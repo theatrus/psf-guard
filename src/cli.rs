@@ -52,6 +52,34 @@ impl From<ExportLayoutArg> for crate::commands::export::ExportLayout {
     }
 }
 
+/// CLI spelling of [`crate::commands::export::Placement`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum ExportPlacementArg {
+    /// Copy every frame.
+    #[default]
+    Copy,
+    /// Hardlink on the same filesystem, falling back to copy.
+    Hardlink,
+    /// Copy-on-write clone where the filesystem can, falling back to copy.
+    Reflink,
+    /// Symbolic links to the originals, which may sit on a network mount.
+    Symlink,
+    /// Place nothing: the WBPP runner names the originals where they are.
+    Reference,
+}
+
+impl From<ExportPlacementArg> for crate::commands::export::Placement {
+    fn from(value: ExportPlacementArg) -> Self {
+        match value {
+            ExportPlacementArg::Copy => Self::Copy,
+            ExportPlacementArg::Hardlink => Self::Hardlink,
+            ExportPlacementArg::Reflink => Self::Reflink,
+            ExportPlacementArg::Symlink => Self::Symlink,
+            ExportPlacementArg::Reference => Self::Reference,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub enum Commands {
     /// Dump grading results for all images
@@ -238,8 +266,21 @@ pub enum Commands {
 
         /// Hardlink instead of copy (instant + no extra disk when the
         /// destination is on the same filesystem; falls back to copy).
+        /// The same as `--placement hardlink`.
         #[arg(long)]
         link: bool,
+
+        /// How the frames land. `symlink` points the tree at the originals,
+        /// which may be on a network mount; `reference` places nothing and
+        /// writes a WBPP runner that names them where they are.
+        #[arg(long, value_enum, default_value_t = ExportPlacementArg::Copy)]
+        placement: ExportPlacementArg,
+
+        /// For `--placement reference`: the image folders' root as the
+        /// machine running PixInsight sees it, when that is another machine
+        /// (a Windows share for this machine's mount).
+        #[arg(long)]
+        remote_root: Option<String>,
 
         /// Print the plan without writing anything.
         #[arg(long)]

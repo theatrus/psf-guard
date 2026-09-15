@@ -542,6 +542,24 @@ export interface StackInputImage {
  */
 export type ExportLayout = 'standard' | 'wbpp';
 
+/**
+ * How an export's frames land. `symlink` points the tree at the originals,
+ * which may sit on a network mount; `reference` places nothing and writes a
+ * WBPP runner that names them where they are.
+ */
+export type ExportPlacement = 'copy' | 'hardlink' | 'reflink' | 'symlink' | 'reference';
+
+/** The choices the export dialog collects for one export. */
+export interface ExportChoice {
+  layout: ExportLayout;
+  /** Also export ungraded (Pending) lights; rejects are never exported. */
+  include_pending: boolean;
+  /** Absent for a zip download, which always copies. */
+  placement?: ExportPlacement;
+  /** For a referenced export: the image folders' root as PixInsight's machine sees it. */
+  remote_root?: string;
+}
+
 export interface StackSkyOrientation {
   convention: 'north_up_east_left' | 'source_frame';
   version: number;
@@ -1406,6 +1424,10 @@ export interface ExportSummary {
   linked: number;
   /** Copy-on-write clones: free like a hardlink, independent like a copy. */
   reflinked?: number;
+  /** Symbolic links to the originals. */
+  symlinked?: number;
+  /** Left where they are and named in the WBPP runner. */
+  referenced?: number;
   skipped_existing: number;
   missing: number;
   errors: number;

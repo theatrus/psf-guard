@@ -407,7 +407,7 @@ Two layouts are available; the default is unchanged.
 BIAS/
 DARK/<exposure>_G<gain>/
 DARKFLAT/<exposure>_G<gain>/
-<target>/FLAT/<filter>/
+<target>/FLAT/<filter>/SESSION_<night>/
 <target>/LIGHT/<filter>/
 ```
 
@@ -416,22 +416,52 @@ DARKFLAT/<exposure>_G<gain>/
 ```text
 bias/G<gain>/
 darks/<exposure>s_G<gain>/
-flats/<target>/<filter>/
-lights/<target>/<filter>/
+flats/<target>/<filter>/SESSION_<night>/
+lights/<target>/<filter>/SESSION_<night>/
 ```
 
 Dark flats land in `darks/` beside the lights' darks. WBPP has no dark-flat
 type: a dark flat is a dark it pairs to a flat by exposure, so a separate
 folder would only mean adding one to WBPP twice.
 
-Flats stay under their target because PSF Guard matched them to that target's
-lights. Two targets shot on different nights can need different flats for one
-filter, and merging them would have WBPP integrate both into a single master.
+Each light takes the calibration frames a stack would build its masters from:
+the coherent set nearest the light per kind, not everything the library
+matched. Flats stay under their target because PSF Guard matched them to that
+target's lights, and under the night they were shot because two nights of one
+target can need different flats for one filter. Merging either would have WBPP
+integrate both into a single master flat.
+
+In the WBPP layout the light's path names the same night as its flats. The
+runner passes `keywords=SESSION` with keyword grouping on, and WBPP reads the
+value out of the `SESSION_<night>` folder: each night's lights calibrate with
+that night's flats, bias and darks carry no session and serve every night, and
+the nights integrate together afterwards. A light with no flats has no session
+folder. The grouped-by-target layout only sorts the flats by night.
 
 Choose the layout with `--layout wbpp` on the CLI, the `layout` query parameter
 on the export download, or in the dialog every Export action on the overview
 opens. The dialog starts from the **Export** default in Settings → Setups,
 which is server-wide and shared by the desktop and browser apps.
+
+The dialog also asks whether to include ungraded lights (on by default, as
+the stack previews do; rejects are never exported) and how the files land:
+
+- **Copy** stands on its own: a clone or hard link where the filesystem
+  allows, a copy elsewhere.
+- **Link to the originals** writes symbolic links, so the tree costs no space
+  and can point at a network mount. Whatever reads it must see the originals
+  at the same paths, which suits a PixInsight on the same machine or on one
+  that mounts the same share at the same place.
+- **Reference in place** copies nothing. The `run-wbpp` scripts name every
+  frame where it already is, below one root the scripts take from
+  `PSF_SOURCE_ROOT`; the dialog's "PixInsight sees the image folders as" seeds
+  that root for a machine that mounts the folders elsewhere, such as a
+  Windows share for the server's mount. Because the paths are the originals',
+  they carry no session folder and WBPP pools each filter's flats across
+  nights. The list travels in one command-line argument, which holds about a
+  thousand frames on Linux and macOS and about three hundred on Windows.
+  This mode needs the WBPP layout. On the CLI it is `--placement reference`
+  with `--remote-root`; `--placement symlink` links.
 
 A WBPP export also carries `run-wbpp.sh` and `run-wbpp.cmd`, which hand it to
 PixInsight. WBPP 3.x is driven from PixInsight's command line rather than

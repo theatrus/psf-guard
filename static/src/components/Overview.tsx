@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { Merge } from 'lucide-react';
 import { apiClient } from '../api/client';
 import type {
-  ExportLayout,
+  ExportChoice,
   ProjectOverview,
   ProjectRecentImage,
   TargetOverview,
@@ -136,17 +136,24 @@ export default function Overview() {
     dbId: string,
     scope: { project_id?: number; target_id?: number },
     label: string,
-    layout: ExportLayout
+    choice: ExportChoice
   ) => {
     try {
       const dest = await tauriFileSystem.pickImageDirectory();
       if (!dest) return;
       setExportBusy(true);
-      const summary = await apiClient.exportLocal(dbId, { dest, layout, ...scope });
-      const placed = summary.copied + summary.linked;
+      const summary = await apiClient.exportLocal(dbId, { dest, ...choice, ...scope });
+      const placed =
+        summary.copied + summary.linked + (summary.reflinked ?? 0) + (summary.symlinked ?? 0);
+      const referenced = summary.referenced ?? 0;
       alert(
-        `Exported ${label}: ${placed} file(s) placed` +
+        `Exported ${label}: ${
+          referenced > 0 && placed === 0
+            ? `${referenced} file(s) named in place`
+            : `${placed} file(s) placed`
+        }` +
           `${summary.linked > 0 ? ` (${summary.linked} hardlinked)` : ''}` +
+          `${(summary.symlinked ?? 0) > 0 ? ` (${summary.symlinked} linked to the originals)` : ''}` +
           `${summary.skipped_existing > 0 ? `, ${summary.skipped_existing} already present` : ''}` +
           `${summary.missing > 0 ? `, ${summary.missing} missing on disk` : ''}` +
           `${summary.errors > 0 ? `, ${summary.errors} ERRORS` : ''}\n\n${dest}`
@@ -165,13 +172,13 @@ export default function Overview() {
     dbId: string,
     scope: { project_id?: number; target_id?: number },
     label: string,
-    layout: ExportLayout
+    choice: ExportChoice
   ) => {
     try {
       setExportBusy(true);
       const status = await apiClient.startServerExport(dbId, {
         ...scope,
-        layout,
+        ...choice,
         subdirectory: label,
         scope_label: label,
       });
@@ -1288,13 +1295,13 @@ export default function Overview() {
           defaultLayout={exportSettings?.default_layout ?? 'standard'}
           busy={exportBusy}
           onClose={() => setPendingExport(null)}
-          onConfirm={(layout) => {
+          onConfirm={(choice) => {
             const request = pendingExport;
             setPendingExport(null);
             if (request.kind === 'local') {
-              handleLocalExport(request.dbId, request.scope, request.label, layout);
+              handleLocalExport(request.dbId, request.scope, request.label, choice);
             } else {
-              handleServerExport(request.dbId, request.scope, request.label, layout);
+              handleServerExport(request.dbId, request.scope, request.label, choice);
             }
           }}
         />

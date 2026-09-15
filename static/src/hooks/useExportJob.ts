@@ -54,9 +54,14 @@ export function describeExportProgress(progress: ExportJobProgress | undefined):
     case 'complete': {
       const outcome = progress.outcome;
       if (!outcome) return `Export of${scope} finished`;
-      const placed = outcome.copied + outcome.linked + (outcome.reflinked ?? 0);
-      const parts = [`${placed} file(s) placed`];
+      const placed =
+        outcome.copied + outcome.linked + (outcome.reflinked ?? 0) + (outcome.symlinked ?? 0);
+      const parts =
+        (outcome.referenced ?? 0) > 0 && placed === 0
+          ? [`${outcome.referenced} file(s) named in place`]
+          : [`${placed} file(s) placed`];
       if ((outcome.reflinked ?? 0) > 0) parts.push(`${outcome.reflinked} reflinked`);
+      if ((outcome.symlinked ?? 0) > 0) parts.push(`${outcome.symlinked} linked to the originals`);
       if (outcome.skipped_existing > 0) parts.push(`${outcome.skipped_existing} already present`);
       if (outcome.missing > 0) parts.push(`${outcome.missing} missing on disk`);
       if (outcome.errors > 0) parts.push(`${outcome.errors} ERRORS`);

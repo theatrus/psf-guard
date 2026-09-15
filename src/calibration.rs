@@ -5175,16 +5175,38 @@ fn validity_admits(candidate: &CalibrationFrame, light_timestamp: Option<i64>) -
     }
 }
 
+/// The calibration frames an export places beside one light, and the flat
+/// session they came from.
+pub struct ExportCalibration {
+    pub items: Vec<(CalibrationKind, CalibrationFrame, PathBuf)>,
+    /// The night the light's flats were shot, as one path component, when it
+    /// has flats. The light and its flats share this component so a stacker
+    /// grouping on it pairs each night's lights with that night's flats.
+    pub flat_session: Option<String>,
+}
+
 pub fn export_destinations(
     conn: &Connection,
     light: &FrameMeta,
     target_name: &str,
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
     layout: crate::commands::export::ExportLayout,
-) -> Result<Vec<(CalibrationKind, CalibrationFrame, PathBuf)>> {
-    use crate::commands::export::ExportLayout;
+) -> Result<ExportCalibration> {
+    use crate::commands::export::{session_component, ExportLayout};
     let mut selected = select_for_light(conn, light)?;
     remap_missing_sources(&mut selected, directory_tree);
+    // Only the frames a master would build from: the coherent set nearest
+    // the light per kind, the same reduction a stack makes. Everything the
+    // library matched would pool every session's flats into one folder, and
+    // a stacker then integrates one master flat for lights that need
+    // different ones.
+    let selected = CalibrationSelection {
+        bias: coherent_master_subset(CalibrationKind::Bias, &selected.bias),
+        dark: coherent_master_subset(CalibrationKind::Dark, &selected.dark),
+        dark_flat: coherent_master_subset(CalibrationKind::DarkFlat, &selected.dark_flat),
+        flat: coherent_master_subset(CalibrationKind::Flat, &selected.flat),
+    };
+    let flat_session = flat_session_label(&selected.flat);
     let target = crate::commands::export::sanitize_component(target_name);
     let filter =
         crate::commands::export::sanitize_component(light.filter.as_deref().unwrap_or("NONE"));
@@ -5259,24 +5281,50 @@ pub fn export_destinations(
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
+        // Kept under the target, because PSF Guard matched these flats to
+        // that target's lights, and under the session, because two nights of
+        // one target can need different flats for one filter. Merging either
+        // would have WBPP integrate both into a single master.
+        let session = flat_session
+            .as_deref()
+            .map(session_component)
+            .unwrap_or_default();
         let destination = match layout {
             ExportLayout::Standard => PathBuf::from(&target)
                 .join("FLAT")
                 .join(&filter)
+                .join(&session)
                 .join(&name),
-            // Kept under the target, because PSF Guard matched these flats to
-            // that target's lights. Two targets shot on different nights can
-            // need different flats for one filter, and merging them would have
-            // WBPP integrate both into a single master.
             ExportLayout::Wbpp => PathBuf::from("flats")
                 .join(&target)
                 .join(&filter)
+                .join(&session)
                 .join(&name),
         };
         output.push((CalibrationKind::Flat, frame, destination));
     }
     output.sort_by(|left, right| left.2.cmp(&right.2));
-    Ok(output)
+    Ok(ExportCalibration {
+        items: output,
+        flat_session,
+    })
+}
+
+/// The night a flat set was shot, as one path component: the observing
+/// night of its earliest frame, or "undated" for frames without a capture
+/// time. `None` when there are no flats.
+pub fn flat_session_label(flats: &[CalibrationFrame]) -> Option<String> {
+    if flats.is_empty() {
+        return None;
+    }
+    Some(
+        flats
+            .iter()
+            .filter_map(|frame| frame.captured_at)
+            .min()
+            .map(night_of)
+            .unwrap_or_else(|| "undated".into()),
+    )
 }
 
 /// The folder a bias frame's gain puts it in. An unrecorded gain gets its own
