@@ -75,7 +75,8 @@
   `run-wbpp.js` PixInsight script names every frame where it is, below a
   server folder you map to what the machine running PixInsight calls it,
   such as `/mnt/nas/astro` to `P:\`, with no limit on how many frames).
-  On the CLI: `--placement symlink` or
+  In the browser, **Scripts only** downloads those scripts as a small zip
+  instead of the frames. On the CLI: `--placement symlink` or
   `--placement reference --local-root <path> --remote-root <path>`.
 
 - Stack and color previews state integrated exposure in hours and minutes.

@@ -2164,6 +2164,17 @@ pub async fn export_archive_route(
         layout: query.layout,
         ..Default::default()
     };
+    // A referenced download is the runner scripts alone: nothing is copied,
+    // the scripts name the frames where they are.
+    let placement = query
+        .placement
+        .unwrap_or(crate::commands::export::Placement::Copy);
+    let files = wbpp_files(
+        placement,
+        query.local_root.clone(),
+        query.remote_root.clone(),
+        options.layout,
+    )?;
 
     // Plan on a blocking thread: it queries the DB and walks the image dirs.
     // Use a DEDICATED read-only connection — the walk can take tens of
@@ -2191,15 +2202,21 @@ pub async fn export_archive_route(
     }
 
     let layout = query.layout;
+    let scripts_only = !placement.places_files();
     let filename = format!(
-        "psf-guard-export-{}{}.zip",
+        "psf-guard-{}-{}{}.zip",
+        if scripts_only {
+            "wbpp-scripts"
+        } else {
+            "export"
+        },
         ctx.id,
         query
             .target_id
             .map(|t| format!("-target{}", t))
             .unwrap_or_default()
     );
-    let total_files = plan.items.len();
+    let total_files = if scripts_only { 0 } else { plan.items.len() };
     let db_id = ctx.id.clone();
 
     // Zip writer feeds one end of a duplex pipe; the response body streams
@@ -2211,7 +2228,7 @@ pub async fn export_archive_route(
         use async_zip::{Compression, ZipEntryBuilder};
 
         let mut zip = ZipFileWriter::with_tokio(writer);
-        for item in &plan.items {
+        for item in plan.items.iter().filter(|_| !scripts_only) {
             let entry_name = item.relative_dest.to_string_lossy().replace('\\', "/");
             let bytes = match tokio::fs::read(&item.source).await {
                 Ok(bytes) => bytes,
@@ -2237,16 +2254,15 @@ pub async fn export_archive_route(
         // inexpressible the way a comma in a local path can be.
         if layout == crate::commands::export::ExportLayout::Wbpp {
             use crate::commands::export::wbpp;
-            for (name, body) in [
-                (
-                    "run-wbpp.sh",
-                    wbpp::shell_script(&plan, wbpp::WbppRun::default(), &wbpp::WbppFiles::Placed),
-                ),
-                (
-                    "run-wbpp.cmd",
-                    wbpp::batch_script(&plan, wbpp::WbppRun::default(), &wbpp::WbppFiles::Placed),
-                ),
-            ] {
+            let run = wbpp::WbppRun::default();
+            let mut scripts = vec![
+                ("run-wbpp.sh", wbpp::shell_script(&plan, run, &files)),
+                ("run-wbpp.cmd", wbpp::batch_script(&plan, run, &files)),
+            ];
+            if let Some(body) = wbpp::js_runner(&plan, run, &files) {
+                scripts.push((wbpp::JS_RUNNER, body));
+            }
+            for (name, body) in scripts {
                 let entry =
                     ZipEntryBuilder::new(name.into(), Compression::Stored).unix_permissions(0o755);
                 if let Err(e) = zip.write_entry_whole(entry, body.as_bytes()).await {
@@ -2258,7 +2274,16 @@ pub async fn export_archive_route(
         if let Err(e) = zip.close().await {
             tracing::warn!("📦 export db={}: zip finalize failed: {}", db_id, e);
         } else {
-            tracing::info!("📦 export db={}: streamed {} file(s)", db_id, total_files);
+            tracing::info!(
+                "📦 export db={}: streamed {} file(s){}",
+                db_id,
+                total_files,
+                if scripts_only {
+                    " (runner scripts only)"
+                } else {
+                    ""
+                }
+            );
         }
     });
 

@@ -73,6 +73,20 @@ const LOCAL_PLACEMENTS: PlacementOption[] = [
   SERVER_PLACEMENTS[2],
 ];
 
+/** What a zip download offers: the frames, or only the scripts that name them. */
+const DOWNLOAD_PLACEMENTS: PlacementOption[] = [
+  {
+    value: 'copy',
+    label: 'Zip of the frames',
+    help: 'Every frame and the run-wbpp scripts, laid out for WBPP.',
+  },
+  {
+    value: 'reference',
+    label: 'Scripts only',
+    help: 'A small zip with run-wbpp.js and its launchers, naming every frame where it already is on the server\u2019s storage. WBPP then pools each filter\u2019s flats across nights; needs the WBPP layout.',
+  },
+];
+
 /**
  * The choices made at export time. Every export affordance funnels through
  * here so the choice is per export, not a page-wide mode.
@@ -90,7 +104,11 @@ export default function ExportDialog({
   // include them, so an export does too unless told otherwise.
   const [includePending, setIncludePending] = useState(true);
   const placements =
-    request.kind === 'local' ? LOCAL_PLACEMENTS : request.kind === 'server' ? SERVER_PLACEMENTS : [];
+    request.kind === 'local'
+      ? LOCAL_PLACEMENTS
+      : request.kind === 'server'
+        ? SERVER_PLACEMENTS
+        : DOWNLOAD_PLACEMENTS;
   const [placement, setPlacement] = useState<ExportPlacement>(
     placements[0]?.value ?? 'copy'
   );
@@ -112,17 +130,13 @@ export default function ExportDialog({
   const choice = (): ExportChoice => ({
     layout,
     include_pending: includePending,
-    ...(request.kind === 'download'
-      ? {}
-      : {
-          placement: effectivePlacement,
-          ...(effectivePlacement === 'reference' && localRoot.trim()
-            ? { local_root: localRoot.trim() }
-            : {}),
-          ...(effectivePlacement === 'reference' && remoteRoot.trim()
-            ? { remote_root: remoteRoot.trim() }
-            : {}),
-        }),
+    placement: effectivePlacement,
+    ...(effectivePlacement === 'reference' && localRoot.trim()
+      ? { local_root: localRoot.trim() }
+      : {}),
+    ...(effectivePlacement === 'reference' && remoteRoot.trim()
+      ? { remote_root: remoteRoot.trim() }
+      : {}),
   });
 
   return (
@@ -139,11 +153,7 @@ export default function ExportDialog({
           {request.kind === 'download' ? (
             <a
               className="action-button export-dialog-download"
-              href={apiClient.exportDownloadUrl(request.dbId, {
-                ...request.scope,
-                layout,
-                include_pending: includePending,
-              })}
+              href={apiClient.exportDownloadUrl(request.dbId, { ...request.scope, ...choice() })}
               onClick={onClose}
             >
               {confirmLabel}
@@ -195,7 +205,7 @@ export default function ExportDialog({
           </label>
         ))}
       </fieldset>
-      {placements.length > 0 && (
+      {(
         <fieldset className="export-layout-options">
           <legend>Files</legend>
           {placements.map((option) => {

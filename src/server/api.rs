@@ -760,6 +760,19 @@ pub struct ExportQuery {
     /// How the destination tree is arranged.
     #[serde(default)]
     pub layout: crate::commands::export::ExportLayout,
+    /// `reference` streams only the WBPP runner scripts, which name the
+    /// frames where they are, instead of the frames; anything else streams
+    /// the frames. Needs the WBPP layout.
+    #[serde(default)]
+    pub placement: Option<crate::commands::export::Placement>,
+    /// For a referenced export: the folder the runner names frames below,
+    /// as the server sees it. Absent, the frames' common parent.
+    #[serde(default)]
+    pub local_root: Option<String>,
+    /// For a referenced export: that same folder as the machine running
+    /// PixInsight sees it, when that is not the server.
+    #[serde(default)]
+    pub remote_root: Option<String>,
 }
 
 /// Body of `POST /api/db/{db_id}/export/local` — place the selected lights

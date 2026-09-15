@@ -975,6 +975,45 @@ async fn export_streams_zip_of_non_rejected_lights() {
         !has(b"m81_l_0002.fits"),
         "rejected frame must not be exported"
     );
+
+    // A referenced download is the runner scripts alone: run-wbpp.js names
+    // the frame where it is, and no frame bytes travel.
+    let (status, bytes, content_type) = raw_request(
+        build_app(state.clone()),
+        &format!(
+            "/api/db/{slug}/export?include_pending=true&layout=wbpp&placement=reference&remote_root=P:%5C"
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type, "application/zip");
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"run-wbpp.js"), "the script is the download");
+    assert!(
+        has(b"var psfSourceRoot = \"P:\";"),
+        "the PixInsight root is in the script"
+    );
+    assert!(
+        has(b"m81_l_0001.fits\","),
+        "the frame is named in the script"
+    );
+    assert!(
+        !has(b"lights/M81/"),
+        "no frame entry in a scripts-only download"
+    );
+    assert!(
+        bytes.len() < 64 * 1024,
+        "scripts only, not frames: {} bytes",
+        bytes.len()
+    );
+
+    // Without the WBPP layout there is no runner to send.
+    let (status, _, _) = raw_request(
+        build_app(state.clone()),
+        &format!("/api/db/{slug}/export?include_pending=true&placement=reference"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
