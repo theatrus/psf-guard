@@ -469,7 +469,11 @@ the stack previews do; rejects are never exported) and how the files land:
   they carry no session folder and WBPP pools each filter's flats across
   nights. This mode needs the WBPP layout. On the CLI it is
   `--placement reference` with `--local-root` and `--remote-root`;
-  `--placement symlink` links.
+  `--placement symlink` links. In the browser, where an export is a zip
+  download unless the database has a server export directory, **Scripts
+  only** downloads the same three scripts as a small zip, with the frames
+  named where they are on the server's storage; `placement=reference` on
+  the download URL does the same.
 
 A WBPP export also carries `run-wbpp.sh` and `run-wbpp.cmd`, which hand it to
 PixInsight. WBPP 3.x is driven from PixInsight's command line rather than

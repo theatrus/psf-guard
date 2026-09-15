@@ -129,7 +129,7 @@ describe('Overview export dialog', () => {
     // The dialog offers both layouts and starts from the configured default.
     const dialog = await screen.findByRole('dialog', { name: 'Export Sh2 86' });
     expect(dialog).toBeInTheDocument();
-    const wbpp = screen.getByRole('radio', { name: /WBPP/ });
+    const wbpp = screen.getByRole('radio', { name: /^WBPP/ });
     expect(wbpp).toBeChecked();
 
     // The chosen layout lands in the download URL.

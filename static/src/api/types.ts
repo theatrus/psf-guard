@@ -554,7 +554,7 @@ export interface ExportChoice {
   layout: ExportLayout;
   /** Also export ungraded (Pending) lights; rejects are never exported. */
   include_pending: boolean;
-  /** Absent for a zip download, which always copies. */
+  /** How the frames land; for a zip download, `reference` means the scripts alone. */
   placement?: ExportPlacement;
   /** For a referenced export: the folder the runner names frames below, as the server sees it. */
   local_root?: string;

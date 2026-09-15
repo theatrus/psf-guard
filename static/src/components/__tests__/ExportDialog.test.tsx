@@ -77,21 +77,36 @@ describe('ExportDialog', () => {
     expect(onConfirm.mock.lastCall?.[0]).not.toHaveProperty('local_root');
   });
 
-  it('offers a zip download only the layout and the ungraded choice', () => {
+  it('lets a zip download carry the scripts alone, naming the frames in place', () => {
     render(
       <ExportDialog
         request={{ ...request, kind: 'download' }}
-        defaultLayout="standard"
+        defaultLayout="wbpp"
+        sourceRoot="/mnt/nas/astro"
         busy={false}
         onClose={() => {}}
         onConfirm={() => {}}
       />
     );
-    expect(screen.queryByRole('radio', { name: /Reference in place/ })).toBeNull();
     const download = () => screen.getByRole('link', { name: 'Download zip' }).getAttribute('href')!;
     expect(download()).toContain('include_pending=true');
+    expect(download()).not.toContain('placement=');
     fireEvent.click(screen.getByRole('checkbox', { name: /Include ungraded lights/ }));
     expect(download()).not.toContain('include_pending');
+
+    fireEvent.click(screen.getByRole('radio', { name: /Scripts only/ }));
+    fireEvent.change(screen.getByRole('textbox', { name: /^PixInsight path/ }), {
+      target: { value: 'P:\\' },
+    });
+    const href = download();
+    expect(href).toContain('placement=reference');
+    expect(href).toContain('local_root=%2Fmnt%2Fnas%2Fastro');
+    expect(href).toContain('remote_root=P%3A%5C');
+
+    // The standard layout has no runner, so the scripts-only choice is not on offer.
+    fireEvent.click(screen.getByRole('radio', { name: /Grouped by target/ }));
+    expect(screen.getByRole('radio', { name: /Scripts only/ })).toBeDisabled();
+    expect(download()).not.toContain('placement=');
   });
 });
 

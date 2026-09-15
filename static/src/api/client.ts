@@ -771,6 +771,10 @@ export const apiClient = {
       target_id?: number;
       include_pending?: boolean;
       layout?: ExportLayout;
+      /** `reference` downloads only the WBPP runner scripts, which name the frames where they are. */
+      placement?: import('./types').ExportPlacement;
+      local_root?: string;
+      remote_root?: string;
     }
   ): string => {
     const query = new URLSearchParams();
@@ -778,6 +782,11 @@ export const apiClient = {
     if (params.target_id !== undefined) query.set('target_id', String(params.target_id));
     if (params.include_pending) query.set('include_pending', 'true');
     if (params.layout && params.layout !== 'standard') query.set('layout', params.layout);
+    if (params.placement === 'reference') {
+      query.set('placement', 'reference');
+      if (params.local_root) query.set('local_root', params.local_root);
+      if (params.remote_root) query.set('remote_root', params.remote_root);
+    }
     const qs = query.toString();
     return withServerUrl(`/api${dbPath(dbId, '/export')}${qs ? `?${qs}` : ''}`);
   },
