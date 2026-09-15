@@ -58,7 +58,7 @@ const SERVER_PLACEMENTS: PlacementOption[] = [
   {
     value: 'reference',
     label: 'Reference in place',
-    help: 'Copies nothing. A run-wbpp.js PixInsight script names every frame where it already is. WBPP then pools each filter\u2019s flats across nights; needs the WBPP layout.',
+    help: 'Copies nothing. A run-wbpp.js PixInsight script names every frame where it already is and tells WBPP which night\u2019s flats each light takes. Needs the WBPP layout.',
   },
 ];
 
@@ -83,7 +83,7 @@ const DOWNLOAD_PLACEMENTS: PlacementOption[] = [
   {
     value: 'reference',
     label: 'Scripts only',
-    help: 'A small zip with run-wbpp.js and its launchers, naming every frame where it already is on the server\u2019s storage. WBPP then pools each filter\u2019s flats across nights; needs the WBPP layout.',
+    help: 'A small zip with run-wbpp.js and its launchers, naming every frame where it already is on the server\u2019s storage, with each night\u2019s flats matched to its lights. Needs the WBPP layout.',
   },
 ];
 

@@ -465,9 +465,10 @@ the stack previews do; rejects are never exported) and how the files land:
   if it differs. Server path `/mnt/barium/astrobin` and PixInsight path
   `P:\` list the frames as `P:/_ByTelescope/...`; `psfSourceRoot` at the top
   of the script is that value and can be edited later. A frame outside the
-  server path keeps its full path. Because the paths are the originals',
-  they carry no session folder and WBPP pools each filter's flats across
-  nights. This mode needs the WBPP layout. On the CLI it is
+  server path keeps its full path. The originals' paths carry no session
+  folder, so the script tells WBPP each frame's session itself and each
+  night's lights still take their own flats. This mode needs the WBPP
+  layout. On the CLI it is
   `--placement reference` with `--local-root` and `--remote-root`;
   `--placement symlink` links. In the browser, where an export is a zip
   download unless the database has a server export directory, **Scripts
@@ -492,7 +493,13 @@ The reference runner was also verified there: WBPP reads its parameters
 from `Runtime.jsArguments`, which the core makes read-only, so the script
 includes WBPP's entry file inside a function where a Proxy named `Runtime`
 answers `jsArguments` with the list built in the script and everything else
-from the real object, then calls WBPP's entry point as `WBPP.js` does.
+from the real object, then calls WBPP's entry point as `WBPP.js` does. WBPP
+reads a grouping keyword's value out of a frame's path, so the script also
+replaces that reader with one that answers `SESSION` for its own frames;
+WBPP consults it on every regroup, so the value holds. It also checks that
+every frame exists before handing the list over, because WBPP drops a frame
+it cannot find without a word, and a wrong root would otherwise open an
+empty dialog.
 `#engine v8` at the top is what `WBPP.js` declares; without it the core
 compiles the include with an engine that rejects WBPP's classes.
 

@@ -74,7 +74,9 @@
   at a network mount) or **Reference in place** (nothing copied; a
   `run-wbpp.js` PixInsight script names every frame where it is, below a
   server folder you map to what the machine running PixInsight calls it,
-  such as `/mnt/nas/astro` to `P:\`, with no limit on how many frames).
+  such as `/mnt/nas/astro` to `P:\`, with no limit on how many frames, and
+  each night's flats still matched to its lights). The script says which
+  frames it could not find instead of leaving WBPP's dialog empty.
   In the browser, **Scripts only** downloads those scripts as a small zip
   instead of the frames. On the CLI: `--placement symlink` or
   `--placement reference --local-root <path> --remote-root <path>`.
