@@ -8,7 +8,7 @@
 %global rustflags_debuginfo 0
 
 Name:           psf-guard
-Version:        0.9.5
+Version:        0.9.6
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -93,6 +93,16 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Wed Sep 16 2026 Yann Ramin <github@theatr.us> - 0.9.6-1
+- Exports keep each night's flats with its lights; link or reference frames in place; scripts-only download
+- Stack previews rebuild on their own after new frames or grades, with a per-project exposure-group split
+- Rotation skew and warm-sensor frames are flagged and recommended for rejection
+- A flat master is checked against the flats that made it; drifting frames stay out
+- Hot-pixel suppression per calibration session; sky-flat masters reject moving stars better; native star masks for flats
+- Inspect the masters behind a stack; review and invalidate scheduler flat coverage
+- Integrated exposure in hours and minutes on stack and color previews
+- Import preview and progress show under the right database and report when finished
+
 * Tue Sep 08 2026 Yann Ramin <github@theatr.us> - 0.9.5-1
 - Merge alternate target names and move exposures between targets, with a preview
 - RC-Astro tool steps per linear input channel in color-stack processing
