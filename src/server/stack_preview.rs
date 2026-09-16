@@ -321,7 +321,7 @@ impl StackSkyOrientation {
 
     /// Whether this record still describes how the current code lays out a
     /// stack. Artifacts written before stacks recorded a mapping fail here.
-    pub(super) fn is_current(&self) -> bool {
+    pub(crate) fn is_current(&self) -> bool {
         self.version == seiza_stacking::SKY_ORIENTATION_VERSION
             && matches!(
                 self.convention.as_str(),
@@ -3512,7 +3512,7 @@ fn manifest_path(cache_root: &FsPath, job_id: &str) -> PathBuf {
 }
 
 /// Parse every `latest-project-*.json` directly inside a directory.
-pub(super) fn read_latest_indices<T: serde::de::DeserializeOwned>(directory: &FsPath) -> Vec<T> {
+pub(crate) fn read_latest_indices<T: serde::de::DeserializeOwned>(directory: &FsPath) -> Vec<T> {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return Vec::new();
     };

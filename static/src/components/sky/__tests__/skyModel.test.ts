@@ -107,11 +107,23 @@ describe('shownTargets', () => {
 describe('timelineLanes and skyStats', () => {
   const merged = mergeCoverage([coverage('a', 'Rig A'), coverage('b', 'Rig B')]);
 
-  it('gives each rig a lane with its nights stacked by filter', () => {
+  it('gives each rig a lane with its nights stacked by filter, after a lane that sums them', () => {
     const lanes = timelineLanes(merged, EVERYTHING);
-    expect(lanes).toHaveLength(2);
-    expect(lanes[0].seconds).toBe(1500);
-    expect(lanes[0].perNight.get('2026-09-08')?.byFilter.get('Ha')).toBe(600);
+    expect(lanes).toHaveLength(3);
+    expect(lanes[0].aggregate).toBe(true);
+    expect(lanes[0].seconds).toBe(3000);
+    expect(lanes[0].perNight.get('2026-09-08')?.byFilter.get('Ha')).toBe(1200);
+    expect(lanes[1].seconds).toBe(1500);
+    expect(lanes[1].perNight.get('2026-09-08')?.byFilter.get('Ha')).toBe(600);
+    expect(timelineLanes(mergeCoverage([coverage('a', 'Rig A')]), EVERYTHING)).toHaveLength(1);
+  });
+
+  it('lists the seconds per night a target was shot, for its sparkline', () => {
+    const shown = shownTargets(merged, EVERYTHING);
+    expect(shown[0].perNight).toEqual([
+      ['2026-09-08', 1200],
+      ['2026-09-09', 300],
+    ]);
   });
 
   it('sums the vanity numbers', () => {

@@ -497,12 +497,12 @@ pub struct StackColorTargetAvailability {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct LatestStackColorPreviews {
+pub(crate) struct LatestStackColorPreviews {
     schema_version: u32,
     database_id: String,
     project_id: i32,
     updated_unix_seconds: i64,
-    pub(super) jobs: Vec<StackColorJob>,
+    pub(crate) jobs: Vec<StackColorJob>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -58,3 +58,23 @@ test('the timeline scrubs the map back through the nights', async ({ page }) => 
   await expect(page.locator('.sky-map')).toHaveAttribute('aria-label', /galactic/);
   await expect(page.locator('.sky-target')).toHaveCount(2);
 });
+
+test('the map zooms, shows constellations, and stays whole-sky by default', async ({ page }) => {
+  await page.goto('/#/sky');
+  const map = page.locator('.sky-map');
+  await expect(map).toBeVisible({ timeout: 15_000 });
+  await expect(map).toHaveAttribute('data-zoom', '1.00');
+  await expect(page.locator('.sky-constellations path').first()).toBeAttached();
+  await expect(page.locator('.sky-constellation-names text', { hasText: 'Cancer' })).toBeAttached();
+
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  await expect(map).toHaveAttribute('data-zoom', '2.56');
+  await expect(page.locator('.sky-target')).toHaveCount(2);
+
+  await page.getByRole('button', { name: 'Whole sky' }).click();
+  await expect(map).toHaveAttribute('data-zoom', '1.00');
+
+  await page.getByLabel('Constellations').uncheck();
+  await expect(page.locator('.sky-constellations')).toHaveCount(0);
+});

@@ -89,6 +89,8 @@ export interface ShownTarget {
   frames: number;
   nights: number;
   byFilter: Array<{ filter: string; seconds: number }>;
+  /** Seconds per night the target was shot, in night order. */
+  perNight: Array<[string, number]>;
   firstNight: string | null;
   lastNight: string | null;
 }
@@ -97,7 +99,14 @@ export interface ShownTarget {
 export function shownTargets(data: MergedCoverage, cut: SkyCut): ShownTarget[] {
   const tallies = new Map<
     string,
-    { seconds: number; frames: number; nights: Set<string>; byFilter: Map<string, number>; first: string | null; last: string | null }
+    {
+      seconds: number;
+      frames: number;
+      nights: Map<string, number>;
+      byFilter: Map<string, number>;
+      first: string | null;
+      last: string | null;
+    }
   >();
   for (const night of data.nights) {
     if (!nightAllowed(night, cut)) continue;
@@ -106,12 +115,12 @@ export function shownTargets(data: MergedCoverage, cut: SkyCut): ShownTarget[] {
     if (f === 0) continue;
     let tally = tallies.get(night.target_key);
     if (!tally) {
-      tally = { seconds: 0, frames: 0, nights: new Set(), byFilter: new Map(), first: null, last: null };
+      tally = { seconds: 0, frames: 0, nights: new Map(), byFilter: new Map(), first: null, last: null };
       tallies.set(night.target_key, tally);
     }
     tally.seconds += s;
     tally.frames += f;
-    tally.nights.add(night.night);
+    tally.nights.set(night.night, (tally.nights.get(night.night) ?? 0) + s);
     tally.byFilter.set(night.filter, (tally.byFilter.get(night.filter) ?? 0) + s);
     if (!tally.first || night.night < tally.first) tally.first = night.night;
     if (!tally.last || night.night > tally.last) tally.last = night.night;
@@ -129,6 +138,7 @@ export function shownTargets(data: MergedCoverage, cut: SkyCut): ShownTarget[] {
       byFilter: [...tally.byFilter.entries()]
         .map(([filter, seconds]) => ({ filter, seconds }))
         .sort((a, b) => b.seconds - a.seconds),
+      perNight: [...tally.nights.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
       firstNight: tally.first,
       lastNight: tally.last,
     });
@@ -146,7 +156,11 @@ export interface Lane {
   db_name: string;
   seconds: number;
   perNight: Map<string, LaneNight>;
+  /** The lane that sums every rig, shown first when there is more than one. */
+  aggregate?: boolean;
 }
+
+export const ALL_RIGS_LANE = 'all-rigs';
 
 /** One timeline lane per rig, with the time counted per night. The time
  * scrubber is not applied here: the strip always shows the whole span. */
@@ -171,7 +185,26 @@ export function timelineLanes(data: MergedCoverage, cut: SkyCut): Lane[] {
     slot.seconds += s;
     slot.byFilter.set(night.filter, (slot.byFilter.get(night.filter) ?? 0) + s);
   }
-  return [...lanes.values()];
+  const rigLanes = [...lanes.values()];
+  if (rigLanes.length < 2) {
+    return rigLanes;
+  }
+  const total: Lane = { db_id: ALL_RIGS_LANE, db_name: 'All rigs', seconds: 0, perNight: new Map(), aggregate: true };
+  for (const lane of rigLanes) {
+    total.seconds += lane.seconds;
+    for (const [night, slot] of lane.perNight) {
+      let sum = total.perNight.get(night);
+      if (!sum) {
+        sum = { seconds: 0, byFilter: new Map() };
+        total.perNight.set(night, sum);
+      }
+      sum.seconds += slot.seconds;
+      for (const [filter, seconds] of slot.byFilter) {
+        sum.byFilter.set(filter, (sum.byFilter.get(filter) ?? 0) + seconds);
+      }
+    }
+  }
+  return [total, ...rigLanes];
 }
 
 export interface SkyStats {
@@ -212,6 +245,7 @@ export function skyStats(shown: ShownTarget[], lanes: Lane[], cut: SkyCut): SkyS
   }
   const perNight = new Map<string, number>();
   for (const lane of lanes) {
+    if (lane.aggregate) continue;
     for (const [night, slot] of lane.perNight) {
       if (cut.asOfNight && night > cut.asOfNight) continue;
       nights.add(night);

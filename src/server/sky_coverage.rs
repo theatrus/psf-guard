@@ -55,6 +55,8 @@ pub struct SkyTarget {
     /// The rotation the scheduler planned for the camera, in degrees.
     pub rotation_deg: Option<f64>,
     pub footprint: Option<SkyFootprint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<SkyPreview>,
     pub frames: i64,
     pub accepted_frames: i64,
     pub seconds: f64,
@@ -86,6 +88,37 @@ pub struct SkyFootprint {
     /// ICRS vertices in boundary order, for a solved footprint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vertices: Option<Vec<[f64; 2]>>,
+}
+
+/// The latest stack preview of a target, to draw inside its field.
+#[derive(Debug, Clone, Serialize)]
+pub struct SkyPreview {
+    /// Same-origin URL of the preview PNG.
+    pub url: String,
+    /// The pixel grid the preview covers, in the stack's output orientation.
+    pub width: usize,
+    pub height: usize,
+    /// `color` or `mono`.
+    pub kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
+    /// A TAN solution for that grid, composed from the reference frame's
+    /// plate solution and the stack's orientation, when the cache has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wcs: Option<SkyTanWcs>,
+}
+
+/// A TAN projection on a zero-based pixel grid, CD matrix in degrees per pixel.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct SkyTanWcs {
+    pub crpix1: f64,
+    pub crpix2: f64,
+    pub crval1: f64,
+    pub crval2: f64,
+    pub cd11: f64,
+    pub cd12: f64,
+    pub cd21: f64,
+    pub cd22: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -137,7 +170,8 @@ pub async fn get_sky_coverage(
     let context = ctx.0.clone();
     let response = tokio::task::spawn_blocking(move || {
         let footprints = footprints_for(&context, &targets, &lights);
-        assemble(targets, lights, footprints)
+        let previews = previews_for(&context.cache_dir_path);
+        assemble(targets, lights, footprints, previews)
     })
     .await
     .map_err(|error| AppError::InternalError(format!("sky coverage task failed: {error}")))?;
@@ -222,6 +256,7 @@ fn assemble(
     targets: Vec<TargetRow>,
     lights: Vec<LightRow>,
     footprints: HashMap<i32, SkyFootprint>,
+    previews: HashMap<i32, SkyPreview>,
 ) -> SkyCoverageResponse {
     #[derive(Default)]
     struct Tally {
@@ -292,6 +327,7 @@ fn assemble(
     totals.nights = all_nights.len() as i64;
 
     let mut footprints = footprints;
+    let mut previews = previews;
     let targets = targets
         .into_iter()
         .map(|target| {
@@ -311,6 +347,7 @@ fn assemble(
                 dec_deg,
                 rotation_deg: target.rotation_deg.filter(|value| value.is_finite()),
                 footprint: footprints.remove(&target.id),
+                preview: previews.remove(&target.id),
                 frames: tally.frames,
                 accepted_frames: tally.accepted_frames,
                 seconds: tally.seconds,
@@ -503,9 +540,355 @@ fn footprints_for(
     footprints
 }
 
+/// The stack preview to draw for each target: the newest finished colour
+/// stack when there is one, else the mono stack with the most integration.
+fn previews_for(cache_dir: &Path) -> HashMap<i32, SkyPreview> {
+    use super::stack_preview::{
+        color::{LatestStackColorPreviews, StackColorKind, StackColorRole},
+        LatestStackPreviews, StackGroupState, StackGroupStatus, StackJobState,
+    };
+    let mut previews: HashMap<i32, SkyPreview> = HashMap::new();
+    let mut solutions: HashMap<i32, Option<crate::astrometry::AstrometrySolutionResponse>> =
+        HashMap::new();
+    let mut solution_for = |image_id: i32| {
+        solutions
+            .entry(image_id)
+            .or_insert_with(|| {
+                crate::astrometry::persisted_pixel_analysis(cache_dir, image_id)
+                    .and_then(|analysis| analysis.solution)
+            })
+            .clone()
+    };
+
+    let stacks = cache_dir.join("stack-previews");
+    let mono: Vec<StackGroupStatus> =
+        super::stack_preview::read_latest_indices::<LatestStackPreviews>(&stacks)
+            .into_iter()
+            .flat_map(|index| index.groups.into_iter().map(|latest| latest.group))
+            .collect();
+
+    let mut colour_ranked: HashMap<i32, (bool, i64)> = HashMap::new();
+    for index in
+        super::stack_preview::read_latest_indices::<LatestStackColorPreviews>(&stacks.join("color"))
+    {
+        for job in index.jobs {
+            if job.state != StackJobState::Completed || job.preview_url.is_empty() {
+                continue;
+            }
+            // A current stack beats an outdated one; among equals, the newest.
+            let rank = (!job.outdated, job.created_unix_seconds);
+            if colour_ranked
+                .get(&job.target_id)
+                .is_some_and(|best| *best >= rank)
+            {
+                continue;
+            }
+            let reference_role = match job.kind {
+                StackColorKind::Rgb => StackColorRole::Red,
+                StackColorKind::Lrgb => StackColorRole::Luminance,
+                StackColorKind::Narrowband => StackColorRole::Ha,
+            };
+            let reference = job
+                .sources
+                .iter()
+                .find(|source| source.role == reference_role)
+                .or_else(|| job.sources.first());
+            let orientation = reference
+                .and_then(|source| source.sky_orientation.as_ref())
+                .filter(|orientation| orientation.is_current());
+            // The colour grid is the reference channel's published grid. Any
+            // channel with a solved frame reaches it: frame → that channel's
+            // reference frame (its registration) → its published output (its
+            // orientation) → the colour grid (the channel registration).
+            let solution = reference
+                .into_iter()
+                .chain(
+                    job.sources
+                        .iter()
+                        .filter(|source| Some(*source) != reference),
+                )
+                .find_map(|source| {
+                    let group = mono.iter().find(|group| {
+                        group.target_id == job.target_id && group.filter_name == source.filter_name
+                    })?;
+                    let (solution, frame_to_group) =
+                        grid_solution(&group.frames, group.reference_image_id, &mut solution_for)?;
+                    let to_output = source
+                        .sky_orientation
+                        .as_ref()
+                        .filter(|orientation| orientation.is_current())
+                        .map_or(seiza_stacking::AffineTransform::IDENTITY, |orientation| {
+                            orientation.source_to_output
+                        });
+                    let to_colour = source
+                        .registration_transform
+                        .map_or(seiza_stacking::AffineTransform::IDENTITY, similarity_affine);
+                    Some((
+                        solution,
+                        compose(to_colour, compose(to_output, frame_to_group)),
+                    ))
+                });
+            let (grid_width, grid_height) = match (orientation, &solution) {
+                (Some(orientation), _) => (orientation.output_width, orientation.output_height),
+                (None, Some((solution, _))) => (
+                    solution.image_width as usize,
+                    solution.image_height as usize,
+                ),
+                (None, None) => (1, 1),
+            };
+            let (_, _, wcs) = preview_geometry(None, solution.as_ref());
+            let (width, height, wcs) = match &job.crop_report {
+                Some(crop) => (
+                    crop.width,
+                    crop.height,
+                    wcs.map(|wcs| SkyTanWcs {
+                        crpix1: wcs.crpix1 - crop.x as f64,
+                        crpix2: wcs.crpix2 - crop.y as f64,
+                        ..wcs
+                    }),
+                ),
+                None => (grid_width, grid_height, wcs),
+            };
+            colour_ranked.insert(job.target_id, rank);
+            previews.insert(
+                job.target_id,
+                SkyPreview {
+                    url: job.preview_url.clone(),
+                    width,
+                    height,
+                    kind: "color",
+                    filter: None,
+                    wcs,
+                },
+            );
+        }
+    }
+
+    let mut mono_ranked: HashMap<i32, f64> = HashMap::new();
+    for group in &mono {
+        if colour_ranked.contains_key(&group.target_id) {
+            continue;
+        }
+        let Some(url) = group.preview_url.clone() else {
+            continue;
+        };
+        if group.state != StackGroupState::Ready {
+            continue;
+        }
+        if mono_ranked
+            .get(&group.target_id)
+            .is_some_and(|best| *best >= group.total_exposure_seconds)
+        {
+            continue;
+        }
+        let solution = grid_solution(&group.frames, group.reference_image_id, &mut solution_for);
+        let (width, height, wcs) =
+            preview_geometry(group.sky_orientation.as_ref(), solution.as_ref());
+        mono_ranked.insert(group.target_id, group.total_exposure_seconds);
+        previews.insert(
+            group.target_id,
+            SkyPreview {
+                url,
+                width,
+                height,
+                kind: "mono",
+                filter: Some(group.filter_name.clone()),
+                wcs,
+            },
+        );
+    }
+    previews
+}
+
+/// A plate solution on a stack's reference grid: the reference frame's own
+/// when it is solved, else any integrated frame's carried through the
+/// registration that placed it on the grid.
+fn grid_solution(
+    frames: &[super::stack_preview::StackFrameDecision],
+    reference_image_id: Option<i32>,
+    solution_for: &mut impl FnMut(i32) -> Option<crate::astrometry::AstrometrySolutionResponse>,
+) -> Option<(
+    crate::astrometry::AstrometrySolutionResponse,
+    seiza_stacking::AffineTransform,
+)> {
+    if let Some(solution) = reference_image_id.and_then(&mut *solution_for) {
+        return Some((solution, seiza_stacking::AffineTransform::IDENTITY));
+    }
+    frames
+        .iter()
+        .filter(|frame| matches!(frame.disposition.as_str(), "accepted" | "reference"))
+        .find_map(|frame| {
+            let mapping = frame.registered_mapping.as_ref()?;
+            let solution = solution_for(frame.image_id)?;
+            Some((solution, similarity_affine(mapping.transform())))
+        })
+}
+
+/// A registration's similarity as the affine it is.
+fn similarity_affine(
+    transform: seiza_stacking::SimilarityTransform,
+) -> seiza_stacking::AffineTransform {
+    let (sin, cos) = transform.rotation_radians.sin_cos();
+    seiza_stacking::AffineTransform {
+        matrix: [
+            [transform.scale * cos, -transform.scale * sin],
+            [transform.scale * sin, transform.scale * cos],
+        ],
+        translation_x: transform.translation_x,
+        translation_y: transform.translation_y,
+    }
+}
+
+/// `after ∘ before`: apply `before`, then `after`.
+fn compose(
+    after: seiza_stacking::AffineTransform,
+    before: seiza_stacking::AffineTransform,
+) -> seiza_stacking::AffineTransform {
+    let [[aa, ab], [ac, ad]] = after.matrix;
+    let [[ba, bb], [bc, bd]] = before.matrix;
+    seiza_stacking::AffineTransform {
+        matrix: [
+            [aa * ba + ab * bc, aa * bb + ab * bd],
+            [ac * ba + ad * bc, ac * bb + ad * bd],
+        ],
+        translation_x: aa * before.translation_x + ab * before.translation_y + after.translation_x,
+        translation_y: ac * before.translation_x + ad * before.translation_y + after.translation_y,
+    }
+}
+
+/// The output grid of a stack and, when a solution reaches it, a TAN
+/// solution on that grid: the solved frame's solution carried through the
+/// registration that placed the frame and the affine that laid the stack
+/// out.
+fn preview_geometry(
+    orientation: Option<&super::stack_preview::StackSkyOrientation>,
+    solution: Option<&(
+        crate::astrometry::AstrometrySolutionResponse,
+        seiza_stacking::AffineTransform,
+    )>,
+) -> (usize, usize, Option<SkyTanWcs>) {
+    let orientation = orientation.filter(|orientation| orientation.is_current());
+    let (width, height) = match (orientation, solution) {
+        (Some(orientation), _) => (orientation.output_width, orientation.output_height),
+        (None, Some((solution, _))) => (
+            solution.image_width as usize,
+            solution.image_height as usize,
+        ),
+        (None, None) => (1, 1),
+    };
+    let Some((solution, frame_to_grid)) = solution else {
+        return (width, height, None);
+    };
+    // One affine from the solved frame's pixels to the output grid.
+    let total = match orientation {
+        Some(orientation) => compose(orientation.source_to_output, *frame_to_grid),
+        None => *frame_to_grid,
+    };
+    let [[a, b], [c, d]] = total.matrix;
+    let (tx, ty) = (total.translation_x, total.translation_y);
+    let det = a * d - b * c;
+    if det.abs() < 1e-12 {
+        return (width, height, None);
+    }
+    let [[cd11, cd12], [cd21, cd22]] = solution.wcs.cd;
+    let [crpix1, crpix2] = solution.wcs.crpix;
+    let [crval1, crval2] = solution.wcs.crval;
+    // frame = M⁻¹(output − t): the intermediate coordinates become
+    // CD·M⁻¹·(output − (M·crpix + t)).
+    let (ia, ib, ic, id) = (d / det, -b / det, -c / det, a / det);
+    let wcs = SkyTanWcs {
+        crpix1: a * crpix1 + b * crpix2 + tx,
+        crpix2: c * crpix1 + d * crpix2 + ty,
+        crval1,
+        crval2,
+        cd11: cd11 * ia + cd12 * ic,
+        cd12: cd11 * ib + cd12 * id,
+        cd21: cd21 * ia + cd22 * ic,
+        cd22: cd21 * ib + cd22 * id,
+    };
+    (width, height, Some(wcs))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_half_turned_stack_carries_its_solution_through_the_turn() {
+        // A 100x50 reference frame solved with north up and 1"/px, published
+        // turned half a turn: the output's reference pixel is the frame's
+        // mirrored through the centre, and the CD matrix flips sign.
+        let solution = crate::astrometry::AstrometrySolutionResponse {
+            center_ra_deg: 10.0,
+            center_dec_deg: 20.0,
+            pixel_scale_arcsec_per_pixel: 1.0,
+            matched_stars: 0,
+            rms_arcsec: 0.0,
+            image_width: 100,
+            image_height: 50,
+            wcs: crate::astrometry::WcsResponse {
+                crval: [10.0, 20.0],
+                crpix: [49.5, 24.5],
+                cd: [[-1.0 / 3600.0, 0.0], [0.0, 1.0 / 3600.0]],
+                ctype: ["RA---TAN".into(), "DEC--TAN".into()],
+                cunit: ["deg".into(), "deg".into()],
+                radesys: "ICRS".into(),
+                equinox: 2000.0,
+            },
+            footprint: Vec::new(),
+            objects: Vec::new(),
+            catalog_version: None,
+            capture_time: None,
+        };
+        let orientation = super::super::stack_preview::StackSkyOrientation {
+            convention: super::super::stack_preview::SOURCE_ORIENTATION_NAME.into(),
+            version: seiza_stacking::SKY_ORIENTATION_VERSION,
+            source: "test".into(),
+            output_width: 100,
+            output_height: 50,
+            source_to_output: seiza_stacking::AffineTransform {
+                matrix: [[-1.0, 0.0], [0.0, -1.0]],
+                translation_x: 99.0,
+                translation_y: 49.0,
+            },
+        };
+        let solved = (solution.clone(), seiza_stacking::AffineTransform::IDENTITY);
+        let (width, height, wcs) = preview_geometry(Some(&orientation), Some(&solved));
+        let wcs = wcs.expect("a composed solution");
+        assert_eq!((width, height), (100, 50));
+        assert!((wcs.crpix1 - 49.5).abs() < 1e-9 && (wcs.crpix2 - 24.5).abs() < 1e-9);
+        assert!(
+            (wcs.cd11 - 1.0 / 3600.0).abs() < 1e-12,
+            "east flips: {}",
+            wcs.cd11
+        );
+        assert!(
+            (wcs.cd22 + 1.0 / 3600.0).abs() < 1e-12,
+            "north flips: {}",
+            wcs.cd22
+        );
+        // Without an orientation the frame's own solution is passed through.
+        let (_, _, plain) = preview_geometry(None, Some(&solved));
+        assert!((plain.unwrap().cd11 + 1.0 / 3600.0).abs() < 1e-12);
+        // A frame registered with a quarter turn onto the grid turns the
+        // solution with it: both sky axes now run along the other grid axis.
+        let quarter = seiza_stacking::AffineTransform {
+            matrix: [[0.0, -1.0], [1.0, 0.0]],
+            translation_x: 49.0,
+            translation_y: 0.0,
+        };
+        let (_, _, turned) = preview_geometry(None, Some(&(solution, quarter)));
+        let turned = turned.unwrap();
+        assert!(
+            turned.cd11.abs() < 1e-12 && turned.cd22.abs() < 1e-12,
+            "{turned:?}"
+        );
+        assert!(
+            (turned.cd12 + 1.0 / 3600.0).abs() < 1e-12
+                && (turned.cd21 + 1.0 / 3600.0).abs() < 1e-12,
+            "{turned:?}"
+        );
+    }
 
     #[test]
     fn a_night_is_keyed_by_the_evening_it_began_on() {
@@ -557,7 +940,7 @@ mod tests {
             light(3, night_one + 620, "Ha", true, 600.0),
             light(4, night_two, "L", true, 300.0),
         ];
-        let response = assemble(targets, lights, HashMap::new());
+        let response = assemble(targets, lights, HashMap::new(), HashMap::new());
 
         assert_eq!(response.filters, vec!["L", "Ha"]);
         assert_eq!(response.totals.frames, 4);

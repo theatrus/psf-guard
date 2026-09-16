@@ -121,7 +121,7 @@ export default function SkyTimeline({ lanes, nightKeys, asOfNight, onAsOf, playi
         {lanes.map((lane, laneIndex) => {
           const top = laneIndex * LANE_HEIGHT;
           return (
-            <g key={lane.db_id} className="sky-lane">
+            <g key={lane.db_id} className={`sky-lane${lane.aggregate ? ' is-aggregate' : ''}`}>
               <rect className="sky-lane-bg" x={LABEL_WIDTH} y={top} width={plotWidth} height={LANE_HEIGHT - 4} />
               <text className="sky-lane-name" x={0} y={top + 17}>
                 {lane.db_name}

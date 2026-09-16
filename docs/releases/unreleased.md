@@ -10,8 +10,11 @@
   all-sky chart, equatorial or galactic, with each target drawn as its field,
   coloured by filter mix and brighter with more hours. Hover for the target's
   story, click to open it in Images. A night-by-night timeline per rig, with
-  the Moon's phase, scrubs or replays the map through the nights, and the
-  stat band totals hours, frames, targets, nights, and sky area.
+  the Moon's phase and an all-rigs total, scrubs or replays the map through
+  the nights, and the stat band totals hours, frames, targets, nights, and
+  sky area. Constellations and bright stars sit behind the fields; scroll to
+  zoom in, and each target's latest stack preview appears inside its field,
+  placed by its plate solve. Save PNG makes a poster with the numbers on it.
 
 ## Changed
 

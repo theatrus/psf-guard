@@ -322,3 +322,31 @@ export function moonIllumination(unixSeconds: number): number {
   const age = ((((unixSeconds - newMoon2000) / 86400) % synodicDays) + synodicDays) % synodicDays;
   return (1 - Math.cos((age / synodicDays) * 2 * Math.PI)) / 2;
 }
+
+/** A TAN plate solution as the astrometry cache records it: zero-based
+ * reference pixel, ICRS reference point, and the CD matrix in degrees per
+ * pixel. */
+export interface TanWcs {
+  crpix1: number;
+  crpix2: number;
+  crval1: number;
+  crval2: number;
+  cd11: number;
+  cd12: number;
+  cd21: number;
+  cd22: number;
+}
+
+/** Sky position of a zero-based pixel under a TAN projection. */
+export function tanPixelToSky(wcs: TanWcs, x: number, y: number): LonLat {
+  const dx = x - wcs.crpix1;
+  const dy = y - wcs.crpix2;
+  const xi = (wcs.cd11 * dx + wcs.cd12 * dy) * DEG;
+  const eta = (wcs.cd21 * dx + wcs.cd22 * dy) * DEG;
+  const ra0 = wcs.crval1 * DEG;
+  const dec0 = wcs.crval2 * DEG;
+  const denominator = Math.cos(dec0) - eta * Math.sin(dec0);
+  const ra = ra0 + Math.atan2(xi, denominator);
+  const dec = Math.atan2(Math.sin(dec0) + eta * Math.cos(dec0), Math.hypot(xi, denominator));
+  return [wrap360(ra * RAD), dec * RAD];
+}

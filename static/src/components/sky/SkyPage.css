@@ -172,6 +172,101 @@
   display: block;
   width: 100%;
   height: auto;
+  cursor: grab;
+  touch-action: none;
+}
+
+.sky-map:active {
+  cursor: grabbing;
+}
+
+.sky-zoom {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(14, 18, 34, 0.85);
+  border: 1px solid rgba(120, 140, 200, 0.3);
+}
+
+.sky-zoom button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 0;
+  cursor: pointer;
+}
+
+.sky-zoom button svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  flex: none;
+  stroke: currentColor;
+}
+
+.sky-zoom button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.sky-zoom button:disabled {
+  color: var(--color-text-disabled);
+  cursor: default;
+}
+
+.sky-zoom-level {
+  padding: 0 8px 0 4px;
+  font-size: 0.78em;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.sky-bright-star {
+  fill: rgba(235, 240, 255, 0.85);
+}
+
+.sky-constellations path {
+  fill: none;
+  stroke: rgba(150, 175, 235, 0.32);
+  stroke-width: 0.8;
+}
+
+.sky-constellation-names text {
+  fill: rgba(170, 185, 230, 0.45);
+  font-family: inherit;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+.sky-stacks image {
+  opacity: 0.96;
+}
+
+.sky-target.is-textured {
+  stroke-opacity: 0.55;
+}
+
+.sky-card-spark {
+  display: block;
+  margin: 2px 0 6px;
+}
+
+.sky-card-spark rect {
+  fill: rgba(140, 190, 255, 0.75);
 }
 
 .sky-globe {
@@ -365,6 +460,14 @@
 
 .sky-lane-bg {
   fill: rgba(255, 255, 255, 0.025);
+}
+
+.sky-lane.is-aggregate .sky-lane-bg {
+  fill: rgba(97, 218, 251, 0.06);
+}
+
+.sky-lane.is-aggregate .sky-lane-name {
+  fill: var(--color-primary);
 }
 
 .sky-lane-name {

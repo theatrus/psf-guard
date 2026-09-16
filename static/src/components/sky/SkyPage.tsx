@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Download } from 'lucide-react';
+import type { SkyStats } from './skyModel';
 import { useMergedSkyCoverage } from '../../hooks/useDatabases';
 import type { SkyFrame } from '../../utils/skyProjection';
 import { filterColor } from '../../utils/filterColors';
@@ -32,6 +33,8 @@ export default function SkyPage() {
   const [hiddenFilters, setHiddenFilters] = useState<Set<string>>(new Set());
   const [asOfNight, setAsOfNight] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
+  const [showBackdrop, setShowBackdrop] = useState(true);
+  const [showStacks, setShowStacks] = useState(true);
   const replay = useRef<number | null>(null);
 
   const cut: SkyCut = useMemo(
@@ -112,12 +115,13 @@ export default function SkyPage() {
       const scale = 2;
       const canvas = document.createElement('canvas');
       canvas.width = MAP_WIDTH * scale;
-      canvas.height = MAP_HEIGHT * scale;
+      canvas.height = (MAP_HEIGHT + POSTER_HEADER + POSTER_FOOTER) * scale;
       const context = canvas.getContext('2d');
       if (!context) return;
       context.fillStyle = '#05070f';
       context.fillRect(0, 0, canvas.width, canvas.height);
-      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, POSTER_HEADER * scale, MAP_WIDTH * scale, MAP_HEIGHT * scale);
+      paintPosterText(context, scale, stats, merged.rigs.length, asOfNight);
       const link = document.createElement('a');
       link.download = `psf-guard-sky-${asOfNight ?? 'all'}.png`;
       link.href = canvas.toDataURL('image/png');
@@ -225,6 +229,14 @@ export default function SkyPage() {
           <input type="checkbox" checked={acceptedOnly} onChange={(event) => setAcceptedOnly(event.target.checked)} />
           Accepted frames only
         </label>
+        <label className="sky-check">
+          <input type="checkbox" checked={showBackdrop} onChange={(event) => setShowBackdrop(event.target.checked)} />
+          Constellations
+        </label>
+        <label className="sky-check">
+          <input type="checkbox" checked={showStacks} onChange={(event) => setShowStacks(event.target.checked)} />
+          Stacks when zoomed
+        </label>
         {merged.rigs.length > 1 && (
           <div className="sky-control-group" aria-label="Rigs">
             {merged.rigs.map((rig) => (
@@ -262,7 +274,7 @@ export default function SkyPage() {
         )}
       </div>
 
-      <SkyMap targets={shown} frame={frame} onOpen={open} />
+      <SkyMap targets={shown} frame={frame} showBackdrop={showBackdrop} showStacks={showStacks} onOpen={open} />
 
       <SkyTimeline
         lanes={lanes}
@@ -277,6 +289,51 @@ export default function SkyPage() {
       />
     </div>
   );
+}
+
+const POSTER_HEADER = 150;
+const POSTER_FOOTER = 40;
+
+/** Title, subtitle, and the numbers above the map, and a footer below it. */
+function paintPosterText(
+  context: CanvasRenderingContext2D,
+  scale: number,
+  stats: SkyStats,
+  rigs: number,
+  asOfNight: string | null
+) {
+  const px = (value: number) => value * scale;
+  context.textBaseline = 'alphabetic';
+  context.fillStyle = '#e8ecf8';
+  context.font = `600 ${px(34)}px system-ui, sans-serif`;
+  context.fillText('Sky coverage', px(40), px(58));
+  context.fillStyle = '#9aa4c4';
+  context.font = `${px(15)}px system-ui, sans-serif`;
+  const when = asOfNight ? `as it stood on ${formatNight(asOfNight)}` : `${formatNight(stats.firstNight)} to ${formatNight(stats.lastNight)}`;
+  context.fillText(`Everything ${rigs === 1 ? 'one rig' : `${rigs} rigs`} pointed at, ${when}`, px(40), px(84));
+  const numbers: Array<[string, string]> = [
+    [formatHours(stats.hours), 'integration'],
+    [stats.frames.toLocaleString(), 'frames'],
+    [String(stats.targets), 'targets'],
+    [String(stats.nights), 'nights'],
+    [`${stats.areaDeg2 >= 100 ? Math.round(stats.areaDeg2) : stats.areaDeg2.toFixed(1)} deg²`, 'of sky'],
+  ];
+  let x = px(40);
+  for (const [value, label] of numbers) {
+    context.fillStyle = '#ffffff';
+    context.font = `600 ${px(24)}px system-ui, sans-serif`;
+    context.fillText(value, x, px(128));
+    const width = context.measureText(value).width;
+    context.fillStyle = '#7f89aa';
+    context.font = `${px(12)}px system-ui, sans-serif`;
+    context.fillText(label, x + width + px(6), px(128));
+    x += width + context.measureText(label).width + px(34);
+  }
+  context.fillStyle = '#5c6584';
+  context.font = `${px(11)}px system-ui, sans-serif`;
+  context.textAlign = 'right';
+  context.fillText(`PSF Guard · ${new Date().toISOString().slice(0, 10)}`, px(MAP_WIDTH - 40), px(POSTER_HEADER + MAP_HEIGHT + 26));
+  context.textAlign = 'left';
 }
 
 /**

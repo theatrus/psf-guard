@@ -1,4 +1,5 @@
-import { useMemo, useRef, useState, type MouseEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react';
+import { Minus, Plus, RotateCcw } from 'lucide-react';
 import type { SkyFrame } from '../../utils/skyProjection';
 import {
   celestialEquatorPoints,
@@ -13,39 +14,55 @@ import {
   graticule,
   projectedPath,
   projectedPoint,
+  tanPixelToSky,
+  type LonLat,
   type PathScale,
 } from '../../utils/skyProjection';
 import { blendFilterColors, filterColor } from '../../utils/filterColors';
+import { BRIGHT_STARS, CONSTELLATION_LINES, CONSTELLATION_NAMES } from '../../data/skyBackdrop';
 import { formatHours, formatNight, type ShownTarget } from './skyModel';
 
 export const MAP_WIDTH = 1000;
 export const MAP_HEIGHT = 540;
 const AT: PathScale = { cx: MAP_WIDTH / 2, cy: MAP_HEIGHT / 2, scale: 236 };
+const MAX_ZOOM = 60;
+/** Stack previews are drawn once a field is big enough to show one. */
+const STACKS_FROM_ZOOM = 3;
 
 interface Props {
   targets: ShownTarget[];
   frame: SkyFrame;
+  showBackdrop: boolean;
+  showStacks: boolean;
   onOpen: (target: ShownTarget) => void;
 }
 
-/** A handful of faint fixed stars so an empty sky still reads as one. */
-function backdropStars(count: number): Array<{ x: number; y: number; r: number }> {
+interface View {
+  x: number;
+  y: number;
+  k: number;
+}
+
+const HOME: View = { x: 0, y: 0, k: 1 };
+
+/** A handful of faint fixed dots so an empty sky still reads as one. */
+function backdropDust(count: number): Array<{ x: number; y: number; r: number }> {
   let seed = 7;
   const next = () => {
     seed = (seed * 1103515245 + 12345) % 2147483648;
     return seed / 2147483648;
   };
-  const stars = [];
-  while (stars.length < count) {
+  const dust = [];
+  while (dust.length < count) {
     const x = (next() * 4 - 2) * AT.scale + AT.cx;
     const y = (next() * 2 - 1) * AT.scale + AT.cy;
     const inside = ((x - AT.cx) / (2 * AT.scale)) ** 2 + ((y - AT.cy) / AT.scale) ** 2 <= 0.98;
-    if (inside) stars.push({ x, y, r: 0.4 + next() * 0.9 });
+    if (inside) dust.push({ x, y, r: 0.35 + next() * 0.7 });
   }
-  return stars;
+  return dust;
 }
 
-const STARS = backdropStars(260);
+const DUST = backdropDust(220);
 
 function opacityFor(seconds: number, maxSeconds: number): number {
   if (!(maxSeconds > 0)) return 0.6;
@@ -53,51 +70,165 @@ function opacityFor(seconds: number, maxSeconds: number): number {
   return 0.3 + 0.6 * Math.min(1, Math.max(0, scaled));
 }
 
-export default function SkyMap({ targets, frame, onOpen }: Props) {
+function clampView(view: View): View {
+  const k = Math.min(MAX_ZOOM, Math.max(1, view.k));
+  const width = MAP_WIDTH / k;
+  const height = MAP_HEIGHT / k;
+  return {
+    k,
+    x: Math.min(MAP_WIDTH - width, Math.max(0, view.x)),
+    y: Math.min(MAP_HEIGHT - height, Math.max(0, view.y)),
+  };
+}
+
+/** The four sky corners of a target's image, image top-left first, clockwise. */
+function imageCorners(item: ShownTarget): LonLat[] | null {
+  const { target } = item;
+  const preview = target.preview;
+  if (!preview || target.ra_deg == null || target.dec_deg == null) return null;
+  if (preview.wcs) {
+    const { width: w, height: h } = preview;
+    return [
+      tanPixelToSky(preview.wcs, 0, 0),
+      tanPixelToSky(preview.wcs, w, 0),
+      tanPixelToSky(preview.wcs, w, h),
+      tanPixelToSky(preview.wcs, 0, h),
+    ];
+  }
+  if (!target.footprint) return null;
+  // North up, east left, turned by the planned rotation: image left is east.
+  const corners = footprintOutline(target.ra_deg, target.dec_deg, { ...target.footprint, vertices: null }, 1);
+  // footprintOutline's rectangle starts at (west, south) and runs (east, south), (east, north), (west, north).
+  const [ws, es, en, wn] = corners;
+  return [en, wn, ws, es];
+}
+
+/** SVG matrix mapping preview pixels onto the map, fitted to three corners. */
+function imageMatrix(corners: LonLat[], width: number, height: number, frame: SkyFrame): string | null {
+  const [p0, p1, , p3] = corners.map(([ra, dec]) => projectedPoint(ra, dec, frame, AT));
+  const a = (p1.x - p0.x) / width;
+  const b = (p1.y - p0.y) / width;
+  const c = (p3.x - p0.x) / height;
+  const d = (p3.y - p0.y) / height;
+  if (![a, b, c, d, p0.x, p0.y].every(Number.isFinite)) return null;
+  // A field across the seam would stretch over the whole map.
+  if (Math.abs(a * width) > MAP_WIDTH / 3 || Math.abs(c * height) > MAP_WIDTH / 3) return null;
+  return `matrix(${a} ${b} ${c} ${d} ${p0.x} ${p0.y})`;
+}
+
+export default function SkyMap({ targets, frame, showBackdrop, showStacks, onOpen }: Props) {
   const [hovered, setHovered] = useState<ShownTarget | null>(null);
   const [pointer, setPointer] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [view, setView] = useState<View>(HOME);
   const wrapper = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const drag = useRef<{ x: number; y: number; view: View; moved: boolean } | null>(null);
+
+  useEffect(() => {
+    setView(HOME);
+  }, [frame]);
+
+  // React registers wheel listeners passively; zooming must swallow the scroll.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const rect = svg.getBoundingClientRect();
+      setView((current) => {
+        const k = Math.min(MAX_ZOOM, Math.max(1, current.k * Math.exp(-event.deltaY * 0.0016)));
+        const px = (event.clientX - rect.left) / rect.width;
+        const py = (event.clientY - rect.top) / rect.height;
+        const sx = current.x + px * (MAP_WIDTH / current.k);
+        const sy = current.y + py * (MAP_HEIGHT / current.k);
+        return clampView({ k, x: sx - px * (MAP_WIDTH / k), y: sy - py * (MAP_HEIGHT / k) });
+      });
+    };
+    svg.addEventListener('wheel', onWheel, { passive: false });
+    return () => svg.removeEventListener('wheel', onWheel);
+  }, []);
+
+  const zoomBy = (factor: number) =>
+    setView((current) => {
+      const k = Math.min(MAX_ZOOM, Math.max(1, current.k * factor));
+      const cx = current.x + MAP_WIDTH / current.k / 2;
+      const cy = current.y + MAP_HEIGHT / current.k / 2;
+      return clampView({ k, x: cx - MAP_WIDTH / k / 2, y: cy - MAP_HEIGHT / k / 2 });
+    });
+
+  const onPointerDown = (event: PointerEvent<SVGSVGElement>) => {
+    if (event.button !== 0) return;
+    drag.current = { x: event.clientX, y: event.clientY, view, moved: false };
+  };
+  const onPointerMove = (event: PointerEvent<SVGSVGElement>) => {
+    const start = drag.current;
+    if (!start) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    if (!start.moved && Math.hypot(dx, dy) < 4) return;
+    if (!start.moved) {
+      // Capture only once this is a drag, so a plain click still reaches
+      // the field under the pointer.
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+    start.moved = true;
+    setView(
+      clampView({
+        k: start.view.k,
+        x: start.view.x - (dx / rect.width) * (MAP_WIDTH / start.view.k),
+        y: start.view.y - (dy / rect.height) * (MAP_HEIGHT / start.view.k),
+      })
+    );
+  };
+  const onPointerUp = (event: PointerEvent<SVGSVGElement>) => {
+    if (drag.current && event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    // Leave `moved` for the click that follows, then forget the drag.
+    window.setTimeout(() => {
+      drag.current = null;
+    }, 0);
+  };
+  const open = (item: ShownTarget) => {
+    if (drag.current?.moved) return;
+    onOpen(item);
+  };
 
   const scenery = useMemo(() => {
     const center = frameCenter(frame);
+    const inFrame = (line: LonLat[]) => (frame === 'galactic' ? line.map(([l, b]) => galacticToEquatorial(l, b)) : line);
     const grid = graticule(center);
-    const framePaths = {
-      meridians: grid.meridians.map((line) =>
-        projectedPath(
-          frame === 'galactic' ? line.map(([l, b]) => galacticToEquatorial(l, b)) : line,
-          frame,
-          AT
-        )
-      ),
-      parallels: grid.parallels.map((line) =>
-        projectedPath(
-          frame === 'galactic' ? line.map(([l, b]) => galacticToEquatorial(l, b)) : line,
-          frame,
-          AT
-        )
-      ),
-    };
+    const meridians = grid.meridians.map((line) => projectedPath(inFrame(line), frame, AT));
+    const parallels = grid.parallels.map((line) => projectedPath(inFrame(line), frame, AT));
     const band = galacticBandQuads(12).map((quad) => projectedPath(quad, frame, AT, true)).filter((path) => !path.includes('M', 1));
     const core = galacticBandQuads(5).map((quad) => projectedPath(quad, frame, AT, true)).filter((path) => !path.includes('M', 1));
     const ecliptic = projectedPath(eclipticPoints(), frame, AT);
     const otherEquator =
-      frame === 'galactic'
-        ? projectedPath(celestialEquatorPoints(), frame, AT)
-        : projectedPath(galacticEquatorPoints(), frame, AT);
+      frame === 'galactic' ? projectedPath(celestialEquatorPoints(), frame, AT) : projectedPath(galacticEquatorPoints(), frame, AT);
     const lonLabels: Array<{ x: number; y: number; text: string }> = [];
     for (let lon = 0; lon < 360; lon += 30) {
       if (lon === (center + 180) % 360) continue;
-      const icrs = frame === 'galactic' ? galacticToEquatorial(lon, 0) : ([lon, 0] as [number, number]);
+      const icrs = frame === 'galactic' ? galacticToEquatorial(lon, 0) : ([lon, 0] as LonLat);
       const at = projectedPoint(icrs[0], icrs[1], frame, AT);
       lonLabels.push({ x: at.x, y: at.y - 4, text: frame === 'galactic' ? `${lon}°` : `${lon / 15}h` });
     }
     const latLabels: Array<{ x: number; y: number; text: string }> = [];
     for (const lat of [-60, -30, 30, 60]) {
-      const icrs = frame === 'galactic' ? galacticToEquatorial(center, lat) : ([center, lat] as [number, number]);
+      const icrs = frame === 'galactic' ? galacticToEquatorial(center, lat) : ([center, lat] as LonLat);
       const at = projectedPoint(icrs[0], icrs[1], frame, AT);
       latLabels.push({ x: at.x + 6, y: at.y - 3, text: `${lat > 0 ? '+' : '−'}${Math.abs(lat)}°` });
     }
-    return { ...framePaths, band, core, ecliptic, otherEquator, lonLabels, latLabels };
+    const constellations = Object.values(CONSTELLATION_LINES).map((figure) =>
+      figure.map((polyline) => projectedPath(polyline, frame, AT)).join('')
+    );
+    const names = Object.entries(CONSTELLATION_NAMES).map(([id, [name, ra, dec]]) => ({
+      id,
+      name,
+      ...projectedPoint(ra, dec, frame, AT),
+    }));
+    const stars = BRIGHT_STARS.map(([ra, dec, mag]) => ({ ...projectedPoint(ra, dec, frame, AT), mag }));
+    return { meridians, parallels, band, core, ecliptic, otherEquator, lonLabels, latLabels, constellations, names, stars };
   }, [frame]);
 
   const maxSeconds = useMemo(() => targets.reduce((max, item) => Math.max(max, item.seconds), 0), [targets]);
@@ -111,14 +242,30 @@ export default function SkyMap({ targets, frame, onOpen }: Props) {
           const dec = item.target.dec_deg as number;
           const fill = blendFilterColors(item.byFilter.map(({ filter, seconds }) => ({ filter, weight: seconds })));
           const opacity = opacityFor(item.seconds, maxSeconds);
+          const at = projectedPoint(ra, dec, frame, AT);
           if (item.target.footprint) {
             const outline = footprintOutline(ra, dec, item.target.footprint);
-            return { item, kind: 'field' as const, path: projectedPath(outline, frame, AT, true), fill, opacity, point: null };
+            const corners = imageCorners(item);
+            const matrix =
+              corners && item.target.preview
+                ? imageMatrix(corners, item.target.preview.width, item.target.preview.height, frame)
+                : null;
+            return { item, kind: 'field' as const, path: projectedPath(outline, frame, AT, true), fill, opacity, at, matrix };
           }
-          return { item, kind: 'point' as const, path: '', fill, opacity, point: projectedPoint(ra, dec, frame, AT) };
+          return { item, kind: 'point' as const, path: '', fill, opacity, at, matrix: null };
         }),
     [targets, frame, maxSeconds]
   );
+
+  // Which fields are inside the current view, for lazy stack previews.
+  const visibleWidth = MAP_WIDTH / view.k;
+  const visibleHeight = MAP_HEIGHT / view.k;
+  const inView = (at: { x: number; y: number }) =>
+    at.x >= view.x - visibleWidth * 0.2 &&
+    at.x <= view.x + visibleWidth * 1.2 &&
+    at.y >= view.y - visibleHeight * 0.2 &&
+    at.y <= view.y + visibleHeight * 1.2;
+  const stacksOn = showStacks && view.k >= STACKS_FROM_ZOOM;
 
   const track = (event: MouseEvent) => {
     const box = wrapper.current?.getBoundingClientRect();
@@ -126,25 +273,52 @@ export default function SkyMap({ targets, frame, onOpen }: Props) {
     setPointer({ x: event.clientX - box.left, y: event.clientY - box.top });
   };
 
+  const k = view.k;
+  const textScale = 1 / k;
+
   return (
     <div className="sky-map-wrapper" ref={wrapper} onMouseMove={track}>
       <svg
-        className="sky-map"
-        viewBox={`0 0 ${MAP_WIDTH} ${MAP_HEIGHT}`}
+        ref={svgRef}
+        className={`sky-map${k > 1 ? ' is-zoomed' : ''}`}
+        viewBox={`${view.x} ${view.y} ${visibleWidth} ${visibleHeight}`}
         role="img"
         aria-label={`Sky coverage map in ${frame} coordinates with ${drawn.length} targets`}
+        data-zoom={k.toFixed(2)}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onDoubleClick={() => setView(HOME)}
       >
         <defs>
           <radialGradient id="sky-ground" cx="50%" cy="50%" r="60%">
             <stop offset="0%" stopColor="#141c33" />
             <stop offset="100%" stopColor="#090c18" />
           </radialGradient>
+          {drawn
+            .filter((entry) => entry.kind === 'field' && entry.matrix)
+            .map((entry) => (
+              <clipPath key={`clip-${entry.item.target.key}`} id={`sky-clip-${entry.item.target.key}`}>
+                <path d={entry.path} />
+              </clipPath>
+            ))}
         </defs>
         <ellipse className="sky-globe" cx={AT.cx} cy={AT.cy} rx={2 * AT.scale} ry={AT.scale} fill="url(#sky-ground)" />
         <g className="sky-stars">
-          {STARS.map((star, index) => (
-            <circle key={index} cx={star.x} cy={star.y} r={star.r} />
+          {DUST.map((dot, index) => (
+            <circle key={index} cx={dot.x} cy={dot.y} r={dot.r * textScale} />
           ))}
+          {showBackdrop &&
+            scenery.stars.map((star, index) => (
+              <circle
+                key={`s${index}`}
+                className="sky-bright-star"
+                cx={star.x}
+                cy={star.y}
+                r={Math.max(0.5, 2.6 - 0.5 * star.mag) * textScale}
+              />
+            ))}
         </g>
         <g className="sky-milky-way">
           {scenery.band.map((path, index) => (
@@ -156,15 +330,22 @@ export default function SkyMap({ targets, frame, onOpen }: Props) {
         </g>
         <g className="sky-graticule">
           {scenery.meridians.map((path, index) => (
-            <path key={`m${index}`} d={path} />
+            <path key={`m${index}`} d={path} vectorEffect="non-scaling-stroke" />
           ))}
           {scenery.parallels.map((path, index) => (
-            <path key={`p${index}`} d={path} />
+            <path key={`p${index}`} d={path} vectorEffect="non-scaling-stroke" />
           ))}
         </g>
-        <path className="sky-ecliptic" d={scenery.ecliptic} />
-        <path className="sky-other-equator" d={scenery.otherEquator} />
-        <g className="sky-labels">
+        {showBackdrop && (
+          <g className="sky-constellations">
+            {scenery.constellations.map((path, index) => (
+              <path key={index} d={path} vectorEffect="non-scaling-stroke" />
+            ))}
+          </g>
+        )}
+        <path className="sky-ecliptic" d={scenery.ecliptic} vectorEffect="non-scaling-stroke" />
+        <path className="sky-other-equator" d={scenery.otherEquator} vectorEffect="non-scaling-stroke" />
+        <g className="sky-labels" style={{ fontSize: 11 * textScale }}>
           {scenery.lonLabels.map((label) => (
             <text key={label.text} x={label.x} y={label.y} textAnchor="middle">
               {label.text}
@@ -176,15 +357,45 @@ export default function SkyMap({ targets, frame, onOpen }: Props) {
             </text>
           ))}
         </g>
+        {showBackdrop && (
+          <g className="sky-constellation-names" style={{ fontSize: 10 * textScale }}>
+            {scenery.names.map((label) => (
+              <text key={label.id} x={label.x} y={label.y} textAnchor="middle">
+                {label.name}
+              </text>
+            ))}
+          </g>
+        )}
+        {stacksOn && (
+          <g className="sky-stacks">
+            {drawn
+              .filter((entry) => entry.kind === 'field' && entry.matrix && inView(entry.at))
+              .map((entry) => (
+                <g key={`stack-${entry.item.target.key}`} clipPath={`url(#sky-clip-${entry.item.target.key})`}>
+                  <image
+                    href={entry.item.target.preview?.url}
+                    x={0}
+                    y={0}
+                    width={entry.item.target.preview?.width}
+                    height={entry.item.target.preview?.height}
+                    preserveAspectRatio="none"
+                    transform={entry.matrix ?? undefined}
+                  />
+                </g>
+              ))}
+          </g>
+        )}
         <g className="sky-targets">
-          {drawn.map(({ item, kind, path, fill, opacity, point }) => {
+          {drawn.map(({ item, kind, path, fill, opacity, at, matrix }) => {
             const active = hovered?.target.key === item.target.key;
+            const textured = stacksOn && matrix != null && inView(at);
             const shared = {
-              className: `sky-target${active ? ' is-active' : ''}`,
+              className: `sky-target${active ? ' is-active' : ''}${textured ? ' is-textured' : ''}`,
               'data-target': item.target.name,
+              vectorEffect: 'non-scaling-stroke' as const,
               onMouseEnter: () => setHovered(item),
               onMouseLeave: () => setHovered((current) => (current?.target.key === item.target.key ? null : current)),
-              onClick: () => onOpen(item),
+              onClick: () => open(item),
               tabIndex: 0,
               onFocus: () => setHovered(item),
               onBlur: () => setHovered(null),
@@ -193,14 +404,16 @@ export default function SkyMap({ targets, frame, onOpen }: Props) {
               },
             };
             if (kind === 'field') {
-              return <path key={item.target.key} d={path} fill={fill} fillOpacity={opacity} stroke={fill} {...shared} />;
+              return (
+                <path key={item.target.key} d={path} fill={fill} fillOpacity={textured ? 0 : opacity} stroke={fill} {...shared} />
+              );
             }
             return (
               <circle
                 key={item.target.key}
-                cx={point?.x}
-                cy={point?.y}
-                r={active ? 5 : 3.5}
+                cx={at.x}
+                cy={at.y}
+                r={(active ? 5 : 3.5) * textScale}
                 fill={fill}
                 fillOpacity={Math.min(1, opacity + 0.2)}
                 stroke={fill}
@@ -210,10 +423,37 @@ export default function SkyMap({ targets, frame, onOpen }: Props) {
           })}
         </g>
       </svg>
-      {hovered && (
-        <TargetCard item={hovered} x={pointer.x} y={pointer.y} width={wrapper.current?.clientWidth ?? 0} />
-      )}
+      <div className="sky-zoom" role="group" aria-label="Zoom">
+        <button type="button" onClick={() => zoomBy(1.6)} aria-label="Zoom in">
+          <Plus size={14} />
+        </button>
+        <button type="button" onClick={() => zoomBy(1 / 1.6)} aria-label="Zoom out" disabled={k <= 1}>
+          <Minus size={14} />
+        </button>
+        <button type="button" onClick={() => setView(HOME)} aria-label="Whole sky" disabled={k <= 1}>
+          <RotateCcw size={14} />
+        </button>
+        <span className="sky-zoom-level">{k >= 10 ? `${Math.round(k)}×` : `${k.toFixed(1)}×`}</span>
+      </div>
+      {hovered && <TargetCard item={hovered} x={pointer.x} y={pointer.y} width={wrapper.current?.clientWidth ?? 0} />}
     </div>
+  );
+}
+
+function Sparkline({ series }: { series: Array<[string, number]> }) {
+  if (series.length < 2) return null;
+  const width = 232;
+  const height = 26;
+  const max = series.reduce((m, [, s]) => Math.max(m, s), 0);
+  if (!(max > 0)) return null;
+  const step = width / series.length;
+  return (
+    <svg className="sky-card-spark" viewBox={`0 0 ${width} ${height}`} width={width} height={height} aria-hidden="true">
+      {series.map(([night, seconds], index) => {
+        const h = Math.max(1, (height - 2) * (seconds / max));
+        return <rect key={night} x={index * step + 0.3} y={height - h} width={Math.max(step - 0.6, 0.8)} height={h} />;
+      })}
+    </svg>
   );
 }
 
@@ -231,6 +471,11 @@ function TargetCard({ item, x, y, width }: { item: ShownTarget; x: number; y: nu
         target.footprint.source === 'solved' ? 'from a plate solve' : 'from the frame header'
       }`
     : 'field size unknown';
+  const stack = target.preview
+    ? `${target.preview.kind === 'color' ? 'Colour' : target.preview.filter ?? 'Mono'} stack preview${
+        target.preview.wcs ? ', placed by its plate solve' : ', placed by the planned rotation'
+      }`
+    : null;
   return (
     <div className="sky-card" style={style} role="tooltip">
       <div className="sky-card-title">{target.name}</div>
@@ -256,12 +501,14 @@ function TargetCard({ item, x, y, width }: { item: ShownTarget; x: number; y: nu
           </div>
         ))}
       </div>
+      <Sparkline series={item.perNight} />
       <div className="sky-card-span">
         {formatNight(item.firstNight)}
         {item.firstNight !== item.lastNight ? ` → ${formatNight(item.lastNight)}` : ''}
       </div>
       <div className="sky-card-field">{field}</div>
-      <div className="sky-card-hint">Click to open in Images</div>
+      {stack && <div className="sky-card-field">{stack}</div>}
+      <div className="sky-card-hint">Click to open in Images · scroll to zoom, drag to pan</div>
     </div>
   );
 }

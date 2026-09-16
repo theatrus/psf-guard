@@ -2005,6 +2005,28 @@ export interface SkyFootprint {
   vertices?: [number, number][];
 }
 
+/** The latest stack preview of a target, for drawing inside its field. */
+export interface SkyPreview {
+  /** Same-origin URL of the preview PNG. */
+  url: string;
+  /** The pixel grid the preview covers, in the stack's output orientation. */
+  width: number;
+  height: number;
+  kind: 'color' | 'mono';
+  filter?: string | null;
+  /** The reference frame's plate solution, when the cache holds one. */
+  wcs?: {
+    crpix1: number;
+    crpix2: number;
+    crval1: number;
+    crval2: number;
+    cd11: number;
+    cd12: number;
+    cd21: number;
+    cd22: number;
+  } | null;
+}
+
 export interface SkyTarget {
   id: number;
   name: string;
@@ -2014,6 +2036,7 @@ export interface SkyTarget {
   dec_deg: number | null;
   rotation_deg: number | null;
   footprint: SkyFootprint | null;
+  preview?: SkyPreview | null;
   frames: number;
   accepted_frames: number;
   seconds: number;
