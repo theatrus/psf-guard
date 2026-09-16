@@ -55,6 +55,7 @@ import type {
   CreateExposurePlanRequest,
   ExposurePlanDetails,
   OverallStats,
+  SkyCoverage,
   CacheRefreshProgress,
   SequenceAnalysisRequest,
   ProjectSequenceAnalysisRequest,
@@ -1657,6 +1658,15 @@ export const apiClient = {
       dbPath(dbId, '/targets/overview')
     );
     return data.data || [];
+  },
+
+  getSkyCoverage: async (dbId: string): Promise<SkyCoverage> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<SkyCoverage>>(
+      dbPath(dbId, '/sky/coverage')
+    );
+    if (!data.data) throw new Error('Failed to get sky coverage');
+    return data.data;
   },
 
   getOverallStats: async (dbId: string): Promise<OverallStats> => {

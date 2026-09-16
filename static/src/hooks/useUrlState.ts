@@ -125,6 +125,16 @@ export function isOverviewPath(pathname: string): boolean {
   return pathname === '/' || pathname === '/overview';
 }
 
+/** The Sky route: every database at once, like the Overview. */
+export function isSkyPath(pathname: string): boolean {
+  return pathname === '/sky';
+}
+
+/** Routes that show every database, where a parked `db` slug means nothing. */
+export function isMergedPath(pathname: string): boolean {
+  return isOverviewPath(pathname) || isSkyPath(pathname);
+}
+
 /**
  * The database a status widget should follow. The Overview carries the scope
  * of the view the user came from so it can return them there, but it shows
@@ -134,7 +144,7 @@ export function isOverviewPath(pathname: string): boolean {
 export function useScopedDbId(): string | null {
   const { dbId } = useDbProjectTarget();
   const { pathname } = useLocation();
-  return isOverviewPath(pathname) ? null : dbId;
+  return isMergedPath(pathname) ? null : dbId;
 }
 
 /**

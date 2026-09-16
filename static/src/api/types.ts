@@ -1986,6 +1986,95 @@ export interface CreateExposurePlanRequest {
   enabled: boolean;
 }
 
+/** Sky coverage of one database: where its lights pointed and when. */
+export interface SkyFilterTotal {
+  filter: string;
+  frames: number;
+  accepted_frames: number;
+  seconds: number;
+  accepted_seconds: number;
+}
+
+export interface SkyFootprint {
+  width_deg: number;
+  height_deg: number;
+  rotation_deg?: number | null;
+  /** `solved` from a plate solution, `header` from a frame's FITS geometry. */
+  source: 'solved' | 'header';
+  /** ICRS vertices in boundary order, for a solved footprint. */
+  vertices?: [number, number][];
+}
+
+/** The latest stack preview of a target, for drawing inside its field. */
+export interface SkyPreview {
+  /** Same-origin URL of the preview PNG. */
+  url: string;
+  /** The pixel grid the preview covers, in the stack's output orientation. */
+  width: number;
+  height: number;
+  kind: 'color' | 'mono';
+  filter?: string | null;
+  /** The reference frame's plate solution, when the cache holds one. */
+  wcs?: {
+    crpix1: number;
+    crpix2: number;
+    crval1: number;
+    crval2: number;
+    cd11: number;
+    cd12: number;
+    cd21: number;
+    cd22: number;
+  } | null;
+}
+
+export interface SkyTarget {
+  id: number;
+  name: string;
+  project_id: number;
+  project_name: string;
+  ra_deg: number | null;
+  dec_deg: number | null;
+  rotation_deg: number | null;
+  footprint: SkyFootprint | null;
+  preview?: SkyPreview | null;
+  frames: number;
+  accepted_frames: number;
+  seconds: number;
+  accepted_seconds: number;
+  nights: number;
+  first_capture: number | null;
+  last_capture: number | null;
+  filters: SkyFilterTotal[];
+}
+
+export interface SkyNight {
+  /** The civil date the night began on, `YYYY-MM-DD`. */
+  night: string;
+  target_id: number;
+  filter: string;
+  frames: number;
+  accepted_frames: number;
+  seconds: number;
+  accepted_seconds: number;
+}
+
+export interface SkyTotals {
+  frames: number;
+  accepted_frames: number;
+  seconds: number;
+  accepted_seconds: number;
+  nights: number;
+  first_capture: number | null;
+  last_capture: number | null;
+}
+
+export interface SkyCoverage {
+  targets: SkyTarget[];
+  nights: SkyNight[];
+  filters: string[];
+  totals: SkyTotals;
+}
+
 export interface OverallStats {
   total_projects: number;
   active_projects: number;

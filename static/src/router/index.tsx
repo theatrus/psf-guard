@@ -4,6 +4,7 @@ import App from '../App';
 import MainView from '../components/MainView';
 import Overview from '../components/Overview';
 import SequenceView from '../components/SequenceView';
+import SkyPage from '../components/sky/SkyPage';
 
 // Create React Query client
 const queryClient = new QueryClient({
@@ -44,6 +45,10 @@ const router = createHashRouter([
       {
         path: "sequence",
         element: <SequenceView />
+      },
+      {
+        path: "sky",
+        element: <SkyPage />
       }
     ]
   }

@@ -1,0 +1,109 @@
+import { expect, test } from '@playwright/test';
+import { registerFixtureDb, resetDatabases, waitForCacheReady } from './helpers';
+
+let dbId: string;
+
+test.beforeEach(async ({ request }) => {
+  await resetDatabases(request);
+  const entry = await registerFixtureDb(request, { name: 'Sky Rig', slug: 'sky-rig' });
+  dbId = entry.id;
+  await waitForCacheReady(request, dbId);
+});
+
+test('the sky page maps every target, tells its story on hover, and opens it in Images', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Sky' }).click();
+  await expect(page).toHaveURL(/#\/sky/);
+
+  const hero = page.locator('.sky-hero');
+  await expect(hero).toBeVisible({ timeout: 15_000 });
+  await expect(hero.locator('[data-stat="frames"]')).toHaveText('4');
+  await expect(hero.locator('[data-stat="targets"]')).toHaveText('2');
+
+  const targets = page.locator('.sky-target');
+  await expect(targets).toHaveCount(2);
+
+  const alpha = page.locator('.sky-target[data-target="Alpha M44"]');
+  await alpha.hover();
+  const card = page.locator('.sky-card');
+  await expect(card).toBeVisible();
+  await expect(card).toContainText('Alpha M44');
+  await expect(card).toContainText('Sky Rig · Project Alpha');
+  await expect(card).toContainText('3 frames');
+
+  await alpha.click();
+  await expect(page).toHaveURL(new RegExp(`#/grid\\?db=${dbId}&project=1&target=1`));
+});
+
+test('the timeline scrubs the map back through the nights', async ({ page }) => {
+  await page.goto('/#/sky');
+  await expect(page.locator('.sky-timeline')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('.sky-lane-name').first()).toHaveText('Sky Rig');
+
+  const scrubber = page.locator('.sky-scrubber');
+  const nights = Number(await scrubber.getAttribute('max')) + 1;
+  expect(nights).toBeGreaterThanOrEqual(1);
+  await expect(page.locator('.sky-timeline-asof')).toContainText('every night');
+
+  if (nights > 1) {
+    await scrubber.fill('0');
+    await expect(page.locator('.sky-timeline-asof')).toContainText('as of');
+    const shownEarly = await page.locator('.sky-target').count();
+    expect(shownEarly).toBeLessThanOrEqual(2);
+    await scrubber.fill(String(nights - 1));
+    await expect(page.locator('.sky-timeline-asof')).toContainText('every night');
+  }
+
+  await page.getByRole('radio', { name: 'Galactic' }).click();
+  await expect(page.locator('.sky-map')).toHaveAttribute('aria-label', /galactic/);
+  await expect(page.locator('.sky-target')).toHaveCount(2);
+});
+
+test('the map zooms, shows constellations, and stays whole-sky by default', async ({ page }) => {
+  await page.goto('/#/sky');
+  const map = page.locator('.sky-map');
+  await expect(map).toBeVisible({ timeout: 15_000 });
+  await expect(map).toHaveAttribute('data-zoom', '1.00');
+  await expect(page.locator('.sky-constellations path').first()).toBeAttached();
+  await expect(page.locator('.sky-constellation-names text', { hasText: 'Cancer' })).toBeAttached();
+
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  await expect(map).toHaveAttribute('data-zoom', '2.56');
+  await expect(page.locator('.sky-target')).toHaveCount(2);
+
+  await page.getByRole('button', { name: 'Whole sky' }).click();
+  await expect(map).toHaveAttribute('data-zoom', '1.00');
+
+  await page.getByLabel('Constellations').uncheck();
+  await expect(page.locator('.sky-constellations')).toHaveCount(0);
+});
+
+test('the globe turns when dragged and the flat map spins its central meridian', async ({ page }) => {
+  await page.goto('/#/sky');
+  const map = page.locator('.sky-map');
+  await expect(map).toBeVisible({ timeout: 15_000 });
+  await expect(map).toHaveAttribute('data-center', '180.0,0.0');
+
+  const box = await map.boundingBox();
+  if (!box) throw new Error('no map');
+  const drag = async (dx: number, dy: number) => {
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + dx / 2, box.y + box.height / 2 + dy / 2, { steps: 4 });
+    await page.mouse.move(box.x + box.width / 2 + dx, box.y + box.height / 2 + dy, { steps: 4 });
+    await page.mouse.up();
+  };
+
+  await drag(box.width / 4, 0);
+  await expect(map).toHaveAttribute('data-center', '270.0,0.0');
+
+  await page.getByRole('radio', { name: 'Globe' }).click();
+  await expect(map).toHaveAttribute('data-center', '180.0,25.0');
+  await drag(0, -box.height / 4);
+  await expect(map).toHaveAttribute('data-center', '180.0,-5.0');
+  await expect(page.locator('.sky-target')).toHaveCount(2);
+
+  await page.getByRole('button', { name: 'Whole sky' }).click();
+  await expect(map).toHaveAttribute('data-center', '180.0,25.0');
+});
