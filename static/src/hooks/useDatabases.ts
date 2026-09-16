@@ -8,6 +8,7 @@ import type {
   TargetNavigation,
   TargetOverview,
   OverallStats,
+  SkyCoverage,
 } from '../api/types';
 
 /** Each row returned by a merged hook carries the DB it came from. */
@@ -212,4 +213,19 @@ export function useMergedOverallStats() {
 
     return { data: summed, isLoading };
   }, [queries, dbsLoading]);
+}
+
+/** Merged sky coverage across every configured database, one row per database. */
+export function useMergedSkyCoverage() {
+  const { data: databases, isLoading: dbsLoading } = useAllDatabases();
+  const merged = useMergedPerDb<SkyCoverage>(
+    databases,
+    'sky-coverage',
+    async (dbId) => [await apiClient.getSkyCoverage(dbId)],
+    { refetchInterval: 5 * 60_000 }
+  );
+  return {
+    ...merged,
+    isLoading: dbsLoading || merged.isLoading,
+  };
 }

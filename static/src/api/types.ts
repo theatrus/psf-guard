@@ -1986,6 +1986,72 @@ export interface CreateExposurePlanRequest {
   enabled: boolean;
 }
 
+/** Sky coverage of one database: where its lights pointed and when. */
+export interface SkyFilterTotal {
+  filter: string;
+  frames: number;
+  accepted_frames: number;
+  seconds: number;
+  accepted_seconds: number;
+}
+
+export interface SkyFootprint {
+  width_deg: number;
+  height_deg: number;
+  rotation_deg?: number | null;
+  /** `solved` from a plate solution, `header` from a frame's FITS geometry. */
+  source: 'solved' | 'header';
+  /** ICRS vertices in boundary order, for a solved footprint. */
+  vertices?: [number, number][];
+}
+
+export interface SkyTarget {
+  id: number;
+  name: string;
+  project_id: number;
+  project_name: string;
+  ra_deg: number | null;
+  dec_deg: number | null;
+  rotation_deg: number | null;
+  footprint: SkyFootprint | null;
+  frames: number;
+  accepted_frames: number;
+  seconds: number;
+  accepted_seconds: number;
+  nights: number;
+  first_capture: number | null;
+  last_capture: number | null;
+  filters: SkyFilterTotal[];
+}
+
+export interface SkyNight {
+  /** The civil date the night began on, `YYYY-MM-DD`. */
+  night: string;
+  target_id: number;
+  filter: string;
+  frames: number;
+  accepted_frames: number;
+  seconds: number;
+  accepted_seconds: number;
+}
+
+export interface SkyTotals {
+  frames: number;
+  accepted_frames: number;
+  seconds: number;
+  accepted_seconds: number;
+  nights: number;
+  first_capture: number | null;
+  last_capture: number | null;
+}
+
+export interface SkyCoverage {
+  targets: SkyTarget[];
+  nights: SkyNight[];
+  filters: string[];
+  totals: SkyTotals;
+}
+
 export interface OverallStats {
   total_projects: number;
   active_projects: number;

@@ -8,6 +8,7 @@ Use this index for detailed behavior and engineering records.
 - [Adding image folders](IMPORTING.md)
 - [Calibration libraries](CALIBRATION_LIBRARY.md)
 - [Project stack previews](STACKING_PREVIEWS.md)
+- [Sky coverage map and timeline](SKY_COVERAGE.md)
 - [Statistical grading](STATISTICAL_GRADING.md)
 
 ## Quality and sky analysis

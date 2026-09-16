@@ -23,6 +23,7 @@ pub mod remote_sync;
 pub mod remote_upload;
 pub mod remote_upload_layout;
 pub mod scheduler;
+pub mod sky_coverage;
 pub mod slug;
 pub mod spatial_scan;
 pub mod stack_preview;
@@ -437,6 +438,7 @@ async fn run_server_internal(
         .route("/targets", get(handlers::list_all_targets))
         .route("/targets/overview", get(handlers::get_targets_overview))
         .route("/stats/overall", get(handlers::get_overall_stats))
+        .route("/sky/coverage", get(sky_coverage::get_sky_coverage))
         .route(
             "/projects/{project_id}/calibration-report",
             get(handlers::get_project_calibration_report),

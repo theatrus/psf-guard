@@ -10,7 +10,7 @@ import UpdateNotice from './components/UpdateNotice';
 import DatabaseActivityStatus from './components/DatabaseActivityStatus';
 import AggregatedCacheStatus from './components/AggregatedCacheStatus';
 import TauriSettings from './components/TauriSettings';
-import { isOverviewPath, useGridState } from './hooks/useUrlState';
+import { isOverviewPath, isSkyPath, useGridState } from './hooks/useUrlState';
 import { isTauriApp, tauriConfig } from './utils/tauri';
 import {
   OPEN_SETTINGS_EVENT,
@@ -116,6 +116,7 @@ function AppContent() {
   const isOnOverview = isOverviewPath(location.pathname);
   const isOnGrid = location.pathname === '/grid';
   const isOnSequence = location.pathname === '/sequence';
+  const isOnSky = isSkyPath(location.pathname);
 
   return (
     <div className="app">
@@ -172,6 +173,14 @@ function AppContent() {
             aria-current={isOnSequence ? 'page' : undefined}
           >
             Sequence
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate(toScoped('/sky'))}
+            className="header-button"
+            aria-current={isOnSky ? 'page' : undefined}
+          >
+            Sky
           </button>
         </nav>
 
