@@ -6,9 +6,11 @@ import { formatHours, formatNight, type Lane } from './skyModel';
 
 interface Props {
   lanes: Lane[];
+  /** The nights the selected rigs captured on, sorted. */
   nightKeys: string[];
+  fromNight: string | null;
   asOfNight: string | null;
-  onAsOf: (night: string | null) => void;
+  onRange: (fromNight: string | null, asOfNight: string | null) => void;
   playing: boolean;
   onTogglePlay: () => void;
 }
@@ -24,7 +26,7 @@ function dayOf(night: string): number {
   return Math.floor(Date.UTC(y, m - 1, d) / 86400000);
 }
 
-export default function SkyTimeline({ lanes, nightKeys, asOfNight, onAsOf, playing, onTogglePlay }: Props) {
+export default function SkyTimeline({ lanes, nightKeys, fromNight, asOfNight, onRange, playing, onTogglePlay }: Props) {
   const span = useMemo(() => {
     if (nightKeys.length === 0) return null;
     const first = dayOf(nightKeys[0]);
@@ -77,9 +79,25 @@ export default function SkyTimeline({ lanes, nightKeys, asOfNight, onAsOf, playi
     return null;
   }
 
-  const currentIndex = asOfNight ? Math.max(0, nightKeys.indexOf(asOfNight)) : nightKeys.length - 1;
-  const cursorX = geometry.xOf(nightKeys[currentIndex]) + geometry.columnWidth;
+  const last = nightKeys.length - 1;
+  const toIndex = asOfNight ? Math.max(0, nightKeys.indexOf(asOfNight)) : last;
+  const fromIndex = fromNight ? Math.max(0, nightKeys.indexOf(fromNight)) : 0;
+  const cursorX = geometry.xOf(nightKeys[toIndex]) + geometry.columnWidth;
+  const startX = geometry.xOf(nightKeys[fromIndex]);
   const barWidth = Math.max(geometry.columnWidth - 0.6, 1);
+  const years = [...new Set(nightKeys.map((night) => night.slice(0, 4)))];
+  const setFrom = (index: number) => {
+    const bounded = Math.min(index, toIndex);
+    onRange(bounded <= 0 ? null : nightKeys[bounded], asOfNight);
+  };
+  const setTo = (index: number) => {
+    const bounded = Math.max(index, fromIndex);
+    onRange(fromNight, bounded >= last ? null : nightKeys[bounded]);
+  };
+  const fromYear = (year: string) => {
+    const first = nightKeys.findIndex((night) => night >= `${year}-01-01`);
+    onRange(first <= 0 ? null : nightKeys[first], null);
+  };
 
   return (
     <div className="sky-timeline">
@@ -92,31 +110,69 @@ export default function SkyTimeline({ lanes, nightKeys, asOfNight, onAsOf, playi
         >
           {playing ? <Pause size={16} /> : <Play size={16} />}
         </button>
-        <input
-          className="sky-scrubber"
-          type="range"
-          min={0}
-          max={Math.max(0, nightKeys.length - 1)}
-          value={currentIndex}
-          aria-label="Show the sky as it was covered by this night"
-          onChange={(event) => {
-            const index = Number(event.target.value);
-            onAsOf(index >= nightKeys.length - 1 ? null : nightKeys[index]);
-          }}
-        />
+        <div className="sky-range" style={{ ['--from' as string]: `${(100 * fromIndex) / Math.max(1, last)}%`, ['--to' as string]: `${(100 * toIndex) / Math.max(1, last)}%` }}>
+          <input
+            className="sky-scrubber sky-scrubber-from"
+            type="range"
+            min={0}
+            max={Math.max(0, last)}
+            value={fromIndex}
+            aria-label="Start the replay from this night"
+            onChange={(event) => setFrom(Number(event.target.value))}
+          />
+          <input
+            className="sky-scrubber sky-scrubber-to"
+            type="range"
+            min={0}
+            max={Math.max(0, last)}
+            value={toIndex}
+            aria-label="Show the sky as it was covered by this night"
+            onChange={(event) => setTo(Number(event.target.value))}
+          />
+        </div>
         <div className="sky-timeline-asof" aria-live="polite">
-          {asOfNight ? (
+          {fromNight || asOfNight ? (
             <>
-              as of <strong>{formatNight(asOfNight)}</strong>
+              {fromNight ? (
+                <>
+                  from <strong>{formatNight(fromNight)}</strong>
+                </>
+              ) : (
+                'from the start'
+              )}
+              {' · '}
+              {asOfNight ? (
+                <>
+                  as of <strong>{formatNight(asOfNight)}</strong>
+                </>
+              ) : (
+                'to the latest night'
+              )}
             </>
           ) : (
             <>
-              every night, <strong>{formatNight(nightKeys[0])}</strong> to{' '}
-              <strong>{formatNight(nightKeys[nightKeys.length - 1])}</strong>
+              every night, <strong>{formatNight(nightKeys[0])}</strong> to <strong>{formatNight(nightKeys[last])}</strong>
             </>
           )}
         </div>
       </div>
+      {years.length > 1 && (
+        <div className="sky-timeline-years" aria-label="Start year">
+          <button type="button" className={`sky-chip${fromNight ? '' : ' is-on'}`} onClick={() => onRange(null, asOfNight)}>
+            From the start
+          </button>
+          {years.map((year) => (
+            <button
+              key={year}
+              type="button"
+              className={`sky-chip${fromNight?.startsWith(year) && fromNight === nightKeys.find((night) => night >= `${year}-01-01`) ? ' is-on' : ''}`}
+              onClick={() => fromYear(year)}
+            >
+              From {year}
+            </button>
+          ))}
+        </div>
+      )}
       <svg className="sky-timeline-plot" viewBox={`0 0 ${WIDTH} ${height}`} role="img" aria-label="Integration per night and rig">
         {lanes.map((lane, laneIndex) => {
           const top = laneIndex * LANE_HEIGHT;
@@ -133,7 +189,7 @@ export default function SkyTimeline({ lanes, nightKeys, asOfNight, onAsOf, playi
                 const x = geometry.xOf(night);
                 const fullHeight = (LANE_HEIGHT - 6) * (slot.seconds / geometry.maxNightSeconds);
                 let y = top + LANE_HEIGHT - 4;
-                const dim = asOfNight != null && night > asOfNight;
+                const dim = (asOfNight != null && night > asOfNight) || (fromNight != null && night < fromNight);
                 return (
                   <g key={night} className={dim ? 'sky-night is-future' : 'sky-night'}>
                     <title>{`${lane.db_name} · ${formatNight(night)} · ${formatHours(slot.seconds / 3600)}`}</title>
@@ -166,6 +222,7 @@ export default function SkyTimeline({ lanes, nightKeys, asOfNight, onAsOf, playi
             </g>
           ))}
         </g>
+        {fromNight && <line className="sky-cursor sky-cursor-from" x1={startX} x2={startX} y1={0} y2={lanes.length * LANE_HEIGHT + MOON_HEIGHT} />}
         <line className="sky-cursor" x1={cursorX} x2={cursorX} y1={0} y2={lanes.length * LANE_HEIGHT + MOON_HEIGHT} />
       </svg>
     </div>

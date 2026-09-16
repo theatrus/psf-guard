@@ -43,7 +43,7 @@
 
 .sky-stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
   gap: 8px;
   margin: 0;
 }
@@ -449,9 +449,102 @@
   fill: currentColor;
 }
 
-.sky-scrubber {
+.sky-range {
+  position: relative;
   flex: 1;
+  height: 28px;
+}
+
+.sky-range::before {
+  /* the selected span, between the two thumbs */
+  content: '';
+  position: absolute;
+  left: var(--from);
+  right: calc(100% - var(--to));
+  top: 12px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-primary);
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.sky-scrubber {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  margin: 0;
+  background: transparent;
   accent-color: var(--color-primary);
+  pointer-events: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.sky-scrubber::-webkit-slider-runnable-track {
+  height: 4px;
+  margin-top: 12px;
+  border-radius: 2px;
+  background: var(--color-bg-slider);
+}
+
+.sky-scrubber-to::-webkit-slider-runnable-track {
+  background: transparent;
+}
+
+.sky-scrubber::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-bg-slider);
+}
+
+.sky-scrubber-to::-moz-range-track {
+  background: transparent;
+}
+
+.sky-scrubber::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  border: 2px solid var(--color-bg-secondary);
+  pointer-events: auto;
+  cursor: grab;
+}
+
+.sky-scrubber::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  border: 2px solid var(--color-bg-secondary);
+  pointer-events: auto;
+  cursor: grab;
+}
+
+.sky-scrubber-from::-webkit-slider-thumb {
+  background: var(--color-bg-secondary);
+  border-color: var(--color-primary);
+}
+
+.sky-scrubber-from::-moz-range-thumb {
+  background: var(--color-bg-secondary);
+  border-color: var(--color-primary);
+}
+
+.sky-timeline-years {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px 42px;
+}
+
+.sky-cursor-from {
+  stroke-dasharray: 1 3;
+  opacity: 0.7;
 }
 
 .sky-timeline-asof {

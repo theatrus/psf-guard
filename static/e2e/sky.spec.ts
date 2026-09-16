@@ -40,7 +40,8 @@ test('the timeline scrubs the map back through the nights', async ({ page }) => 
   await expect(page.locator('.sky-timeline')).toBeVisible({ timeout: 15_000 });
   await expect(page.locator('.sky-lane-name').first()).toHaveText('Sky Rig');
 
-  const scrubber = page.locator('.sky-scrubber');
+  const scrubber = page.locator('.sky-scrubber-to');
+  const start = page.locator('.sky-scrubber-from');
   const nights = Number(await scrubber.getAttribute('max')) + 1;
   expect(nights).toBeGreaterThanOrEqual(1);
   await expect(page.locator('.sky-timeline-asof')).toContainText('every night');
@@ -51,6 +52,11 @@ test('the timeline scrubs the map back through the nights', async ({ page }) => 
     const shownEarly = await page.locator('.sky-target').count();
     expect(shownEarly).toBeLessThanOrEqual(2);
     await scrubber.fill(String(nights - 1));
+    await expect(page.locator('.sky-timeline-asof')).toContainText('every night');
+    // The start thumb cuts the early nights away instead.
+    await start.fill(String(nights - 1));
+    await expect(page.locator('.sky-timeline-asof')).toContainText('from ');
+    await start.fill('0');
     await expect(page.locator('.sky-timeline-asof')).toContainText('every night');
   }
 

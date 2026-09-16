@@ -11,7 +11,9 @@ import SkyTimeline from './SkyTimeline';
 import {
   formatHours,
   formatNight,
+  formatPixels,
   mergeCoverage,
+  nightKeysFor,
   shownTargets,
   skyStats,
   timelineLanes,
@@ -33,6 +35,7 @@ export default function SkyPage() {
   const [hiddenRigs, setHiddenRigs] = useState<Set<string>>(new Set());
   const [hiddenFilters, setHiddenFilters] = useState<Set<string>>(new Set());
   const [asOfNight, setAsOfNight] = useState<string | null>(null);
+  const [fromNight, setFromNight] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [showBackdrop, setShowBackdrop] = useState(true);
   const [showStacks, setShowStacks] = useState(true);
@@ -43,10 +46,25 @@ export default function SkyPage() {
       rigs: hiddenRigs.size > 0 ? new Set(merged.rigs.map((rig) => rig.db_id).filter((id) => !hiddenRigs.has(id))) : null,
       filters: hiddenFilters.size > 0 ? new Set(merged.filters.filter((filter) => !hiddenFilters.has(filter))) : null,
       acceptedOnly,
+      fromNight,
       asOfNight,
     }),
-    [hiddenRigs, hiddenFilters, acceptedOnly, asOfNight, merged]
+    [hiddenRigs, hiddenFilters, acceptedOnly, fromNight, asOfNight, merged]
   );
+
+  // The slider runs over the nights the selected rigs and filters captured on.
+  const nightKeys = useMemo(() => nightKeysFor(merged, cut), [merged, cut]);
+  useEffect(() => {
+    if (nightKeys.length === 0) return;
+    if (fromNight && !nightKeys.includes(fromNight)) {
+      const next = nightKeys.find((night) => night >= fromNight) ?? null;
+      setFromNight(next && next !== nightKeys[0] ? next : null);
+    }
+    if (asOfNight && !nightKeys.includes(asOfNight)) {
+      const previous = [...nightKeys].reverse().find((night) => night <= asOfNight) ?? null;
+      setAsOfNight(previous && previous !== nightKeys[nightKeys.length - 1] ? previous : null);
+    }
+  }, [nightKeys, fromNight, asOfNight]);
 
   const shown = useMemo(() => shownTargets(merged, cut), [merged, cut]);
   const lanes = useMemo(() => timelineLanes(merged, cut), [merged, cut]);
@@ -59,13 +77,15 @@ export default function SkyPage() {
       replay.current = null;
       return;
     }
-    const nights = merged.nightKeys;
+    const nights = nightKeys;
     if (nights.length < 2) {
       setPlaying(false);
       return;
     }
-    let index = asOfNight ? nights.indexOf(asOfNight) : -1;
-    if (index >= nights.length - 1) index = -1;
+    // Start where the replay was parked, else at the chosen start night.
+    const start = fromNight ? Math.max(0, nights.indexOf(fromNight)) : 0;
+    let index = asOfNight ? nights.indexOf(asOfNight) : start - 1;
+    if (index >= nights.length - 1) index = start - 1;
     replay.current = window.setInterval(() => {
       index += 1;
       if (index >= nights.length - 1) {
@@ -81,7 +101,7 @@ export default function SkyPage() {
     };
     // The start point is read once when the replay begins.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, merged.nightKeys]);
+  }, [playing, nightKeys]);
 
   const open = useCallback(
     (item: ShownTarget) => {
@@ -177,7 +197,18 @@ export default function SkyPage() {
           <div className="sky-stat">
             <dt>Sky covered</dt>
             <dd data-stat="area">
-              {stats.areaDeg2 > 0 ? `${stats.areaDeg2 >= 100 ? Math.round(stats.areaDeg2) : stats.areaDeg2.toFixed(1)} deg²` : '—'}
+              {stats.areaDeg2 > 0 ? `${formatDeg2(stats.areaDeg2)} deg²` : '—'}
+              {stats.fieldsDeg2 > stats.areaDeg2 * 1.005 && (
+                <small title="The fields added together, overlaps counted every time">
+                  {formatDeg2(stats.fieldsDeg2)} deg² of fields
+                </small>
+              )}
+            </dd>
+          </div>
+          <div className="sky-stat">
+            <dt>Pixels on sky</dt>
+            <dd data-stat="pixels" title="Each covered patch counted at the finest plate scale that reached it">
+              {formatPixels(stats.pixels)}
             </dd>
           </div>
           <div className="sky-stat">
@@ -186,7 +217,10 @@ export default function SkyPage() {
               {stats.longestNight ? (
                 <>
                   {formatHours(stats.longestNight.hours)}
-                  <small>{formatNight(stats.longestNight.night)}</small>
+                  <small>
+                    {formatNight(stats.longestNight.night)}
+                    {merged.rigs.length > 1 ? ` · ${stats.longestNight.rig}` : ''}
+                  </small>
                 </>
               ) : (
                 '—'
@@ -293,17 +327,23 @@ export default function SkyPage() {
 
       <SkyTimeline
         lanes={lanes}
-        nightKeys={merged.nightKeys}
+        nightKeys={nightKeys}
+        fromNight={fromNight}
         asOfNight={asOfNight}
-        onAsOf={(night) => {
+        onRange={(from, to) => {
           setPlaying(false);
-          setAsOfNight(night);
+          setFromNight(from);
+          setAsOfNight(to);
         }}
         playing={playing}
         onTogglePlay={() => setPlaying((current) => !current)}
       />
     </div>
   );
+}
+
+function formatDeg2(value: number): string {
+  return value >= 100 ? String(Math.round(value)) : value.toFixed(1);
 }
 
 const POSTER_HEADER = 150;
@@ -331,7 +371,8 @@ function paintPosterText(
     [stats.frames.toLocaleString(), 'frames'],
     [String(stats.targets), 'targets'],
     [String(stats.nights), 'nights'],
-    [`${stats.areaDeg2 >= 100 ? Math.round(stats.areaDeg2) : stats.areaDeg2.toFixed(1)} deg²`, 'of sky'],
+    [`${formatDeg2(stats.areaDeg2)} deg²`, 'of sky'],
+    [formatPixels(stats.pixels), 'on sky'],
   ];
   let x = px(40);
   for (const [value, label] of numbers) {
