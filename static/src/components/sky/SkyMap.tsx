@@ -366,25 +366,6 @@ export default function SkyMap({ targets, frame, showBackdrop, showStacks, onOpe
             ))}
           </g>
         )}
-        {stacksOn && (
-          <g className="sky-stacks">
-            {drawn
-              .filter((entry) => entry.kind === 'field' && entry.matrix && inView(entry.at))
-              .map((entry) => (
-                <g key={`stack-${entry.item.target.key}`} clipPath={`url(#sky-clip-${entry.item.target.key})`}>
-                  <image
-                    href={entry.item.target.preview?.url}
-                    x={0}
-                    y={0}
-                    width={entry.item.target.preview?.width}
-                    height={entry.item.target.preview?.height}
-                    preserveAspectRatio="none"
-                    transform={entry.matrix ?? undefined}
-                  />
-                </g>
-              ))}
-          </g>
-        )}
         <g className="sky-targets">
           {drawn.map(({ item, kind, path, fill, opacity, at, matrix }) => {
             const active = hovered?.target.key === item.target.key;
@@ -422,6 +403,25 @@ export default function SkyMap({ targets, frame, showBackdrop, showStacks, onOpe
             );
           })}
         </g>
+        {stacksOn && (
+          <g className="sky-stacks" pointerEvents="none">
+            {drawn
+              .filter((entry) => entry.kind === 'field' && entry.matrix && inView(entry.at))
+              .map((entry) => (
+                <g key={`stack-${entry.item.target.key}`} clipPath={`url(#sky-clip-${entry.item.target.key})`}>
+                  <image
+                    href={entry.item.target.preview?.url}
+                    x={0}
+                    y={0}
+                    width={entry.item.target.preview?.width}
+                    height={entry.item.target.preview?.height}
+                    preserveAspectRatio="none"
+                    transform={entry.matrix ?? undefined}
+                  />
+                </g>
+              ))}
+          </g>
+        )}
       </svg>
       <div className="sky-zoom" role="group" aria-label="Zoom">
         <button type="button" onClick={() => zoomBy(1.6)} aria-label="Zoom in">

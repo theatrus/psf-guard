@@ -4,6 +4,8 @@ The **Sky** view draws everything your catalogs have pointed at on one map of
 the whole sky, and lets you replay the nights that built it. It reads every
 registered database at once, like the Overview.
 
+![The Sky view: stat band, filter chips, and the all-sky map with constellations and fields](sky-coverage.jpg)
+
 ## The map
 
 An Aitoff projection of the celestial sphere, east to the left as on a star
@@ -12,11 +14,15 @@ the galactic plane dashed) and **Galactic** (galactic longitude and latitude,
 with the celestial equator dashed). The ecliptic is the dotted gold line. A
 soft band marks the Milky Way.
 
+![The same sky in galactic coordinates](sky-coverage-galactic.jpg)
+
 Each target is drawn as its field on the sky, coloured by the mix of filters
 that went into it and brighter the more hours it has. Hover a field for its
 card: rig, project, coordinates, hours per filter, a sparkline of hours per
 night, frames, nights, first and last night, where the field size came from,
 and which stack preview is shown. Click it to open the target in **Images**.
+
+![Hovering a field: the target card with hours per filter and a sparkline of nights](sky-coverage-card.jpg)
 
 Behind the fields sit the constellation figures and names and every star to
 magnitude 4.5, which the **Constellations** switch hides. Scroll to zoom
@@ -31,6 +37,8 @@ when the astrometry cache holds one, carried through the stack's own
 orientation, so it lands where the pixels really are; without a solve it is
 laid into the field by the planned rotation, north up and east left, which
 can be a flip out.
+
+![Zoomed in on the Iris Nebula: the colour stack drawn inside its solved outline](sky-coverage-zoomed.jpg)
 
 The field size comes from the best source at hand:
 
@@ -53,6 +61,8 @@ longest night, and the target with the most hours.
 
 ## The timeline
 
+![One lane per rig, an all-rigs total on top, month ticks, and the Moon row](sky-coverage-timeline.png)
+
 Under the map, one lane per rig shows the integration of every night as a bar
 stacked by filter, with month ticks below and a Moon row whose brightness is
 the Moon's illumination that night. With more than one rig, an **All rigs**
@@ -66,6 +76,8 @@ from UTC, which keeps an evening and the small hours that follow it together
 for any site within about eight hours of Greenwich.
 
 ## Saving a picture
+
+![The saved poster: title, span, numbers, and the map](sky-coverage-poster.jpg)
 
 **Save PNG** renders the map at twice its on-screen size, as shown and as
 zoomed, with the title and the numbers above it, for a wallpaper or a post.
