@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Download } from 'lucide-react';
 import type { SkyStats } from './skyModel';
 import { useMergedSkyCoverage } from '../../hooks/useDatabases';
-import type { SkyFrame } from '../../utils/skyProjection';
+import type { SkyFrame, SkyMode } from '../../utils/skyProjection';
 import { filterColor } from '../../utils/filterColors';
 import { isTauriApp } from '../../utils/tauri';
 import SkyMap, { MAP_HEIGHT, MAP_WIDTH } from './SkyMap';
@@ -28,6 +28,7 @@ export default function SkyPage() {
   const merged = useMemo(() => mergeCoverage(rows), [rows]);
 
   const [frame, setFrame] = useState<SkyFrame>('equatorial');
+  const [mode, setMode] = useState<SkyMode>('aitoff');
   const [acceptedOnly, setAcceptedOnly] = useState(false);
   const [hiddenRigs, setHiddenRigs] = useState<Set<string>>(new Set());
   const [hiddenFilters, setHiddenFilters] = useState<Set<string>>(new Set());
@@ -225,6 +226,20 @@ export default function SkyPage() {
             </button>
           ))}
         </div>
+        <div className="sky-control-group" role="radiogroup" aria-label="Map shape">
+          {(['aitoff', 'globe'] as SkyMode[]).map((option) => (
+            <button
+              key={option}
+              type="button"
+              role="radio"
+              aria-checked={mode === option}
+              className={`sky-chip${mode === option ? ' is-on' : ''}`}
+              onClick={() => setMode(option)}
+            >
+              {option === 'aitoff' ? 'Flat' : 'Globe'}
+            </button>
+          ))}
+        </div>
         <label className="sky-check">
           <input type="checkbox" checked={acceptedOnly} onChange={(event) => setAcceptedOnly(event.target.checked)} />
           Accepted frames only
@@ -274,7 +289,7 @@ export default function SkyPage() {
         )}
       </div>
 
-      <SkyMap targets={shown} frame={frame} showBackdrop={showBackdrop} showStacks={showStacks} onOpen={open} />
+      <SkyMap targets={shown} frame={frame} mode={mode} showBackdrop={showBackdrop} showStacks={showStacks} onOpen={open} />
 
       <SkyTimeline
         lanes={lanes}

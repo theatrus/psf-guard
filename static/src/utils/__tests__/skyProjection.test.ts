@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   aitoff,
+  defaultView,
   equatorialToGalactic,
+  orthographic,
+  projectPoint,
   footprintOutline,
   formatDecShort,
   formatRaShort,
@@ -82,14 +85,14 @@ describe('projectedPath', () => {
   it('breaks a line that crosses the seam into two strokes', () => {
     const line: [number, number][] = [];
     for (let ra = 340; ra <= 380; ra += 5) line.push([ra % 360, 20]);
-    const path = projectedPath(line, 'equatorial', at);
+    const path = projectedPath(line, defaultView('equatorial', 'aitoff'), at);
     expect(path.split('M')).toHaveLength(3);
   });
 
   it('closes a small field into one polygon', () => {
     const path = projectedPath(
       footprintOutline(100, -20, { width_deg: 3, height_deg: 2, rotation_deg: 30 }),
-      'equatorial',
+      defaultView('equatorial', 'aitoff'),
       at,
       true
     );
@@ -113,5 +116,39 @@ describe('moonIllumination', () => {
     const newMoon = 947182440; // 2000-01-06 18:14 UTC
     expect(moonIllumination(newMoon)).toBeCloseTo(0, 3);
     expect(moonIllumination(newMoon + 14.765 * 86400)).toBeCloseTo(1, 2);
+  });
+});
+
+describe('globe', () => {
+  it('faces the centre, hides the far side, and keeps east on the left', () => {
+    const facing = orthographic(180, 0, 180, 0);
+    expect(facing.x).toBeCloseTo(0, 9);
+    expect(facing.y).toBeCloseTo(0, 9);
+    expect(facing.visible).toBe(true);
+    expect(orthographic(0, 0, 180, 0).visible).toBe(false);
+    expect(orthographic(190, 0, 180, 0).x).toBeLessThan(0);
+    expect(orthographic(180, 45, 180, 0).y).toBeCloseTo(Math.SQRT1_2, 9);
+  });
+
+  it('turns with the view so a tilted globe shows the pole', () => {
+    const view = { ...defaultView('equatorial', 'globe'), centerLon: 180, centerLat: 60 };
+    const pole = projectPoint(0, 90, view);
+    expect(pole.visible).toBe(true);
+    expect(pole.y).toBeCloseTo(Math.cos((60 * Math.PI) / 180), 9);
+    expect(projectPoint(0, -60, view).visible).toBe(false);
+  });
+
+  it('leaves out a closed shape that dips behind the globe', () => {
+    const at = { cx: 500, cy: 250, scale: 200 };
+    const view = { ...defaultView('equatorial', 'globe'), centerLon: 180, centerLat: 0 };
+    const square: [number, number][] = [
+      [85, -2],
+      [95, -2],
+      [95, 2],
+      [85, 2],
+    ];
+    expect(projectedPath(square, view, at, true)).toBe('');
+    const front: [number, number][] = square.map(([ra, dec]) => [ra + 90, dec]);
+    expect(projectedPath(front, view, at, true).endsWith('Z')).toBe(true);
   });
 });

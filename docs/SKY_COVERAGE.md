@@ -25,9 +25,16 @@ and which stack preview is shown. Click it to open the target in **Images**.
 ![Hovering a field: the target card with hours per filter and a sparkline of nights](sky-coverage-card.jpg)
 
 Behind the fields sit the constellation figures and names and every star to
-magnitude 4.5, which the **Constellations** switch hides. Scroll to zoom
-and drag to pan; the buttons in the corner step the zoom and return to the
-whole sky, and a double click does the same.
+magnitude 4.5, which the **Constellations** switch hides.
+
+**Flat** draws the whole sky at once; a drag at whole-sky zoom spins the
+central meridian. **Globe** draws the sky as a sphere seen from outside,
+and a drag turns it in any direction, so the pole or the far side comes
+round. Scroll to zoom in either; zoomed in on the flat map a drag pans
+instead. The buttons in the corner step the zoom and return to the whole
+sky as it first stood, and a double click does the same.
+
+![The globe, turned toward Cygnus and the pole](sky-coverage-globe.jpg)
 
 Zoomed in past three times, each field that has a stack preview shows the
 picture itself inside its outline (**Stacks when zoomed**): the latest

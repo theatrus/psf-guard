@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react';
 import { Minus, Plus, RotateCcw } from 'lucide-react';
-import type { SkyFrame } from '../../utils/skyProjection';
+import type { SkyFrame, SkyMode, SkyView } from '../../utils/skyProjection';
 import {
   celestialEquatorPoints,
+  defaultView,
   eclipticPoints,
   footprintOutline,
   formatDecShort,
   formatRaShort,
-  frameCenter,
   galacticBandQuads,
   galacticEquatorPoints,
   galacticToEquatorial,
@@ -15,6 +15,7 @@ import {
   projectedPath,
   projectedPoint,
   tanPixelToSky,
+  wrap360,
   type LonLat,
   type PathScale,
 } from '../../utils/skyProjection';
@@ -32,6 +33,7 @@ const STACKS_FROM_ZOOM = 3;
 interface Props {
   targets: ShownTarget[];
   frame: SkyFrame;
+  mode: SkyMode;
   showBackdrop: boolean;
   showStacks: boolean;
   onOpen: (target: ShownTarget) => void;
@@ -104,8 +106,10 @@ function imageCorners(item: ShownTarget): LonLat[] | null {
 }
 
 /** SVG matrix mapping preview pixels onto the map, fitted to three corners. */
-function imageMatrix(corners: LonLat[], width: number, height: number, frame: SkyFrame): string | null {
-  const [p0, p1, , p3] = corners.map(([ra, dec]) => projectedPoint(ra, dec, frame, AT));
+function imageMatrix(corners: LonLat[], width: number, height: number, view: SkyView): string | null {
+  const projected = corners.map(([ra, dec]) => projectedPoint(ra, dec, view, AT));
+  if (projected.some((point) => !point.visible)) return null;
+  const [p0, p1, , p3] = projected;
   const a = (p1.x - p0.x) / width;
   const b = (p1.y - p0.y) / width;
   const c = (p3.x - p0.x) / height;
@@ -116,17 +120,36 @@ function imageMatrix(corners: LonLat[], width: number, height: number, frame: Sk
   return `matrix(${a} ${b} ${c} ${d} ${p0.x} ${p0.y})`;
 }
 
-export default function SkyMap({ targets, frame, showBackdrop, showStacks, onOpen }: Props) {
+export default function SkyMap({ targets, frame, mode, showBackdrop, showStacks, onOpen }: Props) {
   const [hovered, setHovered] = useState<ShownTarget | null>(null);
   const [pointer, setPointer] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [view, setView] = useState<View>(HOME);
+  const [center, setCenter] = useState<{ lon: number; lat: number }>(() => {
+    const initial = defaultView(frame, mode);
+    return { lon: initial.centerLon, lat: initial.centerLat };
+  });
   const wrapper = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
-  const drag = useRef<{ x: number; y: number; view: View; moved: boolean } | null>(null);
+  const drag = useRef<{ x: number; y: number; view: View; center: { lon: number; lat: number }; moved: boolean } | null>(
+    null
+  );
+
+  const sky: SkyView = useMemo(
+    () => ({ frame, mode, centerLon: center.lon, centerLat: center.lat }),
+    [frame, mode, center]
+  );
 
   useEffect(() => {
     setView(HOME);
-  }, [frame]);
+    const initial = defaultView(frame, mode);
+    setCenter({ lon: initial.centerLon, lat: initial.centerLat });
+  }, [frame, mode]);
+
+  const home = () => {
+    setView(HOME);
+    const initial = defaultView(frame, mode);
+    setCenter({ lon: initial.centerLon, lat: initial.centerLat });
+  };
 
   // React registers wheel listeners passively; zooming must swallow the scroll.
   useEffect(() => {
@@ -158,7 +181,7 @@ export default function SkyMap({ targets, frame, showBackdrop, showStacks, onOpe
 
   const onPointerDown = (event: PointerEvent<SVGSVGElement>) => {
     if (event.button !== 0) return;
-    drag.current = { x: event.clientX, y: event.clientY, view, moved: false };
+    drag.current = { x: event.clientX, y: event.clientY, view, center, moved: false };
   };
   const onPointerMove = (event: PointerEvent<SVGSVGElement>) => {
     const start = drag.current;
@@ -173,6 +196,19 @@ export default function SkyMap({ targets, frame, showBackdrop, showStacks, onOpe
       event.currentTarget.setPointerCapture(event.pointerId);
     }
     start.moved = true;
+    // On the globe a drag turns it; on the flat map at whole-sky zoom a drag
+    // spins the central meridian; zoomed in, it pans the view.
+    if (mode === 'globe') {
+      setCenter({
+        lon: wrap360(start.center.lon + (dx / rect.width) * (200 / start.view.k)),
+        lat: Math.max(-90, Math.min(90, start.center.lat + (dy / rect.height) * (120 / start.view.k))),
+      });
+      return;
+    }
+    if (start.view.k <= 1) {
+      setCenter({ lon: wrap360(start.center.lon + (dx / rect.width) * 360), lat: start.center.lat });
+      return;
+    }
     setView(
       clampView({
         k: start.view.k,
@@ -196,40 +232,42 @@ export default function SkyMap({ targets, frame, showBackdrop, showStacks, onOpe
   };
 
   const scenery = useMemo(() => {
-    const center = frameCenter(frame);
+    const { frame, centerLon } = sky;
     const inFrame = (line: LonLat[]) => (frame === 'galactic' ? line.map(([l, b]) => galacticToEquatorial(l, b)) : line);
-    const grid = graticule(center);
-    const meridians = grid.meridians.map((line) => projectedPath(inFrame(line), frame, AT));
-    const parallels = grid.parallels.map((line) => projectedPath(inFrame(line), frame, AT));
-    const band = galacticBandQuads(12).map((quad) => projectedPath(quad, frame, AT, true)).filter((path) => !path.includes('M', 1));
-    const core = galacticBandQuads(5).map((quad) => projectedPath(quad, frame, AT, true)).filter((path) => !path.includes('M', 1));
-    const ecliptic = projectedPath(eclipticPoints(), frame, AT);
+    const grid = graticule(centerLon);
+    const meridians = grid.meridians.map((line) => projectedPath(inFrame(line), sky, AT));
+    const parallels = grid.parallels.map((line) => projectedPath(inFrame(line), sky, AT));
+    const band = galacticBandQuads(12).map((quad) => projectedPath(quad, sky, AT, true)).filter((path) => path && !path.includes('M', 1));
+    const core = galacticBandQuads(5).map((quad) => projectedPath(quad, sky, AT, true)).filter((path) => path && !path.includes('M', 1));
+    const ecliptic = projectedPath(eclipticPoints(), sky, AT);
     const otherEquator =
-      frame === 'galactic' ? projectedPath(celestialEquatorPoints(), frame, AT) : projectedPath(galacticEquatorPoints(), frame, AT);
+      frame === 'galactic' ? projectedPath(celestialEquatorPoints(), sky, AT) : projectedPath(galacticEquatorPoints(), sky, AT);
     const lonLabels: Array<{ x: number; y: number; text: string }> = [];
     for (let lon = 0; lon < 360; lon += 30) {
-      if (lon === (center + 180) % 360) continue;
+      if (sky.mode === 'aitoff' && Math.abs(wrap360(lon - centerLon) - 180) < 1) continue;
       const icrs = frame === 'galactic' ? galacticToEquatorial(lon, 0) : ([lon, 0] as LonLat);
-      const at = projectedPoint(icrs[0], icrs[1], frame, AT);
+      const at = projectedPoint(icrs[0], icrs[1], sky, AT);
+      if (!at.visible) continue;
       lonLabels.push({ x: at.x, y: at.y - 4, text: frame === 'galactic' ? `${lon}°` : `${lon / 15}h` });
     }
     const latLabels: Array<{ x: number; y: number; text: string }> = [];
     for (const lat of [-60, -30, 30, 60]) {
-      const icrs = frame === 'galactic' ? galacticToEquatorial(center, lat) : ([center, lat] as LonLat);
-      const at = projectedPoint(icrs[0], icrs[1], frame, AT);
+      const icrs = frame === 'galactic' ? galacticToEquatorial(centerLon, lat) : ([centerLon, lat] as LonLat);
+      const at = projectedPoint(icrs[0], icrs[1], sky, AT);
+      if (!at.visible) continue;
       latLabels.push({ x: at.x + 6, y: at.y - 3, text: `${lat > 0 ? '+' : '−'}${Math.abs(lat)}°` });
     }
     const constellations = Object.values(CONSTELLATION_LINES).map((figure) =>
-      figure.map((polyline) => projectedPath(polyline, frame, AT)).join('')
+      figure.map((polyline) => projectedPath(polyline, sky, AT)).join('')
     );
-    const names = Object.entries(CONSTELLATION_NAMES).map(([id, [name, ra, dec]]) => ({
-      id,
-      name,
-      ...projectedPoint(ra, dec, frame, AT),
-    }));
-    const stars = BRIGHT_STARS.map(([ra, dec, mag]) => ({ ...projectedPoint(ra, dec, frame, AT), mag }));
+    const names = Object.entries(CONSTELLATION_NAMES)
+      .map(([id, [name, ra, dec]]) => ({ id, name, ...projectedPoint(ra, dec, sky, AT) }))
+      .filter((label) => label.visible);
+    const stars = BRIGHT_STARS.map(([ra, dec, mag]) => ({ ...projectedPoint(ra, dec, sky, AT), mag })).filter(
+      (star) => star.visible
+    );
     return { meridians, parallels, band, core, ecliptic, otherEquator, lonLabels, latLabels, constellations, names, stars };
-  }, [frame]);
+  }, [sky]);
 
   const maxSeconds = useMemo(() => targets.reduce((max, item) => Math.max(max, item.seconds), 0), [targets]);
 
@@ -242,19 +280,23 @@ export default function SkyMap({ targets, frame, showBackdrop, showStacks, onOpe
           const dec = item.target.dec_deg as number;
           const fill = blendFilterColors(item.byFilter.map(({ filter, seconds }) => ({ filter, weight: seconds })));
           const opacity = opacityFor(item.seconds, maxSeconds);
-          const at = projectedPoint(ra, dec, frame, AT);
+          const at = projectedPoint(ra, dec, sky, AT);
+          if (!at.visible) return null;
           if (item.target.footprint) {
             const outline = footprintOutline(ra, dec, item.target.footprint);
+            const path = projectedPath(outline, sky, AT, true);
+            if (!path) return null;
             const corners = imageCorners(item);
             const matrix =
               corners && item.target.preview
-                ? imageMatrix(corners, item.target.preview.width, item.target.preview.height, frame)
+                ? imageMatrix(corners, item.target.preview.width, item.target.preview.height, sky)
                 : null;
-            return { item, kind: 'field' as const, path: projectedPath(outline, frame, AT, true), fill, opacity, at, matrix };
+            return { item, kind: 'field' as const, path, fill, opacity, at, matrix };
           }
           return { item, kind: 'point' as const, path: '', fill, opacity, at, matrix: null };
-        }),
-    [targets, frame, maxSeconds]
+        })
+        .filter((entry) => entry !== null),
+    [targets, sky, maxSeconds]
   );
 
   // Which fields are inside the current view, for lazy stack previews.
@@ -285,11 +327,12 @@ export default function SkyMap({ targets, frame, showBackdrop, showStacks, onOpe
         role="img"
         aria-label={`Sky coverage map in ${frame} coordinates with ${drawn.length} targets`}
         data-zoom={k.toFixed(2)}
+        data-center={`${center.lon.toFixed(1)},${center.lat.toFixed(1)}`}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
-        onDoubleClick={() => setView(HOME)}
+        onDoubleClick={home}
       >
         <defs>
           <radialGradient id="sky-ground" cx="50%" cy="50%" r="60%">
@@ -304,11 +347,20 @@ export default function SkyMap({ targets, frame, showBackdrop, showStacks, onOpe
               </clipPath>
             ))}
         </defs>
-        <ellipse className="sky-globe" cx={AT.cx} cy={AT.cy} rx={2 * AT.scale} ry={AT.scale} fill="url(#sky-ground)" />
+        <ellipse
+          className="sky-globe"
+          cx={AT.cx}
+          cy={AT.cy}
+          rx={mode === 'globe' ? AT.scale : 2 * AT.scale}
+          ry={AT.scale}
+          fill="url(#sky-ground)"
+        />
         <g className="sky-stars">
-          {DUST.map((dot, index) => (
-            <circle key={index} cx={dot.x} cy={dot.y} r={dot.r * textScale} />
-          ))}
+          {DUST.filter((dot) => mode === 'aitoff' || (dot.x - AT.cx) ** 2 + (dot.y - AT.cy) ** 2 <= AT.scale ** 2).map(
+            (dot, index) => (
+              <circle key={index} cx={dot.x} cy={dot.y} r={dot.r * textScale} />
+            )
+          )}
           {showBackdrop &&
             scenery.stars.map((star, index) => (
               <circle
@@ -430,7 +482,12 @@ export default function SkyMap({ targets, frame, showBackdrop, showStacks, onOpe
         <button type="button" onClick={() => zoomBy(1 / 1.6)} aria-label="Zoom out" disabled={k <= 1}>
           <Minus size={14} />
         </button>
-        <button type="button" onClick={() => setView(HOME)} aria-label="Whole sky" disabled={k <= 1}>
+        <button
+          type="button"
+          onClick={home}
+          aria-label="Whole sky"
+          disabled={k <= 1 && center.lon === defaultView(frame, mode).centerLon && center.lat === defaultView(frame, mode).centerLat}
+        >
           <RotateCcw size={14} />
         </button>
         <span className="sky-zoom-level">{k >= 10 ? `${Math.round(k)}×` : `${k.toFixed(1)}×`}</span>
@@ -508,7 +565,7 @@ function TargetCard({ item, x, y, width }: { item: ShownTarget; x: number; y: nu
       </div>
       <div className="sky-card-field">{field}</div>
       {stack && <div className="sky-card-field">{stack}</div>}
-      <div className="sky-card-hint">Click to open in Images · scroll to zoom, drag to pan</div>
+      <div className="sky-card-hint">Click to open in Images · scroll to zoom, drag to turn or pan</div>
     </div>
   );
 }

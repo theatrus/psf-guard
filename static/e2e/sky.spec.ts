@@ -78,3 +78,32 @@ test('the map zooms, shows constellations, and stays whole-sky by default', asyn
   await page.getByLabel('Constellations').uncheck();
   await expect(page.locator('.sky-constellations')).toHaveCount(0);
 });
+
+test('the globe turns when dragged and the flat map spins its central meridian', async ({ page }) => {
+  await page.goto('/#/sky');
+  const map = page.locator('.sky-map');
+  await expect(map).toBeVisible({ timeout: 15_000 });
+  await expect(map).toHaveAttribute('data-center', '180.0,0.0');
+
+  const box = await map.boundingBox();
+  if (!box) throw new Error('no map');
+  const drag = async (dx: number, dy: number) => {
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + dx / 2, box.y + box.height / 2 + dy / 2, { steps: 4 });
+    await page.mouse.move(box.x + box.width / 2 + dx, box.y + box.height / 2 + dy, { steps: 4 });
+    await page.mouse.up();
+  };
+
+  await drag(box.width / 4, 0);
+  await expect(map).toHaveAttribute('data-center', '270.0,0.0');
+
+  await page.getByRole('radio', { name: 'Globe' }).click();
+  await expect(map).toHaveAttribute('data-center', '180.0,25.0');
+  await drag(0, -box.height / 4);
+  await expect(map).toHaveAttribute('data-center', '180.0,-5.0');
+  await expect(page.locator('.sky-target')).toHaveCount(2);
+
+  await page.getByRole('button', { name: 'Whole sky' }).click();
+  await expect(map).toHaveAttribute('data-center', '180.0,25.0');
+});

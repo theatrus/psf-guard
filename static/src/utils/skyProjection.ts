@@ -221,8 +221,59 @@ function rectangleCorners(raDeg: number, decDeg: number, footprint: FootprintSha
   });
 }
 
-/** Whether a set of ICRS outline points straddles the projection seam. */
-function crossesSeam(points: SkyPoint[]): boolean {
+export type SkyMode = 'aitoff' | 'globe';
+
+/** How the sky is drawn: the frame, flat or as a globe, and where it is turned to. */
+export interface SkyView {
+  frame: SkyFrame;
+  mode: SkyMode;
+  /** Longitude at the centre of the map, in the drawn frame. */
+  centerLon: number;
+  /** Latitude at the centre of the globe; the flat map ignores it. */
+  centerLat: number;
+}
+
+export function defaultView(frame: SkyFrame, mode: SkyMode): SkyView {
+  return { frame, mode, centerLon: frameCenter(frame), centerLat: mode === 'globe' ? 25 : 0 };
+}
+
+export interface Projected extends SkyPoint {
+  /** False for a point on the far side of the globe. */
+  visible: boolean;
+}
+
+/**
+ * Orthographic projection of a globe turned so that (`centerLon`,
+ * `centerLat`) faces the viewer, east to the left, radius one.
+ */
+export function orthographic(lonDeg: number, latDeg: number, centerLonDeg: number, centerLatDeg: number): Projected {
+  const lambda = wrap180(lonDeg - centerLonDeg) * DEG;
+  const phi = latDeg * DEG;
+  const phi0 = centerLatDeg * DEG;
+  const cosPhi = Math.cos(phi);
+  const sinPhi = Math.sin(phi);
+  const cosC = Math.sin(phi0) * sinPhi + Math.cos(phi0) * cosPhi * Math.cos(lambda);
+  return {
+    x: -cosPhi * Math.sin(lambda),
+    y: Math.cos(phi0) * sinPhi - Math.sin(phi0) * cosPhi * Math.cos(lambda),
+    visible: cosC > 0,
+  };
+}
+
+/** An ICRS position in unit map coordinates under `view`. */
+export function projectPoint(raDeg: number, decDeg: number, view: SkyView): Projected {
+  const [lon, lat] = toFrame(raDeg, decDeg, view.frame);
+  if (view.mode === 'globe') {
+    return orthographic(lon, lat, view.centerLon, view.centerLat);
+  }
+  return { ...aitoff(lon, lat, view.centerLon), visible: true };
+}
+
+/** Whether a projected outline straddles the seam or dips behind the globe. */
+function broken(points: Projected[]): boolean {
+  if (points.some((point) => !point.visible)) {
+    return true;
+  }
   for (let i = 1; i < points.length; i += 1) {
     if (Math.abs(points[i].x - points[i - 1].x) > 1) {
       return true;
@@ -245,31 +296,29 @@ function toPixel(point: SkyPoint, at: PathScale): string {
 }
 
 /**
- * An SVG path for ICRS points drawn in `frame`: projected, scaled, and
- * broken into separate strokes wherever the line would cross the seam.
+ * An SVG path for ICRS points drawn under `view`: projected, scaled, and
+ * broken into separate strokes wherever the line would cross the seam or
+ * pass behind the globe. A closed shape that would is left open, or, when
+ * any of it is hidden, not drawn.
  */
-export function projectedPath(
-  icrsPoints: LonLat[],
-  frame: SkyFrame,
-  at: PathScale,
-  close = false
-): string {
-  const center = frameCenter(frame);
-  const projected = icrsPoints.map(([ra, dec]) => {
-    const [lon, lat] = toFrame(ra, dec, frame);
-    return aitoff(lon, lat, center);
-  });
+export function projectedPath(icrsPoints: LonLat[], view: SkyView, at: PathScale, close = false): string {
+  const projected = icrsPoints.map(([ra, dec]) => projectPoint(ra, dec, view));
   if (projected.length === 0) {
     return '';
   }
-  if (close && crossesSeam(projected)) {
-    // A closed shape across the seam would smear across the map. Draw the
-    // pieces that lie on one side only.
-    return projectedPath(icrsPoints, frame, at, false);
+  if (close && broken(projected)) {
+    if (projected.some((point) => !point.visible)) {
+      return '';
+    }
+    return projectedPath(icrsPoints, view, at, false);
   }
   let path = '';
   let open = false;
   for (let i = 0; i < projected.length; i += 1) {
+    if (!projected[i].visible) {
+      open = false;
+      continue;
+    }
     const jump = i > 0 && Math.abs(projected[i].x - projected[i - 1].x) > 1;
     if (!open || jump) {
       path += `M${toPixel(projected[i], at)}`;
@@ -281,11 +330,10 @@ export function projectedPath(
   return close ? `${path}Z` : path;
 }
 
-/** The pixel position of one ICRS point drawn in `frame`. */
-export function projectedPoint(raDeg: number, decDeg: number, frame: SkyFrame, at: PathScale): { x: number; y: number } {
-  const [lon, lat] = toFrame(raDeg, decDeg, frame);
-  const point = aitoff(lon, lat, frameCenter(frame));
-  return { x: at.cx + point.x * at.scale, y: at.cy - point.y * at.scale };
+/** The pixel position of one ICRS point drawn under `view`. */
+export function projectedPoint(raDeg: number, decDeg: number, view: SkyView, at: PathScale): { x: number; y: number; visible: boolean } {
+  const point = projectPoint(raDeg, decDeg, view);
+  return { x: at.cx + point.x * at.scale, y: at.cy - point.y * at.scale, visible: point.visible };
 }
 
 /** Right ascension in degrees as `12h 34m`. */
