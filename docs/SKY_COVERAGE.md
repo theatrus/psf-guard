@@ -24,8 +24,8 @@ and which stack preview is shown. Click it to open the target in **Images**.
 
 ![Hovering a field: the target card with hours per filter and a sparkline of nights](sky-coverage-card.jpg)
 
-Behind the fields sit the constellation figures and names and every star to
-magnitude 4.5, which the **Constellations** switch hides.
+Behind the fields sit every star to magnitude 5.5, and the constellation
+figures and names, which the **Constellations** switch hides.
 
 **Flat** draws the whole sky at once; a drag at whole-sky zoom spins the
 central meridian. **Globe** draws the sky as a sphere seen from outside,
@@ -113,7 +113,7 @@ on that grid when the reference frame was solved.
 
 ## Third-party data
 
-The constellation figures, constellation names, and bright stars drawn
-behind the fields come from the d3-celestial data set, Copyright (c) 2015,
+The constellation figures, constellation names, and stars to magnitude 5.5
+drawn behind the fields come from the d3-celestial data set, Copyright (c) 2015,
 Olaf Frohn, under the BSD 3-Clause License. The notice ships with the
 frontend source in `static/src/data/d3-celestial-LICENSE.txt`.

@@ -282,10 +282,6 @@
   stroke-width: 1;
 }
 
-.sky-stars circle {
-  fill: rgba(220, 228, 255, 0.55);
-}
-
 .sky-milky-way path {
   fill: rgba(200, 210, 255, 0.045);
   stroke: none;

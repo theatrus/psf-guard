@@ -101,8 +101,11 @@ test('the globe turns when dragged and the flat map spins its central meridian',
     await page.mouse.up();
   };
 
+  const dustBefore = await page.locator('.sky-stars circle').first().getAttribute('cx');
   await drag(box.width / 4, 0);
   await expect(map).toHaveAttribute('data-center', '270.0,0.0');
+  // The stars turn with the sky: nothing on the map stays put.
+  expect(await page.locator('.sky-stars circle').first().getAttribute('cx')).not.toBe(dustBefore);
 
   await page.getByRole('radio', { name: 'Globe' }).click();
   await expect(map).toHaveAttribute('data-center', '180.0,25.0');
