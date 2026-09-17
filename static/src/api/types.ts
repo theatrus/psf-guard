@@ -1999,6 +1999,8 @@ export interface SkyFootprint {
   width_deg: number;
   height_deg: number;
   rotation_deg?: number | null;
+  /** Sky per pixel, arcseconds, when the geometry is known. */
+  pixel_scale_arcsec?: number | null;
   /** `solved` from a plate solution, `header` from a frame's FITS geometry. */
   source: 'solved' | 'header';
   /** ICRS vertices in boundary order, for a solved footprint. */
@@ -2066,6 +2068,8 @@ export interface SkyTotals {
   nights: number;
   first_capture: number | null;
   last_capture: number | null;
+  /** Seconds after 00:00 UTC at which this catalog's nights are split. */
+  night_starts_utc_seconds: number;
 }
 
 export interface SkyCoverage {

@@ -42,6 +42,9 @@ pub struct SkyTotals {
     pub nights: i64,
     pub first_capture: Option<i64>,
     pub last_capture: Option<i64>,
+    /// Seconds after 00:00 UTC at which this catalog's nights are split:
+    /// the quietest hour of its day, found from its own capture times.
+    pub night_starts_utc_seconds: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -83,6 +86,8 @@ pub struct SkyFootprint {
     /// Camera angle east of north, when known. A solved footprint carries
     /// its vertices instead.
     pub rotation_deg: Option<f64>,
+    /// Sky per pixel, arcseconds, when the geometry is known.
+    pub pixel_scale_arcsec: Option<f64>,
     /// `solved` from a plate solution, `header` from a frame's FITS geometry.
     pub source: &'static str,
     /// ICRS vertices in boundary order, for a solved footprint.
@@ -241,13 +246,46 @@ fn load_lights(conn: &Connection) -> rusqlite::Result<Vec<LightRow>> {
     rows.collect()
 }
 
-/// The civil date a capture's night began on: local evenings and the small
-/// hours that follow them share one key. Twelve hours back from UTC lands
-/// every capture between local noon and local noon on the evening's date
-/// for any site within about eight hours of Greenwich, which covers the
-/// nights this catalog was built for without needing the site.
-pub fn night_of(captured_at: i64) -> String {
-    chrono::DateTime::from_timestamp(captured_at - 12 * 3600, 0)
+/// Where in the UTC day this catalog's nights are split, in seconds after
+/// 00:00 UTC: the middle of the longest stretch of the day in which nothing
+/// was ever captured. A site west of Greenwich captures in the small hours
+/// UTC and is quiet around 18:00 UTC; a site far east captures around noon
+/// UTC and is quiet around 03:00. The catalog does not record its site, and
+/// this needs none. A catalog that captured in every hour, or none, splits
+/// at noon UTC.
+pub fn night_boundary(captures: impl IntoIterator<Item = i64>) -> i64 {
+    let mut busy = [false; 24];
+    let mut any = false;
+    for at in captures {
+        busy[(at.rem_euclid(86_400) / 3_600) as usize] = true;
+        any = true;
+    }
+    if !any || busy.iter().all(|hour| *hour) {
+        return 12 * 3_600;
+    }
+    // The longest circular run of quiet hours, earliest start winning ties.
+    let mut best: Option<(usize, usize)> = None;
+    for start in 0..24 {
+        if busy[start] || !busy[(start + 23) % 24] {
+            continue;
+        }
+        let mut length = 0;
+        while length < 24 && !busy[(start + length) % 24] {
+            length += 1;
+        }
+        if best.is_none_or(|(_, longest)| length > longest) {
+            best = Some((start, length));
+        }
+    }
+    let (start, length) = best.unwrap_or((12, 0));
+    ((start * 3_600 + length * 1_800) % 86_400) as i64
+}
+
+/// The civil date a capture's night began on, for a catalog whose nights
+/// split `boundary` seconds after 00:00 UTC: a local evening and the small
+/// hours that follow it share one key.
+pub fn night_of(captured_at: i64, boundary: i64) -> String {
+    chrono::DateTime::from_timestamp(captured_at - boundary, 0)
         .map(|at| at.format("%Y-%m-%d").to_string())
         .unwrap_or_else(|| captured_at.to_string())
 }
@@ -282,7 +320,11 @@ fn assemble(
     let mut per_target_nights: HashMap<i32, HashSet<String>> = HashMap::new();
     let mut per_target_span: HashMap<i32, (i64, i64)> = HashMap::new();
     let mut nights: BTreeMap<(String, i32, String), Tally> = BTreeMap::new();
-    let mut totals = SkyTotals::default();
+    let boundary = night_boundary(lights.iter().filter_map(|light| light.captured_at));
+    let mut totals = SkyTotals {
+        night_starts_utc_seconds: boundary,
+        ..SkyTotals::default()
+    };
     let mut all_nights: HashSet<String> = HashSet::new();
 
     for light in &lights {
@@ -303,7 +345,7 @@ fn assemble(
             totals.accepted_seconds += light.seconds;
         }
         if let Some(at) = light.captured_at {
-            let night = night_of(at);
+            let night = night_of(at, boundary);
             all_nights.insert(night.clone());
             per_target_nights
                 .entry(light.target_id)
@@ -398,6 +440,7 @@ fn assemble(
 struct HeaderGeometry {
     width_deg: f64,
     height_deg: f64,
+    pixel_scale_arcsec: f64,
 }
 
 fn header_geometry_cache() -> &'static Mutex<HashMap<PathBuf, Option<HeaderGeometry>>> {
@@ -423,6 +466,7 @@ fn header_geometry(path: &Path) -> Option<HeaderGeometry> {
                 HeaderGeometry {
                     width_deg: width * scale / 3600.0,
                     height_deg: height * scale / 3600.0,
+                    pixel_scale_arcsec: scale,
                 }
             })
         });
@@ -485,6 +529,7 @@ fn footprints_for(
                     width_deg: f64::from(solution.image_width) * scale,
                     height_deg: f64::from(solution.image_height) * scale,
                     rotation_deg: None,
+                    pixel_scale_arcsec: Some(solution.pixel_scale_arcsec_per_pixel),
                     source: "solved",
                     vertices: Some(solution.footprint),
                 },
@@ -531,6 +576,7 @@ fn footprints_for(
                     width_deg: geometry.width_deg,
                     height_deg: geometry.height_deg,
                     rotation_deg: target.rotation_deg.filter(|value| value.is_finite()),
+                    pixel_scale_arcsec: Some(geometry.pixel_scale_arcsec),
                     source: "header",
                     vertices: None,
                 },
@@ -892,12 +938,39 @@ mod tests {
 
     #[test]
     fn a_night_is_keyed_by_the_evening_it_began_on() {
-        // 2026-09-09 05:44 UTC is 22:44 the evening before in the Pacific
-        // zone, and 2026-09-09 10:50 UTC is 03:50 the same night.
-        assert_eq!(night_of(1_788_932_675), "2026-09-08");
-        assert_eq!(night_of(1_788_951_022), "2026-09-08");
-        // Late afternoon UTC already belongs to that date's night.
-        assert_eq!(night_of(1_788_975_600), "2026-09-09");
+        // A Texas rig captures from about 02:00 to 11:00 UTC, so its quiet
+        // stretch runs 12:00 to 02:00 and the split lands at 19:00 UTC.
+        let texas: Vec<i64> = (0..10)
+            .map(|hour| 1_788_912_000 + (2 + hour) * 3_600)
+            .collect();
+        let boundary = night_boundary(texas.iter().copied());
+        assert_eq!(boundary, 19 * 3_600);
+        // 2026-09-09 05:44 UTC is 22:44 the evening before, and 10:50 UTC
+        // is 03:50 the same night.
+        assert_eq!(night_of(1_788_932_675, boundary), "2026-09-08");
+        assert_eq!(night_of(1_788_951_022, boundary), "2026-09-08");
+        // 20:00 UTC, past the split, already belongs to that date's night;
+        // 17:40 UTC, before it, still counts as the night before.
+        assert_eq!(night_of(1_788_984_000, boundary), "2026-09-09");
+        assert_eq!(night_of(1_788_975_600, boundary), "2026-09-08");
+    }
+
+    #[test]
+    fn a_night_that_straddles_noon_utc_stays_one_night() {
+        // A rig far east of Greenwich captures from 10:00 to 21:00 UTC. A
+        // fixed noon split cut every one of its nights in two; the quiet
+        // stretch 22:00 to 10:00 puts the split at 04:00 UTC instead.
+        let east: Vec<i64> = (0..12)
+            .map(|hour| 1_762_128_000 + (10 + hour) * 3_600)
+            .collect();
+        let boundary = night_boundary(east.iter().copied());
+        assert_eq!(boundary, 4 * 3_600);
+        // 2025-11-03 12:03 UTC and 2025-11-04 02:00 UTC are one night.
+        assert_eq!(night_of(1_762_171_380, boundary), "2025-11-03");
+        assert_eq!(night_of(1_762_221_600, boundary), "2025-11-03");
+        // With nothing captured, or something in every hour, noon UTC it is.
+        assert_eq!(night_boundary(std::iter::empty()), 12 * 3_600);
+        assert_eq!(night_boundary((0..24).map(|hour| hour * 3_600)), 12 * 3_600);
     }
 
     #[test]
@@ -948,6 +1021,8 @@ mod tests {
         assert_eq!(response.totals.seconds, 1500.0);
         assert_eq!(response.totals.accepted_seconds, 1200.0);
         assert_eq!(response.totals.nights, 2);
+        // Everything was shot in the 05:00 UTC hour, so the split sits opposite it.
+        assert_eq!(response.totals.night_starts_utc_seconds, 17 * 3_600 + 1_800);
 
         let m31 = &response.targets[0];
         assert_eq!((m31.ra_deg.unwrap() * 100.0).round() / 100.0, 10.68);

@@ -5,6 +5,7 @@
  */
 import type { SkyCoverage, SkyNight, SkyTarget } from '../../api/types';
 import type { WithDb } from '../../hooks/useDatabases';
+import { footprintOutline, wrap180 } from '../../utils/skyProjection';
 
 export interface CoverageTarget extends SkyTarget {
   db_id: string;
@@ -35,6 +36,8 @@ export interface SkyCut {
   /** Filters to count; `null` counts all. */
   filters: Set<string> | null;
   acceptedOnly: boolean;
+  /** Show only what was captured from this night on; `null` starts at the first. */
+  fromNight: string | null;
   /** Show only what had been captured by the end of this night; `null` shows everything. */
   asOfNight: string | null;
 }
@@ -43,8 +46,21 @@ export const EVERYTHING: SkyCut = {
   rigs: null,
   filters: null,
   acceptedOnly: false,
+  fromNight: null,
   asOfNight: null,
 };
+
+/** The nights the selected rigs and filters captured on, sorted: the span
+ * the time slider runs over. The time cuts themselves are not applied. */
+export function nightKeysFor(data: MergedCoverage, cut: SkyCut): string[] {
+  const keys = new Set<string>();
+  for (const night of data.nights) {
+    if (!nightAllowed(night, { ...cut, fromNight: null, asOfNight: null })) continue;
+    if (cut.acceptedOnly ? night.accepted_frames === 0 : night.frames === 0) continue;
+    keys.add(night.night);
+  }
+  return [...keys].sort();
+}
 
 export function mergeCoverage(rows: WithDb<SkyCoverage>[]): MergedCoverage {
   const targets: CoverageTarget[] = [];
@@ -79,6 +95,7 @@ function frames(row: { frames: number; accepted_frames: number }, acceptedOnly: 
 function nightAllowed(night: CoverageNight, cut: SkyCut): boolean {
   if (cut.rigs && !cut.rigs.has(night.db_id)) return false;
   if (cut.filters && !cut.filters.has(night.filter)) return false;
+  if (cut.fromNight && night.night < cut.fromNight) return false;
   if (cut.asOfNight && night.night > cut.asOfNight) return false;
   return true;
 }
@@ -171,7 +188,7 @@ export function timelineLanes(data: MergedCoverage, cut: SkyCut): Lane[] {
     lanes.set(rig.db_id, { db_id: rig.db_id, db_name: rig.db_name, seconds: 0, perNight: new Map() });
   }
   for (const night of data.nights) {
-    if (!nightAllowed(night, { ...cut, asOfNight: null })) continue;
+    if (!nightAllowed(night, { ...cut, fromNight: null, asOfNight: null })) continue;
     const lane = lanes.get(night.db_id);
     if (!lane) continue;
     const s = seconds(night, cut.acceptedOnly);
@@ -213,18 +230,22 @@ export interface SkyStats {
   targets: number;
   nights: number;
   rigs: number;
-  /** Sum of the shown fields' areas, square degrees. */
+  /** Area of sky the shown fields cover, square degrees, overlaps counted once. */
   areaDeg2: number;
+  /** The shown fields' areas added together, square degrees, overlaps and all. */
+  fieldsDeg2: number;
+  /** Pixels the covered sky resolves into, each patch at the finest scale that reached it. */
+  pixels: number;
   firstNight: string | null;
   lastNight: string | null;
-  longestNight: { night: string; hours: number } | null;
+  /** The most one rig captured in one night. */
+  longestNight: { night: string; hours: number; rig: string } | null;
   topTarget: { name: string; hours: number } | null;
 }
 
 export function skyStats(shown: ShownTarget[], lanes: Lane[], cut: SkyCut): SkyStats {
   let seconds = 0;
   let frames = 0;
-  let areaDeg2 = 0;
   const nights = new Set<string>();
   const rigs = new Set<string>();
   let first: string | null = null;
@@ -234,27 +255,23 @@ export function skyStats(shown: ShownTarget[], lanes: Lane[], cut: SkyCut): SkyS
     seconds += item.seconds;
     frames += item.frames;
     rigs.add(item.target.db_id);
-    if (item.target.footprint) {
-      areaDeg2 += item.target.footprint.width_deg * item.target.footprint.height_deg;
-    }
     if (item.firstNight && (!first || item.firstNight < first)) first = item.firstNight;
     if (item.lastNight && (!last || item.lastNight > last)) last = item.lastNight;
     if (!top || item.seconds > top.hours * 3600) {
       top = { name: item.target.name, hours: item.seconds / 3600 };
     }
   }
-  const perNight = new Map<string, number>();
+  let longest: { night: string; hours: number; rig: string } | null = null;
   for (const lane of lanes) {
     if (lane.aggregate) continue;
     for (const [night, slot] of lane.perNight) {
+      if (cut.fromNight && night < cut.fromNight) continue;
       if (cut.asOfNight && night > cut.asOfNight) continue;
       nights.add(night);
-      perNight.set(night, (perNight.get(night) ?? 0) + slot.seconds);
+      if (!longest || slot.seconds > longest.hours * 3600) {
+        longest = { night, hours: slot.seconds / 3600, rig: lane.db_name };
+      }
     }
-  }
-  let longest: { night: string; hours: number } | null = null;
-  for (const [night, s] of perNight) {
-    if (!longest || s > longest.hours * 3600) longest = { night, hours: s / 3600 };
   }
   return {
     hours: seconds / 3600,
@@ -262,7 +279,7 @@ export function skyStats(shown: ShownTarget[], lanes: Lane[], cut: SkyCut): SkyS
     targets: shown.length,
     nights: nights.size,
     rigs: rigs.size,
-    areaDeg2,
+    ...coveredSky(shown),
     firstNight: first,
     lastNight: last,
     longestNight: longest,
@@ -287,4 +304,96 @@ export function formatNight(night: string | null): string {
 export function formatHours(hours: number): string {
   if (hours < 10) return `${hours.toFixed(1)} h`;
   return `${Math.round(hours)} h`;
+}
+
+/** Side of the sky cells the covered area is counted on, degrees. */
+const AREA_CELL_DEG = 0.05;
+
+export interface CoveredSky {
+  areaDeg2: number;
+  fieldsDeg2: number;
+  pixels: number;
+}
+
+/**
+ * How much sky the shown fields cover. `areaDeg2` counts overlaps once: each
+ * field is laid onto a grid of small cells and every cell whose centre falls
+ * inside any field is counted, weighted by the cosine of its declination,
+ * so two rigs on one target, or the panels of a mosaic, add up to the sky
+ * they share. `fieldsDeg2` adds the fields up as they are. `pixels` turns
+ * each covered cell into pixels at the finest plate scale of any field that
+ * reached it, so a long focal length earns more per square degree.
+ */
+export function coveredSky(shown: ShownTarget[]): CoveredSky {
+  // cell key → [area in square degrees, finest arcseconds per pixel seen]
+  const cells = new Map<number, [number, number]>();
+  const columns = Math.round(360 / AREA_CELL_DEG);
+  let fieldsDeg2 = 0;
+  for (const { target } of shown) {
+    if (!target.footprint || target.ra_deg == null || target.dec_deg == null) continue;
+    fieldsDeg2 += target.footprint.width_deg * target.footprint.height_deg;
+    const scale = target.footprint.pixel_scale_arcsec ?? Number.POSITIVE_INFINITY;
+    const corners = footprintOutline(target.ra_deg, target.dec_deg, target.footprint, 1);
+    if (corners.length < 3) continue;
+    // Work in a flat patch about the field: RA offsets shrunk by cos(dec),
+    // so the point-in-polygon test sees the field's true shape.
+    const dec0 = target.dec_deg;
+    const cosDec0 = Math.max(0.05, Math.cos((dec0 * Math.PI) / 180));
+    const polygon = corners.map(([ra, dec]) => [wrap180(ra - target.ra_deg!) * cosDec0, dec - dec0]);
+    const xs = polygon.map(([x]) => x);
+    const ys = polygon.map(([, y]) => y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const raStep = AREA_CELL_DEG;
+    const decStep = AREA_CELL_DEG;
+    const decLo = Math.max(-90, dec0 + minY);
+    const decHi = Math.min(90, dec0 + maxY);
+    const raSpan = (maxX - minX) / cosDec0;
+    const raLo = target.ra_deg + minX / cosDec0;
+    const iyLo = Math.floor((decLo + 90) / decStep);
+    const iyHi = Math.floor((decHi + 90) / decStep);
+    const ixLo = Math.floor(raLo / raStep);
+    const ixHi = Math.floor((raLo + raSpan) / raStep);
+    for (let iy = iyLo; iy <= iyHi; iy += 1) {
+      const dec = -90 + (iy + 0.5) * decStep;
+      const y = dec - dec0;
+      const cosDec = Math.cos((dec * Math.PI) / 180);
+      for (let ix = ixLo; ix <= ixHi; ix += 1) {
+        const ra = (ix + 0.5) * raStep;
+        const x = wrap180(ra - target.ra_deg) * cosDec0;
+        if (!pointInPolygon(x, y, polygon)) continue;
+        const key = ((ix % columns) + columns) % columns + iy * columns;
+        const cell = cells.get(key);
+        if (!cell) cells.set(key, [raStep * decStep * cosDec, scale]);
+        else if (scale < cell[1]) cell[1] = scale;
+      }
+    }
+  }
+  let areaDeg2 = 0;
+  let pixels = 0;
+  for (const [area, scale] of cells.values()) {
+    areaDeg2 += area;
+    if (Number.isFinite(scale) && scale > 0) pixels += (area * 3600 * 3600) / (scale * scale);
+  }
+  return { areaDeg2, fieldsDeg2, pixels };
+}
+
+/** Pixels as `1.2 Gpx` or `640 Mpx`. */
+export function formatPixels(pixels: number): string {
+  if (!(pixels > 0)) return '—';
+  if (pixels >= 1e9) return `${(pixels / 1e9).toFixed(pixels >= 1e10 ? 0 : 1)} Gpx`;
+  if (pixels >= 1e6) return `${Math.round(pixels / 1e6)} Mpx`;
+  return `${Math.round(pixels / 1e3)} kpx`;
+}
+
+function pointInPolygon(x: number, y: number, polygon: number[][]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const [xi, yi] = polygon[i];
+    const [xj, yj] = polygon[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
 }

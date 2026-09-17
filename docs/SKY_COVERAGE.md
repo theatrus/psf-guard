@@ -63,8 +63,13 @@ graded-in frames alone. Every number on the page follows the same cut: the
 stat band, the fields, their cards, and the timeline.
 
 The stat band gives integration hours, frames, targets, nights, the sky area
-covered (the sum of the shown fields, so overlapping fields count twice), the
-longest night, and the target with the most hours.
+covered (the area of sky the shown fields reach, with overlaps counted once,
+to a twentieth of a degree, and beneath it the fields added together when
+that is more), the pixels on sky (each covered patch counted at the finest
+plate scale of any field that reached it, so a long focal length earns more
+per square degree), the
+longest night (the most one rig captured in one night, and which rig), and
+the target with the most hours.
 
 ## The timeline
 
@@ -73,14 +78,20 @@ longest night, and the target with the most hours.
 Under the map, one lane per rig shows the integration of every night as a bar
 stacked by filter, with month ticks below and a Moon row whose brightness is
 the Moon's illumination that night. With more than one rig, an **All rigs**
-lane on top sums them. Drag the scrubber, or press play, to see
-the map as it stood at the end of any night: fields appear as their first
-frames arrive and brighten as hours accumulate. The band above reads "as of"
-that night while you look back.
+lane on top sums them. The slider spans the nights the selected rigs and
+filters captured on and has two thumbs: the right one shows the map as it
+stood at the end of a night, the left one sets where the story starts, and
+the year chips under it jump the start to January of a year. Press play to
+replay from the start thumb: fields appear as their first frames arrive and
+brighten as hours accumulate. The band above reads "from" and "as of" while
+the range is narrowed.
 
-A night is the civil date it began on. Captures are grouped twelve hours back
-from UTC, which keeps an evening and the small hours that follow it together
-for any site within about eight hours of Greenwich.
+A night is the civil date it began on. Each catalog's day is split at its
+quietest hour, the middle of the longest stretch of the UTC day in which it
+never captured anything, so an evening and the small hours that follow it
+share one night whatever the site's longitude, and a rig east of Greenwich
+that images across noon UTC is not cut in two. The response reports the
+split it chose.
 
 ## Saving a picture
 
