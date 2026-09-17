@@ -47,25 +47,6 @@ interface View {
 
 const HOME: View = { x: 0, y: 0, k: 1 };
 
-/** A handful of faint fixed dots so an empty sky still reads as one. */
-function backdropDust(count: number): Array<{ x: number; y: number; r: number }> {
-  let seed = 7;
-  const next = () => {
-    seed = (seed * 1103515245 + 12345) % 2147483648;
-    return seed / 2147483648;
-  };
-  const dust = [];
-  while (dust.length < count) {
-    const x = (next() * 4 - 2) * AT.scale + AT.cx;
-    const y = (next() * 2 - 1) * AT.scale + AT.cy;
-    const inside = ((x - AT.cx) / (2 * AT.scale)) ** 2 + ((y - AT.cy) / AT.scale) ** 2 <= 0.98;
-    if (inside) dust.push({ x, y, r: 0.35 + next() * 0.7 });
-  }
-  return dust;
-}
-
-const DUST = backdropDust(220);
-
 function opacityFor(seconds: number, maxSeconds: number): number {
   if (!(maxSeconds > 0)) return 0.6;
   const scaled = Math.log10(1 + seconds / 3600) / Math.log10(1 + maxSeconds / 3600);
@@ -356,21 +337,16 @@ export default function SkyMap({ targets, frame, mode, showBackdrop, showStacks,
           fill="url(#sky-ground)"
         />
         <g className="sky-stars">
-          {DUST.filter((dot) => mode === 'aitoff' || (dot.x - AT.cx) ** 2 + (dot.y - AT.cy) ** 2 <= AT.scale ** 2).map(
-            (dot, index) => (
-              <circle key={index} cx={dot.x} cy={dot.y} r={dot.r * textScale} />
-            )
-          )}
-          {showBackdrop &&
-            scenery.stars.map((star, index) => (
-              <circle
-                key={`s${index}`}
-                className="sky-bright-star"
-                cx={star.x}
-                cy={star.y}
-                r={Math.max(0.5, 2.6 - 0.5 * star.mag) * textScale}
-              />
-            ))}
+          {scenery.stars.map((star, index) => (
+            <circle
+              key={index}
+              className="sky-bright-star"
+              cx={star.x}
+              cy={star.y}
+              r={Math.max(0.3, 2.6 - 0.45 * star.mag) * textScale}
+              fillOpacity={Math.min(1, 1.15 - 0.12 * star.mag)}
+            />
+          ))}
         </g>
         <g className="sky-milky-way">
           {scenery.band.map((path, index) => (
