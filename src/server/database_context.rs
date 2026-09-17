@@ -73,6 +73,22 @@ pub(crate) fn open_scheduler_connection_with_flags(
     Ok(conn)
 }
 
+/// Pages SQLite keeps in memory for the long-lived catalog connection, in
+/// KiB. The default two megabytes hold a few hundred pages; the image table
+/// of a twelve-thousand-frame catalog is 3,700, so a query that reads frame
+/// metadata evicted it all and the next query read it again, page by page,
+/// from a network share. Thirty-two megabytes hold such a catalog's rows and
+/// indexes whole, and the cache stays valid until the file changes.
+///
+/// Only the long-lived connection gets this. Setting it reads the schema
+/// page, which takes a shared lock, and the short-lived snapshot connections
+/// must be able to open a locked file without waiting.
+const SCHEDULER_PAGE_CACHE_KIB: i64 = 32 * 1024;
+
+fn configure_scheduler_page_cache(conn: &Connection) -> rusqlite::Result<()> {
+    conn.pragma_update(None, "cache_size", -SCHEDULER_PAGE_CACHE_KIB)
+}
+
 /// The usual way to open a scheduler DB connection in the server: flags above
 /// plus the shared busy timeout. Every long-lived open site (initial, both
 /// reopen paths, the refresh connection) must go through here so none silently
@@ -97,6 +113,7 @@ pub(crate) fn open_scheduler_connection(path: &str) -> rusqlite::Result<Connecti
         }
     };
     configure_scheduler_busy_timeout(&conn)?;
+    configure_scheduler_page_cache(&conn)?;
     upgrade_psf_guard_tables(&conn, path);
     Ok(conn)
 }

@@ -26,6 +26,15 @@
 
 ## Fixed
 
+- The Overview loads in well under a second per catalog again. Its counts,
+  spans, and filter lists read each image row beside its metadata, so a
+  large catalog on a network share cost several seconds per request; four
+  wider indexes now answer them without touching the table (26,570 page
+  reads became 226 on a twelve-thousand-frame catalog), the grid's
+  newest-first page no longer sorts the whole table, and each catalog keeps
+  a larger page cache. The indexes are created once when the catalog is next
+  opened writable; a read-only catalog works as before.
+
 - Import no longer files another instrument's frames into a catalog. Once
   a catalog has recorded its rig, a light whose telescope matches none of
   its rigs is listed by rig with an example file and left out; the preview

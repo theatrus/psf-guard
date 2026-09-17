@@ -97,6 +97,16 @@ pub struct Database<'a> {
 /// and Target Scheduler's queries keep working exactly as before, so this
 /// stays inside the compatibility contract. The names carry the `psf_guard`
 /// prefix so it is obvious who added them and safe to drop.
+///
+/// The first two indexes only find rows; the summaries then read each row,
+/// and a row of `acquiredimage` sits beside its metadata JSON, so a summary
+/// of twelve thousand images still touched every one of the table's 3,700
+/// pages. On a catalog reached over NFS each page is a round trip, and the
+/// Overview paid seconds per catalog for a handful of counts. The wider
+/// indexes below carry the columns the summaries read, so those queries
+/// never leave the index: the same set of Overview statements went from
+/// 26,570 page reads to 226 on that catalog. A catalog whose file is open
+/// read-only keeps working without them, only slower.
 const QUERY_INDEXES: &[(&str, &str)] = &[
     (
         "idx_psf_guard_acquiredimage_target",
@@ -107,6 +117,31 @@ const QUERY_INDEXES: &[(&str, &str)] = &[
         "idx_psf_guard_acquiredimage_project",
         "CREATE INDEX IF NOT EXISTS idx_psf_guard_acquiredimage_project
              ON acquiredimage(projectId)",
+    ),
+    // Per-target counts by grade, capture spans, and filters.
+    (
+        "idx_psf_guard_acquiredimage_target_summary",
+        "CREATE INDEX IF NOT EXISTS idx_psf_guard_acquiredimage_target_summary
+             ON acquiredimage(targetId, gradingStatus, acquireddate, filtername)",
+    ),
+    // Per-project counts, spans, filters, and the newest frames per project;
+    // also the catalog-wide totals, which scan this index instead of the table.
+    (
+        "idx_psf_guard_acquiredimage_project_summary",
+        "CREATE INDEX IF NOT EXISTS idx_psf_guard_acquiredimage_project_summary
+             ON acquiredimage(projectId, acquireddate, gradingStatus, filtername, targetId)",
+    ),
+    // The distinct filters of a catalog.
+    (
+        "idx_psf_guard_acquiredimage_filter",
+        "CREATE INDEX IF NOT EXISTS idx_psf_guard_acquiredimage_filter
+             ON acquiredimage(filtername)",
+    ),
+    // The grid's newest-first page, which otherwise sorts the whole table.
+    (
+        "idx_psf_guard_acquiredimage_date",
+        "CREATE INDEX IF NOT EXISTS idx_psf_guard_acquiredimage_date
+             ON acquiredimage(acquireddate)",
     ),
 ];
 
@@ -1789,6 +1824,24 @@ mod tests {
             by_project.contains("SEARCH")
                 && by_project.contains("idx_psf_guard_acquiredimage_project"),
             "{by_project}"
+        );
+
+        // The summaries never leave an index: per target, per project, the
+        // whole catalog, the distinct filters, and the newest-first grid.
+        for sql in [
+            "SELECT targetId, MIN(acquireddate), MAX(acquireddate) FROM acquiredimage GROUP BY targetId",
+            "SELECT targetId, filtername FROM acquiredimage WHERE filtername IS NOT NULL GROUP BY targetId, filtername",
+            "SELECT COUNT(*), SUM(gradingStatus = 1), MIN(acquireddate), MAX(acquireddate) FROM acquiredimage WHERE projectId = 1",
+            "SELECT COUNT(*), SUM(gradingStatus = 1), MIN(acquireddate), MAX(acquireddate) FROM acquiredimage",
+            "SELECT DISTINCT filtername FROM acquiredimage WHERE filtername IS NOT NULL ORDER BY filtername",
+        ] {
+            let covering = plan(sql);
+            assert!(covering.contains("COVERING INDEX"), "{sql}: {covering}");
+        }
+        let newest = plan("SELECT Id FROM acquiredimage ORDER BY acquireddate DESC LIMIT 50");
+        assert!(
+            newest.contains("idx_psf_guard_acquiredimage_date") && !newest.contains("TEMP B-TREE"),
+            "{newest}"
         );
 
         // Idempotent: opening the same catalog again writes nothing.
