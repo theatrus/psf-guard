@@ -148,6 +148,18 @@ The preview also carries the run's scope controls:
   exposures the catalog already has under new basenames. Off by default —
   masters are worth cataloging, and later releases will surface a finished
   project's master lights in its display.
+- **Include frames from other rigs** (opt-in): a catalog learns its rigs,
+  the telescope and camera named in its frames' headers, from the
+  calibration frames and lights it has accepted. Once it knows one, a light
+  whose telescope matches none of them (or whose camera does, when the
+  frame names no telescope) is listed by rig, with an example file, and
+  left out, because another instrument's file in this catalog's folders is
+  a filing mistake far more often than a new scope, and once filed it reads
+  as a night this rig never had. The same scope under a new camera, or a
+  camera whose driver spells its name differently, is still this rig. Turn
+  this on after a genuine scope change; the run then records the new rig
+  and later runs accept it on their own. A remote upload from another rig
+  is refused with the same explanation.
 
 Change any of them and choose **Update preview** to re-run the dry preview
 before confirming.
@@ -159,6 +171,7 @@ psf-guard import archive ./new-lights --dry-run
 psf-guard import archive ./new-lights
 psf-guard import archive ./new-flats --calibration-only
 psf-guard import archive ./processing-tree --skip-processed
+psf-guard import archive ./new-camera --accept-other-rigs
 ```
 
 Use `--no-attach` when every new frame should create imported structure instead

@@ -355,6 +355,7 @@ pub fn main() -> Result<()> {
             lights_only,
             calibration_only,
             skip_processed,
+            accept_other_rigs,
             registry,
         } => {
             use crate::commands::import::{
@@ -402,6 +403,7 @@ pub fn main() -> Result<()> {
                     crate::commands::import::ImportScope::All
                 },
                 skip_processed,
+                accept_other_rigs,
             };
             let outcome = import_frames(&mut conn, frames, &options)?;
             print_outcome(&outcome);

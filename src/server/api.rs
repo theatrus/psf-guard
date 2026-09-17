@@ -730,6 +730,10 @@ pub struct ImportRequest {
     /// intermediates) out of the catalog (default false).
     #[serde(default)]
     pub skip_processed: Option<bool>,
+    /// Take lights from a rig the catalog has not recorded (default false:
+    /// they are listed and left out).
+    #[serde(default)]
+    pub accept_other_rigs: Option<bool>,
     /// Coordinate-match radius in degrees (default 0.5).
     #[serde(default)]
     pub match_radius_deg: Option<f64>,

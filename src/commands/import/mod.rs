@@ -70,6 +70,14 @@ pub struct ImportOptions {
     /// over a processing tree can opt in to skip the derived files, which
     /// repeat exposures the catalog already has under new basenames.
     pub skip_processed: bool,
+    /// Take lights whose telescope (or camera, when no telescope is named)
+    /// matches none of the rigs the catalog has recorded. Off by default: a
+    /// frame from another rig in
+    /// this catalog's folders is a filing mistake far more often than a
+    /// new camera, and once it is in it looks like a night this rig never
+    /// had. A catalog that has recorded no rig yet accepts everything and
+    /// learns its rig from what it accepts.
+    pub accept_other_rigs: bool,
 }
 
 pub const DEFAULT_MATCH_RADIUS_DEG: f64 = 0.5;
@@ -84,8 +92,19 @@ impl Default for ImportOptions {
             match_radius_deg: DEFAULT_MATCH_RADIUS_DEG,
             scope: ImportScope::default(),
             skip_processed: false,
+            accept_other_rigs: false,
         }
     }
+}
+
+/// Frames from one rig the catalog does not know, left out of a run.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OtherRigSummary {
+    /// "SpaceCat61 · ZWO ASI2600MM Pro", as the frames named it.
+    pub rig: String,
+    pub frames: usize,
+    /// One of the files, so the operator can find the batch.
+    pub example: String,
 }
 
 /// Per-project report line.
@@ -122,6 +141,13 @@ pub struct ImportOutcome {
     /// Calibration frames stored in PSF Guard's sibling tables.
     pub calibration: crate::calibration::CalibrationImportOutcome,
     pub skipped_existing: usize,
+    /// Lights from a rig the catalog has not recorded, left out unless the
+    /// run accepts other rigs. See [`ImportOptions::accept_other_rigs`].
+    #[serde(default)]
+    pub skipped_other_rig: usize,
+    /// Those frames by rig, for the preview.
+    #[serde(default)]
+    pub other_rigs: Vec<OtherRigSummary>,
     pub imported: usize,
     /// Frames attached to targets that already existed in the database.
     pub attached: usize,
@@ -140,6 +166,16 @@ pub struct ImportOutcome {
     pub created_target_ids: Vec<i32>,
     /// Existing target ids that gained frames (live runs only).
     pub attached_target_ids: Vec<i32>,
+}
+
+/// Whether a light names a rig that none of the catalog's known rigs admits:
+/// another telescope, or another camera when no telescope is named. A
+/// catalog that knows no rig, or a frame that names none, cannot disagree.
+fn from_other_rig(frame: &FrameMeta, known_rigs: &[crate::calibration::KnownRig]) -> bool {
+    if known_rigs.is_empty() || (frame.telescope.is_none() && frame.camera.is_none()) {
+        return false;
+    }
+    !known_rigs.iter().any(|rig| rig.admits(frame))
 }
 
 /// Recursively collect image files — FITS or XISF (a bare file argument is
@@ -223,6 +259,15 @@ pub fn import_frames(
         .filter(|basename| !basename.is_empty())
         .collect();
     let existing = existing_basenames(&tx, &candidate_basenames)?;
+    // The rigs this catalog has seen. A light that names a rig none of them
+    // admits is set aside, unless the run says otherwise.
+    let known_rigs = if options.accept_other_rigs {
+        Vec::new()
+    } else {
+        crate::calibration::known_rigs(&tx)?
+    };
+    let mut strangers: std::collections::BTreeMap<String, (usize, String)> =
+        std::collections::BTreeMap::new();
     let mut lights: Vec<FrameMeta> = Vec::new();
     let mut calibrations: Vec<FrameMeta> = Vec::new();
     for frame in frames {
@@ -243,10 +288,33 @@ pub fn import_frames(
             outcome.skipped_out_of_scope += 1;
         } else if existing.contains(&frame.basename().to_lowercase()) {
             outcome.skipped_existing += 1;
+        } else if from_other_rig(&frame, &known_rigs) {
+            outcome.skipped_other_rig += 1;
+            let entry = strangers
+                .entry(crate::calibration::rig_label(&frame))
+                .or_insert_with(|| (0, frame.path.display().to_string()));
+            entry.0 += 1;
         } else {
             lights.push(frame);
         }
     }
+    outcome.other_rigs = strangers
+        .into_iter()
+        .map(|(rig, (frames, example))| OtherRigSummary {
+            rig,
+            frames,
+            example,
+        })
+        .collect();
+    // What this run accepts teaches the catalog its rig, so the next run
+    // can tell a stranger's frame apart.
+    let mut rigs_seen: HashSet<String> = HashSet::new();
+    let accepted_rigs: Vec<FrameMeta> = lights
+        .iter()
+        .filter(|frame| frame.telescope.is_some() || frame.camera.is_some())
+        .filter(|frame| rigs_seen.insert(crate::calibration::rig_label(frame).to_ascii_lowercase()))
+        .cloned()
+        .collect();
 
     // Merge phase: attach frames to targets that already exist (matched by
     // name, then coordinates). Only what's left falls through to the
@@ -302,6 +370,9 @@ pub fn import_frames(
         .or((!profile_id.is_empty()).then_some(profile_id.as_str()));
     outcome.calibration =
         crate::calibration::import_calibration_frames(&tx, &calibrations, calibration_profile)?;
+    for frame in &accepted_rigs {
+        crate::calibration::note_light_rig(&tx, calibration_profile, frame)?;
+    }
     let template_ids = ensure_templates(&tx, &plan, &profile_id, &mut outcome)?;
 
     for project in &plan.projects {
@@ -1165,6 +1236,12 @@ pub fn print_outcome(outcome: &ImportOutcome) {
             attach.project, attach.target, attach.frames, attach.matched_by
         );
     }
+    for other in &outcome.other_rigs {
+        println!(
+            "    left out {} frame(s) from another rig, {} — e.g. {}; pass --accept-other-rigs if that rig belongs here",
+            other.frames, other.rig, other.example
+        );
+    }
     for summary in &outcome.project_summaries {
         println!(
             "    NEW {} — {} target(s), {} frame(s)",
@@ -1300,6 +1377,92 @@ mod tests {
         let outcome = import_frames(&mut conn, vec![artifact], &ImportOptions::default()).unwrap();
         assert_eq!(outcome.imported, 1);
         assert_eq!(outcome.skipped_processed, 0);
+    }
+
+    #[test]
+    fn a_light_from_another_rig_is_left_out_once_the_catalog_knows_its_own() {
+        // A fresh catalog knows no rig: the first import takes what it is
+        // given and learns the rig from it.
+        let mut conn = fresh_conn();
+        let outcome = import_frames(
+            &mut conn,
+            vec![light("M31", "Ha", 1_000)],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(outcome.imported, 1);
+        let rigs = crate::calibration::known_rigs(&conn).unwrap();
+        assert_eq!(rigs.len(), 1);
+        assert_eq!(rigs[0].name, "EdgeHD · ASI2600");
+
+        // A frame from another instrument that found its way into this
+        // catalog's folders is set aside and named, not filed.
+        let mut stranger = light("Sh2 230", "Ha", 2_000);
+        stranger.telescope = Some("SpaceCat61".into());
+        stranger.camera = Some("ZWO ASI2600MM Pro".into());
+        stranger.focal_length_mm = Some(300.0);
+        let outcome =
+            import_frames(&mut conn, vec![stranger.clone()], &ImportOptions::default()).unwrap();
+        assert_eq!(outcome.imported, 0);
+        assert_eq!(outcome.skipped_other_rig, 1);
+        assert_eq!(outcome.other_rigs.len(), 1);
+        assert_eq!(outcome.other_rigs[0].rig, "SpaceCat61 · ZWO ASI2600MM Pro");
+        assert_eq!(outcome.other_rigs[0].frames, 1);
+        assert!(outcome.other_rigs[0]
+            .example
+            .ends_with("Sh2 230_Ha_2000.fits"));
+        let targets: i64 = conn
+            .query_row("SELECT COUNT(*) FROM target", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            targets, 1,
+            "no project or target is made for a stranger's frame"
+        );
+
+        // The same frame with the other rig accepted is filed, and the
+        // catalog now knows both rigs.
+        let options = ImportOptions {
+            accept_other_rigs: true,
+            ..Default::default()
+        };
+        let outcome = import_frames(&mut conn, vec![stranger], &options).unwrap();
+        assert_eq!(outcome.imported, 1);
+        assert_eq!(outcome.skipped_other_rig, 0);
+        assert_eq!(crate::calibration::known_rigs(&conn).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_light_that_names_no_rig_is_never_a_stranger() {
+        let mut conn = fresh_conn();
+        import_frames(
+            &mut conn,
+            vec![light("M31", "Ha", 1_000)],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        let mut anonymous = light("M31", "OIII", 2_000);
+        anonymous.telescope = None;
+        anonymous.camera = None;
+        let outcome = import_frames(&mut conn, vec![anonymous], &ImportOptions::default()).unwrap();
+        assert_eq!((outcome.imported, outcome.skipped_other_rig), (1, 0));
+        // The same scope under a name written differently is still this rig.
+        let mut spelled = light("M31", "SII", 3_000);
+        spelled.telescope = Some(" edgehd ".into());
+        let outcome = import_frames(&mut conn, vec![spelled], &ImportOptions::default()).unwrap();
+        assert_eq!((outcome.imported, outcome.skipped_other_rig), (1, 0));
+        // So is the same scope with a camera the driver names differently,
+        // or a new camera on it; the scope is the rig's identity.
+        let mut renamed = light("M31", "L", 4_000);
+        renamed.camera = Some("ASI Camera (1) (ASCOM)".into());
+        let outcome = import_frames(&mut conn, vec![renamed], &ImportOptions::default()).unwrap();
+        assert_eq!((outcome.imported, outcome.skipped_other_rig), (1, 0));
+        // A frame naming only a camera is judged by the camera.
+        let mut camera_only = light("M31", "R", 5_000);
+        camera_only.telescope = None;
+        camera_only.camera = Some("QHY600".into());
+        let outcome =
+            import_frames(&mut conn, vec![camera_only], &ImportOptions::default()).unwrap();
+        assert_eq!((outcome.imported, outcome.skipped_other_rig), (0, 1));
     }
 
     #[test]

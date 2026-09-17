@@ -200,6 +200,12 @@ pub enum Commands {
         #[arg(long)]
         skip_processed: bool,
 
+        /// Take lights from a rig this catalog has not recorded. Off by
+        /// default: such frames are listed and left out, since a stranger's
+        /// frame in this catalog's folders is usually a filing mistake.
+        #[arg(long)]
+        accept_other_rigs: bool,
+
         /// Path to the database registry JSON file (defaults to the platform
         /// config directory).
         #[arg(long)]

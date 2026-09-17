@@ -4476,6 +4476,77 @@ fn moved_calibration_row(
     }))
 }
 
+/// A rig this catalog has seen, as its frames named it.
+#[derive(Debug, Clone)]
+pub struct KnownRig {
+    pub name: String,
+    pub telescope: Option<String>,
+    pub camera: Option<String>,
+}
+
+/// Every rig recorded in the catalog, from calibration frames and from the
+/// lights it has accepted. Empty for a catalog that has recorded none.
+pub fn known_rigs(conn: &Connection) -> Result<Vec<KnownRig>> {
+    if !schema_exists(conn) {
+        return Ok(Vec::new());
+    }
+    let mut statement =
+        conn.prepare("SELECT name, telescope, camera FROM psf_guard_rig ORDER BY name")?;
+    let rigs = statement
+        .query_map([], |row| {
+            Ok(KnownRig {
+                name: row.get(0)?,
+                telescope: row.get(1)?,
+                camera: row.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rigs)
+}
+
+impl KnownRig {
+    /// Whether a frame names this rig. The telescope decides: the same
+    /// scope under a new camera, or a camera whose driver spells its name
+    /// differently from one season to the next, is still this rig. The
+    /// camera decides only when one side never named a telescope. A field
+    /// neither side carries cannot disagree.
+    pub fn admits(&self, frame: &FrameMeta) -> bool {
+        let same = |known: &str, seen: &str| known.trim().eq_ignore_ascii_case(seen.trim());
+        match (&self.telescope, &frame.telescope) {
+            (Some(known), Some(seen)) => same(known, seen),
+            _ => match (&self.camera, &frame.camera) {
+                (Some(known), Some(seen)) => same(known, seen),
+                _ => true,
+            },
+        }
+    }
+}
+
+/// How a frame names its rig, for a message: "SpaceCat61 · ZWO ASI2600MM Pro".
+pub fn rig_label(frame: &FrameMeta) -> String {
+    match (&frame.telescope, &frame.camera) {
+        (Some(telescope), Some(camera)) => format!("{telescope} · {camera}"),
+        (Some(telescope), None) => telescope.clone(),
+        (None, Some(camera)) => camera.clone(),
+        (None, None) => "an unnamed rig".into(),
+    }
+}
+
+/// Record the rig a light was shot with, so a later import can tell a
+/// stranger's frame from this catalog's own.
+pub fn note_light_rig(tx: &Connection, profile_id: Option<&str>, frame: &FrameMeta) -> Result<()> {
+    ensure_schema(tx)?;
+    let signature = rig_signature(profile_id, frame);
+    ensure_rig(
+        tx,
+        &signature,
+        profile_id,
+        frame,
+        chrono::Utc::now().timestamp(),
+    )?;
+    Ok(())
+}
+
 fn ensure_rig(
     conn: &Connection,
     signature: &str,

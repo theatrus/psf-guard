@@ -1585,6 +1585,9 @@ export interface ImportOutcome {
   skipped_out_of_scope?: number;
   calibration: CalibrationImportOutcome;
   skipped_existing: number;
+  /** Lights from a rig the catalog has not recorded, left out. */
+  skipped_other_rig?: number;
+  other_rigs?: ImportOtherRigSummary[];
   imported: number;
   /** Frames attached to targets that already existed. */
   attached: number;
@@ -1599,6 +1602,13 @@ export interface ImportOutcome {
   attach_summaries: ImportAttachSummary[];
   created_target_ids: number[];
   attached_target_ids: number[];
+}
+
+/** Frames from one rig the catalog does not know, left out of a run. */
+export interface ImportOtherRigSummary {
+  rig: string;
+  frames: number;
+  example: string;
 }
 
 export interface CalibrationImportOutcome {
@@ -1713,6 +1723,8 @@ export interface ImportRequest {
   scope?: ImportScope;
   /** Leave processing artifacts out of the catalog (default false). */
   skip_processed?: boolean;
+  /** Take lights from a rig the catalog has not recorded (default false). */
+  accept_other_rigs?: boolean;
 }
 
 /** How the calibration library covers one project (mirrors Rust
