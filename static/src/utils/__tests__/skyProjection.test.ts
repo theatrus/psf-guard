@@ -5,6 +5,7 @@ import {
   equatorialToGalactic,
   orthographic,
   projectPoint,
+  turnToCenter,
   footprintOutline,
   formatDecShort,
   formatRaShort,
@@ -150,5 +151,34 @@ describe('globe', () => {
     expect(projectedPath(square, view, at, true)).toBe('');
     const front: [number, number][] = square.map(([ra, dec]) => [ra + 90, dec]);
     expect(projectedPath(front, view, at, true).endsWith('Z')).toBe(true);
+  });
+});
+
+describe('oblique flat map', () => {
+  it('turns the sphere so the view centre is at the origin', () => {
+    const [lon, lat] = turnToCenter(180, 60, 180, 60);
+    expect(wrap180(lon)).toBeCloseTo(0, 9);
+    expect(lat).toBeCloseTo(0, 9);
+    // Ten degrees north of the centre lands ten degrees up, on the meridian.
+    const [, up] = turnToCenter(180, 70, 180, 60);
+    expect(up).toBeCloseTo(10, 9);
+    // The pole is thirty degrees up when the centre is at latitude 60.
+    const [, pole] = turnToCenter(0, 90, 180, 60);
+    expect(pole).toBeCloseTo(30, 9);
+    // With no tilt the turn is only a change of central meridian.
+    const [flatLon, flatLat] = turnToCenter(200, 20, 180, 0);
+    expect(flatLon).toBeCloseTo(20, 9);
+    expect(flatLat).toBeCloseTo(20, 9);
+  });
+
+  it('projects the flat map about a tilted centre with east still on the left', () => {
+    const view = { ...defaultView('equatorial', 'aitoff'), centerLon: 180, centerLat: 60 };
+    const centre = projectPoint(180, 60, view);
+    expect(centre.x).toBeCloseTo(0, 9);
+    expect(centre.y).toBeCloseTo(0, 9);
+    expect(projectPoint(190, 60, view).x).toBeLessThan(0);
+    expect(projectPoint(180, 70, view).y).toBeGreaterThan(0);
+    // Everything stays on the map: the flat view hides nothing.
+    expect(projectPoint(0, -60, view).visible).toBe(true);
   });
 });

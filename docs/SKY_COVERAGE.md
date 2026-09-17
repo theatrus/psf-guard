@@ -27,12 +27,13 @@ and which stack preview is shown. Click it to open the target in **Images**.
 Behind the fields sit every star to magnitude 5.5, and the constellation
 figures and names, which the **Constellations** switch hides.
 
-**Flat** draws the whole sky at once; a drag at whole-sky zoom spins the
-central meridian. **Globe** draws the sky as a sphere seen from outside,
-and a drag turns it in any direction, so the pole or the far side comes
-round. Scroll to zoom in either; zoomed in on the flat map a drag pans
-instead. The buttons in the corner step the zoom and return to the whole
-sky as it first stood, and a double click does the same.
+**Flat** is the sky seen from inside the sphere, the whole of it at once at
+first; **Globe** is the same sphere seen from outside. In both, a drag turns
+the sky in any direction, sideways and up or down, at every zoom, and the
+projection is centred on wherever you have turned it, so what you look at
+is drawn with the least distortion. Scroll to zoom about the centre of the
+view. The buttons in the corner step the zoom and return to the whole sky
+as it first stood, and a double click does the same.
 
 ![The globe, turned toward Cygnus and the pole](sky-coverage-globe.jpg)
 
