@@ -168,6 +168,7 @@ export default function TauriSettings({
   const [confirmImport, setConfirmImport] = useState<DbEntry | null>(null);
   const [importScope, setImportScope] = useState<ImportScope>('all');
   const [importSkipProcessed, setImportSkipProcessed] = useState(false);
+  const [importAcceptOtherRigs, setImportAcceptOtherRigs] = useState(false);
   const [importFolders, setImportFolders] = useState<ImportFolder[]>([]);
   // Checked folder paths. Exactly the configured roots means "everything",
   // and the request then omits image_dirs entirely.
@@ -720,6 +721,7 @@ export default function TauriSettings({
     return {
       scope: importScope === 'all' ? undefined : importScope,
       skip_processed: importSkipProcessed || undefined,
+      accept_other_rigs: importAcceptOtherRigs || undefined,
       image_dirs: isDefaultSelection || selection.length === 0 ? undefined : selection,
     };
   };
@@ -762,6 +764,7 @@ export default function TauriSettings({
       await previewImport(entry, {
         scope: undefined,
         skip_processed: undefined,
+        accept_other_rigs: undefined,
         image_dirs: undefined,
       });
     } catch (err) {
@@ -1445,6 +1448,23 @@ export default function TauriSettings({
                 </small>
               </span>
             </label>
+            <label className="quality-analysis-option import-accept-other-rigs">
+              <input
+                type="checkbox"
+                checked={importAcceptOtherRigs}
+                onChange={(event) => setImportAcceptOtherRigs(event.target.checked)}
+                disabled={importRunning || isApplying}
+              />
+              <span>
+                <small>
+                  Include frames from other rigs. By default a light whose
+                  telescope matches none this catalog has recorded is listed
+                  and left out, since it is usually another instrument&apos;s
+                  file in this catalog&apos;s folders. Turn this on after a
+                  scope change.
+                </small>
+              </span>
+            </label>
             <button
               className="browse-button"
               onClick={handleRepreviewImport}
@@ -1473,6 +1493,14 @@ export default function TauriSettings({
                 selected scope.
               </div>
             )}
+            {(importProgress.outcome.other_rigs ?? []).map((other) => (
+              <div className="import-other-rig" key={other.rig}>
+                {other.frames} frame(s) from another rig left out — {other.rig}
+                {' '}(e.g. {other.example}). If that rig belongs in this
+                catalog, check <em>Include frames from other rigs</em> and
+                update the preview.
+              </div>
+            ))}
             {importProgress.outcome.attach_summaries.length > 0 && (
               <ul className="import-project-list">
                 {importProgress.outcome.attach_summaries.map((a) => (

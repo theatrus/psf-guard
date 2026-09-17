@@ -2913,6 +2913,7 @@ pub async fn start_import_route(
             .unwrap_or(crate::commands::import::DEFAULT_MATCH_RADIUS_DEG),
         scope: req.scope.unwrap_or_default(),
         skip_processed: req.skip_processed.unwrap_or(false),
+        accept_other_rigs: req.accept_other_rigs.unwrap_or(false),
     };
     let started = spawn_import_job(
         &state,

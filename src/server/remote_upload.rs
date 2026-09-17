@@ -442,6 +442,31 @@ fn publish_and_import(
                     if !already_present {
                         cleanup_published_file(&destination_root, &destination, &sha256);
                     }
+                    if let Some(other) = outcome.other_rigs.first() {
+                        // The catalog knows its rig and this frame names
+                        // another: almost always a client pointed at the
+                        // wrong database. Say which, so the operator can
+                        // fix the plugin rather than wonder why nothing lands.
+                        let known = crate::calibration::known_rigs(&connection)
+                            .map(|rigs| {
+                                rigs.iter()
+                                    .map(|rig| rig.name.clone())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            })
+                            .unwrap_or_default();
+                        return Err(AppError::BadRequest(format!(
+                            "uploaded light is from another rig ({}); this database's rig is {}. \
+                             Point that instrument's upload at its own database, or import the \
+                             frames with other rigs accepted.",
+                            other.rig,
+                            if known.is_empty() {
+                                "not recorded".to_string()
+                            } else {
+                                known
+                            }
+                        )));
+                    }
                     return Err(AppError::BadRequest(format!(
                         "uploaded image was not imported (unreadable={}, non_light={}, duplicate={}, calibration_imported={}, calibration_updated={}, calibration_duplicate={})",
                         outcome.unreadable,

@@ -20,3 +20,12 @@
 ## Changed
 
 ## Fixed
+
+- Import no longer files another instrument's frames into a catalog. Once
+  a catalog has recorded its rig, a light whose telescope matches none of
+  its rigs is listed by rig with an example file and left out; the preview
+  and the CLI say so, and **Include frames from other rigs** (or
+  `--accept-other-rigs`) takes them after a real scope change.
+  A remote upload from another rig is refused with the same explanation.
+  A SpaceCat61 night had been swept into an Askar 107PHQ catalog this way
+  and read as two targets exposed at once.

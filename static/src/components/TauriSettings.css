@@ -1814,3 +1814,12 @@
   gap: 0.8rem;
   font-size: 0.88rem;
 }
+
+.import-other-rig {
+  margin: 6px 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--color-warning, #e0a020);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 0.9em;
+}
