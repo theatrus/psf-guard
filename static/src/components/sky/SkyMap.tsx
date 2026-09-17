@@ -53,15 +53,11 @@ function opacityFor(seconds: number, maxSeconds: number): number {
   return 0.3 + 0.6 * Math.min(1, Math.max(0, scaled));
 }
 
-function clampView(view: View): View {
-  const k = Math.min(MAX_ZOOM, Math.max(1, view.k));
-  const width = MAP_WIDTH / k;
-  const height = MAP_HEIGHT / k;
-  return {
-    k,
-    x: Math.min(MAP_WIDTH - width, Math.max(0, view.x)),
-    y: Math.min(MAP_HEIGHT - height, Math.max(0, view.y)),
-  };
+/** The view at zoom `k`, always centred: the viewer turns the sky to look
+ * elsewhere rather than sliding a picture of it. */
+function centredView(k: number): View {
+  const zoom = Math.min(MAX_ZOOM, Math.max(1, k));
+  return { k: zoom, x: (MAP_WIDTH - MAP_WIDTH / zoom) / 2, y: (MAP_HEIGHT - MAP_HEIGHT / zoom) / 2 };
 }
 
 /** The four sky corners of a target's image, image top-left first, clockwise. */
@@ -133,32 +129,21 @@ export default function SkyMap({ targets, frame, mode, showBackdrop, showStacks,
   };
 
   // React registers wheel listeners passively; zooming must swallow the scroll.
+  // Zoom is always about the centre of the view: what the viewer looks at is
+  // what the projection is centred on, and a drag turns the sky to bring
+  // something else there.
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
-      const rect = svg.getBoundingClientRect();
-      setView((current) => {
-        const k = Math.min(MAX_ZOOM, Math.max(1, current.k * Math.exp(-event.deltaY * 0.0016)));
-        const px = (event.clientX - rect.left) / rect.width;
-        const py = (event.clientY - rect.top) / rect.height;
-        const sx = current.x + px * (MAP_WIDTH / current.k);
-        const sy = current.y + py * (MAP_HEIGHT / current.k);
-        return clampView({ k, x: sx - px * (MAP_WIDTH / k), y: sy - py * (MAP_HEIGHT / k) });
-      });
+      setView((current) => centredView(current.k * Math.exp(-event.deltaY * 0.0016)));
     };
     svg.addEventListener('wheel', onWheel, { passive: false });
     return () => svg.removeEventListener('wheel', onWheel);
   }, []);
 
-  const zoomBy = (factor: number) =>
-    setView((current) => {
-      const k = Math.min(MAX_ZOOM, Math.max(1, current.k * factor));
-      const cx = current.x + MAP_WIDTH / current.k / 2;
-      const cy = current.y + MAP_HEIGHT / current.k / 2;
-      return clampView({ k, x: cx - MAP_WIDTH / k / 2, y: cy - MAP_HEIGHT / k / 2 });
-    });
+  const zoomBy = (factor: number) => setView((current) => centredView(current.k * factor));
 
   const onPointerDown = (event: PointerEvent<SVGSVGElement>) => {
     if (event.button !== 0) return;
@@ -177,26 +162,15 @@ export default function SkyMap({ targets, frame, mode, showBackdrop, showStacks,
       event.currentTarget.setPointerCapture(event.pointerId);
     }
     start.moved = true;
-    // On the globe a drag turns it; on the flat map at whole-sky zoom a drag
-    // spins the central meridian; zoomed in, it pans the view.
-    if (mode === 'globe') {
-      setCenter({
-        lon: wrap360(start.center.lon + (dx / rect.width) * (200 / start.view.k)),
-        lat: Math.max(-90, Math.min(90, start.center.lat + (dy / rect.height) * (120 / start.view.k))),
-      });
-      return;
-    }
-    if (start.view.k <= 1) {
-      setCenter({ lon: wrap360(start.center.lon + (dx / rect.width) * 360), lat: start.center.lat });
-      return;
-    }
-    setView(
-      clampView({
-        k: start.view.k,
-        x: start.view.x - (dx / rect.width) * (MAP_WIDTH / start.view.k),
-        y: start.view.y - (dy / rect.height) * (MAP_HEIGHT / start.view.k),
-      })
-    );
+    // A drag turns the sky, in both directions and at every zoom. The globe
+    // is seen from outside and the flat map from inside, so the sky under
+    // the pointer follows the pointer in both.
+    const across = mode === 'globe' ? 200 : 360;
+    const down = mode === 'globe' ? 120 : 180;
+    setCenter({
+      lon: wrap360(start.center.lon + (dx / rect.width) * (across / start.view.k)),
+      lat: Math.max(-90, Math.min(90, start.center.lat + (dy / rect.height) * (down / start.view.k))),
+    });
   };
   const onPointerUp = (event: PointerEvent<SVGSVGElement>) => {
     if (drag.current && event.currentTarget.hasPointerCapture(event.pointerId)) {

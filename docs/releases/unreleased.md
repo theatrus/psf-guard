@@ -34,6 +34,11 @@
   newest-first page no longer sorts the whole table, and each catalog keeps
   a larger page cache. The indexes are created once when the catalog is next
   opened writable; a read-only catalog works as before.
+- The flat Sky map no longer slides a fixed picture around when zoomed in.
+  It is the sky seen from inside the sphere: a drag turns it sideways and
+  up or down at every zoom, zoom is about the centre of the view, and the
+  projection follows the turn, so a field near the pole is no longer sheared
+  when you zoom onto it.
 
 - Import no longer files another instrument's frames into a catalog. Once
   a catalog has recorded its rig, a light whose telescope matches none of

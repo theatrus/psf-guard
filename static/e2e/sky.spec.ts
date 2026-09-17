@@ -106,6 +106,16 @@ test('the globe turns when dragged and the flat map spins its central meridian',
   await expect(map).toHaveAttribute('data-center', '270.0,0.0');
   // The stars turn with the sky: nothing on the map stays put.
   expect(await page.locator('.sky-stars circle').first().getAttribute('cx')).not.toBe(dustBefore);
+  // A vertical drag tilts the flat map too: the viewer is inside the sphere.
+  await drag(0, box.height / 4);
+  await expect(map).toHaveAttribute('data-center', '270.0,45.0');
+  // Zoomed in, a drag still turns the sky rather than sliding a picture.
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  await expect(map).toHaveAttribute('data-zoom', '1.60');
+  await drag(-box.width / 8, 0);
+  await expect(map).toHaveAttribute('data-center', /^241\.9,45\.0$/);
+  await page.getByRole('button', { name: 'Whole sky' }).click();
+  await expect(map).toHaveAttribute('data-center', '180.0,0.0');
 
   await page.getByRole('radio', { name: 'Globe' }).click();
   await expect(map).toHaveAttribute('data-center', '180.0,25.0');

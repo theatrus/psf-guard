@@ -266,7 +266,36 @@ export function projectPoint(raDeg: number, decDeg: number, view: SkyView): Proj
   if (view.mode === 'globe') {
     return orthographic(lon, lat, view.centerLon, view.centerLat);
   }
-  return { ...aitoff(lon, lat, view.centerLon), visible: true };
+  if (view.centerLat === 0) {
+    return { ...aitoff(lon, lat, view.centerLon), visible: true };
+  }
+  // An oblique Aitoff: turn the sphere so the view centre sits at the
+  // origin, then project. The map is then the sky seen from inside, turned
+  // to face any point, with the least distortion where the viewer looks.
+  const [turnedLon, turnedLat] = turnToCenter(lon, lat, view.centerLon, view.centerLat);
+  return { ...aitoff(turnedLon, turnedLat, 0), visible: true };
+}
+
+/**
+ * The coordinates of a point after the sphere is turned so that
+ * (`centerLon`, `centerLat`) lies at longitude 0, latitude 0: a rotation
+ * about the pole by −centerLon, then about the new east–west axis by
+ * −centerLat.
+ */
+export function turnToCenter(lonDeg: number, latDeg: number, centerLonDeg: number, centerLatDeg: number): LonLat {
+  const lambda = wrap180(lonDeg - centerLonDeg) * DEG;
+  const phi = latDeg * DEG;
+  const phi0 = centerLatDeg * DEG;
+  // Unit vector with x toward (0, 0), y toward east, z toward the pole.
+  const x = Math.cos(phi) * Math.cos(lambda);
+  const y = Math.cos(phi) * Math.sin(lambda);
+  const z = Math.sin(phi);
+  // Tilt the pole away by centerLat about the y axis.
+  const x2 = x * Math.cos(phi0) + z * Math.sin(phi0);
+  const z2 = -x * Math.sin(phi0) + z * Math.cos(phi0);
+  const lat = Math.asin(Math.min(1, Math.max(-1, z2)));
+  const lon = Math.atan2(y, x2);
+  return [wrap360(lon * RAD), lat * RAD];
 }
 
 /** Whether a projected outline straddles the seam or dips behind the globe. */
