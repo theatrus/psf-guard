@@ -85,6 +85,34 @@ test('the map zooms, shows constellations, and stays whole-sky by default', asyn
   await expect(page.locator('.sky-constellations')).toHaveCount(0);
 });
 
+test('the sky remembers its turn and zoom while you are away in another view', async ({ page }) => {
+  await page.goto('/#/sky');
+  const map = page.locator('.sky-map');
+  await expect(map).toBeVisible({ timeout: 15_000 });
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  await expect(map).toHaveAttribute('data-zoom', '2.56');
+  const box = await map.boundingBox();
+  if (!box) throw new Error('no map');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + box.width / 8, box.y + box.height / 2 + box.height / 8, { steps: 6 });
+  await page.mouse.up();
+  const turned = await map.getAttribute('data-center');
+  expect(turned).not.toBe('180.0,0.0');
+  await page.getByRole('radio', { name: 'Galactic' }).click();
+  await expect(map).toHaveAttribute('data-zoom', '1.00');
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+
+  await page.getByRole('button', { name: 'Images' }).click();
+  await expect(page).toHaveURL(/#\/grid/);
+  await page.getByRole('button', { name: 'Sky' }).click();
+  await expect(page.locator('.sky-map')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('.sky-map')).toHaveAttribute('data-zoom', '1.60');
+  await expect(page.locator('.sky-map')).toHaveAttribute('aria-label', /galactic/);
+  await expect(page.getByRole('radio', { name: 'Galactic' })).toHaveAttribute('aria-checked', 'true');
+});
+
 test('the globe turns when dragged and the flat map spins its central meridian', async ({ page }) => {
   await page.goto('/#/sky');
   const map = page.locator('.sky-map');

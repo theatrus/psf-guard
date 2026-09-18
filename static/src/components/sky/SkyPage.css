@@ -307,9 +307,10 @@
   stroke-dasharray: 2 4;
 }
 
+/* The size is set on the group, scaled with the zoom; a size here would
+   override it and grow the labels as the view zooms in. */
 .sky-labels text {
   fill: rgba(190, 200, 235, 0.7);
-  font-size: 11px;
   font-family: inherit;
 }
 

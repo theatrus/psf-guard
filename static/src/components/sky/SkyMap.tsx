@@ -36,6 +36,11 @@ interface Props {
   mode: SkyMode;
   showBackdrop: boolean;
   showStacks: boolean;
+  /** Where to start: the zoom and turn remembered from the last visit. */
+  initialZoom?: number;
+  initialCenter?: { lon: number; lat: number };
+  /** Called whenever the zoom or turn changes, so the page can remember it. */
+  onViewChange?: (zoom: number, center: { lon: number; lat: number }) => void;
   onOpen: (target: ShownTarget) => void;
 }
 
@@ -97,14 +102,30 @@ function imageMatrix(corners: LonLat[], width: number, height: number, view: Sky
   return `matrix(${a} ${b} ${c} ${d} ${p0.x} ${p0.y})`;
 }
 
-export default function SkyMap({ targets, frame, mode, showBackdrop, showStacks, onOpen }: Props) {
+export default function SkyMap({
+  targets,
+  frame,
+  mode,
+  showBackdrop,
+  showStacks,
+  initialZoom,
+  initialCenter,
+  onViewChange,
+  onOpen,
+}: Props) {
   const [hovered, setHovered] = useState<ShownTarget | null>(null);
   const [pointer, setPointer] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [view, setView] = useState<View>(HOME);
+  const [view, setView] = useState<View>(() => (initialZoom && initialZoom > 1 ? centredView(initialZoom) : HOME));
   const [center, setCenter] = useState<{ lon: number; lat: number }>(() => {
+    if (initialCenter && Number.isFinite(initialCenter.lon) && Number.isFinite(initialCenter.lat)) {
+      return { lon: wrap360(initialCenter.lon), lat: Math.max(-90, Math.min(90, initialCenter.lat)) };
+    }
     const initial = defaultView(frame, mode);
     return { lon: initial.centerLon, lat: initial.centerLat };
   });
+  // The frame and shape this map was made for; a change to either starts
+  // the view over, but the first render keeps what was remembered.
+  const made = useRef({ frame, mode });
   const wrapper = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const drag = useRef<{ x: number; y: number; view: View; center: { lon: number; lat: number }; moved: boolean } | null>(
@@ -117,10 +138,16 @@ export default function SkyMap({ targets, frame, mode, showBackdrop, showStacks,
   );
 
   useEffect(() => {
+    if (made.current.frame === frame && made.current.mode === mode) return;
+    made.current = { frame, mode };
     setView(HOME);
     const initial = defaultView(frame, mode);
     setCenter({ lon: initial.centerLon, lat: initial.centerLat });
   }, [frame, mode]);
+
+  useEffect(() => {
+    onViewChange?.(view.k, center);
+  }, [view.k, center, onViewChange]);
 
   const home = () => {
     setView(HOME);
@@ -203,14 +230,14 @@ export default function SkyMap({ targets, frame, mode, showBackdrop, showStacks,
       const icrs = frame === 'galactic' ? galacticToEquatorial(lon, 0) : ([lon, 0] as LonLat);
       const at = projectedPoint(icrs[0], icrs[1], sky, AT);
       if (!at.visible) continue;
-      lonLabels.push({ x: at.x, y: at.y - 4, text: frame === 'galactic' ? `${lon}°` : `${lon / 15}h` });
+      lonLabels.push({ x: at.x, y: at.y, text: frame === 'galactic' ? `${lon}°` : `${lon / 15}h` });
     }
     const latLabels: Array<{ x: number; y: number; text: string }> = [];
     for (const lat of [-60, -30, 30, 60]) {
       const icrs = frame === 'galactic' ? galacticToEquatorial(centerLon, lat) : ([centerLon, lat] as LonLat);
       const at = projectedPoint(icrs[0], icrs[1], sky, AT);
       if (!at.visible) continue;
-      latLabels.push({ x: at.x + 6, y: at.y - 3, text: `${lat > 0 ? '+' : '−'}${Math.abs(lat)}°` });
+      latLabels.push({ x: at.x, y: at.y, text: `${lat > 0 ? '+' : '−'}${Math.abs(lat)}°` });
     }
     const constellations = Object.values(CONSTELLATION_LINES).map((figure) =>
       figure.map((polyline) => projectedPath(polyline, sky, AT)).join('')
@@ -349,12 +376,12 @@ export default function SkyMap({ targets, frame, mode, showBackdrop, showStacks,
         <path className="sky-other-equator" d={scenery.otherEquator} vectorEffect="non-scaling-stroke" />
         <g className="sky-labels" style={{ fontSize: 11 * textScale }}>
           {scenery.lonLabels.map((label) => (
-            <text key={label.text} x={label.x} y={label.y} textAnchor="middle">
+            <text key={label.text} x={label.x} y={label.y - 4 * textScale} textAnchor="middle">
               {label.text}
             </text>
           ))}
           {scenery.latLabels.map((label) => (
-            <text key={label.text} x={label.x} y={label.y}>
+            <text key={label.text} x={label.x + 6 * textScale} y={label.y - 3 * textScale}>
               {label.text}
             </text>
           ))}

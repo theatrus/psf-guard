@@ -20,6 +20,7 @@ import {
   type ShownTarget,
   type SkyCut,
 } from './skyModel';
+import { recallSkyView, rememberSkyView } from './skyViewMemory';
 import './SkyPage.css';
 
 const REPLAY_STEP_MS = 90;
@@ -29,16 +30,44 @@ export default function SkyPage() {
   const { data: rows, isLoading, isError } = useMergedSkyCoverage();
   const merged = useMemo(() => mergeCoverage(rows), [rows]);
 
-  const [frame, setFrame] = useState<SkyFrame>('equatorial');
-  const [mode, setMode] = useState<SkyMode>('aitoff');
-  const [acceptedOnly, setAcceptedOnly] = useState(false);
-  const [hiddenRigs, setHiddenRigs] = useState<Set<string>>(new Set());
-  const [hiddenFilters, setHiddenFilters] = useState<Set<string>>(new Set());
-  const [asOfNight, setAsOfNight] = useState<string | null>(null);
-  const [fromNight, setFromNight] = useState<string | null>(null);
+  // Start where the last visit left off, for this browser session.
+  const remembered = useMemo(() => recallSkyView(), []);
+  const [frame, setFrame] = useState<SkyFrame>(remembered.frame ?? 'equatorial');
+  const [mode, setMode] = useState<SkyMode>(remembered.mode ?? 'aitoff');
+  const [acceptedOnly, setAcceptedOnly] = useState(remembered.acceptedOnly ?? false);
+  const [hiddenRigs, setHiddenRigs] = useState<Set<string>>(new Set(remembered.hiddenRigs ?? []));
+  const [hiddenFilters, setHiddenFilters] = useState<Set<string>>(new Set(remembered.hiddenFilters ?? []));
+  const [asOfNight, setAsOfNight] = useState<string | null>(remembered.asOfNight ?? null);
+  const [fromNight, setFromNight] = useState<string | null>(remembered.fromNight ?? null);
   const [playing, setPlaying] = useState(false);
-  const [showBackdrop, setShowBackdrop] = useState(true);
-  const [showStacks, setShowStacks] = useState(true);
+  const [showBackdrop, setShowBackdrop] = useState(remembered.showBackdrop ?? true);
+  const [showStacks, setShowStacks] = useState(remembered.showStacks ?? true);
+  const initialZoom = remembered.zoom;
+  const initialCenter = useMemo(
+    () =>
+      remembered.centerLon != null && remembered.centerLat != null
+        ? { lon: remembered.centerLon, lat: remembered.centerLat }
+        : undefined,
+    [remembered]
+  );
+
+  useEffect(() => {
+    rememberSkyView({
+      frame,
+      mode,
+      acceptedOnly,
+      showBackdrop,
+      showStacks,
+      hiddenRigs: [...hiddenRigs],
+      hiddenFilters: [...hiddenFilters],
+      fromNight,
+      asOfNight,
+    });
+  }, [frame, mode, acceptedOnly, showBackdrop, showStacks, hiddenRigs, hiddenFilters, fromNight, asOfNight]);
+
+  const rememberView = useCallback((zoom: number, center: { lon: number; lat: number }) => {
+    rememberSkyView({ zoom, centerLon: center.lon, centerLat: center.lat });
+  }, []);
   const replay = useRef<number | null>(null);
 
   const cut: SkyCut = useMemo(
@@ -323,7 +352,17 @@ export default function SkyPage() {
         )}
       </div>
 
-      <SkyMap targets={shown} frame={frame} mode={mode} showBackdrop={showBackdrop} showStacks={showStacks} onOpen={open} />
+      <SkyMap
+        targets={shown}
+        frame={frame}
+        mode={mode}
+        showBackdrop={showBackdrop}
+        showStacks={showStacks}
+        initialZoom={initialZoom}
+        initialCenter={initialCenter}
+        onViewChange={rememberView}
+        onOpen={open}
+      />
 
       <SkyTimeline
         lanes={lanes}
