@@ -33,7 +33,9 @@ the sky in any direction, sideways and up or down, at every zoom, and the
 projection is centred on wherever you have turned it, so what you look at
 is drawn with the least distortion. Scroll to zoom about the centre of the
 view. The buttons in the corner step the zoom and return to the whole sky
-as it first stood, and a double click does the same.
+as it first stood, and a double click does the same. The page remembers
+its frame, shape, turn, zoom, and cuts for the browser session, so coming
+back from Images lands on the same sky.
 
 ![The globe, turned toward Cygnus and the pole](sky-coverage-globe.jpg)
 

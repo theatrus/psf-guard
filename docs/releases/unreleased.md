@@ -26,6 +26,11 @@
 
 ## Fixed
 
+- The Sky view remembers its frame, shape, turn, zoom, and cuts for the
+  browser session, so coming back from another view lands on the same sky,
+  and its coordinate labels stay the same size on screen instead of growing
+  with the zoom.
+
 - The Overview loads in well under a second per catalog again. Its counts,
   spans, and filter lists read each image row beside its metadata, so a
   large catalog on a network share cost several seconds per request; four
