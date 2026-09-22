@@ -80,12 +80,19 @@ two rigs' "G" are two filters. So each catalog keeps its own **filter
 map**, under **Settings → Databases → AstroBin filters**. An entry names a
 filter as the catalog spells it, the AstroBin id it stands for, what it is
 ("Antlia V-Pro G 36mm"), and, when the rig's filter changed, the first and
-last night the entry applies to. Names match ignoring case. On a night
+last night the entry applies to. To fill in an id, find the exact filter
+in AstroBin's equipment explorer and paste its page address, or the number
+alone; PSF Guard reads the id out of the address. Every saved id is a link
+back to that page, so a wrong pick is one click to spot. PSF Guard cannot
+search AstroBin for you: its equipment listing is not a public API, and
+its terms forbid tools scraping it. Names match ignoring case. On a night
 more than one entry covers, the one that starts latest wins. A filter that
 changed between nights keeps its rows apart, one per id. The map lives in
 the catalog itself (a `psf_guard_astrobin_filter` table Target Scheduler
 ignores), so it travels with the rig's database and needs the
-database-management grant to edit.
+database-management grant to edit. The table has only its row id: an
+export reads the whole map once and matches names and nights in memory,
+and a map is a handful of rows.
 
 ![A catalog's filter map, with the G filter changing on 2026-09-11](astrobin-filter-map.png)
 

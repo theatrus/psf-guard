@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
+import { astrobinFilterUrl, parseAstrobinFilterId } from '../utils/astrobin';
 
 /**
  * The AstroBin export's filter map: which equipment-database id each of the
@@ -38,11 +39,11 @@ export default function AstroBinSettings() {
 
   const filterIds = settings.data!.filter_ids;
   const names = Object.keys(filterIds).sort();
-  const parsedNewId = Number.parseInt(newId.trim(), 10);
-  const canAdd = newName.trim().length > 0 && Number.isFinite(parsedNewId) && parsedNewId > 0;
+  const parsedNewId = parseAstrobinFilterId(newId);
+  const canAdd = newName.trim().length > 0 && parsedNewId !== null;
 
   const add = () => {
-    if (!canAdd) return;
+    if (!canAdd || parsedNewId === null) return;
     save.mutate({ ...filterIds, [newName.trim()]: parsedNewId });
   };
   const remove = (name: string) => {
@@ -73,7 +74,16 @@ export default function AstroBinSettings() {
             {names.map((name) => (
               <tr key={name}>
                 <td>{name}</td>
-                <td>{filterIds[name]}</td>
+                <td>
+                  <a
+                    href={astrobinFilterUrl(filterIds[name])}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="Open this filter's page on AstroBin"
+                  >
+                    {filterIds[name]}
+                  </a>
+                </td>
                 <td>
                   <button
                     type="button"
@@ -100,8 +110,7 @@ export default function AstroBinSettings() {
         />
         <input
           type="text"
-          inputMode="numeric"
-          placeholder="AstroBin filter id"
+          placeholder="AstroBin filter id or page address"
           aria-label="AstroBin filter id"
           value={newId}
           onChange={(event) => setNewId(event.target.value)}

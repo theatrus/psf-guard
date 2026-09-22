@@ -53,3 +53,17 @@
 .dialog-backdrop:has(> .astrobin-filter-map) {
   z-index: 100100;
 }
+
+.astrobin-filter-map-id {
+  white-space: nowrap;
+}
+
+.astrobin-filter-map-id input {
+  width: calc(100% - 1.6rem);
+  min-width: 9rem;
+}
+
+.astrobin-filter-map-id a {
+  margin-left: 0.35rem;
+  text-decoration: none;
+}

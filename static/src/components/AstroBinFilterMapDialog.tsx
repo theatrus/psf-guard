@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { AstroBinFilterEntry } from '../api/types';
 import Dialog from './Dialog';
+import { ASTROBIN_FILTERS_URL, astrobinFilterUrl, parseAstrobinFilterId } from '../utils/astrobin';
 import './AstroBinFilterMapDialog.css';
 
 interface Props {
@@ -43,8 +44,7 @@ const NIGHT = /^\d{4}-\d{2}-\d{2}$/;
 
 function problem(draft: Draft): string | null {
   if (!draft.filter_name.trim()) return 'needs a filter name';
-  if (!/^\d+$/.test(draft.astrobin_id.trim()) || Number(draft.astrobin_id) <= 0)
-    return 'needs an AstroBin id';
+  if (parseAstrobinFilterId(draft.astrobin_id) === null) return 'needs an AstroBin id or page address';
   for (const night of [draft.from_night, draft.to_night]) {
     if (night.trim() && !NIGHT.test(night.trim())) return 'nights are YYYY-MM-DD';
   }
@@ -57,7 +57,7 @@ function toEntry(draft: Draft): AstroBinFilterEntry {
   const optional = (value: string) => (value.trim() ? value.trim() : undefined);
   return {
     filter_name: draft.filter_name.trim(),
-    astrobin_id: Number(draft.astrobin_id.trim()),
+    astrobin_id: parseAstrobinFilterId(draft.astrobin_id) ?? 0,
     label: optional(draft.label),
     from_night: optional(draft.from_night),
     to_night: optional(draft.to_night),
@@ -121,13 +121,14 @@ export default function AstroBinFilterMapDialog({ dbId, dbName, canManage, onClo
     >
       <p className="astrobin-filter-map-intro">
         AstroBin knows a filter by the number in the address of its page in the{' '}
-        <a href="https://app.astrobin.com/equipment/explorer/filter" target="_blank" rel="noreferrer">
+        <a href={ASTROBIN_FILTERS_URL} target="_blank" rel="noreferrer">
           equipment database
         </a>
-        . This map says which filter each name in this catalog stands for. Give an entry a first
-        or last night when the rig&apos;s filter changed; the entry that starts latest wins on a
-        night more than one covers. A name with no entry here falls back to the server-wide
-        defaults under Setups.
+        . Find the exact filter there and paste its address, or the number, into the id column;
+        the link beside a saved id opens that page to check it. This map says which filter each
+        name in this catalog stands for. Give an entry a first or last night when the rig&apos;s
+        filter changed; the entry that starts latest wins on a night more than one covers. A name
+        with no entry here falls back to the server-wide defaults under Setups.
       </p>
       {map.isError && <p className="astrobin-error">{(map.error as Error).message}</p>}
       {drafts !== null && (
@@ -163,16 +164,26 @@ export default function AstroBinFilterMapDialog({ dbId, dbName, canManage, onClo
                       onChange={(e) => update(row.key, 'filter_name', e.target.value)}
                     />
                   </td>
-                  <td>
+                  <td className="astrobin-filter-map-id">
                     <input
                       type="text"
-                      inputMode="numeric"
                       aria-label={`AstroBin id, row ${index + 1}`}
                       value={row.astrobin_id}
-                      placeholder="4051"
+                      placeholder="4051 or page address"
                       disabled={!canManage}
                       onChange={(e) => update(row.key, 'astrobin_id', e.target.value)}
                     />
+                    {parseAstrobinFilterId(row.astrobin_id) !== null && (
+                      <a
+                        href={astrobinFilterUrl(parseAstrobinFilterId(row.astrobin_id)!)}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label={`Open filter ${parseAstrobinFilterId(row.astrobin_id)} on AstroBin`}
+                        title="Open this filter's page on AstroBin"
+                      >
+                        ↗
+                      </a>
+                    )}
                   </td>
                   <td>
                     <input

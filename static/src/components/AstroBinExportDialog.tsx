@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { AstroBinDetail, AstroBinFilterEntry, AstroBinRow } from '../api/types';
 import Dialog from './Dialog';
+import { ASTROBIN_FILTERS_URL, astrobinFilterUrl, parseAstrobinFilterId } from '../utils/astrobin';
 import './AstroBinExportDialog.css';
 
 /** The target or project whose acquisition rows the dialog shows. */
@@ -21,8 +22,6 @@ const DETAIL_HELP: Record<AstroBinDetail, string> = {
   essentials: 'Date, filter, number of frames and exposure length: what every upload needs.',
   full: 'Also binning, gain, sensor and ambient temperature, f-number, and the darks, flats and bias the calibration library matches to each night.',
 };
-
-const ASTROBIN_FILTERS_URL = 'https://app.astrobin.com/equipment/explorer/filter';
 
 function formatHours(seconds: number): string {
   const hours = seconds / 3600;
@@ -83,12 +82,14 @@ export default function AstroBinExportDialog({ request, onClose }: Props) {
 
   const data = exportQuery.data;
   const unmapped = data?.unmapped_filters ?? [];
-  const draftsReady = unmapped.some((filter) => /^\d+$/.test(draftIds[filter]?.trim() ?? ''));
+  const draftsReady = unmapped.some(
+    (filter) => parseAstrobinFilterId(draftIds[filter] ?? '') !== null
+  );
   const saveDrafts = () => {
     const entries: AstroBinFilterEntry[] = [...(filterMap.data?.entries ?? [])];
     for (const filter of unmapped) {
-      const id = Number.parseInt(draftIds[filter]?.trim() ?? '', 10);
-      if (Number.isFinite(id) && id > 0) entries.push({ filter_name: filter, astrobin_id: id });
+      const id = parseAstrobinFilterId(draftIds[filter] ?? '');
+      if (id !== null) entries.push({ filter_name: filter, astrobin_id: id });
     }
     saveIds.mutate(entries);
   };
@@ -199,10 +200,10 @@ export default function AstroBinExportDialog({ request, onClose }: Props) {
                 <a href={ASTROBIN_FILTERS_URL} target="_blank" rel="noreferrer">
                   equipment database
                 </a>
-                . Rows for these filters have an empty filter cell until you enter one. What you
-                enter here is saved to this catalog&apos;s filter map for every night; if the rig
-                changed filters over time, give the entries first and last nights under Settings
-                → Databases.
+                . Find the exact filter there and paste its address, or the number, here. Rows
+                for these filters have an empty filter cell until you do. What you enter is saved
+                to this catalog&apos;s filter map for every night; if the rig changed filters
+                over time, give the entries first and last nights under Settings → Databases.
               </p>
               <div className="astrobin-unmapped-grid">
                 {unmapped.map((filter) => (
@@ -210,8 +211,7 @@ export default function AstroBinExportDialog({ request, onClose }: Props) {
                     <span>{filter}</span>
                     <input
                       type="text"
-                      inputMode="numeric"
-                      placeholder="AstroBin filter id"
+                      placeholder="AstroBin id or page address"
                       aria-label={`AstroBin id for filter ${filter}`}
                       value={draftIds[filter] ?? ''}
                       onChange={(event) =>
@@ -270,7 +270,14 @@ export default function AstroBinExportDialog({ request, onClose }: Props) {
                         {row.filter_id != null && (
                           <small>
                             {' '}
-                            #{row.filter_id}
+                            <a
+                              href={astrobinFilterUrl(row.filter_id)}
+                              target="_blank"
+                              rel="noreferrer"
+                              title="Open this filter's page on AstroBin"
+                            >
+                              #{row.filter_id}
+                            </a>
                             {row.filter_label ? ` ${row.filter_label}` : ''}
                           </small>
                         )}

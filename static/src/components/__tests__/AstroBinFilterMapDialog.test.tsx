@@ -49,7 +49,14 @@ describe('AstroBinFilterMapDialog', () => {
     expect(screen.getByText('needs a filter name')).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Filter name, row 2'), { target: { value: 'G' } });
-    fireEvent.change(screen.getByLabelText('AstroBin id, row 2'), { target: { value: '11' } });
+    // A pasted equipment page address stands for its id.
+    fireEvent.change(screen.getByLabelText('AstroBin id, row 2'), {
+      target: { value: 'https://app.astrobin.com/equipment/explorer/filter/11/chroma-g' },
+    });
+    expect(screen.getByRole('link', { name: 'Open filter 11 on AstroBin' })).toHaveAttribute(
+      'href',
+      'https://app.astrobin.com/equipment/explorer/filter/11'
+    );
     fireEvent.change(screen.getByLabelText('First night, row 2'), { target: { value: 'soon' } });
     expect(screen.getByText('nights are YYYY-MM-DD')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('First night, row 2'), {
