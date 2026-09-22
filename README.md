@@ -703,7 +703,9 @@ columns every upload needs. **Full** adds binning, gain, sensor and ambient
 temperature, the f-number, and the darks, flats and bias the calibration
 library would match to each night. The dialog previews the rows, asks for
 the AstroBin id of any filter it does not know yet, and offers the file as a
-download or on the clipboard. The CLI writes the same file:
+download or on the clipboard. Each catalog keeps its own filter map, with
+night ranges for a rig whose filters changed, since a catalog's "G" says
+nothing about which G. The CLI writes the same file:
 
 ```bash
 psf-guard astrobin-csv my-db --target-id 12 --detail full -o ngc7023.csv

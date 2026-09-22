@@ -18,6 +18,8 @@ import type {
   ExportSettings,
   AstroBinDetail,
   AstroBinExport,
+  AstroBinFilterEntry,
+  AstroBinFilterMap,
   AstroBinSettings,
   Project,
   Target,
@@ -363,6 +365,30 @@ export const apiClient = {
       filter_ids: filterIds,
     });
     if (!data.data) throw new Error(data.error || 'Failed to update AstroBin settings');
+    return data.data;
+  },
+
+  /** The catalog's own filter map: what each filter name meant on its rig, and when. */
+  getAstroBinFilters: async (dbId: string): Promise<AstroBinFilterMap> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<AstroBinFilterMap>>(
+      dbPath(dbId, '/astrobin/filters')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read the AstroBin filter map');
+    return data.data;
+  },
+
+  /** Replaces the catalog's whole filter map. Management-gated server-side. */
+  updateAstroBinFilters: async (
+    dbId: string,
+    entries: AstroBinFilterEntry[]
+  ): Promise<AstroBinFilterMap> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<AstroBinFilterMap>>(
+      dbPath(dbId, '/astrobin/filters'),
+      { entries }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to save the AstroBin filter map');
     return data.data;
   },
 

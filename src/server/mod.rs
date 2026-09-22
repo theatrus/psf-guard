@@ -632,6 +632,11 @@ async fn run_server_internal(
             "/astrobin-export.csv",
             get(astrobin_export::get_astrobin_csv),
         )
+        .route(
+            "/astrobin/filters",
+            get(astrobin_export::get_astrobin_filters)
+                .put(astrobin_export::update_astrobin_filters),
+        )
         .route("/export/local", post(handlers::export_local_route))
         .route(
             "/export/server",

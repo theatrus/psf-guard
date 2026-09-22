@@ -12,12 +12,14 @@ test.beforeEach(async ({ request }) => {
   dbId = entry.id;
   await waitForCacheReady(request, dbId);
   await request.put('/api/settings/astrobin', { data: { filter_ids: {} } });
+  await request.put(`/api/db/${dbId}/astrobin/filters`, { data: { entries: [] } });
 });
 
 // Leave the server as found: the specs that follow expect no database
 // registered (the empty state opens Settings on its own) and no filter map.
 test.afterEach(async ({ request }) => {
   await request.put('/api/settings/astrobin', { data: { filter_ids: {} } });
+  await request.put(`/api/db/${dbId}/astrobin/filters`, { data: { entries: [] } });
   await resetDatabases(request);
 });
 
@@ -52,7 +54,7 @@ test('the acquisition rows count one night of B lights, essentials and full', as
     'date,filter,number,duration,binning,gain,sensorCooling,fNumber,darks,flats,flatDarks,bias,temperature'
   );
 
-  // The settings map fills the filter column.
+  // The server-wide defaults fill the filter column.
   const saved = await request.put('/api/settings/astrobin', {
     data: { filter_ids: { B: 4047 } },
   });
@@ -66,6 +68,35 @@ test('the acquisition rows count one night of B lights, essentials and full', as
     'attachment; filename="astrobin-Alpha-M44-essentials.csv"'
   );
   expect(await csv.text()).toBe('date,filter,number,duration\n2026-04-16,4047,3,60\n');
+
+  // The catalog's own map wins over the defaults, by night: an entry that
+  // ended before the fixture's night does not apply, one covering it does.
+  const map = await request.put(`/api/db/${dbId}/astrobin/filters`, {
+    data: {
+      entries: [
+        { filter_name: 'B', astrobin_id: 100, label: 'Old B', to_night: '2026-04-15' },
+        { filter_name: 'b', astrobin_id: 200, label: 'Chroma B', from_night: '2026-04-16' },
+      ],
+    },
+  });
+  expect(map.ok()).toBe(true);
+  const stored = (await map.json()).data.entries;
+  expect(stored.map((e: { id: number; astrobin_id: number }) => e.astrobin_id)).toEqual([100, 200]);
+  expect(stored[0].id).toBeGreaterThan(0);
+  const mapped = await request.get(`/api/db/${dbId}/astrobin-export`, {
+    params: { target_id: 1 },
+  });
+  const row = (await mapped.json()).data.rows[0];
+  expect(row.filter_id).toBe(200);
+  expect(row.filter_label).toBe('Chroma B');
+
+  // A bad entry is refused and leaves the map as it was.
+  const refused = await request.put(`/api/db/${dbId}/astrobin/filters`, {
+    data: { entries: [{ filter_name: 'B', astrobin_id: 1, from_night: 'last week' }] },
+  });
+  expect(refused.status()).toBe(400);
+  const still = await request.get(`/api/db/${dbId}/astrobin/filters`);
+  expect((await still.json()).data.entries).toEqual(stored);
 });
 
 test('the Overview opens the AstroBin dialog for a target and maps a filter from it', async ({
@@ -93,8 +124,41 @@ test('the Overview opens the AstroBin dialog for a target and maps a filter from
   await dialog.getByRole('button', { name: 'Save filter ids' }).click();
   await expect(dialog.locator('.astrobin-table tbody tr').first()).toContainText('#4047');
   await expect(dialog.getByLabel('AstroBin id for filter B')).toHaveCount(0);
+  // The id went into this catalog's own map, open-ended.
+  const map = await page.request.get(`/api/db/${dbId}/astrobin/filters`);
+  expect((await map.json()).data.entries).toEqual([
+    expect.objectContaining({ filter_name: 'B', astrobin_id: 4047 }),
+  ]);
 
   await dialog.getByRole('radio', { name: /Full/ }).check();
   await expect(dialog.locator('.astrobin-table thead')).toContainText('Darks');
   await expect(download).toHaveAttribute('href', /detail=full$/);
+});
+
+test('Settings shows each database its own filter map with night ranges', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const summary = page.locator('.astrobin-filter-summary');
+  await expect(summary).toContainText('none named yet');
+  await summary.getByRole('button', { name: 'Edit filters' }).click();
+
+  const dialog = page.locator('.astrobin-filter-map');
+  await expect(dialog).toContainText('AstroBin filters — AstroBin Rig');
+  await dialog.getByRole('button', { name: '+ Add entry' }).click();
+  await dialog.getByLabel('Filter name, row 1').fill('B');
+  await dialog.getByLabel('AstroBin id, row 1').fill('200');
+  await dialog.getByLabel('Label, row 1').fill('Chroma B');
+  await dialog.getByLabel('First night, row 1').fill('2026-04-16');
+  await dialog.getByRole('button', { name: 'Save map' }).click();
+  await expect(summary).toContainText('1 name, 1 entry');
+
+  const map = await page.request.get(`/api/db/${dbId}/astrobin/filters`);
+  expect((await map.json()).data.entries).toEqual([
+    expect.objectContaining({
+      filter_name: 'B',
+      astrobin_id: 200,
+      label: 'Chroma B',
+      from_night: '2026-04-16',
+    }),
+  ]);
 });

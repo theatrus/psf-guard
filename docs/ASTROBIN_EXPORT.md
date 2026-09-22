@@ -75,12 +75,27 @@ AstroBin does not read filter names. Its `filter` column wants the number
 of a filter in AstroBin's equipment database, which is the number in the
 address of that filter's page (for example `.../equipment/explorer/filter/4049/...`).
 
-Map each filter name your catalogs use once. The export dialog lists the
-filters that still lack an id and saves what you enter; **Settings →
-Setups → AstroBin** shows the whole map and lets you add or forget entries.
-The map is server-wide, kept in the registry with the other preferences,
-and shared by every catalog. A filter with no id gets a blank cell, which
-AstroBin ignores, so the rest of the row still imports.
+A catalog's filter names are generic: "G" says nothing about which G, and
+two rigs' "G" are two filters. So each catalog keeps its own **filter
+map**, under **Settings → Databases → AstroBin filters**. An entry names a
+filter as the catalog spells it, the AstroBin id it stands for, what it is
+("Antlia V-Pro G 36mm"), and, when the rig's filter changed, the first and
+last night the entry applies to. Names match ignoring case. On a night
+more than one entry covers, the one that starts latest wins. A filter that
+changed between nights keeps its rows apart, one per id. The map lives in
+the catalog itself (a `psf_guard_astrobin_filter` table Target Scheduler
+ignores), so it travels with the rig's database and needs the
+database-management grant to edit.
+
+![A catalog's filter map, with the G filter changing on 2026-09-11](astrobin-filter-map.png)
+
+The export dialog lists the filters the map does not cover and saves what
+you enter as open-ended entries in this catalog's map; give them nights in
+Settings when a filter changed over time.
+
+**Settings → Setups → AstroBin** holds server-wide defaults by name, used
+for a name no catalog entry covers. A filter with no id anywhere gets a
+blank cell, which AstroBin ignores, so the rest of the row still imports.
 
 ## Importing on AstroBin
 

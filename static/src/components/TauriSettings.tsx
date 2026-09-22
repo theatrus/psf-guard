@@ -31,6 +31,7 @@ import RemoteSyncPreviews from './RemoteSyncPreviews';
 import SeizaCatalogControls from './SeizaCatalogControls';
 import ProcessingSetupsManager from './ProcessingSetupsManager';
 import CalibrationLibrarySummary from './CalibrationLibrarySummary';
+import AstroBinFilterSummary from './AstroBinFilterSummary';
 import UserManagement from './UserManagement';
 import './TauriSettings.css';
 
@@ -1732,6 +1733,11 @@ export default function TauriSettings({
                         dbName={entry.name}
                         canManage={managementAllowed}
                         onImport={() => handleImport(entry)}
+                      />
+                      <AstroBinFilterSummary
+                        dbId={entry.id}
+                        dbName={entry.name}
+                        canManage={managementAllowed}
                       />
                       <QualityBackfillControls dbId={entry.id} />
                     </div>

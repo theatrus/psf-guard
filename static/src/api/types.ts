@@ -1354,9 +1354,29 @@ export interface ExportSettings {
 /** How much of AstroBin's acquisition CSV to fill in. */
 export type AstroBinDetail = 'essentials' | 'full';
 
-/** Filter name, as the catalog spells it, to AstroBin equipment id. */
+/**
+ * Server-wide defaults: filter name, as the catalog spells it, to AstroBin
+ * equipment id, used when a catalog's own map has no entry.
+ */
 export interface AstroBinSettings {
   filter_ids: Record<string, number>;
+}
+
+/**
+ * One line of a catalog's filter map: what a filter name meant on this rig,
+ * and when. Nights are `YYYY-MM-DD`; an absent bound is open.
+ */
+export interface AstroBinFilterEntry {
+  id?: number;
+  filter_name: string;
+  astrobin_id: number;
+  label?: string;
+  from_night?: string;
+  to_night?: string;
+}
+
+export interface AstroBinFilterMap {
+  entries: AstroBinFilterEntry[];
 }
 
 /** One row of the AstroBin CSV: one night, filter and exposure length. */
@@ -1365,6 +1385,8 @@ export interface AstroBinRow {
   /** The catalog's filter name; the CSV carries `filter_id` instead. */
   filter: string;
   filter_id: number | null;
+  /** What the catalog's filter map calls that filter, when it says. */
+  filter_label?: string;
   number: number;
   duration: number;
   binning: number | null;

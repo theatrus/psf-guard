@@ -18,13 +18,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::astrobin::{AstroBinDetail, AstroBinExport, AstroBinExportRequest};
+use crate::astrobin::{AstroBinDetail, AstroBinExport, AstroBinExportRequest, AstroBinFilterEntry};
 use crate::db_registry::{AstroBinSettings, DbRegistry};
 use crate::server::{
     api::ApiResponse,
     database_context::open_scheduler_connection_with_flags,
     extract::DbContext,
-    handlers::{require_registry_path, AppError},
+    handlers::{require_database_management_allowed, require_registry_path, AppError},
     state::AppState,
 };
 
@@ -93,6 +93,49 @@ pub async fn update_astrobin_settings(
         .map_err(|error| AppError::InternalError(error.to_string()))?;
     Ok(Json(ApiResponse::success(AstroBinSettingsResponse {
         filter_ids,
+    })))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AstroBinFilterMapResponse {
+    /// The catalog's own filter map, oldest entry first.
+    pub entries: Vec<AstroBinFilterEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateAstroBinFilterMapRequest {
+    /// The whole map; an entry left out is forgotten.
+    pub entries: Vec<AstroBinFilterEntry>,
+}
+
+/// `GET /api/db/{db_id}/astrobin/filters` — what each filter name meant on
+/// this catalog's rig, and when.
+pub async fn get_astrobin_filters(
+    ctx: DbContext,
+) -> Result<Json<ApiResponse<AstroBinFilterMapResponse>>, AppError> {
+    let conn = ctx.db();
+    let conn = conn.lock().map_err(AppError::db)?;
+    let entries = crate::astrobin::load_filter_entries(&conn)
+        .map_err(|error| AppError::InternalError(format!("reading the filter map: {error:#}")))?;
+    Ok(Json(ApiResponse::success(AstroBinFilterMapResponse {
+        entries,
+    })))
+}
+
+/// `PUT /api/db/{db_id}/astrobin/filters` — replace the catalog's filter
+/// map. A catalog write, so it sits behind the database-management gate.
+pub async fn update_astrobin_filters(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Json(request): Json<UpdateAstroBinFilterMapRequest>,
+) -> Result<Json<ApiResponse<AstroBinFilterMapResponse>>, AppError> {
+    require_database_management_allowed(&state)?;
+    let conn = ctx.db();
+    let mut conn = conn.lock().map_err(AppError::db)?;
+    let entries = crate::astrobin::save_filter_entries(&mut conn, &request.entries)
+        .map_err(|error| AppError::BadRequest(format!("{error:#}")))?;
+    Ok(Json(ApiResponse::success(AstroBinFilterMapResponse {
+        entries,
     })))
 }
 

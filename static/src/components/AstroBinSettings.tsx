@@ -55,9 +55,10 @@ export default function AstroBinSettings() {
     <div className="astrobin-settings">
       <h3>AstroBin</h3>
       <p className="review-preferences-note">
-        The acquisition CSV names filters by their number in AstroBin&apos;s equipment database
-        (the number in the address of a filter&apos;s page). Map each filter name your catalogs
-        use once; the export dialog asks for any it still lacks.
+        Default AstroBin ids by filter name, for any catalog whose own filter map (under
+        Databases) has no entry for that name. AstroBin knows a filter by the number in the
+        address of its page in the equipment database. A rig that changed filters keeps the
+        history in its catalog&apos;s map; this is the fallback.
       </p>
       {names.length > 0 && (
         <table className="astrobin-settings-table">

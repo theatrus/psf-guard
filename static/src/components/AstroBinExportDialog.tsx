@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
-import type { AstroBinDetail, AstroBinRow } from '../api/types';
+import type { AstroBinDetail, AstroBinFilterEntry, AstroBinRow } from '../api/types';
 import Dialog from './Dialog';
 import './AstroBinExportDialog.css';
 
@@ -59,15 +59,17 @@ export default function AstroBinExportDialog({ request, onClose }: Props) {
     queryFn: () => apiClient.getAstroBinExport(request.dbId, params),
     staleTime: 60_000,
   });
-  const settings = useQuery({
-    queryKey: ['astrobin-settings'],
-    queryFn: apiClient.getAstroBinSettings,
+  const filterMap = useQuery({
+    queryKey: ['db', request.dbId, 'astrobin-filters'],
+    queryFn: () => apiClient.getAstroBinFilters(request.dbId),
   });
+  // New ids go into this catalog's own map, open-ended, so they name what
+  // the filter is on this rig rather than a server-wide guess.
   const saveIds = useMutation({
-    mutationFn: (filterIds: Record<string, number>) =>
-      apiClient.updateAstroBinSettings(filterIds),
+    mutationFn: (entries: AstroBinFilterEntry[]) =>
+      apiClient.updateAstroBinFilters(request.dbId, entries),
     onSuccess: (updated) => {
-      queryClient.setQueryData(['astrobin-settings'], updated);
+      queryClient.setQueryData(['db', request.dbId, 'astrobin-filters'], updated);
       setDraftIds({});
       void queryClient.invalidateQueries({ queryKey: ['astrobin-export', request.dbId] });
     },
@@ -83,12 +85,12 @@ export default function AstroBinExportDialog({ request, onClose }: Props) {
   const unmapped = data?.unmapped_filters ?? [];
   const draftsReady = unmapped.some((filter) => /^\d+$/.test(draftIds[filter]?.trim() ?? ''));
   const saveDrafts = () => {
-    const merged: Record<string, number> = { ...(settings.data?.filter_ids ?? {}) };
+    const entries: AstroBinFilterEntry[] = [...(filterMap.data?.entries ?? [])];
     for (const filter of unmapped) {
       const id = Number.parseInt(draftIds[filter]?.trim() ?? '', 10);
-      if (Number.isFinite(id) && id > 0) merged[filter] = id;
+      if (Number.isFinite(id) && id > 0) entries.push({ filter_name: filter, astrobin_id: id });
     }
-    saveIds.mutate(merged);
+    saveIds.mutate(entries);
   };
   const copyCsv = async () => {
     if (!data) return;
@@ -197,7 +199,10 @@ export default function AstroBinExportDialog({ request, onClose }: Props) {
                 <a href={ASTROBIN_FILTERS_URL} target="_blank" rel="noreferrer">
                   equipment database
                 </a>
-                . Rows for these filters have an empty filter cell until you enter one:
+                . Rows for these filters have an empty filter cell until you enter one. What you
+                enter here is saved to this catalog&apos;s filter map for every night; if the rig
+                changed filters over time, give the entries first and last nights under Settings
+                → Databases.
               </p>
               <div className="astrobin-unmapped-grid">
                 {unmapped.map((filter) => (
@@ -262,7 +267,13 @@ export default function AstroBinExportDialog({ request, onClose }: Props) {
                       <td>{row.date}</td>
                       <td className={row.filter_id == null ? 'astrobin-unmapped-cell' : ''}>
                         {row.filter}
-                        {row.filter_id != null && <small> #{row.filter_id}</small>}
+                        {row.filter_id != null && (
+                          <small>
+                            {' '}
+                            #{row.filter_id}
+                            {row.filter_label ? ` ${row.filter_label}` : ''}
+                          </small>
+                        )}
                       </td>
                       <td>{row.number}</td>
                       <td>{cell(row.duration, 4)}</td>

@@ -55,7 +55,7 @@ describe('AstroBinExportDialog', () => {
   it('previews the rows, links the download, and widens with full detail', async () => {
     const seen: string[] = [];
     server.use(
-      http.get('/api/settings/astrobin', () => HttpResponse.json(ok({ filter_ids: { L: 4049 } }))),
+      http.get('/api/db/alpha/astrobin/filters', () => HttpResponse.json(ok({ entries: [] }))),
       http.get('/api/db/alpha/astrobin-export', ({ request: req }) => {
         const url = new URL(req.url);
         seen.push(url.search);
@@ -93,17 +93,20 @@ describe('AstroBinExportDialog', () => {
     await waitFor(() => expect(seen).toContain('?target_id=1&detail=full'));
   });
 
-  it('asks for the ids of unmapped filters and saves them alongside the known ones', async () => {
+  it("asks for the ids of unmapped filters and adds them to the catalog's map", async () => {
     let saved: unknown = null;
     let mapped = false;
+    const existing = { id: 1, filter_name: 'Ha', astrobin_id: 4051, label: 'Antlia 3nm Ha' };
     server.use(
-      http.get('/api/settings/astrobin', () =>
-        HttpResponse.json(ok({ filter_ids: { Ha: 4051 } }))
+      http.get('/api/db/alpha/astrobin/filters', () =>
+        HttpResponse.json(ok({ entries: [existing] }))
       ),
-      http.put('/api/settings/astrobin', async ({ request: req }) => {
+      http.put('/api/db/alpha/astrobin/filters', async ({ request: req }) => {
         saved = await req.json();
         mapped = true;
-        return HttpResponse.json(ok({ filter_ids: { Ha: 4051, L: 4049 } }));
+        return HttpResponse.json(
+          ok({ entries: [existing, { id: 2, filter_name: 'L', astrobin_id: 4049 }] })
+        );
       }),
       http.get('/api/db/alpha/astrobin-export', () =>
         HttpResponse.json(ok(exportFor('essentials', mapped)))
@@ -120,7 +123,9 @@ describe('AstroBinExportDialog', () => {
     expect(save).toBeEnabled();
     fireEvent.click(save);
 
-    await waitFor(() => expect(saved).toEqual({ filter_ids: { Ha: 4051, L: 4049 } }));
+    await waitFor(() =>
+      expect(saved).toEqual({ entries: [existing, { filter_name: 'L', astrobin_id: 4049 }] })
+    );
     expect(await screen.findByText('#4049')).toBeInTheDocument();
     expect(screen.queryByLabelText('AstroBin id for filter L')).not.toBeInTheDocument();
   });
