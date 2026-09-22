@@ -14,6 +14,13 @@ test.beforeEach(async ({ request }) => {
   await request.put('/api/settings/astrobin', { data: { filter_ids: {} } });
 });
 
+// Leave the server as found: the specs that follow expect no database
+// registered (the empty state opens Settings on its own) and no filter map.
+test.afterEach(async ({ request }) => {
+  await request.put('/api/settings/astrobin', { data: { filter_ids: {} } });
+  await resetDatabases(request);
+});
+
 test('the acquisition rows count one night of B lights, essentials and full', async ({
   request,
 }) => {
