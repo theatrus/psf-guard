@@ -56,6 +56,11 @@ processing. Your image files stay where they are.
   combine RGB, LRGB, or narrowband palettes, adjust the processing stack, and
   download the cached linear or processed FITS result. Draw around a visible
   stack artifact to rank the source-frame crops that differ in that area.
+- **See everything on one sky.** The Sky view draws every target from every
+  database as its field on an all-sky chart, flat or as a globe you turn by
+  dragging, with each target's latest stack preview in place when you zoom
+  in, and a night-by-night timeline that replays how the catalog grew.
+  See the [sky coverage guide](docs/SKY_COVERAGE.md).
 - **Run RC-Astro tools on a stack** when the server has the standalone
   `rc-astro` CLI installed and licensed: BlurXTerminator, NoiseXTerminator,
   and StarXTerminator on the linear data, with controls built from each
@@ -438,6 +443,26 @@ the image grid and comparison tools:
 Grades are written to the active catalog. If that catalog is an existing
 Target Scheduler database—or you sync grades to one—the scheduler can keep its
 acquired-image counts accurate and replace rejected frames.
+
+## 🗺️ Sky coverage map
+
+Open the **Sky** tab to see every target from every registered database on
+one map of the whole sky. Each field is drawn at its real size, from a plate
+solve when one exists or from the frame header otherwise, coloured by its
+filter mix and brighter with more hours. Hover a field for its hours per
+filter, nights, and span; click it to open the target in Images. Drag to turn
+the sky from inside, or switch to the globe and turn it from outside; scroll
+to zoom, and past three times each field shows its latest stack preview placed
+by its plate solve. The timeline under the map shows one lane per rig with the
+Moon's phase, and a two-thumb slider replays the nights that built the
+catalog. The stat band totals hours, frames, targets, nights, the sky covered
+with overlaps counted once, and the pixels the sky resolves into at the finest
+scale that reached each patch.
+
+![The Sky view](docs/sky-coverage.jpg)
+
+See the **[sky coverage guide](docs/SKY_COVERAGE.md)** for the field sources,
+the night rule, and the request behind the numbers.
 
 ## 🌌 Sky context, plate solving, and overlays
 
