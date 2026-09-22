@@ -53,6 +53,11 @@ pub struct FrameMeta {
     pub telescope: Option<String>,
     pub camera: Option<String>,
     pub focal_length_mm: Option<f64>,
+    /// FOCRATIO: the focal ratio N.I.N.A. writes from the telescope's
+    /// settings.
+    pub focal_ratio: Option<f64>,
+    /// APTDIA: the aperture in millimetres, when the header records it.
+    pub aperture_mm: Option<f64>,
     pub camera_temp: Option<f64>,
     pub camera_target_temp: Option<f64>,
     pub focuser_position: Option<i64>,
@@ -63,6 +68,16 @@ pub struct FrameMeta {
 }
 
 impl FrameMeta {
+    /// The f-number: the header's focal ratio, else focal length over
+    /// aperture when both are known.
+    pub fn f_number(&self) -> Option<f64> {
+        self.focal_ratio.or_else(|| {
+            let focal_length = self.focal_length_mm?;
+            let aperture = self.aperture_mm?;
+            Some(focal_length / aperture)
+        })
+    }
+
     /// True when the frame should be imported as an acquired light frame.
     /// Calibration frames (dark/flat/bias) have no place in a scheduler DB.
     /// A missing IMAGETYP is treated as a light: plenty of processed archives
@@ -175,6 +190,8 @@ pub fn read_frame_meta_named(path: &Path, declared: &Path) -> FrameMeta {
     meta.telescope = text(&["TELESCOP"]);
     meta.camera = text(&["INSTRUME"]);
     meta.focal_length_mm = f64_of(&["FOCALLEN", "FOCAL"]).filter(|v| *v > 0.0);
+    meta.focal_ratio = f64_of(&["FOCRATIO", "FRATIO"]).filter(|v| *v > 0.0);
+    meta.aperture_mm = f64_of(&["APTDIA", "APERTURE"]).filter(|v| *v > 0.0);
     meta.camera_temp = f64_of(&["CCD-TEMP", "CCDTEMP"]);
     meta.camera_target_temp = f64_of(&["SET-TEMP", "SETTEMP"]);
     meta.focuser_position = i64_of(&["FOCPOS", "FOCUSPOS"]);

@@ -9,6 +9,7 @@ Use this index for detailed behavior and engineering records.
 - [Calibration libraries](CALIBRATION_LIBRARY.md)
 - [Project stack previews](STACKING_PREVIEWS.md)
 - [Sky coverage map and timeline](SKY_COVERAGE.md)
+- [AstroBin acquisition export](ASTROBIN_EXPORT.md)
 - [Statistical grading](STATISTICAL_GRADING.md)
 
 ## Quality and sky analysis

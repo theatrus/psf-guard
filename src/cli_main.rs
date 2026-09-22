@@ -103,6 +103,106 @@ pub fn main() -> Result<()> {
                 .with_context(|| format!("Failed to open database: {}", cli.database))?;
             dump_grading_results(&conn, status, project, target, &format)?;
         }
+        Commands::AstrobinCsv {
+            db,
+            target_id,
+            project_id,
+            include_pending,
+            detail,
+            filter_ids,
+            output,
+            image_dirs,
+            registry,
+        } => {
+            use crate::astrobin::{AstroBinDetail, AstroBinExportRequest};
+            use crate::db_registry::DbRegistry;
+
+            if target_id.is_none() && project_id.is_none() {
+                return Err(anyhow::anyhow!("name --target-id or --project-id"));
+            }
+            let registry_path = match &registry {
+                Some(p) => PathBuf::from(p),
+                None => DbRegistry::default_path().context("resolving default registry path")?,
+            };
+            let reg = DbRegistry::load_or_init(&registry_path).ok();
+            let db_path = crate::commands::sync::resolve_db_path(reg.as_ref(), &db)?;
+            let mut ids = reg
+                .as_ref()
+                .and_then(|r| r.astrobin.clone())
+                .map(|settings| settings.filter_ids)
+                .unwrap_or_default();
+            for pair in &filter_ids {
+                let (name, id) = pair
+                    .split_once('=')
+                    .ok_or_else(|| anyhow::anyhow!("--filter-id wants NAME=ID, got '{pair}'"))?;
+                let id: u32 = id
+                    .trim()
+                    .parse()
+                    .with_context(|| format!("'{id}' is not an AstroBin filter id"))?;
+                ids.insert(name.trim().to_string(), id);
+            }
+
+            let detail: AstroBinDetail = detail.into();
+            // Only full detail reads frames, so only it needs the folders.
+            let tree = if detail == AstroBinDetail::Full {
+                let dirs = match image_dirs {
+                    Some(dirs) if !dirs.is_empty() => dirs,
+                    _ => reg
+                        .as_ref()
+                        .and_then(|r| r.find(&db))
+                        .map(|e| e.image_dirs.clone())
+                        .unwrap_or_default(),
+                };
+                if dirs.is_empty() {
+                    None
+                } else {
+                    let roots: Vec<PathBuf> = dirs.iter().map(PathBuf::from).collect();
+                    let refs: Vec<&Path> = roots.iter().map(PathBuf::as_path).collect();
+                    Some(
+                        crate::directory_tree::DirectoryTree::build_multiple(&refs)
+                            .context("indexing image directories")?,
+                    )
+                }
+            } else {
+                None
+            };
+
+            let conn = Connection::open_with_flags(
+                &db_path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+            )
+            .with_context(|| format!("opening database at {}", db_path.display()))?;
+            let export = crate::astrobin::export(
+                &conn,
+                tree.as_ref(),
+                &ids,
+                &AstroBinExportRequest {
+                    project_id,
+                    target_id,
+                    include_pending,
+                    detail,
+                },
+            )?;
+            match &output {
+                Some(path) => {
+                    std::fs::write(path, &export.csv).with_context(|| format!("writing {path}"))?;
+                    eprintln!(
+                        "Wrote {} row(s) for {} ({} frame(s), {} night(s)) to {path}",
+                        export.rows.len(),
+                        export.scope,
+                        export.frames,
+                        export.nights
+                    );
+                }
+                None => print!("{}", export.csv),
+            }
+            for filter in &export.unmapped_filters {
+                eprintln!("Filter '{filter}' has no AstroBin id; its filter cell is blank.");
+            }
+            for note in &export.notes {
+                eprintln!("{note}");
+            }
+        }
         Commands::ListProjects => {
             let conn = Connection::open(&cli.database)
                 .with_context(|| format!("Failed to open database: {}", cli.database))?;

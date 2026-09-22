@@ -694,6 +694,24 @@ psf-guard export my-db --dest ./stacking --dry-run
 psf-guard export my-db --dest ./stacking
 ```
 
+## ☆ Acquisition list for AstroBin
+
+AstroBin's upload page imports a CSV of imaging sessions. The **AstroBin**
+action on a project card or target row writes it: one row per night, filter
+and exposure length, with the frame count. **Essentials** gives the four
+columns every upload needs. **Full** adds binning, gain, sensor and ambient
+temperature, the f-number, and the darks, flats and bias the calibration
+library would match to each night. The dialog previews the rows, asks for
+the AstroBin id of any filter it does not know yet, and offers the file as a
+download or on the clipboard. The CLI writes the same file:
+
+```bash
+psf-guard astrobin-csv my-db --target-id 12 --detail full -o ngc7023.csv
+```
+
+See **[AstroBin acquisition export](docs/ASTROBIN_EXPORT.md)** for the row
+rules and the filter id map.
+
 See **[Calibration libraries](docs/CALIBRATION_LIBRARY.md)** for import,
 matching, stack-master, export, cache, and database-sync rules. Each database
 in Settings also has a library manager for finding missing files, reviewing

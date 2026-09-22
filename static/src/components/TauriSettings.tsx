@@ -15,6 +15,7 @@ import ReviewPreferences from './ReviewPreferences';
 import CalibrationMatchingSettings from './CalibrationMatchingSettings';
 import StackAutomationSettings from './StackAutomationSettings';
 import ExportDefaultsSettings from './ExportDefaultsSettings';
+import AstroBinSettings from './AstroBinSettings';
 import type { DatabaseSummary } from '../api/types';
 import {
   describeImportProgress,
@@ -1822,6 +1823,7 @@ export default function TauriSettings({
               <CalibrationMatchingSettings />
               <StackAutomationSettings />
               <ExportDefaultsSettings />
+              <AstroBinSettings />
             </>
           )}
 

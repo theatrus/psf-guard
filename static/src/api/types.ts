@@ -1351,6 +1351,49 @@ export interface ExportSettings {
   default_layout: ExportLayout;
 }
 
+/** How much of AstroBin's acquisition CSV to fill in. */
+export type AstroBinDetail = 'essentials' | 'full';
+
+/** Filter name, as the catalog spells it, to AstroBin equipment id. */
+export interface AstroBinSettings {
+  filter_ids: Record<string, number>;
+}
+
+/** One row of the AstroBin CSV: one night, filter and exposure length. */
+export interface AstroBinRow {
+  date: string;
+  /** The catalog's filter name; the CSV carries `filter_id` instead. */
+  filter: string;
+  filter_id: number | null;
+  number: number;
+  duration: number;
+  binning: number | null;
+  gain: number | null;
+  sensor_cooling: number | null;
+  f_number: number | null;
+  darks: number | null;
+  flats: number | null;
+  flat_darks: number | null;
+  bias: number | null;
+  temperature: number | null;
+}
+
+export interface AstroBinExport {
+  filename: string;
+  detail: AstroBinDetail;
+  /** The target or project the rows describe. */
+  scope: string;
+  rows: AstroBinRow[];
+  csv: string;
+  frames: number;
+  nights: number;
+  total_exposure_seconds: number;
+  /** Filter names with no AstroBin id yet; their `filter` cell is blank. */
+  unmapped_filters: string[];
+  lights_missing_files: number;
+  notes: string[];
+}
+
 export interface ServerInfo {
   version: string;
   cache_directory: string;

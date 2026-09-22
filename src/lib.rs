@@ -1,5 +1,6 @@
 pub mod accord_imaging;
 pub mod acquisition_context;
+pub mod astrobin;
 pub mod astrometry;
 pub mod astrometry_headers;
 pub mod auth_registry;
