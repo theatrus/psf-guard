@@ -8,7 +8,7 @@
 %global rustflags_debuginfo 0
 
 Name:           psf-guard
-Version:        0.10.0
+Version:        0.10.1
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -93,6 +93,9 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Thu Sep 24 2026 Yann Ramin <github@theatr.us> - 0.10.1-1
+- Empty catalogs and projects show zero grading counts instead of a database error
+
 * Mon Sep 21 2026 Yann Ramin <github@theatr.us> - 0.10.0-1
 - Sky view: all-sky map of every catalog's targets, flat or globe, with stack previews, constellations, and a night-by-night replay
 - Overview summaries answered from covering indexes; large catalogs load in well under a second
