@@ -43,6 +43,7 @@ import {
 import ProjectSchedulerDialog from './ProjectSchedulerDialog';
 import CalibrationReportDialog from './CalibrationReportDialog';
 import ExportDialog, { type ExportRequest } from './ExportDialog';
+import AstroBinExportDialog, { type AstroBinExportRequest } from './AstroBinExportDialog';
 import { commonDirectory } from '../utils/commonDirectory';
 import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog';
 import { useAccess } from '../auth/access';
@@ -120,6 +121,8 @@ export default function Overview() {
   const [exportJobDb, setExportJobDb] = useState<string | null>(null);
   // The export the user clicked, awaiting its layout choice in the dialog.
   const [pendingExport, setPendingExport] = useState<ExportRequest | null>(null);
+  // The AstroBin acquisition CSV the user asked for, shown in its dialog.
+  const [pendingAstroBin, setPendingAstroBin] = useState<AstroBinExportRequest | null>(null);
   // Seeds the dialog's layout choice; edited in the settings panel.
   const { data: exportSettings } = useQuery({
     queryKey: ['export-settings'],
@@ -1030,6 +1033,22 @@ export default function Overview() {
                         ⬇ Export
                       </span>
                     )}
+                    {project.accepted_images + project.pending_images > 0 && (
+                      <span
+                        className="export-link"
+                        title="The acquisition CSV AstroBin imports, one row per night, filter and exposure length"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPendingAstroBin({
+                            dbId: project.db_id,
+                            scope: { project_id: project.id },
+                            label: project.display_name,
+                          });
+                        }}
+                      >
+                        ☆ AstroBin
+                      </span>
+                    )}
                   </div>
 
                   {/* Targets stay visible so new work is easy to spot. */}
@@ -1161,6 +1180,22 @@ export default function Overview() {
                                   }
                                 >
                                   ↓ Export
+                                </button>
+                              )}
+                              {target.accepted_count + target.pending_count > 0 && (
+                                <button
+                                  type="button"
+                                  className="target-settings-button"
+                                  title="The acquisition CSV AstroBin imports, one row per night, filter and exposure length"
+                                  onClick={() =>
+                                    setPendingAstroBin({
+                                      dbId: target.db_id,
+                                      scope: { target_id: target.id },
+                                      label: target.name,
+                                    })
+                                  }
+                                >
+                                  ☆ AstroBin
                                 </button>
                               )}
                             </div>
@@ -1321,6 +1356,10 @@ export default function Overview() {
           canEdit={organizeAllowed}
           onClose={() => setSchedulerProject(null)}
         />
+      )}
+
+      {pendingAstroBin && (
+        <AstroBinExportDialog request={pendingAstroBin} onClose={() => setPendingAstroBin(null)} />
       )}
 
       {calibrationReportProject && (

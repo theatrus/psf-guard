@@ -397,6 +397,20 @@ pub struct DbRegistry {
     /// settings panel. Additive within registry v2; absent means off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stacking: Option<StackAutomationSettings>,
+    /// Process-global AstroBin export settings, edited from the settings
+    /// panel and the export dialog. Additive within registry v2; absent
+    /// means no filter has an AstroBin id yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub astrobin: Option<AstroBinSettings>,
+}
+
+/// What the AstroBin CSV export needs from the person: which equipment
+/// database id each of their filter names stands for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AstroBinSettings {
+    /// Filter name, as the catalog spells it, to AstroBin filter id.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub filter_ids: std::collections::BTreeMap<String, u32>,
 }
 
 /// Whether, and how soon, remembered stack previews rebuild on their own
@@ -473,6 +487,7 @@ impl Default for DbRegistry {
             calibration: None,
             export: None,
             stacking: None,
+            astrobin: None,
         }
     }
 }

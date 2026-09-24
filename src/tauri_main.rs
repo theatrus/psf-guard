@@ -563,6 +563,7 @@ mod tests {
             calibration: None,
             export: None,
             stacking: None,
+            astrobin: None,
             peers: Vec::new(),
         }
     }
