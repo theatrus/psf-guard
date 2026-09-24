@@ -80,6 +80,24 @@ impl From<ExportPlacementArg> for crate::commands::export::Placement {
     }
 }
 
+/// Mirror of [`crate::astrobin::AstroBinDetail`] for the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum AstroBinDetailArg {
+    /// Date, filter, number and duration.
+    Essentials,
+    /// Every column the catalog and the frames' headers can fill.
+    Full,
+}
+
+impl From<AstroBinDetailArg> for crate::astrobin::AstroBinDetail {
+    fn from(value: AstroBinDetailArg) -> Self {
+        match value {
+            AstroBinDetailArg::Essentials => Self::Essentials,
+            AstroBinDetailArg::Full => Self::Full,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub enum Commands {
     /// Dump grading results for all images
@@ -300,6 +318,54 @@ pub enum Commands {
 
         /// Override the image directories to search (defaults to the
         /// registry entry's; required when `db` is a bare .sqlite path).
+        #[arg(long, value_delimiter = ',')]
+        image_dirs: Option<Vec<String>>,
+
+        /// Path to the database registry JSON file (defaults to the platform
+        /// config directory).
+        #[arg(long)]
+        registry: Option<String>,
+    },
+
+    /// Write the acquisition CSV AstroBin imports for one target or project.
+    ///
+    /// One row per night, filter and exposure length. `essentials` (the
+    /// default) is date, filter, number and duration; `full` adds binning,
+    /// gain, sensor and ambient temperature, the f-number, and the
+    /// calibration frames the library would match. AstroBin's `filter`
+    /// column is its own numeric equipment id, taken from the registry's
+    /// AstroBin settings or `--filter-id`.
+    AstrobinCsv {
+        /// Registry slug or path of the database.
+        db: String,
+
+        /// Export one target by id.
+        #[arg(long, conflicts_with = "project_id")]
+        target_id: Option<i32>,
+
+        /// Export a whole project by id.
+        #[arg(long)]
+        project_id: Option<i32>,
+
+        /// Count ungraded (Pending) lights too. Rejects never count.
+        #[arg(long)]
+        include_pending: bool,
+
+        /// How much of the CSV to fill in.
+        #[arg(long, value_enum, default_value_t = AstroBinDetailArg::Essentials)]
+        detail: AstroBinDetailArg,
+
+        /// A filter name and its AstroBin id, as `NAME=ID`. Repeatable;
+        /// adds to (and overrides) the registry's AstroBin settings.
+        #[arg(long = "filter-id", value_name = "NAME=ID")]
+        filter_ids: Vec<String>,
+
+        /// Write the CSV here instead of standard output.
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Override the image directories to search for `--detail full`
+        /// (defaults to the registry entry's).
         #[arg(long, value_delimiter = ',')]
         image_dirs: Option<Vec<String>>,
 

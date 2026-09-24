@@ -16,6 +16,11 @@ import type {
   ApiResponse,
   ExportLayout,
   ExportSettings,
+  AstroBinDetail,
+  AstroBinExport,
+  AstroBinFilterEntry,
+  AstroBinFilterMap,
+  AstroBinSettings,
   Project,
   Target,
   TargetNavigation,
@@ -166,6 +171,22 @@ export const initializeApiClient = async () => {
 const dbPath = (dbId: string, path: string) => `/db/${encodeURIComponent(dbId)}${path}`;
 
 const withServerUrl = (path: string): string => `${getCachedServerUrl()}${path}`;
+
+export interface AstroBinExportParams {
+  project_id?: number;
+  target_id?: number;
+  include_pending?: boolean;
+  detail?: AstroBinDetail;
+}
+
+const astroBinQuery = (params: AstroBinExportParams): Record<string, string> => {
+  const query: Record<string, string> = {};
+  if (params.project_id !== undefined) query.project_id = String(params.project_id);
+  if (params.target_id !== undefined) query.target_id = String(params.target_id);
+  if (params.include_pending) query.include_pending = 'true';
+  if (params.detail && params.detail !== 'essentials') query.detail = params.detail;
+  return query;
+};
 
 // Bump when response cache semantics change. Version 2 moves rendered images
 // from a 24-hour freshness lifetime to mandatory revalidation; changing the
@@ -326,6 +347,66 @@ export const apiClient = {
     });
     if (!data.data) throw new Error(data.error || 'Failed to update export settings');
     return data.data;
+  },
+
+  getAstroBinSettings: async (): Promise<AstroBinSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<AstroBinSettings>>('/settings/astrobin');
+    if (!data.data) throw new Error(data.error || 'Failed to get AstroBin settings');
+    return data.data;
+  },
+
+  /** Replaces the whole filter map; an entry left out is forgotten. */
+  updateAstroBinSettings: async (
+    filterIds: Record<string, number>
+  ): Promise<AstroBinSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<AstroBinSettings>>('/settings/astrobin', {
+      filter_ids: filterIds,
+    });
+    if (!data.data) throw new Error(data.error || 'Failed to update AstroBin settings');
+    return data.data;
+  },
+
+  /** The catalog's own filter map: what each filter name meant on its rig, and when. */
+  getAstroBinFilters: async (dbId: string): Promise<AstroBinFilterMap> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<AstroBinFilterMap>>(
+      dbPath(dbId, '/astrobin/filters')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read the AstroBin filter map');
+    return data.data;
+  },
+
+  /** Replaces the catalog's whole filter map. Management-gated server-side. */
+  updateAstroBinFilters: async (
+    dbId: string,
+    entries: AstroBinFilterEntry[]
+  ): Promise<AstroBinFilterMap> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<AstroBinFilterMap>>(
+      dbPath(dbId, '/astrobin/filters'),
+      { entries }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to save the AstroBin filter map');
+    return data.data;
+  },
+
+  /** The AstroBin acquisition rows for one target or project, with the CSV they render to. */
+  getAstroBinExport: async (dbId: string, params: AstroBinExportParams): Promise<AstroBinExport> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<AstroBinExport>>(
+      dbPath(dbId, '/astrobin-export'),
+      { params: astroBinQuery(params) }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to build the AstroBin export');
+    return data.data;
+  },
+
+  /** Absolute URL for the AstroBin CSV download. */
+  astroBinCsvUrl: (dbId: string, params: AstroBinExportParams): string => {
+    const qs = new URLSearchParams(astroBinQuery(params)).toString();
+    return withServerUrl(`/api${dbPath(dbId, '/astrobin-export.csv')}${qs ? `?${qs}` : ''}`);
   },
 
   getServerInfo: async (): Promise<ServerInfo> => {

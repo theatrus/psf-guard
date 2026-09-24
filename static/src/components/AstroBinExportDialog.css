@@ -1,0 +1,104 @@
+.astrobin-dialog {
+  width: min(52rem, calc(100vw - 2rem));
+}
+
+.astrobin-scope,
+.astrobin-summary,
+.astrobin-muted {
+  margin: 0 0 0.75rem;
+}
+
+.astrobin-scope,
+.astrobin-muted {
+  color: var(--color-text-muted);
+}
+
+.astrobin-error {
+  margin: 0 0 0.75rem;
+  color: var(--color-error, #c0392b);
+}
+
+.astrobin-dialog .export-layout-options {
+  margin-bottom: 0.9rem;
+}
+
+.astrobin-unmapped {
+  margin: 0 0 0.9rem;
+  padding: 0.6rem 0.75rem 0.75rem;
+  border: 1px solid var(--color-warning, #b9770e);
+  border-radius: 6px;
+}
+
+.astrobin-unmapped p {
+  margin: 0 0 0.6rem;
+  font-size: 0.88rem;
+}
+
+.astrobin-unmapped-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.astrobin-unmapped-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.astrobin-unmapped-row span {
+  min-width: 3rem;
+  font-weight: 600;
+}
+
+.astrobin-unmapped-row input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono, monospace);
+}
+
+.astrobin-table-wrap {
+  overflow-x: auto;
+  max-height: 40vh;
+}
+
+.astrobin-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.astrobin-table th,
+.astrobin-table td {
+  text-align: left;
+  padding: 0.28rem 0.7rem 0.28rem 0;
+  border-bottom: 1px solid var(--color-border, #444);
+  white-space: nowrap;
+}
+
+.astrobin-table th {
+  position: sticky;
+  top: 0;
+  background: var(--color-bg-elevated, inherit);
+}
+
+.astrobin-table td small {
+  color: var(--color-text-muted);
+}
+
+.astrobin-unmapped-cell {
+  color: var(--color-warning, #b9770e);
+}
+
+.dialog-footer .astrobin-download {
+  flex: 0 0 auto;
+  padding: 0.45rem 0.8rem;
+  text-decoration: none;
+}
+
+.dialog-footer .astrobin-download.is-disabled {
+  pointer-events: none;
+  opacity: 0.5;
+}

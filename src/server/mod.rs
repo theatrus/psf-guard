@@ -1,4 +1,5 @@
 pub mod api;
+pub mod astrobin_export;
 pub mod auth;
 pub mod cache;
 pub mod calibration_settings;
@@ -623,6 +624,19 @@ async fn run_server_internal(
         )
         .route("/import/folders", get(handlers::get_import_folders))
         .route("/export", get(handlers::export_archive_route))
+        .route(
+            "/astrobin-export",
+            get(astrobin_export::get_astrobin_export),
+        )
+        .route(
+            "/astrobin-export.csv",
+            get(astrobin_export::get_astrobin_csv),
+        )
+        .route(
+            "/astrobin/filters",
+            get(astrobin_export::get_astrobin_filters)
+                .put(astrobin_export::update_astrobin_filters),
+        )
         .route("/export/local", post(handlers::export_local_route))
         .route(
             "/export/server",
@@ -652,6 +666,11 @@ async fn run_server_internal(
         .route(
             "/settings/export",
             get(export_settings::get_export_settings).put(export_settings::update_export_settings),
+        )
+        .route(
+            "/settings/astrobin",
+            get(astrobin_export::get_astrobin_settings)
+                .put(astrobin_export::update_astrobin_settings),
         )
         .route(
             "/settings/stacking",

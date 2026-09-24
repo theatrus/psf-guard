@@ -160,6 +160,27 @@ pub struct CalibrationSelection {
     pub flat: Vec<CalibrationFrame>,
 }
 
+/// How many frames of each kind a master built for one light would take.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct CalibrationInputCounts {
+    pub bias: usize,
+    pub dark: usize,
+    pub dark_flat: usize,
+    pub flat: usize,
+}
+
+/// The frames a master would build from, per kind: the matching frames
+/// after the same coherence rule a stack build applies, so a night whose
+/// darks span two sessions counts only the session the master takes.
+pub fn master_input_counts(selection: &CalibrationSelection) -> CalibrationInputCounts {
+    CalibrationInputCounts {
+        bias: coherent_master_subset(CalibrationKind::Bias, &selection.bias).len(),
+        dark: coherent_master_subset(CalibrationKind::Dark, &selection.dark).len(),
+        dark_flat: coherent_master_subset(CalibrationKind::DarkFlat, &selection.dark_flat).len(),
+        flat: coherent_master_subset(CalibrationKind::Flat, &selection.flat).len(),
+    }
+}
+
 impl CalibrationSelection {
     pub fn is_empty(&self) -> bool {
         self.bias.is_empty()

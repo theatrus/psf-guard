@@ -15,6 +15,7 @@ import ReviewPreferences from './ReviewPreferences';
 import CalibrationMatchingSettings from './CalibrationMatchingSettings';
 import StackAutomationSettings from './StackAutomationSettings';
 import ExportDefaultsSettings from './ExportDefaultsSettings';
+import AstroBinSettings from './AstroBinSettings';
 import type { DatabaseSummary } from '../api/types';
 import {
   describeImportProgress,
@@ -30,6 +31,7 @@ import RemoteSyncPreviews from './RemoteSyncPreviews';
 import SeizaCatalogControls from './SeizaCatalogControls';
 import ProcessingSetupsManager from './ProcessingSetupsManager';
 import CalibrationLibrarySummary from './CalibrationLibrarySummary';
+import AstroBinFilterSummary from './AstroBinFilterSummary';
 import UserManagement from './UserManagement';
 import './TauriSettings.css';
 
@@ -1732,6 +1734,11 @@ export default function TauriSettings({
                         canManage={managementAllowed}
                         onImport={() => handleImport(entry)}
                       />
+                      <AstroBinFilterSummary
+                        dbId={entry.id}
+                        dbName={entry.name}
+                        canManage={managementAllowed}
+                      />
                       <QualityBackfillControls dbId={entry.id} />
                     </div>
                     {managementAllowed && (
@@ -1822,6 +1829,7 @@ export default function TauriSettings({
               <CalibrationMatchingSettings />
               <StackAutomationSettings />
               <ExportDefaultsSettings />
+              <AstroBinSettings />
             </>
           )}
 
