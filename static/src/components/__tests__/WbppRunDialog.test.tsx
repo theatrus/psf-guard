@@ -130,6 +130,24 @@ describe('WbppRunDialog', () => {
     expect(screen.getByRole('button', { name: 'Stack again' })).toBeInTheDocument();
   });
 
+  it('opens on the last run\u2019s results and offers the form again on request', async () => {
+    server.use(
+      http.get('/api/settings/pixinsight', () => HttpResponse.json(ok(pixinsight))),
+      http.get('/api/db/alpha/wbpp/runs/current', () =>
+        HttpResponse.json(ok({ started: false, progress: finished }))
+      )
+    );
+    render(
+      <WbppRunDialog request={request} defaultOptions={DEFAULT_WBPP_OPTIONS} onClose={() => {}} />,
+      { wrapper: wrapper() }
+    );
+    expect(await screen.findByText('Finished')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Start stacking' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Stack again' }));
+    expect(screen.getByRole('button', { name: 'Start stacking' })).toBeInTheDocument();
+    expect(screen.queryByText('Finished')).not.toBeInTheDocument();
+  });
+
   it('cannot start without PixInsight, and follows a run already under way', async () => {
     const running: WbppRunProgress = {
       ...idle,

@@ -78,8 +78,9 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
   const [options, setOptions] = useState<WbppOptions>(defaultOptions);
   const [includePending, setIncludePending] = useState(true);
   const [extra, setExtra] = useState('');
-  // The form shows until a run starts from it; a finished run offers it again.
-  const [showForm, setShowForm] = useState(true);
+  // The form shows when there is no run to look at, and again on request
+  // once a run has finished; a run under way or just finished shows itself.
+  const [formRequested, setFormRequested] = useState(false);
 
   const start = useMutation({
     mutationFn: () =>
@@ -95,7 +96,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
       }),
     onSuccess: (status) => {
       queryClient.setQueryData(['db', request.dbId, 'wbpp-run'], status);
-      setShowForm(false);
+      setFormRequested(false);
       if (!status.started) {
         alert('A WBPP run is already under way for this database; its progress is shown here.');
       }
@@ -108,8 +109,8 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
 
   const running = progress?.running ?? false;
   const ready = pixinsight.data?.ready ?? false;
-  const formVisible = showForm && !running;
   const hasResult = !!progress && !running && !!progress.finished_at;
+  const formVisible = !running && (formRequested || !hasResult);
   const fileUrl = (path: string) => apiClient.wbppRunFileUrl(request.dbId, path);
   const relativeLog =
     progress?.log_path && progress.work_dir && progress.log_path.startsWith(progress.work_dir)
@@ -138,7 +139,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
             </button>
           )}
           {hasResult && !formVisible && (
-            <button type="button" className="header-button" onClick={() => setShowForm(true)}>
+            <button type="button" className="header-button" onClick={() => setFormRequested(true)}>
               Stack again
             </button>
           )}

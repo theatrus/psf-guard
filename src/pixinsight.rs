@@ -317,8 +317,10 @@ fn strip_timestamp(line: &str) -> &str {
     let Some(rest) = line.strip_prefix('[') else {
         return line;
     };
-    match rest.find("] ") {
-        Some(close) if close == 19 && rest.as_bytes().get(4) == Some(&b'-') => &rest[close + 2..],
+    match rest.find(']') {
+        Some(close) if close == 19 && rest.as_bytes().get(4) == Some(&b'-') => {
+            rest[close + 1..].trim_start()
+        }
         _ => line,
     }
 }
@@ -369,8 +371,10 @@ pub fn summarize_log(text: &str, tail: usize) -> (Vec<String>, LogSummary) {
                 let _ = title;
                 summary.finished = true;
                 summary.elapsed = Some(elapsed.trim().to_string());
-            } else if !step.starts_with("End ") && !step.starts_with("End of ") {
-                summary.stage = Some(step.trim_end_matches('.').to_string());
+            } else if step.starts_with("Begin ") || step.starts_with("Writing master") {
+                // WBPP prefixes many informational lines with "* "; only its
+                // step openings say where the run is.
+                summary.stage = Some(step.trim_end_matches([':', '.']).trim().to_string());
                 summary.steps += 1;
             }
         }
@@ -613,18 +617,24 @@ Registering 12 frames
             summary.stage.as_deref(),
             Some("Begin local normalization of light frames")
         );
-        // PixInsight's log writer stamps every line; the stamp is not the step.
-        let stamped = "[2026-09-24 20:47:48] * Begin registration of light frames
-[2026-09-24 20:47:49] *** Error: no stars
-";
-        let (_, summary_stamped) = summarize_log(stamped, 3);
+        // PixInsight's log writer stamps every line; the stamp is not the step,
+        // a line that is only a stamp is blank, and only WBPP's step openings
+        // move the stage among the many lines it starts with "* ".
+        let stamped = "[2026-09-24 20:47:48] * Begin registration of light frames\n\
+                       [2026-09-24 20:47:48]\n\
+                       [2026-09-24 20:47:49] *** Error: no stars\n\
+                       [2026-09-24 20:47:50] * Estimating global scale factors\n\
+                       [2026-09-24 20:47:51] * Writing master Dark frame:\n";
+        let (stamped_lines, summary_stamped) = summarize_log(stamped, 5);
         assert_eq!(
             summary_stamped.stage.as_deref(),
-            Some("Begin registration of light frames")
+            Some("Writing master Dark frame")
         );
+        assert_eq!(summary_stamped.steps, 2);
         assert_eq!(summary_stamped.errors.len(), 1);
-        let (stamped_lines, _) = summarize_log(stamped, 5);
+        assert_eq!(stamped_lines.len(), 4);
         assert_eq!(stamped_lines[0], "* Begin registration of light frames");
+        assert_eq!(stamped_lines[3], "* Writing master Dark frame:");
         assert_eq!(summary.steps, 2);
         assert!(!summary.finished);
         assert_eq!(
