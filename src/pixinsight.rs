@@ -276,6 +276,30 @@ pub fn wbpp_command(
     })
 }
 
+/// Bytes free on the filesystem holding `path` (or its nearest existing
+/// parent), for the person to weigh before a run writes gigabytes.
+pub fn free_bytes(path: &Path) -> Option<u64> {
+    let mut probe = path;
+    while !probe.exists() {
+        probe = probe.parent()?;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let c_path = std::ffi::CString::new(probe.as_os_str().as_bytes()).ok()?;
+        let mut stats: libc::statvfs = unsafe { std::mem::zeroed() };
+        // SAFETY: a valid NUL-terminated path and a zeroed statvfs to fill.
+        if unsafe { libc::statvfs(c_path.as_ptr(), &mut stats) } != 0 {
+            return None;
+        }
+        Some(stats.f_bavail as u64 * stats.f_frsize as u64)
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
 /// WBPP's newest log below an output folder, if it has written one yet.
 pub fn newest_log(output_dir: &Path) -> Option<PathBuf> {
     let logs = std::fs::read_dir(output_dir.join("logs")).ok()?;

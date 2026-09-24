@@ -362,12 +362,18 @@ export const apiClient = {
     return data.data;
   },
 
-  /** Names the PixInsight executable; null means look in the standard places. */
-  updatePixInsightSettings: async (binary: string | null): Promise<PixInsightSettings> => {
+  /**
+   * Names the PixInsight executable and the runs folder; null means the
+   * standard places, and the export directory or cache, respectively.
+   */
+  updatePixInsightSettings: async (update: {
+    binary: string | null;
+    runs_dir: string | null;
+  }): Promise<PixInsightSettings> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.put<ApiResponse<PixInsightSettings>>(
       '/settings/pixinsight',
-      { binary }
+      update
     );
     if (!data.data) throw new Error(data.error || 'Failed to update PixInsight settings');
     return data.data;

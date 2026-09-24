@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
-import { describePixInsight } from '../utils/pixinsight';
+import { describePixInsight, formatFree } from '../utils/pixinsight';
 
 /**
  * Where PixInsight is on the server, for stacking with WBPP from inside
@@ -16,15 +16,21 @@ export default function PixInsightSettings() {
     queryFn: apiClient.getPixInsightSettings,
   });
   const [draft, setDraft] = useState<string | null>(null);
+  const [runsDraft, setRunsDraft] = useState<string | null>(null);
   useEffect(() => {
-    if (settings.data && draft === null) setDraft(settings.data.binary ?? '');
+    if (settings.data && draft === null) {
+      setDraft(settings.data.binary ?? '');
+      setRunsDraft(settings.data.runs_dir ?? '');
+    }
   }, [settings.data, draft]);
 
   const save = useMutation({
-    mutationFn: (binary: string | null) => apiClient.updatePixInsightSettings(binary),
+    mutationFn: (update: { binary: string | null; runs_dir: string | null }) =>
+      apiClient.updatePixInsightSettings(update),
     onSuccess: (updated) => {
       queryClient.setQueryData(['pixinsight-settings'], updated);
       setDraft(updated.binary ?? '');
+      setRunsDraft(updated.runs_dir ?? '');
     },
   });
 
@@ -38,7 +44,10 @@ export default function PixInsightSettings() {
     );
   }
   const current = settings.data!;
-  const changed = (draft ?? '') !== (current.binary ?? '');
+  const changed =
+    (draft ?? '') !== (current.binary ?? '') || (runsDraft ?? '') !== (current.runs_dir ?? '');
+  const submit = () =>
+    save.mutate({ binary: draft?.trim() || null, runs_dir: runsDraft?.trim() || null });
 
   return (
     <div className="pixinsight-settings">
@@ -61,14 +70,34 @@ export default function PixInsightSettings() {
           value={draft ?? ''}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' && changed) save.mutate(draft?.trim() || null);
+            if (event.key === 'Enter' && changed) submit();
+          }}
+        />
+      </div>
+      <p className="review-preferences-note">
+        Where runs put their script and WBPP&apos;s output. A run writes gigabytes, so pick a
+        disk with room; empty means the database&apos;s export directory when it has one, else
+        the cache.
+        {current.runs_dir && current.runs_dir_free_bytes != null && (
+          <> {formatFree(current.runs_dir_free_bytes)} free there now.</>
+        )}
+      </p>
+      <div className="pixinsight-binary">
+        <input
+          type="text"
+          aria-label="WBPP runs folder"
+          placeholder="/data/wbpp-runs"
+          value={runsDraft ?? ''}
+          onChange={(event) => setRunsDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && changed) submit();
           }}
         />
         <button
           type="button"
           className="header-button"
           disabled={!changed || save.isPending}
-          onClick={() => save.mutate(draft?.trim() || null)}
+          onClick={submit}
         >
           Save
         </button>

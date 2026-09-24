@@ -6,7 +6,7 @@ import { useWbppRun } from '../hooks/useWbppRun';
 import { openSettings } from '../utils/settingsIntent';
 import Dialog from './Dialog';
 import WbppOptionsFields from './WbppOptionsFields';
-import { describePixInsight } from '../utils/pixinsight';
+import { describePixInsight, formatFree } from '../utils/pixinsight';
 import './WbppRunDialog.css';
 
 /** The project or target to stack. */
@@ -78,6 +78,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
   const [options, setOptions] = useState<WbppOptions>(defaultOptions);
   const [includePending, setIncludePending] = useState(true);
   const [extra, setExtra] = useState('');
+  const [workRoot, setWorkRoot] = useState('');
   // The form shows when there is no run to look at, and again on request
   // once a run has finished; a run under way or just finished shows itself.
   const [formRequested, setFormRequested] = useState(false);
@@ -93,6 +94,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
           .map((param) => param.trim())
           .filter(Boolean),
         scope_label: request.label,
+        ...(workRoot.trim() ? { work_root: workRoot.trim() } : {}),
       }),
     onSuccess: (status) => {
       queryClient.setQueryData(['db', request.dbId, 'wbpp-run'], status);
@@ -210,6 +212,29 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
               onChange={(event) => setExtra(event.target.value)}
             />
           </label>
+          <label className="wbpp-run-extra">
+            <span>
+              Run folder
+              <small>
+                Where this run&apos;s script and WBPP&apos;s output go; a run writes gigabytes.
+                Empty uses{' '}
+                {pixinsight.data?.runs_dir
+                  ? `the runs folder in Settings (${pixinsight.data.runs_dir}${
+                      pixinsight.data.runs_dir_free_bytes != null
+                        ? `, ${formatFree(pixinsight.data.runs_dir_free_bytes)} free`
+                        : ''
+                    })`
+                  : "the database's export directory, else the cache"}
+                .
+              </small>
+            </span>
+            <input
+              type="text"
+              value={workRoot}
+              placeholder="/data/wbpp-runs"
+              onChange={(event) => setWorkRoot(event.target.value)}
+            />
+          </label>
           {start.isError && <p className="wbpp-run-error">{(start.error as Error).message}</p>}
         </>
       )}
@@ -220,6 +245,11 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
             <strong>{STAGE_LABEL[progress.stage] ?? progress.stage}</strong>
             {elapsed !== null && <span className="wbpp-run-elapsed">{formatElapsed(elapsed)}</span>}
           </div>
+          {progress.free_bytes_at_start != null && (
+            <p className="wbpp-run-muted">
+              {formatFree(progress.free_bytes_at_start)} free at the run folder when it began.
+            </p>
+          )}
           {progress.frames > 0 && (
             <p className="wbpp-run-muted">
               {progress.lights} light{progress.lights === 1 ? '' : 's'} and{' '}

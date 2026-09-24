@@ -77,9 +77,17 @@ program on the server, and a PixInsight install the server can reach.
 2. Open **Stack in WBPP** on a project. Choose whether ungraded lights
    count (rejects never do), the settings above, and any extra parameters.
 3. **Start stacking.** PSF Guard plans the frames as an export would,
-   writes `run-wbpp.js` into a run folder under the cache
-   (`<cache>/<database>/wbpp/<project>-<time>/`), and starts PixInsight on
-   it headless.
+   writes `run-wbpp.js` into a run folder, and starts PixInsight on it
+   headless.
+
+A run writes gigabytes: calibrated and registered copies of every light,
+then the masters. So the run folder is yours to place. The **WBPP runs
+folder** under **Settings → Setups → PixInsight** puts every database's
+runs below it (`<folder>/<database>/<project>-<time>/`) and shows the
+space free there. Without one, a database's runs go under its export
+directory when it has one, and only otherwise under the cache. The run
+dialog can also name a folder for one run. The dialog shows the space
+free at the folder when the run began.
 
 The dialog then follows WBPP's own log: which step it is on, how long the
 run has taken, the last lines, and any line WBPP marked as an error. WBPP

@@ -57,7 +57,8 @@
   font-size: 0.78rem;
 }
 
-.wbpp-run-extra textarea {
+.wbpp-run-extra textarea,
+.wbpp-run-extra input {
   width: 100%;
   box-sizing: border-box;
   font-family: var(--font-mono, monospace);

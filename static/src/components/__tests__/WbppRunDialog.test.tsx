@@ -33,6 +33,8 @@ const pixinsight = {
   },
   display: { kind: 'own' },
   ready: true,
+  runs_dir: null,
+  runs_dir_free_bytes: null,
 };
 
 const idle: WbppRunProgress = {
@@ -41,6 +43,7 @@ const idle: WbppRunProgress = {
   scope: '',
   work_dir: '',
   output_dir: '',
+  free_bytes_at_start: null,
   options: null,
   frames: 0,
   lights: 0,
@@ -106,6 +109,7 @@ describe('WbppRunDialog', () => {
     fireEvent.change(screen.getByLabelText(/More WBPP parameters/), {
       target: { value: 'maxStars=500\nautocrop=false' },
     });
+    fireEvent.change(screen.getByLabelText(/^Run folder/), { target: { value: ' /data/runs ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Start stacking' }));
     await waitFor(() =>
       expect(started).toEqual({
@@ -114,6 +118,7 @@ describe('WbppRunDialog', () => {
         options: { ...DEFAULT_WBPP_OPTIONS, drizzle: '2x' },
         extra_params: ['maxStars=500', 'autocrop=false'],
         scope_label: 'Project Alpha',
+        work_root: '/data/runs',
       })
     );
     expect(await screen.findByText('Finished')).toBeInTheDocument();

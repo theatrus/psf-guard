@@ -58,6 +58,8 @@ pub struct WbppRunProgress {
     pub work_dir: String,
     /// WBPP's output folder below it.
     pub output_dir: String,
+    /// Bytes free where the run folder is, when the run began.
+    pub free_bytes_at_start: Option<u64>,
     pub options: Option<WbppOptions>,
     /// Frames the plan named, and how many were lights.
     pub frames: usize,
@@ -145,6 +147,11 @@ pub struct PixInsightSettingsResponse {
     /// Whether a run could start now: PixInsight found and a display
     /// available.
     pub ready: bool,
+    /// The runs folder the settings name, if any. Absent means each
+    /// database's export directory when it has one, else the cache.
+    pub runs_dir: Option<String>,
+    /// Bytes free where that folder is (or would be), when known.
+    pub runs_dir_free_bytes: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -152,38 +159,80 @@ pub struct UpdatePixInsightSettingsRequest {
     /// Empty or absent means look in the standard places.
     #[serde(default)]
     pub binary: Option<String>,
+    /// Empty or absent means the export directory or the cache.
+    #[serde(default)]
+    pub runs_dir: Option<String>,
 }
 
-fn configured_binary(state: &AppState) -> Result<Option<String>, AppError> {
+fn clean(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn configured(state: &AppState) -> Result<PixInsightSettings, AppError> {
     let Ok(path) = require_registry_path(state) else {
-        return Ok(None);
+        return Ok(PixInsightSettings::default());
     };
     let registry = DbRegistry::load_or_init(&path)
         .map_err(|error| AppError::InternalError(error.to_string()))?;
-    Ok(registry
-        .pixinsight
-        .and_then(|settings| settings.binary)
-        .filter(|binary| !binary.trim().is_empty()))
+    let settings = registry.pixinsight.unwrap_or_default();
+    Ok(PixInsightSettings {
+        binary: clean(settings.binary),
+        runs_dir: clean(settings.runs_dir),
+    })
 }
 
-fn settings_response(binary: Option<String>) -> PixInsightSettingsResponse {
-    let detection = detect(binary.as_deref());
+fn settings_response(settings: PixInsightSettings) -> PixInsightSettingsResponse {
+    let detection = detect(settings.binary.as_deref());
     let display = display_plan();
     let ready = detection.install.is_some() && display != DisplayPlan::Missing;
+    let runs_dir_free_bytes = settings
+        .runs_dir
+        .as_deref()
+        .and_then(|dir| pixinsight::free_bytes(Path::new(dir)));
     PixInsightSettingsResponse {
-        binary,
+        binary: settings.binary,
         detection,
         display,
         ready,
+        runs_dir: settings.runs_dir,
+        runs_dir_free_bytes,
     }
+}
+
+/// Where a run's folder goes: what the request names, else the settings'
+/// runs folder, else the database's export directory, else the cache.
+/// Every root but the cache gets the database's slug below it, so two
+/// databases' runs never share a folder.
+pub fn run_root(
+    requested: Option<&str>,
+    settings_runs_dir: Option<&str>,
+    export_dir: Option<&Path>,
+    cache_dir: &Path,
+    db_id: &str,
+) -> PathBuf {
+    if let Some(root) = requested.map(str::trim).filter(|root| !root.is_empty()) {
+        return PathBuf::from(root).join(db_id);
+    }
+    if let Some(root) = settings_runs_dir
+        .map(str::trim)
+        .filter(|root| !root.is_empty())
+    {
+        return PathBuf::from(root).join(db_id);
+    }
+    if let Some(export_dir) = export_dir {
+        return export_dir.join("wbpp");
+    }
+    cache_dir.join("wbpp")
 }
 
 /// GET /api/settings/pixinsight
 pub async fn get_pixinsight_settings(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<PixInsightSettingsResponse>>, AppError> {
-    let binary = configured_binary(&state)?;
-    let response = tokio::task::spawn_blocking(move || settings_response(binary))
+    let settings = configured(&state)?;
+    let response = tokio::task::spawn_blocking(move || settings_response(settings))
         .await
         .map_err(|error| AppError::InternalError(format!("settings task: {error}")))?;
     Ok(Json(ApiResponse::success(response)))
@@ -199,19 +248,17 @@ pub async fn update_pixinsight_settings(
     let _registry_guard = state.registry_write.lock().await;
     let mut registry = DbRegistry::load_or_init(&path)
         .map_err(|error| AppError::InternalError(error.to_string()))?;
-    let binary = request
-        .binary
-        .map(|binary| binary.trim().to_string())
-        .filter(|binary| !binary.is_empty());
-    // Absent is what the standard places already mean; storing nothing
-    // keeps the registry clean for older builds reading the same file.
-    registry.pixinsight = binary.clone().map(|binary| PixInsightSettings {
-        binary: Some(binary),
-    });
+    let settings = PixInsightSettings {
+        binary: clean(request.binary),
+        runs_dir: clean(request.runs_dir),
+    };
+    // Absent is what the defaults already mean; storing nothing keeps the
+    // registry clean for older builds reading the same file.
+    registry.pixinsight = (settings != PixInsightSettings::default()).then(|| settings.clone());
     registry
         .save(&path)
         .map_err(|error| AppError::InternalError(error.to_string()))?;
-    let response = tokio::task::spawn_blocking(move || settings_response(binary))
+    let response = tokio::task::spawn_blocking(move || settings_response(settings))
         .await
         .map_err(|error| AppError::InternalError(format!("settings task: {error}")))?;
     Ok(Json(ApiResponse::success(response)))
@@ -241,6 +288,9 @@ pub struct StartWbppRunRequest {
     /// Display label for the progress line ("project Bubble").
     #[serde(default)]
     pub scope_label: Option<String>,
+    /// Where this run's folder goes, overriding the settings for one run.
+    #[serde(default)]
+    pub work_root: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -250,9 +300,11 @@ pub struct WbppRunStatusResponse {
 }
 
 /// The install a run would use, or why it cannot start.
-fn resolve_install(state: &AppState) -> Result<(PixInsightInstall, DisplayPlan), AppError> {
-    let binary = configured_binary(state)?;
-    let detection = detect(binary.as_deref());
+fn resolve_install(
+    state: &AppState,
+) -> Result<(PixInsightInstall, DisplayPlan, PixInsightSettings), AppError> {
+    let settings = configured(state)?;
+    let detection = detect(settings.binary.as_deref());
     let install = match detection.install {
         Some(install) => install,
         None => {
@@ -280,7 +332,7 @@ fn resolve_install(state: &AppState) -> Result<(PixInsightInstall, DisplayPlan),
                 .into(),
         ));
     }
-    Ok((install, display))
+    Ok((install, display, settings))
 }
 
 /// A folder name for a run: the scope, then the time, so runs sort.
@@ -358,12 +410,25 @@ pub async fn start_wbpp_run(
             )));
         }
     }
-    let (install, display) = {
+    let (install, display, settings) = {
         let state = state.clone();
         tokio::task::spawn_blocking(move || resolve_install(&state))
             .await
             .map_err(|error| AppError::InternalError(format!("detect task: {error}")))??
     };
+    let root = run_root(
+        req.work_root.as_deref(),
+        settings.runs_dir.as_deref(),
+        ctx.export_dir.as_deref(),
+        &ctx.cache_dir_path,
+        &ctx.id,
+    );
+    if root.to_string_lossy().contains(',') {
+        return Err(AppError::BadRequest(format!(
+            "{} contains a comma, which WBPP's command line uses to separate parameters;              choose another run folder",
+            root.display()
+        )));
+    }
 
     let scope = req
         .scope_label
@@ -378,11 +443,13 @@ pub async fn start_wbpp_run(
         })));
     };
 
-    let work_dir = ctx.cache_dir_path.join("wbpp").join(run_dir_name(&scope));
+    let work_dir = root.join(run_dir_name(&scope));
     let output_dir = work_dir.join(OUTPUT_DIRECTORY);
+    let free_bytes = pixinsight::free_bytes(&root);
     update(&store, |progress| {
         progress.work_dir = work_dir.display().to_string();
         progress.output_dir = output_dir.display().to_string();
+        progress.free_bytes_at_start = free_bytes;
     });
 
     let options = ExportOptions {
@@ -739,6 +806,34 @@ mod tests {
         assert!(file_below(dir.path(), "../secret").is_err());
         assert!(file_below(dir.path(), "/etc/passwd").is_err());
         assert!(file_below(dir.path(), "wbpp-out/master/none.xisf").is_err());
+    }
+
+    #[test]
+    fn the_run_root_prefers_the_request_then_settings_then_export_then_cache() {
+        let cache = Path::new("/var/cache/psf-guard/db-1");
+        let export = Path::new("/mnt/nas/exports");
+        assert_eq!(
+            run_root(
+                Some(" /data/runs "),
+                Some("/srv/runs"),
+                Some(export),
+                cache,
+                "db-1"
+            ),
+            PathBuf::from("/data/runs/db-1")
+        );
+        assert_eq!(
+            run_root(None, Some("/srv/runs"), Some(export), cache, "db-1"),
+            PathBuf::from("/srv/runs/db-1")
+        );
+        assert_eq!(
+            run_root(Some(""), None, Some(export), cache, "db-1"),
+            PathBuf::from("/mnt/nas/exports/wbpp")
+        );
+        assert_eq!(
+            run_root(None, None, None, cache, "db-1"),
+            PathBuf::from("/var/cache/psf-guard/db-1/wbpp")
+        );
     }
 
     #[test]

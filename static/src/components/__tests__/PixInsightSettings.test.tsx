@@ -32,6 +32,8 @@ const found: Settings = {
   },
   display: { kind: 'xvfb', path: '/usr/bin/xvfb-run' },
   ready: true,
+  runs_dir: null,
+  runs_dir_free_bytes: null,
 };
 
 const missing: Settings = {
@@ -39,11 +41,32 @@ const missing: Settings = {
   detection: { install: null, source: null, checked: ['/nope/PixInsight.sh'], problem: '/nope/PixInsight.sh is not a file' },
   display: { kind: 'own' },
   ready: false,
+  runs_dir: null,
+  runs_dir_free_bytes: null,
 };
 
 const ok = (data: Settings) => ({ success: true, data, error: null });
 
 describe('PixInsightSettings', () => {
+  it('saves a runs folder and shows the space free there', async () => {
+    let saved: unknown = null;
+    server.use(
+      http.get('/api/settings/pixinsight', () => HttpResponse.json(ok(found))),
+      http.put('/api/settings/pixinsight', async ({ request }) => {
+        saved = await request.json();
+        return HttpResponse.json(
+          ok({ ...found, runs_dir: '/data/wbpp-runs', runs_dir_free_bytes: 2.5 * 1024 ** 4 })
+        );
+      })
+    );
+    render(<PixInsightSettings />, { wrapper: wrapper() });
+    const runs = await screen.findByLabelText('WBPP runs folder');
+    fireEvent.change(runs, { target: { value: '/data/wbpp-runs' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(saved).toEqual({ binary: null, runs_dir: '/data/wbpp-runs' }));
+    expect(await screen.findByText(/2\.5 TiB free there now/)).toBeInTheDocument();
+  });
+
   it('describes what was found and how it will get a display', () => {
     expect(describePixInsight(found)).toBe(
       'WBPP 3.1.0 found at /opt/PixInsight/bin/PixInsight.sh, headless through xvfb-run.'
@@ -72,7 +95,9 @@ describe('PixInsightSettings', () => {
     expect(input).toHaveValue('/nope/PixInsight.sh');
     fireEvent.change(input, { target: { value: '/home/me/PixInsight/bin/PixInsight.sh' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(saved).toEqual({ binary: '/home/me/PixInsight/bin/PixInsight.sh' }));
+    await waitFor(() =>
+      expect(saved).toEqual({ binary: '/home/me/PixInsight/bin/PixInsight.sh', runs_dir: null })
+    );
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('WBPP 3.1.0 as configured'));
   });
 });

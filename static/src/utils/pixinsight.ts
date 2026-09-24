@@ -21,3 +21,10 @@ export function describePixInsight(settings: Settings): string {
   return `${version} ${where} at ${detection.install.binary}${screen}.`;
 }
 
+
+/** Free space as a person reads it. */
+export function formatFree(bytes: number): string {
+  if (bytes >= 1024 ** 4) return `${(bytes / 1024 ** 4).toFixed(1)} TiB`;
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+  return `${Math.round(bytes / 1024 ** 2)} MiB`;
+}

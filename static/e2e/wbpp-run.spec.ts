@@ -55,7 +55,7 @@ test.beforeEach(async ({ request }) => {
 });
 
 test.afterEach(async ({ request }) => {
-  await request.put('/api/settings/pixinsight', { data: { binary: null } });
+  await request.put('/api/settings/pixinsight', { data: { binary: null, runs_dir: null } });
   await resetDatabases(request);
 });
 
@@ -83,8 +83,17 @@ test('PixInsight settings report what is found and where it will draw', async ({
 test('a run writes the script for the install, launches it, and lists what it wrote', async ({
   request,
 }) => {
-  const configured = (await (await request.put('/api/settings/pixinsight', { data: { binary: fakeBinary } })).json()).data;
+  // Runs go where the settings say, below the database's slug, with the
+  // space free there reported; the cache is only the last resort.
+  const runsDir = path.join(tmpBase(), 'wbpp-runs');
+  const configured = (
+    await (
+      await request.put('/api/settings/pixinsight', { data: { binary: fakeBinary, runs_dir: runsDir } })
+    ).json()
+  ).data;
   test.skip(!configured.ready, 'no display and no xvfb-run on this machine');
+  expect(configured.runs_dir).toBe(runsDir);
+  expect(configured.runs_dir_free_bytes).toBeGreaterThan(0);
 
   const started = await request.post(`/api/db/${dbId}/wbpp/runs`, {
     data: {
@@ -116,6 +125,8 @@ test('a run writes the script for the install, launches it, and lists what it wr
     )
     .toBe(false);
   expect(progress.stage, JSON.stringify(progress)).toBe('complete');
+  expect(progress.work_dir.startsWith(path.join(runsDir, dbId) + path.sep)).toBe(true);
+  expect(progress.free_bytes_at_start).toBeGreaterThan(0);
   expect(progress.lights).toBe(3);
   expect(progress.exit_code).toBe(0);
   expect(progress.wbpp_elapsed).toBe('00:00:01.000');

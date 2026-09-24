@@ -23,7 +23,9 @@
   WeightedBatchPreprocessing on the server, against the frames where they
   are, headless (through `xvfb-run` on a server with no display). The
   dialog follows WBPP's own log and lists the masters as downloads when
-  it finishes. **Settings → Setups → PixInsight** names the install.
+  it finishes. **Settings → Setups → PixInsight** names the install and
+  the **runs folder**; without one, runs go under the database's export
+  directory, else the cache, and the free space there is shown.
 - **WBPP settings** for exports and runs: quality (WBPP's presets), Fast
   Integration, drizzle (2x or 3x), autocrop, and the light rejection
   algorithm, with defaults under **Settings → Setups → Export** and

@@ -1411,6 +1411,10 @@ export interface PixInsightSettings {
   display: DisplayPlan;
   /** Whether a run could start now. */
   ready: boolean;
+  /** The runs folder the settings name; absent means the database's export directory, else the cache. */
+  runs_dir: string | null;
+  /** Bytes free where that folder is, when known. */
+  runs_dir_free_bytes: number | null;
 }
 
 export interface WbppOutputFile {
@@ -1427,6 +1431,8 @@ export interface WbppRunProgress {
   scope: string;
   work_dir: string;
   output_dir: string;
+  /** Bytes free where the run folder is, when the run began. */
+  free_bytes_at_start: number | null;
   options: WbppOptions | null;
   frames: number;
   lights: number;
@@ -1460,6 +1466,8 @@ export interface StartWbppRunRequest {
   /** Further name=value WBPP parameters, passed as given. */
   extra_params?: string[];
   scope_label?: string;
+  /** Where this run's folder goes, overriding the settings for one run. */
+  work_root?: string;
 }
 
 /** How much of AstroBin's acquisition CSV to fill in. */
