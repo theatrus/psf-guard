@@ -15,9 +15,10 @@ function wrapper() {
   };
 }
 
+const wbpp = { quality: 'maximum', fast_integration: 'off', drizzle: 'off' };
 const current = (layout: 'standard' | 'wbpp') => ({
   success: true,
-  data: { default_layout: layout },
+  data: { default_layout: layout, wbpp },
   error: null,
 });
 
@@ -43,5 +44,27 @@ describe('ExportDefaultsSettings', () => {
     fireEvent.change(select, { target: { value: 'wbpp' } });
     await waitFor(() => expect(saved).toEqual({ default_layout: 'wbpp' }));
     await waitFor(() => expect(select).toHaveValue('wbpp'));
+  });
+
+  it('saves a WBPP default alongside the layout', async () => {
+    let saved: unknown = null;
+    server.use(
+      http.get('/api/settings/export', () => HttpResponse.json(current('standard'))),
+      http.put('/api/settings/export', async ({ request }) => {
+        saved = await request.json();
+        return HttpResponse.json({
+          success: true,
+          data: { default_layout: 'standard', wbpp: { ...wbpp, drizzle: '2x' } },
+          error: null,
+        });
+      })
+    );
+    render(<ExportDefaultsSettings />, { wrapper: wrapper() });
+    const drizzle = await screen.findByLabelText(/^Drizzle/);
+    fireEvent.change(drizzle, { target: { value: '2x' } });
+    await waitFor(() =>
+      expect(saved).toEqual({ default_layout: 'standard', wbpp: { ...wbpp, drizzle: '2x' } })
+    );
+    await waitFor(() => expect(drizzle).toHaveValue('2x'));
   });
 });

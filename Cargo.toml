@@ -87,7 +87,8 @@ reflink-copy = "0.1.30"
 # Platform memory probes for the occlusion-scan worker budget in
 # `concurrency` (both already in the tree transitively). Linux uses
 # /proc/meminfo and needs no crate.
-[target.'cfg(target_os = "macos")'.dependencies]
+[target.'cfg(unix)'.dependencies]
+# macOS memory probing, and signalling the process group a WBPP run starts.
 libc = "0.2"
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = [

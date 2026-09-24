@@ -564,6 +564,7 @@ mod tests {
             export: None,
             stacking: None,
             astrobin: None,
+            pixinsight: None,
             peers: Vec::new(),
         }
     }

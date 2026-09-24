@@ -465,6 +465,8 @@ pub struct DatabaseContext {
     pub import_job: crate::server::import_job::SharedImportJob,
     /// Per-DB singleton export job state (see `server::export_job`).
     pub export_job: crate::server::export_job::SharedExportJob,
+    /// Per-DB singleton WBPP run (see `server::wbpp_run`).
+    pub wbpp_run: crate::server::wbpp_run::SharedWbppRun,
     /// Database-wide, low-priority quality analysis state.
     pub quality_backfill: crate::server::quality_backfill::SharedQualityBackfill,
     /// Serializes publish/import for remotely posted images within one
@@ -792,6 +794,7 @@ impl DatabaseContext {
             spatial_metrics: Arc::new(RwLock::new(Default::default())),
             import_job: Arc::new(RwLock::new(Default::default())),
             export_job: Arc::new(RwLock::new(Default::default())),
+            wbpp_run: Arc::new(RwLock::new(Default::default())),
             quality_backfill: Arc::new(RwLock::new(Default::default())),
             image_import_mutex: Arc::new(TokioMutex::new(())),
         })
@@ -1982,6 +1985,7 @@ impl DatabaseContext {
             spatial_metrics: Arc::new(RwLock::new(Default::default())),
             import_job: Arc::new(RwLock::new(Default::default())),
             export_job: Arc::new(RwLock::new(Default::default())),
+            wbpp_run: Arc::new(RwLock::new(Default::default())),
             quality_backfill: Arc::new(RwLock::new(Default::default())),
             image_import_mutex: Arc::new(TokioMutex::new(())),
         }
@@ -2022,6 +2026,7 @@ impl Clone for DatabaseContext {
             spatial_metrics: self.spatial_metrics.clone(),
             import_job: self.import_job.clone(),
             export_job: self.export_job.clone(),
+            wbpp_run: self.wbpp_run.clone(),
             quality_backfill: self.quality_backfill.clone(),
             image_import_mutex: self.image_import_mutex.clone(),
         }

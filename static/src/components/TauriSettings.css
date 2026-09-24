@@ -1848,3 +1848,33 @@
   flex: 1 1 12rem;
   min-width: 0;
 }
+
+.pixinsight-status {
+  margin: 0.4rem 0 0.6rem;
+  font-size: 0.88rem;
+}
+
+.pixinsight-status.is-ready {
+  color: var(--color-success, #1e8449);
+}
+
+.pixinsight-status.is-missing {
+  color: var(--color-warning, #b9770e);
+}
+
+.pixinsight-binary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.pixinsight-binary input {
+  flex: 1 1 18rem;
+  min-width: 0;
+  font-family: var(--font-mono, monospace);
+}
+
+.export-wbpp-defaults {
+  margin-top: 0.8rem;
+}

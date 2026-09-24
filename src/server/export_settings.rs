@@ -9,6 +9,7 @@ use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::commands::export::wbpp::WbppOptions;
 use crate::commands::export::ExportLayout;
 use crate::db_registry::{DbRegistry, ExportSettings};
 use crate::server::{
@@ -22,17 +23,26 @@ pub struct ExportSettingsResponse {
     /// The layout the export dialog starts from. Never absent: an
     /// unconfigured registry resolves to the standard layout.
     pub default_layout: ExportLayout,
+    /// The WBPP settings an export or an in-app run starts from. Never
+    /// absent: an unconfigured registry resolves to the defaults.
+    pub wbpp: WbppOptions,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateExportSettingsRequest {
     pub default_layout: ExportLayout,
+    /// Absent keeps the stored WBPP settings.
+    #[serde(default)]
+    pub wbpp: Option<WbppOptions>,
 }
 
 fn current_response(settings: Option<&ExportSettings>) -> ExportSettingsResponse {
     ExportSettingsResponse {
         default_layout: settings
             .and_then(|settings| settings.default_layout)
+            .unwrap_or_default(),
+        wbpp: settings
+            .and_then(|settings| settings.wbpp.clone())
             .unwrap_or_default(),
     }
 }
@@ -65,13 +75,28 @@ pub async fn update_export_settings(
     let _registry_guard = state.registry_write.lock().await;
     let mut registry = DbRegistry::load_or_init(&path)
         .map_err(|error| AppError::InternalError(error.to_string()))?;
-    // Standard is what an absent block already means; storing nothing keeps
-    // the registry clean for older builds reading the same file.
-    registry.export = match request.default_layout {
+    // The defaults are what an absent block already means; storing nothing
+    // keeps the registry clean for older builds reading the same file.
+    let wbpp = request
+        .wbpp
+        .or_else(|| {
+            registry
+                .export
+                .as_ref()
+                .and_then(|export| export.wbpp.clone())
+        })
+        .filter(|wbpp| *wbpp != WbppOptions::default());
+    let default_layout = match request.default_layout {
         ExportLayout::Standard => None,
-        layout => Some(ExportSettings {
-            default_layout: Some(layout),
-        }),
+        layout => Some(layout),
+    };
+    registry.export = if default_layout.is_none() && wbpp.is_none() {
+        None
+    } else {
+        Some(ExportSettings {
+            default_layout,
+            wbpp,
+        })
     };
     registry
         .save(&path)

@@ -16,6 +16,10 @@ import type {
   ApiResponse,
   ExportLayout,
   ExportSettings,
+  WbppOptions,
+  PixInsightSettings,
+  WbppRunStatus,
+  StartWbppRunRequest,
   AstroBinDetail,
   AstroBinExport,
   AstroBinFilterEntry,
@@ -340,14 +344,72 @@ export const apiClient = {
     return data.data;
   },
 
-  updateExportSettings: async (defaultLayout: ExportLayout): Promise<ExportSettings> => {
+  updateExportSettings: async (update: {
+    default_layout: ExportLayout;
+    /** Absent keeps the stored WBPP settings. */
+    wbpp?: WbppOptions;
+  }): Promise<ExportSettings> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.put<ApiResponse<ExportSettings>>('/settings/export', {
-      default_layout: defaultLayout,
-    });
+    const { data } = await apiInstance.put<ApiResponse<ExportSettings>>('/settings/export', update);
     if (!data.data) throw new Error(data.error || 'Failed to update export settings');
     return data.data;
   },
+
+  getPixInsightSettings: async (): Promise<PixInsightSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<PixInsightSettings>>('/settings/pixinsight');
+    if (!data.data) throw new Error(data.error || 'Failed to get PixInsight settings');
+    return data.data;
+  },
+
+  /** Names the PixInsight executable; null means look in the standard places. */
+  updatePixInsightSettings: async (binary: string | null): Promise<PixInsightSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<PixInsightSettings>>(
+      '/settings/pixinsight',
+      { binary }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to update PixInsight settings');
+    return data.data;
+  },
+
+  /** Stack a project or target with WBPP on the server. Management-gated server-side. */
+  startWbppRun: async (dbId: string, request: StartWbppRunRequest): Promise<WbppRunStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<WbppRunStatus>>(
+      dbPath(dbId, '/wbpp/runs'),
+      request
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to start the WBPP run');
+    return data.data;
+  },
+
+  getWbppRun: async (dbId: string): Promise<WbppRunStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<WbppRunStatus>>(
+      dbPath(dbId, '/wbpp/runs/current')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read the WBPP run');
+    return data.data;
+  },
+
+  cancelWbppRun: async (dbId: string): Promise<WbppRunStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.delete<ApiResponse<WbppRunStatus>>(
+      dbPath(dbId, '/wbpp/runs/current')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to stop the WBPP run');
+    return data.data;
+  },
+
+  /** Absolute URL of a file the current WBPP run wrote, by its path below the run folder. */
+  wbppRunFileUrl: (dbId: string, path: string): string =>
+    withServerUrl(
+      `/api${dbPath(dbId, '/wbpp/runs/current/files/')}${path
+        .split('/')
+        .map(encodeURIComponent)
+        .join('/')}`
+    ),
 
   getAstroBinSettings: async (): Promise<AstroBinSettings> => {
     const apiInstance = await getApi();
@@ -857,6 +919,8 @@ export const apiClient = {
       placement?: import('./types').ExportPlacement;
       local_root?: string;
       remote_root?: string;
+      /** The WBPP settings the runner passes; sent only with the WBPP layout. */
+      wbpp?: WbppOptions;
     }
   ): string => {
     const query = new URLSearchParams();
@@ -864,6 +928,13 @@ export const apiClient = {
     if (params.target_id !== undefined) query.set('target_id', String(params.target_id));
     if (params.include_pending) query.set('include_pending', 'true');
     if (params.layout && params.layout !== 'standard') query.set('layout', params.layout);
+    if (params.layout === 'wbpp' && params.wbpp) {
+      query.set('wbpp_quality', params.wbpp.quality);
+      query.set('wbpp_fast_integration', params.wbpp.fast_integration);
+      query.set('wbpp_drizzle', params.wbpp.drizzle);
+      if (params.wbpp.autocrop !== undefined) query.set('wbpp_autocrop', String(params.wbpp.autocrop));
+      if (params.wbpp.rejection) query.set('wbpp_rejection', params.wbpp.rejection);
+    }
     if (params.placement === 'reference') {
       query.set('placement', 'reference');
       if (params.local_root) query.set('local_root', params.local_root);

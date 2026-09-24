@@ -560,6 +560,8 @@ export interface ExportChoice {
   local_root?: string;
   /** For a referenced export: that same folder as PixInsight's machine sees it. */
   remote_root?: string;
+  /** The WBPP settings the runner passes; meaningful for the WBPP layout. */
+  wbpp?: WbppOptions;
 }
 
 export interface StackSkyOrientation {
@@ -1346,9 +1348,118 @@ export interface StackAutomationSettings {
   max_delay_minutes: number;
 }
 
+/** How hard WBPP works at local normalization: its own presets. */
+export type WbppQuality = 'maximum' | 'good' | 'fast';
+/** Fast Integration of the light groups; WBPP switches groups of 150+ frames to it on its own unless told off. */
+export type WbppFastIntegration = 'off' | 'auto' | 'on';
+export type WbppDrizzle = 'off' | '2x' | '3x';
+export type WbppRejection =
+  | 'percentile_clip'
+  | 'winsorized_sigma'
+  | 'linear_fit'
+  | 'esd'
+  | 'rcr'
+  | 'auto';
+
+/** What a WBPP run is asked for beyond the frames. */
+export interface WbppOptions {
+  quality: WbppQuality;
+  fast_integration: WbppFastIntegration;
+  drizzle: WbppDrizzle;
+  /** Absent leaves WBPP's default (on). */
+  autocrop?: boolean;
+  /** Absent leaves WBPP's default (automatic). */
+  rejection?: WbppRejection;
+}
+
+export const DEFAULT_WBPP_OPTIONS: WbppOptions = {
+  quality: 'maximum',
+  fast_integration: 'off',
+  drizzle: 'off',
+};
+
 export interface ExportSettings {
   /** The layout the export dialog starts from. */
   default_layout: ExportLayout;
+  /** The WBPP settings an export or an in-app run starts from. */
+  wbpp: WbppOptions;
+}
+
+export interface PixInsightInstall {
+  binary: string;
+  root: string;
+  bpp_main: string;
+  wbpp_version: string | null;
+}
+
+export interface PixInsightDetection {
+  install: PixInsightInstall | null;
+  source: 'configured' | 'detected' | null;
+  /** The places tried, in order. */
+  checked: string[];
+  /** Why a configured path was not taken. */
+  problem: string | null;
+}
+
+/** How PixInsight gets the display it needs on the server. */
+export type DisplayPlan = { kind: 'own' } | { kind: 'xvfb'; path: string } | { kind: 'missing' };
+
+export interface PixInsightSettings {
+  /** The executable the settings name, if any. */
+  binary: string | null;
+  detection: PixInsightDetection;
+  display: DisplayPlan;
+  /** Whether a run could start now. */
+  ready: boolean;
+}
+
+export interface WbppOutputFile {
+  /** Below the run's output folder, with forward slashes. */
+  path: string;
+  size_bytes: number;
+  kind: 'master' | 'calibrated' | 'registered' | 'log' | 'other';
+}
+
+export interface WbppRunProgress {
+  running: boolean;
+  /** `planning`, `launching`, `running`, `complete`, `error`, `cancelled`, or empty. */
+  stage: string;
+  scope: string;
+  work_dir: string;
+  output_dir: string;
+  options: WbppOptions | null;
+  frames: number;
+  lights: number;
+  missing_files: number;
+  command: string | null;
+  pid: number | null;
+  started_at: number | null;
+  finished_at: number | null;
+  exit_code: number | null;
+  wbpp_stage: string | null;
+  wbpp_steps: number;
+  wbpp_elapsed: string | null;
+  log_path: string | null;
+  log_tail: string[];
+  log_errors: string[];
+  outputs: WbppOutputFile[];
+  error: string | null;
+}
+
+export interface WbppRunStatus {
+  started: boolean;
+  progress: WbppRunProgress;
+}
+
+export interface StartWbppRunRequest {
+  project_id?: number;
+  target_id?: number;
+  include_pending: boolean;
+  filter_name?: string;
+  options: WbppOptions;
+  /** Further name=value WBPP parameters, passed as given. */
+  extra_params?: string[];
+  scope_label?: string;
 }
 
 /** How much of AstroBin's acquisition CSV to fill in. */

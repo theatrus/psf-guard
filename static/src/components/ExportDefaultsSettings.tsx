@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
-import type { ExportLayout } from '../api/types';
+import type { ExportLayout, WbppOptions } from '../api/types';
+import WbppOptionsFields from './WbppOptionsFields';
 
 /**
  * The export default: which layout the export dialog starts from. Server-wide,
@@ -15,7 +16,8 @@ export default function ExportDefaultsSettings() {
   });
 
   const save = useMutation({
-    mutationFn: (layout: ExportLayout) => apiClient.updateExportSettings(layout),
+    mutationFn: (update: { default_layout: ExportLayout; wbpp?: WbppOptions }) =>
+      apiClient.updateExportSettings(update),
     onSuccess: (updated) => {
       queryClient.setQueryData(['export-settings'], updated);
     },
@@ -50,12 +52,29 @@ export default function ExportDefaultsSettings() {
           value={current.default_layout}
           aria-label="Default export layout"
           disabled={save.isPending}
-          onChange={(event) => save.mutate(event.target.value as ExportLayout)}
+          onChange={(event) =>
+            save.mutate({ default_layout: event.target.value as ExportLayout })
+          }
         >
           <option value="standard">Grouped by target</option>
           <option value="wbpp">WBPP</option>
         </select>
       </label>
+      <div className="review-preference export-wbpp-defaults">
+        <span>
+          WBPP settings
+          <small>
+            What a WBPP export&apos;s runner and an in-app run start from. Every export and
+            run still offers them.
+          </small>
+        </span>
+      </div>
+      <WbppOptionsFields
+        value={current.wbpp}
+        idPrefix="default-wbpp"
+        disabled={save.isPending}
+        onChange={(wbpp) => save.mutate({ default_layout: current.default_layout, wbpp })}
+      />
       {save.isError && <p className="error-text">{(save.error as Error).message}</p>}
     </div>
   );

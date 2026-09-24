@@ -1,0 +1,118 @@
+.wbpp-run-dialog {
+  width: min(46rem, calc(100vw - 2rem));
+}
+
+.wbpp-run-intro,
+.wbpp-run-muted,
+.wbpp-run-step {
+  margin: 0 0 0.75rem;
+}
+
+.wbpp-run-intro,
+.wbpp-run-muted {
+  color: var(--color-text-muted);
+}
+
+.wbpp-run-pixinsight {
+  margin: 0 0 0.75rem;
+  font-size: 0.88rem;
+}
+
+.wbpp-run-pixinsight.is-ready {
+  color: var(--color-success, #1e8449);
+}
+
+.wbpp-run-pixinsight.is-missing {
+  color: var(--color-warning, #b9770e);
+}
+
+.wbpp-run-pixinsight .link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-primary, #2d6cdf);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+
+.wbpp-run-dialog .export-layout-options {
+  margin-bottom: 0.9rem;
+}
+
+.wbpp-run-extra {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.wbpp-run-extra > span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.wbpp-run-extra small {
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+}
+
+.wbpp-run-extra textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-mono, monospace);
+}
+
+.wbpp-run-error {
+  margin: 0 0 0.75rem;
+  color: var(--color-error, #c0392b);
+}
+
+.wbpp-run-progress {
+  margin-top: 0.5rem;
+}
+
+.wbpp-run-stage {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 0.5rem;
+}
+
+.wbpp-run-elapsed {
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.wbpp-run-log {
+  max-height: 14rem;
+  overflow: auto;
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--color-border, #444);
+  border-radius: 6px;
+  background: var(--color-bg-input, rgba(0, 0, 0, 0.2));
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.wbpp-run-log-errors {
+  margin: 0 0 0.6rem;
+  padding-left: 1.2rem;
+  color: var(--color-error, #c0392b);
+  font-size: 0.82rem;
+}
+
+.wbpp-run-results h4 {
+  margin: 0.4rem 0 0.3rem;
+}
+
+.wbpp-run-files {
+  margin: 0 0 0.6rem;
+  padding-left: 1.2rem;
+}
+
+.wbpp-run-files small {
+  color: var(--color-text-muted);
+}

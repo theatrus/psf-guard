@@ -2175,6 +2175,7 @@ pub async fn export_archive_route(
         query.remote_root.clone(),
         options.layout,
     )?;
+    let wbpp_options = query.wbpp_options();
 
     // Plan on a blocking thread: it queries the DB and walks the image dirs.
     // Use a DEDICATED read-only connection — the walk can take tens of
@@ -2254,14 +2255,17 @@ pub async fn export_archive_route(
         // inexpressible the way a comma in a local path can be.
         if layout == crate::commands::export::ExportLayout::Wbpp {
             use crate::commands::export::wbpp;
-            let run = wbpp::WbppRun::default();
-            let mut scripts = vec![
-                ("run-wbpp.sh", wbpp::shell_script(&plan, run, &files)),
-                ("run-wbpp.cmd", wbpp::batch_script(&plan, run, &files)),
+            let spec = wbpp::WbppScriptSpec {
+                run: wbpp::WbppRun::default(),
+                files,
+                options: wbpp_options,
+                bpp_main: None,
+            };
+            let scripts = [
+                ("run-wbpp.sh", wbpp::shell_script(&plan, &spec)),
+                ("run-wbpp.cmd", wbpp::batch_script(&plan, &spec)),
+                (wbpp::JS_RUNNER, wbpp::js_runner(&plan, &spec)),
             ];
-            if let Some(body) = wbpp::js_runner(&plan, run, &files) {
-                scripts.push((wbpp::JS_RUNNER, body));
-            }
             for (name, body) in scripts {
                 let entry =
                     ZipEntryBuilder::new(name.into(), Compression::Stored).unix_permissions(0o755);
@@ -2392,12 +2396,13 @@ pub async fn export_local_route(
             // With frames placed, a runner that cannot be written is worth
             // logging but never worth failing the export over. A referenced
             // export IS the runner, so there it is the failure.
-            if let Err(error) = write_wbpp_scripts(
-                &plan,
-                std::path::Path::new(&dest),
-                wbpp::WbppRun::default(),
-                &files,
-            ) {
+            let spec = wbpp::WbppScriptSpec {
+                run: wbpp::WbppRun::default(),
+                files: files.clone(),
+                options: req.wbpp.clone().unwrap_or_default(),
+                bpp_main: None,
+            };
+            if let Err(error) = write_wbpp_scripts(&plan, std::path::Path::new(&dest), &spec) {
                 if !placement.places_files() {
                     return Err(error);
                 }
@@ -2475,6 +2480,7 @@ pub async fn start_server_export_route(
         options.layout,
     )?;
 
+    let wbpp_options = req.wbpp.clone().unwrap_or_default();
     let store = ctx.0.export_job.clone();
     if !export_job::try_begin(&store, dest.display().to_string(), scope) {
         return Ok(Json(ApiResponse::success(
@@ -2509,9 +2515,13 @@ pub async fn start_server_export_route(
                 // With frames placed, a runner that cannot be written is
                 // worth logging but never worth failing over. A referenced
                 // export IS the runner, so there it is the failure.
-                if let Err(error) =
-                    write_wbpp_scripts(&plan, &dest, wbpp::WbppRun::default(), &files)
-                {
+                let spec = wbpp::WbppScriptSpec {
+                    run: wbpp::WbppRun::default(),
+                    files: files.clone(),
+                    options: wbpp_options.clone(),
+                    bpp_main: None,
+                };
+                if let Err(error) = write_wbpp_scripts(&plan, &dest, &spec) {
                     if !placement.places_files() {
                         return Err(error);
                     }

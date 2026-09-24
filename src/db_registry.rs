@@ -402,6 +402,10 @@ pub struct DbRegistry {
     /// means no filter has an AstroBin id yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub astrobin: Option<AstroBinSettings>,
+    /// Where PixInsight is on this machine, for in-app WBPP runs. Additive
+    /// within registry v2; absent means the standard install path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pixinsight: Option<PixInsightSettings>,
 }
 
 /// What the AstroBin CSV export needs from the person: which equipment
@@ -474,6 +478,23 @@ pub struct ExportSettings {
     /// grouped-by-target tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_layout: Option<crate::commands::export::ExportLayout>,
+    /// The WBPP settings an export or an in-app run starts from. Absent
+    /// means the defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wbpp: Option<crate::commands::export::wbpp::WbppOptions>,
+}
+
+/// Where PixInsight is, for running WBPP from inside PSF Guard.
+///
+/// Lives in the registry beside the other process-global preferences: it is
+/// a property of the machine the server runs on, and the settings panel is
+/// where a person looks when a run says PixInsight was not found.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PixInsightSettings {
+    /// The PixInsight executable (`PixInsight.sh` on Linux). Absent means
+    /// look in each platform's standard place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
 }
 
 impl Default for DbRegistry {
@@ -488,6 +509,7 @@ impl Default for DbRegistry {
             export: None,
             stacking: None,
             astrobin: None,
+            pixinsight: None,
         }
     }
 }
@@ -992,6 +1014,7 @@ mod tests {
         let reg = DbRegistry {
             export: Some(ExportSettings {
                 default_layout: Some(crate::commands::export::ExportLayout::Wbpp),
+                wbpp: None,
             }),
             ..Default::default()
         };
