@@ -111,6 +111,10 @@ closes, and reopens it.
   causes are a group WBPP could not register, or calibration frames that
   do not match. PixInsight prints nothing to its console output in this
   mode, so the log is the record.
+- **`*** Error: No database files have been selected.`** is WBPP's plate
+  solver saying the server's PixInsight has no local star catalog. It
+  solves another way and the run goes on; the dialog shows every line WBPP
+  marks as an error, so this one appears even on a run that finished well.
 - **A comma in a path.** WBPP's command line separates parameters with
   commas, so a run folder or frame path with one cannot be expressed; PSF
   Guard refuses rather than mangles it.
