@@ -7965,7 +7965,8 @@ mod file_resolution_tests {
             None,
             None,
             None,
-            temp.path().join("cache").to_string_lossy().into_owned())
+            temp.path().join("cache").to_string_lossy().into_owned(),
+        )
         .unwrap();
         (ctx, image_roots)
     }
@@ -8216,7 +8217,8 @@ mod file_resolution_tests {
                 temp.path()
                     .join("cache-restarted")
                     .to_string_lossy()
-                    .into_owned())
+                    .into_owned(),
+            )
             .unwrap(),
         );
         let mut scheduler_image = image(r"C:\remote\repeated.fits", "");

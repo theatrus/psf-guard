@@ -421,7 +421,11 @@ fn publish_and_record(
         Ok(outcome) => outcome,
         Err(error) => PublishOutcome {
             state: "error".to_string(),
-            directory: process_dir.join(folder).join("master").display().to_string(),
+            directory: process_dir
+                .join(folder)
+                .join("master")
+                .display()
+                .to_string(),
             errors: vec![format!("{error:?}")],
             finished_at: Some(chrono::Utc::now().timestamp()),
             ..Default::default()
@@ -433,8 +437,9 @@ fn publish_and_record(
     {
         let conn = ctx.db();
         if let Ok(mut conn) = conn.lock()
-            && let Err(error) =
-                crate::server::exposure_groups::remember_process_folder(&mut conn, project_id, &name)
+            && let Err(error) = crate::server::exposure_groups::remember_process_folder(
+                &mut conn, project_id, &name,
+            )
         {
             tracing::warn!("remembering the process folder for project {project_id}: {error:?}");
         }
@@ -645,13 +650,19 @@ pub async fn start_wbpp_run(
         .await;
         // A run asked to save its masters does so before it is reported
         // done, so the outcome is there when the status turns.
-        if let (Ok("complete"), Some(folder), Some(process_dir)) =
-            (&outcome, publish_folder.as_deref(), job_ctx.process_dir.clone())
-        {
+        if let (Ok("complete"), Some(folder), Some(process_dir)) = (
+            &outcome,
+            publish_folder.as_deref(),
+            job_ctx.process_dir.clone(),
+        ) {
             update(&job_store, |progress| {
                 progress.publish = Some(PublishOutcome {
                     state: "running".to_string(),
-                    directory: process_dir.join(folder).join("master").display().to_string(),
+                    directory: process_dir
+                        .join(folder)
+                        .join("master")
+                        .display()
+                        .to_string(),
                     ..Default::default()
                 })
             });
@@ -925,7 +936,10 @@ pub async fn publish_wbpp_run(
     let (output_dir, project_id, ready) = {
         let s = ctx.0.wbpp_run.read().unwrap();
         let p = &s.progress;
-        let busy = p.publish.as_ref().is_some_and(|publish| publish.state == "running");
+        let busy = p
+            .publish
+            .as_ref()
+            .is_some_and(|publish| publish.state == "running");
         (
             PathBuf::from(&p.output_dir),
             p.project_id,
@@ -941,7 +955,11 @@ pub async fn publish_wbpp_run(
     update(&ctx.0.wbpp_run, |progress| {
         progress.publish = Some(PublishOutcome {
             state: "running".to_string(),
-            directory: process_dir.join(&folder).join("master").display().to_string(),
+            directory: process_dir
+                .join(&folder)
+                .join("master")
+                .display()
+                .to_string(),
             ..Default::default()
         })
     });
@@ -1099,10 +1117,20 @@ mod tests {
         assert_eq!(first.copied, 2);
         assert_eq!(
             first.directory,
-            process.path().join("2026-iris-v1/master").display().to_string()
+            process
+                .path()
+                .join("2026-iris-v1/master")
+                .display()
+                .to_string()
         );
-        assert!(process.path().join("2026-iris-v1/master/masterLight_L.xisf").is_file());
-        assert!(!process.path().join("2026-iris-v1/master/masterLight_L.xisf.part").exists());
+        assert!(process
+            .path()
+            .join("2026-iris-v1/master/masterLight_L.xisf")
+            .is_file());
+        assert!(!process
+            .path()
+            .join("2026-iris-v1/master/masterLight_L.xisf.part")
+            .exists());
 
         // The same masters again are recognised; a changed one is left alone.
         std::fs::write(out.join("master/masterBias.xisf"), vec![3u8; 250]).unwrap();
