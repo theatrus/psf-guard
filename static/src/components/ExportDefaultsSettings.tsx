@@ -38,43 +38,46 @@ export default function ExportDefaultsSettings() {
   return (
     <div className="export-defaults-settings">
       <h3>Export</h3>
-      <label className="review-preference">
-        <span>
-          Default layout
-          <small>
-            What the export dialog starts from. Grouped by target is PSF
-            Guard&apos;s own tree; WBPP gives each frame type one root for
-            PixInsight&apos;s WeightedBatchPreprocessing and writes its runner
-            scripts. Every export still offers both.
-          </small>
-        </span>
-        <select
-          value={current.default_layout}
-          aria-label="Default export layout"
-          disabled={save.isPending}
-          onChange={(event) =>
-            save.mutate({ default_layout: event.target.value as ExportLayout })
-          }
-        >
-          <option value="standard">Grouped by target</option>
-          <option value="wbpp">WBPP</option>
-        </select>
-      </label>
-      <div className="review-preference export-wbpp-defaults">
-        <span>
-          WBPP settings
-          <small>
-            What a WBPP export&apos;s runner and an in-app run start from. Every export and
-            run still offers them.
-          </small>
-        </span>
-      </div>
-      <WbppOptionsFields
-        value={current.wbpp}
-        idPrefix="default-wbpp"
+      <p className="review-preferences-note">
+        What every export starts from. Each export still offers all of these.
+      </p>
+      <fieldset
+        className="calibration-settings-group calibration-matching-group"
         disabled={save.isPending}
-        onChange={(wbpp) => save.mutate({ default_layout: current.default_layout, wbpp })}
-      />
+      >
+        <legend>Layout</legend>
+        <label className="review-preference">
+          <span>
+            Default layout
+            <small>
+              Grouped by target is PSF Guard&apos;s own tree; WBPP gives each frame type one
+              root for PixInsight&apos;s WeightedBatchPreprocessing and writes its runner
+              scripts.
+            </small>
+          </span>
+          <select
+            value={current.default_layout}
+            aria-label="Default export layout"
+            onChange={(event) =>
+              save.mutate({ default_layout: event.target.value as ExportLayout })
+            }
+          >
+            <option value="standard">Grouped by target</option>
+            <option value="wbpp">WBPP</option>
+          </select>
+        </label>
+      </fieldset>
+      <fieldset
+        className="calibration-settings-group calibration-matching-group"
+        disabled={save.isPending}
+      >
+        <legend>WBPP settings</legend>
+        <WbppOptionsFields
+          value={current.wbpp}
+          idPrefix="default-wbpp"
+          onChange={(wbpp) => save.mutate({ default_layout: current.default_layout, wbpp })}
+        />
+      </fieldset>
       {save.isError && <p className="error-text">{(save.error as Error).message}</p>}
     </div>
   );

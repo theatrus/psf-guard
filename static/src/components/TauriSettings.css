@@ -1862,19 +1862,105 @@
   color: var(--color-warning, #b9770e);
 }
 
-.pixinsight-binary {
+/* Setups: one card per panel, and one shape for every field row inside. */
+.tauri-settings .settings-setups {
+  display: grid;
+  gap: 18px;
+  max-width: 62rem;
+}
+
+.tauri-settings .settings-setups > * {
+  margin: 0;
+  padding: 18px 20px 20px;
+  border: 1px solid var(--color-border-secondary, var(--color-border, #444));
+  border-radius: 10px;
+  background: var(--color-bg-secondary, transparent);
+}
+
+.tauri-settings .settings-setups h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.tauri-settings .settings-setups .review-preferences-note,
+.tauri-settings .settings-setups .user-management-heading p,
+.tauri-settings .settings-setups .processing-setups-empty {
+  margin: 0 0 12px;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.tauri-settings .settings-setups .user-management-heading {
+  margin-bottom: 4px;
+}
+
+.tauri-settings .settings-setups .calibration-settings-group {
+  margin: 14px 0 0;
+}
+
+.tauri-settings .settings-setups .calibration-settings-group legend {
+  margin-bottom: 10px;
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.tauri-settings .settings-setups .calibration-matching-group .review-preference,
+.tauri-settings .settings-setups .wbpp-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(11rem, 19rem);
+  column-gap: 1.4rem;
+  align-items: start;
+}
+
+.tauri-settings .settings-setups .wbpp-option + .wbpp-option {
+  margin-top: 0.75rem;
+}
+
+/* A checkbox row reads left to right: the box, then its words. */
+.tauri-settings .settings-setups .review-preference:has(> input[type="checkbox"]) {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: center;
+  gap: 0.6rem;
 }
 
-.pixinsight-binary input {
-  flex: 1 1 18rem;
+.tauri-settings .settings-setups .calibration-matching-group input:not([type="checkbox"]),
+.tauri-settings .settings-setups .calibration-matching-group select,
+.tauri-settings .settings-setups .wbpp-option select {
+  box-sizing: border-box;
+  width: 100%;
   min-width: 0;
-  font-family: var(--font-mono, monospace);
+  justify-self: end;
 }
 
-.export-wbpp-defaults {
-  margin-top: 0.8rem;
+.tauri-settings .settings-setups .review-preference input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: auto;
+  margin-top: 0.2rem;
+}
+
+.tauri-settings .settings-setups .calibration-matching-group input[type="number"] {
+  max-width: 8rem;
+}
+
+.tauri-settings .settings-setups .settings-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 14px;
+}
+
+.tauri-settings .settings-setups .pixinsight-status {
+  margin: 0 0 4px;
+}
+
+@media (max-width: 640px) {
+  .tauri-settings .settings-setups .calibration-matching-group .review-preference,
+  .tauri-settings .settings-setups .wbpp-option {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tauri-settings .settings-setups .review-preference:has(> input[type="checkbox"]) {
+    display: flex;
+  }
 }

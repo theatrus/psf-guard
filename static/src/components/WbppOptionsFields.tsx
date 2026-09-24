@@ -34,7 +34,10 @@ export default function WbppOptionsFields({ value, onChange, idPrefix = 'wbpp', 
       <label className="wbpp-option" htmlFor={id('quality')}>
         <span>
           Quality
-          <small>WBPP&apos;s own presets: how hard local normalization works.</small>
+          <small>
+            WBPP&apos;s own presets. Maximum: local normalization on, PSF Auto, every star.
+            Good: local normalization on, Moffat 4, 500 stars. Fast: no local normalization.
+          </small>
         </span>
         <select
           id={id('quality')}
@@ -42,9 +45,9 @@ export default function WbppOptionsFields({ value, onChange, idPrefix = 'wbpp', 
           disabled={disabled}
           onChange={(event) => set('quality', event.target.value as WbppOptions['quality'])}
         >
-          <option value="maximum">Maximum (local normalization, PSF Auto, every star)</option>
-          <option value="good">Good (local normalization, Moffat 4, 500 stars)</option>
-          <option value="fast">Fast (no local normalization)</option>
+          <option value="maximum">Maximum</option>
+          <option value="good">Good</option>
+          <option value="fast">Fast</option>
         </select>
       </label>
       <label className="wbpp-option" htmlFor={id('fast-integration')}>

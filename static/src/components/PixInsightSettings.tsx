@@ -53,8 +53,8 @@ export default function PixInsightSettings() {
     <div className="pixinsight-settings">
       <h3>PixInsight</h3>
       <p className="review-preferences-note">
-        Where PixInsight is on this server, for stacking a project with WBPP from the Overview.
-        Leave the path empty to look in the standard places.
+        Where PixInsight is on this server, for stacking a project with WBPP from the Overview,
+        and where its runs write.
       </p>
       <p
         className={`pixinsight-status${current.ready ? ' is-ready' : ' is-missing'}`}
@@ -62,37 +62,53 @@ export default function PixInsightSettings() {
       >
         {describePixInsight(current)}
       </p>
-      <div className="pixinsight-binary">
-        <input
-          type="text"
-          aria-label="PixInsight executable"
-          placeholder="/opt/PixInsight/bin/PixInsight.sh"
-          value={draft ?? ''}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && changed) submit();
-          }}
-        />
-      </div>
-      <p className="review-preferences-note">
-        Where runs put their script and WBPP&apos;s output. A run writes gigabytes, so pick a
-        disk with room; empty means the database&apos;s export directory when it has one, else
-        the cache.
-        {current.runs_dir && current.runs_dir_free_bytes != null && (
-          <> {formatFree(current.runs_dir_free_bytes)} free there now.</>
-        )}
-      </p>
-      <div className="pixinsight-binary">
-        <input
-          type="text"
-          aria-label="WBPP runs folder"
-          placeholder="/data/wbpp-runs"
-          value={runsDraft ?? ''}
-          onChange={(event) => setRunsDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && changed) submit();
-          }}
-        />
+      <fieldset className="calibration-settings-group calibration-matching-group">
+        <legend>Install</legend>
+        <label className="review-preference">
+          <span>
+            Executable
+            <small>
+              <code>PixInsight.sh</code> under <code>bin/</code> on Linux, the binary inside the
+              app bundle on macOS, <code>PixInsight.exe</code> on Windows. Empty looks in the
+              standard places.
+            </small>
+          </span>
+          <input
+            type="text"
+            aria-label="PixInsight executable"
+            placeholder="/opt/PixInsight/bin/PixInsight.sh"
+            value={draft ?? ''}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && changed) submit();
+            }}
+          />
+        </label>
+        <label className="review-preference">
+          <span>
+            WBPP runs folder
+            <small>
+              Where runs put their script and WBPP&apos;s output; a run writes gigabytes, so pick
+              a disk with room. Empty means the database&apos;s export directory when it has
+              one, else the cache.
+              {current.runs_dir && current.runs_dir_free_bytes != null && (
+                <> {formatFree(current.runs_dir_free_bytes)} free there now.</>
+              )}
+            </small>
+          </span>
+          <input
+            type="text"
+            aria-label="WBPP runs folder"
+            placeholder="/data/wbpp-runs"
+            value={runsDraft ?? ''}
+            onChange={(event) => setRunsDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && changed) submit();
+            }}
+          />
+        </label>
+      </fieldset>
+      <div className="settings-actions">
         <button
           type="button"
           className="header-button"
