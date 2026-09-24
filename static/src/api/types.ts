@@ -79,6 +79,8 @@ export interface ExposureGroup {
 
 export interface ProjectProcessingSettings {
   split_exposure_groups: boolean;
+  /** The folder below the process directory this project's masters were last saved to. */
+  process_folder?: string;
 }
 
 export interface Image {
@@ -1450,6 +1452,19 @@ export interface WbppRunProgress {
   log_errors: string[];
   outputs: WbppOutputFile[];
   error: string | null;
+  project_id: number | null;
+  /** The masters' save below the process directory, when asked for. */
+  publish: WbppPublishOutcome | null;
+}
+
+export interface WbppPublishOutcome {
+  state: 'running' | 'complete' | 'error';
+  directory: string;
+  copied: number;
+  skipped_existing: number;
+  conflicts: string[];
+  errors: string[];
+  finished_at: number | null;
 }
 
 export interface WbppRunStatus {
@@ -1468,6 +1483,8 @@ export interface StartWbppRunRequest {
   scope_label?: string;
   /** Where this run's folder goes, overriding the settings for one run. */
   work_root?: string;
+  /** Save the masters to `<process_dir>/<folder>/master/` when the run finishes. */
+  publish_folder?: string;
 }
 
 /** How much of AstroBin's acquisition CSV to fill in. */
@@ -1601,6 +1618,8 @@ export interface DatabaseSummary {
    * UI offers a server export that runs without database management.
    */
   export_directory?: string;
+  /** Where this rig's finished work lives; a WBPP run's masters can be saved below it. */
+  process_directory?: string;
 }
 
 /** What one export placed, and how. */

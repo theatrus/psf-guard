@@ -557,6 +557,7 @@ mod tests {
                 reject_archive: None,
                 remote_image_upload: None,
                 export_dir: None,
+                process_dir: None,
             }],
             active_db_id: None,
             astrometry: None,

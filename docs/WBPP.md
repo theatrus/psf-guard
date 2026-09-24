@@ -105,6 +105,25 @@ is reported as failed, with the last error WBPP logged.
 The status line on the Overview keeps following the run after the dialog
 closes, and reopens it.
 
+### Keep the masters with your finished work
+
+Most people keep finished work per rig, beside the frames: a `_Process`
+folder next to `_Source`, with one folder per processing project and the
+WBPP masters in a `master/` folder inside it. PSF Guard can put a run's
+masters there. Give the database a **process directory** under **Settings
+→ Databases** (the rig's `_Process` folder), and the run dialog offers
+**Save the masters**: name the project's folder, and the masters are
+copied to `<process directory>/<folder>/master/`. Tick **Save the masters
+when done** before a run to have it happen as the run ends, or press
+**Save masters** afterwards.
+
+The folder name is remembered per project, so the next run of the same
+project offers it again. Nothing already in the folder is overwritten: a
+file already there with the same size is taken as the same file and
+skipped, one with a different size is left alone and named in the
+outcome. Only the `master/` files are copied; the calibrated and
+registered frames stay in the run folder.
+
 ## What can go wrong
 
 - **PixInsight not found.** The settings panel lists where it looked. Name

@@ -117,3 +117,39 @@
 .wbpp-run-files small {
   color: var(--color-text-muted);
 }
+
+.wbpp-run-publish {
+  margin: 0.4rem 0 0.8rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--color-border-primary, var(--color-border, #444));
+  border-radius: 6px;
+}
+
+.wbpp-run-publish h4 {
+  margin: 0 0 0.4rem;
+}
+
+.wbpp-run-publish-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: flex-end;
+}
+
+.wbpp-run-publish-row label {
+  flex: 1 1 16rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.wbpp-run-publish-row label span {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+}
+
+.wbpp-run-publish-row input {
+  width: 100%;
+  box-sizing: border-box;
+}

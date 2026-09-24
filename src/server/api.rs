@@ -411,6 +411,10 @@ pub struct DatabaseSummary {
     /// UI offers a server export that runs without database management.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub export_directory: Option<String>,
+    /// Where this rig's finished work lives; a WBPP run's masters can be
+    /// saved below it. When present the run dialog offers the save.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_directory: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -989,6 +993,9 @@ pub struct UpdateDatabaseRequest {
     /// New export directory. `Some("")` clears it; absent leaves it alone.
     #[serde(default)]
     pub export_dir: Option<String>,
+    /// New process directory. `Some("")` clears it; absent leaves it alone.
+    #[serde(default)]
+    pub process_dir: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

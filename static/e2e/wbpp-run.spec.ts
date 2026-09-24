@@ -95,6 +95,13 @@ test('a run writes the script for the install, launches it, and lists what it wr
   expect(configured.runs_dir).toBe(runsDir);
   expect(configured.runs_dir_free_bytes).toBeGreaterThan(0);
 
+  // The database's process directory is where finished work lives; a run
+  // can save its masters there as it ends.
+  const processDir = path.join(tmpBase(), '_Process');
+  const updated = await request.put(`/api/databases/${dbId}`, { data: { process_dir: processDir } });
+  expect(updated.ok()).toBe(true);
+  expect((await updated.json()).data.process_directory).toBe(processDir);
+
   const started = await request.post(`/api/db/${dbId}/wbpp/runs`, {
     data: {
       project_id: 1,
@@ -102,6 +109,7 @@ test('a run writes the script for the install, launches it, and lists what it wr
       options: { quality: 'good', fast_integration: 'off', drizzle: '2x', autocrop: false },
       extra_params: ['maxStars=500'],
       scope_label: 'Project Alpha',
+      publish_folder: '2026-alpha-v1',
     },
   });
   expect(started.ok()).toBe(true);
@@ -132,6 +140,33 @@ test('a run writes the script for the install, launches it, and lists what it wr
   expect(progress.wbpp_elapsed).toBe('00:00:01.000');
   expect(progress.log_tail.join('\n')).toContain('End registration of light frames');
   expect(progress.outputs.map((f: { kind: string }) => f.kind)).toContain('master');
+
+  // The masters were saved as the run ended, the folder remembered for the
+  // project, and a second save finds them already there.
+  await expect
+    .poll(
+      async () =>
+        (await (await request.get(`/api/db/${dbId}/wbpp/runs/current`)).json()).data.progress.publish?.state,
+      { timeout: 15_000 }
+    )
+    .toBe('complete');
+  const saved = path.join(processDir, '2026-alpha-v1', 'master', 'masterLight_BIN-1_FILTER-B.xisf');
+  expect(fs.existsSync(saved)).toBe(true);
+  const remembered = await request.get(`/api/db/${dbId}/projects/1/processing-settings`);
+  expect((await remembered.json()).data.process_folder).toBe('2026-alpha-v1');
+  const again = await request.post(`/api/db/${dbId}/wbpp/runs/current/publish`, {
+    data: { folder: '2026-alpha-v1' },
+  });
+  expect(again.ok()).toBe(true);
+  await expect
+    .poll(
+      async () =>
+        (await (await request.get(`/api/db/${dbId}/wbpp/runs/current`)).json()).data.progress.publish,
+      { timeout: 15_000 }
+    )
+    .toMatchObject({ state: 'complete', copied: 0, skipped_existing: 1, conflicts: [] });
+  const bad = await request.post(`/api/db/${dbId}/wbpp/runs/current/publish`, { data: { folder: '..' } });
+  expect(bad.status()).toBe(400);
 
   // The master downloads, as does the script and the log; nothing above the run does.
   const master = await request.get(

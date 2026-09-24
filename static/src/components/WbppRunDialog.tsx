@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { WbppOptions, WbppOutputFile, WbppRunProgress } from '../api/types';
 import { useWbppRun } from '../hooks/useWbppRun';
+import { useAllDatabases } from '../hooks/useDatabases';
 import { openSettings } from '../utils/settingsIntent';
 import Dialog from './Dialog';
 import WbppOptionsFields from './WbppOptionsFields';
@@ -74,6 +75,33 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
   const run = useWbppRun(request.dbId);
   const progress = run.progress;
   const elapsed = useElapsed(progress);
+  const { data: databases } = useAllDatabases();
+  const processDir = databases?.find((db) => db.id === request.dbId)?.process_directory;
+  const projectId = request.scope.project_id ?? progress?.project_id ?? undefined;
+  const projectSettings = useQuery({
+    queryKey: ['db', request.dbId, 'project', projectId, 'processing-settings'],
+    queryFn: () => apiClient.getProjectProcessingSettings(request.dbId, projectId!),
+    enabled: projectId !== undefined,
+  });
+  // The folder the masters go to: what this project used last, else its name.
+  const [publishFolder, setPublishFolder] = useState<string | null>(null);
+  const [publishOnFinish, setPublishOnFinish] = useState(false);
+  useEffect(() => {
+    if (publishFolder !== null) return;
+    if (projectId !== undefined && projectSettings.isLoading) return;
+    setPublishFolder(projectSettings.data?.process_folder ?? request.label);
+  }, [publishFolder, projectId, projectSettings.isLoading, projectSettings.data, request.label]);
+  const publish = useMutation({
+    mutationFn: () => apiClient.publishWbppRun(request.dbId, (publishFolder ?? '').trim()),
+    onSuccess: (status) => {
+      queryClient.setQueryData(['db', request.dbId, 'wbpp-run'], status);
+      if (projectId !== undefined) {
+        void queryClient.invalidateQueries({
+          queryKey: ['db', request.dbId, 'project', projectId, 'processing-settings'],
+        });
+      }
+    },
+  });
 
   const [options, setOptions] = useState<WbppOptions>(defaultOptions);
   const [includePending, setIncludePending] = useState(true);
@@ -95,6 +123,9 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
           .filter(Boolean),
         scope_label: request.label,
         ...(workRoot.trim() ? { work_root: workRoot.trim() } : {}),
+        ...(publishOnFinish && processDir && (publishFolder ?? '').trim()
+          ? { publish_folder: (publishFolder ?? '').trim() }
+          : {}),
       }),
     onSuccess: (status) => {
       queryClient.setQueryData(['db', request.dbId, 'wbpp-run'], status);
@@ -235,6 +266,41 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
               onChange={(event) => setWorkRoot(event.target.value)}
             />
           </label>
+          {processDir ? (
+            <label className="export-dialog-option wbpp-run-publish-option">
+              <input
+                type="checkbox"
+                checked={publishOnFinish}
+                onChange={(event) => setPublishOnFinish(event.target.checked)}
+              />
+              <span>
+                <strong>Save the masters when done</strong>
+                <small>
+                  Copies WBPP&apos;s master files to a folder of this project under{' '}
+                  <code>{processDir}</code>. Nothing already there is overwritten.
+                </small>
+              </span>
+            </label>
+          ) : (
+            <p className="wbpp-run-muted">
+              To save masters beside your other finished work, give this database a process
+              directory under Settings → Databases.
+            </p>
+          )}
+          {processDir && publishOnFinish && (
+            <label className="wbpp-run-extra">
+              <span>
+                Folder under {processDir}
+                <small>The masters land in its <code>master/</code> subfolder.</small>
+              </span>
+              <input
+                type="text"
+                aria-label="Process folder"
+                value={publishFolder ?? ''}
+                onChange={(event) => setPublishFolder(event.target.value)}
+              />
+            </label>
+          )}
           {start.isError && <p className="wbpp-run-error">{(start.error as Error).message}</p>}
         </>
       )}
@@ -295,6 +361,58 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
                       ))}
                   </ul>
                 </>
+              )}
+              {processDir && (
+                <div className="wbpp-run-publish">
+                  <h4>Save the masters</h4>
+                  {progress.publish && (
+                    <p
+                      className={
+                        progress.publish.state === 'error' ? 'wbpp-run-error' : 'wbpp-run-muted'
+                      }
+                      role="status"
+                    >
+                      {progress.publish.state === 'running'
+                        ? `Copying the masters to ${progress.publish.directory}…`
+                        : `${progress.publish.copied} copied to ${progress.publish.directory}` +
+                          (progress.publish.skipped_existing > 0
+                            ? `, ${progress.publish.skipped_existing} already there`
+                            : '') +
+                          (progress.publish.conflicts.length > 0
+                            ? `; left alone, a different file was already there: ${progress.publish.conflicts.join(', ')}`
+                            : '') +
+                          (progress.publish.errors.length > 0
+                            ? `; failed: ${progress.publish.errors.join('; ')}`
+                            : '')}
+                    </p>
+                  )}
+                  <div className="wbpp-run-publish-row">
+                    <label>
+                      <span>Folder under {processDir}</span>
+                      <input
+                        type="text"
+                        aria-label="Process folder"
+                        value={publishFolder ?? ''}
+                        onChange={(event) => setPublishFolder(event.target.value)}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="header-button"
+                      disabled={
+                        publish.isPending ||
+                        progress.publish?.state === 'running' ||
+                        !(publishFolder ?? '').trim()
+                      }
+                      onClick={() => publish.mutate()}
+                    >
+                      Save masters
+                    </button>
+                  </div>
+                  {publish.isError && (
+                    <p className="wbpp-run-error">{(publish.error as Error).message}</p>
+                  )}
+                </div>
               )}
               <p className="wbpp-run-muted">
                 Run folder: <code>{progress.work_dir}</code>

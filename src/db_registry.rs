@@ -52,6 +52,11 @@ pub struct DbEntry {
     /// export is off and the UI offers the archive download instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub export_dir: Option<String>,
+    /// Where finished work for this rig lives, such as `_Process` beside its
+    /// `_Source`: a WBPP run's masters can be saved below it, one folder per
+    /// processing project. Absent means the save is not offered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_dir: Option<String>,
 }
 
 /// One paired client credential. Each pairing mints its own, so revoking a
@@ -641,6 +646,7 @@ impl DbRegistry {
                 reject_archive: None,
                 remote_image_upload: None,
                 export_dir: None,
+                process_dir: None,
             });
         }
         reg.save(path)?;
@@ -709,6 +715,7 @@ impl DbRegistry {
             reject_archive: None,
             remote_image_upload: None,
             export_dir: None,
+            process_dir: None,
         });
         Ok(self.databases.last().unwrap())
     }
@@ -947,6 +954,7 @@ mod tests {
                 ..Default::default()
             }),
             export_dir: None,
+            process_dir: None,
         });
         reg.save(&path).unwrap();
 

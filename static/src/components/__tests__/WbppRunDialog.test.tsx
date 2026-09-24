@@ -61,6 +61,8 @@ const idle: WbppRunProgress = {
   log_errors: [],
   outputs: [],
   error: null,
+  project_id: null,
+  publish: null,
 };
 
 const finished: WbppRunProgress = {
@@ -151,6 +153,59 @@ describe('WbppRunDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stack again' }));
     expect(screen.getByRole('button', { name: 'Start stacking' })).toBeInTheDocument();
     expect(screen.queryByText('Finished')).not.toBeInTheDocument();
+  });
+
+  it('saves the masters to the process directory, in the folder the project used last', async () => {
+    let published: unknown = null;
+    let progress = { ...finished, project_id: 1 };
+    server.use(
+      http.get('/api/settings/pixinsight', () => HttpResponse.json(ok(pixinsight))),
+      http.get('/api/databases', () =>
+        HttpResponse.json(
+          ok([
+            {
+              id: 'alpha',
+              name: 'Alpha',
+              database_path: '/db.sqlite',
+              image_directories: ['/frames'],
+              remote_image_upload: { enabled: false },
+              process_directory: '/mnt/nas/_ByTelescope/alpha/_Process',
+            },
+          ])
+        )
+      ),
+      http.get('/api/db/alpha/projects/1/processing-settings', () =>
+        HttpResponse.json(ok({ split_exposure_groups: false, process_folder: '2026-alpha-v1' }))
+      ),
+      http.get('/api/db/alpha/wbpp/runs/current', () =>
+        HttpResponse.json(ok({ started: false, progress }))
+      ),
+      http.post('/api/db/alpha/wbpp/runs/current/publish', async ({ request: req }) => {
+        published = await req.json();
+        progress = {
+          ...progress,
+          publish: {
+            state: 'complete',
+            directory: '/mnt/nas/_ByTelescope/alpha/_Process/2026-alpha-v1/master',
+            copied: 1,
+            skipped_existing: 0,
+            conflicts: [],
+            errors: [],
+            finished_at: 2_000,
+          },
+        };
+        return HttpResponse.json(ok({ started: false, progress }));
+      })
+    );
+    render(
+      <WbppRunDialog request={request} defaultOptions={DEFAULT_WBPP_OPTIONS} onClose={() => {}} />,
+      { wrapper: wrapper() }
+    );
+    const folder = await screen.findByLabelText('Process folder');
+    await waitFor(() => expect(folder).toHaveValue('2026-alpha-v1'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save masters' }));
+    await waitFor(() => expect(published).toEqual({ folder: '2026-alpha-v1' }));
+    expect(await screen.findByText(/1 copied to \/mnt\/nas\/_ByTelescope\/alpha\/_Process\/2026-alpha-v1\/master/)).toBeInTheDocument();
   });
 
   it('cannot start without PixInsight, and follows a run already under way', async () => {

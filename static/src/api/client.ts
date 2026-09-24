@@ -408,6 +408,17 @@ export const apiClient = {
     return data.data;
   },
 
+  /** Save the finished run's masters to `<process_dir>/<folder>/master/`. */
+  publishWbppRun: async (dbId: string, folder: string): Promise<WbppRunStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<WbppRunStatus>>(
+      dbPath(dbId, '/wbpp/runs/current/publish'),
+      { folder }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to save the masters');
+    return data.data;
+  },
+
   /** Absolute URL of a file the current WBPP run wrote, by its path below the run folder. */
   wbppRunFileUrl: (dbId: string, path: string): string =>
     withServerUrl(
@@ -576,6 +587,8 @@ export const apiClient = {
       };
       /** New export directory; empty string clears it. */
       export_dir?: string;
+      /** New process directory; empty string clears it. */
+      process_dir?: string;
     }
   ): Promise<DatabaseSummary> => {
     const apiInstance = await getApi();

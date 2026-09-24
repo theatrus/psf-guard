@@ -13,7 +13,10 @@ export function useWbppRun(dbId: string | null | undefined) {
     queryKey: ['db', dbId, 'wbpp-run'],
     queryFn: () => apiClient.getWbppRun(dbId!),
     enabled: !!dbId,
-    refetchInterval: (query) => (query.state.data?.progress.running ? 2000 : false),
+    refetchInterval: (query) => {
+      const progress = query.state.data?.progress;
+      return progress?.running || progress?.publish?.state === 'running' ? 2000 : false;
+    },
     refetchIntervalInBackground: true,
   });
 

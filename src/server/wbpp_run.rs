@@ -83,6 +83,28 @@ pub struct WbppRunProgress {
     /// What WBPP wrote, masters first, once it exited.
     pub outputs: Vec<OutputFile>,
     pub error: Option<String>,
+    /// The project the run stacked, when it was a project, so a save can
+    /// remember its folder.
+    pub project_id: Option<i32>,
+    /// The masters' save below the database's process directory: what was
+    /// asked for at the start, and how it went.
+    pub publish: Option<PublishOutcome>,
+}
+
+/// What happened to a run's masters when saved to the process directory.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PublishOutcome {
+    /// `running`, `complete`, or `error`.
+    pub state: String,
+    /// The folder the masters went to.
+    pub directory: String,
+    pub copied: usize,
+    /// Already there with the same size, so left alone.
+    pub skipped_existing: usize,
+    /// Already there with a different size; left alone and named here.
+    pub conflicts: Vec<String>,
+    pub errors: Vec<String>,
+    pub finished_at: Option<i64>,
 }
 
 #[derive(Debug, Default)]
@@ -291,6 +313,133 @@ pub struct StartWbppRunRequest {
     /// Where this run's folder goes, overriding the settings for one run.
     #[serde(default)]
     pub work_root: Option<String>,
+    /// Save the masters below the database's process directory when the run
+    /// finishes, in this folder (`<process_dir>/<folder>/master/`).
+    #[serde(default)]
+    pub publish_folder: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PublishRequest {
+    /// The folder below the process directory (`<process_dir>/<folder>/master/`).
+    pub folder: String,
+}
+
+/// A processing folder name as a person types it, kept to one path
+/// component: separators and control characters become `_`, and a name
+/// that is nothing but dots or spaces is refused.
+pub fn publish_folder_name(folder: &str) -> Result<String, AppError> {
+    let cleaned = sanitize_component(folder.trim());
+    if cleaned == "unnamed" || cleaned.is_empty() || cleaned.chars().all(|c| c == '.') {
+        return Err(AppError::BadRequest(
+            "name a folder for the masters, such as 2026-iris-v1".into(),
+        ));
+    }
+    Ok(cleaned)
+}
+
+/// Copy a run's `master/` files to `<process_dir>/<folder>/master/`,
+/// never over an existing file: one already there with the same size is
+/// taken as the same file and skipped, one with another size is left alone
+/// and reported. Each copy lands under a temporary name and is renamed
+/// into place, so a failed copy leaves no half file.
+pub fn publish_masters(
+    output_dir: &Path,
+    process_dir: &Path,
+    folder: &str,
+) -> Result<PublishOutcome, AppError> {
+    let folder = publish_folder_name(folder)?;
+    let destination = process_dir.join(&folder).join("master");
+    let source = output_dir.join("master");
+    let mut outcome = PublishOutcome {
+        state: "running".to_string(),
+        directory: destination.display().to_string(),
+        ..Default::default()
+    };
+    let entries = std::fs::read_dir(&source).map_err(|error| {
+        AppError::BadRequest(format!(
+            "the run has no master folder to save ({}: {error})",
+            source.display()
+        ))
+    })?;
+    std::fs::create_dir_all(&destination).map_err(|error| {
+        AppError::InternalError(format!("creating {}: {error}", destination.display()))
+    })?;
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .collect();
+    files.sort();
+    for file in files {
+        let Some(name) = file.file_name() else {
+            continue;
+        };
+        let target = destination.join(name);
+        let size = std::fs::metadata(&file).map(|meta| meta.len()).unwrap_or(0);
+        if let Ok(existing) = std::fs::metadata(&target) {
+            if existing.len() == size {
+                outcome.skipped_existing += 1;
+            } else {
+                outcome.conflicts.push(name.to_string_lossy().into_owned());
+            }
+            continue;
+        }
+        let part = destination.join(format!("{}.part", name.to_string_lossy()));
+        let copied = std::fs::copy(&file, &part).and_then(|_| std::fs::rename(&part, &target));
+        match copied {
+            Ok(()) => outcome.copied += 1,
+            Err(error) => {
+                let _ = std::fs::remove_file(&part);
+                outcome
+                    .errors
+                    .push(format!("{}: {error}", name.to_string_lossy()));
+            }
+        }
+    }
+    outcome.state = if outcome.errors.is_empty() {
+        "complete"
+    } else {
+        "error"
+    }
+    .to_string();
+    outcome.finished_at = Some(chrono::Utc::now().timestamp());
+    Ok(outcome)
+}
+
+/// Save the current run's masters and remember the folder for the project.
+/// Runs on a blocking thread and publishes its outcome into the progress.
+fn publish_and_record(
+    ctx: &crate::server::database_context::DatabaseContext,
+    store: &RwLock<WbppRunStore>,
+    output_dir: &Path,
+    process_dir: &Path,
+    folder: &str,
+    project_id: Option<i32>,
+) {
+    let outcome = match publish_masters(output_dir, process_dir, folder) {
+        Ok(outcome) => outcome,
+        Err(error) => PublishOutcome {
+            state: "error".to_string(),
+            directory: process_dir.join(folder).join("master").display().to_string(),
+            errors: vec![format!("{error:?}")],
+            finished_at: Some(chrono::Utc::now().timestamp()),
+            ..Default::default()
+        },
+    };
+    if outcome.state == "complete"
+        && let Some(project_id) = project_id
+        && let Ok(name) = publish_folder_name(folder)
+    {
+        let conn = ctx.db();
+        if let Ok(mut conn) = conn.lock()
+            && let Err(error) =
+                crate::server::exposure_groups::remember_process_folder(&mut conn, project_id, &name)
+        {
+            tracing::warn!("remembering the process folder for project {project_id}: {error:?}");
+        }
+    }
+    update(store, |progress| progress.publish = Some(outcome));
 }
 
 #[derive(Debug, Serialize)]
@@ -435,6 +584,19 @@ pub async fn start_wbpp_run(
         .clone()
         .filter(|label| !label.trim().is_empty())
         .unwrap_or_else(|| "selection".into());
+    let publish_folder = match req.publish_folder.as_deref().map(str::trim) {
+        Some(folder) if !folder.is_empty() => {
+            if ctx.process_dir.is_none() {
+                return Err(AppError::BadRequest(
+                    "This database has no process directory to save masters to. Set one \
+                     under Settings → Databases."
+                        .into(),
+                ));
+            }
+            Some(publish_folder_name(folder)?)
+        }
+        _ => None,
+    };
     let store = ctx.0.wbpp_run.clone();
     let Some(cancel) = try_begin(&store, scope.clone(), req.options.clone()) else {
         return Ok(Json(ApiResponse::success(WbppRunStatusResponse {
@@ -446,10 +608,12 @@ pub async fn start_wbpp_run(
     let work_dir = root.join(run_dir_name(&scope));
     let output_dir = work_dir.join(OUTPUT_DIRECTORY);
     let free_bytes = pixinsight::free_bytes(&root);
+    let project_id = req.project_id;
     update(&store, |progress| {
         progress.work_dir = work_dir.display().to_string();
         progress.output_dir = output_dir.display().to_string();
         progress.free_bytes_at_start = free_bytes;
+        progress.project_id = project_id;
     });
 
     let options = ExportOptions {
@@ -467,18 +631,45 @@ pub async fn start_wbpp_run(
 
     tokio::spawn(async move {
         let outcome = run(
-            job_ctx,
+            job_ctx.clone(),
             job_store.clone(),
             cancel,
             install,
             display,
             work_dir,
-            output_dir,
+            output_dir.clone(),
             options,
             wbpp_options,
             extra,
         )
         .await;
+        // A run asked to save its masters does so before it is reported
+        // done, so the outcome is there when the status turns.
+        if let (Ok("complete"), Some(folder), Some(process_dir)) =
+            (&outcome, publish_folder.as_deref(), job_ctx.process_dir.clone())
+        {
+            update(&job_store, |progress| {
+                progress.publish = Some(PublishOutcome {
+                    state: "running".to_string(),
+                    directory: process_dir.join(folder).join("master").display().to_string(),
+                    ..Default::default()
+                })
+            });
+            let folder = folder.to_string();
+            let publish_ctx = job_ctx.clone();
+            let publish_store = job_store.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                publish_and_record(
+                    &publish_ctx,
+                    &publish_store,
+                    &output_dir,
+                    &process_dir,
+                    &folder,
+                    project_id,
+                )
+            })
+            .await;
+        }
         match outcome {
             Ok(stage) => finish(&job_store, stage, None),
             Err(error) => {
@@ -715,6 +906,64 @@ pub async fn cancel_wbpp_run(
     })))
 }
 
+/// `POST /api/db/{db_id}/wbpp/runs/current/publish` — save the finished
+/// run's masters below the database's process directory.
+pub async fn publish_wbpp_run(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Json(request): Json<PublishRequest>,
+) -> Result<Json<ApiResponse<WbppRunStatusResponse>>, AppError> {
+    require_database_management_allowed(&state)?;
+    let Some(process_dir) = ctx.process_dir.clone() else {
+        return Err(AppError::BadRequest(
+            "This database has no process directory to save masters to. Set one under \
+             Settings → Databases."
+                .into(),
+        ));
+    };
+    let folder = publish_folder_name(&request.folder)?;
+    let (output_dir, project_id, ready) = {
+        let s = ctx.0.wbpp_run.read().unwrap();
+        let p = &s.progress;
+        let busy = p.publish.as_ref().is_some_and(|publish| publish.state == "running");
+        (
+            PathBuf::from(&p.output_dir),
+            p.project_id,
+            !p.running && p.stage == "complete" && !busy,
+        )
+    };
+    if !ready {
+        return Err(AppError::Conflict(
+            "the masters can be saved once a run has finished, and not while a save is under way"
+                .into(),
+        ));
+    }
+    update(&ctx.0.wbpp_run, |progress| {
+        progress.publish = Some(PublishOutcome {
+            state: "running".to_string(),
+            directory: process_dir.join(&folder).join("master").display().to_string(),
+            ..Default::default()
+        })
+    });
+    let publish_ctx = ctx.0.clone();
+    let publish_store = ctx.0.wbpp_run.clone();
+    tokio::task::spawn_blocking(move || {
+        publish_and_record(
+            &publish_ctx,
+            &publish_store,
+            &output_dir,
+            &process_dir,
+            &folder,
+            project_id,
+        )
+    });
+    let progress = progress_snapshot(&ctx.0.wbpp_run);
+    Ok(Json(ApiResponse::success(WbppRunStatusResponse {
+        started: progress.running,
+        progress,
+    })))
+}
+
 /// A path below the run's work folder, refused if it climbs out.
 fn file_below(work_dir: &Path, requested: &str) -> Result<PathBuf, AppError> {
     let relative = Path::new(requested);
@@ -834,6 +1083,45 @@ mod tests {
             run_root(None, None, None, cache, "db-1"),
             PathBuf::from("/var/cache/psf-guard/db-1/wbpp")
         );
+    }
+
+    #[test]
+    fn masters_are_saved_once_and_never_over_a_different_file() {
+        let run = tempfile::tempdir().unwrap();
+        let out = run.path().join("wbpp-out");
+        std::fs::create_dir_all(out.join("master")).unwrap();
+        std::fs::write(out.join("master/masterLight_L.xisf"), vec![1u8; 300]).unwrap();
+        std::fs::write(out.join("master/masterBias.xisf"), vec![2u8; 200]).unwrap();
+        let process = tempfile::tempdir().unwrap();
+
+        let first = publish_masters(&out, process.path(), " 2026-iris-v1 ").unwrap();
+        assert_eq!(first.state, "complete");
+        assert_eq!(first.copied, 2);
+        assert_eq!(
+            first.directory,
+            process.path().join("2026-iris-v1/master").display().to_string()
+        );
+        assert!(process.path().join("2026-iris-v1/master/masterLight_L.xisf").is_file());
+        assert!(!process.path().join("2026-iris-v1/master/masterLight_L.xisf.part").exists());
+
+        // The same masters again are recognised; a changed one is left alone.
+        std::fs::write(out.join("master/masterBias.xisf"), vec![3u8; 250]).unwrap();
+        let second = publish_masters(&out, process.path(), "2026-iris-v1").unwrap();
+        assert_eq!(second.copied, 0);
+        assert_eq!(second.skipped_existing, 1);
+        assert_eq!(second.conflicts, vec!["masterBias.xisf"]);
+        assert_eq!(
+            std::fs::metadata(process.path().join("2026-iris-v1/master/masterBias.xisf"))
+                .unwrap()
+                .len(),
+            200
+        );
+
+        assert!(publish_masters(&out, process.path(), "..").is_err());
+        assert!(publish_masters(&out, process.path(), "   ").is_err());
+        assert_eq!(publish_folder_name("Iris / v2").unwrap(), "Iris _ v2");
+        let empty = tempfile::tempdir().unwrap();
+        assert!(publish_masters(empty.path(), process.path(), "x").is_err());
     }
 
     #[test]

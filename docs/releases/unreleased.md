@@ -25,7 +25,10 @@
   dialog follows WBPP's own log and lists the masters as downloads when
   it finishes. **Settings → Setups → PixInsight** names the install and
   the **runs folder**; without one, runs go under the database's export
-  directory, else the cache, and the free space there is shown.
+  directory, else the cache, and the free space there is shown. A
+  database's new **process directory** (**Settings → Databases**) lets a
+  run save its masters beside your finished work, in a per-project folder
+  PSF Guard remembers, without overwriting anything already there.
 - **WBPP settings** for exports and runs: quality (WBPP's presets), Fast
   Integration, drizzle (2x or 3x), autocrop, and the light rejection
   algorithm, with defaults under **Settings → Setups → Export** and

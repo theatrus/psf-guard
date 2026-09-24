@@ -3816,6 +3816,7 @@ mod tests {
         let mut current = ProjectExposureGroups {
             settings: ProjectProcessingSettings {
                 split_exposure_groups: true,
+                process_folder: None,
             },
             by_image: HashMap::from([(1, short.clone()), (2, exposure_group("long", 300.0))]),
         };
@@ -3863,6 +3864,7 @@ mod tests {
         let current = ProjectExposureGroups {
             settings: ProjectProcessingSettings {
                 split_exposure_groups: true,
+                process_folder: None,
             },
             by_image: HashMap::from([(1, short.clone()), (2, exposure_group("long", 300.0))]),
         };

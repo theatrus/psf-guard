@@ -644,6 +644,10 @@ async fn run_server_internal(
             get(wbpp_run::get_wbpp_run).delete(wbpp_run::cancel_wbpp_run),
         )
         .route(
+            "/wbpp/runs/current/publish",
+            post(wbpp_run::publish_wbpp_run),
+        )
+        .route(
             "/wbpp/runs/current/files/{*path}",
             get(wbpp_run::get_wbpp_run_file),
         )

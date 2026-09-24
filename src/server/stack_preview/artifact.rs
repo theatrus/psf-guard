@@ -1435,8 +1435,8 @@ mod tests {
                 vec![image_root.to_string_lossy().into_owned()],
                 None,
                 None,
-                temp.path().join("cache").to_string_lossy().into_owned(),
-            )
+                None,
+                temp.path().join("cache").to_string_lossy().into_owned())
             .unwrap(),
         );
         let job_id = "a".repeat(64);
