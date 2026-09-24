@@ -24,6 +24,9 @@ use tower::ServiceExt;
 fn build_app(state: Arc<AppState>) -> Router {
     use axum::routing::put;
     let db_routes: Router<Arc<AppState>> = Router::new()
+        .route("/stats/overall", get(handlers::get_overall_stats))
+        .route("/projects/overview", get(handlers::get_projects_overview))
+        .route("/targets/overview", get(handlers::get_targets_overview))
         .route("/projects", get(handlers::list_projects))
         .route(
             "/projects/{project_id}",
@@ -223,6 +226,76 @@ fn state_with_management(dir: &std::path::Path) -> Arc<AppState> {
     state.set_registry_path(Some(registry_path));
     state.set_allow_database_management(true);
     state
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_empty_database_serves_zero_statistics() {
+    let dir = tempdir().unwrap();
+    let images = dir.path().join("incoming");
+    std::fs::create_dir_all(&images).unwrap();
+    let state = state_with_management(dir.path());
+
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        "/api/databases/create",
+        Some(serde_json::json!({
+            "name": "Sync destination",
+            "image_dirs": [images],
+            "backfill": false,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create response: {body}");
+    let slug = body["data"]["database"]["id"].as_str().unwrap();
+
+    // Overview requests start as soon as the catalog is registered, even
+    // before its first import or incoming NINA sync has produced any rows.
+    for wait in [false, true] {
+        if wait {
+            let progress = wait_for_import(&state, slug).await;
+            assert_eq!(progress["stage"], "complete", "{progress}");
+            assert_eq!(progress["outcome"]["imported"], 0);
+        }
+        let (status, body) = json_request(
+            build_app(state.clone()),
+            "GET",
+            &format!("/api/db/{slug}/stats/overall"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "statistics response: {body}");
+        for field in [
+            "total_images",
+            "accepted_images",
+            "rejected_images",
+            "pending_images",
+            "total_projects",
+            "active_projects",
+            "total_targets",
+            "active_targets",
+            "total_desired",
+            "files_found",
+            "files_missing",
+        ] {
+            assert_eq!(body["data"][field], 0, "{field}: {body}");
+        }
+        assert_eq!(body["data"]["unique_filters"], serde_json::json!([]));
+        for field in ["earliest", "latest", "span_days"] {
+            assert!(body["data"]["date_range"][field].is_null());
+        }
+    }
+    for route in ["projects/overview", "targets/overview"] {
+        let (status, body) = json_request(
+            build_app(state.clone()),
+            "GET",
+            &format!("/api/db/{slug}/{route}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{route}: {body}");
+        assert_eq!(body["data"], serde_json::json!([]));
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -1226,9 +1226,9 @@ impl<'a> Database<'a> {
         let mut stmt = self.conn.prepare(
             "SELECT 
                 COUNT(*) as total_images,
-                SUM(CASE WHEN gradingStatus = 1 THEN 1 ELSE 0 END) as accepted,
-                SUM(CASE WHEN gradingStatus = 2 THEN 1 ELSE 0 END) as rejected,
-                SUM(CASE WHEN gradingStatus = 0 THEN 1 ELSE 0 END) as pending,
+                COALESCE(SUM(CASE WHEN gradingStatus = 1 THEN 1 ELSE 0 END), 0) as accepted,
+                COALESCE(SUM(CASE WHEN gradingStatus = 2 THEN 1 ELSE 0 END), 0) as rejected,
+                COALESCE(SUM(CASE WHEN gradingStatus = 0 THEN 1 ELSE 0 END), 0) as pending,
                 MIN(acquireddate) as earliest_date,
                 MAX(acquireddate) as latest_date
              FROM acquiredimage 
@@ -1279,9 +1279,9 @@ impl<'a> Database<'a> {
         let mut stmt = self.conn.prepare(
             "SELECT 
                 COUNT(*) as total_images,
-                SUM(CASE WHEN gradingStatus = 1 THEN 1 ELSE 0 END) as accepted,
-                SUM(CASE WHEN gradingStatus = 2 THEN 1 ELSE 0 END) as rejected,
-                SUM(CASE WHEN gradingStatus = 0 THEN 1 ELSE 0 END) as pending,
+                COALESCE(SUM(CASE WHEN gradingStatus = 1 THEN 1 ELSE 0 END), 0) as accepted,
+                COALESCE(SUM(CASE WHEN gradingStatus = 2 THEN 1 ELSE 0 END), 0) as rejected,
+                COALESCE(SUM(CASE WHEN gradingStatus = 0 THEN 1 ELSE 0 END), 0) as pending,
                 MIN(acquireddate) as earliest_date,
                 MAX(acquireddate) as latest_date
              FROM acquiredimage",
@@ -1597,6 +1597,77 @@ impl<'a> Database<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_catalog_statistics_are_zero() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        let db = Database::new(&conn);
+
+        let stats = db.get_overall_statistics().unwrap();
+        assert_eq!(stats.total_images, 0);
+        assert_eq!(stats.accepted_images, 0);
+        assert_eq!(stats.rejected_images, 0);
+        assert_eq!(stats.pending_images, 0);
+        assert_eq!(stats.total_projects, 0);
+        assert_eq!(stats.active_projects, 0);
+        assert_eq!(stats.total_targets, 0);
+        assert_eq!(stats.active_targets, 0);
+        assert!(stats.unique_filters.is_empty());
+        assert_eq!(stats.earliest_date, None);
+        assert_eq!(stats.latest_date, None);
+    }
+
+    #[test]
+    fn empty_project_statistics_stay_zero_beside_populated_projects() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO project (Id, profileId, name) VALUES
+                (1, 'test', 'Populated'), (2, 'test', 'Awaiting sync');
+             INSERT INTO target (Id, name, active, epochcode, projectId) VALUES
+                (10, 'First', 1, 0, 1), (20, 'Empty', 1, 0, 2);
+             INSERT INTO acquiredimage
+                (Id, projectId, targetId, acquireddate, filtername, gradingStatus, metadata) VALUES
+                (1, 1, 10, 100, 'R', 0, '{}'),
+                (2, 1, 10, 200, 'G', 1, '{}'),
+                (3, 1, 10, 300, 'B', 2, '{}');",
+        )
+        .unwrap();
+        let db = Database::new(&conn);
+
+        for project_id in [2, 999] {
+            let stats = db.get_project_overview_stats(project_id).unwrap();
+            assert_eq!(stats.total_images, 0);
+            assert_eq!(stats.accepted_images, 0);
+            assert_eq!(stats.rejected_images, 0);
+            assert_eq!(stats.pending_images, 0);
+            assert!(stats.filters_used.is_empty());
+            assert_eq!(stats.earliest_date, None);
+            assert_eq!(stats.latest_date, None);
+        }
+
+        let project = db.get_project_overview_stats(1).unwrap();
+        let overall = db.get_overall_statistics().unwrap();
+        assert_eq!(project.total_images, 3);
+        assert_eq!(overall.total_images, 3);
+        assert_eq!(project.accepted_images, 1);
+        assert_eq!(overall.accepted_images, 1);
+        assert_eq!(project.rejected_images, 1);
+        assert_eq!(overall.rejected_images, 1);
+        assert_eq!(project.pending_images, 1);
+        assert_eq!(overall.pending_images, 1);
+        assert_eq!(overall.total_projects, 2);
+        assert_eq!(overall.active_projects, 1);
+        assert_eq!(overall.total_targets, 2);
+        assert_eq!(overall.active_targets, 1);
+        assert_eq!(project.filters_used, vec!["B", "G", "R"]);
+        assert_eq!(overall.unique_filters, project.filters_used);
+        assert_eq!(project.earliest_date, Some(100));
+        assert_eq!(overall.earliest_date, Some(100));
+        assert_eq!(project.latest_date, Some(300));
+        assert_eq!(overall.latest_date, Some(300));
+    }
 
     #[test]
     fn test_schema_capabilities_default() {

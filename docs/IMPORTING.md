@@ -58,6 +58,10 @@ Choose **New Database from Images**.
    progress. If you close or reload the page, opening Settings finds the active
    server job and resumes the progress view.
 
+An empty image folder is valid when preparing a catalog to receive N.I.N.A.
+plugin syncs. Until images arrive, the overview shows zero image and grading
+counts with no acquisition dates.
+
 The UI stores the new catalog as a SQLite file under `databases/` beside the PSF Guard
 registry. Its name comes from the display name, with `-2`, `-3`, and so on added
 when needed. The database row in Settings shows the exact path. The CLI form
