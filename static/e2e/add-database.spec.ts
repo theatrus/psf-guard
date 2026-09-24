@@ -1,8 +1,57 @@
 import { expect, test } from '@playwright/test';
-import { fixtureDbPath, fixtureImageDir, resetDatabases } from './helpers';
+import { mkdtempSync } from 'node:fs';
+import * as path from 'node:path';
+import { fixtureDbPath, fixtureImageDir, resetDatabases, tmpBase } from './helpers';
 
 test.beforeEach(async ({ request }) => {
   await resetDatabases(request);
+});
+
+test('create an empty sync destination and load its overview without errors', async ({
+  page,
+  request,
+}, testInfo) => {
+  const incoming = mkdtempSync(path.join(tmpBase(), 'empty-incoming-'));
+  const failedRequests: string[] = [];
+  page.on('response', (response) => {
+    if (response.url().includes('/api/db/') && response.status() >= 500) {
+      failedRequests.push(response.url());
+    }
+  });
+  await page.goto('/');
+  await page.getByRole('heading', { name: /Welcome to PSF Guard/i }).waitFor();
+  await page.locator('.tauri-settings')
+    .getByRole('button', { name: /New Database from Images/i }).click();
+  await page.getByPlaceholder('e.g. 2026 Archive (defaults to "Imported Images")')
+    .fill('Empty sync destination');
+  await page.getByPlaceholder('Type an absolute path and press Add').fill(incoming);
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  const createdResponse = page.waitForResponse((response) =>
+    response.url().endsWith('/api/databases/create') && response.request().method() === 'POST');
+  await page.getByRole('button', { name: 'Create & Import', exact: true }).click();
+  const created = await createdResponse;
+  expect(created.ok()).toBe(true);
+  const dbId = (await created.json()).data.database.id as string;
+  const prefix = `/api/db/${encodeURIComponent(dbId)}`;
+  await expect.poll(async () => {
+    const response = await request.get(`${prefix}/import`);
+    return (await response.json()).data.progress.stage;
+  }).toBe('complete');
+
+  const response = await request.get(`${prefix}/stats/overall`);
+  expect(response.status(), await response.text()).toBe(200);
+  const stats = (await response.json()).data;
+  for (const field of ['total_images', 'accepted_images', 'rejected_images', 'pending_images']) {
+    expect(stats[field]).toBe(0);
+  }
+  expect(stats.date_range).toEqual({ earliest: null, latest: null, span_days: null });
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await expect(page.locator('.overview-summary')).toContainText('0 images');
+  await expect(page.getByText('No projects with images yet.', { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.locator('.overview-summary')).toContainText('0 images');
+  expect(failedRequests).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath('empty-catalog-overview.png'), fullPage: true });
 });
 
 test('add a database via settings → see it in the Overview', async ({ page }) => {
