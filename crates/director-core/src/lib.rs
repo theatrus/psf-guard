@@ -3,8 +3,10 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+pub mod windows;
+use windows::{observing_windows, Interval, MeridianExclusion, TransitCoverage, WindowError};
 
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_REQUEST_BYTES: usize = 262_144;
 const MAX_GOALS: usize = 256;
@@ -42,8 +44,8 @@ pub struct Goal {
     pub exposure_ms: u64,
     /// Host estimate of additional blocking work before this exposure completes.
     pub overhead_ms: u64,
-    pub eligible_from_ms: u64,
-    pub eligible_until_ms: u64,
+    pub eligible_windows: Vec<Interval>,
+    pub transits: Option<TransitCoverage>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -56,6 +58,7 @@ pub struct State {
     pub safety: Safety,
     pub at_boundary: bool,
     pub operator_stop: bool,
+    pub meridian_exclusion: MeridianExclusion,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -104,13 +107,28 @@ pub enum Error {
     InvalidState,
     DuplicateGoal,
     InvalidGoal,
+    InvalidWindows,
+    InvalidTransits,
+    IncompleteTransitCoverage,
+    MeridianTimeOverflow,
+}
+
+impl From<WindowError> for Error {
+    fn from(error: WindowError) -> Self {
+        match error {
+            WindowError::InvalidWindows => Self::InvalidWindows,
+            WindowError::InvalidTransits => Self::InvalidTransits,
+            WindowError::IncompleteTransitCoverage => Self::IncompleteTransitCoverage,
+            WindowError::MeridianTimeOverflow => Self::MeridianTimeOverflow,
+        }
+    }
 }
 
 fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 128 && id.bytes().all(|c| c.is_ascii_graphic())
 }
 
-fn validate(request: &Request) -> Result<(), Error> {
+fn validate(request: &Request) -> Result<Vec<Vec<Interval>>, Error> {
     if request.contract_version != CONTRACT_VERSION {
         return Err(Error::UnsupportedContract);
     }
@@ -129,6 +147,7 @@ fn validate(request: &Request) -> Result<(), Error> {
         return Err(Error::InvalidState);
     }
     let mut ids = BTreeSet::new();
+    let mut safe_windows = Vec::new();
     for goal in &a.goals {
         if !ids.insert(&goal.id) {
             return Err(Error::DuplicateGoal);
@@ -136,19 +155,27 @@ fn validate(request: &Request) -> Result<(), Error> {
         if !valid_id(&goal.id)
             || goal.requested == 0
             || goal.exposure_ms == 0
-            || goal.eligible_from_ms >= goal.eligible_until_ms
             || goal.exposure_ms.checked_add(goal.overhead_ms).is_none()
         {
             return Err(Error::InvalidGoal);
         }
+        safe_windows.push(observing_windows(
+            &goal.eligible_windows,
+            Interval {
+                start_ms: a.valid_from_ms,
+                end_ms: a.expires_at_ms,
+            },
+            request.state.meridian_exclusion,
+            goal.transits.as_ref(),
+        )?);
     }
-    Ok(())
+    Ok(safe_windows)
 }
 
 /// Select one authorized next exposure. The caller must durably reserve the
 /// attempt and revalidate safety/state at dispatch; this pure function reserves nothing.
 pub fn evaluate(request: &Request) -> Result<Decision, Error> {
-    validate(request)?;
+    let safe_windows = validate(request)?;
     let a = &request.assignment;
     let s = &request.state;
     if s.operator_stop {
@@ -197,7 +224,8 @@ pub fn evaluate(request: &Request) -> Result<Decision, Error> {
     let remaining: Vec<_> = a
         .goals
         .iter()
-        .filter(|g| u64::from(g.accepted) + u64::from(g.pending) < u64::from(g.requested))
+        .zip(&safe_windows)
+        .filter(|(g, _)| u64::from(g.accepted) + u64::from(g.pending) < u64::from(g.requested))
         .collect();
     if remaining.is_empty() {
         return Ok(Decision::Wait {
@@ -205,30 +233,36 @@ pub fn evaluate(request: &Request) -> Result<Decision, Error> {
         });
     }
 
-    let fits = |g: &&Goal, start: u64| {
+    let fits = |g: &Goal, window: &Interval, start: u64| {
         start
             .checked_add(g.exposure_ms)
             .and_then(|v| v.checked_add(g.overhead_ms))
-            .is_some_and(|end| end <= g.eligible_until_ms && end <= a.expires_at_ms)
+            .is_some_and(|end| start >= window.start_ms && end <= window.end_ms)
     };
     let selected = remaining
         .iter()
         .copied()
-        .filter(|g| g.attempts_remaining > 0 && s.now_ms >= g.eligible_from_ms && fits(g, s.now_ms))
+        .filter(|(g, windows)| {
+            g.attempts_remaining > 0 && windows.iter().any(|w| fits(g, w, s.now_ms))
+        })
         .min_by(|left, right| {
             right
+                .0
                 .priority
-                .cmp(&left.priority)
-                .then_with(|| left.id.cmp(&right.id))
+                .cmp(&left.0.priority)
+                .then_with(|| left.0.id.cmp(&right.0.id))
         });
-    if let Some(goal) = selected {
+    if let Some((goal, _)) = selected {
         return Ok(Decision::Acquire {
             goal_id: goal.id.clone(),
             reason: "highest_priority_feasible_goal".into(),
         });
     }
-    if remaining.iter().any(|g| {
-        g.attempts_remaining > 0 && g.eligible_from_ms > s.now_ms && fits(g, g.eligible_from_ms)
+    if remaining.iter().any(|(g, windows)| {
+        g.attempts_remaining > 0
+            && windows
+                .iter()
+                .any(|w| w.start_ms > s.now_ms && fits(g, w, w.start_ms))
     }) {
         return Ok(Decision::Wait {
             reason: "future_window".into(),

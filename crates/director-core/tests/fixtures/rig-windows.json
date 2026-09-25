@@ -1,0 +1,124 @@
+{
+  "base": {
+    "contract_version": 2,
+    "assignment": {
+      "id": "assignment-rig-windows",
+      "revision": 2,
+      "rig_id": "rig-1",
+      "configuration_id": "config-horizon-2",
+      "valid_from_ms": 1000,
+      "expires_at_ms": 1000000,
+      "goals": [
+        {
+          "id": "ha",
+          "priority": 20,
+          "requested": 10,
+          "accepted": 2,
+          "pending": 1,
+          "attempts_remaining": 8,
+          "exposure_ms": 30000,
+          "overhead_ms": 10000,
+          "eligible_windows": [{"start_ms": 1000, "end_ms": 120000}, {"start_ms": 150000, "end_ms": 900000}],
+          "transits": {"searched": {"start_ms": 0, "end_ms": 2000000}, "transits_ms": [100000]}
+        }
+      ]
+    },
+    "state": {
+      "rig_id": "rig-1",
+      "configuration_id": "config-horizon-2",
+      "now_ms": 10000,
+      "conditions_valid_until_ms": 2000000,
+      "safety": "safe",
+      "at_boundary": true,
+      "operator_stop": false,
+      "meridian_exclusion": {"before_ms": 40000, "after_ms": 10000}
+    }
+  },
+  "cases": [
+    {
+      "name": "exposure fits before asymmetric exclusion",
+      "patch": {},
+      "expected": {"status": "ok", "decision": {"action": "acquire", "goal_id": "ha", "reason": "highest_priority_feasible_goal"}}
+    },
+    {
+      "name": "exposure finishes exactly at blocked start",
+      "patch": {"state": {"now_ms": 20000}},
+      "expected": {"status": "ok", "decision": {"action": "acquire", "goal_id": "ha", "reason": "highest_priority_feasible_goal"}}
+    },
+    {
+      "name": "slow setup cannot spill an exposure across meridian exclusion",
+      "patch": {"state": {"now_ms": 20001}},
+      "expected": {"status": "ok", "decision": {"action": "wait", "reason": "future_window"}}
+    },
+    {
+      "name": "blocked start is excluded",
+      "patch": {"state": {"now_ms": 60000}},
+      "expected": {"status": "ok", "decision": {"action": "wait", "reason": "future_window"}}
+    },
+    {
+      "name": "after-side remains blocked at transit",
+      "patch": {"state": {"now_ms": 100000}},
+      "expected": {"status": "ok", "decision": {"action": "wait", "reason": "future_window"}}
+    },
+    {
+      "name": "post-transit horizon gap is not bridged",
+      "patch": {"state": {"now_ms": 110000}},
+      "expected": {"status": "ok", "decision": {"action": "wait", "reason": "future_window"}}
+    },
+    {
+      "name": "target resumes at next real horizon window",
+      "patch": {"state": {"now_ms": 150000}},
+      "expected": {"status": "ok", "decision": {"action": "acquire", "goal_id": "ha", "reason": "highest_priority_feasible_goal"}}
+    },
+    {
+      "name": "future safe interval must fit full operation before expiry",
+      "patch": {"assignment": {"expires_at_ms": 189999}, "state": {"now_ms": 110000}},
+      "expected": {"status": "ok", "decision": {"action": "check_in", "reason": "no_authorized_feasible_work"}}
+    },
+    {
+      "name": "zero after-side permits acquisition exactly at transit when it fits",
+      "patch": {"state": {"now_ms": 100000, "meridian_exclusion": {"after_ms": 0}}, "assignment": {"goals": [
+        {"id": "ha", "priority": 20, "requested": 1, "accepted": 0, "pending": 0, "attempts_remaining": 1, "exposure_ms": 10000, "overhead_ms": 10000, "eligible_windows": [{"start_ms": 1000, "end_ms": 120000}], "transits": {"searched": {"start_ms": 0, "end_ms": 2000000}, "transits_ms": [100000]}}
+      ]}},
+      "expected": {"status": "ok", "decision": {"action": "acquire", "goal_id": "ha", "reason": "highest_priority_feasible_goal"}}
+    },
+    {
+      "name": "known absence of transits differs from missing data",
+      "patch": {"assignment": {"goals": [
+        {"id": "ha", "priority": 20, "requested": 1, "accepted": 0, "pending": 0, "attempts_remaining": 1, "exposure_ms": 10000, "overhead_ms": 10000, "eligible_windows": [{"start_ms": 1000, "end_ms": 120000}], "transits": {"searched": {"start_ms": 0, "end_ms": 2000000}, "transits_ms": []}}
+      ]}},
+      "expected": {"status": "ok", "decision": {"action": "acquire", "goal_id": "ha", "reason": "highest_priority_feasible_goal"}}
+    },
+    {
+      "name": "enabled exclusion cannot proceed without transit data",
+      "patch": {"assignment": {"goals": [
+        {"id": "ha", "priority": 20, "requested": 1, "accepted": 0, "pending": 0, "attempts_remaining": 1, "exposure_ms": 10000, "overhead_ms": 10000, "eligible_windows": [{"start_ms": 1000, "end_ms": 120000}], "transits": null}
+      ]}},
+      "expected": {"status": "error", "code": "incomplete_transit_coverage"}
+    },
+    {
+      "name": "search must cover transit just outside assignment",
+      "patch": {"assignment": {"goals": [
+        {"id": "ha", "priority": 20, "requested": 1, "accepted": 0, "pending": 0, "attempts_remaining": 1, "exposure_ms": 10000, "overhead_ms": 10000, "eligible_windows": [{"start_ms": 1000, "end_ms": 120000}], "transits": {"searched": {"start_ms": 1000, "end_ms": 1000000}, "transits_ms": [100000]}}
+      ]}},
+      "expected": {"status": "error", "code": "incomplete_transit_coverage"}
+    },
+    {
+      "name": "reversed window is not treated as unrestricted",
+      "patch": {"assignment": {"goals": [
+        {"id": "ha", "priority": 20, "requested": 1, "accepted": 0, "pending": 0, "attempts_remaining": 1, "exposure_ms": 10000, "overhead_ms": 10000, "eligible_windows": [{"start_ms": 120000, "end_ms": 1000}], "transits": null}
+      ]}},
+      "expected": {"status": "error", "code": "invalid_windows"}
+    },
+    {
+      "name": "constraint snapshot mismatch cannot acquire",
+      "patch": {"state": {"configuration_id": "config-horizon-3"}},
+      "expected": {"status": "ok", "decision": {"action": "check_in", "reason": "configuration_mismatch"}}
+    },
+    {
+      "name": "old contract is rejected",
+      "patch": {"contract_version": 1},
+      "expected": {"status": "error", "code": "unsupported_contract"}
+    }
+  ]
+}

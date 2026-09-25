@@ -1,6 +1,6 @@
 {
   "base": {
-    "contract_version": 1,
+    "contract_version": 2,
     "assignment": {
       "id": "assignment-1",
       "revision": 1,
@@ -18,8 +18,7 @@
           "attempts_remaining": 8,
           "exposure_ms": 30000,
           "overhead_ms": 10000,
-          "eligible_from_ms": 1000,
-          "eligible_until_ms": 100000
+          "eligible_windows": [{"start_ms": 1000, "end_ms": 100000}]
         },
         {
           "id": "long-ha",
@@ -30,8 +29,7 @@
           "attempts_remaining": 5,
           "exposure_ms": 180000,
           "overhead_ms": 10000,
-          "eligible_from_ms": 1000,
-          "eligible_until_ms": 900000
+          "eligible_windows": [{"start_ms": 1000, "end_ms": 900000}]
         }
       ]
     },
@@ -42,7 +40,8 @@
       "conditions_valid_until_ms": 2000000,
       "safety": "safe",
       "at_boundary": true,
-      "operator_stop": false
+      "operator_stop": false,
+      "meridian_exclusion": {"before_ms": 0, "after_ms": 0}
     }
   },
   "cases": [
@@ -118,7 +117,7 @@
     },
     {
       "name": "unsupported schema fails closed",
-      "patch": {"contract_version": 2},
+      "patch": {"contract_version": 3},
       "expected": {"status": "error", "code": "unsupported_contract"}
     },
     {
@@ -134,21 +133,21 @@
     {
       "name": "pending assessment reserves remaining work",
       "patch": {"assignment": {"goals": [
-        {"id": "short-ha", "priority": 1, "requested": 10, "accepted": 2, "pending": 8, "attempts_remaining": 2, "exposure_ms": 30000, "overhead_ms": 10000, "eligible_from_ms": 1000, "eligible_until_ms": 100000}
+        {"id": "short-ha", "priority": 1, "requested": 10, "accepted": 2, "pending": 8, "attempts_remaining": 2, "exposure_ms": 30000, "overhead_ms": 10000, "eligible_windows": [{"start_ms": 1000, "end_ms": 100000}]}
       ]}},
       "expected": {"status": "ok", "decision": {"action": "wait", "reason": "pending_assessment"}}
     },
     {
       "name": "accepted work completes the goal",
       "patch": {"assignment": {"goals": [
-        {"id": "short-ha", "priority": 1, "requested": 10, "accepted": 10, "pending": 0, "attempts_remaining": 2, "exposure_ms": 30000, "overhead_ms": 10000, "eligible_from_ms": 1000, "eligible_until_ms": 100000}
+        {"id": "short-ha", "priority": 1, "requested": 10, "accepted": 10, "pending": 0, "attempts_remaining": 2, "exposure_ms": 30000, "overhead_ms": 10000, "eligible_windows": [{"start_ms": 1000, "end_ms": 100000}]}
       ]}},
       "expected": {"status": "ok", "decision": {"action": "complete", "reason": "accepted_goal_met"}}
     },
     {
       "name": "rejected exposures cannot bypass the attempt budget",
       "patch": {"assignment": {"goals": [
-        {"id": "short-ha", "priority": 1, "requested": 10, "accepted": 0, "pending": 0, "attempts_remaining": 0, "exposure_ms": 30000, "overhead_ms": 10000, "eligible_from_ms": 1000, "eligible_until_ms": 100000}
+        {"id": "short-ha", "priority": 1, "requested": 10, "accepted": 0, "pending": 0, "attempts_remaining": 0, "exposure_ms": 30000, "overhead_ms": 10000, "eligible_windows": [{"start_ms": 1000, "end_ms": 100000}]}
       ]}},
       "expected": {"status": "ok", "decision": {"action": "check_in", "reason": "no_authorized_feasible_work"}}
     },
