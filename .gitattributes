@@ -1,0 +1,4 @@
+# Match the sidecar harness formatter on Windows as well as Unix runners.
+tools/director-sidecar/*.cs text eol=lf
+tools/director-sidecar/*.csproj text eol=lf
+tools/director-sidecar/.editorconfig text eol=lf
