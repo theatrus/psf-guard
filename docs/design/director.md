@@ -71,6 +71,95 @@ stacks. Project membership never grants stack compatibility. Completion must
 measure required coverage and quality, not just add integration hours from
 different instruments and assume equal depth.
 
+## Rig constraints and local horizons
+
+Meridian restrictions and the effective local horizon are required inputs to
+the shared engine, not optional server scheduling hints. Director exports a
+versioned constraint snapshot at check-in; server simulation uses that snapshot,
+and local execution always checks the current configuration. A remote project
+may tighten local limits, but cannot relax a rig's hard restrictions.
+
+### Meridian policy
+
+Preserve the local TS fork's asymmetric avoidance behavior when introducing the
+3.3 execution adapter. The inspected branch is
+`codex/pier-west-meridian-avoidance` at
+`8b549b1123520add0cb65124f469e9cb5723b13d`. Its
+`MeridianAvoidanceClipper` resolves independent before/after values from project
+overrides and profile defaults, then excludes
+`[transit - before, transit + after)`. For example, 60 minutes before and zero
+after excludes the preceding hour but permits a new exposure at transit,
+subject to all other constraints. This is an acquisition restriction, not a
+command to flip or a general model of mount collision geometry.
+
+Director should model three separate concepts:
+
+- Rig/configuration meridian exclusion, with independently specified before
+  and after durations. This applies to every assigned project on that rig.
+- N.I.N.A. flip/pause safety and execution behavior, including the local fork's
+  existing safety margins. Do not let an assignment override them.
+- Project imaging preferences, such as TS's existing positive `MeridianWindow`
+  that limits imaging to a region near transit. This is not the exclusion zone.
+
+The fork allows each project side to inherit with a negative value, explicitly
+disable with zero, or override with a positive value. Import must retain that
+provenance and show conflicts when promoting a profile default to a hard rig
+limit; do not silently reinterpret legacy overrides. Canonical Director policy
+should use explicit inheritance/override states instead of sentinel numbers.
+The fork clamps requested avoidance values to 120 minutes because its transit
+search extends two hours around the night. Preserve supported behavior and
+validate any broader range against the transit calculation rather than copying
+that limit as a universal telescope property.
+
+Compose these constraints by intersecting allowed intervals. An exposure and
+its blocking overhead must fit a remaining interval; do not test only its start.
+Reevaluate after slow autofocus, settling, or a flip. Multiple intervals before
+and after exclusions must remain distinct, and resumption must recheck horizon,
+maximum altitude, and the remaining night. Unknown required geometry or stale
+rig configuration blocks new work rather than silently disabling a restriction.
+
+### N.I.N.A. horizon integration
+
+Discover the active profile's `AstrometrySettings.Horizon` and `HorizonFilePath`
+through supported profile interfaces. Recognize N.I.N.A. standard horizon files
+and MountWizzard4 `.hpts` files through N.I.N.A.'s supported loading behavior.
+Standard records use azimuth/altitude pairs; `.hpts` JSON uses altitude/azimuth
+pairs. Do not confuse the two or make the server open the rig's local path.
+
+Export a canonical horizon with azimuth/altitude units and convention, ordered
+breakpoints, interpolation/wrap behavior, source format, content fingerprint,
+profile identity, and configuration revision. Keep machine-local paths local
+unless diagnostic disclosure is explicitly requested. Server simulation and
+Director must evaluate the same effective curve. Avoid coarse sampling that
+could erase a narrow obstruction; if the loaded public object cannot export
+breakpoints, resolve a supported export or a parity-tested conversion before
+enabling remote planning with it. Do not reflect private N.I.N.A. arrays.
+
+Compose the curve with rig minimum-altitude restrictions and applicable project
+minimum altitude/horizon offset. Preserve TS's equality-at-horizon rejection and
+its effective-altitude behavior, with fixtures against the actual N.I.N.A./TS
+implementations. Geographic site identity alone is insufficient: two nearby rigs
+may have different obstructions, so each rig configuration binds its own horizon.
+
+Subscribe to profile, location, and `HorizonChanged` events. Also detect a file
+edited in place at controlled refresh/check-in points; the path can stay the
+same while its contents change. Reconcile disk contents with N.I.N.A.'s loaded
+model before publishing a new snapshot, invalidate cached visibility by content
+and configuration revision, and replan at a safe boundary. A configured or
+previously required horizon that is missing, invalid, or unexpectedly cleared
+must produce a visible blocked state, not a flat-horizon fallback. An explicitly
+configured no-file/fixed-minimum mode remains valid. Persist the last declared
+mode because N.I.N.A. can clear the path when loading a horizon fails.
+
+Acceptance fixtures must cover asymmetric exclusions, independent inheritance,
+flip margins, an exposure straddling an exclusion, both sides of transit,
+horizon gaps after transit, both file formats, 0/360 wrap, narrow obstructions,
+minimum altitude/offset, invalid files, same-path edits, and profile switches.
+These are single-rig phase-0/phase-2 requirements, not deferred multi-rig work.
+The initial shared-core spike only accepts one precomputed interval per goal;
+it does not yet import horizons or evaluate these meridian constraints. Extend
+that representation and prove parity before connecting it to acquisition.
+
 ## Storage and authority
 
 | Store | Owns |
@@ -283,6 +372,8 @@ its acceptance gate passes and its review and validation evidence is linked here
 - [ ] Pin current N.I.N.A. 3.3 nightly and TS 3.3 versions; audit custom TS fixes
   before porting them and record the supported version matrix.
 - [ ] Prove the TS execution extension while retaining ordinary TS behavior.
+- [ ] Audit/port the local asymmetric meridian constraints and prove N.I.N.A.
+  horizon export/parity; include multiple safe intervals in the engine contract.
 - [ ] Prove the shared Rust core loads and returns decisions in PSF Guard and
   a minimal C# plugin, including native packaging and error handling.
 - [x] Implement a deterministic core linked into the PSF Guard Rust library and
@@ -381,10 +472,14 @@ rebuild without counting mirrored captures twice.
 - [ ] Implement versioned allocation, acknowledgements, checkpoints, and limits.
 - [ ] Add durable event delivery, local recovery, offline operation, and status UI.
 - [ ] Support native sequence safety/hooks and explicit Sync coexistence rules.
+- [ ] Enforce the current rig meridian/horizon snapshot at dispatch and refresh
+  it on profile changes, horizon changes, and same-path file edits.
 
 Gate: a real N.I.N.A. instance using simulated equipment handles slow autofocus,
 failed centering, reprioritization, network loss, restart, and operator stop.
 It never starts unauthorized work and reports ambiguous capture outcomes.
+It does not start an exposure across a meridian exclusion or below the effective
+local horizon, including after unexpectedly slow setup operations.
 
 ### Phase 3: timing-aware shared simulation
 
@@ -450,6 +545,11 @@ in the relevant phase, not implicit defaults in implementation.
 - [Stack previews](../STACKING_PREVIEWS.md).
 - [N.I.N.A. downloads](https://nighttime-imaging.eu/download/).
 - [TS 3.3 source branch](https://github.com/tcpalmer/nina.plugin.targetscheduler/tree/release/nightly-3.3).
+- [Local TS meridian fork](https://github.com/theatrus/nina.plugin.targetscheduler/tree/8b549b1123520add0cb65124f469e9cb5723b13d).
+- [N.I.N.A. custom horizons](https://github.com/isbeorn/nina/blob/develop/NINA.Core/Model/CustomHorizon.cs)
+  and [profile service](https://github.com/isbeorn/nina/blob/develop/NINA.Profile/ProfileService.cs):
+  source inspected for file formats and profile change notifications; verify
+  against the pinned nightly during adapter implementation.
 - [Astro-PM N.I.N.A. integration](https://astro-pm.com/nina-sync/) and
   [project lifecycle](https://astro-pm.com/project-management/): product
   references for integrated planning and acquisition, not dependencies or
