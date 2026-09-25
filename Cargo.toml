@@ -1,8 +1,3 @@
-[workspace]
-members = ["crates/director-core", "crates/director-ffi"]
-default-members = ["."]
-resolver = "3"
-
 [package]
 name = "psf-guard"
 version = "0.10.1"
@@ -21,6 +16,12 @@ homepage = "https://github.com/theatrus/psf-guard"
 readme = "README.md"
 keywords = ["astronomy", "telescope", "imaging", "analysis", "nina"]
 categories = ["command-line-utilities", "science"]
+
+[workspace]
+members = ["crates/director-core", "crates/director-ffi"]
+default-members = ["."]
+resolver = "3"
+
 [lib]
 name = "psf_guard"
 path = "src/lib.rs"
