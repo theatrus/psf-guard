@@ -210,4 +210,18 @@ test('the Overview stacks a project from its card and shows the masters', async 
   await expect(dialog).toContainText('3 lights');
   await dialog.locator('.dialog-footer').getByRole('button', { name: 'Close' }).click();
   await expect(page.locator('.overview-wbpp-run')).toContainText('finished: 1 master');
+
+  // A fresh tab still sees the run: the line comes back after a reload, the
+  // project's action says the masters are ready, and either reopens the run.
+  await page.reload();
+  await expect(page.locator('.overview-wbpp-run')).toContainText('finished: 1 master', {
+    timeout: 15_000,
+  });
+  const ready = page.locator('.project-card').filter({ hasText: 'Project Alpha' }).getByText('WBPP masters ready');
+  await expect(ready).toBeVisible();
+  await ready.click();
+  await expect(page.locator('.wbpp-run-dialog')).toContainText('Finished');
+  await expect(
+    page.locator('.wbpp-run-dialog').getByRole('link', { name: 'masterLight_BIN-1_FILTER-B.xisf' })
+  ).toBeVisible();
 });

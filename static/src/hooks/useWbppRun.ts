@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { WbppRunProgress, WbppRunStatus } from '../api/types';
 
@@ -56,6 +56,54 @@ export function describeWbppRun(progress: WbppRunProgress | undefined): string |
       return `WBPP${scope} was stopped`;
     case 'error':
       return `WBPP${scope} failed: ${progress.error ?? 'unknown error'}`;
+    default:
+      return null;
+  }
+}
+
+/** Whether a run is one the Overview should still show. */
+export function isRunOfInterest(progress: WbppRunProgress | undefined): progress is WbppRunProgress {
+  return !!progress && (progress.running || !!progress.finished_at);
+}
+
+/**
+ * The current WBPP run of every database, so the Overview can show a run
+ * under way or just finished in any browser tab, not only the one that
+ * started it. Polls the databases whose run is under way.
+ */
+export function useWbppRuns(dbIds: string[]): Map<string, WbppRunProgress> {
+  const results = useQueries({
+    queries: dbIds.map((dbId) => ({
+      queryKey: ['db', dbId, 'wbpp-run'],
+      queryFn: () => apiClient.getWbppRun(dbId),
+      staleTime: 5_000,
+      refetchInterval: (query: { state: { data?: WbppRunStatus } }) => {
+        const progress = query.state.data?.progress;
+        return progress?.running || progress?.publish?.state === 'running' ? 2000 : false;
+      },
+      refetchIntervalInBackground: true,
+    })),
+  });
+  const runs = new Map<string, WbppRunProgress>();
+  results.forEach((result, index) => {
+    const progress = result.data?.progress;
+    if (isRunOfInterest(progress)) runs.set(dbIds[index], progress);
+  });
+  return runs;
+}
+
+/** The short state a project card shows for its database's run, if the run is its own. */
+export function describeWbppRunForProject(
+  progress: WbppRunProgress | undefined,
+  projectId: number
+): { label: string; tone: 'running' | 'done' | 'error' } | null {
+  if (!isRunOfInterest(progress) || progress.project_id !== projectId) return null;
+  if (progress.running) return { label: 'Stacking in WBPP…', tone: 'running' };
+  switch (progress.stage) {
+    case 'complete':
+      return { label: 'WBPP masters ready', tone: 'done' };
+    case 'error':
+      return { label: 'WBPP failed', tone: 'error' };
     default:
       return null;
   }
