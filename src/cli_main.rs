@@ -253,6 +253,7 @@ pub fn main() -> Result<()> {
             local_root,
             remote_root,
             dry_run,
+            wbpp: wbpp_args,
             image_dirs,
             registry,
         } => {
@@ -323,7 +324,13 @@ pub fn main() -> Result<()> {
             let summary = execute_plan_with(&plan, &dest_root, placement, dry_run, &mut |_, _| {});
             if options.layout == ExportLayout::Wbpp && !dry_run {
                 use crate::commands::export::write_wbpp_scripts;
-                match write_wbpp_scripts(&plan, &dest_root, wbpp::WbppRun::default(), &files) {
+                let spec = wbpp::WbppScriptSpec {
+                    run: wbpp::WbppRun::default(),
+                    files,
+                    options: (&wbpp_args).into(),
+                    bpp_main: None,
+                };
+                match write_wbpp_scripts(&plan, &dest_root, &spec) {
                     Ok(scripts) => {
                         for script in scripts {
                             println!("Wrote {}", script.display());

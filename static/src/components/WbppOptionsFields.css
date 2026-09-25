@@ -1,0 +1,33 @@
+.wbpp-options {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.wbpp-option {
+  display: grid;
+  grid-template-columns: minmax(10rem, 1fr) minmax(12rem, 1.4fr);
+  gap: 0.4rem 0.8rem;
+  align-items: start;
+}
+
+.wbpp-option > span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.wbpp-option small {
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+}
+
+.wbpp-option select {
+  min-width: 0;
+  width: 100%;
+}
+
+@media (max-width: 40rem) {
+  .wbpp-option {
+    grid-template-columns: 1fr;
+  }
+}

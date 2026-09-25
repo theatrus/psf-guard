@@ -44,6 +44,9 @@ import ProjectSchedulerDialog from './ProjectSchedulerDialog';
 import CalibrationReportDialog from './CalibrationReportDialog';
 import ExportDialog, { type ExportRequest } from './ExportDialog';
 import AstroBinExportDialog, { type AstroBinExportRequest } from './AstroBinExportDialog';
+import WbppRunDialog, { type WbppRunRequest } from './WbppRunDialog';
+import { describeWbppRun, useWbppRun } from '../hooks/useWbppRun';
+import { DEFAULT_WBPP_OPTIONS } from '../api/types';
 import { commonDirectory } from '../utils/commonDirectory';
 import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog';
 import { useAccess } from '../auth/access';
@@ -123,6 +126,10 @@ export default function Overview() {
   const [pendingExport, setPendingExport] = useState<ExportRequest | null>(null);
   // The AstroBin acquisition CSV the user asked for, shown in its dialog.
   const [pendingAstroBin, setPendingAstroBin] = useState<AstroBinExportRequest | null>(null);
+  // The project the user asked to stack with WBPP, shown in its dialog; and
+  // the database whose run the status line follows.
+  const [pendingWbpp, setPendingWbpp] = useState<WbppRunRequest | null>(null);
+  const [wbppRunDb, setWbppRunDb] = useState<string | null>(null);
   // Seeds the dialog's layout choice; edited in the settings panel.
   const { data: exportSettings } = useQuery({
     queryKey: ['export-settings'],
@@ -199,6 +206,8 @@ export default function Overview() {
   };
   const exportJob = useExportJob(exportJobDb);
   const exportJobLine = describeExportProgress(exportJob.progress);
+  const wbppRun = useWbppRun(wbppRunDb);
+  const wbppRunLine = describeWbppRun(wbppRun.progress);
 
   // Persist an organize edit (rename / move / merge), then refresh this DB's
   // overview queries so the new grouping shows up.
@@ -520,6 +529,27 @@ export default function Overview() {
             <span>Catalog</span>
             <strong>{overallStats.total_images.toLocaleString()} images</strong>
           </div>
+          {wbppRunLine && wbppRunDb && (
+            <div
+              className={`overview-export-job overview-wbpp-run${
+                wbppRun.progress?.stage === 'error' ? ' error' : ''
+              }`}
+            >
+              <button
+                type="button"
+                className="link-button"
+                onClick={() =>
+                  setPendingWbpp({
+                    dbId: wbppRunDb,
+                    scope: {},
+                    label: wbppRun.progress?.scope ?? 'WBPP run',
+                  })
+                }
+              >
+                {wbppRunLine}
+              </button>
+            </div>
+          )}
           {exportJobLine && (
             <div
               className={`server-export-status${
@@ -1049,6 +1079,23 @@ export default function Overview() {
                         ☆ AstroBin
                       </span>
                     )}
+                    {organizeAllowed && project.accepted_images + project.pending_images > 0 && (
+                      <span
+                        className="export-link"
+                        title="Stack this project with PixInsight's WBPP on the server, against the frames where they are"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setWbppRunDb(project.db_id);
+                          setPendingWbpp({
+                            dbId: project.db_id,
+                            scope: { project_id: project.id },
+                            label: project.display_name,
+                          });
+                        }}
+                      >
+                        ⚗ Stack in WBPP
+                      </span>
+                    )}
                   </div>
 
                   {/* Targets stay visible so new work is easy to spot. */}
@@ -1330,6 +1377,7 @@ export default function Overview() {
         <ExportDialog
           request={pendingExport}
           defaultLayout={exportSettings?.default_layout ?? 'standard'}
+          defaultWbpp={exportSettings?.wbpp ?? DEFAULT_WBPP_OPTIONS}
           sourceRoot={commonDirectory(
             databases?.find((db) => db.id === pendingExport.dbId)?.image_directories ?? []
           )}
@@ -1360,6 +1408,13 @@ export default function Overview() {
 
       {pendingAstroBin && (
         <AstroBinExportDialog request={pendingAstroBin} onClose={() => setPendingAstroBin(null)} />
+      )}
+      {pendingWbpp && (
+        <WbppRunDialog
+          request={pendingWbpp}
+          defaultOptions={exportSettings?.wbpp ?? DEFAULT_WBPP_OPTIONS}
+          onClose={() => setPendingWbpp(null)}
+        />
       )}
 
       {calibrationReportProject && (

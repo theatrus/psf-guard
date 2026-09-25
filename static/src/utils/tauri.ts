@@ -75,6 +75,7 @@ export interface DbEntry {
   };
   /** Server-side destination for UI-triggered exports. */
   export_dir?: string;
+  process_dir?: string;
 }
 
 // Process-global Seiza catalog paths. data_dir configures a complete bundle;

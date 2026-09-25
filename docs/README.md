@@ -10,6 +10,7 @@ Use this index for detailed behavior and engineering records.
 - [Project stack previews](STACKING_PREVIEWS.md)
 - [Sky coverage map and timeline](SKY_COVERAGE.md)
 - [AstroBin acquisition export](ASTROBIN_EXPORT.md)
+- [Stacking with PixInsight's WBPP](WBPP.md)
 - [Statistical grading](STATISTICAL_GRADING.md)
 
 ## Quality and sky analysis

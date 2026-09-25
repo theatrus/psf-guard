@@ -34,6 +34,7 @@ pub mod static_file_service;
 pub mod sync_preview;
 pub mod update_notice;
 pub mod user_admin;
+pub mod wbpp_run;
 
 use anyhow::{Context, Result};
 use axum::{
@@ -637,6 +638,19 @@ async fn run_server_internal(
             get(astrobin_export::get_astrobin_filters)
                 .put(astrobin_export::update_astrobin_filters),
         )
+        .route("/wbpp/runs", post(wbpp_run::start_wbpp_run))
+        .route(
+            "/wbpp/runs/current",
+            get(wbpp_run::get_wbpp_run).delete(wbpp_run::cancel_wbpp_run),
+        )
+        .route(
+            "/wbpp/runs/current/publish",
+            post(wbpp_run::publish_wbpp_run),
+        )
+        .route(
+            "/wbpp/runs/current/files/{*path}",
+            get(wbpp_run::get_wbpp_run_file),
+        )
         .route("/export/local", post(handlers::export_local_route))
         .route(
             "/export/server",
@@ -671,6 +685,10 @@ async fn run_server_internal(
             "/settings/astrobin",
             get(astrobin_export::get_astrobin_settings)
                 .put(astrobin_export::update_astrobin_settings),
+        )
+        .route(
+            "/settings/pixinsight",
+            get(wbpp_run::get_pixinsight_settings).put(wbpp_run::update_pixinsight_settings),
         )
         .route(
             "/settings/stacking",

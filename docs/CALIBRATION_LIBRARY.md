@@ -441,7 +441,11 @@ folder. The grouped-by-target layout only sorts the flats by night.
 Choose the layout with `--layout wbpp` on the CLI, the `layout` query parameter
 on the export download, or in the dialog every Export action on the overview
 opens. The dialog starts from the **Export** default in Settings → Setups,
-which is server-wide and shared by the desktop and browser apps.
+which is server-wide and shared by the desktop and browser apps. With the WBPP
+layout the dialog also asks for WBPP's settings (quality preset, Fast
+Integration, drizzle, autocrop, light rejection), which the runner script
+passes; see [Stacking with PixInsight's WBPP](WBPP.md), which also covers
+running WBPP on the server from the Overview.
 
 The dialog also asks whether to include ungraded lights (on by default, as
 the stack previews do; rejects are never exported) and how the files land:

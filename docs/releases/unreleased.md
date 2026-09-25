@@ -19,6 +19,28 @@
   with a first and last night for a filter that changed over time. The
   export reads it ahead of the server-wide defaults under **Setups**.
 
+- **Stack in WBPP** on a project card runs PixInsight's
+  WeightedBatchPreprocessing on the server, against the frames where they
+  are, headless (through `xvfb-run` on a server with no display). The
+  dialog follows WBPP's own log and lists the masters as downloads when
+  it finishes. **Settings → Setups → PixInsight** names the install and
+  the **runs folder**; without one, runs go under the database's export
+  directory, else the cache, and the free space there is shown. A
+  database's new **process directory** (**Settings → Databases**) lets a
+  run save its masters beside your finished work, in a per-project folder
+  PSF Guard remembers, without overwriting anything already there.
+- **WBPP settings** for exports and runs: quality (WBPP's presets), Fast
+  Integration, drizzle (2x or 3x), autocrop, and the light rejection
+  algorithm, with defaults under **Settings → Setups → Export** and
+  matching `--wbpp-*` flags on `psf-guard export`. Fast Integration is off
+  by default: WBPP would otherwise switch any group of 150 frames or more
+  to it on its own during a headless run.
+
 ## Changed
+
+- A WBPP export's launchers now always start `run-wbpp.js`, which carries
+  the frames or folders, every setting, and the per-group drizzle and Fast
+  Integration choices WBPP has no command-line parameter for. Anything
+  appended to `PARAMS` still reaches WBPP.
 
 ## Fixed

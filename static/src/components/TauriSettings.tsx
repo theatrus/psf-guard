@@ -16,6 +16,7 @@ import CalibrationMatchingSettings from './CalibrationMatchingSettings';
 import StackAutomationSettings from './StackAutomationSettings';
 import ExportDefaultsSettings from './ExportDefaultsSettings';
 import AstroBinSettings from './AstroBinSettings';
+import PixInsightSettings from './PixInsightSettings';
 import type { DatabaseSummary } from '../api/types';
 import {
   describeImportProgress,
@@ -135,6 +136,7 @@ export default function TauriSettings({
   const [formRemoteUploadRescanRequested, setFormRemoteUploadRescanRequested] =
     useState(false);
   const [formExportDir, setFormExportDir] = useState('');
+  const [formProcessDir, setFormProcessDir] = useState('');
   const [formRemoteUploadToken, setFormRemoteUploadToken] = useState('');
   const [formRemoteUploadTokenConfigured, setFormRemoteUploadTokenConfigured] =
     useState(false);
@@ -209,6 +211,7 @@ export default function TauriSettings({
                 db_path: summary.database_path,
                 image_dirs: summary.image_directories,
                 export_dir: summary.export_directory,
+                process_dir: summary.process_directory,
                 remote_image_upload: {
                   enabled: summary.remote_image_upload?.enabled ?? false,
                   image_dir: summary.remote_image_upload?.image_directory,
@@ -242,6 +245,7 @@ export default function TauriSettings({
             db_path: s.database_path,
             image_dirs: s.image_directories,
             export_dir: s.export_directory,
+            process_dir: s.process_directory,
             remote_image_upload: {
               enabled: s.remote_image_upload?.enabled ?? false,
               image_dir: s.remote_image_upload?.image_directory,
@@ -338,6 +342,7 @@ export default function TauriSettings({
     setFormDbPath(entry.db_path);
     setFormImageDirs(entry.image_dirs);
     setFormExportDir(entry.export_dir ?? '');
+    setFormProcessDir(entry.process_dir ?? '');
     setFormRemoteUploadEnabled(entry.remote_image_upload?.enabled ?? false);
     setFormRemoteSyncEnabled(entry.remote_image_upload?.sync_enabled ?? false);
     setFormRemoteUploadDir(
@@ -655,6 +660,7 @@ export default function TauriSettings({
           db_path: formDbPath.trim(),
           image_dirs: formImageDirs,
           export_dir: formExportDir.trim(),
+          process_dir: formProcessDir.trim(),
           remote_image_upload: {
             enabled: formRemoteUploadEnabled,
             image_directory: formRemoteUploadDir || undefined,
@@ -1296,6 +1302,18 @@ export default function TauriSettings({
               value={formExportDir}
               onChange={(event) => setFormExportDir(event.target.value)}
             />
+            <label htmlFor="process-directory">
+              Process directory:
+            </label>
+            <input
+              id="process-directory"
+              type="text"
+              className="file-path-input"
+              placeholder="Absolute server path, such as the rig's _Process folder"
+              title="Where this rig's finished work lives. A WBPP run can save its masters below it, one folder per processing project, in a master/ subfolder."
+              value={formProcessDir}
+              onChange={(event) => setFormProcessDir(event.target.value)}
+            />
           </div>
         )}
 
@@ -1824,13 +1842,14 @@ export default function TauriSettings({
           )}
 
           {currentTab === 'setups' && (
-            <>
+            <div className="settings-setups">
               <ProcessingSetupsManager />
               <CalibrationMatchingSettings />
               <StackAutomationSettings />
               <ExportDefaultsSettings />
+              <PixInsightSettings />
               <AstroBinSettings />
-            </>
+            </div>
           )}
 
           {currentTab === 'users' && (

@@ -22,10 +22,40 @@ const EXPOSURE_SPLIT_RATIO: f64 = 2.0;
 
 type ExposureStream = Vec<(i32, Option<f64>)>;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectProcessingSettings {
     pub split_exposure_groups: bool,
+    /// The folder below the database's process directory this project's
+    /// masters are saved to, as last used. Absent until a save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_folder: Option<String>,
+}
+
+/// Whether the settings table already carries the process folder column;
+/// a table made by an earlier build lacks it.
+fn has_process_folder_column(conn: &Connection) -> Result<bool, AppError> {
+    let mut statement = conn
+        .prepare("PRAGMA table_info(psf_guard_project_processing)")
+        .map_err(AppError::db)?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(AppError::db)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(AppError::db)?;
+    Ok(columns.iter().any(|name| name == "process_folder"))
+}
+
+/// Remember the folder a project's masters were saved to, without touching
+/// its other settings.
+pub fn remember_process_folder(
+    conn: &mut Connection,
+    project_id: i32,
+    folder: &str,
+) -> Result<(), AppError> {
+    let mut settings = load_settings(conn, project_id)?;
+    settings.process_folder = Some(folder.to_string());
+    save_settings(conn, project_id, settings)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -162,17 +192,22 @@ pub fn load_settings(
     if !exists {
         return Ok(ProjectProcessingSettings::default());
     }
-    let split_exposure_groups = conn
-        .query_row(
-            "SELECT split_exposure_groups FROM psf_guard_project_processing WHERE project_key=?1",
-            [key],
-            |row| row.get::<_, bool>(0),
-        )
+    let with_folder = has_process_folder_column(conn)?;
+    let sql = if with_folder {
+        "SELECT split_exposure_groups, process_folder FROM psf_guard_project_processing WHERE project_key=?1"
+    } else {
+        "SELECT split_exposure_groups, NULL FROM psf_guard_project_processing WHERE project_key=?1"
+    };
+    let row = conn
+        .query_row(sql, [key], |row| {
+            Ok((row.get::<_, bool>(0)?, row.get::<_, Option<String>>(1)?))
+        })
         .optional()
-        .map_err(AppError::db)?
-        .unwrap_or(false);
+        .map_err(AppError::db)?;
+    let (split_exposure_groups, process_folder) = row.unwrap_or((false, None));
     Ok(ProjectProcessingSettings {
         split_exposure_groups,
+        process_folder: process_folder.filter(|folder| !folder.trim().is_empty()),
     })
 }
 
@@ -192,11 +227,16 @@ fn save_settings(
         )",
     )
     .map_err(AppError::db)?;
+    if !has_process_folder_column(&tx)? {
+        tx.execute_batch("ALTER TABLE psf_guard_project_processing ADD COLUMN process_folder TEXT")
+            .map_err(AppError::db)?;
+    }
     tx.execute(
-        "INSERT INTO psf_guard_project_processing(project_key,split_exposure_groups)
-         VALUES (?1,?2) ON CONFLICT(project_key) DO UPDATE
-         SET split_exposure_groups=excluded.split_exposure_groups",
-        params![key, settings.split_exposure_groups],
+        "INSERT INTO psf_guard_project_processing(project_key,split_exposure_groups,process_folder)
+         VALUES (?1,?2,?3) ON CONFLICT(project_key) DO UPDATE
+         SET split_exposure_groups=excluded.split_exposure_groups,
+             process_folder=excluded.process_folder",
+        params![key, settings.split_exposure_groups, settings.process_folder],
     )
     .map_err(AppError::db)?;
     tx.commit().map_err(AppError::db)
@@ -329,7 +369,12 @@ pub async fn update_project_settings(
     require_database_management_allowed(&state)?;
     let conn = ctx.db();
     let mut conn = conn.lock().map_err(AppError::db)?;
-    save_settings(&mut conn, project_id, settings)?;
+    // A body that names only the grouping keeps the remembered folder.
+    let mut settings = settings;
+    if settings.process_folder.is_none() {
+        settings.process_folder = load_settings(&conn, project_id)?.process_folder;
+    }
+    save_settings(&mut conn, project_id, settings.clone())?;
     Ok(Json(ApiResponse::success(settings)))
 }
 
@@ -354,6 +399,30 @@ mod tests {
             (9,1,10,'G','{\"ExposureDuration\":12}'),
             (10,2,20,'R','{\"ExposureDuration\":10}');").unwrap();
         conn
+    }
+
+    #[test]
+    fn an_older_settings_table_gains_the_folder_column_on_save() {
+        let mut conn = fixture();
+        conn.execute_batch(
+            "CREATE TABLE psf_guard_project_processing (
+                project_key TEXT PRIMARY KEY,
+                split_exposure_groups INTEGER NOT NULL CHECK(split_exposure_groups IN (0,1)));
+             INSERT INTO psf_guard_project_processing VALUES ('guid:project-one', 1);",
+        )
+        .unwrap();
+        let before = load_settings(&conn, 1).unwrap();
+        assert!(before.split_exposure_groups);
+        assert_eq!(before.process_folder, None);
+        remember_process_folder(&mut conn, 1, "2026-iris-v1").unwrap();
+        let after = load_settings(&conn, 1).unwrap();
+        assert!(after.split_exposure_groups);
+        assert_eq!(after.process_folder.as_deref(), Some("2026-iris-v1"));
+        // Project two never had a row; the folder alone makes one.
+        remember_process_folder(&mut conn, 2, "2026-m31").unwrap();
+        let other = load_settings(&conn, 2).unwrap();
+        assert!(!other.split_exposure_groups);
+        assert_eq!(other.process_folder.as_deref(), Some("2026-m31"));
     }
 
     #[test]
@@ -388,6 +457,7 @@ mod tests {
             1,
             ProjectProcessingSettings {
                 split_exposure_groups: true,
+                process_folder: None,
             },
         )
         .unwrap();
@@ -427,6 +497,7 @@ mod tests {
             1,
             ProjectProcessingSettings {
                 split_exposure_groups: true,
+                process_folder: None,
             },
         )
         .unwrap();
@@ -459,6 +530,7 @@ mod tests {
             1,
             ProjectProcessingSettings {
                 split_exposure_groups: true,
+                process_folder: None,
             },
         )
         .unwrap();
@@ -524,6 +596,7 @@ mod tests {
             1,
             ProjectProcessingSettings {
                 split_exposure_groups: true,
+                process_folder: None,
             },
         )
         .unwrap();
@@ -572,6 +645,7 @@ mod tests {
             1,
             ProjectProcessingSettings {
                 split_exposure_groups: true,
+                process_folder: None,
             },
         )
         .unwrap();
@@ -588,6 +662,7 @@ mod tests {
             1,
             ProjectProcessingSettings {
                 split_exposure_groups: true,
+                process_folder: None,
             },
         )
         .unwrap();
@@ -607,6 +682,7 @@ mod tests {
                 1,
                 ProjectProcessingSettings {
                     split_exposure_groups: true,
+                    process_folder: None,
                 },
             )
             .unwrap();

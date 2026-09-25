@@ -66,6 +66,7 @@ impl Fixture {
                 reject_archive: None,
                 remote_image_upload: Some(config_a),
                 export_dir: None,
+                process_dir: None,
             },
             DbEntry {
                 id: "catalog-b".into(),
@@ -75,6 +76,7 @@ impl Fixture {
                 reject_archive: None,
                 remote_image_upload: Some(config_b),
                 export_dir: None,
+                process_dir: None,
             },
         ];
         let state = Arc::new(
@@ -126,6 +128,7 @@ impl Fixture {
                     reject_archive: None,
                     remote_image_upload: Some(config),
                     export_dir: None,
+                    process_dir: None,
                 }],
                 self._directory
                     .path()
