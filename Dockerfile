@@ -22,22 +22,27 @@ WORKDIR /app
 # v0.6.3 merge, and a fresh multi-hundred-MB layer written to the build cache
 # each time.
 #
-# The stubs keep this layer keyed on Cargo.toml and Cargo.lock alone. build.rs
+# The stubs keep this layer keyed on workspace manifests and Cargo.lock. build.rs
 # is stubbed too — the real one shells out to npm, and lib.rs is empty here so
 # nothing yet references static/dist.
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir -p src/bin && \
+COPY crates/director-core/Cargo.toml ./crates/director-core/Cargo.toml
+COPY crates/director-ffi/Cargo.toml ./crates/director-ffi/Cargo.toml
+RUN mkdir -p src/bin crates/director-core/src crates/director-ffi/src && \
     echo 'fn main() {}' > src/main.rs && \
     : > src/lib.rs && \
+    : > crates/director-core/src/lib.rs && \
+    : > crates/director-ffi/src/lib.rs && \
     echo 'fn main() {}' > src/bin/psf-guard-cli.rs && \
     echo 'fn main() {}' > build.rs && \
     cargo build --release --locked && \
-    rm -rf src build.rs
+    rm -rf src build.rs crates
 
 # Copy source code. Only these layers move on an ordinary commit; the compiled
 # dependencies above are reused.
 COPY build.rs ./
 COPY src ./src
+COPY crates ./crates
 COPY static ./static
 
 # Drop the stub crate's fingerprints before building for real.
