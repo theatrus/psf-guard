@@ -210,8 +210,9 @@ with that sidecar over versioned local IPC. The process boundary is implemented
 as a testable spike; plugin packaging and equipment integration remain pending.
 Do not maintain parallel Rust and C# versions of the scheduling algorithm.
 
-The core currently lives in this repository; the installable Director plugin
-will live in a separate repository from both PSF Guard and PSF Guard Sync. The
+The core lives in this repository; the Director plugin lives in
+[`theatrus/psf-guard-director-nina-plugin`](https://github.com/theatrus/psf-guard-director-nina-plugin),
+separate from both PSF Guard and PSF Guard Sync. The
 current `tools/director-interop` program is a console proof, not that plugin.
 Follow Chatstronomy's core/plugin release separation: the plugin consumes a
 pinned, verified Rust artifact and does not compile its own copy of the engine.
@@ -496,6 +497,18 @@ decisions. No Sync changes are required to run existing workflows.
 
 Implementation review: [shared-core and native interop spike, PR #460](https://github.com/theatrus/psf-guard/pull/460).
 Follow-on review: [rig meridian exclusions and multiple safe intervals, PR #461](https://github.com/theatrus/psf-guard/pull/461).
+Sidecar review: [bounded IPC and process harness, PR #462](https://github.com/theatrus/psf-guard/pull/462).
+Plugin review: [N.I.N.A. 3.3 runtime host and development bundle, Director PR #1](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/1).
+
+The Director host pins N.I.N.A. `3.3.0.1058-nightly` and the tested sidecar by
+commit, CI run/artifact identity, SHA-256, and wire versions. The C# build consumes
+the artifact rather than compiling Rust. Its initial settings surface exposes
+explicit runtime Start/Stop only; no pairing or equipment dispatch is present.
+It has local process/protocol tests and WPF render tests using N.I.N.A.'s button
+template. Those are not N.I.N.A. plugin discovery or full-stack simulator tests.
+The installed local N.I.N.A. is 3.2, so the 3.3 runtime host has not been loaded
+into it. Signed durable artifacts, native execution, and Chatstronomy state
+integration remain open gates; the current CI artifact pin is developmental.
 
 Baseline checked on 2026-09-25:
 
@@ -633,8 +646,9 @@ dotnet run --project tools/director-sidecar --configuration Release -- target/re
 
 CI runs portable protocol tests on all three platforms and Windows process
 tests against a release executable. Release panic-abort is intentional here:
-the failure stays in the child process, outside N.I.N.A. This is not yet an
-installable plugin. Signed/pinned artifacts, a production lifecycle controller,
+the failure stays in the child process, outside N.I.N.A. The sidecar alone is not
+a plugin. The separate development host bundles this tested executable, but
+signed release artifacts, N.I.N.A.-validated lifecycle behavior,
 durable journals, restart reconciliation, and native N.I.N.A. dispatch remain
 phase-0 gates.
 The existing Sync plugin is unchanged.
