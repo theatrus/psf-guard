@@ -636,10 +636,43 @@ simulated devices, not only mocked plugin classes. Include cancellation,
 duplicate/reordered events, stale conditions, expired assignments, clock skew,
 disk/SQLite contention, missing images, and incompatible versions.
 
-Maintain shared-engine fixtures across server and native plugin hosts. Protect
+Maintain shared-engine fixtures across server and sidecar hosts. Protect
 ordinary TS execution and existing Sync behavior with regression coverage.
 Use an experimental Director release channel until these gates pass; do not
 replace the stable Sync registry entry.
+
+### Full-stack end-to-end gate
+
+Once the Director plugin, shared crate/sidecar, TS adapter, and corresponding
+PSF Guard changes are available, run them together. Passing core fixtures or
+the console process harness does not satisfy this gate. Run the first integrated
+test as soon as those components exist, then repeat it after changes to their
+contracts or execution behavior and before an experimental release.
+
+- Build a separate local PSF Guard instance from the candidate changes. Use
+  copied catalogs, isolated meta storage, a test registry supplied with
+  `--registry`, and a temporary image receive directory. Do not write to live
+  catalogs, production endpoints, or the user's real registry.
+- Install the candidate Director plugin and its pinned runtime into the test
+  N.I.N.A. setup with the supported TS build. Use simulated camera, mount, and
+  other required devices, an isolated profile, and a real sequencer run.
+- Pair with the local server, check in, obtain an assignment, select work in
+  the shared engine, execute through TS, and record the resulting image and
+  timing events. Verify progress in PSF Guard and the plugin UI, not just logs.
+- Grade the captured work in PSF Guard and check in again. Confirm accepted
+  work completes its objective, rejected work can request a bounded retry, and
+  pending assessments do not cause duplicate acquisition.
+- Exercise changed priorities, slow autofocus, horizon/meridian restrictions,
+  operator stop, safety loss, server disconnection, sidecar failure, and restart.
+  Verify recovery reconciles actual execution without replaying a stale decision
+  or starting work outside the assignment or local safety constraints.
+- Re-run ordinary TS and existing Sync workflows to check coexistence. Retain
+  exact commits/package versions, sequence/profile fixtures, redacted logs,
+  execution events, assertions, and UI captures with the relevant PR evidence.
+
+Mark unavailable paths as untested and keep the gate open; do not substitute
+mocked components for the missing integration. No current sidecar-spike result
+claims this full-stack test has run.
 
 Open design choices include objective depth equivalence across instruments,
 coordinate/time precision policy, conservative expiry margins, duration-model
