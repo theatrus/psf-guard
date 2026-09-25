@@ -421,6 +421,7 @@ are required to run existing workflows.
 #### Phase 0 evidence and remaining work
 
 Implementation review: [shared-core and native interop spike, PR #460](https://github.com/theatrus/psf-guard/pull/460).
+Follow-on review: [rig meridian exclusions and multiple safe intervals, PR #461](https://github.com/theatrus/psf-guard/pull/461).
 
 Baseline checked on 2026-09-25:
 
