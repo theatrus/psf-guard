@@ -1321,3 +1321,14 @@
 .export-link:hover {
   text-decoration: underline;
 }
+
+.overview-wbpp-run .link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+}

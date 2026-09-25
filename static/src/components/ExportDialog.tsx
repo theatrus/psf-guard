@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { apiClient } from '../api/client';
-import type { ExportChoice, ExportLayout, ExportPlacement } from '../api/types';
+import type { ExportChoice, ExportLayout, ExportPlacement, WbppOptions } from '../api/types';
+import { DEFAULT_WBPP_OPTIONS } from '../api/types';
 import Dialog from './Dialog';
+import WbppOptionsFields from './WbppOptionsFields';
 
 /** One export the user has asked for, awaiting its layout choice. */
 export interface ExportRequest {
@@ -20,6 +22,8 @@ interface ExportDialogProps {
   request: ExportRequest;
   /** What the layout choice starts from, per the settings panel. */
   defaultLayout: ExportLayout;
+  /** What the WBPP settings start from, per the settings panel. */
+  defaultWbpp?: WbppOptions;
   /**
    * The folder the database's image directories share, as the server sees
    * it: what a referenced export names frames below unless told otherwise.
@@ -94,12 +98,14 @@ const DOWNLOAD_PLACEMENTS: PlacementOption[] = [
 export default function ExportDialog({
   request,
   defaultLayout,
+  defaultWbpp = DEFAULT_WBPP_OPTIONS,
   sourceRoot,
   busy,
   onClose,
   onConfirm,
 }: ExportDialogProps) {
   const [layout, setLayout] = useState<ExportLayout>(defaultLayout);
+  const [wbpp, setWbpp] = useState<WbppOptions>(defaultWbpp);
   // Ungraded lights are what a fresh night mostly is, and the stack previews
   // include them, so an export does too unless told otherwise.
   const [includePending, setIncludePending] = useState(true);
@@ -131,6 +137,7 @@ export default function ExportDialog({
     layout,
     include_pending: includePending,
     placement: effectivePlacement,
+    ...(layout === 'wbpp' ? { wbpp } : {}),
     ...(effectivePlacement === 'reference' && localRoot.trim()
       ? { local_root: localRoot.trim() }
       : {}),
@@ -205,6 +212,12 @@ export default function ExportDialog({
           </label>
         ))}
       </fieldset>
+      {layout === 'wbpp' && (
+        <fieldset className="export-layout-options">
+          <legend>WBPP settings</legend>
+          <WbppOptionsFields value={wbpp} onChange={setWbpp} idPrefix="export-wbpp" />
+        </fieldset>
+      )}
       {(
         <fieldset className="export-layout-options">
           <legend>Files</legend>

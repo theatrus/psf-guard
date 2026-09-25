@@ -516,8 +516,7 @@ fn place_symlink(source: &Path, dest: &Path) -> std::io::Result<()> {
 pub fn write_wbpp_scripts(
     plan: &ExportPlan,
     dest_root: &Path,
-    run: wbpp::WbppRun,
-    files: &wbpp::WbppFiles,
+    spec: &wbpp::WbppScriptSpec,
 ) -> Result<Vec<PathBuf>> {
     if let Some(reason) = wbpp::unusable_destination(dest_root) {
         anyhow::bail!(reason);
@@ -525,13 +524,11 @@ pub fn write_wbpp_scripts(
     std::fs::create_dir_all(dest_root)
         .with_context(|| format!("creating {}", dest_root.display()))?;
     let mut written = Vec::new();
-    let mut scripts = vec![
-        ("run-wbpp.sh", wbpp::shell_script(plan, run, files)),
-        ("run-wbpp.cmd", wbpp::batch_script(plan, run, files)),
+    let scripts = [
+        ("run-wbpp.sh", wbpp::shell_script(plan, spec)),
+        ("run-wbpp.cmd", wbpp::batch_script(plan, spec)),
+        (wbpp::JS_RUNNER, wbpp::js_runner(plan, spec)),
     ];
-    if let Some(body) = wbpp::js_runner(plan, run, files) {
-        scripts.push((wbpp::JS_RUNNER, body));
-    }
     for (name, body) in scripts {
         let path = dest_root.join(name);
         std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
@@ -798,8 +795,11 @@ mod tests {
             "{destinations:?}"
         );
         // And the runner turns the session keyword on.
-        let script = wbpp::shell_script(&plan, wbpp::WbppRun::LoadOnly, &wbpp::WbppFiles::Placed);
-        assert!(script.contains("keywords=SESSION"), "{script}");
+        let script = wbpp::js_runner(&plan, &wbpp::WbppScriptSpec::default());
+        assert!(
+            script.contains("var psfSessionGrouping = true;"),
+            "{script}"
+        );
     }
 
     /// A symlinked export costs no space and can point across filesystems,

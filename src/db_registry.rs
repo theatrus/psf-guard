@@ -52,6 +52,11 @@ pub struct DbEntry {
     /// export is off and the UI offers the archive download instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub export_dir: Option<String>,
+    /// Where finished work for this rig lives, such as `_Process` beside its
+    /// `_Source`: a WBPP run's masters can be saved below it, one folder per
+    /// processing project. Absent means the save is not offered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_dir: Option<String>,
 }
 
 /// One paired client credential. Each pairing mints its own, so revoking a
@@ -402,6 +407,10 @@ pub struct DbRegistry {
     /// means no filter has an AstroBin id yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub astrobin: Option<AstroBinSettings>,
+    /// Where PixInsight is on this machine, for in-app WBPP runs. Additive
+    /// within registry v2; absent means the standard install path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pixinsight: Option<PixInsightSettings>,
 }
 
 /// What the AstroBin CSV export needs from the person: which equipment
@@ -474,6 +483,28 @@ pub struct ExportSettings {
     /// grouped-by-target tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_layout: Option<crate::commands::export::ExportLayout>,
+    /// The WBPP settings an export or an in-app run starts from. Absent
+    /// means the defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wbpp: Option<crate::commands::export::wbpp::WbppOptions>,
+}
+
+/// Where PixInsight is, for running WBPP from inside PSF Guard.
+///
+/// Lives in the registry beside the other process-global preferences: it is
+/// a property of the machine the server runs on, and the settings panel is
+/// where a person looks when a run says PixInsight was not found.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PixInsightSettings {
+    /// The PixInsight executable (`PixInsight.sh` on Linux). Absent means
+    /// look in each platform's standard place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+    /// Where WBPP runs put their script and output, since a run writes
+    /// gigabytes and the cache may sit on a small disk. Absent means the
+    /// database's export directory when it has one, else the cache.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runs_dir: Option<String>,
 }
 
 impl Default for DbRegistry {
@@ -488,6 +519,7 @@ impl Default for DbRegistry {
             export: None,
             stacking: None,
             astrobin: None,
+            pixinsight: None,
         }
     }
 }
@@ -614,6 +646,7 @@ impl DbRegistry {
                 reject_archive: None,
                 remote_image_upload: None,
                 export_dir: None,
+                process_dir: None,
             });
         }
         reg.save(path)?;
@@ -682,6 +715,7 @@ impl DbRegistry {
             reject_archive: None,
             remote_image_upload: None,
             export_dir: None,
+            process_dir: None,
         });
         Ok(self.databases.last().unwrap())
     }
@@ -920,6 +954,7 @@ mod tests {
                 ..Default::default()
             }),
             export_dir: None,
+            process_dir: None,
         });
         reg.save(&path).unwrap();
 
@@ -992,6 +1027,7 @@ mod tests {
         let reg = DbRegistry {
             export: Some(ExportSettings {
                 default_layout: Some(crate::commands::export::ExportLayout::Wbpp),
+                wbpp: None,
             }),
             ..Default::default()
         };

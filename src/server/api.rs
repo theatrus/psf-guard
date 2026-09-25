@@ -411,6 +411,10 @@ pub struct DatabaseSummary {
     /// UI offers a server export that runs without database management.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub export_directory: Option<String>,
+    /// Where this rig's finished work lives; a WBPP run's masters can be
+    /// saved below it. When present the run dialog offers the save.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_directory: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -777,6 +781,33 @@ pub struct ExportQuery {
     /// PixInsight sees it, when that is not the server.
     #[serde(default)]
     pub remote_root: Option<String>,
+    /// The WBPP settings the runner passes, one query parameter each since a
+    /// query string carries no nesting. Absent means the defaults.
+    #[serde(default)]
+    pub wbpp_quality: Option<crate::commands::export::wbpp::WbppQuality>,
+    #[serde(default)]
+    pub wbpp_fast_integration: Option<crate::commands::export::wbpp::WbppFastIntegration>,
+    #[serde(default)]
+    pub wbpp_drizzle: Option<crate::commands::export::wbpp::WbppDrizzle>,
+    #[serde(default)]
+    pub wbpp_autocrop: Option<bool>,
+    #[serde(default)]
+    pub wbpp_rejection: Option<crate::commands::export::wbpp::WbppRejection>,
+}
+
+impl ExportQuery {
+    pub fn wbpp_options(&self) -> crate::commands::export::wbpp::WbppOptions {
+        let defaults = crate::commands::export::wbpp::WbppOptions::default();
+        crate::commands::export::wbpp::WbppOptions {
+            quality: self.wbpp_quality.unwrap_or(defaults.quality),
+            fast_integration: self
+                .wbpp_fast_integration
+                .unwrap_or(defaults.fast_integration),
+            drizzle: self.wbpp_drizzle.unwrap_or(defaults.drizzle),
+            autocrop: self.wbpp_autocrop,
+            rejection: self.wbpp_rejection,
+        }
+    }
 }
 
 /// Body of `POST /api/db/{db_id}/export/local` — place the selected lights
@@ -807,6 +838,9 @@ pub struct LocalExportRequest {
     /// (place nothing; the WBPP runner names the originals).
     #[serde(default)]
     pub placement: Option<crate::commands::export::Placement>,
+    /// The WBPP settings the runner passes. Absent means the defaults.
+    #[serde(default)]
+    pub wbpp: Option<crate::commands::export::wbpp::WbppOptions>,
     /// For a referenced export: the folder the runner names frames below,
     /// as this machine sees it. Absent, the frames' common parent.
     #[serde(default)]
@@ -856,6 +890,9 @@ pub struct ServerExportRequest {
     /// PixInsight sees it, when that is not the server.
     #[serde(default)]
     pub remote_root: Option<String>,
+    /// The WBPP settings the runner passes. Absent means the defaults.
+    #[serde(default)]
+    pub wbpp: Option<crate::commands::export::wbpp::WbppOptions>,
 }
 
 /// Response of both methods on `/api/db/{db_id}/export/server`. On POST,
@@ -956,6 +993,9 @@ pub struct UpdateDatabaseRequest {
     /// New export directory. `Some("")` clears it; absent leaves it alone.
     #[serde(default)]
     pub export_dir: Option<String>,
+    /// New process directory. `Some("")` clears it; absent leaves it alone.
+    #[serde(default)]
+    pub process_dir: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

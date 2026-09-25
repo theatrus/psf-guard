@@ -20,6 +20,7 @@ pub mod image_io;
 pub mod models;
 pub mod nina_star_detection;
 pub mod photometry;
+pub mod pixinsight;
 pub mod preview_format;
 pub mod processing_setups;
 pub mod psf_fitting;

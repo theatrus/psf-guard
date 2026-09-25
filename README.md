@@ -714,6 +714,20 @@ psf-guard astrobin-csv my-db --target-id 12 --detail full -o ngc7023.csv
 See **[AstroBin acquisition export](docs/ASTROBIN_EXPORT.md)** for the row
 rules and the filter id map.
 
+## ⚗ Stack in WBPP from the Overview
+
+**Stack in WBPP** on a project card runs PixInsight's WeightedBatchPreprocessing
+on the server, against the frames where they are, with each night's flats
+matched to its lights. It runs headless, through `xvfb-run` on a server with
+no display, and the dialog follows WBPP's own log until the masters are ready
+to download. WBPP's settings are yours to pick: quality preset, Fast
+Integration (off by default, since WBPP would otherwise switch large groups
+to it unseen), drizzle, autocrop, and light rejection. The same settings ride
+in the runner scripts of a WBPP export. Tell PSF Guard where PixInsight is
+under **Settings → Setups → PixInsight**, and give a database a process
+directory to save a run's masters beside your finished work. See
+**[Stacking with PixInsight's WBPP](docs/WBPP.md)**.
+
 See **[Calibration libraries](docs/CALIBRATION_LIBRARY.md)** for import,
 matching, stack-master, export, cache, and database-sync rules. Each database
 in Settings also has a library manager for finding missing files, reviewing

@@ -27,6 +27,7 @@ describe('ExportDialog', () => {
       layout: 'wbpp',
       include_pending: true,
       placement: 'reflink',
+      wbpp: { quality: 'maximum', fast_integration: 'off', drizzle: 'off' },
     });
 
     fireEvent.click(pending);
@@ -66,6 +67,7 @@ describe('ExportDialog', () => {
       placement: 'reference',
       local_root: '/mnt/nas/astro',
       remote_root: 'P:\\',
+      wbpp: { quality: 'maximum', fast_integration: 'off', drizzle: 'off' },
     });
 
     // Back to the standard layout, the reference choice falls back to the
@@ -75,6 +77,28 @@ describe('ExportDialog', () => {
     expect(onConfirm.mock.lastCall?.[0]).toMatchObject({ placement: 'reflink' });
     expect(onConfirm.mock.lastCall?.[0]).not.toHaveProperty('remote_root');
     expect(onConfirm.mock.lastCall?.[0]).not.toHaveProperty('local_root');
+    // The standard layout has no runner, so it carries no WBPP settings.
+    expect(onConfirm.mock.lastCall?.[0]).not.toHaveProperty('wbpp');
+  });
+
+  it('carries the chosen WBPP settings with the WBPP layout, and in a download link', () => {
+    const onConfirm = vi.fn();
+    render(
+      <ExportDialog
+        request={{ ...request, kind: 'server' }}
+        defaultLayout="wbpp"
+        defaultWbpp={{ quality: 'good', fast_integration: 'auto', drizzle: 'off' }}
+        busy={false}
+        onClose={() => {}}
+        onConfirm={onConfirm}
+      />
+    );
+    fireEvent.change(screen.getByLabelText(/^Drizzle/), { target: { value: '2x' } });
+    fireEvent.change(screen.getByLabelText(/^Autocrop/), { target: { value: 'off' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start export' }));
+    expect(onConfirm.mock.lastCall?.[0]).toMatchObject({
+      wbpp: { quality: 'good', fast_integration: 'auto', drizzle: '2x', autocrop: false },
+    });
   });
 
   it('lets a zip download carry the scripts alone, naming the frames in place', () => {
@@ -90,6 +114,8 @@ describe('ExportDialog', () => {
     );
     const download = () => screen.getByRole('link', { name: 'Download zip' }).getAttribute('href')!;
     expect(download()).toContain('include_pending=true');
+    expect(download()).toContain('wbpp_quality=maximum');
+    expect(download()).toContain('wbpp_fast_integration=off');
     expect(download()).not.toContain('placement=');
     fireEvent.click(screen.getByRole('checkbox', { name: /Include ungraded lights/ }));
     expect(download()).not.toContain('include_pending');
@@ -107,6 +133,7 @@ describe('ExportDialog', () => {
     fireEvent.click(screen.getByRole('radio', { name: /Grouped by target/ }));
     expect(screen.getByRole('radio', { name: /Scripts only/ })).toBeDisabled();
     expect(download()).not.toContain('placement=');
+    expect(download()).not.toContain('wbpp_');
   });
 });
 

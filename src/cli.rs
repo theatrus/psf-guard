@@ -98,6 +98,124 @@ impl From<AstroBinDetailArg> for crate::astrobin::AstroBinDetail {
     }
 }
 
+/// Mirrors of the WBPP option enums for the command line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum WbppQualityArg {
+    #[default]
+    Maximum,
+    Good,
+    Fast,
+}
+
+impl From<WbppQualityArg> for crate::commands::export::wbpp::WbppQuality {
+    fn from(value: WbppQualityArg) -> Self {
+        match value {
+            WbppQualityArg::Maximum => Self::Maximum,
+            WbppQualityArg::Good => Self::Good,
+            WbppQualityArg::Fast => Self::Fast,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum WbppFastIntegrationArg {
+    #[default]
+    Off,
+    Auto,
+    On,
+}
+
+impl From<WbppFastIntegrationArg> for crate::commands::export::wbpp::WbppFastIntegration {
+    fn from(value: WbppFastIntegrationArg) -> Self {
+        match value {
+            WbppFastIntegrationArg::Off => Self::Off,
+            WbppFastIntegrationArg::Auto => Self::Auto,
+            WbppFastIntegrationArg::On => Self::On,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum WbppDrizzleArg {
+    #[default]
+    Off,
+    #[value(name = "2x")]
+    Scale2,
+    #[value(name = "3x")]
+    Scale3,
+}
+
+impl From<WbppDrizzleArg> for crate::commands::export::wbpp::WbppDrizzle {
+    fn from(value: WbppDrizzleArg) -> Self {
+        match value {
+            WbppDrizzleArg::Off => Self::Off,
+            WbppDrizzleArg::Scale2 => Self::Scale2,
+            WbppDrizzleArg::Scale3 => Self::Scale3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum WbppRejectionArg {
+    PercentileClip,
+    WinsorizedSigma,
+    LinearFit,
+    Esd,
+    Rcr,
+    Auto,
+}
+
+impl From<WbppRejectionArg> for crate::commands::export::wbpp::WbppRejection {
+    fn from(value: WbppRejectionArg) -> Self {
+        match value {
+            WbppRejectionArg::PercentileClip => Self::PercentileClip,
+            WbppRejectionArg::WinsorizedSigma => Self::WinsorizedSigma,
+            WbppRejectionArg::LinearFit => Self::LinearFit,
+            WbppRejectionArg::Esd => Self::Esd,
+            WbppRejectionArg::Rcr => Self::Rcr,
+            WbppRejectionArg::Auto => Self::Auto,
+        }
+    }
+}
+
+/// The WBPP settings an export's runner passes, shared by `export` and
+/// `stack-wbpp`.
+#[derive(Debug, Clone, clap::Args)]
+pub struct WbppOptionArgs {
+    /// How hard WBPP works at local normalization: WBPP's own presets.
+    #[arg(long, value_enum, default_value_t = WbppQualityArg::Maximum)]
+    pub wbpp_quality: WbppQualityArg,
+
+    /// Fast Integration of the light groups. WBPP switches any group of
+    /// 150 frames or more to it on its own unless told `off`.
+    #[arg(long, value_enum, default_value_t = WbppFastIntegrationArg::Off)]
+    pub wbpp_fast_integration: WbppFastIntegrationArg,
+
+    /// Drizzle integration of the lights, at WBPP's default drop shrink.
+    #[arg(long, value_enum, default_value_t = WbppDrizzleArg::Off)]
+    pub wbpp_drizzle: WbppDrizzleArg,
+
+    /// Crop the masters to the area every frame covers (WBPP's default is on).
+    #[arg(long)]
+    pub wbpp_autocrop: Option<bool>,
+
+    /// The light integration's pixel rejection (WBPP's default is auto).
+    #[arg(long, value_enum)]
+    pub wbpp_rejection: Option<WbppRejectionArg>,
+}
+
+impl From<&WbppOptionArgs> for crate::commands::export::wbpp::WbppOptions {
+    fn from(args: &WbppOptionArgs) -> Self {
+        Self {
+            quality: args.wbpp_quality.into(),
+            fast_integration: args.wbpp_fast_integration.into(),
+            drizzle: args.wbpp_drizzle.into(),
+            autocrop: args.wbpp_autocrop,
+            rejection: args.wbpp_rejection.map(Into::into),
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub enum Commands {
     /// Dump grading results for all images
@@ -315,6 +433,9 @@ pub enum Commands {
         /// Print the plan without writing anything.
         #[arg(long)]
         dry_run: bool,
+
+        #[command(flatten)]
+        wbpp: WbppOptionArgs,
 
         /// Override the image directories to search (defaults to the
         /// registry entry's; required when `db` is a bare .sqlite path).

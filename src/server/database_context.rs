@@ -404,6 +404,10 @@ pub struct DatabaseContext {
     /// write here was given when the directory was configured, so the export
     /// job runs without the database-management grant.
     pub export_dir: Option<PathBuf>,
+    /// Where this rig's finished work lives; a WBPP run's masters are saved
+    /// below it on request. Consent to write there was given when it was
+    /// configured.
+    pub process_dir: Option<PathBuf>,
     /// Per-DB cache directory: `<cache_root>/<slug>/`. Created on construction.
     /// All preview/annotated/PSF artifacts for this database live below here,
     /// so two DBs with overlapping image IDs do not collide.
@@ -465,6 +469,8 @@ pub struct DatabaseContext {
     pub import_job: crate::server::import_job::SharedImportJob,
     /// Per-DB singleton export job state (see `server::export_job`).
     pub export_job: crate::server::export_job::SharedExportJob,
+    /// Per-DB singleton WBPP run (see `server::wbpp_run`).
+    pub wbpp_run: crate::server::wbpp_run::SharedWbppRun,
     /// Database-wide, low-priority quality analysis state.
     pub quality_backfill: crate::server::quality_backfill::SharedQualityBackfill,
     /// Serializes publish/import for remotely posted images within one
@@ -693,6 +699,7 @@ fn publish_file_check_cache(
 impl DatabaseContext {
     /// `cache_root` is the shared parent directory; this constructor appends
     /// the slug to produce a per-DB cache subdir and creates it on disk.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: String,
         name: String,
@@ -700,6 +707,7 @@ impl DatabaseContext {
         image_dirs: Vec<String>,
         remote_image_upload: Option<crate::db_registry::RemoteImageUploadConfig>,
         export_dir: Option<String>,
+        process_dir: Option<String>,
         cache_root: String,
     ) -> Result<Self> {
         use std::path::Path;
@@ -746,6 +754,19 @@ impl DatabaseContext {
                 }
             })
             .transpose()?;
+        let process_dir = process_dir
+            .filter(|dir| !dir.trim().is_empty())
+            .map(|dir| {
+                let path = PathBuf::from(&dir);
+                if path.is_relative() {
+                    Err(anyhow::anyhow!(
+                        "Process directory must be an absolute path: {dir}"
+                    ))
+                } else {
+                    Ok(path)
+                }
+            })
+            .transpose()?;
 
         let cache_dir_path = PathBuf::from(&cache_root).join(&id);
         std::fs::create_dir_all(&cache_dir_path).map_err(|e| {
@@ -769,6 +790,7 @@ impl DatabaseContext {
             remote_image_upload,
             remote_image_upload_dir,
             export_dir,
+            process_dir,
             cache_dir,
             cache_dir_path,
             db_connection: Arc::new(Mutex::new(conn)),
@@ -792,6 +814,7 @@ impl DatabaseContext {
             spatial_metrics: Arc::new(RwLock::new(Default::default())),
             import_job: Arc::new(RwLock::new(Default::default())),
             export_job: Arc::new(RwLock::new(Default::default())),
+            wbpp_run: Arc::new(RwLock::new(Default::default())),
             quality_backfill: Arc::new(RwLock::new(Default::default())),
             image_import_mutex: Arc::new(TokioMutex::new(())),
         })
@@ -1959,6 +1982,7 @@ impl DatabaseContext {
             remote_image_upload: None,
             remote_image_upload_dir: None,
             export_dir: None,
+            process_dir: None,
             cache_dir: "/tmp/psf-guard-test".to_string(),
             cache_dir_path: PathBuf::from("/tmp/psf-guard-test"),
             db_connection: Arc::new(Mutex::new(conn)),
@@ -1982,6 +2006,7 @@ impl DatabaseContext {
             spatial_metrics: Arc::new(RwLock::new(Default::default())),
             import_job: Arc::new(RwLock::new(Default::default())),
             export_job: Arc::new(RwLock::new(Default::default())),
+            wbpp_run: Arc::new(RwLock::new(Default::default())),
             quality_backfill: Arc::new(RwLock::new(Default::default())),
             image_import_mutex: Arc::new(TokioMutex::new(())),
         }
@@ -1999,6 +2024,7 @@ impl Clone for DatabaseContext {
             remote_image_upload: self.remote_image_upload.clone(),
             remote_image_upload_dir: self.remote_image_upload_dir.clone(),
             export_dir: self.export_dir.clone(),
+            process_dir: self.process_dir.clone(),
             cache_dir: self.cache_dir.clone(),
             cache_dir_path: self.cache_dir_path.clone(),
             db_connection: self.db_connection.clone(),
@@ -2022,6 +2048,7 @@ impl Clone for DatabaseContext {
             spatial_metrics: self.spatial_metrics.clone(),
             import_job: self.import_job.clone(),
             export_job: self.export_job.clone(),
+            wbpp_run: self.wbpp_run.clone(),
             quality_backfill: self.quality_backfill.clone(),
             image_import_mutex: self.image_import_mutex.clone(),
         }
@@ -2241,6 +2268,7 @@ mod tests {
             "Test".into(),
             db_path.to_string_lossy().into_owned(),
             vec![img_dir.to_string_lossy().into_owned()],
+            None,
             None,
             None,
             dir.join("cache").to_string_lossy().into_owned(),
