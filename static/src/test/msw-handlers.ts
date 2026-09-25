@@ -51,7 +51,24 @@ const idleSpatialScan = {
   status: 'ready',
 };
 
+const idleWbppRun = {
+  success: true,
+  data: {
+    started: false,
+    progress: {
+      running: false, stage: '', scope: '', work_dir: '', output_dir: '', free_bytes_at_start: null,
+      options: null, frames: 0, lights: 0, missing_files: 0, command: null, pid: null,
+      started_at: null, finished_at: null, exit_code: null, wbpp_stage: null, wbpp_steps: 0,
+      wbpp_elapsed: null, log_path: null, log_tail: [], log_errors: [], outputs: [], error: null,
+      project_id: null, publish: null,
+    },
+  },
+  error: null,
+  status: 'ready',
+};
+
 export const handlers = [
+  http.get('/api/db/:dbId/wbpp/runs/current', () => HttpResponse.json(idleWbppRun)),
   http.get('/api/db/:dbId/projects/:projectId/processing-settings', () => HttpResponse.json({
     success: true, data: { split_exposure_groups: false }, error: null,
   })),

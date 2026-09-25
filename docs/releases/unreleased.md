@@ -6,6 +6,10 @@
 
 ## Added
 
+- The Overview shows every database's WBPP run under way or just
+  finished in any browser tab, as a status line and as the state of the
+  project's **Stack in WBPP** action, and either reopens the run's dialog.
+
 - **AstroBin** action on every project card and target row of the
   Overview, and an `astrobin-csv` command, write the acquisition CSV
   AstroBin's upload page imports: one row per night, filter and exposure
