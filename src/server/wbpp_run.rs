@@ -1119,17 +1119,22 @@ mod tests {
             first.directory,
             process
                 .path()
-                .join("2026-iris-v1/master")
+                .join("2026-iris-v1")
+                .join("master")
                 .display()
                 .to_string()
         );
         assert!(process
             .path()
-            .join("2026-iris-v1/master/masterLight_L.xisf")
+            .join("2026-iris-v1")
+            .join("master")
+            .join("masterLight_L.xisf")
             .is_file());
         assert!(!process
             .path()
-            .join("2026-iris-v1/master/masterLight_L.xisf.part")
+            .join("2026-iris-v1")
+            .join("master")
+            .join("masterLight_L.xisf.part")
             .exists());
 
         // The same masters again are recognised; a changed one is left alone.
@@ -1139,9 +1144,15 @@ mod tests {
         assert_eq!(second.skipped_existing, 1);
         assert_eq!(second.conflicts, vec!["masterBias.xisf"]);
         assert_eq!(
-            std::fs::metadata(process.path().join("2026-iris-v1/master/masterBias.xisf"))
-                .unwrap()
-                .len(),
+            std::fs::metadata(
+                process
+                    .path()
+                    .join("2026-iris-v1")
+                    .join("master")
+                    .join("masterBias.xisf")
+            )
+            .unwrap()
+            .len(),
             200
         );
 
