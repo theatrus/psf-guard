@@ -28,11 +28,14 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY crates/director-core/Cargo.toml ./crates/director-core/Cargo.toml
 COPY crates/director-ffi/Cargo.toml ./crates/director-ffi/Cargo.toml
-RUN mkdir -p src/bin crates/director-core/src crates/director-ffi/src && \
+COPY crates/director-runtime/Cargo.toml ./crates/director-runtime/Cargo.toml
+RUN mkdir -p src/bin crates/director-core/src crates/director-ffi/src crates/director-runtime/src && \
     echo 'fn main() {}' > src/main.rs && \
     : > src/lib.rs && \
     : > crates/director-core/src/lib.rs && \
     : > crates/director-ffi/src/lib.rs && \
+    : > crates/director-runtime/src/lib.rs && \
+    echo 'fn main() {}' > crates/director-runtime/src/main.rs && \
     echo 'fn main() {}' > src/bin/psf-guard-cli.rs && \
     echo 'fn main() {}' > build.rs && \
     cargo build --release --locked && \

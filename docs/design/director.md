@@ -198,8 +198,8 @@ before production coordination data is stored.
 
 Implementation direction: a standalone Rust planning crate used directly by
 PSF Guard and by a bundled Director sidecar. The C# N.I.N.A. plugin communicates
-with that sidecar over versioned local IPC. The sidecar boundary and plugin
-packaging still need implementation and validation.
+with that sidecar over versioned local IPC. The process boundary is implemented
+as a testable spike; plugin packaging and equipment integration remain pending.
 Do not maintain parallel Rust and C# versions of the scheduling algorithm.
 
 The core currently lives in this repository; the installable Director plugin
@@ -224,8 +224,8 @@ Sidecar exit, timeout, protocol mismatch, or malformed responses revoke pending
 decisions and prevent new dispatch. N.I.N.A. remains responsible for an in-flight
 operation and continuous safety handling. On restart, reconcile the durable
 execution journal and resubmit current state; never replay a stale decision just
-because its IPC request was retried. The exact pipe framing, startup handshake,
-and failure policy belong to the phase-0 sidecar/plugin slice.
+because its IPC request was retried. The phase-0 protocol described below proves
+the process boundary, not durable recovery or permission to operate equipment.
 
 The core has no HTTP, SQLite, N.I.N.A., or TS dependencies. Hosts provide inputs
 and execute outputs. Time and randomness are explicit inputs, not hidden global
@@ -412,6 +412,8 @@ its acceptance gate passes and its review and validation evidence is linked here
   meridian exclusions without bridging horizon gaps; validate transit coverage.
 - [x] Choose a separate thin plugin plus bundled Rust sidecar, following the
   Chatstronomy core/plugin distribution model with versioned local IPC.
+- [x] Exercise the same golden decisions through a real Windows sidecar with
+  bounded framing, version negotiation, peer checks, and process failure tests.
 - [ ] Finalize crate ownership, IPC framing, local state layout, and contracts.
 
 Gate: one simulated target/exposure runs through the supported adapter; the
@@ -516,6 +518,53 @@ The Director CI workflow runs Rust checks and the .NET/native vectors on
 Windows, Linux, and macOS. Only local Windows results are evidence until those
 hosted jobs pass. The existing application remains the default Cargo workspace
 member, so normal application builds do not package the experimental native DLL.
+
+#### Sidecar protocol spike
+
+[`crates/director-runtime`](../../crates/director-runtime/src/lib.rs) links the
+same core into a separate executable. The Windows-only
+[.NET process harness](../../tools/director-sidecar/Program.cs) launches it over
+a random, current-user-only, first-instance named pipe. Both ends verify the
+peer process ID. Only the pipe name and host PID appear in process arguments;
+this protocol has no credential, network, database, or equipment operations.
+
+IPC version 1 uses a four-byte little-endian length followed by UTF-8 JSON.
+Frames are limited to 266,240 bytes before body allocation. The nested planning
+request retains its original JSON and the core's 262,144-byte limit, including
+duplicate-field validation. Every envelope contains `protocol_version`,
+`session_id`, `request_id`, and `payload`; payloads use a `type` discriminator.
+
+- `hello` must be request 0 with a fresh 32-hex-character session ID. It binds
+  the rig ID and requires exact runtime 0.1.0, engine 0.2.0, and contract 2.
+  `ready` confirms all versions and the rig.
+- `evaluate` wraps one core request and returns a `decision` with the unchanged
+  core response. Valid requests for another assignment rig terminate the session.
+  Invalid planning inputs return core errors; invalid IPC terminates the session.
+- `ping` returns `pong`; `shutdown` returns `stopped` and exits. Every message
+  after hello requires the next consecutive request ID, including heartbeats.
+- Pipe connection and hello each have a 15-second deadline. After hello, each
+  complete incoming frame has a 30-second deadline; writes have 10 seconds.
+  The test host applies a five-second request deadline and kills its owned
+  process on an interrupted exchange. A production controller must keep the
+  connection alive during long equipment operations without blocking N.I.N.A.
+- Clean EOF ends the child normally. Truncation, timeout, incompatible versions,
+  and stale/duplicate requests end the session without a replayed response.
+  A new child must negotiate a new session and receive a fresh snapshot.
+
+Run the real Windows process tests:
+
+```powershell
+cargo test --locked -p psf-guard-director-runtime
+cargo build --locked --release -p psf-guard-director-runtime
+dotnet run --project tools/director-sidecar --configuration Release -- target/release/psf-guard-director-runtime.exe crates/director-core/tests/fixtures/decisions.json crates/director-core/tests/fixtures/rig-windows.json
+```
+
+CI runs portable protocol tests on all three platforms and Windows process
+tests against a release executable. Release panic-abort is intentional here:
+the failure stays in the child process, outside N.I.N.A. This is not yet an
+installable plugin. Signed/pinned artifacts, a production lifecycle controller,
+durable journals, restart reconciliation, and TS dispatch remain phase-0 gates.
+The existing Sync plugin is unchanged.
 
 ### Phase 1: meta database and global project model
 

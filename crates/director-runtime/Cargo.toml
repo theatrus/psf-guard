@@ -1,0 +1,20 @@
+[package]
+name = "psf-guard-director-runtime"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "Apache-2.0"
+publish = false
+description = "Local sidecar protocol and planning host for PSF Guard Director"
+
+[dependencies]
+psf-guard-director-core = { path = "../director-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+tokio = { version = "1", features = ["io-util", "macros", "rt", "net", "time"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Pipes"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }

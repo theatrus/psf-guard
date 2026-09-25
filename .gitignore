@@ -2,6 +2,8 @@
 /target/
 /tools/director-interop/bin/
 /tools/director-interop/obj/
+/tools/director-sidecar/bin/
+/tools/director-sidecar/obj/
 **/*.rs.bk
 *.pdb
 
