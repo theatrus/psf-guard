@@ -42,3 +42,9 @@ jobs:
         run: dotnet format tools/director-sidecar --verify-no-changes
       - if: runner.os == 'Windows'
         run: dotnet run --project tools/director-sidecar --configuration Release -- target/release/psf-guard-director-runtime.exe crates/director-core/tests/fixtures/decisions.json crates/director-core/tests/fixtures/rig-windows.json
+      - if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: director-runtime-windows-x64
+          path: target/release/psf-guard-director-runtime.exe
+          if-no-files-found: error
