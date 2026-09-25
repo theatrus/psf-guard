@@ -1322,6 +1322,18 @@
   text-decoration: underline;
 }
 
+.export-link.wbpp-state-running {
+  color: var(--color-warning, #b9770e);
+}
+
+.export-link.wbpp-state-done {
+  color: var(--color-success, #1e8449);
+}
+
+.export-link.wbpp-state-error {
+  color: var(--color-error, #c0392b);
+}
+
 .overview-wbpp-run .link-button {
   padding: 0;
   border: 0;

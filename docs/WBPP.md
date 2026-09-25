@@ -102,8 +102,13 @@ output. Everything stays in the run folder, so it is also there on the
 server's disk for PixInsight to open directly. A run that wrote no master
 is reported as failed, with the last error WBPP logged.
 
-The status line on the Overview keeps following the run after the dialog
-closes, and reopens it.
+The Overview shows every database's run under way or just finished, in
+whichever browser or tab you open it from: a status line above the
+projects, and the project's own **Stack in WBPP** action reads *Stacking
+in WBPP…*, *WBPP masters ready* or *WBPP failed* until the next run.
+Either reopens the dialog. The run's state lives in the server process,
+so a server restart forgets a finished run's progress and results; its
+folder and files stay on disk.
 
 ### Keep the masters with your finished work
 
