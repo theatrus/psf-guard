@@ -1,0 +1,39 @@
+name: Director planning spike
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    name: Director parity (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            library: psf_guard_director_ffi.dll
+          - os: ubuntu-22.04
+            library: libpsf_guard_director_ffi.so
+          - os: macos-latest
+            library: libpsf_guard_director_ffi.dylib
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked -p psf-guard-director-core -p psf-guard-director-ffi --all-targets -- -D warnings
+      - run: cargo test --locked -p psf-guard-director-core -p psf-guard-director-ffi
+      - run: cargo build --locked --profile director -p psf-guard-director-ffi
+      - run: dotnet run --project tools/director-interop --configuration Release -- target/director/${{ matrix.library }} crates/director-core/tests/fixtures/decisions.json

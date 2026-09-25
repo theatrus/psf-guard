@@ -1,6 +1,7 @@
 # PSF Guard Director: goal-driven acquisition
 
-Status: proposed architecture and phased implementation plan; not implemented.
+Status: phase 0 in progress. Shared-core/native interop spike implemented;
+no acquisition integration or production Director plugin yet.
 Last updated: 2026-09-25.
 
 This is the tracking document for Director. Update the phase checklist and
@@ -274,8 +275,8 @@ bounded authorization defines that risk.
 
 ## Phased delivery
 
-All implementation phases are pending. A phase is complete only when its
-acceptance gate passes and its review and validation evidence is linked here.
+Phase 0 is in progress; later phases are pending. A phase is complete only when
+its acceptance gate passes and its review and validation evidence is linked here.
 
 ### Phase 0: compatibility and execution spike
 
@@ -284,11 +285,83 @@ acceptance gate passes and its review and validation evidence is linked here.
 - [ ] Prove the TS execution extension while retaining ordinary TS behavior.
 - [ ] Prove the shared Rust core loads and returns decisions in PSF Guard and
   a minimal C# plugin, including native packaging and error handling.
+- [x] Implement a deterministic core linked into the PSF Guard Rust library and
+  replay shared vectors through a native library from a .NET 10 console host.
 - [ ] Decide crate ownership, interop format, local state layout, and contracts.
 
 Gate: one simulated target/exposure runs through the supported adapter; the
 same recorded input yields matching server/plugin decisions. No Sync changes
 are required to run existing workflows.
+
+#### Phase 0 evidence and remaining work
+
+Baseline checked on 2026-09-25:
+
+| Component | Inspected baseline |
+| --- | --- |
+| N.I.N.A. | 3.3 NIGHTLY #58; NuGet `NINA.Plugin` `3.3.0.1058-nightly`. |
+| TS | Upstream `release/nightly-3.3`, commit `65478b96c52b47d4860e781c0249799cac2749e1`; source assembly version `5.10.4.0`. |
+| TS dependencies | `net10.0-windows7.0`, NINA package `3.3.0.1037-nightly`; compatibility with #58 is not yet runtime-tested. |
+| Local .NET SDK | `10.0.302`. |
+
+TS's `TargetSchedulerContainer.Execute` constructs `Planner` directly, then
+creates a private `PlanContainer` and executes it. The next TS change must
+introduce an optional provider at work selection while preserving event hooks,
+history, image-save observation, cancellation, and the default planner. Auditing
+and porting local TS modifications remains pending. No TS source or installed
+N.I.N.A. plugins are changed by the shared-core spike.
+
+The initial implementation lives in
+[`crates/director-core`](../../crates/director-core/src/lib.rs) and
+[`crates/director-ffi`](../../crates/director-ffi/src/lib.rs). PSF Guard re-exports
+the core as `psf_guard::director`; the native library calls the same evaluator.
+There is no server route, database migration, or hardware dispatch yet. The
+[.NET harness](../../tools/director-interop/Program.cs) is a console interop test,
+not a N.I.N.A. plugin or a substitute for the required simulator session.
+
+The experimental input is a host-assembled decision snapshot, not the eventual
+signed/authorized assignment API. It includes goal progress and estimates for
+convenience; production allocation records must remain separate from mutable
+observations. Hosts are responsible for authenticated allocation, durable attempt
+reservation, capture deduplication, and state/assignment revision checks before
+dispatch. Calling the evaluator twice does not reserve two exposures or mutate
+progress. A `continue` decision permits only the existing indivisible operation
+to finish; it never authorizes another exposure.
+
+The spike chooses the highest-priority feasible goal, with stable ID tie-breaking.
+It uses host-supplied windows and estimates, not a new astronomy implementation.
+Window and assignment ends are exclusive start bounds; an exposure may finish
+exactly at the end. Exposure plus blocking overhead must fit both windows.
+Timestamps are nonnegative Unix milliseconds and durations are milliseconds;
+all arithmetic is checked integer arithmetic. Safety remains continuously
+enforced by the host, not only when this evaluator runs.
+
+Both Rust and .NET consume the same golden decision vectors, including slow
+autofocus, pending grades, retry limits, safety, expiry, wrong-rig state, and
+invalid protocol input. The C ABI uses caller-owned UTF-8 buffers, a version
+probe, bounded input, and explicit status codes. See the
+[C header](../../crates/director-ffi/include/director.h).
+
+Run from the repository root on Windows:
+
+```powershell
+cargo test --locked -p psf-guard-director-core -p psf-guard-director-ffi
+cargo clippy --locked -p psf-guard-director-core -p psf-guard-director-ffi --all-targets -- -D warnings
+cargo build --locked --profile director -p psf-guard-director-ffi
+dotnet run --project tools/director-interop --configuration Release -- target/director/psf_guard_director_ffi.dll crates/director-core/tests/fixtures/decisions.json
+```
+
+The dedicated `director` Cargo profile unwinds panics so the native boundary can
+report an internal error. Ordinary `--release` builds of the FFI crate are
+rejected because PSF Guard's application release profile aborts on panic.
+Invalid native pointers, allocation failure, or process termination cannot be
+made recoverable by this wrapper; no plugin installation is authorized by this
+spike. Packaging and host-failure safety still require review before deployment.
+
+The Director CI workflow runs Rust checks and the .NET/native vectors on
+Windows, Linux, and macOS. Only local Windows results are evidence until those
+hosted jobs pass. The existing application remains the default Cargo workspace
+member, so normal application builds do not package the experimental native DLL.
 
 ### Phase 1: meta database and global project model
 

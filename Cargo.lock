@@ -4117,6 +4117,7 @@ dependencies = [
  "libc",
  "mime_guess",
  "nalgebra",
+ "psf-guard-director-core",
  "rand 0.10.2",
  "rayon",
  "reflink-copy",
@@ -4155,6 +4156,22 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "psf-guard-director-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "psf-guard-director-ffi"
+version = "0.1.0"
+dependencies = [
+ "psf-guard-director-core",
+ "serde_json",
 ]
 
 [[package]]

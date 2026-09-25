@@ -1,5 +1,7 @@
 # Rust artifacts
 /target/
+/tools/director-interop/bin/
+/tools/director-interop/obj/
 **/*.rs.bk
 *.pdb
 

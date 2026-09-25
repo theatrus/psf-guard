@@ -43,3 +43,5 @@ mod test_star_detection;
 
 // Re-export commonly used items
 pub use image_analysis::{FitsImage, ImageStatistics};
+// The server and the Director native host use this same decision implementation.
+pub use psf_guard_director_core as director;

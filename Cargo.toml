@@ -1,3 +1,8 @@
+[workspace]
+members = ["crates/director-core", "crates/director-ffi"]
+default-members = ["."]
+resolver = "3"
+
 [package]
 name = "psf-guard"
 version = "0.10.1"
@@ -21,6 +26,7 @@ name = "psf_guard"
 path = "src/lib.rs"
 
 [dependencies]
+psf-guard-director-core = { path = "crates/director-core" }
 clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.40", features = ["backup", "bundled"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -127,6 +133,12 @@ overflow-checks = false
 opt-level = 1
 # Disable overflow checks in dev for performance (be careful with this)
 overflow-checks = false
+
+# Native plugin hosts must receive an error instead of unwinding across the ABI
+# or inheriting the application's abort-on-panic release policy.
+[profile.director]
+inherits = "release"
+panic = "unwind"
 
 [build-dependencies]
 tauri-build = { version = "2.6.2", features = [] }
