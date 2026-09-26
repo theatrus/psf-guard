@@ -18,7 +18,7 @@ keywords = ["astronomy", "telescope", "imaging", "analysis", "nina"]
 categories = ["command-line-utilities", "science"]
 
 [workspace]
-members = ["crates/director-core", "crates/director-ffi", "crates/director-runtime", "crates/director-ledger"]
+members = ["crates/director-core", "crates/director-ffi", "crates/director-runtime", "crates/director-ledger", "crates/director-meta"]
 default-members = ["."]
 resolver = "3"
 
@@ -28,6 +28,7 @@ path = "src/lib.rs"
 
 [dependencies]
 psf-guard-director-core = { path = "crates/director-core" }
+psf-guard-director-meta = { path = "crates/director-meta" }
 clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.40", features = ["backup", "bundled"] }
 serde = { version = "1.0", features = ["derive"] }

@@ -1357,6 +1357,38 @@ and the published preview are unchanged.
 
 ### Phase 1: meta database and global project model
 
+The `psf-guard-director-meta` crate starts the coordination store, separately
+from catalogs and the local execution ledger. It is linked into PSF Guard but
+has no automatic open, server route, or registry migration. Hosts must explicitly
+create a new file or open a recognized existing file. Schema 1 stores the
+coordinator instance UUID, global project and rig identities, originating catalog
+identities, and explicit catalog/source-project-GUID links. Names and URL slugs
+never establish identity; rigs outlive catalogs, and one global project may link
+to several catalogs. Project and rig listings use bounded, stable-ID cursor pages;
+renaming an entity does not move it across a page boundary. Catalog IDs must be
+explicitly registered and retained by the future adoption workflow, not
+regenerated on every import or inferred from
+paths. Stable catalog identity adoption is not yet implemented.
+
+Writes use short SQLite transactions with foreign keys, WAL and full synchronous
+commits. Renames require an expected revision; retries cannot overwrite another
+editor's work or silently move a source project to a different global project.
+The store refuses foreign databases and unsupported schema versions. Future
+migrations must be transactional and preserve its instance and entity IDs.
+
+Backup uses SQLite's snapshot API, including committed WAL content, then publishes
+a checked standalone file without overwriting a destination. Restore likewise
+requires a new destination and preserves coordinator identity. Never run a
+restored copy alongside the original as another coordinator. Backups do not
+include catalogs, images, or Director's local execution journal. Stop the old
+coordinator before switching to a restored path. Online replacement and automated
+restore/configuration switching are not supported.
+
+This is identity storage only. Site/configuration revisions, objectives, recipes,
+allocation authority, enrollment/permissions, catalog adoption, HTTP and UI remain
+required before the phase is complete. No assignment or hardware authority is
+created by registering a rig or catalog.
+
 - [ ] Add opt-in meta storage, migrations, backup/restore, and stable mappings.
 - [ ] Model sites, rig configurations, objectives, recipes, and contribution plans.
 - [ ] Link existing catalogs without rewriting TS history or merging names.

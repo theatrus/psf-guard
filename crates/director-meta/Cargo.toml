@@ -1,0 +1,14 @@
+[package]
+name = "psf-guard-director-meta"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "Apache-2.0"
+publish = false
+description = "Opt-in coordination identity storage for PSF Guard Director"
+
+[dependencies]
+rusqlite = { version = "0.40", features = ["backup", "bundled"] }
+serde = { version = "1", features = ["derive"] }
+tempfile = "3.27"
+uuid = { version = "1", features = ["v4", "serde"] }

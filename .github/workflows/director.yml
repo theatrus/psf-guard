@@ -32,8 +32,8 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --locked -p psf-guard-director-core -p psf-guard-director-ffi -p psf-guard-director-runtime -p psf-guard-director-ledger --all-targets -- -D warnings
-      - run: cargo test --locked -p psf-guard-director-core -p psf-guard-director-ffi -p psf-guard-director-runtime -p psf-guard-director-ledger
+      - run: cargo clippy --locked -p psf-guard-director-core -p psf-guard-director-ffi -p psf-guard-director-runtime -p psf-guard-director-ledger -p psf-guard-director-meta --all-targets -- -D warnings
+      - run: cargo test --locked -p psf-guard-director-core -p psf-guard-director-ffi -p psf-guard-director-runtime -p psf-guard-director-ledger -p psf-guard-director-meta
       - run: cargo build --locked --profile director -p psf-guard-director-ffi
       - run: dotnet run --project tools/director-interop --configuration Release -- target/director/${{ matrix.library }} crates/director-core/tests/fixtures/decisions.json crates/director-core/tests/fixtures/rig-windows.json
       - if: runner.os == 'Windows'
