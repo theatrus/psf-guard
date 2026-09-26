@@ -91,6 +91,7 @@ await using (var session = await RuntimeSession.StartAsync(args[0], "rig-1", sta
 await StorageChecks.RunAsync(args[0], args[1], started.Add);
 await PreparationChecks.RunAsync(args[0], args[1], started.Add);
 await ProgramChecks.RunAsync(args[0], args[1], started.Add);
+await GeometryChecks.RunAsync(args[0], args[1], started.Add);
 
 foreach (var pid in started)
 {

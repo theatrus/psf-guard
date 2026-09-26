@@ -1,0 +1,23 @@
+{
+  "state": {
+    "rig_id": "rig-1", "configuration_id": "config-1",
+    "now_ms": 1790409600000, "conditions_valid_until_ms": 1790409720000,
+    "safety": "safe", "at_boundary": true, "operator_stop": false,
+    "meridian_exclusion": { "before_ms": 0, "after_ms": 0 }
+  },
+  "constraints": {
+    "schema_version": 1,
+    "rig": {
+      "rig_id": "rig-1", "configuration_id": "config-1", "revision": 9007199254740993,
+      "site": { "latitude_degrees": 35.0, "longitude_degrees": -120.0, "elevation_meters": 1000.0 },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.0, "polar_motion_x_radians": 0.0, "polar_motion_y_radians": 0.0,
+        "valid_from_ms": 1790409600000, "valid_until_ms": 1790409720001
+      },
+      "horizon": { "mode": "fixed_minimum" },
+      "minimum_altitude_degrees": -89.0, "maximum_altitude_degrees": 89.0,
+      "meridian_exclusion": { "before_ms": 0, "after_ms": 0 }
+    },
+    "goals": [{ "goal_id": "short-ha", "minimum_altitude_degrees": -89.0, "maximum_altitude_degrees": 89.0, "horizon_offset_degrees": 0.0 }]
+  }
+}

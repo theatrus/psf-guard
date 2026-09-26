@@ -1,5 +1,6 @@
 //! Opt-in local storage. Paths come only from the launcher, never IPC commands.
 use crate::ProtocolError;
+use psf_guard_director_core::geometry::{Constraints, CONSTRAINTS_VERSION};
 use psf_guard_director_core::preparation::{
     Completion, Context, Error as PreparationError, Estimates, Next,
 };
@@ -25,6 +26,36 @@ pub const MAX_PREPARATION_EVENT_PAGE: usize = 32;
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    OpenGeometry {
+        program: Box<Program>,
+        constraints: Box<Constraints>,
+        state: State,
+    },
+    EvaluateGeometry {
+        constraints: Box<Constraints>,
+        state: State,
+    },
+    BeginGeometryPreparation {
+        preparation_id: String,
+        goal_id: String,
+        local: Box<LocalState>,
+        estimates: Estimates,
+        constraints: Box<Constraints>,
+        state: State,
+    },
+    AdvanceGeometryPreparation {
+        preparation_id: String,
+        configuration: Box<Configuration>,
+        constraints: Box<Constraints>,
+        state: State,
+    },
+    ReserveGeometryPrepared {
+        preparation_id: String,
+        capture_id: String,
+        configuration: Box<Configuration>,
+        constraints: Box<Constraints>,
+        state: State,
+    },
     Evaluate {
         state: State,
     },
@@ -106,6 +137,11 @@ pub enum Operation {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StorageReply {
+    GeometryOpened {
+        info: LedgerInfo,
+        program_version: u32,
+        constraints_version: u32,
+    },
     Evaluated {
         decision: psf_guard_director_core::Decision,
     },
@@ -295,6 +331,50 @@ impl Storage {
             return Err(ProtocolError::WrongRig);
         }
         match &operation {
+            Operation::OpenGeometry {
+                program,
+                constraints,
+                state,
+            } if program.assignment.rig_id != rig_id
+                || program.configuration.rig_id != rig_id
+                || constraints.rig.rig_id != rig_id
+                || state.rig_id != rig_id =>
+            {
+                return Err(ProtocolError::WrongRig)
+            }
+            Operation::BeginGeometryPreparation {
+                local,
+                constraints,
+                state,
+                ..
+            } if local.configuration.rig_id != rig_id
+                || constraints.rig.rig_id != rig_id
+                || state.rig_id != rig_id =>
+            {
+                return Err(ProtocolError::WrongRig)
+            }
+            Operation::AdvanceGeometryPreparation {
+                configuration,
+                constraints,
+                state,
+                ..
+            }
+            | Operation::ReserveGeometryPrepared {
+                configuration,
+                constraints,
+                state,
+                ..
+            } if configuration.rig_id != rig_id
+                || constraints.rig.rig_id != rig_id
+                || state.rig_id != rig_id =>
+            {
+                return Err(ProtocolError::WrongRig)
+            }
+            Operation::EvaluateGeometry { constraints, state }
+                if constraints.rig.rig_id != rig_id || state.rig_id != rig_id =>
+            {
+                return Err(ProtocolError::WrongRig)
+            }
             Operation::OpenProgram { program, state }
                 if program.assignment.rig_id != rig_id
                     || program.configuration.rig_id != rig_id
@@ -341,6 +421,24 @@ impl Storage {
     }
 
     fn apply(&mut self, operation: Operation) -> Result<StorageReply, StorageError> {
+        if let Operation::OpenGeometry {
+            program,
+            constraints,
+            state,
+        } = operation
+        {
+            if self.ledger.is_some() {
+                return Err(StorageError::AlreadyOpen);
+            }
+            let ledger = Ledger::open_geometry(&self.path, *program, *constraints, state)?;
+            let info = ledger.info();
+            self.ledger = Some(ledger);
+            return Ok(StorageReply::GeometryOpened {
+                info,
+                program_version: PROGRAM_VERSION,
+                constraints_version: CONSTRAINTS_VERSION,
+            });
+        }
         if let Operation::OpenProgram { program, state } = operation {
             if self.ledger.is_some() {
                 return Err(StorageError::AlreadyOpen);
@@ -367,13 +465,67 @@ impl Storage {
         }
         let ledger = self.ledger.as_mut().ok_or(StorageError::NotOpen)?;
         Ok(match operation {
+            Operation::EvaluateGeometry { constraints, state } => StorageReply::Evaluated {
+                decision: ledger.evaluate_geometry(state, &constraints)?,
+            },
+            Operation::BeginGeometryPreparation {
+                preparation_id,
+                goal_id,
+                local,
+                estimates,
+                constraints,
+                state,
+            } => {
+                let started = ledger.begin_geometry_preparation(
+                    &preparation_id,
+                    &goal_id,
+                    *local,
+                    estimates,
+                    state,
+                    &constraints,
+                )?;
+                StorageReply::PreparationStarted {
+                    created: started.created,
+                    record: started.record,
+                }
+            }
+            Operation::AdvanceGeometryPreparation {
+                preparation_id,
+                configuration,
+                constraints,
+                state,
+            } => StorageReply::PreparationAdvanced {
+                next: ledger.advance_geometry_preparation(
+                    &preparation_id,
+                    state,
+                    &configuration,
+                    &constraints,
+                )?,
+            },
+            Operation::ReserveGeometryPrepared {
+                preparation_id,
+                capture_id,
+                configuration,
+                constraints,
+                state,
+            } => StorageReply::Reserved {
+                outcome: ledger.reserve_geometry_prepared(
+                    &preparation_id,
+                    &capture_id,
+                    state,
+                    &configuration,
+                    &constraints,
+                )?,
+            },
             Operation::Evaluate { state } => StorageReply::Evaluated {
                 decision: ledger.evaluate(state)?,
             },
             Operation::UnresolvedAttempt {} => StorageReply::Found {
                 attempt: ledger.unresolved_attempt()?,
             },
-            Operation::Open { .. } | Operation::OpenProgram { .. } => unreachable!("handled above"),
+            Operation::Open { .. }
+            | Operation::OpenProgram { .. }
+            | Operation::OpenGeometry { .. } => unreachable!("handled above"),
             Operation::BeginProgramPreparation {
                 preparation_id,
                 goal_id,
