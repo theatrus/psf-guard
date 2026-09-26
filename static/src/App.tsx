@@ -20,11 +20,14 @@ import {
 import { apiClient } from './api/client';
 import AuthGate from './auth/AccessContext';
 import { useAccess } from './auth/access';
+import { useDirectorStatus } from './hooks/useDirectorStatus';
 import './App.css';
 
 function AppContent() {
   const navigate = useNavigate();
   const location = useLocation();
+  const isOnDirector = location.pathname === '/director';
+  const director = useDirectorStatus();
   const { showStats, setShowStats } = useGridState();
   const { data: serverInfo } = useQuery({
     queryKey: ['serverInfo'],
@@ -80,13 +83,13 @@ function AppContent() {
         // If management is disabled and there are no DBs, leave the user on
         // the overview's empty state where they can read the explanation
         // without a modal blocking them.
-        if (!cancelled && access.canWrite && !hasValid && managementAllowed) {
+        if (!cancelled && !isOnDirector && access.canWrite && !hasValid && managementAllowed) {
           console.log('No databases configured — opening settings modal');
           setShowSettings(true);
         }
       } catch (error) {
         console.error('Failed to check configuration:', error);
-        if (!cancelled && access.canWrite) setShowSettings(true);
+        if (!cancelled && !isOnDirector && access.canWrite) setShowSettings(true);
       }
     };
 
@@ -108,7 +111,7 @@ function AppContent() {
       clearTimeout(handle);
       window.removeEventListener(OPEN_SETTINGS_EVENT, openHandler);
     };
-  }, [access.canWrite]);
+  }, [access.canWrite, isOnDirector]);
 
   // Keyboard shortcut for help
   useHotkeys('?', () => setShowHelp(true), []);
@@ -139,7 +142,7 @@ function AppContent() {
         </div>
 
         <div className={`header-context${isOnOverview ? ' header-context--overview' : ''}`}>
-          {!isOnOverview && <ProjectTargetSelector />}
+          {!isOnOverview && !isOnDirector && <ProjectTargetSelector />}
           <div className="header-cache-slot" aria-live="polite">
           {/* Scoped views show the active database's refresh or quality job;
               unscoped views merge active jobs across databases. This fixed
@@ -150,6 +153,9 @@ function AppContent() {
         </div>
 
         <nav className="header-view-tabs" aria-label="Views">
+          {director.data?.enabled && director.data.protocol_version === 1 && (
+            <button type="button" onClick={() => navigate(toScoped('/director'))} className="header-button" aria-current={isOnDirector ? 'page' : undefined}>Director</button>
+          )}
           <button
             type="button"
             onClick={() => navigate(toScoped('/'))}
