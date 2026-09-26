@@ -2,6 +2,7 @@ import axios from 'axios';
 import type { AxiosInstance } from 'axios';
 import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
+import type { DirectorCollection, DirectorIdentity, DirectorIdentityPage, DirectorStatus } from './directorTypes';
 import type {
   ProjectProcessingSettings,
   StackColorInputSources,
@@ -235,6 +236,44 @@ const stackStretchError = (cause: unknown, fallback: string): Error => {
 };
 
 export const apiClient = {
+  getDirectorStatus: async (): Promise<DirectorStatus> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorStatus>>('/director/v1/status');
+    if (!data.data) throw new Error(data.error || 'Failed to load Director status');
+    return data.data;
+  },
+
+  getDirectorIdentities: async (
+    collection: DirectorCollection, after?: string,
+  ): Promise<DirectorIdentityPage> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorIdentityPage>>(`/director/v1/${collection}`, {
+      params: { limit: 64, after },
+    });
+    if (!data.data) throw new Error(data.error || 'Failed to load Director records');
+    return data.data;
+  },
+
+  createDirectorIdentity: async (
+    collection: DirectorCollection, request: { id: string; name: string },
+  ): Promise<DirectorIdentity> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<DirectorIdentity>>(`/director/v1/${collection}`, request);
+    if (!data.data) throw new Error(data.error || 'Failed to create Director record');
+    return data.data;
+  },
+
+  renameDirectorIdentity: async (
+    collection: DirectorCollection, id: string, request: { expected_revision: number; name: string },
+  ): Promise<DirectorIdentity> => {
+    const api = await getApi();
+    const { data } = await api.patch<ApiResponse<DirectorIdentity>>(
+      `/director/v1/${collection}/${encodeURIComponent(id)}`, request,
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to rename Director record');
+    return data.data;
+  },
+
   getAuthStatus: async (): Promise<AuthStatus> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<AuthStatus>>('/auth/status');
