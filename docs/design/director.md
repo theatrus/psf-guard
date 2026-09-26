@@ -1387,7 +1387,7 @@ Writes use short SQLite transactions with foreign keys, WAL and full synchronous
 commits. Renames require an expected revision; retries cannot overwrite another
 editor's work or silently move a source project to a different global project.
 The store refuses foreign databases and unsupported schema versions. Opening a
-schema-1 store upgrades it to schema 2 in one writer transaction, preserving its
+schema-1 or schema-2 store upgrades it to schema 3 in one writer transaction, preserving its
 instance and entity IDs; failed or competing migrations cannot partially commit.
 Future migrations must retain those properties. Back up before upgrading and
 stop older coordinator processes first; mixed-version online operation is not a
@@ -1419,10 +1419,10 @@ include catalogs, images, or Director's local execution journal. Stop the old
 coordinator before switching to a restored path. Online replacement and automated
 restore/configuration switching are not supported.
 
-This is identity and configuration storage only. Objectives, recipes,
-allocation authority, rig enrollment/permissions, catalog adoption and UI remain
-required before the phase is complete. No assignment or hardware authority is
-created by registering a rig or catalog.
+Identity, configuration and project-intent storage do not complete coordination.
+Allocation authority, rig enrollment/permissions, catalog adoption and UI remain
+required. No assignment or hardware authority is created by registering a rig,
+catalog or project-intent snapshot.
 
 The shared core's `project` module defines versioned project intent separately
 from an execution assignment. Each immutable snapshot identifies the global
@@ -1443,13 +1443,29 @@ resolution validates capabilities, not the authenticity of caller-supplied
 configuration data. An objective with no contribution is not yet a fully bound
 intent snapshot; draft editing needs a separate UI state.
 
-This model establishes intent only. It does not persist snapshots, infer FOV or
+This model establishes intent only. It does not infer FOV or
 sampling equivalence, judge quality, sum integration from different rigs, issue
 assignments, or project progress. Frame goals are scoped to each contribution;
 depth/cadence objectives and rig-optics compatibility remain required. The
 coordinator must separately reserve outstanding allocation and bind intent
 provenance before an executor can use it. Existing program and IPC contracts
 are unchanged.
+
+Meta schema 3 persists these project-intent snapshots and a foreign-key-backed
+inventory of their rig-setup references. Registration validates the shared-core
+contract, canonical project/rig/setup identities, project ownership, and every
+recipe against its stored immutable setup in one short transaction. Identical
+retries are idempotent; changing content or moving an existing snapshot to a
+different project returns a conflict. A changed plan needs a new snapshot ID.
+There is no implicit latest/active plan pointer or assignment issuance.
+
+Reads use one SQLite snapshot and validate both the bounded payload and exact
+reference inventory. Same-named projects and rigs remain distinct. Listings are
+bounded, project-scoped ID pages, not revision chronology. Backup/restore retains
+the plan, referenced configurations and instance identity. Upgrading schema 1
+or 2 to 3 is transactional; older backups remain read-only until the restored
+copy is explicitly opened for migration. HTTP editing, active-plan selection,
+allocation accounting and native assignment delivery are not implemented here.
 
 - [ ] Add opt-in meta storage, migrations, backup/restore, and stable mappings.
 - [ ] Model sites, rig configurations, objectives, recipes, and contribution plans.
