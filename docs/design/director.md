@@ -56,8 +56,9 @@ sync semantics.
 
 ## Implementation audit
 
-Audited 2026-09-26 against PSF Guard main `3a6a3ac` and Director plugin main
-`8f6d8c2`, plus the open PR heads listed below. **Merged building block** does
+Audited 2026-09-26 against PSF Guard main `1e8dbd1`, this change's project-intent
+storage (#493), and Director plugin main `8f6d8c2`, plus the open PR heads listed
+below. **Merged building block** does
 not mean a production workflow or phase gate passed. Open PR work is not in
 main. Update this table and the relevant checklist when a PR lands; keep
 untested integration requirements unchecked.
@@ -70,7 +71,7 @@ untested integration requirements unchecked.
 | NINA native execution | Plugin [#18](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/18), [#19](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/19), [#22](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/22), [#23](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/23), [#24](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/24) merged: transient native items, target context, complete horizon export and post-hook geometry checks. Real nightly #58 OmniSim probe captured three filtered FITS frames with correlated evidence. | Public production session container, all trigger/condition/hook contexts, plugin compatibility matrix, native defaults, full autofocus/guiding/flip/calibration/safety recovery and continuous ownership integration. Probe uses fixture allocations and synthetic orientation evidence, not a server session. |
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
 | Meta storage | [#488](https://github.com/theatrus/psf-guard/pull/488) and [#489](https://github.com/theatrus/psf-guard/pull/489) merged: separate schema-2 store, UUIDs, mappings, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. | Catalog adoption workflow, permissions/enrollment, active revisions, allocation authority and progress projections. |
-| Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492) merged: shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493) implements/tests schema-3 intent persistence in an open PR. | Persistence not merged; objective editor, depth/FOV/sampling compatibility and authoritative allocation remain open. |
+| Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492): shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493): schema-3 intent persistence with validated immutable setup references. | Objective editor, depth/FOV/sampling compatibility and authoritative allocation remain open. |
 | Operator API and UI | [#490](https://github.com/theatrus/psf-guard/pull/490) and [#494](https://github.com/theatrus/psf-guard/pull/494) merged: opt-in project/site/rig identity and site/rig snapshot APIs. [#495](https://github.com/theatrus/psf-guard/pull/495) implements/tests the identity management screen in an open PR. | UI not merged. No project planning editor, catalog adoption, rig pairing, acquisition control or live rig dashboard. UI tests are not equipment tests. |
 | Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
 | Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. | Central telemetry ingestion/dashboard, scoped pairing, remote acknowledgements, offline authorization lifecycle, manual/sequence batch reconcile and reconnect activation are not implemented. |
@@ -1678,7 +1679,7 @@ Writes use short SQLite transactions with foreign keys, WAL and full synchronous
 commits. Renames require an expected revision; retries cannot overwrite another
 editor's work or silently move a source project to a different global project.
 The store refuses foreign databases and unsupported schema versions. Opening a
-schema-1 store upgrades it to schema 2 in one writer transaction, preserving its
+schema-1 or schema-2 store upgrades it to schema 3 in one writer transaction, preserving its
 instance and entity IDs; failed or competing migrations cannot partially commit.
 Future migrations must retain those properties. Back up before upgrading and
 stop older coordinator processes first; mixed-version online operation is not a
@@ -1712,11 +1713,10 @@ include catalogs, images, or Director's local execution journal. Stop the old
 coordinator before switching to a restored path. Online replacement and automated
 restore/configuration switching are not supported.
 
-Identity and configuration storage do not complete coordination. The shared
-objective/contribution model below is merged, but its persistence, editing,
-allocation authority, rig enrollment/permissions and catalog adoption remain
-required. No assignment or hardware authority is created by registering a rig
-or catalog.
+Identity, configuration and project-intent storage do not complete coordination.
+Allocation authority, rig enrollment/permissions, catalog adoption and UI remain
+required. No assignment or hardware authority is created by registering a rig,
+catalog or project-intent snapshot.
 
 The shared core's `project` module defines versioned project intent separately
 from an execution assignment. Each immutable snapshot identifies the global
@@ -1737,13 +1737,29 @@ resolution validates capabilities, not the authenticity of caller-supplied
 configuration data. An objective with no contribution is not yet a fully bound
 intent snapshot; draft editing needs a separate UI state.
 
-This model establishes intent only. It does not persist snapshots, infer FOV or
+This model establishes intent only. It does not infer FOV or
 sampling equivalence, judge quality, sum integration from different rigs, issue
 assignments, or project progress. Frame goals are scoped to each contribution;
 depth/cadence objectives and rig-optics compatibility remain required. The
 coordinator must separately reserve outstanding allocation and bind intent
 provenance before an executor can use it. Existing program and IPC contracts
 are unchanged.
+
+Meta schema 3 persists these project-intent snapshots and a foreign-key-backed
+inventory of their rig-setup references. Registration validates the shared-core
+contract, canonical project/rig/setup identities, project ownership, and every
+recipe against its stored immutable setup in one short transaction. Identical
+retries are idempotent; changing content or moving an existing snapshot to a
+different project returns a conflict. A changed plan needs a new snapshot ID.
+There is no implicit latest/active plan pointer or assignment issuance.
+
+Reads use one SQLite snapshot and validate both the bounded payload and exact
+reference inventory. Same-named projects and rigs remain distinct. Listings are
+bounded, project-scoped ID pages, not revision chronology. Backup/restore retains
+the plan, referenced configurations and instance identity. Upgrading schema 1
+or 2 to 3 is transactional; older backups remain read-only until the restored
+copy is explicitly opened for migration. HTTP editing, active-plan selection,
+allocation accounting and native assignment delivery are not implemented here.
 
 - [x] Add separate owned meta storage, transactional migrations, snapshot
   backup/restore, UUID identities and explicit catalog mapping primitives (#488).
@@ -1760,7 +1776,8 @@ are unchanged.
 - [x] Merge and validate site/rig identity and snapshot operator APIs (#494).
 - [ ] Merge and validate the identity management UI (#495).
 - [x] Merge the shared objective/contribution model (#492).
-- [ ] Merge persisted intent (#493), then add the objective/configuration editor.
+- [x] Persist immutable intent with validated rig-setup references (#493).
+- [ ] Add the objective/configuration editor.
 - [ ] Link existing catalogs without rewriting TS history or merging names.
 - [ ] Add scoped project views that distinguish global and rig-local projects.
 - [ ] Define PSF Guard-owned per-rig catalog schemas and versioned access
