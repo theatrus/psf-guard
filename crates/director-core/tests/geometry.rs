@@ -10,6 +10,8 @@ use psf_guard_director_core::{
     *,
 };
 use serde_json::json;
+#[path = "geometry/dispatch.rs"]
+mod dispatch;
 #[path = "geometry/recovery.rs"]
 mod recovery;
 
