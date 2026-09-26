@@ -499,16 +499,21 @@ Implementation review: [shared-core and native interop spike, PR #460](https://g
 Follow-on review: [rig meridian exclusions and multiple safe intervals, PR #461](https://github.com/theatrus/psf-guard/pull/461).
 Sidecar review: [bounded IPC and process harness, PR #462](https://github.com/theatrus/psf-guard/pull/462).
 Plugin review: [N.I.N.A. 3.3 runtime host and development bundle, Director PR #1](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/1).
+Live host validation: [isolated N.I.N.A. nightly smoke tests, Director PR #2](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/2).
 
 The Director host pins N.I.N.A. `3.3.0.1058-nightly` and the tested sidecar by
 commit, CI run/artifact identity, SHA-256, and wire versions. The C# build consumes
 the artifact rather than compiling Rust. Its initial settings surface exposes
 explicit runtime Start/Stop only; no pairing or equipment dispatch is present.
 It has local process/protocol tests and WPF render tests using N.I.N.A.'s button
-template. Those are not N.I.N.A. plugin discovery or full-stack simulator tests.
-The installed local N.I.N.A. is 3.2, so the 3.3 runtime host has not been loaded
-into it. Signed durable artifacts, native execution, and Chatstronomy state
-integration remain open gates; the current CI artifact pin is developmental.
+template. A separately extracted official 3.3 nightly also passed real plugin
+discovery, runtime Start/Stop, child-failure recovery, profile-switch cleanup,
+normal shutdown, and abrupt parent-exit cleanup on 2026-09-25. Those tests used
+fresh redirected profile/plugin directories with no TS and no connected devices;
+they did not replace the installed N.I.N.A. 3.2 application. They are not the
+full-stack acquisition gate. Signed durable artifacts, native execution, and
+Chatstronomy state integration remain open gates; the current CI artifact pin
+is developmental.
 
 Baseline checked on 2026-09-25:
 
