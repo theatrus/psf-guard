@@ -207,6 +207,52 @@ fn capture_metadata_cannot_change_under_an_existing_fingerprint_and_batch_rolls_
 }
 
 #[test]
+fn float_parsing_jitter_is_not_a_new_capture_but_a_real_change_is() {
+    // The plugin widens the rotator's float32 to double and sends its
+    // shortest form. A server whose JSON parser was not correctly rounded
+    // stored the value two ULPs away; once the parser became exact, the
+    // stored and incoming strings no longer parsed to the same double.
+    let stored_form: f64 = serde_json::from_str("103.94000244140624").unwrap();
+    let plugin_form: f64 = serde_json::from_str("103.94000244140625").unwrap();
+    assert_ne!(
+        stored_form.to_bits(),
+        plugin_form.to_bits(),
+        "the fixture needs the exact parser this build has"
+    );
+    let mut conn = Connection::open_in_memory().unwrap();
+    let mut first = capture(1);
+    first.rotation = Some(stored_form);
+    first.roi = Some(serde_json::from_str("104.31990051269533").unwrap());
+    store_snapshot(&mut conn, &snapshot_request(vec![first]), 100).unwrap();
+
+    let mut replay = capture(1);
+    replay.rotation = Some(plugin_form);
+    replay.roi = Some(serde_json::from_str("104.31990051269531").unwrap());
+    store_snapshot(&mut conn, &snapshot_request(vec![replay]), 200).unwrap();
+    let current = records(&conn).remove(0);
+    assert_eq!(current.last_seen, 200);
+    assert_eq!(
+        current.capture.rotation.map(f64::to_bits),
+        Some(plugin_form.to_bits()),
+        "the replay rewrites the stored value in the exact form"
+    );
+
+    let mut moved = capture(1);
+    moved.rotation = Some(103.95);
+    moved.roi = Some(serde_json::from_str("104.31990051269531").unwrap());
+    assert!(matches!(
+        store_snapshot(&mut conn, &snapshot_request(vec![moved]), 300),
+        Err(AppError::Conflict(_))
+    ));
+    let mut cleared = capture(1);
+    cleared.rotation = None;
+    assert!(matches!(
+        store_snapshot(&mut conn, &snapshot_request(vec![cleared]), 400),
+        Err(AppError::Conflict(_))
+    ));
+}
+
+#[test]
 fn missing_rows_are_not_treated_as_invalidations() {
     let mut conn = Connection::open_in_memory().unwrap();
     store_snapshot(&mut conn, &snapshot_request(vec![capture(1)]), 100).unwrap();

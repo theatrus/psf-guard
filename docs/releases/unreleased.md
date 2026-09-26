@@ -57,3 +57,9 @@
   appended to `PARAMS` still reaches WBPP.
 
 ## Fixed
+
+- Flat coverage sync from the N.I.N.A. plugin no longer fails with
+  "flat-history fingerprint was reused for different capture metadata"
+  after a server update. Rotation and ROI now compare within a tolerance,
+  so a change in how the server parses a 17-digit float no longer reads as
+  a changed capture; the first replay rewrites the stored values.
