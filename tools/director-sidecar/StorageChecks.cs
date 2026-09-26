@@ -14,8 +14,7 @@ internal static class StorageChecks
         goals[0]!["pending"] = 0;
         goals[0]!["attempts_remaining"] = 2;
         var state = request["state"]!;
-        var directory = Directory.CreateTempSubdirectory("psf-guard-director-ledger-");
-        try
+        await TestDirectory.RunAsync("psf-guard-director-ledger-", async directory =>
         {
             await MustFail(async () =>
             {
@@ -88,12 +87,7 @@ internal static class StorageChecks
                 await MustFail(async () => await saved.SendAsync(new JsonObject { ["type"] = "evaluate", ["request"] = request.DeepClone() }),
                     "untracked evaluation cannot bypass opened ledger progress");
             }
-        }
-        finally
-        {
-            // This directory was created by this test, never supplied by a user.
-            directory.Delete(recursive: true);
-        }
+        });
     }
 
     private static JsonObject Open(JsonObject request) => new() { ["action"] = "open", ["request"] = request.DeepClone() };
