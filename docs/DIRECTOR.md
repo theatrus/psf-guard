@@ -26,7 +26,7 @@ switching are not exposed. Catalog adoption requires the explicit workflow below
 ## Management screen
 
 When enabled, the **Director** navigation entry opens global **Projects**,
-**Sites**, and **Rigs**. Editors can create and rename these records; readers
+**Sites**, **Rigs**, and **Catalogs**. Editors can create and rename identities; readers
 can inspect them. The selected view stays in the URL. Catalog selection does
 not scope Director identities, and a catalog is not required to use this page.
 
@@ -37,6 +37,26 @@ the current record. Listings load in bounded pages with a refresh action.
 
 This first management screen does not edit observing objectives, configuration
 snapshots, assignments, or plugin credentials. Acquisition remains unavailable.
+
+### Map a catalog
+
+Open **Catalogs** and choose a configured catalog. Select source projects, then
+choose or create a global project and a rig for each. Projects sharing a source
+profile share one rig choice. Multiple source projects and rigs can contribute
+to the same global project. Nothing infers rig identity from the database name.
+
+Choose **Preview mappings**, check the source, global project and rig names and
+UUIDs, then **Apply mappings**. Changed source evidence or destination revisions
+discard the stale review; preview again. An interrupted Apply retains the exact
+reviewed request for retry. Creating an identity is a separate operation and
+does not map it until Apply succeeds.
+
+The selected catalog stays in the `directorCatalog` URL parameter. Existing
+links are read-only; a changed source profile is flagged instead of silently
+reassigned. Missing, invalid or duplicate source identities cannot be selected.
+Readers can inspect saved links but cannot create identities or apply mappings.
+Refresh reloads source evidence and saved links. The view pages source rows and
+loads at most 4096 records per inventory; each Apply accepts at most 256 projects.
 
 ## Protocol 1
 
@@ -52,6 +72,7 @@ All metadata routes also require the database-management gate.
 | --- | --- | --- |
 | GET | `/status` | Reports `protocol_version`, `enabled`, `instance_id`, and `acquisition_available: false`. |
 | GET | `/catalogs/{slug}/discovery` | Read project/profile evidence from one already registered catalog. |
+| GET | `/catalogs/{slug}/mappings` | Optional `after` source-project UUID and `limit` 1-256; returns `catalog_identity`, `items` and `next_after`. |
 | GET | `/projects` | Optional `after` UUID cursor and `limit` from 1 to 256 (default 64). |
 | POST | `/projects` | `{"id":"<caller-generated UUID>","name":"M31"}` |
 | GET | `/projects/{id}` | Exact project UUID. |
@@ -113,7 +134,12 @@ the coordinator writer; if the final meta commit fails, retry the same plan and
 digest to finish registration. Do not mint a replacement identity. A changed
 preview still requires review before retrying.
 
-No UI invokes these routes yet. Catalog copies retain lineage; the same
+The Catalogs view invokes these routes after explicit review. Its mapping
+inventory endpoint is read-only, allows readers, and requires database
+management. An unadopted catalog returns a null identity and no mappings without
+creating anything. Reading the identity does not scan images or project history.
+
+Catalog copies retain lineage; the same
 catalog/project mapping is not duplicated for another path. Independent forks,
 historical frame attribution and contribution accounting remain separate work.
 

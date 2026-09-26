@@ -208,6 +208,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             get(catalog_discovery::discover),
         )
         .route("/projects", get(list_projects).post(create_project))
+        .route("/catalogs/{slug}/mappings", get(catalog_adoption::mappings))
         .route(
             "/catalogs/{slug}/adoption/preview",
             axum::routing::post(catalog_adoption::preview).layer(DefaultBodyLimit::max(
