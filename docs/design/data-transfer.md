@@ -6,6 +6,15 @@ follow-up work.
 
 ## Purpose
 
+Architectural follow-on (planned, not current behavior): the
+[Director design](director.md#native-catalogs-and-target-scheduler-exchange)
+allows PSF Guard-owned catalog schemas. Target Scheduler becomes an explicit
+import and bidirectional sync connection in Settings/UI. The transfer rules in
+this document remain compatibility requirements at that boundary, not a demand
+that native catalogs mirror TS tables. The future adapter must report unsupported
+data and preserve the published Sync API during migration. No native-catalog
+migration is implemented by this design update.
+
 PSF Guard needs one safe way to:
 
 - import FITS folders into a catalog;
