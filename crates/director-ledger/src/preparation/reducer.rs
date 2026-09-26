@@ -66,6 +66,23 @@ impl<'a> Reducer<'a> {
         }
     }
 
+    pub(super) fn check_pending_dispatch(
+        &mut self,
+        request: &Request,
+        command: &Command,
+        current: Option<&Constraints>,
+    ) -> Result<Decision, Error> {
+        match (self, current) {
+            (Self::Legacy(inner), None) => inner
+                .check_pending_dispatch(request, command)
+                .map_err(Error::Preparation),
+            (Self::Geometry(inner), Some(current)) => inner
+                .check_pending_dispatch(request, current, command)
+                .map_err(Error::Geometry),
+            _ => Err(Error::ConflictingEvidence),
+        }
+    }
+
     pub(super) fn complete(&mut self, completion: Completion) -> Result<(), Error> {
         match self {
             Self::Legacy(inner) => inner.complete(completion).map_err(Error::Preparation),

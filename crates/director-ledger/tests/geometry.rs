@@ -18,6 +18,8 @@ const START: u64 = 1_790_409_600_000;
 
 #[path = "geometry/capture_dispatch.rs"]
 mod capture_dispatch;
+#[path = "geometry/dispatch.rs"]
+mod dispatch;
 
 #[derive(Clone)]
 struct Fixture {
@@ -680,14 +682,36 @@ fn geometry_process_exit_helper() {
     let Some(path) = std::env::var_os("DIRECTOR_GEOMETRY_CRASH_DB") else {
         return;
     };
-    let f = Fixture::new();
+    let mut f = Fixture::new();
     let mut ledger = f.open(Path::new(&path));
     f.begin(&mut ledger);
-    if std::env::var("DIRECTOR_GEOMETRY_CRASH_PHASE").unwrap() == "issued" {
-        f.next(&mut ledger);
-    } else {
-        f.ready(&mut ledger);
-        f.reserve(&mut ledger).unwrap();
+    match std::env::var("DIRECTOR_GEOMETRY_CRASH_PHASE")
+        .unwrap()
+        .as_str()
+    {
+        "issued" => {
+            f.next(&mut ledger);
+        }
+        "dispatch_refused" => {
+            let Next::Run(command) = f.next(&mut ledger) else {
+                panic!()
+            };
+            f.state.now_ms = f.first_end() - 4_999;
+            assert!(matches!(
+                ledger.check_geometry_pending_dispatch(
+                    &command,
+                    f.state.clone(),
+                    &f.program.configuration,
+                    &f.constraints
+                ),
+                Ok(Decision::Wait { .. })
+            ));
+        }
+        "captured" => {
+            f.ready(&mut ledger);
+            f.reserve(&mut ledger).unwrap();
+        }
+        _ => panic!("unknown crash phase"),
     }
     std::process::exit(82);
 }
@@ -774,8 +798,8 @@ fn safety_and_expired_conditions_block_final_reservation_after_reopen() {
 
 #[test]
 fn abrupt_process_exit_cannot_replay_geometry_preparation_or_capture() {
-    for phase in ["issued", "captured"] {
-        let f = Fixture::new();
+    for phase in ["issued", "captured", "dispatch_refused"] {
+        let mut f = Fixture::new();
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("execution.sqlite");
         let status = std::process::Command::new(std::env::current_exe().unwrap())
@@ -786,7 +810,25 @@ fn abrupt_process_exit_cannot_replay_geometry_preparation_or_capture() {
             .unwrap();
         assert_eq!(status.code(), Some(82));
         let mut ledger = f.open(&path);
-        if phase == "issued" {
+        if phase == "dispatch_refused" {
+            f.state.now_ms = f.first_end() - 4_999;
+            let record = ledger.preparation("prep").unwrap().unwrap();
+            assert!(matches!(record.halted, Some(Decision::Wait { .. })));
+            let command = record.pending.unwrap();
+            assert_eq!(
+                ledger
+                    .check_geometry_pending_dispatch(
+                        &command,
+                        f.state.clone(),
+                        &f.program.configuration,
+                        &f.constraints
+                    )
+                    .unwrap(),
+                record.halted.unwrap()
+            );
+            assert_eq!(ledger.preparation_events_after(0, 256).unwrap().len(), 3);
+            assert!(matches!(f.next(&mut ledger), Next::InFlight { .. }));
+        } else if phase == "issued" {
             assert!(matches!(f.next(&mut ledger), Next::InFlight { .. }));
         } else {
             assert!(matches!(

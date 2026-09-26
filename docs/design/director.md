@@ -1238,8 +1238,9 @@ This core check returns a decision, never `Run`, a new command, or a replay perm
 `Continue` is not permission to start another operation. Even an `Acquire`
 feasibility result requires the original one-shot command from the current live
 session and local native checks. A recovered pending command remains uncertain
-evidence. The durable journal, IPC and native before-hook boundary must adopt
-this check before production dispatch; the existing preview gains no authority.
+evidence. The durable journal commits these checks through the entry points
+below. IPC and the native before-hook boundary still need to adopt them before
+production dispatch; the existing preview gains no authority.
 
 Geometry preparation has an opaque, versioned checkpoint for local persistence.
 Restore requires a separately compiled binding from the original trusted program
@@ -1309,8 +1310,19 @@ reservation, not a replay grant. The host must retain its one-shot dispatch
 authority and revalidate native ownership and safety at the actual boundary.
 IPC/native adoption remains required, and no published plugin gains authority.
 
-Geometry planning is exposed through IPC 6; this new dispatch check still needs
-IPC and native adoption. Neither path is a hardware permit.
+`check_geometry_pending_dispatch` requires the exact pending command, fresh
+constraints, current equipment configuration and boundary state. In one writer
+transaction it checks durable progress, runs the shared-core feasibility check,
+persists its checkpoint and appends a changed halt once. A failed event write
+rolls back both the halt and snapshot clock. Repeated checks issue no command,
+add no capture credit and cannot bypass mode or lifecycle checks. Program-only
+and legacy ledgers have corresponding mode-specific entry points. A second
+handle observes the same sticky refusal, including a later safety escalation;
+correlated completion still resolves the pending evidence. No result authorizes
+replay of a recovered command.
+
+Geometry planning is exposed through IPC 6; these dispatch checks still need
+IPC and native adoption. None of these paths is a hardware permit.
 Final native dispatch still needs fresh revalidation.
 Compilation is bounded by the program/geometry limits but can be expensive for
 many distinct targets; schedule it off the interactive/dispatch path. Shared

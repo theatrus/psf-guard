@@ -368,6 +368,58 @@ impl Ledger {
         Ok(next)
     }
 
+    /// Feasibility after before-hooks, not permission to replay recovered work.
+    /// The host still needs its original one-shot command from the live session.
+    pub fn check_pending_preparation_dispatch(
+        &mut self,
+        command: &Command,
+        state: State,
+    ) -> Result<Decision, Error> {
+        if self.program.is_some() {
+            return Err(Error::ConflictingEvidence);
+        }
+        self.check_pending_dispatch_inner(command, state, None)
+    }
+
+    pub(super) fn check_pending_dispatch_inner(
+        &mut self,
+        command: &Command,
+        state: State,
+        current: Option<&Constraints>,
+    ) -> Result<Decision, Error> {
+        self.check_geometry_mode(current.is_some())?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let id = &command.preparation_id;
+        let mut stored = read(&tx, id, self.geometry.as_ref())?.ok_or(Error::InvalidInput)?;
+        if stored.lifecycle != Lifecycle::Active {
+            return Err(Error::ConflictingEvidence);
+        }
+        let old_halt = stored.preparation.halted().cloned();
+        let decision = stored.preparation.check_pending_dispatch(
+            &snapshot(&tx, &self.assignment, state)?,
+            command,
+            current,
+        )?;
+        persist(&tx, &stored.preparation)?;
+        if old_halt.as_ref() != stored.preparation.halted()
+            && let Some(halted) = stored.preparation.halted()
+        {
+            append(
+                &tx,
+                &self.ledger_id,
+                &self.assignment,
+                id,
+                EventKind::Halted {
+                    decision: halted.clone(),
+                },
+            )?;
+        }
+        tx.commit()?;
+        Ok(decision)
+    }
+
     pub fn complete_preparation(&mut self, completion: Completion) -> Result<Record, Error> {
         let tx = self
             .connection
