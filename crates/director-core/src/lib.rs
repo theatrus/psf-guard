@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+pub mod preparation;
 pub mod windows;
 use windows::{observing_windows, Interval, MeridianExclusion, TransitCoverage, WindowError};
 
@@ -19,7 +20,7 @@ pub struct Request {
     pub state: State,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Assignment {
     pub id: String,
@@ -31,7 +32,7 @@ pub struct Assignment {
     pub goals: Vec<Goal>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Goal {
     pub id: String,
