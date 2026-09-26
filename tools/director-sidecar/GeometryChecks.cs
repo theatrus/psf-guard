@@ -55,6 +55,7 @@ internal static class GeometryChecks
                 var next = (await Send(session, Boundary("advance_geometry_preparation", program, constraints, state)))["next"]!;
                 Assert(next["status"]!.GetValue<string>() == "run", "geometry issues one preparation operation");
                 issued = next["value"]!.DeepClone();
+                await CheckDispatch(session, program, constraints, state, issued, "acquire");
                 session.KillChild();
                 Assert(await session.WaitForExitAsync() != 0, "kill geometry sidecar after issue");
             }
@@ -68,6 +69,8 @@ internal static class GeometryChecks
                 var active = (await Send(session, new JsonObject { ["action"] = "active_preparation" }))["record"]!;
                 Assert(JsonNode.DeepEquals(active["pending"], issued), "geometry restart discovers exact pending command");
                 Assert((await Send(session, Boundary("advance_geometry_preparation", program, constraints, state)))["next"]!["status"]!.GetValue<string>() == "in_flight", "geometry restart never repeats hardware command");
+                // Feasibility is not permission to replay recovered work.
+                await CheckDispatch(session, program, constraints, state, issued, "acquire");
                 await Send(session, Complete(issued, state));
                 for (var count = 0; ; count++)
                 {
@@ -81,6 +84,7 @@ internal static class GeometryChecks
                 legacy.Remove("constraints");
                 Assert((await Send(session, legacy))["code"]!.GetValue<string>() == "conflicting_evidence", "geometry rejects program-only reservation bypass");
                 Assert((await Send(session, Boundary("reserve_geometry_prepared", program, constraints, state)))["outcome"]!["status"]!.GetValue<string>() == "created", "geometry reserves capture once");
+                await CheckDispatch(session, program, constraints, state, null, "acquire");
                 session.KillChild();
                 Assert(await session.WaitForExitAsync() != 0, "kill geometry sidecar after capture reservation");
             }
@@ -90,6 +94,20 @@ internal static class GeometryChecks
                 Assert((await Send(session, Boundary("reserve_geometry_prepared", program, constraints, state)))["outcome"]!["status"]!.GetValue<string>() == "existing", "geometry recovered capture never grants redispatch");
                 var binding = (await Send(session, new JsonObject { ["action"] = "capture_binding", ["capture_id"] = "capture" }))["binding"]!;
                 Assert(JsonNode.DeepEquals(binding["recipe"], program["recipes"]![0]), "geometry capture keeps exact recipe");
+                var unsafeState = state.DeepClone();
+                unsafeState["safety"] = "unsafe";
+                await CheckDispatch(session, program, constraints, unsafeState, null, "stop");
+                session.KillChild();
+                Assert(await session.WaitForExitAsync() != 0, "kill geometry sidecar after capture dispatch refusal");
+            }
+            await using (var session = await RuntimeSession.StartAsync(executable, "rig-1", started, storageDirectory: directory.FullName))
+            {
+                await Send(session, Open(program, constraints, state));
+                await CheckDispatch(session, program, constraints, state, null, "stop");
+                var record = (await Send(session, new JsonObject { ["action"] = "preparation", ["preparation_id"] = "prep" }))["record"]!;
+                Assert(record["lifecycle"]!.GetValue<string>() == "captured" && record["halted"]!["action"]!.GetValue<string>() == "stop"
+                    && record["capture_id"]!.GetValue<string>() == "capture" && record["pending"] is null, "captured refusal retains exact recovery evidence");
+                Assert((await Send(session, Boundary("reserve_geometry_prepared", program, constraints, state)))["outcome"]!["status"]!.GetValue<string>() == "existing", "refused recovered capture still cannot be reissued");
                 await session.SendAsync(new JsonObject { ["type"] = "shutdown" });
                 Assert(await session.WaitForExitAsync() == 0, "geometry recovery shuts down cleanly");
             }
@@ -99,6 +117,21 @@ internal static class GeometryChecks
             // Only this test-owned temporary directory is removed.
             directory.Delete(recursive: true);
         }
+    }
+
+    private static async Task CheckDispatch(RuntimeSession session, JsonNode program, JsonNode constraints, JsonNode state,
+        JsonNode? command, string expected)
+    {
+        var operation = Boundary(command is null ? "check_geometry_capture_dispatch" : "check_geometry_pending_dispatch", program, constraints, state);
+        if (command is null) operation["capture_id"] = "capture";
+        else
+        {
+            operation.Remove("preparation_id");
+            operation["command"] = command.DeepClone();
+        }
+        var response = await Send(session, operation);
+        Assert(response["status"]!.GetValue<string>() == "dispatch_checked" && response["decision"]!["action"]!.GetValue<string>() == expected,
+            $"geometry {(command is null ? "capture" : "preparation")} dispatch check: {expected}");
     }
 
     private static JsonObject Open(JsonNode program, JsonNode constraints, JsonNode state) => new()

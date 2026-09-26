@@ -12,6 +12,9 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio::io::duplex;
 
+#[path = "geometry_tests/dispatch.rs"]
+mod dispatch;
+
 #[derive(Deserialize)]
 struct Fixture {
     state: State,
@@ -441,7 +444,7 @@ async fn previous_protocol_is_rejected_before_ledger_creation() {
             rig_id: "rig-1".into(),
         },
     );
-    old.protocol_version = 5;
+    old.protocol_version = PROTOCOL_VERSION - 1;
     send(&mut client, &old).await;
     assert_eq!(task.await.unwrap(), Err(ProtocolError::VersionMismatch));
     assert!(!dir.path().join("execution.sqlite").exists());
