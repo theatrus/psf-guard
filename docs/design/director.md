@@ -317,15 +317,36 @@ source/package versions in phase 0; nightly branch heads and published releases
 are not interchangeable.
 
 Director does not need a TS provider extension or fork. The shared Rust core
-owns objective selection, scheduling, progress accounting, retry policy, and
-timing-aware replanning. PSF Guard simulation and the local sidecar use that
-same code; do not put a second scheduler in C# or delegate selection to TS.
+owns objective selection, scheduling, equipment-operation planning, progress
+accounting, retry policy, and timing-aware replanning. PSF Guard simulation and
+the local sidecar use that same code; do not put a second scheduler in C# or
+delegate selection to TS. N.I.N.A. is the only execution backend in the current
+scope. Keep the core independent so another backend can implement the contract
+later, but do not build a standalone equipment backend now.
+
+TS is the behavioral reference for both what/when to image and the operations
+needed to acquire it. The core must model operation prerequisites, ordering,
+completion, interruption, and recovery: startup/shutdown, slew and centering,
+rotation, filter changes, autofocus policy, guiding, dithering and settling,
+meridian transitions, calibration acquisition, waiting, and check-in boundaries.
+This is a requirements inventory, not a claim that these operations already
+exist in the core. Actual device control and the mechanics of native actions
+remain in N.I.N.A.; immediate safety never waits for a core decision.
 
 The thin C# adapter translates approved work into supported N.I.N.A. sequence
 items, mediators, and services. Reuse N.I.N.A.'s hardware, guiding, autofocus,
 centering, flip, cancellation, and image-saving machinery rather than copying
 TS's execution loop or calling private APIs. Prove each required public API in
 phase 0; do not assume the existence of a generic execute-plan endpoint.
+
+Use the same native sequencer-container model as TS: a Director container owns
+the session and runs actions through N.I.N.A.'s sequence execution lifecycle.
+Preserve the TS-style container options and their semantics, including configured
+triggers, conditions, cancellation, and nested action behavior. Calling a
+mediator directly is not sufficient if it bypasses those sequence hooks. Director
+may extend the container and options, but must not require TS's private container
+types or TS installation. This is behavioral compatibility, not reuse of TS's
+runtime identity or a promise that saved TS sequences deserialize unchanged.
 
 N.I.N.A. retains continuous local safety and operator control. Director's own
 session container coordinates operation boundaries and reports actual results
@@ -471,6 +492,9 @@ its acceptance gate passes and its review and validation evidence is linked here
 - [ ] Pin current N.I.N.A. 3.3 nightly and record the supported version matrix.
 - [ ] Prove Director-owned execution through supported N.I.N.A. APIs without
   TS installed; preserve ordinary TS and Sync behavior when separately installed.
+- [ ] Inventory the pinned TS container options, operation policies, conditions,
+  and trigger lifecycle. Map each to shared-core policy or native N.I.N.A.
+  execution, with parity tests and explicit reasons for any intended difference.
 - [ ] Validate asymmetric meridian constraints against local TS reference cases
   and prove N.I.N.A. horizon export/parity; include multiple safe intervals in
   the engine contract.
@@ -504,6 +528,7 @@ Native capture building block: [journaled capture and save lifecycle, Director P
 Native simulator sequence: [ASCOM capture and FITS readback, Director PR #4](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/4).
 Planner bridge: [typed evaluation and Rust-selected native capture, Director PR #5](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/5).
 Execution storage: [durable attempt reservations and event outbox, PR #464](https://github.com/theatrus/psf-guard/pull/464).
+Storage IPC: [versioned ledger operations and process recovery, PR #465](https://github.com/theatrus/psf-guard/pull/465).
 
 The Director host pins N.I.N.A. `3.3.0.1058-nightly` and the tested sidecar by
 commit, CI run/artifact identity, SHA-256, and wire versions. The C# build consumes
@@ -651,26 +676,28 @@ member, so normal application builds do not package the experimental native DLL.
 same core into a separate executable. The Windows-only
 [.NET process harness](../../tools/director-sidecar/Program.cs) launches it over
 a random, current-user-only, first-instance named pipe. Both ends verify the
-peer process ID. Only the pipe name and host PID appear in process arguments;
-this protocol has no credential, network, database, or equipment operations.
+peer process ID. The launcher supplies the pipe name, host PID, and optionally
+an absolute state directory. No credentials appear in process arguments. The
+protocol has no network or equipment operations; local persistence is opt-in.
 
-IPC version 1 uses a four-byte little-endian length followed by UTF-8 JSON.
+IPC version 3 uses a four-byte little-endian length followed by UTF-8 JSON.
 Frames are limited to 266,240 bytes before body allocation. The nested planning
 request retains its original JSON and the core's 262,144-byte limit, including
 duplicate-field validation. Every envelope contains `protocol_version`,
 `session_id`, `request_id`, and `payload`; payloads use a `type` discriminator.
 
 - `hello` must be request 0 with a fresh 32-hex-character session ID. It binds
-  the rig ID and requires exact runtime 0.1.1, engine 0.2.0, and contract 2.
-  `ready` confirms all versions and the rig.
+  the rig ID and requires exact runtime 0.2.1, engine 0.2.0, and contract 2.
+  `ready` confirms all versions, the rig, and whether storage is enabled.
 - `evaluate` wraps one core request and returns a `decision` with the unchanged
   core response. Valid requests for another assignment rig terminate the session.
   Invalid planning inputs return core errors; invalid IPC terminates the session.
-- IPC 2 adds a shutdown drain handshake: `ping` returns `pong`; `shutdown`
-  returns `stopped`, then waits at most two seconds for the host to close its
-  pipe after reading the reply. The host closes before waiting for process exit.
-  This avoids dropping an unread Windows pipe reply. No more commands may run
-  after shutdown. Every message
+  After opening a ledger, stateless `evaluate` terminates the session: it must
+  not bypass durable pending work or attempt limits with a caller's old snapshot.
+- `ping` returns `pong`; `shutdown` returns `stopped`, then waits at most two
+  seconds for the host to close its pipe after reading the reply. The host
+  closes before waiting for process exit. This avoids dropping an unread
+  Windows pipe reply. No more commands may run after shutdown. Every message
   after hello requires the next consecutive request ID, including heartbeats.
 - Pipe connection and hello each have a 15-second deadline. After hello, each
   complete incoming frame has a 30-second deadline; writes have 10 seconds.
@@ -680,6 +707,52 @@ duplicate-field validation. Every envelope contains `protocol_version`,
 - Clean EOF ends the child normally. Truncation, timeout, incompatible versions,
   and stale/duplicate requests end the session without a replayed response.
   A new child must negotiate a new session and receive a fresh snapshot.
+
+The Director preview pins runtime 0.2.1 / IPC 3 with the typed ledger host and
+shutdown drain handshake together. A mismatched version is refused, never
+silently downgraded. Publishing this runtime artifact alone does not update
+installed plugins or change the existing Sync plugin.
+
+With `--state-directory`, the launcher supplies a private existing directory for
+one profile/rig. The runtime verifies the pipe peer before touching storage,
+takes an exclusive OS lock on `director-runtime.lock`, and uses the fixed
+`execution.sqlite` filename. It never accepts paths in IPC messages or unlinks
+the lock file. Another sidecar cannot own the same directory while this owner
+or its blocking database operation lives. Process death releases the lock; it
+does not clear capture evidence.
+
+Startup waits up to two seconds for lock contention, including Windows sharing
+violations during handle release. It never steals a live owner's lock. Invalid
+directories and other I/O errors fail immediately; this wait does not retry any
+ledger operation or hardware dispatch.
+
+`ledger` wraps a strict `operation` object with an `action` discriminator:
+
+- `open` validates and binds the original core `request`. Its reply contains
+  stable ledger, assignment, revision, rig, and configuration identities.
+- `reserve` takes a capture ID and current core state. The shared evaluator and
+  ledger return a newly committed reservation, existing evidence, recovery
+  required, or a non-acquisition decision. Only the first case is new work;
+  none is a hardware permission or a restart dispatch token.
+- `record` accepts verified saved/failed/uncertain evidence. `attempt` reads a
+  capture's evidence without changing it, including after reconnect.
+- `events` pages at most 64 events after a cursor and returns the next cursor.
+  There is no acknowledgement, pruning, revision activation, or grading yet.
+
+SQLite work runs on the blocking executor, serialized within the pipe session.
+Structured storage failures carry codes, not paths or raw database errors. Wrong
+rig identity or malformed commands terminate the session; ordinary busy/invalid
+operation errors do not. If a response is lost, the operation may have committed.
+Reconnect with the same ledger/allocation and query the stable capture ID; never
+interpret a retry returning existing evidence as permission to capture again.
+
+Portable protocol tests cover loss of the reservation reply, duplicate/unknown
+fields, wrong-rig commands, bounded event pages with escaped maximum-length IDs,
+contention, exclusive ownership, and refusal to bypass ledger progress. The real
+Windows named-pipe harness passed 36 golden decisions and lifecycle/storage checks
+across 17 owned sidecars on 2026-09-25, including forced termination after uncertain
+and saved outcomes. This is process-level recovery evidence, not a N.I.N.A. or
+server-loop test.
 
 Run the real Windows process tests:
 
@@ -702,9 +775,9 @@ The existing Sync plugin is unchanged.
 
 [`crates/director-ledger`](../../crates/director-ledger/src/lib.rs) owns the
 first local attempt/event storage contract. It depends on the shared core and
-SQLite, leaving the planner itself free of I/O. This crate is not yet exposed
-through sidecar IPC or used by the native capture adapter. It changes no existing
-catalog, Sync endpoint, plugin package, or runtime protocol.
+SQLite, leaving the planner itself free of I/O. IPC 3 exposes it through explicit
+storage operations, but the native capture adapter does not use it yet. It
+changes no existing catalog, Sync endpoint, or installed plugin package.
 
 The initial ledger binds one immutable allocation, its original accepted/pending
 baseline, the rig/configuration, and the exact engine/contract versions. Each
@@ -773,6 +846,10 @@ rebuild without counting mirrored captures twice.
 - [ ] Implement versioned allocation, acknowledgements, checkpoints, and limits.
 - [ ] Add durable event delivery, local recovery, offline operation, and status UI.
 - [ ] Support native sequence safety/hooks and explicit Sync coexistence rules.
+- [ ] Implement the shared-core operation state machine and the TS-style native
+  container/options contract. Test configured trigger order and frequency,
+  nested operations, cancellation, and failure propagation in real N.I.N.A.
+  simulator sequences; report injected actions and durations back to the core.
 - [ ] Enforce the current rig meridian/horizon snapshot at dispatch and refresh
   it on profile changes, horizon changes, and same-path file edits.
 

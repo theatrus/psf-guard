@@ -105,7 +105,13 @@ pub struct ExecutionEvent {
     pub attempt: Attempt,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(
+    tag = "status",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum Reservation {
     /// Newly committed reservation only. Local safety and ownership must still
     /// be revalidated at the actual dispatch boundary; this is not a permit.
@@ -115,6 +121,16 @@ pub enum Reservation {
     /// A previous reservation or ambiguous capture blocks all new rig work.
     RecoveryRequired(Attempt),
     Decision(Decision),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LedgerInfo {
+    pub ledger_id: String,
+    pub assignment_id: String,
+    pub assignment_revision: u64,
+    pub rig_id: String,
+    pub configuration_id: String,
 }
 
 pub struct Ledger {
@@ -137,6 +153,15 @@ fn status(evidence: &Evidence) -> &'static str {
 }
 
 impl Ledger {
+    pub fn info(&self) -> LedgerInfo {
+        LedgerInfo {
+            ledger_id: self.ledger_id.clone(),
+            assignment_id: self.assignment.id.clone(),
+            assignment_revision: self.assignment.revision,
+            rig_id: self.assignment.rig_id.clone(),
+            configuration_id: self.assignment.configuration_id.clone(),
+        }
+    }
     /// Open only a Director-owned local database. The input allocation must be
     /// authenticated by the host. Validation uses the real shared core, including
     /// its geometry contract; it does not grant permission to dispatch.

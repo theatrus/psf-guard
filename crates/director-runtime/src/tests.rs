@@ -4,7 +4,7 @@ use tokio::io::{duplex, DuplexStream};
 
 const SESSION: &str = "0123456789abcdef0123456789abcdef";
 
-fn command(id: u64, payload: Command) -> Message {
+pub(super) fn command(id: u64, payload: Command) -> Message {
     Message {
         protocol_version: PROTOCOL_VERSION,
         session_id: SESSION.into(),
@@ -25,21 +25,23 @@ fn hello() -> Message {
     )
 }
 
-async fn send(stream: &mut DuplexStream, message: &Message) {
+pub(super) async fn send(stream: &mut DuplexStream, message: &Message) {
     write_frame(stream, &serde_json::to_vec(message).unwrap())
         .await
         .unwrap();
 }
 
-async fn receive_reply(stream: &mut DuplexStream) -> Reply {
-    let data = read_frame(stream, Duration::from_secs(1))
+pub(super) async fn receive_reply(stream: &mut DuplexStream) -> Reply {
+    // Match the host's request budget; real FULL-sync SQLite I/O is not a
+    // one-second latency test on shared CI disks.
+    let data = read_frame(stream, Duration::from_secs(5))
         .await
         .unwrap()
         .unwrap();
     serde_json::from_slice(&data).unwrap()
 }
 
-async fn handshake(stream: &mut DuplexStream) {
+pub(super) async fn handshake(stream: &mut DuplexStream) {
     send(stream, &hello()).await;
     let response = receive_reply(stream).await;
     assert_eq!(response.session_id, SESSION);
