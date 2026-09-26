@@ -430,3 +430,117 @@ fn preparations_cannot_start_at_an_in_flight_or_unsafe_boundary() {
         Err(Error::NotSelected)
     ));
 }
+
+#[test]
+fn checkpoints_restore_each_boundary_without_reissuing_commands() {
+    let mut r = request();
+    let mut p = preparation(&r, context());
+    loop {
+        let bytes = p.checkpoint().unwrap();
+        p = Preparation::restore(&bytes).unwrap();
+        assert_eq!(p.checkpoint().unwrap(), bytes);
+        match p.next(&r).unwrap() {
+            Next::Run(command) => {
+                p = Preparation::restore(&p.checkpoint().unwrap()).unwrap();
+                assert_eq!(
+                    p.next(&r).unwrap(),
+                    Next::InFlight {
+                        ordinal: command.ordinal
+                    }
+                );
+                finish(&mut p, &mut r, &command);
+            }
+            Next::ReadyToReserve { .. } => break,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    assert!(p.steps_completed());
+    assert_eq!(p.observations().len(), 5);
+}
+
+#[test]
+fn checkpoints_preserve_stops_in_flight_and_delayed_receipt_clock() {
+    let mut r = request();
+    let mut p = preparation(&r, context());
+    let command = run(&mut p, &r);
+    r.state.now_ms += 100;
+    r.state.operator_stop = true;
+    p.next(&r).unwrap();
+    p = Preparation::restore(&p.checkpoint().unwrap()).unwrap();
+    p.complete(completion(
+        &command,
+        r.state.now_ms - 50,
+        Outcome::Succeeded,
+    ))
+    .unwrap();
+    p = Preparation::restore(&p.checkpoint().unwrap()).unwrap();
+    r.state.operator_stop = false;
+    assert!(matches!(
+        p.next(&r).unwrap(),
+        Next::Decision(Decision::Stop { .. })
+    ));
+    r.state.now_ms -= 1;
+    assert_eq!(p.next(&r), Err(Error::ClockRegression));
+}
+
+#[test]
+fn malformed_checkpoint_cannot_create_readiness_or_erase_failed_evidence() {
+    let r = request();
+    let mut p = preparation(&r, context());
+    let command = run(&mut p, &r);
+    p.complete(completion(
+        &command,
+        r.state.now_ms,
+        Outcome::Failed {
+            reason: "native_failure".into(),
+        },
+    ))
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&p.checkpoint().unwrap()).unwrap();
+    for (pointer, replacement) in [
+        ("/format_version", serde_json::json!(99)),
+        ("/engine_version", serde_json::json!("future")),
+        ("/halted", serde_json::Value::Null),
+        (
+            "/halted",
+            serde_json::json!({"action":"acquire","goal_id":"short-ha","reason":"forged"}),
+        ),
+        ("/last_time_ms", serde_json::json!(0)),
+        ("/observations/0/command/ordinal", serde_json::json!(2)),
+        (
+            "/observations/0/command/goal_id",
+            serde_json::json!("other"),
+        ),
+        ("/observations/0/issued_at_ms", serde_json::json!(0)),
+        ("/pending_issued_at_ms", serde_json::json!(10000)),
+        ("/initial/contract_version", serde_json::json!(99)),
+    ] {
+        let mut invalid = value.clone();
+        *invalid.pointer_mut(pointer).unwrap() = replacement;
+        assert!(
+            matches!(
+                Preparation::restore(&serde_json::to_vec(&invalid).unwrap()),
+                Err(Error::InvalidCheckpoint)
+            ),
+            "{pointer}"
+        );
+    }
+    for field in ["pending_issued_at_ms", "halted"] {
+        let mut invalid = value.clone();
+        invalid.as_object_mut().unwrap().remove(field);
+        assert!(matches!(
+            Preparation::restore(&serde_json::to_vec(&invalid).unwrap()),
+            Err(Error::InvalidCheckpoint)
+        ));
+    }
+    let mut invalid = value;
+    invalid["extra"] = serde_json::json!(true);
+    assert!(matches!(
+        Preparation::restore(&serde_json::to_vec(&invalid).unwrap()),
+        Err(Error::InvalidCheckpoint)
+    ));
+    assert!(matches!(
+        Preparation::restore(&vec![0; 400_000]),
+        Err(Error::InvalidCheckpoint)
+    ));
+}

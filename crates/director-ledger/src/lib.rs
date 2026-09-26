@@ -9,9 +9,11 @@ use psf_guard_director_core::{
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::{fmt, path::Path, time::Duration};
+pub mod preparation;
 
 const APPLICATION_ID: i32 = 0x5047444c;
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
+const CAPTURE_EVENT_VERSION: u32 = 1;
 const MAX_EVENT_PAGE: usize = 256;
 
 #[derive(Debug)]
@@ -19,6 +21,7 @@ pub enum Error {
     Sqlite(rusqlite::Error),
     Json(serde_json::Error),
     Planner(psf_guard_director_core::Error),
+    Preparation(psf_guard_director_core::preparation::Error),
     InvalidInput,
     ForeignDatabase,
     UnsupportedSchema,
@@ -237,9 +240,13 @@ impl Ledger {
                 ],
             )?;
             tx.pragma_update(None, "application_id", APPLICATION_ID)?;
+            preparation::create_tables(&tx)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         } else if application != APPLICATION_ID {
             return Err(Error::ForeignDatabase);
+        } else if version == 1 {
+            preparation::create_tables(&tx)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         } else if version != SCHEMA_VERSION {
             return Err(Error::UnsupportedSchema);
         }
@@ -283,6 +290,11 @@ impl Ledger {
         if let Some(attempt) = read_attempt(&tx, capture_id)? {
             return Ok(Reservation::Existing(attempt));
         }
+        if preparation::has_active(&tx)? {
+            return Ok(Reservation::Decision(Decision::CheckIn {
+                reason: "preparation_active".into(),
+            }));
+        }
         let unresolved: Option<String> = tx
             .query_row(
                 "SELECT capture_id FROM attempt WHERE status IN ('reserved','uncertain') LIMIT 1",
@@ -295,34 +307,7 @@ impl Ledger {
                 read_attempt(&tx, &id)?.ok_or(Error::CorruptLedger)?,
             ));
         }
-        let mut assignment = self.assignment.clone();
-        let mut counts = tx.prepare(
-            "SELECT goal_id, count(*), sum(status='saved') FROM attempt GROUP BY goal_id",
-        )?;
-        let rows = counts.query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, u32>(1)?,
-                r.get::<_, u32>(2)?,
-            ))
-        })?;
-        for row in rows {
-            let (goal_id, used, saved) = row?;
-            let goal = assignment
-                .goals
-                .iter_mut()
-                .find(|g| g.id == goal_id)
-                .ok_or(Error::CorruptLedger)?;
-            goal.attempts_remaining = goal
-                .attempts_remaining
-                .checked_sub(used)
-                .ok_or(Error::CorruptLedger)?;
-            goal.pending = goal
-                .pending
-                .checked_add(saved)
-                .ok_or(Error::CorruptLedger)?;
-        }
-        drop(counts);
+        let assignment = current_assignment(&tx, &self.assignment)?;
         let now_ms = state.now_ms;
         let decision = psf_guard_director_core::evaluate(&Request {
             contract_version: CONTRACT_VERSION,
@@ -333,21 +318,14 @@ impl Ledger {
         let Decision::Acquire { goal_id, .. } = decision else {
             return Ok(Reservation::Decision(decision));
         };
-        let attempt = Attempt {
-            capture_id: capture_id.into(),
+        let attempt = insert_attempt(
+            &tx,
+            &self.ledger_id,
+            &self.assignment,
+            capture_id,
             goal_id,
-            reserved_at_ms: now_ms,
-            evidence: Evidence::Reserved,
-        };
-        tx.execute(
-            "INSERT INTO attempt(capture_id,goal_id,status,payload) VALUES (?1,?2,'reserved',?3)",
-            params![
-                attempt.capture_id,
-                attempt.goal_id,
-                serde_json::to_string(&attempt)?
-            ],
+            now_ms,
         )?;
-        append_event(&tx, &self.ledger_id, &self.assignment, &attempt)?;
         tx.commit()?;
         Ok(Reservation::Created(attempt))
     }
@@ -466,7 +444,7 @@ fn append_event(
     attempt: &Attempt,
 ) -> Result<(), Error> {
     let event = ExecutionEvent {
-        schema_version: SCHEMA_VERSION as u32,
+        schema_version: CAPTURE_EVENT_VERSION,
         ledger_id: ledger_id.into(),
         sequence: 0,
         contract_version: CONTRACT_VERSION,
@@ -482,4 +460,60 @@ fn append_event(
         [serde_json::to_string(&event)?],
     )?;
     Ok(())
+}
+
+fn current_assignment(connection: &Connection, baseline: &Assignment) -> Result<Assignment, Error> {
+    let mut assignment = baseline.clone();
+    let mut counts = connection
+        .prepare("SELECT goal_id, count(*), sum(status='saved') FROM attempt GROUP BY goal_id")?;
+    let rows = counts.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, u32>(1)?,
+            r.get::<_, u32>(2)?,
+        ))
+    })?;
+    for row in rows {
+        let (goal_id, used, saved) = row?;
+        let goal = assignment
+            .goals
+            .iter_mut()
+            .find(|g| g.id == goal_id)
+            .ok_or(Error::CorruptLedger)?;
+        goal.attempts_remaining = goal
+            .attempts_remaining
+            .checked_sub(used)
+            .ok_or(Error::CorruptLedger)?;
+        goal.pending = goal
+            .pending
+            .checked_add(saved)
+            .ok_or(Error::CorruptLedger)?;
+    }
+    Ok(assignment)
+}
+
+fn insert_attempt(
+    connection: &Connection,
+    ledger_id: &str,
+    assignment: &Assignment,
+    capture_id: &str,
+    goal_id: String,
+    now_ms: u64,
+) -> Result<Attempt, Error> {
+    let attempt = Attempt {
+        capture_id: capture_id.into(),
+        goal_id,
+        reserved_at_ms: now_ms,
+        evidence: Evidence::Reserved,
+    };
+    connection.execute(
+        "INSERT INTO attempt(capture_id,goal_id,status,payload) VALUES (?1,?2,'reserved',?3)",
+        params![
+            attempt.capture_id,
+            attempt.goal_id,
+            serde_json::to_string(&attempt)?
+        ],
+    )?;
+    append_event(connection, ledger_id, assignment, &attempt)?;
+    Ok(attempt)
 }
