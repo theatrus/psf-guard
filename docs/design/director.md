@@ -56,7 +56,7 @@ sync semantics.
 
 ## Implementation audit
 
-Audited 2026-09-26 against PSF Guard main `a244515` and Director plugin main
+Audited 2026-09-26 against PSF Guard main `caf4d51` and Director plugin main
 `8f6d8c2`, plus the open PR heads listed below. **Merged building block** does
 not mean a production workflow or phase gate passed. Open PR work is not in
 main. Update this table and the relevant checklist when a PR lands; keep
@@ -71,7 +71,7 @@ untested integration requirements unchecked.
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
 | Meta storage | [#488](https://github.com/theatrus/psf-guard/pull/488) and [#489](https://github.com/theatrus/psf-guard/pull/489) merged: separate schema-2 store, UUIDs, mappings, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. | Catalog adoption workflow, permissions/enrollment, active revisions, allocation authority and progress projections. |
 | Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492) and [#493](https://github.com/theatrus/psf-guard/pull/493) implemented/tested in open PRs: shared objective/contribution model and schema-3 intent persistence. | Not merged; objective editor, depth/FOV/sampling compatibility and authoritative allocation remain open. |
-| Operator API and UI | [#490](https://github.com/theatrus/psf-guard/pull/490) merged: opt-in project identity API. [#494](https://github.com/theatrus/psf-guard/pull/494) and [#495](https://github.com/theatrus/psf-guard/pull/495) implemented/tested in open PRs: site/rig identities/snapshots API and identity management screen. | Site/rig API and UI not merged. No project planning editor, catalog adoption, rig pairing, acquisition control or live rig dashboard. UI tests are not equipment tests. |
+| Operator API and UI | [#490](https://github.com/theatrus/psf-guard/pull/490) and [#494](https://github.com/theatrus/psf-guard/pull/494) merged: opt-in project/site/rig identity and site/rig snapshot APIs. [#495](https://github.com/theatrus/psf-guard/pull/495) implements/tests the identity management screen in an open PR. | UI not merged. No project planning editor, catalog adoption, rig pairing, acquisition control or live rig dashboard. UI tests are not equipment tests. |
 | Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
 | Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. | Central telemetry ingestion/dashboard, scoped pairing, remote acknowledgements, offline authorization lifecycle, manual/sequence batch reconcile and reconnect activation are not implemented. |
 | End-to-end lifecycle | Core, process, native simulator and isolated management HTTP/UI tests exist separately. | No PSF Guard allocation -> real NINA simulator acquisition -> central telemetry/grade -> batch reconciliation/replan test. TS/Sync/Chatstronomy coexistence gates remain open. |
@@ -1756,7 +1756,8 @@ are unchanged.
   and UI override/reset controls rather than duplicating settings per project.
 - [x] Enable opt-in operator project identity API with authentication and the
   database-management gate (#490).
-- [ ] Merge and validate site/rig operator APIs and identity UI (#494/#495).
+- [x] Merge and validate site/rig identity and snapshot operator APIs (#494).
+- [ ] Merge and validate the identity management UI (#495).
 - [ ] Merge the shared objective/contribution model and persisted intent
   (#492/#493), then add the actual objective/configuration editor.
 - [ ] Link existing catalogs without rewriting TS history or merging names.
