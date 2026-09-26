@@ -1149,10 +1149,38 @@ Tests feed the resulting windows into the existing selector and meridian
 interval composition. Exposure plus overhead must fit a single surviving
 window; a narrow horizon obstruction can force waiting for the next one.
 Day-long dense SOFA checks verify the generated clear regions across sites.
-This is not yet the complete availability compiler: darkness, actual transit
-search, immutable constraint identity, IPC, and production dispatch binding
+This is not yet the complete availability compiler: darkness,
+immutable constraint identity, IPC, and production dispatch binding
 remain separate requirements. The native integration must not treat these
 altitude windows alone as an observing assignment or hardware permit.
+
+`meridian_windows` now constructs conservative upper-meridian exclusion windows
+using the same SOFA positions and bounded spherical motion envelope. The search
+extends before the assignment by the after-transit margin and after it by the
+before-transit margin. Crossings outside the assignment can therefore still
+remove overlapping time. Observed hour angle and declination are a rotation of
+the same horizontal direction, so the spherical longitude bound applies there
+too. The search does not assume monotonic hour angle near a celestial pole or
+mistake the +/-180-degree lower culmination wrap for an upper transit.
+
+Caps that cannot reach hour angle zero are skipped. Other intervals subdivide
+to one-second resolution and become `possible_transits` bands; these may include
+near misses, not just confirmed crossings. The whole band plus the independent
+before/after margins is excluded. A band midpoint is **not** an exact transit
+and must not be inserted into the legacy `TransitCoverage.transits_ms` contract.
+Adjacent bands merge, and overlapping exclusions never create a usable gap.
+The expanded search must satisfy the same 24-hour, 8192-observation, supported
+time, Earth-orientation freshness, and UTC-offset-continuity requirements. Any
+error returns no partial result. Each output list is limited to 128 intervals.
+Explicit zero/zero exclusion skips geometry and returns the valid assignment;
+it does not disable any other constraint or imply geometry was validated.
+
+Regression tests check independent margins, outside-assignment crossings,
+lower culmination, stale expanded coverage, leap transitions, overflow, bounded
+work, and dense crossing searches across northern/southern sites and near-polar
+declinations. These windows enforce the rig exclusion only. They are neither
+flip commands nor proof that a mount can safely track or flip, and production
+integration with the other constraints and fresh dispatch checks remains open.
 
 SOFA attribution and the full upstream terms live in
 `crates/director-core/THIRD_PARTY_NOTICES.md` and `SOFARS-LICENSE.txt`.

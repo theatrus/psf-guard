@@ -189,15 +189,7 @@ fn horizon_range(
     let Horizon::Custom { points } = horizon else {
         return Ok(None);
     };
-    // Spherical metric ds^2 = dh^2 + cos(h)^2 da^2. On this cap, |h| is
-    // bounded by |center altitude| + radius. Integrating gives |da| <= r/cos(h).
-    // A cap touching either pole can span every azimuth; never divide near zero.
-    let maximum_latitude = center.altitude_degrees.abs() + radius;
-    let azimuth_radius = if maximum_latitude >= 90.0 {
-        180.0
-    } else {
-        (radius / maximum_latitude.to_radians().cos()).min(180.0)
-    };
+    let azimuth_radius = longitude_radius_degrees(center.altitude_degrees, radius);
     let range = if azimuth_radius >= 180.0 {
         points
             .iter()
@@ -231,10 +223,32 @@ fn horizon_range(
     Ok(Some(range))
 }
 
+pub(super) fn longitude_radius_degrees(latitude: f64, radius: f64) -> f64 {
+    // Spherical metric ds^2 = dh^2 + cos(h)^2 da^2. Within a cap,
+    // |h| <= |latitude| + radius; integrating gives |da| <= radius/cos(h).
+    // Works for both horizontal azimuth and observed equatorial hour angle.
+    let maximum_latitude = latitude.abs() + radius;
+    if maximum_latitude >= 90.0 {
+        180.0
+    } else {
+        (radius / maximum_latitude.to_radians().cos()).min(180.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::visibility::HorizonPoint;
+
+    #[test]
+    fn longitude_sweep_cannot_rule_out_any_meridian_when_cap_reaches_a_pole() {
+        for latitude in [-90.0, -89.999, 89.999, 90.0] {
+            assert_eq!(longitude_radius_degrees(latitude, 0.0011), 180.0);
+        }
+        assert_eq!(longitude_radius_degrees(0.0, 180.0), 180.0);
+        assert!(longitude_radius_degrees(89.0, 0.001) > 0.057);
+        assert!(longitude_radius_degrees(0.0, 0.001) < 0.0011);
+    }
 
     #[test]
     fn narrow_horizon_notch_cannot_be_certified_fully_blocked() {
