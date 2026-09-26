@@ -1,4 +1,4 @@
-# Director metadata API
+# Director management
 
 Director is experimental. This API manages global project, site and rig identities in a
 separate meta database. It does not yet pair rigs, allocate work, or enable
@@ -22,6 +22,21 @@ Back up the meta store with its SQLite-aware storage API before an upgrade.
 Do not copy a live SQLite main file without its WAL. Stop older coordinator
 processes before opening an upgraded store. HTTP backup, restore, path switching,
 and catalog adoption are deliberately not exposed.
+
+## Management screen
+
+When enabled, the **Director** navigation entry opens global **Projects**,
+**Sites**, and **Rigs**. Editors can create and rename these records; readers
+can inspect them. The selected view stays in the URL. Catalog selection does
+not scope Director identities, and a catalog is not required to use this page.
+
+Names do not establish identity. Each row includes its stable UUID and current
+revision. Create retries retain the same UUID. A conflicting rename keeps the
+draft without overwriting the other editor's change: cancel, refresh, then edit
+the current record. Listings load in bounded pages with a refresh action.
+
+This first management screen does not edit observing objectives, configuration
+snapshots, assignments, or plugin credentials. Acquisition remains unavailable.
 
 ## Protocol 1
 
@@ -83,7 +98,7 @@ make a registered rig eligible to acquire. See the typed
 [configuration model](../crates/director-meta/src/configuration.rs).
 
 These are operator APIs using ordinary user authentication. Dedicated rig
-pairing, scoped check-in credentials, assignment issuance and the UI remain
+pairing, scoped check-in credentials, assignment issuance and snapshot editing remain
 separate work. Do not put an operator API token in a plugin profile as a substitute
 for pairing.
 
@@ -96,4 +111,4 @@ identity on retry, or GET after an ambiguous rename result. Errors do not return
 filesystem paths or raw SQLite diagnostics; detailed failures are logged locally.
 
 Project objectives, site/rig enrollment, scoped assignments, feedback, and the
-project UI remain in the [phased Director plan](design/director.md).
+objective editor remain in the [phased Director plan](design/director.md).

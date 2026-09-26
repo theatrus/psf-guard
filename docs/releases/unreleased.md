@@ -6,6 +6,10 @@
 
 ## Added
 
+- An experimental Director page manages global projects, sites, and rigs on
+  servers with Director metadata enabled. It supports read-only accounts,
+  paged listings, and revision-checked renames without requiring a catalog.
+
 - An opt-in Director metadata API can create, list, and rename global project,
   site and rig identities, and retain complete immutable horizon and equipment
   snapshots in a separate SQLite store. Enable it with `--director-meta` and

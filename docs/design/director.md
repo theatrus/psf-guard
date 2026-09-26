@@ -71,7 +71,7 @@ untested integration requirements unchecked.
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
 | Meta storage | [#488](https://github.com/theatrus/psf-guard/pull/488) and [#489](https://github.com/theatrus/psf-guard/pull/489) merged: separate schema-2 store, UUIDs, mappings, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. | Catalog adoption workflow, permissions/enrollment, active revisions, allocation authority and progress projections. |
 | Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492) merged: shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493) implements/tests schema-3 intent persistence in an open PR. | Persistence not merged; objective editor, depth/FOV/sampling compatibility and authoritative allocation remain open. |
-| Operator API and UI | [#490](https://github.com/theatrus/psf-guard/pull/490) and [#494](https://github.com/theatrus/psf-guard/pull/494) merged: opt-in project/site/rig identity and site/rig snapshot APIs. [#495](https://github.com/theatrus/psf-guard/pull/495) implements/tests the identity management screen in an open PR. | UI not merged. No project planning editor, catalog adoption, rig pairing, acquisition control or live rig dashboard. UI tests are not equipment tests. |
+| Operator API and UI | [#490](https://github.com/theatrus/psf-guard/pull/490) and [#494](https://github.com/theatrus/psf-guard/pull/494): opt-in project/site/rig identity and site/rig snapshot APIs. [#495](https://github.com/theatrus/psf-guard/pull/495): identity management screen with real-server browser tests. | No project planning editor, catalog adoption, rig pairing, acquisition control or live rig dashboard. UI tests are not equipment tests. |
 | Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
 | Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. | Central telemetry ingestion/dashboard, scoped pairing, remote acknowledgements, offline authorization lifecycle, manual/sequence batch reconcile and reconnect activation are not implemented. |
 | End-to-end lifecycle | Core, process, native simulator and isolated management HTTP/UI tests exist separately. | No PSF Guard allocation -> real NINA simulator acquisition -> central telemetry/grade -> batch reconciliation/replan test. TS/Sync/Chatstronomy coexistence gates remain open. |
@@ -1712,6 +1712,13 @@ include catalogs, images, or Director's local execution journal. Stop the old
 coordinator before switching to a restored path. Online replacement and automated
 restore/configuration switching are not supported.
 
+The opt-in Director management page lists, creates and renames global projects,
+sites and rigs, independently of catalog selection. It shows stable UUIDs and
+revision checks, honors read-only accounts, and keeps the selected collection in
+the URL. Real-server browser tests cover create, reload, conflicting renames and
+mobile layout without any catalogs or acquisition authority. Configuration and
+objective editing are not yet part of this screen.
+
 Identity and configuration storage do not complete coordination. The shared
 objective/contribution model below is merged, but its persistence, editing,
 allocation authority, rig enrollment/permissions and catalog adoption remain
@@ -1758,7 +1765,7 @@ are unchanged.
 - [x] Enable opt-in operator project identity API with authentication and the
   database-management gate (#490).
 - [x] Merge and validate site/rig identity and snapshot operator APIs (#494).
-- [ ] Merge and validate the identity management UI (#495).
+- [x] Implement and browser-test the identity management UI (#495).
 - [x] Merge the shared objective/contribution model (#492).
 - [ ] Merge persisted intent (#493), then add the objective/configuration editor.
 - [ ] Link existing catalogs without rewriting TS history or merging names.
