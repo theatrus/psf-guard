@@ -8,7 +8,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time::timeout;
 
 pub mod storage;
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_FRAME_BYTES: usize = psf_guard_director_core::MAX_REQUEST_BYTES + 4096;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -367,6 +367,8 @@ pub async fn serve_with_storage<S: AsyncRead + AsyncWrite + Unpin>(
 
 #[cfg(test)]
 mod preparation_tests;
+#[cfg(test)]
+mod program_tests;
 #[cfg(test)]
 mod storage_tests;
 #[cfg(test)]

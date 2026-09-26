@@ -43,7 +43,7 @@ fn program() -> Program {
                 minimum: 0,
                 maximum: 100,
             },
-            offset: Control::Unsupported,
+            offset: Control::Unsupported {},
             exposure_min_ms: 1,
             exposure_max_ms: 1000000,
             enable_slew_center: true,

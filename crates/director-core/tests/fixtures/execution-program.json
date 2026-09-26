@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "assignment": {
+    "id": "assignment-1",
+    "revision": 9007199254740993,
+    "rig_id": "rig-1",
+    "configuration_id": "config-1",
+    "valid_from_ms": 1000,
+    "expires_at_ms": 1000000,
+    "goals": [{
+      "id": "short-ha", "priority": 20, "requested": 1,
+      "accepted": 0, "pending": 0, "attempts_remaining": 2,
+      "exposure_ms": 30000, "overhead_ms": 10000,
+      "eligible_windows": [{"start_ms": 1000, "end_ms": 100000}]
+    }]
+  },
+  "configuration": {
+    "rig_id": "rig-1", "id": "config-1", "camera_id": "camera-1",
+    "filter_wheel_id": "wheel-1", "filters": [{"id": "ha", "position": 2}],
+    "binning_modes": [{"x": 1, "y": 1}], "readout_modes": [0],
+    "gain": {"support": "range", "minimum": 0, "maximum": 100},
+    "offset": {"support": "unsupported"},
+    "exposure_min_ms": 1, "exposure_max_ms": 600000,
+    "enable_slew_center": true, "dither_every": 0
+  },
+  "targets": [{
+    "id": "target-1", "name": "M42", "icrs_ra_mas": 298800000,
+    "icrs_dec_mas": -18000000, "position_angle_mas": null
+  }],
+  "recipes": [{
+    "id": "recipe-1", "exposure_ms": 30000, "filter_id": "ha",
+    "binning": {"x": 1, "y": 1}, "gain": 40, "offset": null,
+    "readout_mode": 0, "dither_override": null
+  }],
+  "bindings": [{"goal_id": "short-ha", "target_id": "target-1", "recipe_id": "recipe-1"}]
+}
