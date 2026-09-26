@@ -11,6 +11,8 @@ use crate::windows::{Interval, MeridianExclusion, MAX_WINDOWS};
 use crate::{Decision, Request, State, CONTRACT_VERSION};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+mod preparation;
+pub use preparation::GeometryPreparation;
 
 pub const CONSTRAINTS_VERSION: u32 = 1;
 
@@ -57,6 +59,7 @@ pub enum Error {
     Program(crate::program::Error),
     Planning(crate::Error),
     Geometry(VisibilityError),
+    Preparation(crate::preparation::Error),
 }
 
 /// Own both source intent and computed geometry. This object is intentionally
@@ -188,6 +191,11 @@ impl BoundGeometry {
         if !matches!(original, Decision::Acquire { .. } | Decision::Wait { .. }) {
             return Ok(original);
         }
+        self.check_current(request, current)?;
+        crate::evaluate(&self.narrow(request)?).map_err(Error::Planning)
+    }
+
+    fn check_current(&self, request: &Request, current: &Constraints) -> Result<(), Error> {
         if request.state.meridian_exclusion != self.constraints.rig.meridian_exclusion {
             return Err(Error::ConstraintsChanged);
         }
@@ -205,11 +213,19 @@ impl BoundGeometry {
         {
             return Err(Error::ConstraintsChanged);
         }
+        Ok(())
+    }
+
+    fn narrow(&self, request: &Request) -> Result<Request, Error> {
+        self.source
+            .validate_projection(&request.assignment)
+            .map_err(Error::Program)?;
+        crate::validate(request).map_err(Error::Planning)?;
         let mut narrowed = request.clone();
         for goal in &mut narrowed.assignment.goals {
             goal.eligible_windows = self.windows[&goal.id].clone();
         }
-        crate::evaluate(&narrowed).map_err(Error::Planning)
+        Ok(narrowed)
     }
 }
 

@@ -1,3 +1,5 @@
+use psf_guard_director_core::preparation::{Completion, Estimates, Next, Operation, Outcome};
+use psf_guard_director_core::program::LocalState;
 use psf_guard_director_core::{
     geometry::{
         BoundGeometry, Constraints, Error, GoalLimits, RigConstraints, CONSTRAINTS_VERSION,
@@ -94,6 +96,375 @@ fn compile(
     )
 }
 
+fn local(program: &Program) -> LocalState {
+    LocalState {
+        configuration: program.configuration.clone(),
+        previous_pointing: None,
+        mount_parked: false,
+        rotator_connected: false,
+        filter_exposures_since_dither: 0,
+    }
+}
+
+fn preparation_fixture() -> (Program, Request, Constraints) {
+    let (mut program, mut request, mut constraints) = fixture();
+    request.assignment.goals[0].exposure_ms = 5_000;
+    program.assignment = request.assignment.clone();
+    program.recipes[0].exposure_ms = 5_000;
+    spike(&mut constraints);
+    (program, request, constraints)
+}
+
+fn receipt(command: &psf_guard_director_core::preparation::Command, now: u64) -> Completion {
+    Completion {
+        preparation_id: command.preparation_id.clone(),
+        ordinal: command.ordinal,
+        ended_at_ms: now,
+        elapsed_ms: now - START,
+        outcome: Outcome::Succeeded,
+    }
+}
+
+#[test]
+fn geometry_preparation_rechecks_after_slow_centering_and_never_bridges_horizon_gap() {
+    let (program, mut request, constraints) = preparation_fixture();
+    let local = local(&program);
+    let bound = compile(program, &request, constraints.clone()).unwrap();
+    let mut prep = bound
+        .preparation(
+            "prep".into(),
+            &request,
+            &constraints,
+            "goal",
+            local,
+            Estimates {
+                center_ms: 1_000,
+                ..Estimates::default()
+            },
+        )
+        .unwrap();
+    let Next::Run(command) = prep.next(&request, &constraints).unwrap() else {
+        panic!()
+    };
+    assert_eq!(command.operation, Operation::Center { rotate: false });
+    assert!(matches!(
+        prep.next(&request, &constraints).unwrap(),
+        Next::InFlight { .. }
+    ));
+    request.state.now_ms = bound.windows("goal").unwrap()[0].end_ms - 4_999;
+    prep.complete(receipt(&command, request.state.now_ms))
+        .unwrap();
+    assert!(matches!(evaluate(&request), Ok(Decision::Acquire { .. })));
+    assert!(matches!(
+        prep.next(&request, &constraints).unwrap(),
+        Next::Decision(Decision::Wait { .. })
+    ));
+    request.state.now_ms = bound.windows("goal").unwrap()[1].start_ms;
+    // Once interrupted, the old preparation cannot resume on a later window.
+    assert!(matches!(
+        prep.next(&request, &constraints).unwrap(),
+        Next::Decision(Decision::Wait { .. })
+    ));
+    assert_eq!(prep.observations().len(), 1);
+}
+
+#[test]
+fn geometry_preparation_rechecks_even_after_all_steps_are_finished() {
+    let (program, mut request, constraints) = preparation_fixture();
+    let local = local(&program);
+    let bound = compile(program, &request, constraints.clone()).unwrap();
+    let mut prep = bound
+        .preparation(
+            "prep".into(),
+            &request,
+            &constraints,
+            "goal",
+            local,
+            Estimates::default(),
+        )
+        .unwrap();
+    let mut operations = Vec::new();
+    loop {
+        match prep.next(&request, &constraints).unwrap() {
+            Next::Run(command) => {
+                operations.push(command.operation.clone());
+                prep.complete(receipt(&command, request.state.now_ms))
+                    .unwrap();
+            }
+            Next::ReadyToReserve { goal_id } => {
+                assert_eq!(goal_id, "goal");
+                break;
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    assert_eq!(
+        operations,
+        vec![
+            Operation::Center { rotate: false },
+            Operation::BeforeTarget,
+            Operation::SwitchFilter {
+                filter_id: "L".into()
+            },
+            Operation::SetReadoutMode { mode: 0 }
+        ]
+    );
+    request.state.now_ms = bound.windows("goal").unwrap()[0].end_ms - 4_999;
+    assert!(matches!(
+        prep.next(&request, &constraints).unwrap(),
+        Next::Decision(Decision::Wait { .. })
+    ));
+}
+
+#[test]
+fn geometry_preparation_uses_remaining_estimates_not_the_original_overhead() {
+    let (mut program, mut request, constraints) = preparation_fixture();
+    request.assignment.goals[0].overhead_ms = 59_000;
+    program.assignment = request.assignment.clone();
+    let local = local(&program);
+    let bound = compile(program, &request, constraints.clone()).unwrap();
+    assert!(matches!(
+        bound.evaluate(&request, &constraints),
+        Ok(Decision::CheckIn { .. })
+    ));
+    let mut prep = bound
+        .preparation(
+            "prep".into(),
+            &request,
+            &constraints,
+            "goal",
+            local.clone(),
+            Estimates::default(),
+        )
+        .unwrap();
+    assert!(matches!(
+        prep.next(&request, &constraints).unwrap(),
+        Next::Run(_)
+    ));
+    assert!(matches!(
+        bound.preparation(
+            "too-slow".into(),
+            &request,
+            &constraints,
+            "goal",
+            local,
+            Estimates {
+                center_ms: 59_000,
+                ..Estimates::default()
+            }
+        ),
+        Err(Error::Preparation(_))
+    ));
+}
+
+#[test]
+fn constraint_change_latches_through_inflight_receipt_even_when_settings_change_back() {
+    let (program, request, constraints) = fixture();
+    let local = local(&program);
+    let bound = compile(program, &request, constraints.clone()).unwrap();
+    for pending in [false, true] {
+        let mut prep = bound
+            .preparation(
+                "prep".into(),
+                &request,
+                &constraints,
+                "goal",
+                local.clone(),
+                Estimates::default(),
+            )
+            .unwrap();
+        let command = if pending {
+            let Next::Run(command) = prep.next(&request, &constraints).unwrap() else {
+                panic!()
+            };
+            Some(command)
+        } else {
+            None
+        };
+        let mut current = constraints.clone();
+        // Same revision and IDs, changed content.
+        current.rig.site.longitude_degrees += 0.001;
+        let next = prep.next(&request, &current).unwrap();
+        if let Some(command) = command {
+            assert_eq!(
+                next,
+                Next::InFlight {
+                    ordinal: command.ordinal
+                }
+            );
+            prep.complete(receipt(&command, request.state.now_ms))
+                .unwrap();
+        }
+        assert_eq!(
+            prep.next(&request, &constraints).unwrap(),
+            Next::Decision(Decision::CheckIn {
+                reason: "observing_constraints_changed".into()
+            })
+        );
+        assert!(prep.pending().is_none());
+    }
+}
+
+#[test]
+fn geometry_preparation_safety_overrides_changed_constraints_and_accepts_receipt() {
+    let (program, mut request, constraints) = fixture();
+    let local = local(&program);
+    let bound = compile(program, &request, constraints.clone()).unwrap();
+    let mut prep = bound
+        .preparation(
+            "prep".into(),
+            &request,
+            &constraints,
+            "goal",
+            local,
+            Estimates::default(),
+        )
+        .unwrap();
+    let Next::Run(command) = prep.next(&request, &constraints).unwrap() else {
+        panic!()
+    };
+    let mut current = constraints.clone();
+    current.rig.revision += 1;
+    request.state.safety = Safety::Unsafe;
+    assert!(matches!(
+        prep.next(&request, &current).unwrap(),
+        Next::Decision(Decision::Stop { .. })
+    ));
+    prep.complete(receipt(&command, request.state.now_ms))
+        .unwrap();
+    request.state.safety = Safety::Safe;
+    assert!(matches!(
+        prep.next(&request, &constraints).unwrap(),
+        Next::Decision(Decision::Stop { .. })
+    ));
+    assert_eq!(prep.observations().len(), 1);
+}
+
+#[test]
+fn geometry_preparation_rejects_changed_intent_configuration_and_stale_constructor() {
+    let (program, request, constraints) = fixture();
+    let mut local = local(&program);
+    let bound = compile(program, &request, constraints.clone()).unwrap();
+    local.configuration.camera_id = "other".into();
+    assert!(matches!(
+        bound.preparation(
+            "prep".into(),
+            &request,
+            &constraints,
+            "goal",
+            local.clone(),
+            Estimates::default()
+        ),
+        Err(Error::Program(_))
+    ));
+    local.configuration.camera_id = "camera".into();
+    let mut current = constraints.clone();
+    current.goals.clear();
+    assert!(matches!(
+        bound.preparation(
+            "prep".into(),
+            &request,
+            &current,
+            "goal",
+            local.clone(),
+            Estimates::default()
+        ),
+        Err(Error::ConstraintsChanged)
+    ));
+    let mut prep = bound
+        .preparation(
+            "prep".into(),
+            &request,
+            &constraints,
+            "goal",
+            local,
+            Estimates::default(),
+        )
+        .unwrap();
+    let mut changed = request.clone();
+    changed.assignment.goals[0].exposure_ms += 1;
+    assert!(matches!(
+        prep.next(&changed, &constraints),
+        Err(Error::Program(_))
+    ));
+    assert!(prep.pending().is_none());
+    assert!(matches!(
+        prep.next(&request, &constraints),
+        Ok(Next::Run(_))
+    ));
+}
+
+#[test]
+fn invalid_clock_cannot_latch_constraint_change_or_issue_work() {
+    let (program, mut request, constraints) = fixture();
+    let local = local(&program);
+    let bound = compile(program, &request, constraints.clone()).unwrap();
+    let mut prep = bound
+        .preparation(
+            "prep".into(),
+            &request,
+            &constraints,
+            "goal",
+            local,
+            Estimates::default(),
+        )
+        .unwrap();
+    let mut current = constraints.clone();
+    current.rig.revision += 1;
+    request.state.now_ms -= 1;
+    assert_eq!(
+        prep.next(&request, &current),
+        Err(Error::Preparation(
+            psf_guard_director_core::preparation::Error::ClockRegression
+        ))
+    );
+    assert!(prep.halted().is_none());
+    request.state.now_ms += 1;
+    assert!(matches!(
+        prep.next(&request, &constraints),
+        Ok(Next::Run(_))
+    ));
+}
+
+#[test]
+fn geometry_preparation_keeps_failed_and_uncertain_receipts_without_replay() {
+    let (program, request, constraints) = fixture();
+    let local = local(&program);
+    let bound = compile(program, &request, constraints.clone()).unwrap();
+    for outcome in [
+        Outcome::Failed {
+            reason: "native_failure".into(),
+        },
+        Outcome::Uncertain {
+            reason: "lost_response".into(),
+        },
+    ] {
+        let mut prep = bound
+            .preparation(
+                "prep".into(),
+                &request,
+                &constraints,
+                "goal",
+                local.clone(),
+                Estimates::default(),
+            )
+            .unwrap();
+        let Next::Run(command) = prep.next(&request, &constraints).unwrap() else {
+            panic!()
+        };
+        let mut completion = receipt(&command, request.state.now_ms);
+        completion.outcome = outcome;
+        prep.complete(completion.clone()).unwrap();
+        prep.complete(completion).unwrap();
+        assert_eq!(prep.observations().len(), 1);
+        assert!(matches!(
+            prep.next(&request, &constraints),
+            Ok(Next::Decision(Decision::CheckIn { .. }))
+        ));
+        assert!(prep.pending().is_none());
+    }
+}
+
 fn spike(constraints: &mut Constraints) {
     let az = observe(
         IcrsPosition {
@@ -179,6 +550,7 @@ fn computed_meridian_constraint_cannot_be_relaxed_by_empty_claimed_transits() {
         transits_ms: vec![],
     });
     program.assignment = request.assignment.clone();
+    let local_state = local(&program);
     let bound = compile(program, &request, constraints.clone()).unwrap();
     assert!(matches!(evaluate(&request), Ok(Decision::Acquire { .. })));
     assert!(matches!(
@@ -191,6 +563,26 @@ fn computed_meridian_constraint_cannot_be_relaxed_by_empty_claimed_transits() {
         .unwrap()
         .iter()
         .all(|w| w.end_ms <= transit - 1000 || w.start_ms >= transit + 2000));
+    let mut prep = bound
+        .preparation(
+            "meridian".into(),
+            &request,
+            &constraints,
+            "goal",
+            local_state,
+            Estimates::default(),
+        )
+        .unwrap();
+    let Next::Run(command) = prep.next(&request, &constraints).unwrap() else {
+        panic!()
+    };
+    request.state.now_ms = bound.windows("goal").unwrap()[0].end_ms - 19_999;
+    prep.complete(receipt(&command, request.state.now_ms))
+        .unwrap();
+    assert!(matches!(
+        prep.next(&request, &constraints),
+        Ok(Next::Decision(Decision::Wait { .. }))
+    ));
     request.state.meridian_exclusion = MeridianExclusion {
         before_ms: 0,
         after_ms: 0,
@@ -204,6 +596,7 @@ fn computed_meridian_constraint_cannot_be_relaxed_by_empty_claimed_transits() {
 #[test]
 fn same_ids_never_hide_changed_constraint_content() {
     let (program, request, constraints) = fixture();
+    let local = local(&program);
     let bound = compile(program, &request, constraints.clone()).unwrap();
     for fault in 0..17 {
         let mut current = constraints.clone();
@@ -231,6 +624,24 @@ fn same_ids_never_hide_changed_constraint_content() {
             Err(Error::ConstraintsChanged),
             "fault {fault}"
         );
+        let mut prep = bound
+            .preparation(
+                "prep".into(),
+                &request,
+                &constraints,
+                "goal",
+                local.clone(),
+                Estimates::default(),
+            )
+            .unwrap();
+        assert_eq!(
+            prep.next(&request, &current).unwrap(),
+            Next::Decision(Decision::CheckIn {
+                reason: "observing_constraints_changed".into()
+            }),
+            "fault {fault}"
+        );
+        assert!(prep.pending().is_none());
     }
 }
 

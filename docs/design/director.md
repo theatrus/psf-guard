@@ -1213,10 +1213,24 @@ than presenting a stale cached snapshot. Safety stops and completion of an
 already in-flight indivisible native operation retain the existing selector's
 precedence. Exposure plus blocking overhead must still fit one computed window.
 
-This is a Rust selection path, not yet the runtime ledger/preparation/IPC path
-or a hardware permit. The ledger cannot replace its immutable allocation with
-the diagnostic window lists. Production adoption must retain both source intent
-and the geometry binding, including final revalidation after slow native work.
+`BoundGeometry::preparation` binds the shared native-operation reducer to these
+computed windows. It resolves target, recipe and local configuration through the
+original program, keeps the inner reducer private, and checks original intent
+and fresh constraints at every operation boundary. Remaining setup estimates,
+not the original aggregate overhead, must fit together with the exposure. Slow
+centering or hooks can therefore end a preparation before another operation or
+capture reservation. Readiness is checked again even after all steps finish.
+A changed constraint latches a check-in; changing it back does not revive the old
+preparation. An in-flight action still needs its correlated receipt, and safety
+stops retain precedence. No failure, uncertainty or lost receipt authorizes replay.
+
+This is a Rust selection/preparation path, not yet the durable ledger or IPC path
+and not a hardware permit. It deliberately does not expose a serializable
+geometry preparation or the inner legacy reducer. The ledger cannot replace its
+immutable allocation with diagnostic window lists. Production adoption must
+retain both source intent and geometry identity in durable storage, recompile
+from verified inputs on reopen, and refuse legacy paths that would bypass the
+binding. Reservation and final native dispatch still need fresh revalidation.
 Compilation is bounded by the program/geometry limits but can be expensive for
 many distinct targets; schedule it off the interactive/dispatch path. Shared
 darkness calculation, other observing criteria, and the full server/N.I.N.A.
