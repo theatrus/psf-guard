@@ -241,6 +241,99 @@ fn owner_lock_is_exclusive_and_released_without_deleting_lock_file() {
     ));
 }
 
+#[tokio::test(start_paused = true)]
+async fn startup_waits_for_owner_release_without_stealing_lock() {
+    let dir = TempDir::new().unwrap();
+    let owner = Storage::acquire(dir.path()).unwrap();
+    let started = tokio::time::Instant::now();
+    let release = async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        drop(owner);
+    };
+    let (acquired, ()) = tokio::join!(Storage::acquire_for_startup(dir.path()), release);
+    let acquired = acquired.unwrap();
+    assert!(started.elapsed() >= Duration::from_millis(100));
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(matches!(
+        Storage::acquire(dir.path()),
+        Err(StorageError::Busy)
+    ));
+    drop(acquired);
+}
+
+#[tokio::test(start_paused = true)]
+async fn startup_contention_times_out_and_preserves_live_owner() {
+    let dir = TempDir::new().unwrap();
+    let owner = Storage::acquire(dir.path()).unwrap();
+    let started = tokio::time::Instant::now();
+    assert!(matches!(
+        Storage::acquire_for_startup(dir.path()).await,
+        Err(StorageError::Busy)
+    ));
+    assert_eq!(started.elapsed(), Duration::from_secs(2));
+    assert!(matches!(
+        Storage::acquire(dir.path()),
+        Err(StorageError::Busy)
+    ));
+    drop(owner);
+    drop(Storage::acquire(dir.path()).unwrap());
+}
+
+#[tokio::test(start_paused = true)]
+async fn startup_does_not_retry_invalid_directory_or_non_contention_io() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir(dir.path().join("director-runtime.lock")).unwrap();
+    let started = tokio::time::Instant::now();
+    assert!(matches!(
+        Storage::acquire_for_startup(std::path::Path::new("relative")).await,
+        Err(StorageError::InvalidDirectory)
+    ));
+    assert!(matches!(
+        Storage::acquire_for_startup(dir.path()).await,
+        Err(StorageError::Unavailable)
+    ));
+    assert_eq!(started.elapsed(), Duration::ZERO);
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancelled_startup_does_not_acquire_ownership_later() {
+    let dir = TempDir::new().unwrap();
+    let owner = Storage::acquire(dir.path()).unwrap();
+    assert!(tokio::time::timeout(
+        Duration::from_millis(50),
+        Storage::acquire_for_startup(dir.path())
+    )
+    .await
+    .is_err());
+    drop(owner);
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    drop(Storage::acquire(dir.path()).unwrap());
+}
+
+#[cfg(windows)]
+#[tokio::test(start_paused = true)]
+async fn startup_retries_windows_sharing_violation_until_handle_closes() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let dir = TempDir::new().unwrap();
+    let handle = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .share_mode(0)
+        .open(dir.path().join("director-runtime.lock"))
+        .unwrap();
+    assert!(matches!(
+        Storage::acquire(dir.path()),
+        Err(StorageError::Busy)
+    ));
+    let release = async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        drop(handle);
+    };
+    let (acquired, ()) = tokio::join!(Storage::acquire_for_startup(dir.path()), release);
+    drop(acquired.unwrap());
+}
+
 #[test]
 fn storage_operations_preserve_strict_nested_decoding() {
     let good = serde_json::to_string(&Operation::Open { request: fixture() }).unwrap();

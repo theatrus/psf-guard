@@ -54,10 +54,19 @@ mod windows_host {
         // Do not touch storage until the process peer is verified.
         let storage = if args.len() == 6 {
             Some(
-                psf_guard_director_runtime::storage::Storage::acquire(std::path::Path::new(
-                    &args[5],
-                ))
-                .map_err(|_| "execution storage unavailable")?,
+                psf_guard_director_runtime::storage::Storage::acquire_for_startup(
+                    std::path::Path::new(&args[5]),
+                )
+                .await
+                .map_err(|error| match error {
+                    psf_guard_director_runtime::storage::StorageError::Busy => {
+                        "execution storage busy after startup wait"
+                    }
+                    psf_guard_director_runtime::storage::StorageError::InvalidDirectory => {
+                        "execution storage directory invalid"
+                    }
+                    _ => "execution storage unavailable",
+                })?,
             )
         } else {
             None

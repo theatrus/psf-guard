@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs::{File, OpenOptions},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 pub const MAX_EVENT_PAGE: usize = 64;
@@ -131,16 +132,31 @@ impl Storage {
             .create(true)
             .truncate(false)
             .open(directory.join("director-runtime.lock"))
-            .map_err(|_| StorageError::Unavailable)?;
+            .map_err(acquisition_io_error)?;
         lease.try_lock().map_err(|error| match error {
             std::fs::TryLockError::WouldBlock => StorageError::Busy,
-            std::fs::TryLockError::Error(_) => StorageError::Unavailable,
+            std::fs::TryLockError::Error(error) => acquisition_io_error(error),
         })?;
         Ok(Self {
             path: directory.join("execution.sqlite"),
             _lease: lease,
             ledger: None,
         })
+    }
+
+    /// A previous process may have exited before the OS finishes releasing its
+    /// handles. Wait only for contention, never steal ownership or retry I/O errors.
+    pub async fn acquire_for_startup(directory: &Path) -> Result<Self, StorageError> {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match Self::acquire(directory) {
+                    Err(StorageError::Busy) => tokio::time::sleep(Duration::from_millis(25)).await,
+                    result => return result,
+                }
+            }
+        })
+        .await
+        .unwrap_or(Err(StorageError::Busy))
     }
 
     pub fn handle(
@@ -204,6 +220,18 @@ impl Storage {
                 }
             }
         })
+    }
+}
+
+fn acquisition_io_error(error: std::io::Error) -> StorageError {
+    #[cfg(windows)]
+    if matches!(error.raw_os_error(), Some(32 | 33)) {
+        return StorageError::Busy;
+    }
+    if error.kind() == std::io::ErrorKind::WouldBlock {
+        StorageError::Busy
+    } else {
+        StorageError::Unavailable
     }
 }
 

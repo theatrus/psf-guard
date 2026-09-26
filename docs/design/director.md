@@ -721,6 +721,11 @@ the lock file. Another sidecar cannot own the same directory while this owner
 or its blocking database operation lives. Process death releases the lock; it
 does not clear capture evidence.
 
+Startup waits up to two seconds for lock contention, including Windows sharing
+violations during handle release. It never steals a live owner's lock. Invalid
+directories and other I/O errors fail immediately; this wait does not retry any
+ledger operation or hardware dispatch.
+
 `ledger` wraps a strict `operation` object with an `action` discriminator:
 
 - `open` validates and binds the original core `request`. Its reply contains
