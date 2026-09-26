@@ -28,6 +28,95 @@ fn state(dir: &TempDir, enable: bool) -> AppState {
     state
 }
 
+#[tokio::test]
+async fn discovery_is_scoped_read_only_and_does_not_block_metadata() {
+    let dir = TempDir::new().unwrap();
+    let state = Arc::new(state(&dir, true));
+    let path = dir.path().join("catalog.sqlite");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE project(Id INTEGER PRIMARY KEY,name TEXT,guid TEXT,profileId TEXT)",
+    )
+    .unwrap();
+    let guid = Uuid::new_v4();
+    conn.execute(
+        "INSERT INTO project VALUES(1,'M31',?1,'profile-a')",
+        [guid.to_string()],
+    )
+    .unwrap();
+    let catalog = super::super::database_context::DatabaseContext::new(
+        "rig-catalog".into(),
+        "Rig catalog".into(),
+        path.to_string_lossy().into(),
+        vec![dir.path().to_string_lossy().into()],
+        None,
+        None,
+        None,
+        dir.path().join("cache").to_string_lossy().into(),
+    )
+    .unwrap();
+    state
+        .databases
+        .write()
+        .unwrap()
+        .insert(catalog.id.clone(), Arc::new(catalog));
+    let app = router(state.clone());
+    let endpoint = "/catalogs/rig-catalog/discovery";
+    let (status, first) = call(&app, "GET", endpoint, Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(first["data"]["catalog_slug"], "rig-catalog");
+    assert_eq!(
+        first["data"]["evidence"]["projects"][0]["source_project_guid"],
+        guid.to_string()
+    );
+    assert!(!first.to_string().contains(path.to_str().unwrap()));
+    let (_, again) = call(&app, "GET", endpoint, Value::Null, None).await;
+    assert_eq!(
+        again["data"]["snapshot_digest"],
+        first["data"]["snapshot_digest"]
+    );
+    conn.execute_batch("UPDATE project SET name='Andromeda'")
+        .unwrap();
+    let (_, changed) = call(&app, "GET", endpoint, Value::Null, None).await;
+    assert_ne!(
+        changed["data"]["snapshot_digest"],
+        first["data"]["snapshot_digest"]
+    );
+    let service = state.director.as_ref().unwrap();
+    let permit = service
+        .discovery_admission
+        .clone()
+        .acquire_owned()
+        .await
+        .unwrap();
+    assert_eq!(
+        call(&app, "GET", endpoint, Value::Null, None).await.0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        call(&app, "GET", "/projects", Value::Null, None).await.0,
+        StatusCode::OK
+    );
+    drop(permit);
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            "/catalogs/missing/discovery",
+            Value::Null,
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    state.set_allow_database_management(false);
+    assert_eq!(
+        call(&app, "GET", endpoint, Value::Null, None).await.0,
+        StatusCode::FORBIDDEN
+    );
+}
+
 fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .nest("/api/director/v1", routes())
@@ -285,6 +374,18 @@ async fn normal_api_auth_rejects_sync_keys_and_read_only_mutations() {
     let create = json!({"id":Uuid::new_v4(),"name":"M31"});
     for token in [None, Some("not-a-user-api-token")] {
         assert_eq!(
+            call(
+                &app,
+                "GET",
+                "/catalogs/missing/discovery",
+                Value::Null,
+                token
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
             call(&app, "GET", "/status", Value::Null, token).await.0,
             StatusCode::UNAUTHORIZED
         );
@@ -306,6 +407,18 @@ async fn normal_api_auth_rejects_sync_keys_and_read_only_mutations() {
             .await
             .0,
         StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            "/catalogs/missing/discovery",
+            Value::Null,
+            Some(&reader)
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
     );
     assert_eq!(
         call(&app, "POST", "/projects", create, Some(&writer))
