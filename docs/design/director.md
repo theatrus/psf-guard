@@ -74,7 +74,7 @@ untested integration requirements unchecked.
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
 | Meta storage | [#488](https://github.com/theatrus/psf-guard/pull/488), [#489](https://github.com/theatrus/psf-guard/pull/489) and [#499](https://github.com/theatrus/psf-guard/pull/499) merged: separate schema-4 store, UUIDs, confirmed catalog/profile/project/rig links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. | Catalog adoption workflow, permissions/enrollment, active revisions, allocation authority and progress projections. |
 | Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492): shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493): schema-3 intent persistence with validated immutable setup references. | Objective editor, depth/FOV/sampling compatibility and authoritative allocation remain open. |
-| Project framing wizard | Project intent retains target coordinates and rig-specific framing/recipes as building blocks only. | Target/reference selection, interactive FOV and rotation, mosaics, versioned optical geometry, multi-rig/site preview, draft editing and reviewed activation are not implemented. |
+| Project framing wizard | Project intent retains target coordinates and rig-specific framing/recipes as building blocks only. | Survey-map backgrounds, target/reference selection, interactive FOV and rotation, mosaics, versioned optical geometry, multi-rig/site preview, draft editing and reviewed activation are not implemented. |
 | Operator API and UI | [#490](https://github.com/theatrus/psf-guard/pull/490) and [#494](https://github.com/theatrus/psf-guard/pull/494) merged: opt-in project/site/rig identity and site/rig snapshot APIs. [#495](https://github.com/theatrus/psf-guard/pull/495) implements/tests the identity management screen in an open PR. | UI not merged. No project planning editor, catalog adoption, rig pairing, acquisition control or live rig dashboard. UI tests are not equipment tests. |
 | Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
 | Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. | Central telemetry ingestion/dashboard, scoped pairing, remote acknowledgements, offline authorization lifecycle, manual/sequence batch reconcile and reconnect activation are not implemented. |
@@ -247,6 +247,66 @@ turn unlike data into interchangeable credit. Cross-rig coverage and completion
 must use explicit compatibility rules and capture identity, not summed hours or
 overlapping rectangles alone. Calibration, quality and processing provenance
 remain attached to the originating rig/setup and contribution.
+
+### Survey backgrounds for framing
+
+The framing wizard requires an image-backed sky map, not only catalog markers
+or camera rectangles on an empty field. Start with the normal/broadband and
+narrowband survey choices available in N.I.N.A., and allow additional providers.
+Use the underlying survey services directly so PSF Guard's browser planner does
+not require a running N.I.N.A. instance or a copy of its internal database.
+
+The inspected N.I.N.A. source includes DSS2 Color (`CDS/P/DSS2/color`) and the
+Finkbeiner H-alpha composite (`CDS/P/Finkbeiner`) in its HiPS choices. These are
+initial presets, not the complete provider list. Keep broadband color, individual
+bands and emission-line maps distinguishable. H-alpha is not interchangeable
+with O III or S II; offer other narrowband layers only where a real survey exists
+and clearly expose its coverage and resolution limits.
+
+Use a maintained astronomical map renderer with HiPS support, evaluating Aladin
+Lite for the browser, rather than implementing a new tile projection engine.
+HiPS tiles support interactive pan/zoom; HiPS2FITS-style cutouts can support
+fixed reference views and cached exports. A provider adapter owns fetching and
+display metadata, outside the pure Rust planning core. Core-generated rig and
+panel footprints remain authoritative; renderer coordinate transforms must keep
+them registered to the imagery across projections, RA wrap and the poles.
+
+The workflow must:
+
+- Offer named survey/band choices and comparison by opacity or blinking without
+  changing the saved target, position angle, panel IDs or any rig's footprint.
+- Show attribution, survey identifier, bandpass, resolution and available
+  coverage. Record survey identity/version and display choices with the draft,
+  separately from acquisition recipes; changing a background cannot change a
+  capture filter or create a new allocation.
+- Preserve center, zoom, rotation and overlays while a new layer loads. Cancel
+  obsolete requests and prevent late responses from replacing the selected map.
+  Distinguish loading, missing coverage, service failure and cached/offline data;
+  do not silently substitute a broadband layer for unavailable narrowband data.
+- Cache bounded tiles/cutouts using provider, survey/version, coordinate frame,
+  projection, resolution and relevant display parameters. Honor provider usage,
+  attribution and redistribution terms before enabling persistent caches or
+  redistributing images; N.I.N.A.'s code license is not an image-data license.
+- Let the operator prepare an offline cache for the project's framing region.
+  Offline editing can use cached surveys or imported reference images, with
+  unavailable regions marked. Missing map pixels must never block an already
+  authorized rig's offline acquisition or become a scheduling dependency.
+- Support local reference images with known WCS or a verified solve alongside
+  surveys. Label embedded coordinates versus fresh pixel-derived solves.
+  Background pixels are composition aids, not evidence of current pointing,
+  transparency, grade, accepted exposure depth or project completion.
+
+Remote provider URLs and imported metadata are untrusted. A server-side image
+fetcher must use approved endpoints, bounded transfers and timeouts, and enforce
+the same destination restrictions across redirects; it must not become an
+arbitrary URL proxy. Browser providers need verified CORS/Tauri compatibility.
+
+References: N.I.N.A.'s [framing documentation](https://nighttime-imaging.eu/docs/master/site/tabs/framing/),
+its inspected [survey presets](https://github.com/isbeorn/nina/blob/fdf546fc2bea0de1eeff36f227ffaf0dd408ab70/NINA/Database/Migration/16.sql)
+and [HiPS2FITS adapter](https://github.com/isbeorn/nina/blob/fdf546fc2bea0de1eeff36f227ffaf0dd408ab70/NINA.WPF.Base/SkySurvey/Hips2FitsSurvey.cs),
+and the CDS [HiPS survey registry](https://aladin.cds.unistra.fr/hips/list).
+Verify provider availability and terms again when implementing; these references
+do not promise service uptime or uniform all-sky coverage.
 
 ## Rig constraints and local horizons
 
@@ -1858,6 +1918,8 @@ allocation accounting and native assignment delivery are not implemented here.
 - [ ] Build the framing wizard's target/reference, FOV/rotation, mosaic,
   per-rig objective/recipe and review steps. Keep multi-rig/site intent from the
   start; do not model a project as one camera footprint or one local night.
+- [ ] Add broadband and narrowband survey backgrounds, additional provider
+  choices, provenance/attribution, registered overlays and bounded offline caches.
 - [ ] Link existing catalogs without rewriting TS history or merging names.
 - [ ] Add scoped project views that distinguish global and rig-local projects.
 - [ ] Define PSF Guard-owned per-rig catalog schemas and versioned access
@@ -2003,6 +2065,11 @@ rotation, draft reload/back navigation and stale-review rejection. Exercise
 cancel/save without acquisition, activate after review, run native simulated
 capture, grade, and reopen the same coverage view with no duplicate credit.
 The single-rig wizard must also work without sites/rigs beyond its one setup.
+Survey gates: switch DSS2 Color and H-alpha without moving either rig's framing;
+verify projection, orientation, RA-wrap/polar overlays and partial coverage with
+deterministic fixtures. Test loading, cancellation, failed providers and offline
+cache misses on desktop/mobile and in Tauri. Real-provider smoke checks supplement
+fixtures but are not required network dependencies of CI or acquisition.
 
 ### Phase 6: remote instances and collaboration (deferred)
 
