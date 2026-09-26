@@ -4,6 +4,8 @@
 /tools/director-interop/obj/
 /tools/director-sidecar/bin/
 /tools/director-sidecar/obj/
+/tools/director-astronomy-reference/bin/
+/tools/director-astronomy-reference/obj/
 **/*.rs.bk
 *.pdb
 

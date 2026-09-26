@@ -1,10 +1,12 @@
-//! Phase-0 goal-selection spike. No I/O, clock access, astronomy, or hardware control.
-//! Hosts supply bounded goals and fresh, precomputed eligibility windows.
+//! Phase-0 goal-selection spike. No I/O, clock access, or hardware control.
+//! Selection still uses precomputed eligibility windows. The visibility module
+//! supplies shared point geometry, not yet full observing-window construction.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 pub mod preparation;
 pub mod program;
+pub mod visibility;
 pub mod windows;
 use windows::{observing_windows, Interval, MeridianExclusion, TransitCoverage, WindowError};
 
