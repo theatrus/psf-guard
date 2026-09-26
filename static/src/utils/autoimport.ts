@@ -74,4 +74,3 @@ export function describeAutoImport(
   }
   return details.length ? `${head} · ${details.join(' · ')}` : head;
 }
-

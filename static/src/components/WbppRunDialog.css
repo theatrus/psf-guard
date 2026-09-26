@@ -73,6 +73,36 @@
   margin-top: 0.5rem;
 }
 
+.wbpp-run-busy {
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.7rem;
+  border-left: 3px solid var(--color-warning, #b9770e);
+  border-radius: 4px;
+  background: var(--color-bg-tertiary);
+}
+
+.wbpp-run-busy .link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-primary, #2d6cdf);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+
+.wbpp-run-queued {
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.8rem;
+  border-left: 3px solid var(--color-border-secondary);
+  border-radius: 4px;
+  background: var(--color-bg-tertiary);
+}
+
+.wbpp-run-queued p {
+  margin: 0.3rem 0 0;
+}
+
 .wbpp-run-stage {
   display: flex;
   justify-content: space-between;

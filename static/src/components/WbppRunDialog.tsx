@@ -2,7 +2,13 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { WbppOptions, WbppOutputFile, WbppRunProgress } from '../api/types';
-import { useWbppRun } from '../hooks/useWbppRun';
+import {
+  describeQueuedRun,
+  describeWbppRun,
+  isRunOfInterest,
+  ordinal,
+  useWbppRun,
+} from '../hooks/useWbppRun';
 import { useAllDatabases } from '../hooks/useDatabases';
 import { openSettings } from '../utils/settingsIntent';
 import Dialog from './Dialog';
@@ -63,8 +69,9 @@ const STAGE_LABEL: Record<string, string> = {
 
 /**
  * Stack a project or target with WBPP on the server: the settings, then
- * WBPP's own progress, then what it wrote. One run per catalog at a time,
- * so an open dialog shows whatever run is under way.
+ * WBPP's own progress, then what it wrote. PixInsight runs one job at a
+ * time, so opening this for a project while another one runs shows that
+ * run by name and offers to queue this one behind it.
  */
 export default function WbppRunDialog({ request, defaultOptions, onClose }: Props) {
   const queryClient = useQueryClient();
@@ -75,6 +82,21 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
   const run = useWbppRun(request.dbId);
   const progress = run.progress;
   const elapsed = useElapsed(progress);
+  // Whether the database's run is the one this dialog was opened for.
+  const ownRun =
+    isRunOfInterest(progress) &&
+    (request.scope.project_id != null
+      ? progress.project_id === request.scope.project_id
+      : progress.project_id == null && progress.scope === request.label);
+  const queuedEntry = run.queued.find((entry) =>
+    request.scope.project_id != null
+      ? entry.project_id === request.scope.project_id
+      : request.scope.target_id != null
+        ? entry.target_id === request.scope.target_id
+        : false
+  );
+  // Show the other project's run instead of this project's form, on request.
+  const [viewingRun, setViewingRun] = useState(false);
   const { data: databases } = useAllDatabases();
   const processDir = databases?.find((db) => db.id === request.dbId)?.process_directory;
   const projectId = request.scope.project_id ?? progress?.project_id ?? undefined;
@@ -130,20 +152,28 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
     onSuccess: (status) => {
       queryClient.setQueryData(['db', request.dbId, 'wbpp-run'], status);
       setFormRequested(false);
-      if (!status.started) {
-        alert('A WBPP run is already under way for this database; its progress is shown here.');
-      }
+      setViewingRun(false);
     },
   });
   const cancel = useMutation({
     mutationFn: () => apiClient.cancelWbppRun(request.dbId),
     onSuccess: (status) => queryClient.setQueryData(['db', request.dbId, 'wbpp-run'], status),
   });
+  const leaveQueue = useMutation({
+    mutationFn: (queueId: string) => apiClient.removeQueuedWbppRun(request.dbId, queueId),
+    onSuccess: (status) => queryClient.setQueryData(['db', request.dbId, 'wbpp-run'], status),
+  });
 
   const running = progress?.running ?? false;
   const ready = pixinsight.data?.ready ?? false;
   const hasResult = !!progress && !running && !!progress.finished_at;
-  const formVisible = !running && (formRequested || !hasResult);
+  // The run is shown when it is this project's own, or when asked to see
+  // another project's; otherwise this project's form, which queues behind a
+  // run under way.
+  const showRun = isRunOfInterest(progress) && (ownRun || viewingRun) && !formRequested;
+  const formVisible = !showRun && !queuedEntry;
+  const willQueue = running || run.queued.length > 0;
+  const title = showRun && progress?.scope ? progress.scope : request.label;
   const fileUrl = (path: string) => apiClient.wbppRunFileUrl(request.dbId, path);
   const relativeLog =
     progress?.log_path && progress.work_dir && progress.log_path.startsWith(progress.work_dir)
@@ -153,7 +183,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
   return (
     <Dialog
       open
-      title={`Stack with WBPP — ${request.label}`}
+      title={`Stack with WBPP — ${title}`}
       onClose={onClose}
       className="wbpp-run-dialog"
       footer={
@@ -161,7 +191,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
           <button type="button" className="header-button" onClick={onClose}>
             Close
           </button>
-          {running && (
+          {showRun && running && (
             <button
               type="button"
               className="header-button"
@@ -171,9 +201,28 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
               Stop PixInsight
             </button>
           )}
-          {hasResult && !formVisible && (
+          {showRun && !running && ownRun && (
             <button type="button" className="header-button" onClick={() => setFormRequested(true)}>
               Stack again
+            </button>
+          )}
+          {showRun && viewingRun && !ownRun && (
+            <button
+              type="button"
+              className="header-button"
+              onClick={() => setViewingRun(false)}
+            >
+              Back to {request.label}
+            </button>
+          )}
+          {queuedEntry && (
+            <button
+              type="button"
+              className="header-button"
+              disabled={leaveQueue.isPending}
+              onClick={() => leaveQueue.mutate(queuedEntry.id)}
+            >
+              Remove from queue
             </button>
           )}
           {formVisible && (
@@ -183,7 +232,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
               disabled={!ready || start.isPending}
               onClick={() => start.mutate()}
             >
-              Start stacking
+              {willQueue ? 'Queue stacking' : 'Start stacking'}
             </button>
           )}
         </>
@@ -206,12 +255,35 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
         <p className="wbpp-run-error">{(pixinsight.error as Error).message}</p>
       )}
 
+      {!showRun && isRunOfInterest(progress) && !ownRun && (
+        <p className="wbpp-run-busy" role="status">
+          <strong>{running ? 'PixInsight is busy' : 'Last run'}:</strong> {describeWbppRun(progress)}{' '}
+          <button type="button" className="link-button" onClick={() => setViewingRun(true)}>
+            Show that run
+          </button>
+        </p>
+      )}
+      {run.queued.length > 0 && !queuedEntry && (
+        <p className="wbpp-run-muted" role="status">
+          In line: {run.queued.map((entry) => `${entry.scope} (${ordinal(entry.position)})`).join(', ')}.
+        </p>
+      )}
+      {queuedEntry && (
+        <div className="wbpp-run-queued" role="status">
+          <strong>{describeQueuedRun(queuedEntry)}.</strong>
+          <p className="wbpp-run-muted">
+            It starts on its own when PixInsight is free, with the settings it was queued with.
+            Leave this window; the Overview shows it either way.
+          </p>
+        </div>
+      )}
       {formVisible && (
         <>
           <p className="wbpp-run-intro">
             PixInsight runs WBPP on the server against the frames where they are, with each
             night&apos;s flats matched to its lights. Rejected lights never go in. Results land
             in a run folder under the cache and are listed here when WBPP finishes.
+            {willQueue && ' PixInsight is busy, so this run waits its turn.'}
           </p>
           <label className="export-dialog-option">
             <input
@@ -305,7 +377,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
         </>
       )}
 
-      {progress && (running || !formVisible) && (
+      {progress && showRun && (
         <div className="wbpp-run-progress" aria-live="polite">
           <div className="wbpp-run-stage">
             <strong>{STAGE_LABEL[progress.stage] ?? progress.stage}</strong>

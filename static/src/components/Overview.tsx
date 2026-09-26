@@ -45,7 +45,15 @@ import CalibrationReportDialog from './CalibrationReportDialog';
 import ExportDialog, { type ExportRequest } from './ExportDialog';
 import AstroBinExportDialog, { type AstroBinExportRequest } from './AstroBinExportDialog';
 import WbppRunDialog, { type WbppRunRequest } from './WbppRunDialog';
-import { describeWbppRun, describeWbppRunForProject, useWbppRuns } from '../hooks/useWbppRun';
+import type { WbppRunStatus } from '../api/types';
+import {
+  describeQueuedRun,
+  describeWbppRun,
+  describeWbppRunForProject,
+  isRunOfInterest,
+  useWbppRuns,
+  wbppRunTone,
+} from '../hooks/useWbppRun';
 import { DEFAULT_WBPP_OPTIONS } from '../api/types';
 import { commonDirectory } from '../utils/commonDirectory';
 import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog';
@@ -208,12 +216,28 @@ export default function Overview() {
   // shows here whichever tab or device started it.
   const wbppRuns = useWbppRuns(useMemo(() => (databases ?? []).map((db) => db.id), [databases]));
   const openWbppRun = (dbId: string) => {
-    const progress = wbppRuns.get(dbId);
+    const progress = wbppRuns.get(dbId)?.progress;
     setPendingWbpp({
       dbId,
       scope: progress?.project_id != null ? { project_id: progress.project_id } : {},
       label: progress?.scope ?? 'WBPP run',
     });
+  };
+  const publishWbppStatus = (dbId: string, status: WbppRunStatus) =>
+    queryClient.setQueryData(['db', dbId, 'wbpp-run'], status);
+  const dismissWbppRun = async (dbId: string) => {
+    try {
+      publishWbppStatus(dbId, await apiClient.dismissWbppRun(dbId));
+    } catch (error) {
+      alert(error instanceof Error ? error.message : String(error));
+    }
+  };
+  const removeQueuedWbppRun = async (dbId: string, queueId: string) => {
+    try {
+      publishWbppStatus(dbId, await apiClient.removeQueuedWbppRun(dbId, queueId));
+    } catch (error) {
+      alert(error instanceof Error ? error.message : String(error));
+    }
   };
 
   // Persist an organize edit (rename / move / merge), then refresh this DB's
@@ -536,30 +560,90 @@ export default function Overview() {
             <span>Catalog</span>
             <strong>{overallStats.total_images.toLocaleString()} images</strong>
           </div>
-          {[...wbppRuns.entries()].map(([dbId, progress]) => {
-            const line = describeWbppRun(progress);
-            if (!line) return null;
-            return (
-              <div
-                key={dbId}
-                className={`overview-export-job overview-wbpp-run${
-                  progress.stage === 'error' ? ' error' : ''
-                }`}
-              >
-                <button type="button" className="link-button" onClick={() => openWbppRun(dbId)}>
-                  {line}
-                </button>
-              </div>
-            );
-          })}
-          {exportJobLine && (
-            <div
-              className={`server-export-status${
-                exportJob.progress?.stage === 'error' ? ' error' : ''
-              }`}
-            >
-              {exportJobLine}
-            </div>
+          {(wbppRuns.size > 0 || exportJobLine) && (
+            <ul className="overview-jobs" aria-label="Background jobs">
+              {[...wbppRuns.entries()].map(([dbId, status]) => {
+                const progress = status.progress;
+                const line = isRunOfInterest(progress) ? describeWbppRun(progress) : null;
+                return [
+                  line && (
+                    <li
+                      key={`${dbId}-run`}
+                      className={`overview-job overview-wbpp-run tone-${wbppRunTone(progress)}`}
+                    >
+                      <span className="overview-job-icon" aria-hidden="true">⚗</span>
+                      <button
+                        type="button"
+                        className="link-button"
+                        onClick={() => openWbppRun(dbId)}
+                      >
+                        {line}
+                      </button>
+                      {!progress.running && progress.publish?.state !== 'running' && (
+                        <button
+                          type="button"
+                          className="overview-job-dismiss"
+                          aria-label={`Dismiss ${line}`}
+                          title="Clear this run from view; its folder stays on disk"
+                          onClick={() => void dismissWbppRun(dbId)}
+                        >
+                          ×
+                        </button>
+                      )}
+                    </li>
+                  ),
+                  ...status.queued.map((entry) => (
+                    <li
+                      key={`${dbId}-${entry.id}`}
+                      className="overview-job overview-wbpp-queued tone-queued"
+                    >
+                      <span className="overview-job-icon" aria-hidden="true">⚗</span>
+                      <button
+                        type="button"
+                        className="link-button"
+                        onClick={() =>
+                          setPendingWbpp({
+                            dbId,
+                            scope:
+                              entry.project_id != null
+                                ? { project_id: entry.project_id }
+                                : entry.target_id != null
+                                  ? { target_id: entry.target_id }
+                                  : {},
+                            label: entry.scope,
+                          })
+                        }
+                      >
+                        {describeQueuedRun(entry)}
+                      </button>
+                      <button
+                        type="button"
+                        className="overview-job-dismiss"
+                        aria-label={`Remove ${entry.scope} from the WBPP queue`}
+                        title="Take this run out of the line"
+                        onClick={() => void removeQueuedWbppRun(dbId, entry.id)}
+                      >
+                        ×
+                      </button>
+                    </li>
+                  )),
+                ];
+              })}
+              {exportJobLine && (
+                <li
+                  className={`overview-job overview-export-job tone-${
+                    exportJob.progress?.stage === 'error'
+                      ? 'error'
+                      : exportJob.progress?.running
+                        ? 'running'
+                        : 'done'
+                  }`}
+                >
+                  <span className="overview-job-icon" aria-hidden="true">⇩</span>
+                  <span>{exportJobLine}</span>
+                </li>
+              )}
+            </ul>
           )}
           <dl className="summary-metrics">
             <div>

@@ -1334,7 +1334,63 @@
   color: var(--color-error, #c0392b);
 }
 
-.overview-wbpp-run .link-button {
+.export-link.wbpp-state-queued {
+  color: var(--color-text-muted, #7a7f87);
+}
+
+/* Background jobs above the metrics: WBPP runs, runs in line, server exports.
+   One row each, the same shape whatever the job, coloured by its state. */
+.overview-jobs {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.overview-job {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  padding: 3px 8px 3px 10px;
+  border-left: 3px solid var(--color-border-secondary);
+  border-radius: 4px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 12.5px;
+}
+
+.overview-job.tone-running {
+  border-left-color: var(--color-warning, #b9770e);
+  color: var(--color-text-primary);
+}
+
+.overview-job.tone-done {
+  border-left-color: var(--color-success, #1e8449);
+}
+
+.overview-job.tone-error {
+  border-left-color: var(--color-error, #c0392b);
+  color: var(--color-error, #c0392b);
+}
+
+.overview-job.tone-queued {
+  border-left-color: var(--color-border-secondary);
+  color: var(--color-text-muted, #7a7f87);
+}
+
+.overview-job-icon {
+  flex: none;
+  width: 1.1em;
+  text-align: center;
+}
+
+.overview-job .link-button {
+  flex: 1;
+  min-width: 0;
   padding: 0;
   border: 0;
   background: none;
@@ -1342,5 +1398,33 @@
   cursor: pointer;
   font: inherit;
   text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.overview-job .link-button:hover {
   text-decoration: underline;
+}
+
+.overview-job > span:last-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.overview-job-dismiss {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: var(--color-text-muted, #7a7f87);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.overview-job-dismiss:hover {
+  border-color: var(--color-border-secondary);
+  color: var(--color-text-primary);
 }

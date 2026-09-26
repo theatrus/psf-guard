@@ -6,6 +6,12 @@
 
 ## Added
 
+- WBPP runs **queue**. PixInsight runs one job at a time across all
+  databases; starting a second project while one runs puts it in line,
+  shown on the Overview with its place and a **×** to take it out, and it
+  starts on its own when the running job ends. **Queue stacking** replaces
+  the refusal.
+
 - An opt-in Director metadata API can create, list, and rename global project
   identities in a separate SQLite store. Enable it with `--director-meta` and
   database management on a CLI server. It follows user authentication and does
@@ -72,6 +78,14 @@
   appended to `PARAMS` still reaches WBPP.
 
 ## Fixed
+
+- Opening **Stack in WBPP** on one project while another project's run
+  was under way titled the dialog and its progress after the project you
+  clicked. The dialog now opens under the clicked project, names the run
+  PixInsight is busy with, and offers to queue; **Show that run** switches
+  to the running one.
+- The Overview's WBPP and export status lines share one style, coloured by
+  state, and a finished WBPP run can be cleared with **×**.
 
 - Flat coverage sync from the N.I.N.A. plugin no longer fails with
   "flat-history fingerprint was reused for different capture metadata"

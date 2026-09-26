@@ -37,6 +37,7 @@ pub mod static_file_service;
 pub mod sync_preview;
 pub mod update_notice;
 pub mod user_admin;
+pub mod wbpp_queue;
 pub mod wbpp_run;
 
 use anyhow::{Context, Result};
@@ -668,6 +669,14 @@ async fn run_server_internal(
         .route(
             "/wbpp/runs/current/publish",
             post(wbpp_run::publish_wbpp_run),
+        )
+        .route(
+            "/wbpp/runs/current/dismiss",
+            post(wbpp_run::dismiss_wbpp_run),
+        )
+        .route(
+            "/wbpp/runs/queue/{queue_id}",
+            delete(wbpp_run::remove_queued_wbpp_run),
         )
         .route(
             "/wbpp/runs/current/files/{*path}",

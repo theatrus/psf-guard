@@ -115,12 +115,23 @@ test('a run writes the script for the install, launches it, and lists what it wr
   expect(started.ok()).toBe(true);
   expect((await started.json()).data.started).toBe(true);
 
-  // A second start while the first runs is refused, not queued.
+  // A second start while the first runs joins the line rather than starting
+  // a second PixInsight; taken out again here so the first run stays the
+  // current one for the checks below.
   const second = await request.post(`/api/db/${dbId}/wbpp/runs`, {
-    data: { project_id: 1, include_pending: true, options: {} },
+    data: { project_id: 2, include_pending: true, options: {}, scope_label: 'Project Beta' },
   });
   const secondBody = (await second.json()).data;
-  if (secondBody.progress.running) expect(secondBody.started).toBe(false);
+  if (secondBody.progress.running) {
+    expect(secondBody.started).toBe(false);
+    expect(secondBody.queue_id).toBeTruthy();
+    expect(secondBody.queued).toMatchObject([{ scope: 'Project Beta', position: 1, project_id: 2 }]);
+    const left = await request.delete(`/api/db/${dbId}/wbpp/runs/queue/${secondBody.queue_id}`);
+    expect(left.ok()).toBe(true);
+    expect((await left.json()).data.queued).toEqual([]);
+    const gone = await request.delete(`/api/db/${dbId}/wbpp/runs/queue/${secondBody.queue_id}`);
+    expect(gone.status()).toBe(404);
+  }
 
   let progress;
   await expect
@@ -205,9 +216,30 @@ test('the Overview stacks a project from its card and shows the masters', async 
   await dialog.getByLabel(/^Drizzle/).selectOption('2x');
   await dialog.getByRole('button', { name: 'Start stacking' }).click();
 
-  await expect(dialog).toContainText('Finished', { timeout: 30_000 });
+  // While Alpha runs, Beta's action opens under Beta's own name, names the
+  // busy run, and queues behind it; the queued run starts on its own.
+  await expect(dialog).toContainText('PixInsight is running WBPP', { timeout: 15_000 });
+  await dialog.locator('.dialog-footer').getByRole('button', { name: 'Close' }).click();
+  const betaCard = page.locator('.project-card').filter({ hasText: 'Project Beta' });
+  await betaCard.getByText('Stack in WBPP').click();
+  await expect(dialog).toContainText('Stack with WBPP — Project Beta');
+  await expect(dialog).toContainText('PixInsight is busy');
+  await expect(dialog).toContainText('Project Alpha');
+  await dialog.getByRole('button', { name: 'Queue stacking' }).click();
+  await expect(dialog).toContainText('WBPP Project Beta is next in line');
+  await dialog.locator('.dialog-footer').getByRole('button', { name: 'Close' }).click();
+  await expect(page.locator('.overview-wbpp-queued')).toContainText('Project Beta is next in line');
+  await expect(betaCard.getByText('Queued for WBPP')).toBeVisible();
+
+  // Alpha finishes, Beta runs and finishes; the line shows Beta's result.
+  await expect(page.locator('.overview-wbpp-run')).toContainText('WBPP Project Beta finished: 1 master', {
+    timeout: 60_000,
+  });
+  await expect(page.locator('.overview-wbpp-queued')).toHaveCount(0);
+  await page.locator('.overview-wbpp-run .link-button').click();
+  await expect(dialog).toContainText('Stack with WBPP — Project Beta');
+  await expect(dialog).toContainText('Finished');
   await expect(dialog.getByRole('link', { name: 'masterLight_BIN-1_FILTER-B.xisf' })).toBeVisible();
-  await expect(dialog).toContainText('3 lights');
   await dialog.locator('.dialog-footer').getByRole('button', { name: 'Close' }).click();
   await expect(page.locator('.overview-wbpp-run')).toContainText('finished: 1 master');
 
@@ -217,11 +249,20 @@ test('the Overview stacks a project from its card and shows the masters', async 
   await expect(page.locator('.overview-wbpp-run')).toContainText('finished: 1 master', {
     timeout: 15_000,
   });
-  const ready = page.locator('.project-card').filter({ hasText: 'Project Alpha' }).getByText('WBPP masters ready');
+  const ready = page.locator('.project-card').filter({ hasText: 'Project Beta' }).getByText('WBPP masters ready');
   await expect(ready).toBeVisible();
   await ready.click();
   await expect(page.locator('.wbpp-run-dialog')).toContainText('Finished');
   await expect(
     page.locator('.wbpp-run-dialog').getByRole('link', { name: 'masterLight_BIN-1_FILTER-B.xisf' })
   ).toBeVisible();
+  await page.locator('.wbpp-run-dialog .dialog-footer').getByRole('button', { name: 'Close' }).click();
+
+  // × clears the finished run from the Overview, in this tab and the next.
+  await page.locator('.overview-wbpp-run').getByRole('button', { name: /^Dismiss/ }).click();
+  await expect(page.locator('.overview-wbpp-run')).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator('.project-card').filter({ hasText: 'Project Beta' })).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('.overview-wbpp-run')).toHaveCount(0);
+  await expect(page.locator('.project-card').filter({ hasText: 'Project Beta' }).getByText('Stack in WBPP')).toBeVisible();
 });
