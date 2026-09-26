@@ -317,15 +317,36 @@ source/package versions in phase 0; nightly branch heads and published releases
 are not interchangeable.
 
 Director does not need a TS provider extension or fork. The shared Rust core
-owns objective selection, scheduling, progress accounting, retry policy, and
-timing-aware replanning. PSF Guard simulation and the local sidecar use that
-same code; do not put a second scheduler in C# or delegate selection to TS.
+owns objective selection, scheduling, equipment-operation planning, progress
+accounting, retry policy, and timing-aware replanning. PSF Guard simulation and
+the local sidecar use that same code; do not put a second scheduler in C# or
+delegate selection to TS. N.I.N.A. is the only execution backend in the current
+scope. Keep the core independent so another backend can implement the contract
+later, but do not build a standalone equipment backend now.
+
+TS is the behavioral reference for both what/when to image and the operations
+needed to acquire it. The core must model operation prerequisites, ordering,
+completion, interruption, and recovery: startup/shutdown, slew and centering,
+rotation, filter changes, autofocus policy, guiding, dithering and settling,
+meridian transitions, calibration acquisition, waiting, and check-in boundaries.
+This is a requirements inventory, not a claim that these operations already
+exist in the core. Actual device control and the mechanics of native actions
+remain in N.I.N.A.; immediate safety never waits for a core decision.
 
 The thin C# adapter translates approved work into supported N.I.N.A. sequence
 items, mediators, and services. Reuse N.I.N.A.'s hardware, guiding, autofocus,
 centering, flip, cancellation, and image-saving machinery rather than copying
 TS's execution loop or calling private APIs. Prove each required public API in
 phase 0; do not assume the existence of a generic execute-plan endpoint.
+
+Use the same native sequencer-container model as TS: a Director container owns
+the session and runs actions through N.I.N.A.'s sequence execution lifecycle.
+Preserve the TS-style container options and their semantics, including configured
+triggers, conditions, cancellation, and nested action behavior. Calling a
+mediator directly is not sufficient if it bypasses those sequence hooks. Director
+may extend the container and options, but must not require TS's private container
+types or TS installation. This is behavioral compatibility, not reuse of TS's
+runtime identity or a promise that saved TS sequences deserialize unchanged.
 
 N.I.N.A. retains continuous local safety and operator control. Director's own
 session container coordinates operation boundaries and reports actual results
@@ -471,6 +492,9 @@ its acceptance gate passes and its review and validation evidence is linked here
 - [ ] Pin current N.I.N.A. 3.3 nightly and record the supported version matrix.
 - [ ] Prove Director-owned execution through supported N.I.N.A. APIs without
   TS installed; preserve ordinary TS and Sync behavior when separately installed.
+- [ ] Inventory the pinned TS container options, operation policies, conditions,
+  and trigger lifecycle. Map each to shared-core policy or native N.I.N.A.
+  execution, with parity tests and explicit reasons for any intended difference.
 - [ ] Validate asymmetric meridian constraints against local TS reference cases
   and prove N.I.N.A. horizon export/parity; include multiple safe intervals in
   the engine contract.
@@ -817,6 +841,10 @@ rebuild without counting mirrored captures twice.
 - [ ] Implement versioned allocation, acknowledgements, checkpoints, and limits.
 - [ ] Add durable event delivery, local recovery, offline operation, and status UI.
 - [ ] Support native sequence safety/hooks and explicit Sync coexistence rules.
+- [ ] Implement the shared-core operation state machine and the TS-style native
+  container/options contract. Test configured trigger order and frequency,
+  nested operations, cancellation, and failure propagation in real N.I.N.A.
+  simulator sequences; report injected actions and durations back to the core.
 - [ ] Enforce the current rig meridian/horizon snapshot at dispatch and refresh
   it on profile changes, horizon changes, and same-path file edits.
 
