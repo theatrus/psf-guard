@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+pub mod dispatch;
 pub mod geometry;
 pub mod preparation;
 pub mod program;
