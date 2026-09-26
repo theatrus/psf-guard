@@ -53,10 +53,13 @@ sync semantics.
   image uploads to keep control/progress evidence moving.
 - Define planning behavior as global defaults with optional site, rig and
   project overrides, not a required copy of scheduling settings on every project.
+- Provide a full project framing wizard, from sky coverage and mosaics through
+  rig-specific contributions and coordinated planning across sites. A combined
+  project does not imply that every participant's images belong in one stack.
 
 ## Implementation audit
 
-Audited 2026-09-26 against PSF Guard main `3a6a3ac` and Director plugin main
+Audited 2026-09-26 against PSF Guard main `5b8087b` and Director plugin main
 `8f6d8c2`, plus the open PR heads listed below. **Merged building block** does
 not mean a production workflow or phase gate passed. Open PR work is not in
 main. Update this table and the relevant checklist when a PR lands; keep
@@ -69,8 +72,9 @@ untested integration requirements unchecked.
 | Sidecar and local recovery | Merged `crates/director-ledger` and `crates/director-runtime`: schema-4 journal, capture/preparation outboxes, IPC 7, one-shot dispatch checks, process crash/reopen tests; PSF Guard #464-487. | Remote inbox/acknowledgements, pruning, grade feedback, assignment replacement and complete operator recovery. No network batch check-in yet. |
 | NINA native execution | Plugin [#18](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/18), [#19](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/19), [#22](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/22), [#23](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/23), [#24](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/24) merged: transient native items, target context, complete horizon export and post-hook geometry checks. Real nightly #58 OmniSim probe captured three filtered FITS frames with correlated evidence. | Public production session container, all trigger/condition/hook contexts, plugin compatibility matrix, native defaults, full autofocus/guiding/flip/calibration/safety recovery and continuous ownership integration. Probe uses fixture allocations and synthetic orientation evidence, not a server session. |
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
-| Meta storage | [#488](https://github.com/theatrus/psf-guard/pull/488) and [#489](https://github.com/theatrus/psf-guard/pull/489) merged: separate schema-2 store, UUIDs, mappings, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. | Catalog adoption workflow, permissions/enrollment, active revisions, allocation authority and progress projections. |
-| Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492) merged: shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493) implements/tests schema-3 intent persistence in an open PR. | Persistence not merged; objective editor, depth/FOV/sampling compatibility and authoritative allocation remain open. |
+| Meta storage | [#488](https://github.com/theatrus/psf-guard/pull/488), [#489](https://github.com/theatrus/psf-guard/pull/489) and [#499](https://github.com/theatrus/psf-guard/pull/499) merged: separate schema-4 store, UUIDs, confirmed catalog/profile/project/rig links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. | Catalog adoption workflow, permissions/enrollment, active revisions, allocation authority and progress projections. |
+| Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492): shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493): schema-3 intent persistence with validated immutable setup references. | Objective editor, depth/FOV/sampling compatibility and authoritative allocation remain open. |
+| Project framing wizard | Project intent retains target coordinates and rig-specific framing/recipes as building blocks only. | Target/reference selection, interactive FOV and rotation, mosaics, versioned optical geometry, multi-rig/site preview, draft editing and reviewed activation are not implemented. |
 | Operator API and UI | [#490](https://github.com/theatrus/psf-guard/pull/490) and [#494](https://github.com/theatrus/psf-guard/pull/494) merged: opt-in project/site/rig identity and site/rig snapshot APIs. [#495](https://github.com/theatrus/psf-guard/pull/495) implements/tests the identity management screen in an open PR. | UI not merged. No project planning editor, catalog adoption, rig pairing, acquisition control or live rig dashboard. UI tests are not equipment tests. |
 | Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
 | Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. | Central telemetry ingestion/dashboard, scoped pairing, remote acknowledgements, offline authorization lifecycle, manual/sequence batch reconcile and reconnect activation are not implemented. |
@@ -178,6 +182,71 @@ and a high-resolution central region can serve one project but require separate
 stacks. Project membership never grants stack compatibility. Completion must
 measure required coverage and quality, not just add integration hours from
 different instruments and assume equal depth.
+
+### Project framing wizard
+
+The planner must support a complete framing workflow for one global project
+using one or more rigs at one or more sites. This is planned work, not a feature
+of the current identity screen. The first implementation uses one PSF Guard
+coordinator and its enrolled rigs; another person's projects or independent
+coordinators are not required to use it.
+
+1. Select or create a project and its targets. Find a target by name or explicit
+   coordinates, or start from a reference image with verified coordinate
+   metadata. Display the sky/reference layer, its source and coordinate quality;
+   a catalog overlay or embedded WCS is not fresh pixel-derived pointing evidence.
+2. Frame the desired result on an interactive sky view. Set the center, angular
+   coverage and position angle; pan, zoom and rotate with numeric equivalents.
+   Add, remove and adjust mosaic panels, rows/columns and overlap. Show the
+   complete footprint and panel IDs, including uncovered regions and overlap.
+   Keep canonical ICRS coordinates and explicit angle conventions at the boundary.
+3. Select participating rigs and exact setup/site revisions. Overlay each rig's
+   field of view and sampling using sensor geometry, pixel size, effective focal
+   length, binning and orientation capability. Missing optical geometry requires
+   confirmed input; never infer it from equipment names. Support fixed/manual
+   camera angles as well as rotators, and identify adjustments that need an
+   operator before acquisition. Planning can use cached setup snapshots, but
+   must show their freshness and revalidate them before activation.
+4. Build rig-specific contribution plans for each objective. A wide-field rig
+   may cover the whole target while a narrow-field rig needs several panels or
+   provides a high-resolution region. Choose panel coverage, bandpass, exposure
+   purpose, short/long recipes and accepted-data goals without duplicating the
+   global project. Validate native filter/readout mappings and keep incompatible
+   sampling, coverage, exposure purposes and processing groups distinct.
+5. Preview the combined plan by rig, site and local night. Use each site's
+   location/time/weather context, each rig's horizon and hard limits, effective
+   inherited policy, existing accepted/pending coverage, and operation-duration
+   estimates. Show visibility, darkness, Moon restrictions, meridian/flip gaps,
+   filter opportunities, estimated work, uncertainty and unmet objectives.
+   Unsupported or stale required inputs must be visible, not treated as feasible.
+6. Review the proposed objectives, panels, recipes, contributions and allocation
+   changes together, then explicitly save or activate a revision. Saving a draft
+   never starts equipment. Changed setup, policy or project revisions require a
+   fresh review; activation separately requires current rig authorization and
+   validates outstanding allocations. Allow cancellation, back navigation and
+   resuming a saved draft without losing choices.
+7. Return to the same project coverage view as captures are graded. Distinguish
+   planned, allocated, captured-pending, accepted and rejected coverage per panel
+   and contribution. Revise deficits or framing without rewriting historical
+   capture provenance. Replanning can reassign compatible outstanding demand at
+   safe check-in boundaries, but cannot double-allocate an offline rig's work.
+
+Persist draft state separately from immutable validated intent. Retain stable
+objective, panel and contribution identities, revision provenance, reference
+sources and exact equipment/site snapshots; names and tile order are not IDs.
+Keep project and wizard scope in URL state. The shared Rust core owns footprint,
+panel geometry and feasibility calculations used by server preview and Director;
+the browser renders results and edits intent, not a separate scheduling engine.
+Use the same plan engine for preview and goal-driven execution. Estimated slots
+are not a replay script: slow autofocus, weather and changing priorities trigger
+bounded local reevaluation and check-in within the authorized contributions.
+
+Multi-site coordination serves one combined project's objectives. Sites affect
+when and where contributions are feasible; they neither own the project nor
+turn unlike data into interchangeable credit. Cross-rig coverage and completion
+must use explicit compatibility rules and capture identity, not summed hours or
+overlapping rectangles alone. Calibration, quality and processing provenance
+remain attached to the originating rig/setup and contribution.
 
 ## Rig constraints and local horizons
 
@@ -747,6 +816,12 @@ not proof that acquisition failed or that an image passes quality requirements.
 
 ## Federation and collaboration
 
+Future design note only, outside the active implementation scope. A later
+revision may support collaborative projects with other people and independent
+PSF Guard instances. Do not implement invitations, participant coordination or
+cross-instance exchange as part of the framing wizard or current multi-rig work;
+that needs a separate implementation request. The following are future constraints.
+
 Each participating instance may have its own meta database, but each shared
 project initially has one authoritative coordinator. A remote participant keeps
 control of its equipment and only accepts assignments within local policy.
@@ -765,7 +840,8 @@ bounded authorization defines that risk.
 ## Phased delivery
 
 Phases 0 and 1 have merged building blocks; neither acceptance gate is complete.
-Phases 2-6 remain incomplete even where a lower-level primitive exists. Checked
+Phases 2-5 remain incomplete even where a lower-level primitive exists. Phase 6
+is a deferred design note, not part of the current implementation scope. Checked
 items below refer only to the stated implementation scope, not adjacent goals.
 A phase is complete only when its full acceptance gate passes and its review and
 validation evidence is linked here.
@@ -1678,7 +1754,7 @@ Writes use short SQLite transactions with foreign keys, WAL and full synchronous
 commits. Renames require an expected revision; retries cannot overwrite another
 editor's work or silently move a source project to a different global project.
 The store refuses foreign databases and unsupported schema versions. Opening a
-schema-1 store upgrades it to schema 2 in one writer transaction, preserving its
+schema-1 or schema-2 store upgrades it to schema 3 in one writer transaction, preserving its
 instance and entity IDs; failed or competing migrations cannot partially commit.
 Future migrations must retain those properties. Back up before upgrading and
 stop older coordinator processes first; mixed-version online operation is not a
@@ -1712,11 +1788,10 @@ include catalogs, images, or Director's local execution journal. Stop the old
 coordinator before switching to a restored path. Online replacement and automated
 restore/configuration switching are not supported.
 
-Identity and configuration storage do not complete coordination. The shared
-objective/contribution model below is merged, but its persistence, editing,
-allocation authority, rig enrollment/permissions and catalog adoption remain
-required. No assignment or hardware authority is created by registering a rig
-or catalog.
+Identity, configuration and project-intent storage do not complete coordination.
+Allocation authority, rig enrollment/permissions, catalog adoption and UI remain
+required. No assignment or hardware authority is created by registering a rig,
+catalog or project-intent snapshot.
 
 The shared core's `project` module defines versioned project intent separately
 from an execution assignment. Each immutable snapshot identifies the global
@@ -1737,13 +1812,29 @@ resolution validates capabilities, not the authenticity of caller-supplied
 configuration data. An objective with no contribution is not yet a fully bound
 intent snapshot; draft editing needs a separate UI state.
 
-This model establishes intent only. It does not persist snapshots, infer FOV or
+This model establishes intent only. It does not infer FOV or
 sampling equivalence, judge quality, sum integration from different rigs, issue
 assignments, or project progress. Frame goals are scoped to each contribution;
 depth/cadence objectives and rig-optics compatibility remain required. The
 coordinator must separately reserve outstanding allocation and bind intent
 provenance before an executor can use it. Existing program and IPC contracts
 are unchanged.
+
+Meta schema 3 persists these project-intent snapshots and a foreign-key-backed
+inventory of their rig-setup references. Registration validates the shared-core
+contract, canonical project/rig/setup identities, project ownership, and every
+recipe against its stored immutable setup in one short transaction. Identical
+retries are idempotent; changing content or moving an existing snapshot to a
+different project returns a conflict. A changed plan needs a new snapshot ID.
+There is no implicit latest/active plan pointer or assignment issuance.
+
+Reads use one SQLite snapshot and validate both the bounded payload and exact
+reference inventory. Same-named projects and rigs remain distinct. Listings are
+bounded, project-scoped ID pages, not revision chronology. Backup/restore retains
+the plan, referenced configurations and instance identity. Upgrading schema 1
+or 2 to 3 is transactional; older backups remain read-only until the restored
+copy is explicitly opened for migration. HTTP editing, active-plan selection,
+allocation accounting and native assignment delivery are not implemented here.
 
 - [x] Add separate owned meta storage, transactional migrations, snapshot
   backup/restore, UUID identities and explicit catalog mapping primitives (#488).
@@ -1760,7 +1851,13 @@ are unchanged.
 - [x] Merge and validate site/rig identity and snapshot operator APIs (#494).
 - [ ] Merge and validate the identity management UI (#495).
 - [x] Merge the shared objective/contribution model (#492).
-- [ ] Merge persisted intent (#493), then add the objective/configuration editor.
+- [x] Persist immutable intent with validated rig-setup references (#493).
+- [ ] Add the objective/configuration editor.
+- [ ] Add versioned rig optical geometry, stable mosaic panels and resumable
+  framing drafts, separate from immutable validated intent and allocation.
+- [ ] Build the framing wizard's target/reference, FOV/rotation, mosaic,
+  per-rig objective/recipe and review steps. Keep multi-rig/site intent from the
+  start; do not model a project as one camera footprint or one local night.
 - [ ] Link existing catalogs without rewriting TS history or merging names.
 - [ ] Add scoped project views that distinguish global and rig-local projects.
 - [ ] Define PSF Guard-owned per-rig catalog schemas and versioned access
@@ -1784,6 +1881,34 @@ for unsupported data. A same-name entity or relocated source cannot acquire a
 new identity accidentally. An old Sync plugin still works through its documented
 API; existing direct-TS catalogs continue to work during migration. This gate
 is not satisfied by the separate meta database alone.
+
+#### Confirmed catalog mappings
+
+The meta crate's schema 4 adds explicit source-profile-to-rig links and binds
+each confirmed source project to that profile and a global project. A caller
+first registers the stable catalog identity and creates or selects the global
+project and rig. `link_catalog_project` then records both links in one writer
+transaction. It never infers a rig from a database name, source row number or
+project name, and never changes a source catalog.
+`link_catalog_projects` applies up to 256 mappings in one transaction; a conflict
+or storage failure rolls back the entire batch, including any earlier entries.
+
+Profiles are scoped by catalog identity and retained as exact opaque source
+IDs. Several profiles/catalogs may link to one rig, and several rig-local
+projects may contribute to one global project. A profile within one catalog
+cannot silently change rigs; a source project cannot silently change its
+profile or global project. Identical retries succeed; changed mappings conflict.
+Legacy project-only mappings remain intact but do not imply a rig. Migration
+from schemas 1-3 is transactional and does not invent missing associations.
+
+Complete mapping inventories are catalog-scoped and paged by source project
+GUID, with at most 256 entries per page. They describe explicit associations,
+not equipment compatibility, image attribution or acquisition permission. A
+project's current profile does not prove every historical image came from that
+rig. The eventual adoption API must verify fresh source evidence, retain durable
+catalog identity across relocation/copies, preview the proposed links, and
+report ambiguous or unsupported history. Settings/UI adoption and rig/project
+views are still required; these storage methods alone are not that workflow.
 
 ### Phase 2: single-rig autonomous Director
 
@@ -1842,6 +1967,8 @@ copy is required for local safety or an already authorized offline session.
   contextual duration distributions with versioned, capability-aware defaults.
 - [ ] Add virtual-clock simulation, decision explanations, and replay fixtures.
 - [ ] Display uncertainty, constraints, and predicted versus actual progress.
+- [ ] Feed the framing wizard's per-rig/site/night preview through this same
+  engine, including inherited policy, setup freshness and existing allocations.
 
 Gate: timing observations affect both hosts consistently; nested durations are
 not double-counted and slow operations cause sensible goal reevaluation rather
@@ -1863,18 +1990,27 @@ rejected lights and invalid flats reopen only the appropriate deficits.
 - [ ] Allocate compatible contributions across rigs and sites.
 - [ ] Evaluate horizons, coverage, sampling, priorities, and separate stack groups.
 - [ ] Add assignment handoff and project-level allocation/progress views.
+- [ ] Complete the framing wizard's combined coverage, multi-site feasibility,
+  reviewed activation and grade-driven revision workflow.
 
 Gate: two rigs with different FOVs and horizons advance one project; loss of
 contact with one does not authorize duplicate outstanding work on the other.
+Create that project through the wizard using rigs at two sites with different
+visibility/local nights: one wide-field contribution and a narrow-field mosaic,
+with distinct short/long purposes. Verify panel rotation/overlap and sky geometry
+near RA wrap and high declination, setup changes, missing optical data, manual
+rotation, draft reload/back navigation and stale-review rejection. Exercise
+cancel/save without acquisition, activate after review, run native simulated
+capture, grade, and reopen the same coverage view with no duplicate credit.
+The single-rig wizard must also work without sites/rigs beyond its one setup.
 
-### Phase 6: remote instances and collaboration
+### Phase 6: remote instances and collaboration (deferred)
 
-- [ ] Add coordinator/participant APIs, invitations, and scoped permissions.
-- [ ] Add provenance-preserving contribution exchange and reconnect reconciliation.
-- [ ] Validate expiry, revocation, compatibility, and isolation across instances.
-
-Gate: a remote participant can contribute while retaining local safety/control;
-offline recovery preserves history and unauthorized catalogs remain inaccessible.
+Future revision only. Keep the collaboration constraints above as design notes;
+do not implement coordinator/participant APIs, invitations, cross-instance
+contribution exchange or collaborative permissions in the current work. Define
+its acceptance gate when that work is explicitly requested. Deferral does not
+block single-coordinator planning and acquisition across multiple rigs/sites.
 
 ## Review and validation policy
 

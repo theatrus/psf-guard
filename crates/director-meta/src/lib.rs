@@ -5,7 +5,9 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBeha
 use serde::{Deserialize, Serialize};
 use std::{fmt, path::Path, time::Duration};
 pub use uuid::Uuid;
+pub mod catalog;
 pub mod configuration;
+pub mod project;
 mod storage;
 
 #[derive(Debug)]

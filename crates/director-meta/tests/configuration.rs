@@ -251,7 +251,7 @@ fn mismatched_and_oversized_stored_payloads_are_corruption_not_configuration() {
 }
 
 fn downgrade_to_v1(path: &std::path::Path) {
-    Connection::open(path).unwrap().execute_batch("DROP TABLE rig_setup; DROP TABLE site_snapshot; DROP TABLE site; PRAGMA user_version=1;").unwrap();
+    Connection::open(path).unwrap().execute_batch("DROP TABLE project_profile; DROP TABLE catalog_profile; DROP TABLE project_intent_setup; DROP TABLE project_intent; DROP TABLE rig_setup; DROP TABLE site_snapshot; DROP TABLE site; PRAGMA user_version=1;").unwrap();
 }
 
 #[test]
@@ -280,7 +280,7 @@ fn schema_one_migrates_without_changing_identities_and_old_backups_stay_read_onl
             .unwrap()
             .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        2
+        4
     );
 }
 
