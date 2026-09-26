@@ -5,6 +5,7 @@ pub mod astrometry;
 pub mod astrometry_headers;
 pub mod auth_registry;
 pub mod calibration;
+pub mod catalog_identity;
 pub mod cli;
 pub mod commands;
 pub mod concurrency;
