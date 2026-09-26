@@ -25,47 +25,29 @@ pub fn stretch_to_png(
     )
 }
 
-/// Render a one-shot-color frame in colour, or report that it cannot.
-///
-/// Returns `Ok(false)` when the frame is not a mosaic, leaving the caller to
-/// fall back to the greyscale path — a mono camera has no colour to show, and
-/// refusing outright would make the option useless on a mixed rig.
+/// Write a colour frame as a stretched preview.
 ///
 /// The transfer is the same midtone stretch the greyscale preview uses, so a
 /// colour and a mono rendition of the same exposure sit at the same
-/// brightness. It is measured once on luminance and applied identically to
-/// red, green, and blue: that keeps the ratios between channels, and with
-/// them the colour. Stretching each channel against its own statistics would
-/// pull all three toward a common median and wash the image out.
-pub fn render_color_preview(
-    fits_path: &str,
-    output: Option<String>,
+/// brightness. For a linked frame it is measured once on luminance and
+/// applied identically to red, green, and blue: that keeps the ratios
+/// between channels, and with them the colour. Stretching each channel
+/// against its own statistics would pull all three toward a common median,
+/// which is wrong for a raw sub but is what an uncalibrated master wants, so
+/// an unlinked frame gets a transfer per channel.
+fn write_color_preview(
+    frame: &ColorFrame,
+    output_path: &Path,
     midtone_factor: f64,
     shadow_clipping: f64,
     max_dimensions: Option<(u32, u32)>,
     encoding: PreviewEncoding,
-) -> Result<bool> {
-    use seiza_stretch::{stretch_u16_to_u16, StretchParams};
+) -> Result<()> {
+    use seiza_stretch::{statistics_u16, stretch_u16_to_u16, StretchParams};
 
-    let path = Path::new(fits_path);
-    let Some(frame) = ColorFrame::from_file(path)
-        .with_context(|| format!("Failed to load FITS file: {}", path.display()))?
-    else {
-        return Ok(false);
-    };
-
-    // Statistics come from luminance so every channel shares one transfer.
-    let luminance = FitsImage {
-        width: frame.width,
-        height: frame.height,
-        data: frame.luminance(),
-        raw_min: 0.0,
-        raw_scale: 1.0,
-        bzero: 0.0,
-    };
-    let statistics = luminance
-        .calculate_basic_statistics()
-        .to_stretch_statistics();
+    // A linked stretch measures luminance so every channel shares one
+    // transfer.
+    let linked = frame.linked.then(|| statistics_u16(&frame.luminance()));
     let params = StretchParams {
         target_median: midtone_factor,
         shadows_clip: shadow_clipping,
@@ -78,7 +60,9 @@ pub fn render_color_preview(
     let pixels = frame.width * frame.height;
     let mut interleaved = vec![0u8; pixels * 3];
     for channel in 0..3 {
-        let stretched = stretch_u16_to_u16(&frame.channel(channel), &statistics, &params);
+        let samples = frame.channel(channel);
+        let statistics = linked.clone().unwrap_or_else(|| statistics_u16(&samples));
+        let stretched = stretch_u16_to_u16(&samples, &statistics, &params);
         for (pixel, value) in stretched.iter().enumerate() {
             interleaved[pixel * 3 + channel] = (value >> 8) as u8;
         }
@@ -91,20 +75,13 @@ pub fn render_color_preview(
         None => buffer,
     };
 
-    let output_path = output.map_or_else(
-        // Name the file after what is about to be written to it, not after
-        // the format this function used to be able to produce.
-        || path.with_extension(encoding.extension()),
-        PathBuf::from,
-    );
     encoding.write(
-        &output_path,
+        output_path,
         buffer.as_raw(),
         buffer.width(),
         buffer.height(),
         ColorType::Rgb8,
-    )?;
-    Ok(true)
+    )
 }
 
 /// Scale down to fit a box, keeping the aspect ratio. Never scales up: an
@@ -142,12 +119,17 @@ pub fn stretch_to_png_with_resize(
         logarithmic,
         invert,
         max_dimensions,
+        false,
         PreviewEncoding::png(),
     )
 }
 
 /// As above, in a chosen format. The CLI writes PNG; the server writes
 /// whatever its configuration says.
+///
+/// Planar RGB, such as an integrated master, is always shown in colour. A
+/// raw mosaic is debayered to colour only when `color` asks for it. The
+/// logarithmic and inverted renditions are greyscale only.
 #[allow(clippy::too_many_arguments)]
 pub fn render_preview(
     fits_path: &str,
@@ -157,16 +139,56 @@ pub fn render_preview(
     logarithmic: bool,
     invert: bool,
     max_dimensions: Option<(u32, u32)>,
+    color: bool,
     encoding: PreviewEncoding,
 ) -> Result<()> {
     // Load FITS file
     let fits_path = Path::new(fits_path);
     println!("Loading FITS file: {}", fits_path.display());
 
-    let image = FitsImage::from_file(fits_path)
-        .with_context(|| format!("Failed to load FITS file: {}", fits_path.display()))?;
+    let fits = crate::image_io::open(fits_path)
+        .map_err(|e| anyhow::anyhow!("Failed to load FITS file {}: {e:?}", fits_path.display()))?;
+
+    let colour = (!logarithmic && !invert)
+        .then(|| ColorFrame::from_decoded(&fits, color))
+        .flatten();
+    if let Some(frame) = colour {
+        // A float master's decoded planes are twice the size of the frame
+        // kept here; free them before stretching.
+        drop(fits);
+        println!("Colour image dimensions: {}x{}", frame.width, frame.height);
+        let output_path = output.map_or_else(
+            // Name the file after what is about to be written to it, not
+            // after the format this function used to be able to produce.
+            || fits_path.with_extension(encoding.extension()),
+            PathBuf::from,
+        );
+        write_color_preview(
+            &frame,
+            &output_path,
+            midtone_factor,
+            shadow_clipping,
+            max_dimensions,
+            encoding,
+        )?;
+        println!("Saved stretched image to: {}", output_path.display());
+        return Ok(());
+    }
+
+    let image = FitsImage::from_decoded(fits);
 
     println!("Image dimensions: {}x{}", image.width, image.height);
+
+    // The encoder asserts on a length mismatch, which takes down a server
+    // worker; refuse here instead.
+    anyhow::ensure!(
+        image.data.len() == image.width * image.height,
+        "{} decoded to {} samples for a {}x{} image",
+        fits_path.display(),
+        image.data.len(),
+        image.width,
+        image.height
+    );
 
     // Calculate statistics
     let stats = image.calculate_basic_statistics();
@@ -305,4 +327,71 @@ fn apply_logarithmic_stretch(image: &FitsImage, invert: bool) -> Vec<u8> {
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An integrated master is planar float RGB. Before, its three planes
+    /// landed in a greyscale buffer three times the image size and the
+    /// encoder panicked. It previews in colour whether or not mosaics are
+    /// set to, stretched per channel, and in greyscale for the logarithmic
+    /// rendition.
+    #[test]
+    fn a_planar_rgb_master_previews_in_colour() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("master.xisf");
+        let (width, height) = (8usize, 6usize);
+        let pixels = width * height;
+        // A red cast: red over green over blue, each with the same spread so
+        // the stretch has a histogram to work from.
+        let planes: Vec<f32> = (0..3 * pixels)
+            .map(|index| {
+                let (plane, pixel) = (index / pixels, index % pixels);
+                (0.6 - 0.2 * plane as f32) + 0.004 * pixel as f32
+            })
+            .collect();
+        seiza_xisf::write_f32_image(
+            &path,
+            width,
+            height,
+            seiza_fits::F32ImageData::RgbPlanar(&planes),
+            &[],
+        )
+        .unwrap();
+
+        let render = |name: &str, logarithmic: bool| {
+            let out = directory.path().join(name);
+            render_preview(
+                path.to_str().unwrap(),
+                Some(out.display().to_string()),
+                0.2,
+                -2.8,
+                logarithmic,
+                false,
+                None,
+                false,
+                PreviewEncoding::png(),
+            )
+            .unwrap();
+            image::open(out).unwrap()
+        };
+
+        let colour = render("colour.png", false);
+        assert_eq!(colour.color(), image::ColorType::Rgb8);
+        assert_eq!((colour.width(), colour.height()), (8, 6));
+        // Each channel is stretched against its own statistics, so the cast
+        // is gone: every channel lands on the same value.
+        let centre = *colour.to_rgb8().get_pixel(4, 3);
+        let spread = centre.0.iter().max().unwrap() - centre.0.iter().min().unwrap();
+        assert!(
+            spread <= 2,
+            "an unlinked stretch should neutralize the cast: {centre:?}"
+        );
+
+        let grey = render("grey.png", true);
+        assert_eq!(grey.color(), image::ColorType::L8);
+        assert_eq!((grey.width(), grey.height()), (8, 6));
+    }
 }
