@@ -36,6 +36,7 @@ All metadata routes also require the database-management gate.
 | Method | Route | Body or query |
 | --- | --- | --- |
 | GET | `/status` | Reports `protocol_version`, `enabled`, `instance_id`, and `acquisition_available: false`. |
+| GET | `/catalogs/{slug}/discovery` | Read project/profile evidence from one already registered catalog. |
 | GET | `/projects` | Optional `after` UUID cursor and `limit` from 1 to 256 (default 64). |
 | POST | `/projects` | `{"id":"<caller-generated UUID>","name":"M31"}` |
 | GET | `/projects/{id}` | Exact project UUID. |
@@ -94,6 +95,33 @@ at a time; contention returns `503` with `Retry-After: 1`. A canceled HTTP
 request may still commit its already admitted transaction. Use the same create
 identity on retry, or GET after an ambiguous rename result. Errors do not return
 filesystem paths or raw SQLite diagnostics; detailed failures are logged locally.
+
+## Catalog discovery
+
+`GET /api/director/v1/catalogs/{slug}/discovery` returns the registered catalog's
+slug and display name, a `snapshot_digest`, and `evidence` containing projects,
+profile IDs with project counts, and schema capabilities. It includes projects
+with no images. A project reports its source row ID, parsed non-nil project GUID,
+profile ID, name and `issues`. Missing GUID/profile columns in older TS schemas
+are reported rather than treated as empty catalogs. Invalid fields and duplicate
+project GUIDs are flagged; equivalent UUID spellings count as duplicates.
+
+This is discovery, not adoption. It does not create rigs, link projects, infer
+equipment or horizons, or change source tables. Profile IDs are source evidence,
+not friendly rig names. A database can contain several profiles and one rig can
+have several catalogs. Confirm mappings in the future adoption workflow rather
+than treating a slug, source row ID, name or snapshot digest as global identity.
+The digest detects changes to the returned evidence; it grants no write or
+execution authority and is not an image/catalog-content checksum.
+
+Discovery uses its own read-only SQLite connection and a short snapshot of the
+project table; it reads no acquired-image records, thumbnails or image files.
+One discovery read is admitted at a time, independently of metadata operations.
+Contention returns retryable `503`; unsupported schemas or more than 4096
+projects return `422` without a partial result. Text fields are limited to 512
+UTF-8 bytes; malformed fields are flagged rather than used for mapping. The
+normal operator authentication and database-management gate apply. This route
+accepts only a registered slug, never an arbitrary file path.
 
 Project objectives, site/rig enrollment, scoped assignments, feedback, and the
 project UI remain in the [phased Director plan](design/director.md).
