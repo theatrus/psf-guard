@@ -14,9 +14,8 @@ internal static class PreparationChecks
         goals[0]!["pending"] = 0;
         goals[0]!["attempts_remaining"] = 2;
         var state = request["state"]!;
-        var directory = Directory.CreateTempSubdirectory("psf-guard-director-preparation-");
         JsonObject pending;
-        try
+        await TestDirectory.RunAsync("psf-guard-director-preparation-", async directory =>
         {
             await using (var session = await RuntimeSession.StartAsync(executable, "rig-1", started, storageDirectory: directory.FullName))
             {
@@ -119,12 +118,7 @@ internal static class PreparationChecks
                 await captured.SendAsync(new JsonObject { ["type"] = "shutdown" });
                 Assert(await captured.WaitForExitAsync() == 0, "preparation recovery session shuts down cleanly");
             }
-        }
-        finally
-        {
-            // Owned temporary directory, never a user-supplied database path.
-            directory.Delete(recursive: true);
-        }
+        });
     }
 
     private static JsonObject WithState(string action, JsonNode state) => new() { ["action"] = action, ["state"] = state.DeepClone() };

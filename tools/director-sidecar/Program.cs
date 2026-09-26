@@ -1,6 +1,12 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
 
+if (args is ["--cleanup-self-test"])
+{
+    await TestDirectoryChecks.RunAsync();
+    return 0;
+}
+
 if (args.Length < 2)
 {
     Console.Error.WriteLine("Usage: Director.Sidecar <runtime.exe> <fixture.json> [fixture.json ...]");
@@ -8,6 +14,7 @@ if (args.Length < 2)
 }
 
 var started = new List<int>();
+await TestDirectoryChecks.RunAsync();
 var count = 0;
 foreach (var fixturePath in args.Skip(1))
 {
