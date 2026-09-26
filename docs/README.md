@@ -32,7 +32,7 @@ work. Historical checklists record delivery; they do not track current work.
 ## Component-specific guides
 
 - [Server authentication](AUTHENTICATION.md)
-- [Experimental Director metadata API](DIRECTOR.md)
+- [Experimental Director management and API](DIRECTOR.md)
 - [MCP server for agents](MCP.md)
 - [Release guide](RELEASING.md)
 - [App and server updates](UPDATES.md)

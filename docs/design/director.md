@@ -59,7 +59,7 @@ sync semantics.
 
 ## Implementation audit
 
-Audited 2026-09-26 against PSF Guard main `696df68` and Director plugin main
+Audited 2026-09-26 against PSF Guard main `3cb1406` and Director plugin main
 `8f6d8c2`, plus the open PR heads listed below. **Merged building block** does
 not mean a production workflow or phase gate passed. Open PR work is not in
 main. Update this table and the relevant checklist when a PR lands; keep
@@ -76,8 +76,8 @@ untested integration requirements unchecked.
 | Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492): shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493): schema-3 intent persistence with validated immutable setup references. | Objective editor, depth/FOV/sampling compatibility and authoritative allocation remain open. |
 | Project framing wizard | Project intent retains target coordinates and rig-specific framing/recipes as building blocks only. | Survey-map backgrounds, target/reference selection, interactive FOV and rotation, mosaics, versioned optical geometry, multi-rig/site preview, draft editing and reviewed activation are not implemented. |
 | Catalog discovery | [#498](https://github.com/theatrus/psf-guard/pull/498) merged: operator-scoped read-only project/profile evidence from registered TS-compatible catalogs, with bounded results and invalid/duplicate identity reports. | Discovery does not infer rig ownership or read image history. |
-| Catalog adoption | [#502](https://github.com/theatrus/psf-guard/pull/502) merged explicit durable lineage; [#503](https://github.com/theatrus/psf-guard/pull/503) implements operator preview/apply, exact identity matching, stale-review refusal and interrupted-write recovery. These are reviewed storage/API building blocks, not a complete UI workflow. | Mapping UI, independent forks, historical-image attribution, contribution accounting and acquisition authorization remain separate work. |
-| Operator API and UI | [#490](https://github.com/theatrus/psf-guard/pull/490) and [#494](https://github.com/theatrus/psf-guard/pull/494) merged: opt-in project/site/rig identity and site/rig snapshot APIs. [#495](https://github.com/theatrus/psf-guard/pull/495) implements/tests the identity management screen in an open PR. | UI not merged. No project planning editor, catalog adoption UI, rig pairing, acquisition control or live rig dashboard. UI tests are not equipment tests. |
+| Catalog adoption | [#502](https://github.com/theatrus/psf-guard/pull/502) merged explicit durable lineage; [#503](https://github.com/theatrus/psf-guard/pull/503) merged operator preview/apply, exact identity matching, stale-review refusal and interrupted-write recovery. These are reviewed storage/API building blocks, not a complete UI workflow. | Mapping UI, independent forks, historical-image attribution, contribution accounting and acquisition authorization remain separate work. |
+| Operator API and UI | [#490](https://github.com/theatrus/psf-guard/pull/490) and [#494](https://github.com/theatrus/psf-guard/pull/494) merged: opt-in project/site/rig identity and site/rig snapshot APIs. [#495](https://github.com/theatrus/psf-guard/pull/495): identity management screen with real-server browser tests. | No project planning editor, catalog adoption UI, rig pairing, acquisition control or live rig dashboard. UI tests are not equipment tests. |
 | Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
 | Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. | Central telemetry ingestion/dashboard, scoped pairing, remote acknowledgements, offline authorization lifecycle, manual/sequence batch reconcile and reconnect activation are not implemented. |
 | End-to-end lifecycle | Core, process, native simulator and isolated management HTTP/UI tests exist separately. | No PSF Guard allocation -> real NINA simulator acquisition -> central telemetry/grade -> batch reconciliation/replan test. TS/Sync/Chatstronomy coexistence gates remain open. |
@@ -1878,6 +1878,13 @@ include catalogs, images, or Director's local execution journal. Stop the old
 coordinator before switching to a restored path. Online replacement and automated
 restore/configuration switching are not supported.
 
+The opt-in Director management page lists, creates and renames global projects,
+sites and rigs, independently of catalog selection. It shows stable UUIDs and
+revision checks, honors read-only accounts, and keeps the selected collection in
+the URL. Real-server browser tests cover create, reload, conflicting renames and
+mobile layout without any catalogs or acquisition authority. Configuration and
+objective editing are not yet part of this screen.
+
 Identity, configuration and project-intent storage do not complete coordination.
 Allocation authority, rig enrollment/permissions and catalog adoption UI remain
 required. No assignment or hardware authority is created by registering a rig,
@@ -1941,7 +1948,7 @@ allocation accounting and native assignment delivery are not implemented here.
 - [x] Enable opt-in operator project identity API with authentication and the
   database-management gate (#490).
 - [x] Merge and validate site/rig identity and snapshot operator APIs (#494).
-- [ ] Merge and validate the identity management UI (#495).
+- [x] Implement and browser-test the identity management UI (#495).
 - [x] Merge the shared objective/contribution model (#492).
 - [x] Persist immutable intent with validated rig-setup references (#493).
 - [ ] Add the objective/configuration editor.

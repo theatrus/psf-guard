@@ -5,6 +5,7 @@ import MainView from '../components/MainView';
 import Overview from '../components/Overview';
 import SequenceView from '../components/SequenceView';
 import SkyPage from '../components/sky/SkyPage';
+import DirectorPage from '../components/director/DirectorPage';
 
 // Create React Query client
 const queryClient = new QueryClient({
@@ -22,6 +23,7 @@ const router = createHashRouter([
     path: "/",
     element: <App />,
     children: [
+      { path: 'director', element: <DirectorPage /> },
       {
         index: true,
         element: <Overview />
