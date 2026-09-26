@@ -12,6 +12,8 @@ mod span;
 pub use span::{check_altitude_span, AltitudeSpan};
 mod windows;
 pub use windows::{altitude_windows, AltitudeWindows};
+mod meridian;
+pub use meridian::{meridian_windows, MeridianWindows};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -93,6 +95,7 @@ pub enum VisibilityError {
     UnresolvedSpan,
     SpanBudgetExceeded,
     TooManyVisibilityWindows,
+    MeridianTimeOverflow,
 }
 
 fn bounded(value: f64, minimum: f64, maximum: f64) -> bool {
@@ -190,6 +193,15 @@ pub fn observe(
     orientation: EarthOrientation,
     unix_ms: u64,
 ) -> Result<ObservedPosition, VisibilityError> {
+    observe_with_declination(position, site, orientation, unix_ms).map(|(observed, _)| observed)
+}
+
+fn observe_with_declination(
+    position: IcrsPosition,
+    site: Site,
+    orientation: EarthOrientation,
+    unix_ms: u64,
+) -> Result<(ObservedPosition, f64), VisibilityError> {
     if !bounded(position.ra_degrees, 0.0, 360.0)
         || position.ra_degrees == 360.0
         || !bounded(position.dec_degrees, -90.0, 90.0)
@@ -231,7 +243,7 @@ pub fn observe(
         f64::from(time.second()) + f64::from(time.timestamp_subsec_millis()) / 1000.0,
     )
     .map_err(|_| VisibilityError::AstronomyUnavailable)?;
-    let (azimuth, zenith, hour_angle, _, _, _) = sofars::astro::atco13(
+    let (azimuth, zenith, hour_angle, declination, _, _) = sofars::astro::atco13(
         position.ra_degrees.to_radians(),
         position.dec_degrees.to_radians(),
         0.0,
@@ -260,8 +272,9 @@ pub fn observe(
     if !bounded(observed.azimuth_degrees, 0.0, 360.0)
         || !bounded(observed.altitude_degrees, -90.0, 90.0)
         || !bounded(observed.hour_angle_degrees, -180.0, 180.0)
+        || !bounded(declination.to_degrees(), -90.0, 90.0)
     {
         return Err(VisibilityError::AstronomyUnavailable);
     }
-    Ok(observed)
+    Ok((observed, declination.to_degrees()))
 }
