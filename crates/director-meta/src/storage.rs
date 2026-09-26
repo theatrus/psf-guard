@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -31,6 +31,7 @@ impl MetaStore {
         tx.pragma_update(None, "application_id", APPLICATION_ID)?;
         create_configuration_tables(&tx)?;
         create_project_tables(&tx)?;
+        create_catalog_mapping_tables(&tx)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         conn.close().map_err(|(_, error)| Error::Sqlite(error))?;
@@ -52,7 +53,10 @@ impl MetaStore {
             if version == 1 {
                 create_configuration_tables(&tx)?;
             }
-            create_project_tables(&tx)?;
+            if version < 3 {
+                create_project_tables(&tx)?;
+            }
+            create_catalog_mapping_tables(&tx)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;
@@ -131,6 +135,14 @@ fn validate(conn: &Connection) -> Result<Uuid, Error> {
             conn.prepare(sql).map_err(|_| Error::CorruptDatabase)?;
         }
     }
+    if version >= 4 {
+        for sql in [
+            "SELECT catalog_id,source_profile_id,rig_id FROM catalog_profile LIMIT 0",
+            "SELECT catalog_id,source_project_guid,source_profile_id FROM project_profile LIMIT 0",
+        ] {
+            conn.prepare(sql).map_err(|_| Error::CorruptDatabase)?;
+        }
+    }
     let id: String = conn.query_row(
         "SELECT instance_id FROM meta WHERE singleton=1",
         [],
@@ -155,6 +167,25 @@ fn create_project_tables(conn: &Connection) -> Result<(), Error> {
         "CREATE TABLE project_intent(id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL REFERENCES global_project(id), payload TEXT NOT NULL);
          CREATE INDEX project_intent_project ON project_intent(project_id,id);
          CREATE TABLE project_intent_setup(intent_id TEXT NOT NULL REFERENCES project_intent(id), setup_id TEXT NOT NULL REFERENCES rig_setup(id), PRIMARY KEY(intent_id,setup_id));"
+    )?;
+    Ok(())
+}
+
+fn create_catalog_mapping_tables(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch(
+        "CREATE TABLE catalog_profile(
+            catalog_id TEXT NOT NULL REFERENCES catalog(id),
+            source_profile_id TEXT NOT NULL,
+            rig_id TEXT NOT NULL REFERENCES rig(id),
+            PRIMARY KEY(catalog_id,source_profile_id));
+         CREATE INDEX catalog_profile_rig ON catalog_profile(rig_id,catalog_id);
+         CREATE TABLE project_profile(
+            catalog_id TEXT NOT NULL,
+            source_project_guid TEXT NOT NULL,
+            source_profile_id TEXT NOT NULL,
+            PRIMARY KEY(catalog_id,source_project_guid),
+            FOREIGN KEY(catalog_id,source_project_guid) REFERENCES project_catalog(catalog_id,source_project_guid),
+            FOREIGN KEY(catalog_id,source_profile_id) REFERENCES catalog_profile(catalog_id,source_profile_id));"
     )?;
     Ok(())
 }
