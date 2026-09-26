@@ -157,10 +157,10 @@ impl IntoResponse for Error {
                 "Director metadata requires database management",
             ),
             Self::Invalid => (StatusCode::BAD_REQUEST, "Invalid Director metadata request"),
-            Self::Missing => (StatusCode::NOT_FOUND, "Director project not found"),
+            Self::Missing => (StatusCode::NOT_FOUND, "Director record not found"),
             Self::Conflict => (
                 StatusCode::CONFLICT,
-                "Director project changed; reload before retrying",
+                "Director record conflicts with stored content; reload before retrying",
             ),
             Self::Busy => (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -186,6 +186,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .route("/status", get(status))
         .route("/projects", get(list_projects).post(create_project))
         .route("/projects/{id}", get(project).patch(rename_project))
+        .merge(configuration_api::routes())
         .layer(DefaultBodyLimit::max(4096))
 }
 
@@ -227,14 +228,14 @@ fn page_size() -> usize {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CreateProject {
+struct CreateIdentity {
     id: Uuid,
     name: String,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RenameProject {
+struct RenameIdentity {
     expected_revision: u64,
     name: String,
 }
@@ -252,7 +253,7 @@ async fn list_projects(
 
 async fn create_project(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<CreateProject>,
+    Json(request): Json<CreateIdentity>,
 ) -> Result<Json<ApiResponse<NamedIdentity>>, Error> {
     Ok(Json(ApiResponse::success(
         enabled(&state)?
@@ -275,7 +276,7 @@ async fn project(
 async fn rename_project(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
-    Json(request): Json<RenameProject>,
+    Json(request): Json<RenameIdentity>,
 ) -> Result<Json<ApiResponse<NamedIdentity>>, Error> {
     Ok(Json(ApiResponse::success(
         enabled(&state)?
@@ -284,5 +285,6 @@ async fn rename_project(
     )))
 }
 
+mod configuration_api;
 #[cfg(test)]
 mod tests;
