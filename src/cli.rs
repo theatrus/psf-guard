@@ -1123,6 +1123,12 @@ pub enum Commands {
         #[arg(long)]
         allow_database_management: bool,
 
+        /// Enable experimental Director metadata at this separate SQLite path.
+        /// Requires --allow-database-management. Creates a new store only if
+        /// the path does not exist; never adopts a catalog or arbitrary database.
+        #[arg(long, requires = "allow_database_management")]
+        director_meta: Option<std::path::PathBuf>,
+
         /// Serve a network address with no user accounts, granting every
         /// caller the access a localhost server grants. Off by default: a
         /// server bound anywhere but loopback answers 401 until an operator

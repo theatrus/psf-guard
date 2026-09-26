@@ -6,6 +6,11 @@
 
 ## Added
 
+- An opt-in Director metadata API can create, list, and rename global project
+  identities in a separate SQLite store. Enable it with `--director-meta` and
+  database management on a CLI server. It follows user authentication and does
+  not yet enable pairing or acquisition. See `docs/DIRECTOR.md`.
+
 - The server is an **MCP server** at `/api/mcp`, so an agent such as
   Claude Code can list catalogs, read grades and quality evidence, score
   sequences, apply grades, and start imports, quality scans and WBPP runs.
