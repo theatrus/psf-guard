@@ -6,10 +6,14 @@
 
 ## Added
 
+- Director's Catalogs view maps existing source projects and profiles to global
+  projects and rigs through an explicit preview and Apply. It shows saved links,
+  flags invalid identities and changed profiles, and supports read-only users.
+
 - Director's experimental operator API can preview and apply confirmed catalog
   project/profile links to global projects and rigs. It preserves catalog
   identity across moves and retries without changing TS history or image grades.
-  The mapping UI and acquisition remain unavailable.
+  Acquisition remains unavailable.
 
 - Director's experimental API can inspect registered catalogs for projects and
   profile IDs, reporting missing or duplicate identities without modifying the

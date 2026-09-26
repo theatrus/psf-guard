@@ -2,7 +2,7 @@ import axios from 'axios';
 import type { AxiosInstance } from 'axios';
 import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
-import type { DirectorCollection, DirectorIdentity, DirectorIdentityPage, DirectorStatus } from './directorTypes';
+import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorDiscovery, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorStatus } from './directorTypes';
 import type {
   ProjectProcessingSettings,
   StackColorInputSources,
@@ -240,6 +240,31 @@ export const apiClient = {
     const api = await getApi();
     const { data } = await api.get<ApiResponse<DirectorStatus>>('/director/v1/status');
     if (!data.data) throw new Error(data.error || 'Failed to load Director status');
+    return data.data;
+  },
+
+  discoverDirectorCatalog: async (slug: string): Promise<DirectorDiscovery> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorDiscovery>>(`/director/v1/catalogs/${encodeURIComponent(slug)}/discovery`);
+    if (!data.data) throw new Error(data.error || 'Failed to inspect catalog');
+    return data.data;
+  },
+  getDirectorMappings: async (slug: string, after?: string): Promise<DirectorMappingPage> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorMappingPage>>(`/director/v1/catalogs/${encodeURIComponent(slug)}/mappings`, { params: { after, limit: 256 } });
+    if (!data.data) throw new Error(data.error || 'Failed to load catalog mappings');
+    return data.data;
+  },
+  previewDirectorAdoption: async (slug: string, plan: DirectorAdoptionPlan): Promise<DirectorAdoptionReport> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<DirectorAdoptionReport>>(`/director/v1/catalogs/${encodeURIComponent(slug)}/adoption/preview`, plan);
+    if (!data.data) throw new Error(data.error || 'Failed to preview mappings');
+    return data.data;
+  },
+  applyDirectorAdoption: async (slug: string, plan: DirectorAdoptionPlan, preview_digest: string): Promise<DirectorAdoptionReport> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<DirectorAdoptionReport>>(`/director/v1/catalogs/${encodeURIComponent(slug)}/adoption/apply`, { plan, preview_digest });
+    if (!data.data) throw new Error(data.error || 'Failed to apply mappings');
     return data.data;
   },
 

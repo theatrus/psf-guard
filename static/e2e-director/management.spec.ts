@@ -11,11 +11,10 @@ test('global Director identities survive reload, conflicts, and narrow viewports
   await expect(page.getByText('Acquisition is not yet available.')).toBeVisible();
   await page.getByRole('button', { name: 'New project' }).click();
   await page.getByLabel('Project name').fill('Multi-rig Andromeda');
+  const createdResponse = page.waitForResponse(response => response.url().endsWith('/api/director/v1/projects') && response.request().method() === 'POST');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByText('Created Multi-rig Andromeda.')).toBeVisible();
-  const projects = await (await request.get('/api/director/v1/projects')).json();
-  expect(projects.data.items).toHaveLength(1);
-  const project = projects.data.items[0];
+  const project = (await (await createdResponse).json()).data;
 
   await page.getByRole('button', { name: 'Rename Multi-rig Andromeda' }).click();
   const changed = await request.patch(`/api/director/v1/projects/${project.id}`, { data: { expected_revision: 1, name: 'Edited from another session' } });

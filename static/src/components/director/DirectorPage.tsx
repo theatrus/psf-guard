@@ -7,18 +7,11 @@ import type { DirectorCollection, DirectorIdentity } from '../../api/directorTyp
 import { useAccess } from '../../auth/access';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import './DirectorPage.css';
+import { identityId } from './identityId';
+import DirectorCatalogs from './DirectorCatalogs';
 
 const labels = { projects: 'Project', sites: 'Site', rigs: 'Rig' };
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
-
-// getRandomValues also works on a trusted LAN connection without HTTPS.
-function identityId(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = (bytes[6] & 15) | 64;
-  bytes[8] = (bytes[8] & 63) | 128;
-  const hex = [...bytes].map(value => value.toString(16).padStart(2, '0')).join('');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
 
 interface Edit {
   record: DirectorIdentity;
@@ -125,7 +118,7 @@ export default function DirectorPage() {
   const status = useDirectorStatus();
   const [params, setParams] = useSearchParams();
   const selected = params.get('directorView');
-  const collection: DirectorCollection = selected === 'sites' || selected === 'rigs' ? selected : 'projects';
+  const collection = selected === 'sites' || selected === 'rigs' || selected === 'catalogs' ? selected : 'projects';
   const available = status.data?.enabled && status.data.protocol_version === 1 && !!status.data.instance_id;
   return (
     <main className="director-page">
@@ -136,13 +129,15 @@ export default function DirectorPage() {
       {available && status.data && <>
         {!status.data.acquisition_available && <p className="director-muted">Acquisition is not yet available.</p>}
         <nav className="director-tabs" aria-label="Director views">
-          {(Object.keys(labels) as DirectorCollection[]).map(value => <button type="button" key={value} aria-current={collection === value ? 'page' : undefined} onClick={() => {
+          {(['projects', 'sites', 'rigs', 'catalogs'] as const).map(value => <button type="button" key={value} aria-current={collection === value ? 'page' : undefined} onClick={() => {
             const next = new URLSearchParams(params);
             next.set('directorView', value);
             setParams(next);
-          }}>{labels[value]}s</button>)}
+          }}>{value === 'catalogs' ? 'Catalogs' : `${labels[value]}s`}</button>)}
         </nav>
-        <Records key={`${status.data.instance_id}:${collection}`} instanceId={status.data.instance_id!} collection={collection} />
+        {collection === 'catalogs'
+          ? <DirectorCatalogs key={status.data.instance_id} instanceId={status.data.instance_id!} />
+          : <Records key={`${status.data.instance_id}:${collection}`} instanceId={status.data.instance_id!} collection={collection} />}
       </>}
     </main>
   );

@@ -484,3 +484,170 @@ async fn batch_review_accepts_more_than_four_kib_but_not_duplicate_source_projec
         StatusCode::BAD_REQUEST
     );
 }
+
+#[tokio::test]
+async fn mapping_inventory_is_paged_and_does_not_adopt_an_unregistered_catalog() {
+    let mut fixture = Fixture::new();
+    let path = "/catalogs/catalog/mappings";
+    let (status, empty) = call(&fixture.app, "GET", path, Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(empty["data"]["catalog_identity"], Value::Null);
+    assert_eq!(empty["data"]["items"], json!([]));
+    assert_eq!(
+        crate::catalog_identity::read(&fixture.source).unwrap(),
+        None
+    );
+    let guid = Uuid::new_v4();
+    fixture
+        .source
+        .execute(
+            "INSERT INTO project VALUES(2,'Second',?1,'profile-a')",
+            [guid.to_string()],
+        )
+        .unwrap();
+    let mut mapping = fixture.plan["mappings"][0].clone();
+    mapping["source_project_guid"] = guid.to_string().into();
+    fixture.plan["mappings"]
+        .as_array_mut()
+        .unwrap()
+        .push(mapping);
+    let preview = fixture.preview().await;
+    assert_eq!(
+        call(&fixture.app, "POST", APPLY, fixture.request(&preview), None)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (status, first) = call(
+        &fixture.app,
+        "GET",
+        &format!("{path}?limit=1"),
+        Value::Null,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(first["data"]["items"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        first["data"]["catalog_identity"]["id"],
+        fixture.catalog.to_string()
+    );
+    let cursor = first["data"]["next_after"].as_str().unwrap();
+    let (_, second) = call(
+        &fixture.app,
+        "GET",
+        &format!("{path}?limit=1&after={cursor}"),
+        Value::Null,
+        None,
+    )
+    .await;
+    assert_eq!(second["data"]["items"].as_array().unwrap().len(), 1);
+    assert_eq!(second["data"]["next_after"], Value::Null);
+    assert_ne!(second["data"]["items"][0], first["data"]["items"][0]);
+    assert_eq!(
+        call(
+            &fixture.app,
+            "GET",
+            &format!("{path}?limit=257"),
+            Value::Null,
+            None
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn mapping_inventory_allows_authenticated_readers_but_keeps_management_gate() {
+    let fixture = Fixture::new();
+    let mut registry = AuthRegistry::default();
+    registry
+        .add(
+            AuthUserRecord::new("operator", AccessRole::ReadWrite, "test-password-not-real")
+                .unwrap(),
+            false,
+        )
+        .unwrap();
+    let (reader, record) = AuthTokenRecord::mint("operator", "reader", true, None).unwrap();
+    registry.tokens.push(record);
+    fixture
+        .state
+        .set_server_auth(auth::ServerAuth::from_sources(None, &registry, 3000).unwrap());
+    let path = "/catalogs/catalog/mappings";
+    assert_eq!(
+        call(&fixture.app, "GET", path, Value::Null, None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(
+            &fixture.app,
+            "GET",
+            path,
+            Value::Null,
+            Some("database-sync-key")
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(&fixture.app, "GET", path, Value::Null, Some(&reader))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    fixture.state.set_allow_database_management(false);
+    assert_eq!(
+        call(&fixture.app, "GET", path, Value::Null, Some(&reader))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        crate::catalog_identity::read(&fixture.source).unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn mapping_inventory_preserves_unregistered_lineage_and_refuses_origin_conflicts() {
+    let mut fixture = Fixture::new();
+    let identity = CatalogIdentity {
+        id: fixture.catalog,
+        origin_instance_id: Uuid::new_v4(),
+    };
+    let mut tx = fixture.source.transaction().unwrap();
+    crate::catalog_identity::adopt(&mut tx, identity).unwrap();
+    tx.commit().unwrap();
+    let path = "/catalogs/catalog/mappings";
+    let (status, result) = call(&fixture.app, "GET", path, Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["data"]["catalog_identity"], json!(identity));
+    assert_eq!(result["data"]["items"], json!([]));
+    {
+        let mut store = fixture
+            .state
+            .director
+            .as_ref()
+            .unwrap()
+            .store
+            .lock()
+            .unwrap();
+        assert_eq!(store.catalog_identity(identity.id).unwrap(), None);
+        store
+            .register_catalog(CatalogIdentity {
+                id: identity.id,
+                origin_instance_id: Uuid::new_v4(),
+            })
+            .unwrap();
+    }
+    assert_eq!(
+        call(&fixture.app, "GET", path, Value::Null, None).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        crate::catalog_identity::read(&fixture.source).unwrap(),
+        Some(identity)
+    );
+}

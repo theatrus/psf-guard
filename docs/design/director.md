@@ -1379,10 +1379,11 @@ identities, and explicit catalog/source-project-GUID links. Names and URL slugs
 never establish identity; rigs outlive catalogs, and one global project may link
 to several catalogs. Project and rig listings use bounded, stable-ID cursor pages;
 renaming an entity does not move it across a page boundary. Catalog IDs must be
-explicitly registered and retained by the future adoption workflow, not
+explicitly registered and retained by the adoption workflow, not
 regenerated on every import or inferred from
 paths. The operator preview/apply API establishes this identity explicitly;
-the catalog mapping UI and native-catalog migration remain unimplemented.
+the Catalogs view reviews and applies mappings. Native-catalog migration remains
+unimplemented.
 
 The `src/catalog_identity.rs` storage primitive supplies an opt-in identity for
 a PSF Guard-managed catalog destination. A versioned, PSF Guard-owned singleton
@@ -1404,7 +1405,7 @@ the same lineage, not a new rig or independent catalog. Registering multiple
 paths to that lineage must not duplicate contributions; an independent fork
 requires an explicit future workflow. Identity alone grants no execution rights
 and does not prove that every historical frame belongs to a given rig. The
-mapping UI, historical attribution and duplicate-mount contribution accounting
+historical attribution and duplicate-mount contribution accounting
 remain unimplemented. The API only accepts registered catalog slugs. It holds
 the coordinator writer while committing catalog identity, then commits catalog
 registration and every confirmed mapping together. This prevents another new
@@ -1450,10 +1451,16 @@ restore/configuration switching are not supported.
 The opt-in Director management page lists, creates and renames global projects,
 sites and rigs, independently of catalog selection. It honors read-only accounts,
 keeps the selected collection in the URL, and supports revision-checked renames.
-Configuration, objectives and catalog mapping are not yet editable in this screen.
+The Catalogs view discovers source projects/profiles, selects or creates global
+projects and rigs, and requires preview before applying mappings. It preserves
+choices across retry, discards stale reviews, and flags source-profile drift
+without reassignment. A profile shares one rig choice across its projects.
+Read-only users can inspect saved links. Desktop and narrow layouts expose the
+source, destination project and rig together. Configuration and objectives are
+not yet editable in this screen.
 
 Identity, configuration and project-intent storage do not complete coordination.
-Allocation authority, rig enrollment/permissions, catalog adoption and UI remain
+Allocation authority, rig enrollment/permissions and configuration/objective UI remain
 required. No assignment or hardware authority is created by registering a rig,
 catalog or project-intent snapshot.
 
@@ -1532,10 +1539,11 @@ Complete mapping inventories are catalog-scoped and paged by source project
 GUID, with at most 256 entries per page. They describe explicit associations,
 not equipment compatibility, image attribution or acquisition permission. A
 project's current profile does not prove every historical image came from that
-rig. The eventual adoption API must verify fresh source evidence, retain durable
-catalog identity across relocation/copies, preview the proposed links, and
-report ambiguous or unsupported history. Settings/UI adoption and rig/project
-views are still required; these storage methods alone are not that workflow.
+rig. The adoption API verifies fresh source evidence, retains durable catalog
+identity across relocation/copies, and previews the proposed links. The Catalogs
+view uses a read-only, paged mapping inventory and requires explicit Apply.
+Ambiguous historical frame ownership and contribution accounting still need a
+separate workflow; these mappings alone do not resolve them.
 
 ### Phase 2: single-rig autonomous Director
 
