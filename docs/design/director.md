@@ -1242,6 +1242,24 @@ evidence. The durable journal commits these checks through the entry points
 below, exposed in IPC 7. The native before-hook boundary still needs to adopt
 them before production dispatch; the existing preview gains no authority.
 
+The internal `director-core::dispatch` API also computes an inclusive latest
+start for the selected work in its current safe window. Its result includes the
+evaluated timestamp and no deadline for non-acquisition decisions. Preparation
+checks include the pending operation, remaining steps and capture overhead;
+completed steps are not charged again. Geometry checks use the compiled horizon
+and meridian windows, never a later window beyond a gap. Assignment expiry and
+exclusive condition freshness further constrain the bound.
+
+This is an internal shared-core building block, not yet wired through the ledger,
+IPC or native adapter. The existing IPC 7 result still has no dispatch deadline.
+The follow-on transport must preserve both timestamps exactly. Native enforcement
+must measure monotonic elapsed time (rounded up to milliseconds) from before
+requesting the check, compare it
+with the returned slack, also reject wall-clock regression/expiry, and retain
+fresh local safety/ownership/configuration checks. A successful but late reply
+must not dispatch. This bound is feasibility for the already issued work, never
+a reservation, replay grant, or promise that its priority rank remains highest.
+
 Geometry preparation has an opaque, versioned checkpoint for local persistence.
 Restore requires a separately compiled binding from the original trusted program
 and constraints. It compares the complete inputs, reconstructs the initial

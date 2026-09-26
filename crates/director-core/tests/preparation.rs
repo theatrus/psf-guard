@@ -9,6 +9,69 @@ fn request() -> Request {
     serde_json::from_value(fixture["base"].clone()).unwrap()
 }
 
+#[test]
+fn dispatch_deadlines_charge_pending_not_completed_preparation() {
+    let mut r = request();
+    r.assignment.goals.truncate(1);
+    let mut p = Preparation::new(
+        "prep".into(),
+        &r,
+        context(),
+        Estimates {
+            unpark_ms: 2_000,
+            center_ms: 3_000,
+            before_target_ms: 4_000,
+            filter_ms: 5_000,
+            readout_ms: 6_000,
+            capture_overhead_ms: 1_000,
+            ..Estimates::default()
+        },
+    )
+    .unwrap();
+    assert!(p.check_capture_dispatch_deadline(&r).is_err());
+    let command = run(&mut p, &r);
+    let checked = p.check_pending_dispatch_deadline(&r, &command).unwrap();
+    assert_eq!(checked.latest_start_ms, Some(49_000));
+    assert_eq!(p.pending(), Some(&command));
+    finish(&mut p, &mut r, &command);
+    let command = run(&mut p, &r);
+    assert_eq!(
+        p.check_pending_dispatch_deadline(&r, &command)
+            .unwrap()
+            .latest_start_ms,
+        Some(51_000)
+    );
+    finish(&mut p, &mut r, &command);
+    while let Next::Run(command) = p.next(&r).unwrap() {
+        finish(&mut p, &mut r, &command);
+    }
+    let checked = p.check_capture_dispatch_deadline(&r).unwrap();
+    assert_eq!(checked.latest_start_ms, Some(69_000));
+    assert_eq!(checked.evaluated_at_ms, r.state.now_ms);
+    r.state.at_boundary = false;
+    assert_eq!(
+        p.check_capture_dispatch_deadline(&r)
+            .unwrap()
+            .latest_start_ms,
+        None
+    );
+}
+
+#[test]
+fn refused_deadline_cannot_revive_after_conditions_recover() {
+    let mut r = request();
+    let mut p = preparation(&r, context());
+    let command = run(&mut p, &r);
+    r.state.safety = Safety::Unsafe;
+    let checked = p.check_pending_dispatch_deadline(&r, &command).unwrap();
+    assert_eq!(checked.latest_start_ms, None);
+    r.state.safety = Safety::Safe;
+    assert_eq!(
+        p.check_pending_dispatch_deadline(&r, &command).unwrap(),
+        checked
+    );
+}
+
 fn context() -> Context {
     Context {
         goal_id: "short-ha".into(),
