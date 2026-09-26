@@ -59,7 +59,7 @@ sync semantics.
 
 ## Implementation audit
 
-Audited 2026-09-26 against PSF Guard main `5b8087b` and Director plugin main
+Audited 2026-09-26 against PSF Guard main `696df68` and Director plugin main
 `8f6d8c2`, plus the open PR heads listed below. **Merged building block** does
 not mean a production workflow or phase gate passed. Open PR work is not in
 main. Update this table and the relevant checklist when a PR lands; keep
@@ -72,11 +72,12 @@ untested integration requirements unchecked.
 | Sidecar and local recovery | Merged `crates/director-ledger` and `crates/director-runtime`: schema-4 journal, capture/preparation outboxes, IPC 7, one-shot dispatch checks, process crash/reopen tests; PSF Guard #464-487. | Remote inbox/acknowledgements, pruning, grade feedback, assignment replacement and complete operator recovery. No network batch check-in yet. |
 | NINA native execution | Plugin [#18](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/18), [#19](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/19), [#22](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/22), [#23](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/23), [#24](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/24) merged: transient native items, target context, complete horizon export and post-hook geometry checks. Real nightly #58 OmniSim probe captured three filtered FITS frames with correlated evidence. | Public production session container, all trigger/condition/hook contexts, plugin compatibility matrix, native defaults, full autofocus/guiding/flip/calibration/safety recovery and continuous ownership integration. Probe uses fixture allocations and synthetic orientation evidence, not a server session. |
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
-| Meta storage | [#488](https://github.com/theatrus/psf-guard/pull/488), [#489](https://github.com/theatrus/psf-guard/pull/489) and [#499](https://github.com/theatrus/psf-guard/pull/499) merged: separate schema-4 store, UUIDs, confirmed catalog/profile/project/rig links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. | Catalog adoption workflow, permissions/enrollment, active revisions, allocation authority and progress projections. |
+| Meta storage | [#488](https://github.com/theatrus/psf-guard/pull/488), [#489](https://github.com/theatrus/psf-guard/pull/489) and [#499](https://github.com/theatrus/psf-guard/pull/499) merged: separate schema-4 store, UUIDs, confirmed catalog/profile/project/rig links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. | Catalog adoption UI, permissions/enrollment, active revisions, allocation authority and progress projections. |
 | Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492): shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493): schema-3 intent persistence with validated immutable setup references. | Objective editor, depth/FOV/sampling compatibility and authoritative allocation remain open. |
 | Project framing wizard | Project intent retains target coordinates and rig-specific framing/recipes as building blocks only. | Survey-map backgrounds, target/reference selection, interactive FOV and rotation, mosaics, versioned optical geometry, multi-rig/site preview, draft editing and reviewed activation are not implemented. |
-| Catalog discovery | [#498](https://github.com/theatrus/psf-guard/pull/498): operator-scoped read-only project/profile evidence from registered TS-compatible catalogs, with bounded results and invalid/duplicate identity reports. | Durable catalog lineage, reviewed adoption and the mapping UI remain separate work. Discovery does not infer rig ownership or read image history. |
-| Operator API and UI | [#490](https://github.com/theatrus/psf-guard/pull/490) and [#494](https://github.com/theatrus/psf-guard/pull/494) merged: opt-in project/site/rig identity and site/rig snapshot APIs. [#495](https://github.com/theatrus/psf-guard/pull/495) implements/tests the identity management screen in an open PR. | UI not merged. No project planning editor, catalog adoption, rig pairing, acquisition control or live rig dashboard. UI tests are not equipment tests. |
+| Catalog discovery | [#498](https://github.com/theatrus/psf-guard/pull/498) merged: operator-scoped read-only project/profile evidence from registered TS-compatible catalogs, with bounded results and invalid/duplicate identity reports. | Discovery does not infer rig ownership or read image history. |
+| Catalog adoption | [#502](https://github.com/theatrus/psf-guard/pull/502) merged explicit durable lineage; [#503](https://github.com/theatrus/psf-guard/pull/503) implements operator preview/apply, exact identity matching, stale-review refusal and interrupted-write recovery. These are reviewed storage/API building blocks, not a complete UI workflow. | Mapping UI, independent forks, historical-image attribution, contribution accounting and acquisition authorization remain separate work. |
+| Operator API and UI | [#490](https://github.com/theatrus/psf-guard/pull/490) and [#494](https://github.com/theatrus/psf-guard/pull/494) merged: opt-in project/site/rig identity and site/rig snapshot APIs. [#495](https://github.com/theatrus/psf-guard/pull/495) implements/tests the identity management screen in an open PR. | UI not merged. No project planning editor, catalog adoption UI, rig pairing, acquisition control or live rig dashboard. UI tests are not equipment tests. |
 | Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
 | Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. | Central telemetry ingestion/dashboard, scoped pairing, remote acknowledgements, offline authorization lifecycle, manual/sequence batch reconcile and reconnect activation are not implemented. |
 | End-to-end lifecycle | Core, process, native simulator and isolated management HTTP/UI tests exist separately. | No PSF Guard allocation -> real NINA simulator acquisition -> central telemetry/grade -> batch reconciliation/replan test. TS/Sync/Chatstronomy coexistence gates remain open. |
@@ -1807,19 +1808,20 @@ identities, and explicit catalog/source-project-GUID links. Names and URL slugs
 never establish identity; rigs outlive catalogs, and one global project may link
 to several catalogs. Project and rig listings use bounded, stable-ID cursor pages;
 renaming an entity does not move it across a page boundary. Catalog IDs must be
-explicitly registered and retained by the future adoption workflow, not
+explicitly registered and retained by the operator adoption workflow, not
 regenerated on every import or inferred from
-paths. Stable catalog identity adoption is not yet implemented.
+paths. The operator preview/apply API establishes this identity explicitly;
+the catalog mapping UI and native-catalog migration remain unimplemented.
 
 The `src/catalog_identity.rs` storage primitive supplies an opt-in identity for
 a PSF Guard-managed catalog destination. A versioned, PSF Guard-owned singleton
 table retains the catalog UUID and its originating coordinator UUID. It does
 not change TS tables, GUIDs, grades, `application_id` or `user_version`. Ordinary
-reads return an unadopted result without creating anything. No startup, sync,
-discovery, HTTP or UI path invokes adoption yet.
+reads return an unadopted result without creating anything. Only the explicit
+operator adoption API invokes it; startup, sync and discovery never adopt.
 
-The future preview/apply workflow must confirm the destination, retain the
-proposed IDs across retries, and revalidate preview evidence in the same SQLite
+The preview/apply workflow confirms the destination, retains the
+proposed IDs across retries, and revalidates preview evidence in the same SQLite
 transaction as adoption. Adoption uses a savepoint inside that transaction;
 only the host's outer commit makes it durable. A conflicting identity or damaged
 record is refused, not repaired or reassigned. Never adopt a read-only TS sync
@@ -1831,8 +1833,12 @@ the same lineage, not a new rig or independent catalog. Registering multiple
 paths to that lineage must not duplicate contributions; an independent fork
 requires an explicit future workflow. Identity alone grants no execution rights
 and does not prove that every historical frame belongs to a given rig. The
-preview/apply API, registry integration, mapping UI and duplicate-mount checks
-remain unimplemented.
+mapping UI, historical attribution and duplicate-mount contribution accounting
+remain unimplemented. The API only accepts registered catalog slugs. It holds
+the coordinator writer while committing catalog identity, then commits catalog
+registration and every confirmed mapping together. This prevents another new
+catalog from claiming that UUID during finalization. If the coordinator commit
+fails afterward, the durable catalog ID remains available for a retry.
 
 Writes use short SQLite transactions with foreign keys, WAL and full synchronous
 commits. Renames require an expected revision; retries cannot overwrite another
@@ -1873,7 +1879,7 @@ coordinator before switching to a restored path. Online replacement and automate
 restore/configuration switching are not supported.
 
 Identity, configuration and project-intent storage do not complete coordination.
-Allocation authority, rig enrollment/permissions, catalog adoption and UI remain
+Allocation authority, rig enrollment/permissions and catalog adoption UI remain
 required. No assignment or hardware authority is created by registering a rig,
 catalog or project-intent snapshot.
 
@@ -1922,6 +1928,8 @@ allocation accounting and native assignment delivery are not implemented here.
 
 - [x] Add separate owned meta storage, transactional migrations, snapshot
   backup/restore, UUID identities and explicit catalog mapping primitives (#488).
+- [x] Add explicit durable catalog lineage and operator preview/apply with
+  stale-evidence checks and retryable cross-database commit recovery (#502/#503).
 - [x] Persist immutable sites and rig configurations with shared validation (#489).
 - [ ] Separate site location/time/weather from rig horizon and equipment
   constraints; migrate existing snapshots without changing effective geometry.
@@ -1993,10 +2001,12 @@ Complete mapping inventories are catalog-scoped and paged by source project
 GUID, with at most 256 entries per page. They describe explicit associations,
 not equipment compatibility, image attribution or acquisition permission. A
 project's current profile does not prove every historical image came from that
-rig. The eventual adoption API must verify fresh source evidence, retain durable
-catalog identity across relocation/copies, preview the proposed links, and
-report ambiguous or unsupported history. Settings/UI adoption and rig/project
-views are still required; these storage methods alone are not that workflow.
+rig. The operator adoption API verifies fresh project/profile evidence, retains
+durable catalog identity across relocation/copies and previews proposed links.
+It does not inspect image history or infer past rig ownership from a project's
+current profile. Settings/UI adoption, historical-attribution review and
+rig/project views are still required; these storage methods alone are not that
+workflow.
 
 ### Phase 2: single-rig autonomous Director
 
