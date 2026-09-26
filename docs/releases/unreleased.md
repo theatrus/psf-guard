@@ -12,9 +12,14 @@
   starts on its own when the running job ends. **Queue stacking** replaces
   the refusal.
 
+- Director's experimental operator API can preview and apply confirmed catalog
+  project/profile links to global projects and rigs. It preserves catalog
+  identity across moves and retries without changing TS history or image grades.
+  The mapping UI and acquisition remain unavailable.
+
 - Director's experimental API can inspect registered catalogs for projects and
   profile IDs, reporting missing or duplicate identities without modifying the
-  source database or reading image data. Rig/project adoption is still pending.
+  source database or reading image data.
 
 - An opt-in Director metadata API can create, list, and rename global project,
   site and rig identities, and retain complete immutable horizon and equipment

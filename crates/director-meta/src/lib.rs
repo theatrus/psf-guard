@@ -139,26 +139,7 @@ impl MetaStore {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing: Option<String> = tx
-            .query_row(
-                "SELECT origin_instance_id FROM catalog WHERE id=?1",
-                [catalog.id.to_string()],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if let Some(origin) = existing {
-            if parse_id(&origin)? != catalog.origin_instance_id {
-                return Err(Error::Conflict);
-            }
-        } else {
-            tx.execute(
-                "INSERT INTO catalog(id,origin_instance_id) VALUES(?1,?2)",
-                params![
-                    catalog.id.to_string(),
-                    catalog.origin_instance_id.to_string()
-                ],
-            )?;
-        }
+        register_catalog_on(&tx, catalog)?;
         tx.commit()?;
         Ok(())
     }
@@ -329,6 +310,32 @@ impl Kind {
         }
     }
 }
+fn register_catalog_on(connection: &Connection, catalog: CatalogIdentity) -> Result<(), Error> {
+    valid_id(catalog.id)?;
+    valid_id(catalog.origin_instance_id)?;
+    let existing: Option<String> = connection
+        .query_row(
+            "SELECT origin_instance_id FROM catalog WHERE id=?1",
+            [catalog.id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(origin) = existing {
+        if parse_id(&origin)? != catalog.origin_instance_id {
+            return Err(Error::Conflict);
+        }
+    } else {
+        connection.execute(
+            "INSERT INTO catalog(id,origin_instance_id) VALUES(?1,?2)",
+            params![
+                catalog.id.to_string(),
+                catalog.origin_instance_id.to_string()
+            ],
+        )?;
+    }
+    Ok(())
+}
+
 fn valid_id(id: Uuid) -> Result<(), Error> {
     if id.is_nil() {
         Err(Error::InvalidInput)
