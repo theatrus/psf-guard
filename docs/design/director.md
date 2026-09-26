@@ -1417,6 +1417,33 @@ allocation authority, rig enrollment/permissions, catalog adoption and UI remain
 required before the phase is complete. No assignment or hardware authority is
 created by registering a rig or catalog.
 
+The shared core's `project` module defines versioned project intent separately
+from an execution assignment. Each immutable snapshot identifies the global
+project, objectives, and rig-specific contributions. Objectives retain explicit
+bandpass and purpose IDs, priority, and ICRS target intent. Contributions retain
+an exact setup revision and native configuration ID, panel framing, concrete
+recipe/filter mapping, and their own required accepted-frame count. A narrow
+field panel and a wide-field image, or short and long exposures in one band,
+remain separate contributions. Their counts are not interchangeable and project
+membership does not authorize stacking them together.
+
+`BoundProject` owns and validates a bounded snapshot. Target and recipe checks
+reuse the execution program's validators; conflicting meanings for one target
+or configuration-scoped recipe ID are refused. Resolving a contribution requires
+the explicitly named setup and configuration, never a display-name match or a
+"latest" lookup. The host must load that immutable setup from trusted storage;
+resolution validates capabilities, not the authenticity of caller-supplied
+configuration data. An objective with no contribution is not yet a fully bound
+intent snapshot; draft editing needs a separate UI state.
+
+This model establishes intent only. It does not persist snapshots, infer FOV or
+sampling equivalence, judge quality, sum integration from different rigs, issue
+assignments, or project progress. Frame goals are scoped to each contribution;
+depth/cadence objectives and rig-optics compatibility remain required. The
+coordinator must separately reserve outstanding allocation and bind intent
+provenance before an executor can use it. Existing program and IPC contracts
+are unchanged.
+
 - [ ] Add opt-in meta storage, migrations, backup/restore, and stable mappings.
 - [ ] Model sites, rig configurations, objectives, recipes, and contribution plans.
 - [ ] Link existing catalogs without rewriting TS history or merging names.
