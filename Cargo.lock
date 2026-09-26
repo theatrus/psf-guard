@@ -4175,6 +4175,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "psf-guard-director-ledger"
+version = "0.1.0"
+dependencies = [
+ "psf-guard-director-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "psf-guard-director-runtime"
 version = "0.1.0"
 dependencies = [
