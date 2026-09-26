@@ -298,7 +298,7 @@ fn downgrade_to_v2(path: &std::path::Path) {
     Connection::open(path)
         .unwrap()
         .execute_batch(
-            "DROP TABLE project_intent_setup; DROP TABLE project_intent; PRAGMA user_version=2;",
+            "DROP TABLE project_profile; DROP TABLE catalog_profile; DROP TABLE project_intent_setup; DROP TABLE project_intent; PRAGMA user_version=2;",
         )
         .unwrap();
 }
@@ -342,7 +342,7 @@ fn schema_two_upgrade_preserves_identity_and_configurations_with_transactional_f
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        3
+        4
     );
 }
 

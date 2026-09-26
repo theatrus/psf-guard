@@ -1802,6 +1802,34 @@ new identity accidentally. An old Sync plugin still works through its documented
 API; existing direct-TS catalogs continue to work during migration. This gate
 is not satisfied by the separate meta database alone.
 
+#### Confirmed catalog mappings
+
+The meta crate's schema 4 adds explicit source-profile-to-rig links and binds
+each confirmed source project to that profile and a global project. A caller
+first registers the stable catalog identity and creates or selects the global
+project and rig. `link_catalog_project` then records both links in one writer
+transaction. It never infers a rig from a database name, source row number or
+project name, and never changes a source catalog.
+`link_catalog_projects` applies up to 256 mappings in one transaction; a conflict
+or storage failure rolls back the entire batch, including any earlier entries.
+
+Profiles are scoped by catalog identity and retained as exact opaque source
+IDs. Several profiles/catalogs may link to one rig, and several rig-local
+projects may contribute to one global project. A profile within one catalog
+cannot silently change rigs; a source project cannot silently change its
+profile or global project. Identical retries succeed; changed mappings conflict.
+Legacy project-only mappings remain intact but do not imply a rig. Migration
+from schemas 1-3 is transactional and does not invent missing associations.
+
+Complete mapping inventories are catalog-scoped and paged by source project
+GUID, with at most 256 entries per page. They describe explicit associations,
+not equipment compatibility, image attribution or acquisition permission. A
+project's current profile does not prove every historical image came from that
+rig. The eventual adoption API must verify fresh source evidence, retain durable
+catalog identity across relocation/copies, preview the proposed links, and
+report ambiguous or unsupported history. Settings/UI adoption and rig/project
+views are still required; these storage methods alone are not that workflow.
+
 ### Phase 2: single-rig autonomous Director
 
 - [ ] Use the same resolved smart-filter, avoidance and priority policy in
