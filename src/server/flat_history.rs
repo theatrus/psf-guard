@@ -328,13 +328,39 @@ fn read_capture(value: &str) -> Result<CaptureRecord, AppError> {
         .map_err(|_| AppError::DatabaseError("invalid stored flat-history capture".into()))
 }
 
+/// Whether two snapshots describe the same capture. A target rename is
+/// presentation metadata, not a new generation. Rotation and ROI compare
+/// within a tolerance rather than bit for bit: they are float32 values the
+/// plugin widens to double, and a JSON parser that rounds a 17-digit float
+/// differently from the one that stored it (serde_json without and with
+/// `float_roundtrip`) moves them by a few ULPs, which is not a new capture.
+/// Anything a rotator can report differs by far more than the tolerance.
 fn same_capture(left: &CaptureRecord, right: &CaptureRecord) -> bool {
-    // A target rename is presentation metadata, not a new capture generation.
     let mut left = left.clone();
     let mut right = right.clone();
     left.target_name = None;
     right.target_name = None;
-    left == right
+    let reals_match = same_real(left.rotation, right.rotation) && same_real(left.roi, right.roi);
+    left.rotation = None;
+    right.rotation = None;
+    left.roi = None;
+    right.roi = None;
+    reals_match && left == right
+}
+
+/// Relative tolerance for capture reals: six orders of magnitude finer than
+/// float32 resolution, six coarser than double parsing jitter.
+const REAL_TOLERANCE: f64 = 1e-9;
+
+fn same_real(left: Option<f64>, right: Option<f64>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            let scale = left.abs().max(right.abs()).max(1.0);
+            (left - right).abs() <= REAL_TOLERANCE * scale
+        }
+        _ => false,
+    }
 }
 
 fn store_snapshot(

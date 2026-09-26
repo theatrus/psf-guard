@@ -31,7 +31,11 @@ psf-guard-director-core = { path = "crates/director-core" }
 clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.40", features = ["backup", "bundled"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# `float_roundtrip` makes float parsing correctly rounded. A workspace crate
+# turned it on in September 2026 and feature unification switched the whole
+# binary over; naming it here keeps that from flipping back with a dependency
+# change, since stored JSON and fresh input must parse alike.
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
 toml_edit = { version = "0.25", features = ["serde"] }
 anyhow = "1.0"
 argon2 = "0.6.0"

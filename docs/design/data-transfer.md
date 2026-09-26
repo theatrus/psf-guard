@@ -353,7 +353,9 @@ does not try to reproduce another implementation's JSON serialization.
 
 PSF-owned `psf_guard_scheduler_flat_history` records bind origin, row ID, and
 fingerprint to a server UUID. Replayed snapshots update display metadata but
-cannot clear invalidations. A new row generation can supersede an undecided
+cannot clear invalidations; a replay whose other metadata differs is refused
+as a reused fingerprint, with rotation and ROI compared within a small
+relative tolerance because JSON float parsing may move them by a few ULPs. A new row generation can supersede an undecided
 record, never a pending or acknowledged decision. Missing snapshot rows have
 no meaning: a chunk or target-scoped snapshot is not a deletion request.
 
