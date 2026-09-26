@@ -1,0 +1,161 @@
+{
+  "base": {
+    "contract_version": 1,
+    "assignment": {
+      "id": "assignment-1",
+      "revision": 1,
+      "rig_id": "rig-1",
+      "configuration_id": "config-1",
+      "valid_from_ms": 1000,
+      "expires_at_ms": 1000000,
+      "goals": [
+        {
+          "id": "short-ha",
+          "priority": 20,
+          "requested": 10,
+          "accepted": 2,
+          "pending": 1,
+          "attempts_remaining": 8,
+          "exposure_ms": 30000,
+          "overhead_ms": 10000,
+          "eligible_from_ms": 1000,
+          "eligible_until_ms": 100000
+        },
+        {
+          "id": "long-ha",
+          "priority": 10,
+          "requested": 4,
+          "accepted": 0,
+          "pending": 0,
+          "attempts_remaining": 5,
+          "exposure_ms": 180000,
+          "overhead_ms": 10000,
+          "eligible_from_ms": 1000,
+          "eligible_until_ms": 900000
+        }
+      ]
+    },
+    "state": {
+      "rig_id": "rig-1",
+      "configuration_id": "config-1",
+      "now_ms": 10000,
+      "conditions_valid_until_ms": 2000000,
+      "safety": "safe",
+      "at_boundary": true,
+      "operator_stop": false
+    }
+  },
+  "cases": [
+    {
+      "name": "prefer high priority feasible goal",
+      "patch": {},
+      "expected": {"status": "ok", "decision": {"action": "acquire", "goal_id": "short-ha", "reason": "highest_priority_feasible_goal"}}
+    },
+    {
+      "name": "slow autofocus consumes short target window",
+      "patch": {"state": {"now_ms": 80000}},
+      "expected": {"status": "ok", "decision": {"action": "acquire", "goal_id": "long-ha", "reason": "highest_priority_feasible_goal"}}
+    },
+    {
+      "name": "exact completion at window boundary fits",
+      "patch": {"state": {"now_ms": 60000}},
+      "expected": {"status": "ok", "decision": {"action": "acquire", "goal_id": "short-ha", "reason": "highest_priority_feasible_goal"}}
+    },
+    {
+      "name": "one millisecond beyond window does not fit",
+      "patch": {"state": {"now_ms": 60001}},
+      "expected": {"status": "ok", "decision": {"action": "acquire", "goal_id": "long-ha", "reason": "highest_priority_feasible_goal"}}
+    },
+    {
+      "name": "do not interrupt an operation for a new priority",
+      "patch": {"state": {"at_boundary": false}},
+      "expected": {"status": "ok", "decision": {"action": "continue", "reason": "await_operation_boundary"}}
+    },
+    {
+      "name": "safety overrides in-flight operation",
+      "patch": {"state": {"at_boundary": false, "safety": "unsafe"}},
+      "expected": {"status": "ok", "decision": {"action": "stop", "reason": "safety_not_confirmed"}}
+    },
+    {
+      "name": "unknown safety cannot acquire",
+      "patch": {"state": {"safety": "unknown"}},
+      "expected": {"status": "ok", "decision": {"action": "stop", "reason": "safety_not_confirmed"}}
+    },
+    {
+      "name": "operator stop overrides in-flight operation",
+      "patch": {"state": {"at_boundary": false, "operator_stop": true}},
+      "expected": {"status": "ok", "decision": {"action": "stop", "reason": "operator_stop"}}
+    },
+    {
+      "name": "expired assignment cannot acquire",
+      "patch": {"state": {"now_ms": 1000000}},
+      "expected": {"status": "ok", "decision": {"action": "check_in", "reason": "assignment_expired"}}
+    },
+    {
+      "name": "expiry permits only existing operation completion",
+      "patch": {"state": {"now_ms": 1000000, "at_boundary": false}},
+      "expected": {"status": "ok", "decision": {"action": "continue", "reason": "await_operation_boundary"}}
+    },
+    {
+      "name": "wrong rig cannot acquire",
+      "patch": {"state": {"rig_id": "rig-2"}},
+      "expected": {"status": "ok", "decision": {"action": "check_in", "reason": "configuration_mismatch"}}
+    },
+    {
+      "name": "changed equipment requires allocation refresh",
+      "patch": {"state": {"configuration_id": "config-2"}},
+      "expected": {"status": "ok", "decision": {"action": "check_in", "reason": "configuration_mismatch"}}
+    },
+    {
+      "name": "stale conditions cannot acquire",
+      "patch": {"state": {"conditions_valid_until_ms": 10000}},
+      "expected": {"status": "ok", "decision": {"action": "check_in", "reason": "conditions_stale"}}
+    },
+    {
+      "name": "future assignment waits",
+      "patch": {"state": {"now_ms": 999}},
+      "expected": {"status": "ok", "decision": {"action": "wait", "reason": "assignment_not_started"}}
+    },
+    {
+      "name": "unsupported schema fails closed",
+      "patch": {"contract_version": 2},
+      "expected": {"status": "error", "code": "unsupported_contract"}
+    },
+    {
+      "name": "unknown field is not silently ignored",
+      "patch": {"state": {"unknown_constraint": true}},
+      "expected": {"status": "error", "code": "invalid_json"}
+    },
+    {
+      "name": "empty assignments are invalid not completed",
+      "patch": {"assignment": {"goals": []}},
+      "expected": {"status": "error", "code": "invalid_assignment"}
+    },
+    {
+      "name": "pending assessment reserves remaining work",
+      "patch": {"assignment": {"goals": [
+        {"id": "short-ha", "priority": 1, "requested": 10, "accepted": 2, "pending": 8, "attempts_remaining": 2, "exposure_ms": 30000, "overhead_ms": 10000, "eligible_from_ms": 1000, "eligible_until_ms": 100000}
+      ]}},
+      "expected": {"status": "ok", "decision": {"action": "wait", "reason": "pending_assessment"}}
+    },
+    {
+      "name": "accepted work completes the goal",
+      "patch": {"assignment": {"goals": [
+        {"id": "short-ha", "priority": 1, "requested": 10, "accepted": 10, "pending": 0, "attempts_remaining": 2, "exposure_ms": 30000, "overhead_ms": 10000, "eligible_from_ms": 1000, "eligible_until_ms": 100000}
+      ]}},
+      "expected": {"status": "ok", "decision": {"action": "complete", "reason": "accepted_goal_met"}}
+    },
+    {
+      "name": "rejected exposures cannot bypass the attempt budget",
+      "patch": {"assignment": {"goals": [
+        {"id": "short-ha", "priority": 1, "requested": 10, "accepted": 0, "pending": 0, "attempts_remaining": 0, "exposure_ms": 30000, "overhead_ms": 10000, "eligible_from_ms": 1000, "eligible_until_ms": 100000}
+      ]}},
+      "expected": {"status": "ok", "decision": {"action": "check_in", "reason": "no_authorized_feasible_work"}}
+    },
+    {
+      "name": "assignment expiry also bounds exposure completion",
+      "patch": {"assignment": {"expires_at_ms": 49999}},
+      "expected": {"status": "ok", "decision": {"action": "check_in", "reason": "no_authorized_feasible_work"}}
+    }
+  ]
+}
