@@ -60,6 +60,7 @@ pub enum Error {
     Planning(crate::Error),
     Geometry(VisibilityError),
     Preparation(crate::preparation::Error),
+    InvalidCheckpoint,
 }
 
 /// Own both source intent and computed geometry. This object is intentionally

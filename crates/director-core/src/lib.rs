@@ -17,7 +17,7 @@ pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_REQUEST_BYTES: usize = 262_144;
 const MAX_GOALS: usize = 256;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
     pub contract_version: u32,
@@ -54,7 +54,7 @@ pub struct Goal {
     pub transits: Option<TransitCoverage>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct State {
     pub rig_id: String,
