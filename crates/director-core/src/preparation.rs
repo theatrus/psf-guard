@@ -259,9 +259,22 @@ impl Preparation {
     /// Reevaluate at every native operation boundary. A target switch, stale
     /// context, or failure ends this preparation; the host cannot skip to capture.
     pub fn next(&mut self, request: &Request) -> Result<Next, Error> {
+        self.next_with_constraint_change(request, false)
+    }
+
+    pub(crate) fn next_with_constraint_change(
+        &mut self,
+        request: &Request,
+        constraints_changed: bool,
+    ) -> Result<Next, Error> {
         crate::validate(request).map_err(Error::Core)?;
         if request.state.now_ms < self.last_time_ms {
             return Err(Error::ClockRegression);
+        }
+        if constraints_changed && self.halted.is_none() {
+            self.halted = Some(Decision::CheckIn {
+                reason: "observing_constraints_changed".into(),
+            });
         }
         let next = self.advance(request)?;
         self.last_time_ms = request.state.now_ms;
