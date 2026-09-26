@@ -211,6 +211,10 @@ async fn run_server_internal(
         config.auth.is_some(),
     )?;
 
+    director::validate_registry_separation(
+        config.director_meta.as_deref(),
+        config.registry_path.as_deref(),
+    )?;
     let director = director::Service::configured(
         config.director_meta.as_deref(),
         config.allow_database_management,

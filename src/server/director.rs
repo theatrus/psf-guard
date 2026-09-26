@@ -17,6 +17,51 @@ use std::{
 };
 use tokio::sync::Semaphore;
 
+pub(super) fn validate_registry_separation(
+    meta: Option<&FilePath>,
+    registry: Option<&FilePath>,
+) -> anyhow::Result<()> {
+    let (Some(meta), Some(registry)) = (meta, registry) else {
+        return Ok(());
+    };
+    fn location(path: &FilePath) -> anyhow::Result<Option<std::path::PathBuf>> {
+        if path.try_exists()? {
+            return Ok(Some(dunce::canonicalize(path)?));
+        }
+        let absolute = std::path::absolute(path)?;
+        let parent = absolute
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Invalid metadata path"))?;
+        let parent = match dunce::canonicalize(parent) {
+            Ok(parent) => parent,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        Ok(absolute.file_name().map(|name| parent.join(name)))
+    }
+    let meta = location(meta)?;
+    let protected = [
+        registry.to_path_buf(),
+        crate::auth_registry::AuthRegistry::path_for_database_registry(registry),
+        crate::processing_setups::ProcessingSetupsRegistry::path_for_database_registry(registry),
+    ];
+    for path in protected {
+        if let (Some(meta), Some(other)) = (&meta, location(&path)?) {
+            #[cfg(windows)]
+            let same = meta
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&other.to_string_lossy());
+            #[cfg(not(windows))]
+            let same = meta == &other;
+            anyhow::ensure!(
+                !same,
+                "Director metadata must be separate from server registry files"
+            );
+        }
+    }
+    Ok(())
+}
+
 pub struct Service {
     store: Mutex<MetaStore>,
     instance_id: Uuid,

@@ -67,6 +67,36 @@ async fn call(
 }
 
 #[test]
+fn metadata_cannot_claim_existing_or_future_registry_files() {
+    let dir = TempDir::new().unwrap();
+    let registry = dir.path().join("registry.json");
+    let paths = [
+        registry.clone(),
+        AuthRegistry::path_for_database_registry(&registry),
+        crate::processing_setups::ProcessingSetupsRegistry::path_for_database_registry(&registry),
+    ];
+    for path in paths {
+        assert!(validate_registry_separation(Some(&path), Some(&registry)).is_err());
+        let alias = dir.path().join(".").join(path.file_name().unwrap());
+        assert!(validate_registry_separation(Some(&alias), Some(&registry)).is_err());
+        assert!(!path.exists());
+        std::fs::write(&path, b"{}").unwrap();
+        assert!(validate_registry_separation(Some(&path), Some(&registry)).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"{}");
+    }
+    #[cfg(windows)]
+    assert!(
+        validate_registry_separation(Some(&dir.path().join("REGISTRY.JSON")), Some(&registry))
+            .is_err()
+    );
+    assert!(
+        validate_registry_separation(Some(&dir.path().join("meta.sqlite")), Some(&registry))
+            .is_ok()
+    );
+    assert!(validate_registry_separation(None, Some(&registry)).is_ok());
+}
+
+#[test]
 fn startup_is_explicit_and_never_adopts_a_foreign_file() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("meta.sqlite");
