@@ -13,6 +13,7 @@ pub mod extract;
 pub mod flat_history;
 pub mod handlers;
 pub mod import_job;
+pub mod mcp;
 pub mod organization;
 pub mod pairing;
 pub mod peers;
@@ -670,6 +671,11 @@ async fn run_server_internal(
             "/auth/users/{username}",
             put(user_admin::update_user).delete(user_admin::remove_user),
         )
+        .route(
+            "/auth/tokens",
+            get(user_admin::list_tokens).post(user_admin::create_token),
+        )
+        .route("/auth/tokens/{id}", delete(user_admin::revoke_token))
         .route("/info", get(handlers::get_server_info))
         .route("/stack-activity", get(stack_preview::get_stack_activity))
         .route(
@@ -816,6 +822,7 @@ async fn run_server_internal(
         .route("/sync/v1/exports/{export_id}", get(remote_sync::get_export))
         .route("/sync/v1/jobs/{job_id}", get(remote_sync::get_preview_job))
         .nest("/db/{db_id}", db_routes)
+        .nest_service("/mcp", mcp::service(Arc::clone(&state)))
         .layer(axum::middleware::from_fn(json_no_store))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state),

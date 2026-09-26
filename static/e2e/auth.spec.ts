@@ -85,6 +85,12 @@ test('editor manages browser users from a separate Settings tab', async ({ page 
       })),
     })
   );
+  await page.route('**/api/auth/tokens', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse([])),
+    });
+  });
   await page.route('**/api/auth/users', async (route) => {
     if (route.request().method() === 'POST') {
       const request = route.request().postDataJSON();

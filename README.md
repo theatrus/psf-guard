@@ -981,6 +981,12 @@ Signed-in editors can manage every account from the separate **Users** tab in
 Settings. Each account can include an optional email address. Changes made
 there take effect at once.
 
+Scripts and MCP clients use personal API tokens instead of a login. Mint one
+under **Settings → Users → API tokens** or with
+`psf-guard users token create <user> --label "..."`, and send it as
+`Authorization: Bearer psfg_…`. The server is an MCP server at `/api/mcp`;
+see [MCP server for agents](docs/MCP.md).
+
 Command-line arguments override the config file. (A legacy
 `[database]`/`[images]` section is still parsed but ignored in server mode —
 databases come from the registry.)

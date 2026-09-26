@@ -146,9 +146,39 @@ Server checks enforce the role even if a client calls the API directly. The UI
 also labels viewer sessions as **Read only**, hides Settings, and disables
 grading controls.
 
-## API sessions
+## API tokens
 
-Scripts that use the ordinary UI API can log in with a cookie jar:
+A personal API token lets a script or an MCP client act as a user without a
+browser login. It is a bearer credential:
+
+```bash
+curl -H "Authorization: Bearer psfg_…" https://guard.example/api/databases
+```
+
+A token never grants more than its user has. A viewer's token reads; an
+editor's token can also write, unless it was minted **read only**. A token
+can expire on a date you pick, or never. A token cannot mint or revoke
+tokens; that takes a signed-in session, so a leaked token cannot renew
+itself.
+
+Mint tokens under **Settings → Users → API tokens**. Everyone signed in sees
+and manages their own; an editor sees every token and can mint one for
+another user. The secret is shown once, on creation. Revoking a token cuts
+it off at once, and removing a user removes their tokens.
+
+The CLI does the same against `auth.json`. Restart the server after a CLI
+change, as with users:
+
+```bash
+psf-guard users token create editor --label "claude on laptop" --read-only --expires-days 90
+psf-guard users token list
+psf-guard users token revoke <id>
+```
+
+The file keeps the SHA-256 of each token, its owner, label, and dates, never
+the secret. The [MCP guide](MCP.md) covers what an agent can do with one.
+
+Scripts that prefer the ordinary UI API can still log in with a cookie jar:
 
 ```bash
 curl -c psf-guard.cookies \
@@ -159,7 +189,7 @@ curl -c psf-guard.cookies \
 curl -b psf-guard.cookies https://guard.example/api/databases
 ```
 
-Remote image upload and scheduler sync do not use this session. Their
+Remote image upload and scheduler sync use neither. Their
 `Authorization: Bearer ...` keys remain scoped to the configured database and
 continue to work when browser authentication is enabled.
 

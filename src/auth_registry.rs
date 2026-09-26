@@ -10,11 +10,13 @@ use argon2::{
     Argon2,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
     fmt,
     io::Write,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
@@ -131,11 +133,145 @@ pub(crate) fn verify_password_hash(password_hash: &str, password: &str) -> bool 
         .is_ok()
 }
 
+/// Every personal API token starts with this, so a leaked value is easy to
+/// recognize and a request can tell a token from a session cookie.
+pub const TOKEN_PREFIX: &str = "psfg_";
+pub const MAX_TOKEN_LABEL_LENGTH: usize = 80;
+pub const MAX_TOKEN_DAYS: u32 = 3650;
+
+/// A personal API token for scripts and agents. The registry keeps only the
+/// SHA-256 of the secret; the secret is shown once, when it is minted. A
+/// token never grants more than its user has, and `read_only` narrows it.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthTokenRecord {
+    pub id: String,
+    pub username: String,
+    pub label: String,
+    token_hash: String,
+    #[serde(default)]
+    pub read_only: bool,
+    /// Unix seconds.
+    pub created_at: i64,
+    /// Unix seconds; `None` never expires.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
+}
+
+impl fmt::Debug for AuthTokenRecord {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthTokenRecord")
+            .field("id", &self.id)
+            .field("username", &self.username)
+            .field("label", &self.label)
+            .field("read_only", &self.read_only)
+            .field("created_at", &self.created_at)
+            .field("expires_at", &self.expires_at)
+            .field("token_hash", &"[redacted]")
+            .finish()
+    }
+}
+
+impl AuthTokenRecord {
+    /// Make a new token. Returns the secret to show once and the record to
+    /// store.
+    pub fn mint(
+        username: &str,
+        label: &str,
+        read_only: bool,
+        expires_in_days: Option<u32>,
+    ) -> Result<(String, Self)> {
+        validate_username(username)?;
+        let label = normalize_token_label(label)?;
+        if let Some(days) = expires_in_days
+            && !(1..=MAX_TOKEN_DAYS).contains(&days)
+        {
+            anyhow::bail!("token expiry must be between 1 and {MAX_TOKEN_DAYS} days");
+        }
+        let random: [u8; 32] = rand::random();
+        let secret = format!("{TOKEN_PREFIX}{}", hex_lower(&random));
+        let now = unix_now();
+        let record = Self {
+            id: uuid::Uuid::new_v4().simple().to_string()[..16].to_string(),
+            username: username.to_string(),
+            label,
+            token_hash: hash_token(&secret),
+            read_only,
+            created_at: now,
+            expires_at: expires_in_days.map(|days| now + i64::from(days) * 86_400),
+        };
+        Ok((secret, record))
+    }
+
+    pub fn matches(&self, secret: &str) -> bool {
+        constant_time_eq(self.token_hash.as_bytes(), hash_token(secret).as_bytes())
+    }
+
+    pub fn is_expired_at(&self, now: i64) -> bool {
+        self.expires_at.is_some_and(|expires_at| expires_at <= now)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.id.is_empty() || self.id.len() > 64 {
+            anyhow::bail!("token id must be 1 to 64 bytes");
+        }
+        validate_username(&self.username)?;
+        normalize_token_label(&self.label)?;
+        if self.token_hash.len() != 64 || !self.token_hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+            anyhow::bail!("token '{}' has an invalid hash", self.id);
+        }
+        Ok(())
+    }
+}
+
+pub fn hash_token(secret: &str) -> String {
+    hex_lower(&Sha256::digest(secret.as_bytes()))
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right)
+        .fold(0u8, |acc, (l, r)| acc | (l ^ r))
+        == 0
+}
+
+pub fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+pub fn normalize_token_label(label: &str) -> Result<String> {
+    let label = label.trim();
+    if label.is_empty() {
+        anyhow::bail!("token label cannot be empty");
+    }
+    if label.chars().count() > MAX_TOKEN_LABEL_LENGTH {
+        anyhow::bail!("token label cannot exceed {MAX_TOKEN_LABEL_LENGTH} characters");
+    }
+    if label.chars().any(char::is_control) {
+        anyhow::bail!("token label cannot contain control characters");
+    }
+    Ok(label.to_string())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AuthRegistry {
     pub schema_version: u32,
     pub users: Vec<AuthUserRecord>,
+    /// Personal API tokens. Older files have no field, which reads as none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tokens: Vec<AuthTokenRecord>,
 }
 
 impl Default for AuthRegistry {
@@ -143,6 +279,7 @@ impl Default for AuthRegistry {
         Self {
             schema_version: CURRENT_SCHEMA_VERSION,
             users: Vec::new(),
+            tokens: Vec::new(),
         }
     }
 }
@@ -222,13 +359,41 @@ impl AuthRegistry {
         Ok(())
     }
 
+    /// Remove a user and every token that belonged to them.
     pub fn remove(&mut self, username: &str) -> Result<()> {
         let old_len = self.users.len();
         self.users.retain(|user| user.username != username);
         if self.users.len() == old_len {
             anyhow::bail!("user '{username}' does not exist");
         }
+        self.tokens.retain(|token| token.username != username);
         Ok(())
+    }
+
+    pub fn add_token(&mut self, token: AuthTokenRecord) -> Result<()> {
+        if !self
+            .users
+            .iter()
+            .any(|user| user.username == token.username)
+        {
+            anyhow::bail!("user '{}' does not exist", token.username);
+        }
+        if self.tokens.iter().any(|existing| existing.id == token.id) {
+            anyhow::bail!("token id '{}' already exists", token.id);
+        }
+        self.tokens.push(token);
+        Ok(())
+    }
+
+    /// Drop one token by id. `owner` restricts the removal to that user's
+    /// tokens; an editor passes `None`.
+    pub fn revoke_token(&mut self, id: &str, owner: Option<&str>) -> Result<AuthTokenRecord> {
+        let index = self
+            .tokens
+            .iter()
+            .position(|token| token.id == id && owner.is_none_or(|owner| token.username == owner))
+            .ok_or_else(|| anyhow::anyhow!("token '{id}' does not exist"))?;
+        Ok(self.tokens.remove(index))
     }
 
     pub fn find_mut(&mut self, username: &str) -> Option<&mut AuthUserRecord> {
@@ -248,6 +413,20 @@ impl AuthRegistry {
             user.validate()?;
             if !usernames.insert(user.username.as_str()) {
                 anyhow::bail!("auth registry contains duplicate user '{}'", user.username);
+            }
+        }
+        let mut token_ids = HashSet::new();
+        for token in &self.tokens {
+            token.validate()?;
+            if !usernames.contains(token.username.as_str()) {
+                anyhow::bail!(
+                    "token '{}' belongs to unknown user '{}'",
+                    token.id,
+                    token.username
+                );
+            }
+            if !token_ids.insert(token.id.as_str()) {
+                anyhow::bail!("auth registry contains duplicate token '{}'", token.id);
             }
         }
         Ok(())
@@ -317,6 +496,87 @@ fn set_private_permissions(_file: &std::fs::File, _path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tokens_hash_expire_and_follow_their_user() {
+        let mut registry = AuthRegistry::default();
+        registry
+            .add(
+                AuthUserRecord::new("editor", AccessRole::ReadWrite, "editor-secret-1").unwrap(),
+                false,
+            )
+            .unwrap();
+        assert!(
+            AuthTokenRecord::mint("nobody", "x", false, None).is_ok(),
+            "minting does not know the registry; add_token checks the user"
+        );
+        let (secret, record) = AuthTokenRecord::mint("editor", " laptop ", true, Some(30)).unwrap();
+        assert!(secret.starts_with(TOKEN_PREFIX));
+        assert_eq!(secret.len(), TOKEN_PREFIX.len() + 64);
+        assert_eq!(record.label, "laptop");
+        assert!(record.matches(&secret));
+        assert!(!record.matches(&format!("{secret}x")));
+        assert!(!record.is_expired_at(record.created_at + 29 * 86_400));
+        assert!(record.is_expired_at(record.created_at + 30 * 86_400));
+        assert!(AuthTokenRecord::mint("editor", "", false, None).is_err());
+        assert!(AuthTokenRecord::mint("editor", "x", false, Some(0)).is_err());
+
+        let (_, stray) = AuthTokenRecord::mint("nobody", "stray", false, None).unwrap();
+        assert!(registry.add_token(stray).is_err());
+        let id = record.id.clone();
+        registry.add_token(record.clone()).unwrap();
+        assert!(registry.add_token(record).is_err(), "duplicate id");
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("auth.json");
+        registry.save(&path).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(!contents.contains(&secret), "the secret never reaches disk");
+        let reloaded = AuthRegistry::load(&path).unwrap();
+        assert_eq!(reloaded.tokens.len(), 1);
+        assert!(reloaded.tokens[0].matches(&secret));
+        assert!(format!("{:?}", reloaded.tokens[0]).contains("[redacted]"));
+
+        let mut reloaded = reloaded;
+        assert!(reloaded.revoke_token(&id, Some("someone-else")).is_err());
+        reloaded.remove("editor").unwrap();
+        assert!(
+            reloaded.tokens.is_empty(),
+            "a removed user takes its tokens"
+        );
+    }
+
+    #[test]
+    fn registry_without_tokens_field_still_loads_and_saves_without_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("auth.json");
+        let mut registry = AuthRegistry::default();
+        registry
+            .add(
+                AuthUserRecord::new("editor", AccessRole::ReadWrite, "editor-secret-1").unwrap(),
+                false,
+            )
+            .unwrap();
+        registry.save(&path).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(!contents.contains("tokens"));
+        assert!(AuthRegistry::load(&path).unwrap().tokens.is_empty());
+
+        let orphan = serde_json::json!({
+            "schema_version": 1,
+            "users": [],
+            "tokens": [{
+                "id": "abc",
+                "username": "ghost",
+                "label": "x",
+                "token_hash": "0".repeat(64),
+                "created_at": 0
+            }]
+        });
+        std::fs::write(&path, orphan.to_string()).unwrap();
+        let error = AuthRegistry::load(&path).unwrap_err().to_string();
+        assert!(error.contains("ghost"), "{error}");
+    }
 
     #[test]
     fn legacy_password_hash_survives_registry_reload_and_password_reset() {

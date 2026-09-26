@@ -41,8 +41,11 @@ import type {
   PreviewOptions,
   ServerInfo,
   AuthStatus,
+  AuthTokenSummary,
   AuthUserSummary,
+  CreateAuthTokenRequest,
   CreateAuthUserRequest,
+  MintedAuthToken,
   UpdateAuthUserRequest,
   UpdateNoticeStatus,
   SchedulerSyncRequest,
@@ -288,6 +291,32 @@ export const apiClient = {
       '/auth/users/' + encodeURIComponent(username)
     );
     if (!data.data) throw new Error(data.error || 'Failed to remove user');
+    return data.data;
+  },
+
+  getAuthTokens: async (): Promise<AuthTokenSummary[]> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<AuthTokenSummary[]>>('/auth/tokens');
+    if (!data.data) throw new Error(data.error || 'Failed to load API tokens');
+    return data.data;
+  },
+
+  createAuthToken: async (request: CreateAuthTokenRequest): Promise<MintedAuthToken> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<MintedAuthToken>>(
+      '/auth/tokens',
+      request
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to create the API token');
+    return data.data;
+  },
+
+  revokeAuthToken: async (id: string): Promise<AuthTokenSummary[]> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.delete<ApiResponse<AuthTokenSummary[]>>(
+      '/auth/tokens/' + encodeURIComponent(id)
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to revoke the API token');
     return data.data;
   },
 
