@@ -10,9 +10,11 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBeha
 use serde::{Deserialize, Serialize};
 use std::{fmt, path::Path, time::Duration};
 pub mod preparation;
+pub mod program;
+use psf_guard_director_core::program::{BoundProgram, Program};
 
 const APPLICATION_ID: i32 = 0x5047444c;
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 const CAPTURE_EVENT_VERSION: u32 = 1;
 const MAX_EVENT_PAGE: usize = 256;
 
@@ -22,6 +24,7 @@ pub enum Error {
     Json(serde_json::Error),
     Planner(psf_guard_director_core::Error),
     Preparation(psf_guard_director_core::preparation::Error),
+    Program(psf_guard_director_core::program::Error),
     InvalidInput,
     ForeignDatabase,
     UnsupportedSchema,
@@ -140,6 +143,7 @@ pub struct Ledger {
     connection: Connection,
     assignment: Assignment,
     ledger_id: String,
+    program: Option<BoundProgram>,
 }
 
 fn valid_id(value: &str) -> bool {
@@ -208,6 +212,27 @@ impl Ledger {
     /// accepted/pending counters. Do not create another ledger on revision changes:
     /// revision activation and cursor reconciliation are not implemented yet.
     pub fn open(path: &Path, assignment: Assignment, state: State) -> Result<Self, Error> {
+        Self::open_internal(path, assignment, state, None)
+    }
+
+    /// Bind the exact observing program at creation. Existing unbound ledgers
+    /// cannot be upgraded into programs; their original evidence stays unbound.
+    pub fn open_program(path: &Path, program: Program, state: State) -> Result<Self, Error> {
+        let bound = BoundProgram::new(program, &state).map_err(Error::Program)?;
+        Self::open_internal(
+            path,
+            bound.snapshot().assignment.clone(),
+            state,
+            Some(bound),
+        )
+    }
+
+    fn open_internal(
+        path: &Path,
+        assignment: Assignment,
+        state: State,
+        program: Option<BoundProgram>,
+    ) -> Result<Self, Error> {
         // Absolute filesystem paths exclude SQLite's temporary/":memory:" names
         // and URI connection parameters that can silently disable persistence.
         if !path.is_absolute() {
@@ -251,7 +276,8 @@ impl Ledger {
             tx.execute_batch(
                 "CREATE TABLE allocation (
                     singleton INTEGER PRIMARY KEY CHECK(singleton=1), payload TEXT NOT NULL,
-                    ledger_id TEXT NOT NULL, contract_version INTEGER NOT NULL, engine_version TEXT NOT NULL
+                    ledger_id TEXT NOT NULL, contract_version INTEGER NOT NULL, engine_version TEXT NOT NULL,
+                    program_required INTEGER NOT NULL CHECK(program_required IN (0,1))
                  );
                  CREATE TABLE attempt (
                     capture_id TEXT PRIMARY KEY NOT NULL,
@@ -266,21 +292,28 @@ impl Ledger {
                  CREATE TABLE event (sequence INTEGER PRIMARY KEY AUTOINCREMENT, payload TEXT NOT NULL);"
             )?;
             tx.execute(
-                "INSERT INTO allocation VALUES (1, ?1, ?2, ?3, ?4)",
+                "INSERT INTO allocation VALUES (1, ?1, ?2, ?3, ?4, ?5)",
                 params![
                     encoded,
                     uuid::Uuid::new_v4().to_string(),
                     CONTRACT_VERSION,
-                    ENGINE_VERSION
+                    ENGINE_VERSION,
+                    program.is_some()
                 ],
             )?;
             tx.pragma_update(None, "application_id", APPLICATION_ID)?;
             preparation::create_tables(&tx)?;
+            program::create_table(&tx)?;
+            program::insert(&tx, program.as_ref())?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         } else if application != APPLICATION_ID {
             return Err(Error::ForeignDatabase);
-        } else if version == 1 {
-            preparation::create_tables(&tx)?;
+        } else if version == 1 || version == 2 {
+            if version == 1 {
+                preparation::create_tables(&tx)?;
+            }
+            tx.execute_batch("ALTER TABLE allocation ADD COLUMN program_required INTEGER NOT NULL DEFAULT 0 CHECK(program_required IN (0,1));")?;
+            program::create_table(&tx)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         } else if version != SCHEMA_VERSION {
             return Err(Error::UnsupportedSchema);
@@ -299,6 +332,7 @@ impl Ledger {
         if stored != encoded {
             return Err(Error::AssignmentMismatch);
         }
+        program::verify(&tx, program.as_ref())?;
         tx.commit()?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         let journal_mode: String =
@@ -310,12 +344,16 @@ impl Ledger {
             connection,
             assignment: request.assignment,
             ledger_id,
+            program,
         })
     }
 
     /// Select with shared Rust policy and commit both the attempt and its event
     /// under one SQLite writer transaction. No network/hardware work runs here.
     pub fn reserve(&mut self, capture_id: &str, state: State) -> Result<Reservation, Error> {
+        if self.program.is_some() {
+            return Err(Error::ConflictingEvidence);
+        }
         if !valid_id(capture_id) {
             return Err(Error::InvalidInput);
         }

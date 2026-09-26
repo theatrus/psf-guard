@@ -217,6 +217,19 @@ impl Ledger {
         estimates: Estimates,
         state: State,
     ) -> Result<Started, Error> {
+        if self.program.is_some() {
+            return Err(Error::ConflictingEvidence);
+        }
+        self.begin_preparation_inner(id, context, estimates, state)
+    }
+
+    pub(super) fn begin_preparation_inner(
+        &mut self,
+        id: &str,
+        context: Context,
+        estimates: Estimates,
+        state: State,
+    ) -> Result<Started, Error> {
         if !valid_id(id) {
             return Err(Error::InvalidInput);
         }
@@ -273,6 +286,17 @@ impl Ledger {
     /// Commit an issued operation before returning Run. A lost response or reopen
     /// returns InFlight, never a second dispatch of the same native action.
     pub fn advance_preparation(&mut self, id: &str, state: State) -> Result<Next, Error> {
+        if self.program.is_some() {
+            return Err(Error::ConflictingEvidence);
+        }
+        self.advance_preparation_inner(id, state)
+    }
+
+    pub(super) fn advance_preparation_inner(
+        &mut self,
+        id: &str,
+        state: State,
+    ) -> Result<Next, Error> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -412,6 +436,18 @@ impl Ledger {
     /// Freshly check readiness and atomically link the resulting reservation.
     /// Existing reservations are evidence only and must never be redispatched.
     pub fn reserve_prepared(
+        &mut self,
+        id: &str,
+        capture_id: &str,
+        state: State,
+    ) -> Result<Reservation, Error> {
+        if self.program.is_some() {
+            return Err(Error::ConflictingEvidence);
+        }
+        self.reserve_prepared_inner(id, capture_id, state)
+    }
+
+    pub(super) fn reserve_prepared_inner(
         &mut self,
         id: &str,
         capture_id: &str,
