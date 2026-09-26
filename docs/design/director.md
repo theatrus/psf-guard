@@ -1361,8 +1361,10 @@ The `psf-guard-director-meta` crate starts the coordination store, separately
 from catalogs and the local execution ledger. It is linked into PSF Guard but
 has no implicit registry migration or catalog adoption. A CLI server can opt in
 with `--director-meta` and database management; omission opens no store. The
-[metadata API](../DIRECTOR.md) exposes authenticated, bounded global-project
-listing, creation and revision-checked renames. It grants no rig or acquisition
+[metadata API](../DIRECTOR.md) exposes authenticated, bounded project/site/rig
+listing, creation and revision-checked renames, plus immutable site snapshots
+and rig setups under their explicit owners. Snapshot bodies retain the full
+shared-core size bound instead of the smaller identity-form limit. It grants no rig or acquisition
 authority. Other hosts must explicitly create a new file or open a recognized
 existing file. Schema 1 stores the
 coordinator instance UUID, global project and rig identities, originating catalog
