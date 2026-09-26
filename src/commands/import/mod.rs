@@ -78,6 +78,11 @@ pub struct ImportOptions {
     /// had. A catalog that has recorded no rig yet accepts everything and
     /// learns its rig from what it accepts.
     pub accept_other_rigs: bool,
+    /// Drop files the catalog already has before reading any header: lights
+    /// by basename, calibration frames by path and fingerprint. An
+    /// automatic run sets this so a folder of thousands of known frames
+    /// costs a directory walk and one query, not a header read per file.
+    pub only_new: bool,
 }
 
 pub const DEFAULT_MATCH_RADIUS_DEG: f64 = 0.5;
@@ -93,8 +98,42 @@ impl Default for ImportOptions {
             scope: ImportScope::default(),
             skip_processed: false,
             accept_other_rigs: false,
+            only_new: false,
         }
     }
+}
+
+/// Files the catalog already holds, so a caller can drop them before the
+/// header scan. A light is known by its basename; a calibration frame by its
+/// canonical path with an unchanged fingerprint. Both are the same tests
+/// `import_frames` applies afterwards, so dropping a file here changes the
+/// count of headers read, not what the run imports.
+pub fn known_files(conn: &Connection, files: &[PathBuf]) -> Result<HashSet<PathBuf>> {
+    let candidate_basenames: HashSet<String> = files
+        .iter()
+        .filter_map(|path| path.file_name())
+        .map(|name| name.to_string_lossy().to_lowercase())
+        .collect();
+    let existing = existing_basenames(conn, &candidate_basenames)?;
+    let calibration = crate::calibration::known_calibration_fingerprints(conn)?;
+    let mut known = HashSet::new();
+    for path in files {
+        let basename = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        if existing.contains(&basename) {
+            known.insert(path.clone());
+            continue;
+        }
+        if !calibration.is_empty() {
+            let (source_path, fingerprint) = crate::calibration::source_fingerprint(path);
+            if calibration.get(&source_path) == Some(&fingerprint) {
+                known.insert(path.clone());
+            }
+        }
+    }
+    Ok(known)
 }
 
 /// Frames from one rig the catalog does not know, left out of a run.

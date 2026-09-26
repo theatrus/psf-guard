@@ -28,6 +28,15 @@ pub struct ImportJobProgress {
     pub started_at: Option<i64>,
     pub finished_at: Option<i64>,
     pub error: Option<String>,
+    /// `manual` for the Import button and API, `automatic` for a scheduled
+    /// or on-open run.
+    #[serde(default)]
+    pub trigger: String,
+    /// Files the automatic prefilter dropped as already cataloged, without
+    /// reading their headers. Counted into the outcome's `skipped_existing`
+    /// too; kept apart so the UI can say how cheap the run was.
+    #[serde(default)]
+    pub prefiltered: usize,
 }
 
 #[derive(Debug, Default)]
@@ -51,6 +60,16 @@ pub fn try_begin(store: &RwLock<ImportJobStore>, image_dirs: Vec<String>) -> boo
         ..Default::default()
     };
     true
+}
+
+pub fn set_trigger(store: &RwLock<ImportJobStore>, trigger: &str) {
+    let mut s = store.write().unwrap();
+    s.progress.trigger = trigger.to_string();
+}
+
+pub fn set_prefiltered(store: &RwLock<ImportJobStore>, prefiltered: usize) {
+    let mut s = store.write().unwrap();
+    s.progress.prefiltered = prefiltered;
 }
 
 pub fn set_stage(store: &RwLock<ImportJobStore>, stage: &str) {

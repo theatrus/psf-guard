@@ -843,6 +843,48 @@
   font-size: 13px;
 }
 
+.tauri-settings .autoimport-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.tauri-settings .autoimport-fields {
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  display: grid;
+  gap: 8px;
+}
+
+.tauri-settings .autoimport-fields legend {
+  padding: 0 6px;
+  font-weight: 600;
+}
+
+.tauri-settings .autoimport-fields .checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.tauri-settings .autoimport-fields .checkbox-label input {
+  width: auto;
+}
+
+.tauri-settings .autoimport-fields small {
+  display: block;
+}
+
+.tauri-settings .autoimport-warning {
+  color: var(--color-error);
+}
+
 .tauri-settings .quality-backfill-error {
   align-self: center;
   color: var(--color-error);

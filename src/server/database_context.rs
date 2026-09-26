@@ -408,6 +408,8 @@ pub struct DatabaseContext {
     /// below it on request. Consent to write there was given when it was
     /// configured.
     pub process_dir: Option<PathBuf>,
+    /// Automatic import of new frames, when the operator turned it on.
+    pub autoimport: Option<crate::db_registry::AutoImportSettings>,
     /// Per-DB cache directory: `<cache_root>/<slug>/`. Created on construction.
     /// All preview/annotated/PSF artifacts for this database live below here,
     /// so two DBs with overlapping image IDs do not collide.
@@ -699,6 +701,27 @@ fn publish_file_check_cache(
 impl DatabaseContext {
     /// `cache_root` is the shared parent directory; this constructor appends
     /// the slug to produce a per-DB cache subdir and creates it on disk.
+    /// Open the database a registry entry describes. Every place that turns
+    /// an entry into a live context goes through here, so a setting added to
+    /// the entry reaches the context in one place.
+    pub fn from_entry(entry: &crate::db_registry::DbEntry, cache_root: String) -> Result<Self> {
+        let mut context = Self::new(
+            entry.id.clone(),
+            entry.name.clone(),
+            entry.db_path.clone(),
+            entry.image_dirs.clone(),
+            entry.remote_image_upload.clone(),
+            entry.export_dir.clone(),
+            entry.process_dir.clone(),
+            cache_root,
+        )?;
+        // Not validated here: a hand-edited block must not keep the whole
+        // database from opening. The update route validates what it saves,
+        // and the scheduler does nothing with a block that names no trigger.
+        context.autoimport = entry.autoimport.clone();
+        Ok(context)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: String,
@@ -791,6 +814,7 @@ impl DatabaseContext {
             remote_image_upload_dir,
             export_dir,
             process_dir,
+            autoimport: None,
             cache_dir,
             cache_dir_path,
             db_connection: Arc::new(Mutex::new(conn)),
@@ -1983,6 +2007,7 @@ impl DatabaseContext {
             remote_image_upload_dir: None,
             export_dir: None,
             process_dir: None,
+            autoimport: None,
             cache_dir: "/tmp/psf-guard-test".to_string(),
             cache_dir_path: PathBuf::from("/tmp/psf-guard-test"),
             db_connection: Arc::new(Mutex::new(conn)),
@@ -2025,6 +2050,7 @@ impl Clone for DatabaseContext {
             remote_image_upload_dir: self.remote_image_upload_dir.clone(),
             export_dir: self.export_dir.clone(),
             process_dir: self.process_dir.clone(),
+            autoimport: self.autoimport.clone(),
             cache_dir: self.cache_dir.clone(),
             cache_dir_path: self.cache_dir_path.clone(),
             db_connection: self.db_connection.clone(),

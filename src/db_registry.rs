@@ -57,6 +57,61 @@ pub struct DbEntry {
     /// processing project. Absent means the save is not offered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_dir: Option<String>,
+    /// Import new frames from the image folders on its own. Absent means off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autoimport: Option<AutoImportSettings>,
+}
+
+/// When and what an automatic import brings in. A run scans the database's
+/// configured image folders, drops every file the catalog already has
+/// without reading its header, and imports the rest the way the Import
+/// button does, with the same matching rules.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutoImportSettings {
+    pub enabled: bool,
+    /// Run once when the server or desktop app opens the database.
+    pub on_open: bool,
+    /// Run again this many minutes after the last run. `0` means only on
+    /// open.
+    pub interval_minutes: u32,
+    /// Lights, calibration frames, or both.
+    pub scope: crate::commands::import::ImportScope,
+    /// Queue the background quality scan for the frames a run brings in.
+    pub backfill: bool,
+    /// Take lights from a rig the catalog has not recorded. Off by default,
+    /// as for a manual import.
+    pub accept_other_rigs: bool,
+}
+
+/// The longest schedule: once a week.
+pub const MAX_AUTOIMPORT_INTERVAL_MINUTES: u32 = 7 * 24 * 60;
+
+impl Default for AutoImportSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            on_open: true,
+            interval_minutes: 0,
+            scope: crate::commands::import::ImportScope::All,
+            backfill: true,
+            accept_other_rigs: false,
+        }
+    }
+}
+
+impl AutoImportSettings {
+    pub fn validate(&self) -> Result<()> {
+        if self.interval_minutes > MAX_AUTOIMPORT_INTERVAL_MINUTES {
+            anyhow::bail!(
+                "automatic import interval cannot exceed {MAX_AUTOIMPORT_INTERVAL_MINUTES} minutes"
+            );
+        }
+        if self.enabled && !self.on_open && self.interval_minutes == 0 {
+            anyhow::bail!("automatic import needs a run on open, a schedule, or both");
+        }
+        Ok(())
+    }
 }
 
 /// One paired client credential. Each pairing mints its own, so revoking a
@@ -647,6 +702,7 @@ impl DbRegistry {
                 remote_image_upload: None,
                 export_dir: None,
                 process_dir: None,
+                autoimport: None,
             });
         }
         reg.save(path)?;
@@ -716,6 +772,7 @@ impl DbRegistry {
             remote_image_upload: None,
             export_dir: None,
             process_dir: None,
+            autoimport: None,
         });
         Ok(self.databases.last().unwrap())
     }
@@ -955,6 +1012,7 @@ mod tests {
             }),
             export_dir: None,
             process_dir: None,
+            autoimport: None,
         });
         reg.save(&path).unwrap();
 

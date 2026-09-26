@@ -210,6 +210,7 @@ impl Harness {
                         remote_image_upload: Some(api_config(SOURCE_TOKEN)),
                         export_dir: None,
                         process_dir: None,
+                        autoimport: None,
                     },
                     DbEntry {
                         id: "destination".into(),
@@ -220,6 +221,7 @@ impl Harness {
                         remote_image_upload: Some(api_config(DESTINATION_TOKEN)),
                         export_dir: None,
                         process_dir: None,
+                        autoimport: None,
                     },
                 ],
                 directory
@@ -960,6 +962,7 @@ async fn an_upload_only_key_cannot_reach_the_sync_protocol() {
                 remote_image_upload: Some(upload_only_config(SOURCE_TOKEN)),
                 export_dir: None,
                 process_dir: None,
+                autoimport: None,
             }],
             directory
                 .path()

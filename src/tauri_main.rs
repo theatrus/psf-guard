@@ -558,6 +558,7 @@ mod tests {
                 remote_image_upload: None,
                 export_dir: None,
                 process_dir: None,
+                autoimport: None,
             }],
             active_db_id: None,
             astrometry: None,

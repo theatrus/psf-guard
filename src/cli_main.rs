@@ -511,6 +511,7 @@ pub fn main() -> Result<()> {
                 },
                 skip_processed,
                 accept_other_rigs,
+                only_new: false,
             };
             let outcome = import_frames(&mut conn, frames, &options)?;
             print_outcome(&outcome);
