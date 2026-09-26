@@ -682,14 +682,14 @@ peer process ID. The launcher supplies the pipe name, host PID, and optionally
 an absolute state directory. No credentials appear in process arguments. The
 protocol has no network or equipment operations; local persistence is opt-in.
 
-IPC version 5 uses a four-byte little-endian length followed by UTF-8 JSON.
+IPC version 6 uses a four-byte little-endian length followed by UTF-8 JSON.
 Frames are limited to 266,240 bytes before body allocation. The nested planning
 request retains its original JSON and the core's 262,144-byte limit, including
 duplicate-field validation. Every envelope contains `protocol_version`,
 `session_id`, `request_id`, and `payload`; payloads use a `type` discriminator.
 
 - `hello` must be request 0 with a fresh 32-hex-character session ID. It binds
-  the rig ID and requires exact runtime 0.4.0, engine 0.2.0, and contract 2.
+  the rig ID and requires exact runtime 0.5.0, engine 0.2.0, and contract 2.
   `ready` confirms all versions, the rig, and whether storage is enabled.
 - `evaluate` wraps one core request and returns a `decision` with the unchanged
   core response. Valid requests for another assignment rig terminate the session.
@@ -711,7 +711,7 @@ duplicate-field validation. Every envelope contains `protocol_version`,
   A new child must negotiate a new session and receive a fresh snapshot.
 
 The published Director preview still pins runtime 0.2.1 / IPC 3 with the typed
-ledger host and shutdown drain handshake together. Newer IPC 4/5 development
+ledger host and shutdown drain handshake together. Newer IPC 4/5/6 development
 hosts need their matching adapter and bundle pin. A mismatched version is
 refused, never silently downgraded. Publishing this runtime artifact alone does not update
 installed plugins or change the existing Sync plugin.
@@ -1256,7 +1256,24 @@ and completion receipts remain available after constraints change. Tests cover
 competing handles and abrupt process exit, not just orderly close/reopen.
 The legacy mutation and selection entry points reject geometry-bound ledgers.
 
-This is a Rust ledger path, not yet the runtime IPC or native dispatch path and
+IPC 6 / runtime 0.5.0 exposes `open_geometry`, `evaluate_geometry`,
+`begin_geometry_preparation`, `advance_geometry_preparation`, and
+`reserve_geometry_prepared`. Open returns the program and constraint schema
+versions; every selection or dispatch recommendation requires the complete fresh
+constraint snapshot, not just its revision. All nested rig IDs must match the
+handshake before storage is touched. Existing receipt, lookup and outbox commands
+remain usable. The runtime delegates to the geometry ledger; it does not compute
+a second set of windows or accept caller-provided geometry certificates.
+
+Wire limits remain 262,144 bytes per operation and 266,240 bytes per frame.
+A program plus a large horizon may exceed this transport limit even when each
+is valid separately; refuse it rather than thinning the horizon or dropping
+constraints. Compilation runs on the blocking storage worker. Process tests kill
+and restart the Windows sidecar after issued work and capture reservation,
+checking that neither can be dispatched twice. The plugin adapter and artifact
+pin must be updated together before this mode can be used from N.I.N.A.
+
+This is a Rust ledger path exposed through IPC 6, not yet the native dispatch path and
 not a hardware permit. Final native dispatch still needs fresh revalidation.
 Compilation is bounded by the program/geometry limits but can be expensive for
 many distinct targets; schedule it off the interactive/dispatch path. Shared
