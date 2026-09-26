@@ -16,6 +16,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::sync::Semaphore;
+mod catalog_discovery;
 
 pub(super) fn validate_registry_separation(
     meta: Option<&FilePath>,
@@ -66,6 +67,7 @@ pub struct Service {
     store: Mutex<MetaStore>,
     instance_id: Uuid,
     admission: Arc<Semaphore>,
+    discovery_admission: Arc<Semaphore>,
 }
 
 impl Service {
@@ -88,6 +90,7 @@ impl Service {
             instance_id: store.instance_id(),
             store: Mutex::new(store),
             admission: Arc::new(Semaphore::new(1)),
+            discovery_admission: Arc::new(Semaphore::new(1)),
         })))
     }
 
@@ -184,6 +187,10 @@ impl IntoResponse for Error {
 pub(super) fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/status", get(status))
+        .route(
+            "/catalogs/{slug}/discovery",
+            get(catalog_discovery::discover),
+        )
         .route("/projects", get(list_projects).post(create_project))
         .route("/projects/{id}", get(project).patch(rename_project))
         .merge(configuration_api::routes())
