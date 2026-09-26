@@ -7,7 +7,7 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time::timeout;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_FRAME_BYTES: usize = psf_guard_director_core::MAX_REQUEST_BYTES + 4096;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -288,7 +288,12 @@ pub async fn serve<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S) -> Result<(
                     ResultMessage::Stopped,
                 )
                 .await?;
-                return Ok(());
+                // A completed pipe write does not prove the peer read the reply.
+                // Keep the handle alive until the host acknowledges it by closing.
+                return match read_frame(&mut stream, Duration::from_secs(2)).await? {
+                    None => Ok(()),
+                    Some(_) => Err(ProtocolError::InvalidMessage),
+                };
             }
             Command::Evaluate { request } => {
                 // Invalid planning input remains a core error response, distinct

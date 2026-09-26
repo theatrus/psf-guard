@@ -661,12 +661,16 @@ duplicate-field validation. Every envelope contains `protocol_version`,
 `session_id`, `request_id`, and `payload`; payloads use a `type` discriminator.
 
 - `hello` must be request 0 with a fresh 32-hex-character session ID. It binds
-  the rig ID and requires exact runtime 0.1.0, engine 0.2.0, and contract 2.
+  the rig ID and requires exact runtime 0.1.1, engine 0.2.0, and contract 2.
   `ready` confirms all versions and the rig.
 - `evaluate` wraps one core request and returns a `decision` with the unchanged
   core response. Valid requests for another assignment rig terminate the session.
   Invalid planning inputs return core errors; invalid IPC terminates the session.
-- `ping` returns `pong`; `shutdown` returns `stopped` and exits. Every message
+- IPC 2 adds a shutdown drain handshake: `ping` returns `pong`; `shutdown`
+  returns `stopped`, then waits at most two seconds for the host to close its
+  pipe after reading the reply. The host closes before waiting for process exit.
+  This avoids dropping an unread Windows pipe reply. No more commands may run
+  after shutdown. Every message
   after hello requires the next consecutive request ID, including heartbeats.
 - Pipe connection and hello each have a 15-second deadline. After hello, each
   complete incoming frame has a 30-second deadline; writes have 10 seconds.
