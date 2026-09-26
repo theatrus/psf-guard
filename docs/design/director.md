@@ -1329,17 +1329,20 @@ checked before storage access. Malformed or cross-rig messages terminate the
 session; valid but stale commands, links or evidence return scoped storage
 errors. A returned `Acquire` is feasibility only, never new dispatch authority.
 Neither operation issues a native command, reserves a capture or refunds credit.
-The plugin must adopt the matching version, typed replies and final native
-boundary checks together before using this protocol.
+Plugin PRs #23 and #24 adopted the matching version, typed replies and
+session-bound post-hook checks for the isolated native simulator sequence.
 Captured preparation records may now contain a halt from a refused post-reserve
 boundary while retaining successful preparation observations and their capture
 link. Host decoders must accept that specific state without allowing pending or
-unsuccessful preparation operations in a captured record. The protocol-6 plugin
-rejects captured-plus-halted records; its decoder needs a regression test and
-versioned update before adopting this runtime.
+unsuccessful preparation operations in a captured record. The IPC-7 plugin
+decoder has regression coverage for that captured-plus-halted state.
 
-This is a Rust ledger path exposed through IPC 7, not yet the native dispatch path and
-not a hardware permit. Final native dispatch still needs fresh revalidation.
+This is a Rust ledger path exposed through IPC 7 and adopted by the native test
+adapter, not a production acquisition container or hardware permit. The adapter
+checks current native state around IPC and retains one-use dispatch authority.
+This is sampled boundary validation, not a hard real-time lease or continuous
+safety interlock; production dispatch must account for elapsed check/IPC time
+and retain N.I.N.A.'s native safety handling.
 Compilation is bounded by the program/geometry limits but can be expensive for
 many distinct targets; schedule it off the interactive/dispatch path. Shared
 darkness calculation, other observing criteria, and the full server/N.I.N.A.
@@ -1352,8 +1355,12 @@ The runtime CI artifact now includes these files beside the executable.
 Plugin [PR #20](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/20)
 adopted the merged geometry runtime and verifies and packages both notices.
 Its fetch tests reject missing, corrupted, or extra artifact files and repair
-missing or changed cached notices. Existing published preview artifacts
-and the published preview are unchanged.
+missing or changed cached notices. The published `0.1.0.1-preview.1` plugin
+bundles runtime 0.6.0 / IPC 7 with those notices. Its public controls still only
+start/stop the runtime and report status; it cannot pair, receive server
+assignments, or acquire. Its isolated N.I.N.A. nightly/ASCOM test saved three RGB
+frames and exercised native hooks, restart and horizon changes using a fixture
+assignment, not PSF Guard authorization. The full-stack gate remains open.
 
 ### Phase 1: meta database and global project model
 
@@ -1416,6 +1423,33 @@ This is identity and configuration storage only. Objectives, recipes,
 allocation authority, rig enrollment/permissions, catalog adoption and UI remain
 required before the phase is complete. No assignment or hardware authority is
 created by registering a rig or catalog.
+
+The shared core's `project` module defines versioned project intent separately
+from an execution assignment. Each immutable snapshot identifies the global
+project, objectives, and rig-specific contributions. Objectives retain explicit
+bandpass and purpose IDs, priority, and ICRS target intent. Contributions retain
+an exact setup revision and native configuration ID, panel framing, concrete
+recipe/filter mapping, and their own required accepted-frame count. A narrow
+field panel and a wide-field image, or short and long exposures in one band,
+remain separate contributions. Their counts are not interchangeable and project
+membership does not authorize stacking them together.
+
+`BoundProject` owns and validates a bounded snapshot. Target and recipe checks
+reuse the execution program's validators; conflicting meanings for one target
+or configuration-scoped recipe ID are refused. Resolving a contribution requires
+the explicitly named setup and configuration, never a display-name match or a
+"latest" lookup. The host must load that immutable setup from trusted storage;
+resolution validates capabilities, not the authenticity of caller-supplied
+configuration data. An objective with no contribution is not yet a fully bound
+intent snapshot; draft editing needs a separate UI state.
+
+This model establishes intent only. It does not persist snapshots, infer FOV or
+sampling equivalence, judge quality, sum integration from different rigs, issue
+assignments, or project progress. Frame goals are scoped to each contribution;
+depth/cadence objectives and rig-optics compatibility remain required. The
+coordinator must separately reserve outstanding allocation and bind intent
+provenance before an executor can use it. Existing program and IPC contracts
+are unchanged.
 
 - [ ] Add opt-in meta storage, migrations, backup/restore, and stable mappings.
 - [ ] Model sites, rig configurations, objectives, recipes, and contribution plans.
