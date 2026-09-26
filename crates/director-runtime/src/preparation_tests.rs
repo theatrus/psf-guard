@@ -277,6 +277,15 @@ fn new_operations_keep_rig_scope_and_local_storage_ownership() {
     storage
         .handle(Operation::Open { request: fixture() }, "rig-1")
         .unwrap();
+    for operation in [
+        Operation::ActivePreparation {},
+        Operation::UnresolvedAttempt {},
+    ] {
+        assert_eq!(
+            storage.handle(operation, "foreign-rig").unwrap_err(),
+            ProtocolError::WrongRig
+        );
+    }
     let mut wrong = fixture().state;
     wrong.rig_id = "foreign-rig".into();
     for operation in [

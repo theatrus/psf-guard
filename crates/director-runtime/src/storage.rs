@@ -240,6 +240,13 @@ impl Storage {
         operation: Operation,
         rig_id: &str,
     ) -> Result<StorageReply, ProtocolError> {
+        if self
+            .ledger
+            .as_ref()
+            .is_some_and(|ledger| ledger.info().rig_id != rig_id)
+        {
+            return Err(ProtocolError::WrongRig);
+        }
         match &operation {
             Operation::Open { request }
                 if request.assignment.rig_id != rig_id || request.state.rig_id != rig_id =>
