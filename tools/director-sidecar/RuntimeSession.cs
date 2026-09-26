@@ -64,13 +64,13 @@ internal sealed class RuntimeSession : IAsyncDisposable
             var payload = new JsonObject
             {
                 ["type"] = "hello",
-                ["runtime_version"] = "0.1.0",
+                ["runtime_version"] = "0.1.1",
                 ["engine_version"] = engineVersion,
                 ["contract_version"] = ContractVersion,
                 ["rig_id"] = rigId
             };
             var result = await session.ExchangeAsync(0, payload, "ready", startup.Token);
-            if (result["runtime_version"]?.GetValue<string>() != "0.1.0" ||
+            if (result["runtime_version"]?.GetValue<string>() != "0.1.1" ||
                 result["engine_version"]?.GetValue<string>() != EngineVersion ||
                 result["contract_version"]?.GetValue<int>() != ContractVersion ||
                 result["rig_id"]?.GetValue<string>() != rigId)
@@ -95,7 +95,7 @@ internal sealed class RuntimeSession : IAsyncDisposable
         }
     }
 
-    internal async Task<JsonObject> SendAsync(JsonObject payload, CancellationToken token = default)
+    internal async Task<JsonObject> SendAsync(JsonObject payload, CancellationToken token = default, TimeSpan? replyDelay = null)
     {
         // Cancellation before taking the gate cannot abandon an in-flight frame.
         await gate.WaitAsync(token);
@@ -111,8 +111,8 @@ internal sealed class RuntimeSession : IAsyncDisposable
                 "shutdown" => "stopped",
                 _ => throw new InvalidDataException("Unsupported host request.")
             };
-            var response = await ExchangeAsync(checked(nextId++), payload, expected, deadline.Token);
-            if (expected == "stopped") ready = false;
+            var response = await ExchangeAsync(checked(nextId++), payload, expected, deadline.Token, replyDelay);
+            if (expected == "stopped") { ready = false; pipe.Dispose(); }
             if (expected == "decision")
             {
                 var decision = response["response"]!.AsObject();
@@ -134,18 +134,19 @@ internal sealed class RuntimeSession : IAsyncDisposable
         finally { gate.Release(); }
     }
 
-    private async Task<JsonObject> ExchangeAsync(ulong id, JsonObject payload, string expected, CancellationToken token)
+    private async Task<JsonObject> ExchangeAsync(ulong id, JsonObject payload, string expected, CancellationToken token, TimeSpan? replyDelay = null)
     {
         var message = new JsonObject
         {
-            ["protocol_version"] = 1,
+            ["protocol_version"] = 2,
             ["session_id"] = sessionId,
             ["request_id"] = id,
             ["payload"] = payload.DeepClone()
         };
         await WriteFrameAsync(pipe, JsonSerializer.SerializeToUtf8Bytes(message), token);
+        if (replyDelay is { } delay) await Task.Delay(delay, token);
         var response = JsonNode.Parse(await ReadFrameAsync(pipe, token))!.AsObject();
-        if (response.Count != 4 || response["protocol_version"]?.GetValue<int>() != 1 ||
+        if (response.Count != 4 || response["protocol_version"]?.GetValue<int>() != 2 ||
             response["session_id"]?.GetValue<string>() != sessionId ||
             response["request_id"]?.GetValue<ulong>() != id ||
             response["payload"]?["type"]?.GetValue<string>() != expected)
@@ -185,7 +186,7 @@ internal sealed class RuntimeSession : IAsyncDisposable
     {
         var message = new JsonObject
         {
-            ["protocol_version"] = 1,
+            ["protocol_version"] = 2,
             ["session_id"] = sessionId,
             ["request_id"] = nextId - 1,
             ["payload"] = new JsonObject { ["type"] = "ping" }

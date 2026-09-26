@@ -1,7 +1,7 @@
 # PSF Guard Director: goal-driven acquisition
 
-Status: phase 0 in progress. Shared-core and sidecar spikes implemented;
-no acquisition integration or production Director plugin yet.
+Status: phase 0 in progress. Shared-core, sidecar, and native simulated
+acquisition spikes implemented; no production Director plugin yet.
 Last updated: 2026-09-25.
 
 This is the tracking document for Director. Update the phase checklist and
@@ -503,6 +503,7 @@ Live host validation: [isolated N.I.N.A. nightly smoke tests, Director PR #2](ht
 Native capture building block: [journaled capture and save lifecycle, Director PR #3](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/3).
 Native simulator sequence: [ASCOM capture and FITS readback, Director PR #4](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/4).
 Planner bridge: [typed evaluation and Rust-selected native capture, Director PR #5](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/5).
+Execution storage: [durable attempt reservations and event outbox, PR #464](https://github.com/theatrus/psf-guard/pull/464).
 
 The Director host pins N.I.N.A. `3.3.0.1058-nightly` and the tested sidecar by
 commit, CI run/artifact identity, SHA-256, and wire versions. The C# build consumes
@@ -660,12 +661,16 @@ duplicate-field validation. Every envelope contains `protocol_version`,
 `session_id`, `request_id`, and `payload`; payloads use a `type` discriminator.
 
 - `hello` must be request 0 with a fresh 32-hex-character session ID. It binds
-  the rig ID and requires exact runtime 0.1.0, engine 0.2.0, and contract 2.
+  the rig ID and requires exact runtime 0.1.1, engine 0.2.0, and contract 2.
   `ready` confirms all versions and the rig.
 - `evaluate` wraps one core request and returns a `decision` with the unchanged
   core response. Valid requests for another assignment rig terminate the session.
   Invalid planning inputs return core errors; invalid IPC terminates the session.
-- `ping` returns `pong`; `shutdown` returns `stopped` and exits. Every message
+- IPC 2 adds a shutdown drain handshake: `ping` returns `pong`; `shutdown`
+  returns `stopped`, then waits at most two seconds for the host to close its
+  pipe after reading the reply. The host closes before waiting for process exit.
+  This avoids dropping an unread Windows pipe reply. No more commands may run
+  after shutdown. Every message
   after hello requires the next consecutive request ID, including heartbeats.
 - Pipe connection and hello each have a 15-second deadline. After hello, each
   complete incoming frame has a 30-second deadline; writes have 10 seconds.
@@ -692,6 +697,65 @@ passed real N.I.N.A. runtime-lifecycle smoke tests. Signed release artifacts,
 integrated durable journals, restart reconciliation, and core-authorized native
 N.I.N.A. dispatch remain phase-0 gates.
 The existing Sync plugin is unchanged.
+
+#### Durable execution ledger
+
+[`crates/director-ledger`](../../crates/director-ledger/src/lib.rs) owns the
+first local attempt/event storage contract. It depends on the shared core and
+SQLite, leaving the planner itself free of I/O. This crate is not yet exposed
+through sidecar IPC or used by the native capture adapter. It changes no existing
+catalog, Sync endpoint, plugin package, or runtime protocol.
+
+The initial ledger binds one immutable allocation, its original accepted/pending
+baseline, the rig/configuration, and the exact engine/contract versions. Each
+ledger has a stable UUID and a monotonically increasing event cursor. Unknown
+schema/engine versions, foreign databases, and changed allocations are refused.
+This deliberately does not activate assignment revisions yet: server baselines
+must first identify acknowledged event cursors so local saved work is not added
+twice. Never rotate the ledger file to bypass this guard or reset attempt limits.
+The eventual host must keep one fixed, profile/rig-scoped ledger location.
+
+Reservation runs the shared evaluator against current conditions and projected
+progress under a short SQLite `BEGIN IMMEDIATE` transaction. It then commits the
+attempt and outbox event together before returning a newly created reservation.
+Competing connections cannot both reserve work. Saved images add pending credit,
+not accepted credit; failed attempts consume budget without refund. A stable
+image identity cannot credit two captures. Repeated identical result delivery
+does not append another event. The outbox supports bounded cursor pages but no
+acknowledgement or pruning until a server inbox contract exists.
+
+Any reserved or uncertain attempt blocks new rig work after a restart. Retrying
+the same capture ID returns existing evidence, never a new dispatch candidate.
+Only a verified final save receipt can mark an image saved. A queue admission,
+cancellation, timeout, or missing file is not proof of failure. Uncertain work
+can resolve to a verified saved image; this first contract has no operator
+resolution for uncertain no-image outcomes. Terminal evidence is immutable.
+The native adapter remains responsible for matching the image identity to its
+capture and recording measured elapsed time, not an estimate.
+
+SQLite WAL with full synchronization retains committed evidence across process
+termination; attempt/result and event writes roll back together on failure.
+Only absolute filesystem paths are accepted, URI open modes are disabled, and
+WAL mode must be confirmed. Temporary/in-memory databases are not durable ledgers.
+Tests cover abrupt exits with committed reservations, committed saved receipts,
+and unfinished transactions, competing writers, bounded lock contention,
+duplicate results, baseline preservation, exhausted budgets, and late saves.
+Copying a live SQLite main file without its WAL is not a supported backup. Backup,
+restore/fork detection, acknowledged revisions, grading events, and recovery
+resolution must be specified before production use.
+
+A reservation is not a hardware permit. Sidecar session fencing, actual dispatch
+boundary safety/ownership checks, and native-journal reconciliation are still
+required. The current adapter and ASCOM probe have not exercised this ledger.
+The next integration must preserve these distinctions rather than treating a
+replayed reservation or an old `acquire` decision as permission to capture.
+
+Run the isolated storage regressions with:
+
+```powershell
+cargo test --locked -p psf-guard-director-ledger
+cargo clippy --locked -p psf-guard-director-ledger --all-targets -- -D warnings
+```
 
 ### Phase 1: meta database and global project model
 

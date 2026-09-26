@@ -18,7 +18,7 @@ keywords = ["astronomy", "telescope", "imaging", "analysis", "nina"]
 categories = ["command-line-utilities", "science"]
 
 [workspace]
-members = ["crates/director-core", "crates/director-ffi", "crates/director-runtime"]
+members = ["crates/director-core", "crates/director-ffi", "crates/director-runtime", "crates/director-ledger"]
 default-members = ["."]
 resolver = "3"
 

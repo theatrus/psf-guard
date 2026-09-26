@@ -32,6 +32,13 @@ foreach (var fixturePath in args.Skip(1))
     Assert(await session.WaitForExitAsync() == 0, "graceful shutdown");
 }
 
+for (var iteration = 0; iteration < 10; iteration++)
+{
+    await using var slowReader = await RuntimeSession.StartAsync(args[0], "rig-1", started.Add);
+    await slowReader.SendAsync(new JsonObject { ["type"] = "shutdown" }, replyDelay: TimeSpan.FromMilliseconds(100));
+    Assert(await slowReader.WaitForExitAsync() == 0, "shutdown reply survives a delayed pipe reader");
+}
+
 await MustFail(async () =>
 {
     await using var rejected = await RuntimeSession.StartAsync(args[0], "rig-1", started.Add, engineVersion: "incompatible");

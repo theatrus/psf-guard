@@ -62,7 +62,50 @@ async fn handshake_ping_and_shutdown_are_correlated() {
         receive_reply(&mut client).await.payload,
         ResultMessage::Stopped
     ));
+    client.shutdown().await.unwrap();
     assert_eq!(task.await.unwrap(), Ok(()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn shutdown_keeps_reply_alive_until_host_disconnects() {
+    let (mut client, server) = duplex(MAX_FRAME_BYTES);
+    let task = tokio::spawn(serve(server));
+    handshake(&mut client).await;
+    send(&mut client, &command(1, Command::Shutdown)).await;
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_millis(100)).await;
+    assert!(!task.is_finished());
+    assert!(matches!(
+        receive_reply(&mut client).await.payload,
+        ResultMessage::Stopped
+    ));
+    client.shutdown().await.unwrap();
+    assert_eq!(task.await.unwrap(), Ok(()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn shutdown_wait_is_bounded_and_cannot_dispatch_more_commands() {
+    for extra_command in [false, true] {
+        let (mut client, server) = duplex(MAX_FRAME_BYTES);
+        let task = tokio::spawn(serve(server));
+        handshake(&mut client).await;
+        send(&mut client, &command(1, Command::Shutdown)).await;
+        assert!(matches!(
+            receive_reply(&mut client).await.payload,
+            ResultMessage::Stopped
+        ));
+        if extra_command {
+            send(&mut client, &command(2, Command::Ping)).await;
+        }
+        assert_eq!(
+            task.await.unwrap(),
+            Err(if extra_command {
+                ProtocolError::InvalidMessage
+            } else {
+                ProtocolError::Timeout
+            })
+        );
+    }
 }
 
 #[tokio::test]
@@ -182,7 +225,7 @@ async fn raw_planning_input_keeps_duplicate_fields_and_size_limits() {
     .enumerate()
     {
         let message = format!(
-            r#"{{"protocol_version":1,"session_id":"{SESSION}","request_id":{},"payload":{{"type":"evaluate","request":{raw}}}}}"#,
+            r#"{{"protocol_version":{PROTOCOL_VERSION},"session_id":"{SESSION}","request_id":{},"payload":{{"type":"evaluate","request":{raw}}}}}"#,
             index + 1
         );
         write_frame(&mut client, message.as_bytes()).await.unwrap();
