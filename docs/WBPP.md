@@ -93,8 +93,19 @@ The dialog then follows WBPP's own log: which step it is on, how long the
 run has taken, the last lines, and any line WBPP marked as an error. WBPP
 writes its log between steps, so a long integration shows nothing new for
 a while; the elapsed time keeps counting and PixInsight is still at work.
-**Stop PixInsight** ends the run. One run at a time per database; opening
-the dialog while one is under way shows that run.
+**Stop PixInsight** ends the run.
+
+PixInsight takes every core it can get, so the server runs one WBPP job at
+a time across all databases. Starting a second project while one runs
+queues it: the dialog opens under that project's own name, says which run
+PixInsight is busy with, and its button reads **Queue stacking**. A queued
+run starts on its own when the running one ends, with the settings it was
+queued with, whatever the first run's outcome. The Overview lists runs in
+line with their place; **×** takes one out, and so does **Remove from
+queue** in its dialog. The queue lives in the server process, so a
+restart drops it along with the run under way. Opening the dialog on the
+project that is running shows that run; from another project's dialog,
+**Show that run** does the same.
 
 When PixInsight exits, the dialog lists the masters WBPP wrote, each a
 download, with links to the script, WBPP's log and PixInsight's console
@@ -102,13 +113,14 @@ output. Everything stays in the run folder, so it is also there on the
 server's disk for PixInsight to open directly. A run that wrote no master
 is reported as failed, with the last error WBPP logged.
 
-The Overview shows every database's run under way or just finished, in
-whichever browser or tab you open it from: a status line above the
-projects, and the project's own **Stack in WBPP** action reads *Stacking
-in WBPP…*, *WBPP masters ready* or *WBPP failed* until the next run.
-Either reopens the dialog. The run's state lives in the server process,
-so a server restart forgets a finished run's progress and results; its
-folder and files stay on disk.
+The Overview shows every database's run under way, just finished, or in
+line, in whichever browser or tab you open it from: one row per job above
+the metrics, coloured by state, and the project's own **Stack in WBPP**
+action reads *Stacking in WBPP…*, *Queued for WBPP*, *WBPP masters ready*
+or *WBPP failed* until the next run. Either reopens the dialog. **×** on a
+finished run's row clears it from view everywhere; the run folder and its
+files stay on disk. The run's state lives in the server process, so a
+server restart forgets a finished run's progress and results too.
 
 ### Keep the masters with your finished work
 

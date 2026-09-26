@@ -17,7 +17,9 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -290,7 +292,7 @@ pub async fn update_pixinsight_settings(
 // Runs
 // ----------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct StartWbppRunRequest {
     #[serde(default)]
     pub project_id: Option<i32>,
@@ -449,8 +451,63 @@ fn publish_and_record(
 
 #[derive(Debug, Serialize)]
 pub struct WbppRunStatusResponse {
+    /// POST: whether this request started PixInsight now. GET: whether a run
+    /// is under way.
     pub started: bool,
+    /// The id this request's run took in the line, when it was queued
+    /// rather than started.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue_id: Option<String>,
+    /// This database's runs waiting their turn, with their place in the
+    /// server-wide line.
+    pub queued: Vec<crate::server::wbpp_queue::QueuedRunSummary>,
     pub progress: WbppRunProgress,
+}
+
+fn status(
+    state: &AppState,
+    ctx: &crate::server::database_context::DatabaseContext,
+    started: bool,
+    queue_id: Option<String>,
+) -> WbppRunStatusResponse {
+    WbppRunStatusResponse {
+        started,
+        queue_id,
+        queued: state.wbpp_queue.summaries_for(&ctx.id),
+        progress: progress_snapshot(&ctx.wbpp_run),
+    }
+}
+
+/// Whether PixInsight is busy with any database's run.
+fn any_run_active(state: &AppState) -> bool {
+    state
+        .all_databases()
+        .iter()
+        .any(|db| db.wbpp_run.read().unwrap().progress.running)
+}
+
+/// A queued run that could not start: shown as a failed run of its
+/// database, so the reason is where the person will look.
+fn record_failed_launch(
+    store: &RwLock<WbppRunStore>,
+    scope: String,
+    project_id: Option<i32>,
+    error: String,
+) {
+    let now = chrono::Utc::now().timestamp();
+    let mut s = store.write().unwrap();
+    if s.progress.running {
+        return;
+    }
+    s.progress = WbppRunProgress {
+        stage: "error".to_string(),
+        scope,
+        project_id,
+        started_at: Some(now),
+        finished_at: Some(now),
+        error: Some(error),
+        ..Default::default()
+    };
 }
 
 /// The install a run would use, or why it cannot start.
@@ -564,6 +621,70 @@ pub async fn start_wbpp_run(
             )));
         }
     }
+    if req
+        .publish_folder
+        .as_deref()
+        .is_some_and(|folder| !folder.trim().is_empty())
+    {
+        if ctx.process_dir.is_none() {
+            return Err(AppError::BadRequest(
+                "This database has no process directory to save masters to. Set one \
+                 under Settings → Databases."
+                    .into(),
+            ));
+        }
+        publish_folder_name(req.publish_folder.as_deref().unwrap_or_default())?;
+    }
+
+    // One PixInsight at a time, server-wide: a start while any run is under
+    // way joins the line and starts on its own when that run ends.
+    if any_run_active(&state) {
+        if let Some(existing) = state.wbpp_queue.find_same(&ctx.id, &req) {
+            return Ok(Json(ApiResponse::success(status(
+                &state,
+                &ctx,
+                false,
+                Some(existing.id),
+            ))));
+        }
+        let scope = scope_of(&req);
+        let (queue_id, position) =
+            state
+                .wbpp_queue
+                .push(&ctx.id, scope.clone(), req, chrono::Utc::now().timestamp());
+        tracing::info!(
+            "🔭 WBPP run for db={} ({scope}) queued at position {position}",
+            ctx.id
+        );
+        return Ok(Json(ApiResponse::success(status(
+            &state,
+            &ctx,
+            false,
+            Some(queue_id),
+        ))));
+    }
+
+    let started = launch(Arc::clone(&state), ctx.0.clone(), req).await?;
+    Ok(Json(ApiResponse::success(status(
+        &state, &ctx, started, None,
+    ))))
+}
+
+fn scope_of(req: &StartWbppRunRequest) -> String {
+    req.scope_label
+        .clone()
+        .filter(|label| !label.trim().is_empty())
+        .unwrap_or_else(|| "selection".into())
+}
+
+/// Resolve the install, claim the database's run slot, and start PixInsight
+/// in the background. `Ok(false)` means the database already has a run
+/// under way. When the run ends, the next queued run starts.
+async fn launch(
+    state: Arc<AppState>,
+    ctx: Arc<crate::server::database_context::DatabaseContext>,
+    req: StartWbppRunRequest,
+) -> Result<bool, AppError> {
     let (install, display, settings) = {
         let state = state.clone();
         tokio::task::spawn_blocking(move || resolve_install(&state))
@@ -579,35 +700,20 @@ pub async fn start_wbpp_run(
     );
     if root.to_string_lossy().contains(',') {
         return Err(AppError::BadRequest(format!(
-            "{} contains a comma, which WBPP's command line uses to separate parameters;              choose another run folder",
+            "{} contains a comma, which WBPP's command line uses to separate parameters; \
+             choose another run folder",
             root.display()
         )));
     }
 
-    let scope = req
-        .scope_label
-        .clone()
-        .filter(|label| !label.trim().is_empty())
-        .unwrap_or_else(|| "selection".into());
+    let scope = scope_of(&req);
     let publish_folder = match req.publish_folder.as_deref().map(str::trim) {
-        Some(folder) if !folder.is_empty() => {
-            if ctx.process_dir.is_none() {
-                return Err(AppError::BadRequest(
-                    "This database has no process directory to save masters to. Set one \
-                     under Settings → Databases."
-                        .into(),
-                ));
-            }
-            Some(publish_folder_name(folder)?)
-        }
+        Some(folder) if !folder.is_empty() => Some(publish_folder_name(folder)?),
         _ => None,
     };
-    let store = ctx.0.wbpp_run.clone();
+    let store = ctx.wbpp_run.clone();
     let Some(cancel) = try_begin(&store, scope.clone(), req.options.clone()) else {
-        return Ok(Json(ApiResponse::success(WbppRunStatusResponse {
-            started: false,
-            progress: progress_snapshot(&store),
-        })));
+        return Ok(false);
     };
 
     let work_dir = root.join(run_dir_name(&scope));
@@ -629,10 +735,11 @@ pub async fn start_wbpp_run(
         layout: ExportLayout::Wbpp,
         ..Default::default()
     };
-    let job_ctx = ctx.0.clone();
+    let job_ctx = ctx.clone();
     let job_store = store.clone();
     let wbpp_options = req.options.clone();
     let extra = req.extra_params.clone();
+    let job_state = state;
 
     tokio::spawn(async move {
         let outcome = run(
@@ -688,12 +795,63 @@ pub async fn start_wbpp_run(
                 finish(&job_store, "error", Some(format!("{error:#}")));
             }
         }
+        // PixInsight is free: the next run in line takes it.
+        tokio::spawn(drain_queue(job_state));
     });
 
-    Ok(Json(ApiResponse::success(WbppRunStatusResponse {
-        started: true,
-        progress: progress_snapshot(&store),
-    })))
+    Ok(true)
+}
+
+/// Start the next queued run, skipping past any that cannot start (its
+/// database gone, PixInsight missing) and recording why on that database.
+/// Boxed because a run's end schedules this again.
+fn drain_queue(state: Arc<AppState>) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    Box::pin(async move {
+        while let Some(next) = state.wbpp_queue.pop_front() {
+            let Some(ctx) = state.get_database(&next.db_id) else {
+                tracing::info!(
+                    "🔭 Queued WBPP run {} dropped: database {} is gone",
+                    next.scope,
+                    next.db_id
+                );
+                continue;
+            };
+            let scope = next.scope.clone();
+            let project_id = next.project_id;
+            match launch(Arc::clone(&state), ctx.clone(), next.request).await {
+                Ok(true) => {
+                    tracing::info!("🔭 Queued WBPP run for db={} ({scope}) started", ctx.id);
+                    return;
+                }
+                Ok(false) => {
+                    // Someone started a run on this database by hand in the
+                    // meantime; that run's end will drain again.
+                    tracing::info!(
+                        "🔭 Queued WBPP run for db={} ({scope}) waits: the database is busy",
+                        ctx.id
+                    );
+                    return;
+                }
+                Err(error) => {
+                    let message = match &error {
+                        AppError::BadRequest(message)
+                        | AppError::Conflict(message)
+                        | AppError::Forbidden(message)
+                        | AppError::InternalError(message)
+                        | AppError::NotFoundMessage(message)
+                        | AppError::DatabaseError(message) => message.clone(),
+                        AppError::NotFound => "not found".to_string(),
+                        AppError::NotImplemented => "not implemented".to_string(),
+                    };
+                    tracing::warn!(
+                        "🔭 Queued WBPP run for db={} ({scope}) could not start: {message}",
+                        ctx.id
+                    );
+                    record_failed_launch(&ctx.wbpp_run, scope, project_id, message);
+                }
+            }
+        }
+    })
 }
 
 /// The run itself: plan, write, launch, watch. Returns the closing stage.
@@ -881,15 +1039,65 @@ async fn run(
     Ok("complete")
 }
 
-/// `GET /api/db/{db_id}/wbpp/runs/current` — the run's progress.
+/// `GET /api/db/{db_id}/wbpp/runs/current` — the run's progress and the
+/// database's queued runs.
 pub async fn get_wbpp_run(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
 ) -> Result<Json<ApiResponse<WbppRunStatusResponse>>, AppError> {
-    let progress = progress_snapshot(&ctx.0.wbpp_run);
-    Ok(Json(ApiResponse::success(WbppRunStatusResponse {
-        started: progress.running,
-        progress,
-    })))
+    let running = ctx.wbpp_run.read().unwrap().progress.running;
+    Ok(Json(ApiResponse::success(status(
+        &state, &ctx, running, None,
+    ))))
+}
+
+/// `POST /api/db/{db_id}/wbpp/runs/current/dismiss` — clear a finished run
+/// from view. The run folder stays on disk.
+pub async fn dismiss_wbpp_run(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Result<Json<ApiResponse<WbppRunStatusResponse>>, AppError> {
+    require_database_management_allowed(&state)?;
+    {
+        let mut s = ctx.wbpp_run.write().unwrap();
+        if s.progress.running {
+            return Err(AppError::Conflict(
+                "the WBPP run is still under way; stop it first".into(),
+            ));
+        }
+        if s.progress
+            .publish
+            .as_ref()
+            .is_some_and(|publish| publish.state == "running")
+        {
+            return Err(AppError::Conflict(
+                "the masters are still being saved; try again in a moment".into(),
+            ));
+        }
+        s.progress = WbppRunProgress::default();
+    }
+    Ok(Json(ApiResponse::success(status(
+        &state, &ctx, false, None,
+    ))))
+}
+
+/// `DELETE /api/db/{db_id}/wbpp/runs/queue/{queue_id}` — take a waiting run
+/// out of the line.
+pub async fn remove_queued_wbpp_run(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    AxumPath((_db_id, queue_id)): AxumPath<(String, String)>,
+) -> Result<Json<ApiResponse<WbppRunStatusResponse>>, AppError> {
+    require_database_management_allowed(&state)?;
+    if state.wbpp_queue.remove(&ctx.id, &queue_id).is_none() {
+        return Err(AppError::NotFoundMessage(
+            "that run is no longer waiting; it may have started".into(),
+        ));
+    }
+    let running = ctx.wbpp_run.read().unwrap().progress.running;
+    Ok(Json(ApiResponse::success(status(
+        &state, &ctx, running, None,
+    ))))
 }
 
 /// `DELETE /api/db/{db_id}/wbpp/runs/current` — stop the run.
@@ -910,11 +1118,10 @@ pub async fn cancel_wbpp_run(
             terminate(pid);
         }
     }
-    let progress = progress_snapshot(&ctx.0.wbpp_run);
-    Ok(Json(ApiResponse::success(WbppRunStatusResponse {
-        started: progress.running,
-        progress,
-    })))
+    let running = ctx.wbpp_run.read().unwrap().progress.running;
+    Ok(Json(ApiResponse::success(status(
+        &state, &ctx, running, None,
+    ))))
 }
 
 /// `POST /api/db/{db_id}/wbpp/runs/current/publish` — save the finished
@@ -975,11 +1182,10 @@ pub async fn publish_wbpp_run(
             project_id,
         )
     });
-    let progress = progress_snapshot(&ctx.0.wbpp_run);
-    Ok(Json(ApiResponse::success(WbppRunStatusResponse {
-        started: progress.running,
-        progress,
-    })))
+    let running = ctx.wbpp_run.read().unwrap().progress.running;
+    Ok(Json(ApiResponse::success(status(
+        &state, &ctx, running, None,
+    ))))
 }
 
 /// A path below the run's work folder, refused if it climbs out.
@@ -1062,6 +1268,124 @@ mod tests {
         assert_eq!(progress.scope, "project B");
         assert!(progress.error.is_none());
         assert!(progress.outputs.is_empty());
+    }
+
+    fn state_with_management() -> (Arc<AppState>, DbContext) {
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        state.set_allow_database_management(true);
+        let ctx = DbContext(state.all_databases().remove(0));
+        (state, ctx)
+    }
+
+    fn request(project_id: i32, label: &str) -> StartWbppRunRequest {
+        StartWbppRunRequest {
+            project_id: Some(project_id),
+            scope_label: Some(label.into()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_start_while_pixinsight_is_busy_joins_the_line_once_and_can_leave_it() {
+        let (state, ctx) = state_with_management();
+        // A run under way on this database, as PixInsight would leave it.
+        try_begin(&ctx.wbpp_run, "Sh2 86".into(), WbppOptions::default()).unwrap();
+        update(&ctx.wbpp_run, |progress| progress.project_id = Some(1));
+
+        let queued = start_wbpp_run(
+            State(Arc::clone(&state)),
+            DbContext(ctx.0.clone()),
+            Json(request(2, "NGC 6820")),
+        )
+        .await
+        .unwrap()
+        .0
+        .data
+        .unwrap();
+        assert!(!queued.started);
+        let queue_id = queued.queue_id.clone().expect("queued, not started");
+        assert_eq!(queued.queued.len(), 1);
+        assert_eq!(queued.queued[0].position, 1);
+        assert_eq!(queued.queued[0].scope, "NGC 6820");
+        assert_eq!(
+            queued.progress.scope, "Sh2 86",
+            "the running run is untouched"
+        );
+
+        // The same project again does not queue twice.
+        let again = start_wbpp_run(
+            State(Arc::clone(&state)),
+            DbContext(ctx.0.clone()),
+            Json(request(2, "NGC 6820")),
+        )
+        .await
+        .unwrap()
+        .0
+        .data
+        .unwrap();
+        assert_eq!(again.queue_id.as_deref(), Some(queue_id.as_str()));
+        assert_eq!(state.wbpp_queue.len(), 1);
+
+        // Dismissing is refused while the run is under way.
+        assert!(matches!(
+            dismiss_wbpp_run(State(Arc::clone(&state)), DbContext(ctx.0.clone())).await,
+            Err(AppError::Conflict(_))
+        ));
+
+        let left = remove_queued_wbpp_run(
+            State(Arc::clone(&state)),
+            DbContext(ctx.0.clone()),
+            AxumPath(("test".into(), queue_id.clone())),
+        )
+        .await
+        .unwrap()
+        .0
+        .data
+        .unwrap();
+        assert!(left.queued.is_empty());
+        assert!(matches!(
+            remove_queued_wbpp_run(
+                State(Arc::clone(&state)),
+                DbContext(ctx.0.clone()),
+                AxumPath(("test".into(), queue_id)),
+            )
+            .await,
+            Err(AppError::NotFoundMessage(_))
+        ));
+
+        // Once the run ends, dismissing clears it from view.
+        finish(&ctx.wbpp_run, "complete", None);
+        let cleared = dismiss_wbpp_run(State(Arc::clone(&state)), DbContext(ctx.0.clone()))
+            .await
+            .unwrap()
+            .0
+            .data
+            .unwrap();
+        assert_eq!(cleared.progress.stage, "");
+        assert!(cleared.progress.finished_at.is_none());
+    }
+
+    #[test]
+    fn a_queued_run_that_cannot_start_is_shown_as_a_failed_run() {
+        let store = RwLock::new(WbppRunStore::default());
+        record_failed_launch(
+            &store,
+            "M31".into(),
+            Some(3),
+            "PixInsight is not installed".into(),
+        );
+        let progress = progress_snapshot(&store);
+        assert_eq!(progress.stage, "error");
+        assert_eq!(progress.scope, "M31");
+        assert_eq!(progress.project_id, Some(3));
+        assert!(!progress.running);
+        assert!(progress.finished_at.is_some());
+        // Never over a run under way.
+        try_begin(&store, "live".into(), WbppOptions::default()).unwrap();
+        record_failed_launch(&store, "M31".into(), None, "x".into());
+        assert_eq!(progress_snapshot(&store).scope, "live");
     }
 
     #[test]

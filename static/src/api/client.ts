@@ -410,6 +410,26 @@ export const apiClient = {
     return data.data;
   },
 
+  /** Clear a finished run from view; its folder stays on disk. */
+  dismissWbppRun: async (dbId: string): Promise<WbppRunStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<WbppRunStatus>>(
+      dbPath(dbId, '/wbpp/runs/current/dismiss')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to dismiss the WBPP run');
+    return data.data;
+  },
+
+  /** Take a waiting run out of the line. */
+  removeQueuedWbppRun: async (dbId: string, queueId: string): Promise<WbppRunStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.delete<ApiResponse<WbppRunStatus>>(
+      dbPath(dbId, `/wbpp/runs/queue/${encodeURIComponent(queueId)}`)
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to remove the queued run');
+    return data.data;
+  },
+
   /** Save the finished run's masters to `<process_dir>/<folder>/master/`. */
   publishWbppRun: async (dbId: string, folder: string): Promise<WbppRunStatus> => {
     const apiInstance = await getApi();
