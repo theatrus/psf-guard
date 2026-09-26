@@ -56,7 +56,7 @@ sync semantics.
 
 ## Implementation audit
 
-Audited 2026-09-26 against PSF Guard main `caf4d51` and Director plugin main
+Audited 2026-09-26 against PSF Guard main `3a6a3ac` and Director plugin main
 `8f6d8c2`, plus the open PR heads listed below. **Merged building block** does
 not mean a production workflow or phase gate passed. Open PR work is not in
 main. Update this table and the relevant checklist when a PR lands; keep
@@ -70,7 +70,7 @@ untested integration requirements unchecked.
 | NINA native execution | Plugin [#18](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/18), [#19](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/19), [#22](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/22), [#23](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/23), [#24](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/24) merged: transient native items, target context, complete horizon export and post-hook geometry checks. Real nightly #58 OmniSim probe captured three filtered FITS frames with correlated evidence. | Public production session container, all trigger/condition/hook contexts, plugin compatibility matrix, native defaults, full autofocus/guiding/flip/calibration/safety recovery and continuous ownership integration. Probe uses fixture allocations and synthetic orientation evidence, not a server session. |
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
 | Meta storage | [#488](https://github.com/theatrus/psf-guard/pull/488) and [#489](https://github.com/theatrus/psf-guard/pull/489) merged: separate schema-2 store, UUIDs, mappings, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. | Catalog adoption workflow, permissions/enrollment, active revisions, allocation authority and progress projections. |
-| Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492) and [#493](https://github.com/theatrus/psf-guard/pull/493) implemented/tested in open PRs: shared objective/contribution model and schema-3 intent persistence. | Not merged; objective editor, depth/FOV/sampling compatibility and authoritative allocation remain open. |
+| Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492) merged: shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493) implements/tests schema-3 intent persistence in an open PR. | Persistence not merged; objective editor, depth/FOV/sampling compatibility and authoritative allocation remain open. |
 | Operator API and UI | [#490](https://github.com/theatrus/psf-guard/pull/490) and [#494](https://github.com/theatrus/psf-guard/pull/494) merged: opt-in project/site/rig identity and site/rig snapshot APIs. [#495](https://github.com/theatrus/psf-guard/pull/495) implements/tests the identity management screen in an open PR. | UI not merged. No project planning editor, catalog adoption, rig pairing, acquisition control or live rig dashboard. UI tests are not equipment tests. |
 | Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
 | Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. | Central telemetry ingestion/dashboard, scoped pairing, remote acknowledgements, offline authorization lifecycle, manual/sequence batch reconcile and reconnect activation are not implemented. |
@@ -1712,10 +1712,11 @@ include catalogs, images, or Director's local execution journal. Stop the old
 coordinator before switching to a restored path. Online replacement and automated
 restore/configuration switching are not supported.
 
-This is identity and configuration storage only. Objectives, recipes,
-allocation authority, rig enrollment/permissions, catalog adoption and UI remain
-required before the phase is complete. No assignment or hardware authority is
-created by registering a rig or catalog.
+Identity and configuration storage do not complete coordination. The shared
+objective/contribution model below is merged, but its persistence, editing,
+allocation authority, rig enrollment/permissions and catalog adoption remain
+required. No assignment or hardware authority is created by registering a rig
+or catalog.
 
 The shared core's `project` module defines versioned project intent separately
 from an execution assignment. Each immutable snapshot identifies the global
@@ -1758,8 +1759,8 @@ are unchanged.
   database-management gate (#490).
 - [x] Merge and validate site/rig identity and snapshot operator APIs (#494).
 - [ ] Merge and validate the identity management UI (#495).
-- [ ] Merge the shared objective/contribution model and persisted intent
-  (#492/#493), then add the actual objective/configuration editor.
+- [x] Merge the shared objective/contribution model (#492).
+- [ ] Merge persisted intent (#493), then add the objective/configuration editor.
 - [ ] Link existing catalogs without rewriting TS history or merging names.
 - [ ] Add scoped project views that distinguish global and rig-local projects.
 - [ ] Define PSF Guard-owned per-rig catalog schemas and versioned access
