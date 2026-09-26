@@ -6,6 +6,10 @@
 
 ## Added
 
+- Director's experimental API can inspect registered catalogs for projects and
+  profile IDs, reporting missing or duplicate identities without modifying the
+  source database or reading image data. Rig/project adoption is still pending.
+
 - An opt-in Director metadata API can create, list, and rename global project,
   site and rig identities, and retain complete immutable horizon and equipment
   snapshots in a separate SQLite store. Enable it with `--director-meta` and
