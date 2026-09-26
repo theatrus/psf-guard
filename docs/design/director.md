@@ -198,8 +198,8 @@ before production coordination data is stored.
 
 Implementation direction: a standalone Rust planning crate used directly by
 PSF Guard and by a bundled Director sidecar. The C# N.I.N.A. plugin communicates
-with that sidecar over versioned local IPC. The sidecar boundary and plugin
-packaging still need implementation and validation.
+with that sidecar over versioned local IPC. The process boundary is implemented
+as a testable spike; plugin packaging and equipment integration remain pending.
 Do not maintain parallel Rust and C# versions of the scheduling algorithm.
 
 The core currently lives in this repository; the installable Director plugin
@@ -224,8 +224,8 @@ Sidecar exit, timeout, protocol mismatch, or malformed responses revoke pending
 decisions and prevent new dispatch. N.I.N.A. remains responsible for an in-flight
 operation and continuous safety handling. On restart, reconcile the durable
 execution journal and resubmit current state; never replay a stale decision just
-because its IPC request was retried. The exact pipe framing, startup handshake,
-and failure policy belong to the phase-0 sidecar/plugin slice.
+because its IPC request was retried. The phase-0 protocol described below proves
+the process boundary, not durable recovery or permission to operate equipment.
 
 The core has no HTTP, SQLite, N.I.N.A., or TS dependencies. Hosts provide inputs
 and execute outputs. Time and randomness are explicit inputs, not hidden global
@@ -412,6 +412,8 @@ its acceptance gate passes and its review and validation evidence is linked here
   meridian exclusions without bridging horizon gaps; validate transit coverage.
 - [x] Choose a separate thin plugin plus bundled Rust sidecar, following the
   Chatstronomy core/plugin distribution model with versioned local IPC.
+- [x] Exercise the same golden decisions through a real Windows sidecar with
+  bounded framing, version negotiation, peer checks, and process failure tests.
 - [ ] Finalize crate ownership, IPC framing, local state layout, and contracts.
 
 Gate: one simulated target/exposure runs through the supported adapter; the
@@ -517,6 +519,53 @@ Windows, Linux, and macOS. Only local Windows results are evidence until those
 hosted jobs pass. The existing application remains the default Cargo workspace
 member, so normal application builds do not package the experimental native DLL.
 
+#### Sidecar protocol spike
+
+[`crates/director-runtime`](../../crates/director-runtime/src/lib.rs) links the
+same core into a separate executable. The Windows-only
+[.NET process harness](../../tools/director-sidecar/Program.cs) launches it over
+a random, current-user-only, first-instance named pipe. Both ends verify the
+peer process ID. Only the pipe name and host PID appear in process arguments;
+this protocol has no credential, network, database, or equipment operations.
+
+IPC version 1 uses a four-byte little-endian length followed by UTF-8 JSON.
+Frames are limited to 266,240 bytes before body allocation. The nested planning
+request retains its original JSON and the core's 262,144-byte limit, including
+duplicate-field validation. Every envelope contains `protocol_version`,
+`session_id`, `request_id`, and `payload`; payloads use a `type` discriminator.
+
+- `hello` must be request 0 with a fresh 32-hex-character session ID. It binds
+  the rig ID and requires exact runtime 0.1.0, engine 0.2.0, and contract 2.
+  `ready` confirms all versions and the rig.
+- `evaluate` wraps one core request and returns a `decision` with the unchanged
+  core response. Valid requests for another assignment rig terminate the session.
+  Invalid planning inputs return core errors; invalid IPC terminates the session.
+- `ping` returns `pong`; `shutdown` returns `stopped` and exits. Every message
+  after hello requires the next consecutive request ID, including heartbeats.
+- Pipe connection and hello each have a 15-second deadline. After hello, each
+  complete incoming frame has a 30-second deadline; writes have 10 seconds.
+  The test host applies a five-second request deadline and kills its owned
+  process on an interrupted exchange. A production controller must keep the
+  connection alive during long equipment operations without blocking N.I.N.A.
+- Clean EOF ends the child normally. Truncation, timeout, incompatible versions,
+  and stale/duplicate requests end the session without a replayed response.
+  A new child must negotiate a new session and receive a fresh snapshot.
+
+Run the real Windows process tests:
+
+```powershell
+cargo test --locked -p psf-guard-director-runtime
+cargo build --locked --release -p psf-guard-director-runtime
+dotnet run --project tools/director-sidecar --configuration Release -- target/release/psf-guard-director-runtime.exe crates/director-core/tests/fixtures/decisions.json crates/director-core/tests/fixtures/rig-windows.json
+```
+
+CI runs portable protocol tests on all three platforms and Windows process
+tests against a release executable. Release panic-abort is intentional here:
+the failure stays in the child process, outside N.I.N.A. This is not yet an
+installable plugin. Signed/pinned artifacts, a production lifecycle controller,
+durable journals, restart reconciliation, and TS dispatch remain phase-0 gates.
+The existing Sync plugin is unchanged.
+
 ### Phase 1: meta database and global project model
 
 - [ ] Add opt-in meta storage, migrations, backup/restore, and stable mappings.
@@ -587,10 +636,43 @@ simulated devices, not only mocked plugin classes. Include cancellation,
 duplicate/reordered events, stale conditions, expired assignments, clock skew,
 disk/SQLite contention, missing images, and incompatible versions.
 
-Maintain shared-engine fixtures across server and native plugin hosts. Protect
+Maintain shared-engine fixtures across server and sidecar hosts. Protect
 ordinary TS execution and existing Sync behavior with regression coverage.
 Use an experimental Director release channel until these gates pass; do not
 replace the stable Sync registry entry.
+
+### Full-stack end-to-end gate
+
+Once the Director plugin, shared crate/sidecar, TS adapter, and corresponding
+PSF Guard changes are available, run them together. Passing core fixtures or
+the console process harness does not satisfy this gate. Run the first integrated
+test as soon as those components exist, then repeat it after changes to their
+contracts or execution behavior and before an experimental release.
+
+- Build a separate local PSF Guard instance from the candidate changes. Use
+  copied catalogs, isolated meta storage, a test registry supplied with
+  `--registry`, and a temporary image receive directory. Do not write to live
+  catalogs, production endpoints, or the user's real registry.
+- Install the candidate Director plugin and its pinned runtime into the test
+  N.I.N.A. setup with the supported TS build. Use simulated camera, mount, and
+  other required devices, an isolated profile, and a real sequencer run.
+- Pair with the local server, check in, obtain an assignment, select work in
+  the shared engine, execute through TS, and record the resulting image and
+  timing events. Verify progress in PSF Guard and the plugin UI, not just logs.
+- Grade the captured work in PSF Guard and check in again. Confirm accepted
+  work completes its objective, rejected work can request a bounded retry, and
+  pending assessments do not cause duplicate acquisition.
+- Exercise changed priorities, slow autofocus, horizon/meridian restrictions,
+  operator stop, safety loss, server disconnection, sidecar failure, and restart.
+  Verify recovery reconciles actual execution without replaying a stale decision
+  or starting work outside the assignment or local safety constraints.
+- Re-run ordinary TS and existing Sync workflows to check coexistence. Retain
+  exact commits/package versions, sequence/profile fixtures, redacted logs,
+  execution events, assertions, and UI captures with the relevant PR evidence.
+
+Mark unavailable paths as untested and keep the gate open; do not substitute
+mocked components for the missing integration. No current sidecar-spike result
+claims this full-stack test has run.
 
 Open design choices include objective depth equivalence across instruments,
 coordinate/time precision policy, conservative expiry margins, duration-model

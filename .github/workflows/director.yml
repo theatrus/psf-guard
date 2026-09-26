@@ -32,7 +32,19 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --locked -p psf-guard-director-core -p psf-guard-director-ffi --all-targets -- -D warnings
-      - run: cargo test --locked -p psf-guard-director-core -p psf-guard-director-ffi
+      - run: cargo clippy --locked -p psf-guard-director-core -p psf-guard-director-ffi -p psf-guard-director-runtime --all-targets -- -D warnings
+      - run: cargo test --locked -p psf-guard-director-core -p psf-guard-director-ffi -p psf-guard-director-runtime
       - run: cargo build --locked --profile director -p psf-guard-director-ffi
       - run: dotnet run --project tools/director-interop --configuration Release -- target/director/${{ matrix.library }} crates/director-core/tests/fixtures/decisions.json crates/director-core/tests/fixtures/rig-windows.json
+      - if: runner.os == 'Windows'
+        run: cargo build --locked --release -p psf-guard-director-runtime
+      - if: runner.os == 'Windows'
+        run: dotnet format tools/director-sidecar --verify-no-changes
+      - if: runner.os == 'Windows'
+        run: dotnet run --project tools/director-sidecar --configuration Release -- target/release/psf-guard-director-runtime.exe crates/director-core/tests/fixtures/decisions.json crates/director-core/tests/fixtures/rig-windows.json
+      - if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: director-runtime-windows-x64
+          path: target/release/psf-guard-director-runtime.exe
+          if-no-files-found: error
