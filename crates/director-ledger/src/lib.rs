@@ -6,7 +6,7 @@
 use psf_guard_director_core::{
     Assignment, Decision, Request, State, CONTRACT_VERSION, ENGINE_VERSION, MAX_REQUEST_BYTES,
 };
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::{fmt, path::Path, time::Duration};
 
@@ -23,6 +23,7 @@ pub enum Error {
     ForeignDatabase,
     UnsupportedSchema,
     UnsupportedEngine,
+    UnsupportedStorage,
     AssignmentMismatch,
     UnknownCapture,
     ConflictingEvidence,
@@ -144,6 +145,11 @@ impl Ledger {
     /// accepted/pending counters. Do not create another ledger on revision changes:
     /// revision activation and cursor reconciliation are not implemented yet.
     pub fn open(path: &Path, assignment: Assignment, state: State) -> Result<Self, Error> {
+        // Absolute filesystem paths exclude SQLite's temporary/":memory:" names
+        // and URI connection parameters that can silently disable persistence.
+        if !path.is_absolute() {
+            return Err(Error::InvalidInput);
+        }
         let request = Request {
             contract_version: CONTRACT_VERSION,
             assignment,
@@ -159,7 +165,12 @@ impl Ledger {
             return Err(Error::AssignmentMismatch);
         }
         let encoded = serde_json::to_string(&request.assignment)?;
-        let mut connection = Connection::open(path)?;
+        let mut connection = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE
+                | OpenFlags::SQLITE_OPEN_CREATE
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
         connection.busy_timeout(Duration::from_secs(2))?;
         connection.pragma_update(None, "synchronous", "FULL")?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -223,6 +234,11 @@ impl Ledger {
         }
         tx.commit()?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
+        let journal_mode: String =
+            connection.pragma_query_value(None, "journal_mode", |r| r.get(0))?;
+        if journal_mode != "wal" {
+            return Err(Error::UnsupportedStorage);
+        }
         Ok(Self {
             connection,
             assignment: request.assignment,

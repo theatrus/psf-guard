@@ -731,6 +731,8 @@ capture and recording measured elapsed time, not an estimate.
 
 SQLite WAL with full synchronization retains committed evidence across process
 termination; attempt/result and event writes roll back together on failure.
+Only absolute filesystem paths are accepted, URI open modes are disabled, and
+WAL mode must be confirmed. Temporary/in-memory databases are not durable ledgers.
 Tests cover abrupt exits with committed reservations, committed saved receipts,
 and unfinished transactions, competing writers, bounded lock contention,
 duplicate results, baseline preservation, exhausted budgets, and late saves.

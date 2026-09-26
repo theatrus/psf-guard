@@ -570,3 +570,19 @@ fn slow_preparation_changes_selection_using_the_same_core() {
     };
     assert_eq!(attempt.goal_id, "later-target");
 }
+
+#[test]
+fn temporary_memory_and_uri_paths_cannot_claim_durable_storage() {
+    for path in [
+        "",
+        ":memory:",
+        "file:director?mode=memory&cache=shared",
+        "relative.sqlite",
+    ] {
+        let r = request();
+        assert!(matches!(
+            Ledger::open(Path::new(path), r.assignment, r.state),
+            Err(Error::InvalidInput)
+        ));
+    }
+}
