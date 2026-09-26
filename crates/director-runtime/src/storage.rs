@@ -85,7 +85,7 @@ impl From<Error> for StorageError {
     fn from(error: Error) -> Self {
         match error {
             Error::InvalidInput => Self::InvalidInput,
-            Error::Planner(_) => Self::InvalidSnapshot,
+            Error::Planner(_) | Error::Preparation(_) => Self::InvalidSnapshot,
             Error::ForeignDatabase => Self::ForeignDatabase,
             Error::UnsupportedSchema => Self::UnsupportedSchema,
             Error::UnsupportedEngine => Self::UnsupportedEngine,

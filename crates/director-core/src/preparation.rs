@@ -6,9 +6,12 @@
 //! state does not authorize replay of an operation with an unknown outcome.
 
 use crate::{evaluate, valid_id, Assignment, Decision, Request};
+use serde::{Deserialize, Serialize};
+mod checkpoint;
 
 /// Resolved recipe and local equipment context, immutable for one preparation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct Context {
     pub goal_id: String,
     pub target_id: String,
@@ -28,7 +31,8 @@ pub struct Context {
 }
 
 /// Blocking estimates, not deadlines. Hook estimates include their nested work.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct Estimates {
     pub unpark_ms: u64,
     pub center_ms: u64,
@@ -39,7 +43,8 @@ pub struct Estimates {
     pub capture_overhead_ms: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
     Unpark,
     Center { rotate: bool },
@@ -49,7 +54,8 @@ pub enum Operation {
     SetReadoutMode { mode: i16 },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Command {
     pub preparation_id: String,
     pub ordinal: u32,
@@ -73,14 +79,16 @@ pub enum Next {
     Decision(Decision),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Outcome {
     Succeeded,
     Failed { reason: String },
     Uncertain { reason: String },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Completion {
     pub preparation_id: String,
     pub ordinal: u32,
@@ -90,7 +98,8 @@ pub struct Completion {
     pub outcome: Outcome,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Observation {
     pub command: Command,
     pub issued_at_ms: u64,
@@ -105,6 +114,7 @@ pub enum Error {
     InvalidCompletion,
     ConflictingCompletion,
     ClockRegression,
+    InvalidCheckpoint,
     Core(crate::Error),
 }
 
@@ -119,6 +129,8 @@ struct Step {
 #[derive(Debug)]
 pub struct Preparation {
     id: String,
+    initial: Request,
+    estimates: Estimates,
     assignment: Assignment,
     context: Context,
     steps: Vec<Step>,
@@ -197,6 +209,8 @@ impl Preparation {
         );
         let preparation = Self {
             id,
+            initial: request.clone(),
+            estimates,
             assignment: request.assignment.clone(),
             context,
             steps,
@@ -367,5 +381,30 @@ impl Preparation {
     /// recorded as children, not added again to these blocking durations.
     pub fn observations(&self) -> &[Observation] {
         &self.observations
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn context(&self) -> &Context {
+        &self.context
+    }
+
+    pub fn estimates(&self) -> Estimates {
+        self.estimates
+    }
+
+    pub fn pending(&self) -> Option<&Command> {
+        self.pending.as_ref().map(|(command, _)| command)
+    }
+
+    pub fn halted(&self) -> Option<&Decision> {
+        self.halted.as_ref()
+    }
+
+    /// Informational only. Call next with fresh state before any reservation.
+    pub fn steps_completed(&self) -> bool {
+        self.cursor == self.steps.len() && self.pending.is_none() && self.halted.is_none()
     }
 }
