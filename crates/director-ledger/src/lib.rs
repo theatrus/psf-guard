@@ -360,6 +360,16 @@ impl Ledger {
             Evidence::Saved { image_id, .. } => Some(image_id),
             _ => None,
         };
+        if let Some(image_id) = image_id {
+            let already_used: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM attempt WHERE image_id=?1 AND capture_id<>?2)",
+                params![image_id, capture_id],
+                |row| row.get(0),
+            )?;
+            if already_used {
+                return Err(Error::ConflictingEvidence);
+            }
+        }
         tx.execute(
             "UPDATE attempt SET status=?1,payload=?2,image_id=?3 WHERE capture_id=?4",
             params![

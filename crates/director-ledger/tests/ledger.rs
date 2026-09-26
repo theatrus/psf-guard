@@ -192,13 +192,15 @@ fn one_saved_image_cannot_credit_two_captures() {
     created(&mut ledger, "capture-2");
     assert!(matches!(
         ledger.record("capture-2", saved("image-1")),
-        Err(Error::Sqlite(_))
+        Err(Error::ConflictingEvidence)
     ));
     assert_eq!(
         ledger.attempt("capture-2").unwrap().unwrap().evidence,
         Evidence::Reserved
     );
     assert_eq!(ledger.events_after(0, 256).unwrap().len(), 3);
+    ledger.record("capture-2", saved("image-2")).unwrap();
+    assert_eq!(ledger.events_after(0, 256).unwrap().len(), 4);
 }
 
 #[test]
