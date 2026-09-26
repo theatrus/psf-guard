@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -29,6 +29,7 @@ impl MetaStore {
             [Uuid::new_v4().to_string()],
         )?;
         tx.pragma_update(None, "application_id", APPLICATION_ID)?;
+        create_configuration_tables(&tx)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         conn.close().map_err(|(_, error)| Error::Sqlite(error))?;
@@ -39,8 +40,18 @@ impl MetaStore {
     /// Open only a recognized existing store. Future schema versions are not
     /// rewritten or opened with downgraded semantics.
     pub fn open(path: &Path) -> Result<Self, Error> {
-        let conn = connect(path, false)?;
-        let instance_id = validate(&conn)?;
+        let mut conn = connect(path, false)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let instance_id = validate(&tx)?;
+        let version: i32 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version == 1 {
+            if tx.prepare("PRAGMA foreign_key_check")?.exists([])? {
+                return Err(Error::CorruptDatabase);
+            }
+            create_configuration_tables(&tx)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+        tx.commit()?;
         conn.pragma_update(None, "foreign_keys", true)?;
         let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
         if mode != "wal" {
@@ -88,7 +99,7 @@ fn validate(conn: &Connection) -> Result<Uuid, Error> {
         return Err(Error::ForeignDatabase);
     }
     let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version != SCHEMA_VERSION {
+    if !(1..=SCHEMA_VERSION).contains(&version) {
         return Err(Error::UnsupportedSchema);
     }
     for sql in [
@@ -99,12 +110,32 @@ fn validate(conn: &Connection) -> Result<Uuid, Error> {
     ] {
         conn.prepare(sql).map_err(|_| Error::CorruptDatabase)?;
     }
+    if version >= 2 {
+        for sql in [
+            "SELECT id,name,revision FROM site LIMIT 0",
+            "SELECT id,site_id,payload FROM site_snapshot LIMIT 0",
+            "SELECT id,rig_id,site_snapshot_id,payload FROM rig_setup LIMIT 0",
+        ] {
+            conn.prepare(sql).map_err(|_| Error::CorruptDatabase)?;
+        }
+    }
     let id: String = conn.query_row(
         "SELECT instance_id FROM meta WHERE singleton=1",
         [],
         |row| row.get(0),
     )?;
     parse_id(&id)
+}
+
+fn create_configuration_tables(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch(
+        "CREATE TABLE site(id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision>0));
+         CREATE TABLE site_snapshot(id TEXT PRIMARY KEY NOT NULL, site_id TEXT NOT NULL REFERENCES site(id), payload TEXT NOT NULL);
+         CREATE INDEX site_snapshot_site ON site_snapshot(site_id,id);
+         CREATE TABLE rig_setup(id TEXT PRIMARY KEY NOT NULL, rig_id TEXT NOT NULL REFERENCES rig(id), site_snapshot_id TEXT NOT NULL REFERENCES site_snapshot(id), payload TEXT NOT NULL);
+         CREATE INDEX rig_setup_rig ON rig_setup(rig_id,id);"
+    )?;
+    Ok(())
 }
 
 fn staging(destination: &Path) -> Result<NamedTempFile, Error> {

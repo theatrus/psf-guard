@@ -5,6 +5,7 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBeha
 use serde::{Deserialize, Serialize};
 use std::{fmt, path::Path, time::Duration};
 pub use uuid::Uuid;
+pub mod configuration;
 mod storage;
 
 #[derive(Debug)]
@@ -315,12 +316,14 @@ impl MetaStore {
 enum Kind {
     Project,
     Rig,
+    Site,
 }
 impl Kind {
     fn table(self) -> &'static str {
         match self {
             Self::Project => "global_project",
             Self::Rig => "rig",
+            Self::Site => "site",
         }
     }
 }

@@ -382,7 +382,9 @@ impl BoundProgram {
     }
 }
 
-fn validate_configuration(config: &Configuration) -> Result<(), Error> {
+/// Validate an equipment snapshot before enrollment, without inventing a goal.
+/// Program binding still validates every target, recipe and assignment separately.
+pub fn validate_configuration(config: &Configuration) -> Result<(), Error> {
     if !valid_id(&config.id)
         || !valid_id(&config.rig_id)
         || !valid_id(&config.camera_id)

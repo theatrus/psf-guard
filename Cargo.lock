@@ -4264,8 +4264,10 @@ dependencies = [
 name = "psf-guard-director-meta"
 version = "0.1.0"
 dependencies = [
+ "psf-guard-director-core",
  "rusqlite",
  "serde",
+ "serde_json",
  "tempfile",
  "uuid",
 ]
