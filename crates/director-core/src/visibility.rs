@@ -2,12 +2,14 @@
 //!
 //! Astronomy uses the unmodified published sofars Rust translation of SOFA.
 //! This wrapper validates inputs and converts units; it is not endorsed by SOFA.
-//! No clock, network, file access, or device state is consulted. These point
-//! calculations are not exposure/window authorization: interval construction,
+//! No clock, network, file access, or device state is consulted. Point and span
+//! calculations are not exposure/window authorization: observing-window construction,
 //! darkness/conditions, transit searches and dispatch fencing remain separate.
 
 use chrono::{Datelike, Timelike};
 use serde::{Deserialize, Serialize};
+mod span;
+pub use span::{check_altitude_span, AltitudeSpan};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -82,8 +84,12 @@ pub enum VisibilityError {
     InvalidSite,
     InvalidEarthOrientation,
     StaleEarthOrientation,
+    EarthOrientationDiscontinuity,
     UnsupportedTime,
     AstronomyUnavailable,
+    InvalidSpan,
+    UnresolvedSpan,
+    SpanBudgetExceeded,
 }
 
 fn bounded(value: f64, minimum: f64, maximum: f64) -> bool {
