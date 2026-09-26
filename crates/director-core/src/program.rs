@@ -360,7 +360,7 @@ impl BoundProgram {
 
     /// The owning ledger supplies progress. Only counters may differ; a caller
     /// cannot use a projection to expand the original remaining attempt budget.
-    fn validate_projection(&self, assignment: &Assignment) -> Result<(), Error> {
+    pub(crate) fn validate_projection(&self, assignment: &Assignment) -> Result<(), Error> {
         let mut expected = self.program.assignment.clone();
         if expected.goals.len() != assignment.goals.len() {
             return Err(Error::ConfigurationMismatch);

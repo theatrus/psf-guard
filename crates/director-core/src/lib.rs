@@ -1,10 +1,11 @@
 //! Phase-0 goal-selection spike. No I/O, clock access, or hardware control.
 //! Selection still uses precomputed eligibility windows. The visibility module
-//! supplies shared altitude geometry and conservative windows, not yet full
-//! darkness/meridian window construction or dispatch authorization.
+//! supplies shared altitude/meridian windows; geometry binds them to a program
+//! for selection, not yet darkness calculation or production dispatch authority.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+pub mod geometry;
 pub mod preparation;
 pub mod program;
 pub mod visibility;

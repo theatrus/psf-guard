@@ -165,11 +165,12 @@ flip margins, an exposure straddling an exclusion, both sides of transit,
 horizon gaps after transit, both file formats, 0/360 wrap, narrow obstructions,
 minimum altitude/offset, invalid files, same-path edits, and profile switches.
 These are single-rig phase-0/phase-2 requirements, not deferred multi-rig work.
-The shared-core contract now accepts multiple precomputed intervals per goal
-and subtracts effective rig-level meridian exclusions. It does not yet import
-horizon files, calculate sky positions, or resolve N.I.N.A./Director preferences.
-Prove those adapter calculations against the pinned implementations before
-connecting the evaluator to acquisition.
+The shared core accepts multiple allocated intervals per goal and now calculates
+conservative altitude and meridian windows from the resolved program target and
+canonical rig constraints. The N.I.N.A. adapter exports native horizon curves;
+the core does not read rig files. Production IPC, preference resolution, and
+dispatch binding remain unfinished. Prove the combined path against the pinned
+implementations before connecting this geometry-aware evaluator to acquisition.
 
 ## Storage and authority
 
@@ -1181,6 +1182,46 @@ work, and dense crossing searches across northern/southern sites and near-polar
 declinations. These windows enforce the rig exclusion only. They are neither
 flip commands nor proof that a mount can safely track or flip, and production
 integration with the other constraints and fresh dispatch checks remains open.
+
+`geometry::BoundGeometry` now connects those altitude and meridian calculations
+to a validated observing program and the existing goal selector. Its versioned
+`Constraints` input contains a rig/configuration identity and revision, complete
+site, Earth-orientation evidence, full horizon, hard altitude limits and meridian
+policy, plus explicit altitude preferences for every allocated goal. Missing,
+duplicate, unknown, invalid, or wrong-scope entries fail before a usable result.
+The target comes from the program's immutable binding, converting its integer
+ICRS milliarcseconds to degrees; callers cannot supply an unrelated coordinate.
+
+Compilation intersects the original allocation, shared altitude clearance and
+shared meridian exclusions. Project preferences cannot lower rig restrictions;
+uncertain horizon regions remain unusable. No geometry result can expand the
+coordinator's original eligibility. The legacy exact-transit contract remains
+required when its policy is active and can only further restrict the computed
+windows. A claimed empty transit list cannot suppress the independent shared
+meridian calculation. This does not turn approximate bands into exact transits.
+Fragmentation beyond 128 intervals returns an error, never a bridged gap.
+Goals sharing the same bound target and altitude limits reuse a calculation;
+their individual allocated windows and recipe identities remain separate.
+
+The compiled object owns its inputs and is not deserializable. Its evaluation
+accepts only progress-counter changes to the original allocation and compares
+the complete freshly supplied constraint snapshot before considering new work.
+Unchanged revision labels cannot hide changed content. Goal preference order
+does not affect identity. A mismatch refuses reuse and requires recompilation;
+the caller is responsible for refreshing native profile/horizon state rather
+than presenting a stale cached snapshot. Safety stops and completion of an
+already in-flight indivisible native operation retain the existing selector's
+precedence. Exposure plus blocking overhead must still fit one computed window.
+
+This is a Rust selection path, not yet the runtime ledger/preparation/IPC path
+or a hardware permit. The ledger cannot replace its immutable allocation with
+the diagnostic window lists. Production adoption must retain both source intent
+and the geometry binding, including final revalidation after slow native work.
+Compilation is bounded by the program/geometry limits but can be expensive for
+many distinct targets; schedule it off the interactive/dispatch path. Shared
+darkness calculation, other observing criteria, and the full server/N.I.N.A.
+acceptance gate remain required. No production or preview plugin gains new
+acquisition authority from this API.
 
 SOFA attribution and the full upstream terms live in
 `crates/director-core/THIRD_PARTY_NOTICES.md` and `SOFARS-LICENSE.txt`.
