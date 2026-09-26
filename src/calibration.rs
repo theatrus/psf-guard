@@ -4667,6 +4667,30 @@ fn stable_uuid(value: &str) -> String {
     uuid::Uuid::from_bytes(bytes).to_string()
 }
 
+/// Every recorded calibration source with its fingerprint, for a prefilter
+/// that wants to skip unchanged files without a header read. An unmigrated
+/// catalog has no table and no frames.
+pub(crate) fn known_calibration_fingerprints(
+    conn: &Connection,
+) -> Result<std::collections::HashMap<String, String>> {
+    if !schema_exists(conn) {
+        return Ok(Default::default());
+    }
+    let mut stmt =
+        conn.prepare("SELECT source_path, source_fingerprint FROM psf_guard_calibration_frame")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    Ok(rows.flatten().collect())
+}
+
+/// The path key and fingerprint `import_calibration_frames` would record for
+/// this file now.
+pub(crate) fn source_fingerprint(path: &Path) -> (String, String) {
+    let (fingerprint, _, _) = file_fingerprint(path);
+    (canonical_text(path), fingerprint)
+}
+
 fn canonical_text(path: &Path) -> String {
     std::fs::canonicalize(path)
         .unwrap_or_else(|_| path.to_path_buf())

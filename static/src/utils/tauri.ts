@@ -76,6 +76,8 @@ export interface DbEntry {
   /** Server-side destination for UI-triggered exports. */
   export_dir?: string;
   process_dir?: string;
+  /** Automatic import of new frames, when turned on. */
+  autoimport?: import('../api/types').AutoImportSettings;
 }
 
 // Process-global Seiza catalog paths. data_dir configures a complete bundle;

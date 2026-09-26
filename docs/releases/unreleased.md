@@ -6,6 +6,15 @@
 
 ## Added
 
+- **Automatic import.** A database can scan its image directories on its
+  own, on open and on a schedule, and import the lights and calibration
+  frames it does not have yet. Turn it on per database under **Settings →
+  Databases → Edit → Automatic import**, choose the frame kinds and
+  whether to analyze quality afterwards. A run drops every file the
+  catalog already holds before reading a header, so a folder of known
+  frames costs next to nothing. The database row shows the schedule, the
+  last run, and a **Run now** button.
+
 - The Overview shows every database's WBPP run under way or just
   finished in any browser tab, as a status line and as the state of the
   project's **Stack in WBPP** action, and either reopens the run's dialog.

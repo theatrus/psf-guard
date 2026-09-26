@@ -1,6 +1,7 @@
 pub mod api;
 pub mod astrobin_export;
 pub mod auth;
+pub mod autoimport;
 pub mod cache;
 pub mod calibration_settings;
 pub mod catalog_install;
@@ -322,6 +323,9 @@ async fn run_server_internal(
     // for that; the scheduler idles otherwise.
     crate::server::stack_preview::automatic::spawn(Arc::clone(&state));
 
+    // Databases that asked for it import new frames on open and on schedule.
+    crate::server::autoimport::spawn(Arc::clone(&state));
+
     // Build PSF Guard's query indexes on each configured catalog, once, off
     // the request path and before cache refreshes start long-lived reads.
     // Startup is the quietest moment: no PSF Guard import or database
@@ -623,6 +627,8 @@ async fn run_server_internal(
             "/import",
             post(handlers::start_import_route).get(handlers::get_import_progress),
         )
+        .route("/autoimport", get(handlers::get_autoimport_status))
+        .route("/autoimport/run", post(handlers::run_autoimport_now))
         .route("/import/folders", get(handlers::get_import_folders))
         .route("/export", get(handlers::export_archive_route))
         .route(

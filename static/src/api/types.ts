@@ -1620,6 +1620,41 @@ export interface DatabaseSummary {
   export_directory?: string;
   /** Where this rig's finished work lives; a WBPP run's masters can be saved below it. */
   process_directory?: string;
+  /** Automatic import of new frames, when turned on. */
+  autoimport?: AutoImportSettings;
+}
+
+/** When and what an automatic import brings in. */
+export interface AutoImportSettings {
+  enabled: boolean;
+  /** Run once when the server or desktop app opens the database. */
+  on_open: boolean;
+  /** Run again this many minutes after the last run; 0 means only on open. */
+  interval_minutes: number;
+  scope: ImportScope;
+  /** Queue the background quality scan for the frames a run brings in. */
+  backfill: boolean;
+  accept_other_rigs: boolean;
+}
+
+export const DEFAULT_AUTOIMPORT_SETTINGS: AutoImportSettings = {
+  enabled: false,
+  on_open: true,
+  interval_minutes: 0,
+  scope: 'all',
+  backfill: true,
+  accept_other_rigs: false,
+};
+
+/** `GET /api/db/{db_id}/autoimport`. */
+export interface AutoImportStatus {
+  settings?: AutoImportSettings | null;
+  /** Unix seconds of the last automatic run's start this process. */
+  last_started_at?: number | null;
+  /** Unix seconds when the next scheduled run is due. */
+  next_run_at?: number | null;
+  /** The import job when its last run was automatic. */
+  progress?: ImportJobProgress | null;
 }
 
 /** What one export placed, and how. */
@@ -1901,6 +1936,10 @@ export interface ImportJobProgress {
   started_at?: number | null;
   finished_at?: number | null;
   error?: string | null;
+  /** `manual` for the Import button and API, `automatic` for a scheduled or on-open run. */
+  trigger?: string;
+  /** Files an automatic run dropped as already cataloged, without a header read. */
+  prefiltered?: number;
 }
 
 export interface ImportStatus {

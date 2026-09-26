@@ -17,7 +17,8 @@ import StackAutomationSettings from './StackAutomationSettings';
 import ExportDefaultsSettings from './ExportDefaultsSettings';
 import AstroBinSettings from './AstroBinSettings';
 import PixInsightSettings from './PixInsightSettings';
-import type { DatabaseSummary } from '../api/types';
+import type { AutoImportSettings, DatabaseSummary } from '../api/types';
+import { DEFAULT_AUTOIMPORT_SETTINGS } from '../api/types';
 import {
   describeImportProgress,
   importFinishedMessage,
@@ -26,6 +27,8 @@ import {
 } from '../hooks/useImportJob';
 import { starMetadataFillEnabled } from '../hooks/useStarMetadataFill';
 import QualityBackfillControls from './QualityBackfillControls';
+import AutoImportFields from './AutoImportFields';
+import AutoImportSummary from './AutoImportSummary';
 import RemotePeerSync from './RemotePeerSync';
 import SchedulerSyncControls from './SchedulerSyncControls';
 import RemoteSyncPreviews from './RemoteSyncPreviews';
@@ -137,6 +140,9 @@ export default function TauriSettings({
     useState(false);
   const [formExportDir, setFormExportDir] = useState('');
   const [formProcessDir, setFormProcessDir] = useState('');
+  const [formAutoImport, setFormAutoImport] = useState<AutoImportSettings>(
+    DEFAULT_AUTOIMPORT_SETTINGS
+  );
   const [formRemoteUploadToken, setFormRemoteUploadToken] = useState('');
   const [formRemoteUploadTokenConfigured, setFormRemoteUploadTokenConfigured] =
     useState(false);
@@ -212,6 +218,7 @@ export default function TauriSettings({
                 image_dirs: summary.image_directories,
                 export_dir: summary.export_directory,
                 process_dir: summary.process_directory,
+                autoimport: summary.autoimport,
                 remote_image_upload: {
                   enabled: summary.remote_image_upload?.enabled ?? false,
                   image_dir: summary.remote_image_upload?.image_directory,
@@ -246,6 +253,7 @@ export default function TauriSettings({
             image_dirs: s.image_directories,
             export_dir: s.export_directory,
             process_dir: s.process_directory,
+            autoimport: s.autoimport,
             remote_image_upload: {
               enabled: s.remote_image_upload?.enabled ?? false,
               image_dir: s.remote_image_upload?.image_directory,
@@ -343,6 +351,7 @@ export default function TauriSettings({
     setFormImageDirs(entry.image_dirs);
     setFormExportDir(entry.export_dir ?? '');
     setFormProcessDir(entry.process_dir ?? '');
+    setFormAutoImport({ ...DEFAULT_AUTOIMPORT_SETTINGS, ...(entry.autoimport ?? {}) });
     setFormRemoteUploadEnabled(entry.remote_image_upload?.enabled ?? false);
     setFormRemoteSyncEnabled(entry.remote_image_upload?.sync_enabled ?? false);
     setFormRemoteUploadDir(
@@ -661,6 +670,7 @@ export default function TauriSettings({
           image_dirs: formImageDirs,
           export_dir: formExportDir.trim(),
           process_dir: formProcessDir.trim(),
+          autoimport: formAutoImport,
           remote_image_upload: {
             enabled: formRemoteUploadEnabled,
             image_directory: formRemoteUploadDir || undefined,
@@ -1314,6 +1324,7 @@ export default function TauriSettings({
               value={formProcessDir}
               onChange={(event) => setFormProcessDir(event.target.value)}
             />
+            <AutoImportFields value={formAutoImport} onChange={setFormAutoImport} />
           </div>
         )}
 
@@ -1758,6 +1769,7 @@ export default function TauriSettings({
                         canManage={managementAllowed}
                       />
                       <QualityBackfillControls dbId={entry.id} />
+                      <AutoImportSummary dbId={entry.id} settings={entry.autoimport} />
                     </div>
                     {managementAllowed && (
                       <div className="db-row-actions">

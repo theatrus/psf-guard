@@ -564,6 +564,7 @@ fn summary_of(ctx: &crate::server::database_context::DatabaseContext) -> Databas
             .process_dir
             .as_ref()
             .map(|path| path.to_string_lossy().into_owned()),
+        autoimport: ctx.autoimport.clone(),
     }
 }
 
@@ -1388,17 +1389,8 @@ pub async fn add_database_route(
 
     // Open the connection now so persisting bad config can't outlive a failure.
     let ctx = Arc::new(
-        DatabaseContext::new(
-            entry.id.clone(),
-            entry.name.clone(),
-            entry.db_path.clone(),
-            entry.image_dirs.clone(),
-            entry.remote_image_upload.clone(),
-            entry.export_dir.clone(),
-            entry.process_dir.clone(),
-            state.cache_dir_root.clone(),
-        )
-        .map_err(|e| AppError::BadRequest(format!("opening database: {}", e)))?,
+        DatabaseContext::from_entry(&entry, state.cache_dir_root.clone())
+            .map_err(|e| AppError::BadRequest(format!("opening database: {}", e)))?,
     );
 
     reg.save(&registry_path)
@@ -1562,6 +1554,25 @@ pub async fn update_database_route(
             Some(trimmed.to_string())
         };
     }
+    if let Some(autoimport) = req.autoimport.as_ref() {
+        autoimport
+            .validate()
+            .map_err(|error| AppError::BadRequest(error.to_string()))?;
+        let entry = reg
+            .databases
+            .iter_mut()
+            .find(|entry| entry.id == new_id)
+            .ok_or(AppError::InternalError(
+                "registry update lost the entry".into(),
+            ))?;
+        // Off with default choices reads as unset, so a registry that never
+        // heard of the feature stays as it was.
+        entry.autoimport = if *autoimport == crate::db_registry::AutoImportSettings::default() {
+            None
+        } else {
+            Some(autoimport.clone())
+        };
+    }
     let entry = reg
         .find(&new_id)
         .ok_or(AppError::InternalError(
@@ -1594,17 +1605,8 @@ pub async fn update_database_route(
     }
 
     let new_ctx = Arc::new(
-        DatabaseContext::new(
-            entry.id.clone(),
-            entry.name.clone(),
-            entry.db_path.clone(),
-            entry.image_dirs.clone(),
-            entry.remote_image_upload.clone(),
-            entry.export_dir.clone(),
-            entry.process_dir.clone(),
-            state.cache_dir_root.clone(),
-        )
-        .map_err(|e| AppError::BadRequest(format!("opening database: {}", e)))?,
+        DatabaseContext::from_entry(&entry, state.cache_dir_root.clone())
+            .map_err(|e| AppError::BadRequest(format!("opening database: {}", e)))?,
     );
 
     reg.save(&registry_path)
@@ -1808,6 +1810,7 @@ mod remote_image_layout_settings_tests {
             }),
             export_dir: None,
             process_dir: None,
+            autoimport: None,
         }
     }
 
@@ -2778,17 +2781,8 @@ pub async fn create_database_route(
         .clone();
 
     let ctx = Arc::new(
-        DatabaseContext::new(
-            entry.id.clone(),
-            entry.name.clone(),
-            entry.db_path.clone(),
-            entry.image_dirs.clone(),
-            entry.remote_image_upload.clone(),
-            entry.export_dir.clone(),
-            entry.process_dir.clone(),
-            state.cache_dir_root.clone(),
-        )
-        .map_err(|e| AppError::InternalError(format!("opening new database: {}", e)))?,
+        DatabaseContext::from_entry(&entry, state.cache_dir_root.clone())
+            .map_err(|e| AppError::InternalError(format!("opening new database: {}", e)))?,
     );
 
     reg.save(&registry_path)
@@ -2952,6 +2946,7 @@ pub async fn start_import_route(
         scope: req.scope.unwrap_or_default(),
         skip_processed: req.skip_processed.unwrap_or(false),
         accept_other_rigs: req.accept_other_rigs.unwrap_or(false),
+        only_new: false,
     };
     let started = spawn_import_job(
         &state,
@@ -2961,6 +2956,42 @@ pub async fn start_import_route(
         req.backfill.unwrap_or(false),
         req.fill_metadata.unwrap_or(true),
     );
+    Ok(Json(ApiResponse::success(ImportStatusResponse {
+        started,
+        progress: crate::server::import_job::progress_snapshot(&ctx.import_job),
+    })))
+}
+
+/// `GET /api/db/{db_id}/autoimport` — the automatic import's settings,
+/// schedule, and last run.
+pub async fn get_autoimport_status(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Result<Json<ApiResponse<crate::server::autoimport::AutoImportStatus>>, AppError> {
+    Ok(Json(ApiResponse::success(state.autoimport.status(&ctx))))
+}
+
+/// `POST /api/db/{db_id}/autoimport/run` — run the automatic import now,
+/// with its configured scope, from the configured folders. Works whether or
+/// not a schedule is set; the settings still decide what a run takes.
+pub async fn run_autoimport_now(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Result<Json<ApiResponse<ImportStatusResponse>>, AppError> {
+    let settings = ctx.autoimport.clone().unwrap_or_default();
+    let started = crate::server::autoimport::start(
+        &state,
+        &ctx.0,
+        &settings,
+        crate::server::autoimport::Reason::Manual,
+        std::time::Instant::now(),
+    )
+    .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    if !started {
+        return Err(AppError::Conflict(
+            "an import is already running for this database".into(),
+        ));
+    }
     Ok(Json(ApiResponse::success(ImportStatusResponse {
         started,
         progress: crate::server::import_job::progress_snapshot(&ctx.import_job),
@@ -3016,7 +3047,7 @@ fn unique_db_file(base: &std::path::Path, stem: &str) -> std::path::PathBuf {
 /// import transaction. Optional quality work starts afterwards with the
 /// background worker budget and does not delay import completion.
 /// Returns false when a job is already running for this database.
-fn spawn_import_job(
+pub(crate) fn spawn_import_job(
     state: &Arc<AppState>,
     ctx: Arc<DatabaseContext>,
     dirs: Vec<String>,
@@ -3024,11 +3055,24 @@ fn spawn_import_job(
     backfill: bool,
     fill_metadata: bool,
 ) -> bool {
+    spawn_import_job_with_trigger(state, ctx, dirs, options, backfill, fill_metadata, "manual")
+}
+
+pub(crate) fn spawn_import_job_with_trigger(
+    state: &Arc<AppState>,
+    ctx: Arc<DatabaseContext>,
+    dirs: Vec<String>,
+    options: crate::commands::import::ImportOptions,
+    backfill: bool,
+    fill_metadata: bool,
+    trigger: &str,
+) -> bool {
     use crate::server::import_job as job;
 
     if !job::try_begin(&ctx.import_job, dirs.clone()) {
         return false;
     }
+    job::set_trigger(&ctx.import_job, trigger);
     tracing::info!(
         "📥 Import started for db={} ({} director{})",
         ctx.id,
@@ -3115,7 +3159,29 @@ fn run_import_blocking(
     use crate::server::import_job as job;
     use rayon::prelude::*;
 
-    let files = imp::collect_fits_files(dirs)?;
+    let mut files = imp::collect_fits_files(dirs)?;
+    let mut prefiltered = 0usize;
+    if options.only_new && !files.is_empty() {
+        let conn = open_scheduler_connection_with_flags(
+            &ctx.database_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .map_err(|e| anyhow::anyhow!("opening {} for import: {}", ctx.database_path, e))?;
+        let known = imp::known_files(&conn, &files)?;
+        prefiltered = known.len();
+        files.retain(|path| !known.contains(path));
+        job::set_prefiltered(&ctx.import_job, prefiltered);
+        if files.is_empty() {
+            // Nothing new: no header reads, no transaction, no migration.
+            job::set_scan_totals(&ctx.import_job, 0, 0);
+            return Ok(imp::ImportOutcome {
+                scanned: prefiltered,
+                skipped_existing: prefiltered,
+                dry_run: options.dry_run,
+                ..Default::default()
+            });
+        }
+    }
     job::set_scan_totals(&ctx.import_job, files.len(), 0);
 
     let store = ctx.import_job.clone();
@@ -3134,7 +3200,10 @@ fn run_import_blocking(
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_URI,
     )
     .map_err(|e| anyhow::anyhow!("opening {} for import: {}", ctx.database_path, e))?;
-    imp::import_frames(&mut conn, frames, options)
+    let mut outcome = imp::import_frames(&mut conn, frames, options)?;
+    outcome.scanned += prefiltered;
+    outcome.skipped_existing += prefiltered;
+    Ok(outcome)
 }
 
 /// Run (or wait for) the quality scan for one database target. The scan is a
@@ -7615,6 +7684,7 @@ mod delayed_ready_tests {
                     remote_image_upload: None,
                     export_dir: None,
                     process_dir: None,
+                    autoimport: None,
                 }],
                 temp.path().join("cache").to_string_lossy().into_owned(),
                 crate::cli::PregenerationConfig::default(),

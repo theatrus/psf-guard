@@ -229,17 +229,8 @@ pub async fn pair_route(
     let entry = entry.clone();
 
     let context = Arc::new(
-        DatabaseContext::new(
-            entry.id.clone(),
-            entry.name.clone(),
-            entry.db_path.clone(),
-            entry.image_dirs.clone(),
-            entry.remote_image_upload.clone(),
-            entry.export_dir.clone(),
-            entry.process_dir.clone(),
-            state.cache_dir_root.clone(),
-        )
-        .map_err(|error| AppError::InternalError(format!("reopening database: {error}")))?,
+        DatabaseContext::from_entry(&entry, state.cache_dir_root.clone())
+            .map_err(|error| AppError::InternalError(format!("reopening database: {error}")))?,
     );
     registry
         .save(&registry_path)
@@ -293,17 +284,8 @@ pub async fn revoke_client_route(
     }
     let entry = entry.clone();
     let context = Arc::new(
-        DatabaseContext::new(
-            entry.id.clone(),
-            entry.name.clone(),
-            entry.db_path.clone(),
-            entry.image_dirs.clone(),
-            entry.remote_image_upload.clone(),
-            entry.export_dir.clone(),
-            entry.process_dir.clone(),
-            state.cache_dir_root.clone(),
-        )
-        .map_err(|error| AppError::InternalError(format!("reopening database: {error}")))?,
+        DatabaseContext::from_entry(&entry, state.cache_dir_root.clone())
+            .map_err(|error| AppError::InternalError(format!("reopening database: {error}")))?,
     );
     registry
         .save(&registry_path)
