@@ -25,7 +25,7 @@ pub struct MeridianExclusion {
 
 /// Complete, sorted transit results for the stated search interval. An empty
 /// result is known absence; `None` at the caller is unknown, not absence.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TransitCoverage {
     pub searched: Interval,

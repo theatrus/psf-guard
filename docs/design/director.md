@@ -1,7 +1,8 @@
 # PSF Guard Director: goal-driven acquisition
 
 Status: phase 0 in progress. Shared-core, sidecar, and native simulated
-acquisition spikes implemented; no production Director plugin yet.
+acquisition spikes implemented. An experimental runtime-only plugin preview is
+published in the theatr.us registry; no production acquisition plugin yet.
 Last updated: 2026-09-25.
 
 This is the tracking document for Director. Update the phase checklist and
@@ -770,6 +771,55 @@ passed real N.I.N.A. runtime-lifecycle smoke tests. Signed release artifacts,
 integrated durable journals, restart reconciliation, and core-authorized native
 N.I.N.A. dispatch remain phase-0 gates.
 The existing Sync plugin is unchanged.
+
+#### Shared exposure preparation
+
+[`director-core::preparation`](../../crates/director-core/src/preparation.rs)
+models the first native-operation boundaries without device APIs or I/O. This
+is an internal Rust API, not an extension of planning JSON contract 2 or IPC 3.
+It does not change the published plugin's behavior.
+
+The reducer follows the pinned TS reference's preparation order: unpark when
+needed; center/rotate and the Before New Target hook on a target transition;
+dither when the effective per-filter cadence requires it; switch filter; set
+readout mode. Disabling automatic slew/center leaves the target hook enabled.
+A recipe may inherit the target's dither cadence or explicitly disable it.
+Recipes sharing a filter share its confirmed exposure counter; a target
+transition starts with fresh dither history. The caller supplies resolved
+recipe identifiers, equipment context, and confirmed history. This reducer
+does not yet own that history or resolve device settings.
+
+Each operation has a preparation ID and ordinal and is issued once. A matching
+completion records the observed monotonic duration separately from wall time.
+Identical receipts are idempotent; conflicting or unrelated receipts cannot
+advance the sequence. A delayed receipt remains valid after a newer status
+poll without moving the snapshot clock backwards. Hook durations include
+nested native work; callers must not add child durations a second time.
+
+Every boundary runs the shared selector with the remaining preparation and
+capture overhead estimates. Actual elapsed time, rather than the original
+estimate, determines whether the next operation/exposure still fits. Safety
+and operator stop win immediately. Changed assignments/configurations latch a
+check-in and wait for the current indivisible action's receipt; failures or
+uncertain outcomes cannot silently retry. A final ReadyToReserve result is
+only a fresh recommendation, never a stored dispatch permit.
+
+The focused regression suite covers ordering/options, per-filter cadence,
+remaining estimates, slow-operation reselection, delayed/conflicting receipts,
+in-flight assignment changes, configuration changes, safety, expiry, stale
+conditions, and final-boundary revalidation. Run it with:
+
+```powershell
+cargo test --locked -p psf-guard-director-core --test preparation
+```
+
+Durable preparation records, versioned IPC, recipe/configuration binding, and
+native container execution remain required before hardware use. A host must
+not reconstruct lost reducer state and replay an operation whose outcome is
+unknown. Preparation does not consume capture attempts or credit images; the
+ledger and a fresh native dispatch check remain separate requirements. Session
+startup/shutdown, autofocus policy, guiding, flips, and calibration are still
+open parts of the operation inventory, not implied by this initial reducer.
 
 #### Durable execution ledger
 
