@@ -682,14 +682,14 @@ peer process ID. The launcher supplies the pipe name, host PID, and optionally
 an absolute state directory. No credentials appear in process arguments. The
 protocol has no network or equipment operations; local persistence is opt-in.
 
-IPC version 6 uses a four-byte little-endian length followed by UTF-8 JSON.
+IPC version 7 uses a four-byte little-endian length followed by UTF-8 JSON.
 Frames are limited to 266,240 bytes before body allocation. The nested planning
 request retains its original JSON and the core's 262,144-byte limit, including
 duplicate-field validation. Every envelope contains `protocol_version`,
 `session_id`, `request_id`, and `payload`; payloads use a `type` discriminator.
 
 - `hello` must be request 0 with a fresh 32-hex-character session ID. It binds
-  the rig ID and requires exact runtime 0.5.0, engine 0.2.0, and contract 2.
+  the rig ID and requires exact runtime 0.6.0, engine 0.2.0, and contract 2.
   `ready` confirms all versions, the rig, and whether storage is enabled.
 - `evaluate` wraps one core request and returns a `decision` with the unchanged
   core response. Valid requests for another assignment rig terminate the session.
@@ -711,7 +711,7 @@ duplicate-field validation. Every envelope contains `protocol_version`,
   A new child must negotiate a new session and receive a fresh snapshot.
 
 The published Director preview still pins runtime 0.2.1 / IPC 3 with the typed
-ledger host and shutdown drain handshake together. Newer IPC 4/5/6 development
+ledger host and shutdown drain handshake together. Newer IPC 4/5/6/7 development
 hosts need their matching adapter and bundle pin. A mismatched version is
 refused, never silently downgraded. Publishing this runtime artifact alone does not update
 installed plugins or change the existing Sync plugin.
@@ -1239,8 +1239,8 @@ This core check returns a decision, never `Run`, a new command, or a replay perm
 feasibility result requires the original one-shot command from the current live
 session and local native checks. A recovered pending command remains uncertain
 evidence. The durable journal commits these checks through the entry points
-below. IPC and the native before-hook boundary still need to adopt them before
-production dispatch; the existing preview gains no authority.
+below, exposed in IPC 7. The native before-hook boundary still needs to adopt
+them before production dispatch; the existing preview gains no authority.
 
 Geometry preparation has an opaque, versioned checkpoint for local persistence.
 Restore requires a separately compiled binding from the original trusted program
@@ -1308,7 +1308,7 @@ program-only and legacy entry points preserve mode separation. `Continue` is not
 readiness; even `Acquire` is only fresh feasibility for the original live-session
 reservation, not a replay grant. The host must retain its one-shot dispatch
 authority and revalidate native ownership and safety at the actual boundary.
-IPC/native adoption remains required, and no published plugin gains authority.
+Native adoption remains required, and no published plugin gains authority.
 
 `check_geometry_pending_dispatch` requires the exact pending command, fresh
 constraints, current equipment configuration and boundary state. In one writer
@@ -1321,9 +1321,25 @@ handle observes the same sticky refusal, including a later safety escalation;
 correlated completion still resolves the pending evidence. No result authorizes
 replay of a recovered command.
 
-Geometry planning is exposed through IPC 6; these dispatch checks still need
-IPC and native adoption. None of these paths is a hardware permit.
-Final native dispatch still needs fresh revalidation.
+IPC 7 / runtime 0.6.0 adds `check_geometry_pending_dispatch` with the exact
+issued command and `check_geometry_capture_dispatch` with the linked preparation
+and capture IDs. Both require full current configuration, constraints and state,
+and return `dispatch_checked` with the shared-core decision. Nested rig IDs are
+checked before storage access. Malformed or cross-rig messages terminate the
+session; valid but stale commands, links or evidence return scoped storage
+errors. A returned `Acquire` is feasibility only, never new dispatch authority.
+Neither operation issues a native command, reserves a capture or refunds credit.
+The plugin must adopt the matching version, typed replies and final native
+boundary checks together before using this protocol.
+Captured preparation records may now contain a halt from a refused post-reserve
+boundary while retaining successful preparation observations and their capture
+link. Host decoders must accept that specific state without allowing pending or
+unsuccessful preparation operations in a captured record. The protocol-6 plugin
+rejects captured-plus-halted records; its decoder needs a regression test and
+versioned update before adopting this runtime.
+
+This is a Rust ledger path exposed through IPC 7, not yet the native dispatch path and
+not a hardware permit. Final native dispatch still needs fresh revalidation.
 Compilation is bounded by the program/geometry limits but can be expensive for
 many distinct targets; schedule it off the interactive/dispatch path. Shared
 darkness calculation, other observing criteria, and the full server/N.I.N.A.

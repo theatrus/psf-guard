@@ -2,7 +2,7 @@
 use crate::ProtocolError;
 use psf_guard_director_core::geometry::{Constraints, CONSTRAINTS_VERSION};
 use psf_guard_director_core::preparation::{
-    Completion, Context, Error as PreparationError, Estimates, Next,
+    Command, Completion, Context, Error as PreparationError, Estimates, Next,
 };
 use psf_guard_director_core::program::{Configuration, LocalState, Program, PROGRAM_VERSION};
 use psf_guard_director_core::{Request, State};
@@ -26,6 +26,19 @@ pub const MAX_PREPARATION_EVENT_PAGE: usize = 32;
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    CheckGeometryPendingDispatch {
+        command: Box<Command>,
+        configuration: Box<Configuration>,
+        constraints: Box<Constraints>,
+        state: State,
+    },
+    CheckGeometryCaptureDispatch {
+        preparation_id: String,
+        capture_id: String,
+        configuration: Box<Configuration>,
+        constraints: Box<Constraints>,
+        state: State,
+    },
     OpenGeometry {
         program: Box<Program>,
         constraints: Box<Constraints>,
@@ -137,6 +150,9 @@ pub enum Operation {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StorageReply {
+    DispatchChecked {
+        decision: psf_guard_director_core::Decision,
+    },
     GeometryOpened {
         info: LedgerInfo,
         program_version: u32,
@@ -353,7 +369,19 @@ impl Storage {
             {
                 return Err(ProtocolError::WrongRig)
             }
-            Operation::AdvanceGeometryPreparation {
+            Operation::CheckGeometryPendingDispatch {
+                configuration,
+                constraints,
+                state,
+                ..
+            }
+            | Operation::CheckGeometryCaptureDispatch {
+                configuration,
+                constraints,
+                state,
+                ..
+            }
+            | Operation::AdvanceGeometryPreparation {
                 configuration,
                 constraints,
                 state,
@@ -465,6 +493,34 @@ impl Storage {
         }
         let ledger = self.ledger.as_mut().ok_or(StorageError::NotOpen)?;
         Ok(match operation {
+            Operation::CheckGeometryPendingDispatch {
+                command,
+                configuration,
+                constraints,
+                state,
+            } => StorageReply::DispatchChecked {
+                decision: ledger.check_geometry_pending_dispatch(
+                    &command,
+                    state,
+                    &configuration,
+                    &constraints,
+                )?,
+            },
+            Operation::CheckGeometryCaptureDispatch {
+                preparation_id,
+                capture_id,
+                configuration,
+                constraints,
+                state,
+            } => StorageReply::DispatchChecked {
+                decision: ledger.check_geometry_capture_dispatch(
+                    &preparation_id,
+                    &capture_id,
+                    state,
+                    &configuration,
+                    &constraints,
+                )?,
+            },
             Operation::EvaluateGeometry { constraints, state } => StorageReply::Evaluated {
                 decision: ledger.evaluate_geometry(state, &constraints)?,
             },
