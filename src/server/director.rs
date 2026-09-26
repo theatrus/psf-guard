@@ -16,6 +16,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::sync::Semaphore;
+mod catalog_adoption;
 mod catalog_discovery;
 
 pub(super) fn validate_registry_separation(
@@ -151,6 +152,21 @@ impl From<StoreError> for Error {
     }
 }
 
+impl From<crate::catalog_identity::Error> for Error {
+    fn from(error: crate::catalog_identity::Error) -> Self {
+        use crate::catalog_identity::Error as IdentityError;
+        match error {
+            IdentityError::Sqlite(error) => StoreError::from(error).into(),
+            IdentityError::Conflict => Self::Conflict,
+            IdentityError::InvalidIdentity => Self::Invalid,
+            other => {
+                tracing::error!(error = ?other, "Director catalog identity failed");
+                Self::Internal
+            }
+        }
+    }
+}
+
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let (status, message) = match self {
@@ -192,6 +208,18 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             get(catalog_discovery::discover),
         )
         .route("/projects", get(list_projects).post(create_project))
+        .route(
+            "/catalogs/{slug}/adoption/preview",
+            axum::routing::post(catalog_adoption::preview).layer(DefaultBodyLimit::max(
+                psf_guard_director_core::MAX_REQUEST_BYTES,
+            )),
+        )
+        .route(
+            "/catalogs/{slug}/adoption/apply",
+            axum::routing::post(catalog_adoption::apply).layer(DefaultBodyLimit::max(
+                psf_guard_director_core::MAX_REQUEST_BYTES,
+            )),
+        )
         .route("/projects/{id}", get(project).patch(rename_project))
         .merge(configuration_api::routes())
         .layer(DefaultBodyLimit::max(4096))

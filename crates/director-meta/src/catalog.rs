@@ -41,19 +41,89 @@ impl MetaStore {
     /// Apply a bounded batch in one transaction, including conflicts within the
     /// batch itself. A failed entry rolls back every new link in this batch.
     pub fn link_catalog_projects(&mut self, mappings: &[ProjectMapping]) -> Result<(), Error> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::link_catalog_projects_on(&tx, mappings)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Exercise exactly the adoption transaction, then roll it back. This uses a
+    /// short metadata write transaction but commits no catalog or mapping rows.
+    /// The host separately validates source evidence through a read-only handle.
+    pub fn preview_catalog_adoption(
+        &mut self,
+        catalog: CatalogIdentity,
+        mappings: &[ProjectMapping],
+        require_new: bool,
+    ) -> Result<(), Error> {
+        self.start_catalog_adoption(catalog, mappings, require_new)?
+            .rollback()?;
+        Ok(())
+    }
+
+    /// Register lineage and every confirmed mapping in one metadata transaction.
+    /// The catalog file's identity must already be durable; retrying after a
+    /// coordinator failure must retain that identity, not mint another catalog.
+    pub fn adopt_catalog_projects(
+        &mut self,
+        catalog: CatalogIdentity,
+        mappings: &[ProjectMapping],
+    ) -> Result<(), Error> {
+        self.adopt_catalog_projects_after(catalog, mappings, false, || Ok(()))
+    }
+
+    /// Hold the coordinator writer through catalog finalization, then commit
+    /// every mapping. A failed finalizer rolls metadata back. If the final meta
+    /// commit fails, the host must retain the catalog's durable ID for retry.
+    pub fn adopt_catalog_projects_after(
+        &mut self,
+        catalog: CatalogIdentity,
+        mappings: &[ProjectMapping],
+        require_new: bool,
+        finalize_catalog: impl FnOnce() -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let tx = self.start_catalog_adoption(catalog, mappings, require_new)?;
+        finalize_catalog()?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn start_catalog_adoption(
+        &mut self,
+        catalog: CatalogIdentity,
+        mappings: &[ProjectMapping],
+        require_new: bool,
+    ) -> Result<rusqlite::Transaction<'_>, Error> {
+        if mappings
+            .iter()
+            .any(|mapping| mapping.catalog_id != catalog.id)
+        {
+            return Err(Error::InvalidInput);
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if require_new && read_catalog(&tx, catalog.id)?.is_some() {
+            return Err(Error::Conflict);
+        }
+        register_catalog_on(&tx, catalog)?;
+        Self::link_catalog_projects_on(&tx, mappings)?;
+        Ok(tx)
+    }
+
+    fn link_catalog_projects_on(tx: &Connection, mappings: &[ProjectMapping]) -> Result<(), Error> {
         if !(1..=256).contains(&mappings.len()) {
             return Err(Error::InvalidInput);
         }
         for mapping in mappings {
             validate_mapping(mapping)?;
         }
-        let tx = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         for mapping in mappings {
-            if read_catalog(&tx, mapping.catalog_id)?.is_none()
-                || read_named(&tx, Kind::Project, mapping.project_id)?.is_none()
-                || read_named(&tx, Kind::Rig, mapping.rig_id)?.is_none()
+            if read_catalog(tx, mapping.catalog_id)?.is_none()
+                || read_named(tx, Kind::Project, mapping.project_id)?.is_none()
+                || read_named(tx, Kind::Rig, mapping.rig_id)?.is_none()
             {
                 return Err(Error::NotFound);
             }
@@ -70,7 +140,7 @@ impl MetaStore {
             {
                 return Err(Error::Conflict);
             }
-            let old_rig = read_rig_link(&tx, mapping.catalog_id, &mapping.source_profile_id)?;
+            let old_rig = read_rig_link(tx, mapping.catalog_id, &mapping.source_profile_id)?;
             if old_rig.is_some_and(|id| id != mapping.rig_id) {
                 return Err(Error::Conflict);
             }
@@ -85,7 +155,7 @@ impl MetaStore {
                     return Err(Error::CorruptDatabase);
                 }
                 // Do not repair an orphan by assigning it to the caller's proposed rig.
-                if read_rig_link(&tx, mapping.catalog_id, profile)?.is_none() {
+                if read_rig_link(tx, mapping.catalog_id, profile)?.is_none() {
                     return Err(Error::CorruptDatabase);
                 }
             }
@@ -114,7 +184,6 @@ impl MetaStore {
                 params![mapping.catalog_id.to_string(), mapping.source_project_guid.to_string(), mapping.source_profile_id])?;
             }
         }
-        tx.commit()?;
         Ok(())
     }
 

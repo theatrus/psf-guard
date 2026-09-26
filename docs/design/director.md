@@ -1749,17 +1749,18 @@ to several catalogs. Project and rig listings use bounded, stable-ID cursor page
 renaming an entity does not move it across a page boundary. Catalog IDs must be
 explicitly registered and retained by the future adoption workflow, not
 regenerated on every import or inferred from
-paths. Stable catalog identity adoption is not yet implemented.
+paths. The operator preview/apply API establishes this identity explicitly;
+the catalog mapping UI and native-catalog migration remain unimplemented.
 
 The `src/catalog_identity.rs` storage primitive supplies an opt-in identity for
 a PSF Guard-managed catalog destination. A versioned, PSF Guard-owned singleton
 table retains the catalog UUID and its originating coordinator UUID. It does
 not change TS tables, GUIDs, grades, `application_id` or `user_version`. Ordinary
-reads return an unadopted result without creating anything. No startup, sync,
-discovery, HTTP or UI path invokes adoption yet.
+reads return an unadopted result without creating anything. Only the explicit
+operator adoption API invokes it; startup, sync and discovery never adopt.
 
-The future preview/apply workflow must confirm the destination, retain the
-proposed IDs across retries, and revalidate preview evidence in the same SQLite
+The preview/apply workflow confirms the destination, retains the
+proposed IDs across retries, and revalidates preview evidence in the same SQLite
 transaction as adoption. Adoption uses a savepoint inside that transaction;
 only the host's outer commit makes it durable. A conflicting identity or damaged
 record is refused, not repaired or reassigned. Never adopt a read-only TS sync
@@ -1771,8 +1772,12 @@ the same lineage, not a new rig or independent catalog. Registering multiple
 paths to that lineage must not duplicate contributions; an independent fork
 requires an explicit future workflow. Identity alone grants no execution rights
 and does not prove that every historical frame belongs to a given rig. The
-preview/apply API, registry integration, mapping UI and duplicate-mount checks
-remain unimplemented.
+mapping UI, historical attribution and duplicate-mount contribution accounting
+remain unimplemented. The API only accepts registered catalog slugs. It holds
+the coordinator writer while committing catalog identity, then commits catalog
+registration and every confirmed mapping together. This prevents another new
+catalog from claiming that UUID during finalization. If the coordinator commit
+fails afterward, the durable catalog ID remains available for a retry.
 
 Writes use short SQLite transactions with foreign keys, WAL and full synchronous
 commits. Renames require an expected revision; retries cannot overwrite another
