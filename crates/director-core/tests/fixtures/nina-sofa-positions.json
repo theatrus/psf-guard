@@ -1,0 +1,1159 @@
+{
+  "source": "SOFA_2023_10_11.dll",
+  "sha256": "6f84a31ff7a9c74c50825abeed4209462d1eecbb32a76903e33f834b4327b4da",
+  "mode": "icrs-zero-motion-zero-pressure",
+  "samples": [
+    {
+      "unix_ms": 1483228799999,
+      "position": {
+        "ra_degrees": 0,
+        "dec_degrees": 0
+      },
+      "site": {
+        "latitude_degrees": 35,
+        "longitude_degrees": -120,
+        "elevation_meters": 1000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225199999,
+        "valid_until_ms": 1483232399999
+      },
+      "expected": {
+        "azimuth_degrees": 148.41892347052809,
+        "altitude_degrees": 50.68560950007347,
+        "hour_angle_degrees": -19.378470212442142
+      }
+    },
+    {
+      "unix_ms": 1483228799999,
+      "position": {
+        "ra_degrees": 83,
+        "dec_degrees": -5
+      },
+      "site": {
+        "latitude_degrees": 35,
+        "longitude_degrees": -120,
+        "elevation_meters": 1000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225199999,
+        "valid_until_ms": 1483232399999
+      },
+      "expected": {
+        "azimuth_degrees": 86.98823040676155,
+        "altitude_degrees": -12.992214237678837,
+        "hour_angle_degrees": -102.37671968318092
+      }
+    },
+    {
+      "unix_ms": 1483228799999,
+      "position": {
+        "ra_degrees": 359.999,
+        "dec_degrees": 89.9
+      },
+      "site": {
+        "latitude_degrees": 35,
+        "longitude_degrees": -120,
+        "elevation_meters": 1000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225199999,
+        "valid_until_ms": 1483232399999
+      },
+      "expected": {
+        "azimuth_degrees": 0.0022185519365047726,
+        "altitude_degrees": 34.9996725086122,
+        "hour_angle_degrees": -100.21466936960216
+      }
+    },
+    {
+      "unix_ms": 1483228799999,
+      "position": {
+        "ra_degrees": 180,
+        "dec_degrees": -89.9
+      },
+      "site": {
+        "latitude_degrees": 35,
+        "longitude_degrees": -120,
+        "elevation_meters": 1000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225199999,
+        "valid_until_ms": 1483232399999
+      },
+      "expected": {
+        "azimuth_degrees": 180.0088936000927,
+        "altitude_degrees": -35.00976601114843,
+        "hour_angle_degrees": 143.28213158488424
+      }
+    },
+    {
+      "unix_ms": 1483228799999,
+      "position": {
+        "ra_degrees": 0,
+        "dec_degrees": 0
+      },
+      "site": {
+        "latitude_degrees": -35,
+        "longitude_degrees": 149,
+        "elevation_meters": 500
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225199999,
+        "valid_until_ms": 1483232399999
+      },
+      "expected": {
+        "azimuth_degrees": 101.94958075419336,
+        "altitude_degrees": -16.62942669102351,
+        "hour_angle_degrees": -110.37837604682147
+      }
+    },
+    {
+      "unix_ms": 1483228799999,
+      "position": {
+        "ra_degrees": 83,
+        "dec_degrees": -5
+      },
+      "site": {
+        "latitude_degrees": -35,
+        "longitude_degrees": 149,
+        "elevation_meters": 500
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225199999,
+        "valid_until_ms": 1483232399999
+      },
+      "expected": {
+        "azimuth_degrees": 200.1773300798611,
+        "altitude_degrees": -48.07302950655432,
+        "hour_angle_degrees": 166.62333582790674
+      }
+    },
+    {
+      "unix_ms": 1483228799999,
+      "position": {
+        "ra_degrees": 359.999,
+        "dec_degrees": 89.9
+      },
+      "site": {
+        "latitude_degrees": -35,
+        "longitude_degrees": 149,
+        "elevation_meters": 500
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225199999,
+        "valid_until_ms": 1483232399999
+      },
+      "expected": {
+        "azimuth_degrees": 359.99965211358847,
+        "altitude_degrees": -35.00173845126001,
+        "hour_angle_degrees": 170.69090330921412
+      }
+    },
+    {
+      "unix_ms": 1483228799999,
+      "position": {
+        "ra_degrees": 180,
+        "dec_degrees": -89.9
+      },
+      "site": {
+        "latitude_degrees": -35,
+        "longitude_degrees": 149,
+        "elevation_meters": 500
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225199999,
+        "valid_until_ms": 1483232399999
+      },
+      "expected": {
+        "azimuth_degrees": 180.01167600891614,
+        "altitude_degrees": 35.0075260132558,
+        "hour_angle_degrees": 51.79702920600528
+      }
+    },
+    {
+      "unix_ms": 1483228799999,
+      "position": {
+        "ra_degrees": 0,
+        "dec_degrees": 0
+      },
+      "site": {
+        "latitude_degrees": 89.9,
+        "longitude_degrees": 179.9,
+        "elevation_meters": 0
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225199999,
+        "valid_until_ms": 1483232399999
+      },
+      "expected": {
+        "azimuth_degrees": 100.52142222483926,
+        "altitude_degrees": 0.11187743738794609,
+        "hour_angle_degrees": -79.47840146236915
+      }
+    },
+    {
+      "unix_ms": 1483228799999,
+      "position": {
+        "ra_degrees": 83,
+        "dec_degrees": -5
+      },
+      "site": {
+        "latitude_degrees": 89.9,
+        "longitude_degrees": 179.9,
+        "elevation_meters": 0
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225199999,
+        "valid_until_ms": 1483232399999
+      },
+      "expected": {
+        "azimuth_degrees": 17.525920115607587,
+        "altitude_degrees": -5.087173133578631,
+        "hour_angle_degrees": -162.47673521693093
+      }
+    },
+    {
+      "unix_ms": 1483228799999,
+      "position": {
+        "ra_degrees": 359.999,
+        "dec_degrees": 89.9
+      },
+      "site": {
+        "latitude_degrees": 89.9,
+        "longitude_degrees": 179.9,
+        "elevation_meters": 0
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225199999,
+        "valid_until_ms": 1483232399999
+      },
+      "expected": {
+        "azimuth_degrees": 0.33013264867194425,
+        "altitude_degrees": 89.89832282863688,
+        "hour_angle_degrees": -160.72728780727468
+      }
+    },
+    {
+      "unix_ms": 1483228799999,
+      "position": {
+        "ra_degrees": 180,
+        "dec_degrees": -89.9
+      },
+      "site": {
+        "latitude_degrees": 89.9,
+        "longitude_degrees": 179.9,
+        "elevation_meters": 0
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225199999,
+        "valid_until_ms": 1483232399999
+      },
+      "expected": {
+        "azimuth_degrees": 186.8163993890141,
+        "altitude_degrees": -89.89776780669766,
+        "hour_angle_degrees": 82.90820017031976
+      }
+    },
+    {
+      "unix_ms": 1483228799999,
+      "position": {
+        "ra_degrees": 0,
+        "dec_degrees": 0
+      },
+      "site": {
+        "latitude_degrees": -89.9,
+        "longitude_degrees": -179.9,
+        "elevation_meters": 3000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225199999,
+        "valid_until_ms": 1483232399999
+      },
+      "expected": {
+        "azimuth_degrees": 79.27825687396475,
+        "altitude_degrees": -0.0750131376477583,
+        "hour_angle_degrees": -79.27840146263125
+      }
+    },
+    {
+      "unix_ms": 1483228799999,
+      "position": {
+        "ra_degrees": 83,
+        "dec_degrees": -5
+      },
+      "site": {
+        "latitude_degrees": -89.9,
+        "longitude_degrees": -179.9,
+        "elevation_meters": 3000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225199999,
+        "valid_until_ms": 1483232399999
+      },
+      "expected": {
+        "azimuth_degrees": 162.27936847853675,
+        "altitude_degrees": 4.896559855083282,
+        "hour_angle_degrees": -162.27673521709698
+      }
+    },
+    {
+      "unix_ms": 1483228799999,
+      "position": {
+        "ra_degrees": 359.999,
+        "dec_degrees": 89.9
+      },
+      "site": {
+        "latitude_degrees": -89.9,
+        "longitude_degrees": -179.9,
+        "elevation_meters": 3000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225199999,
+        "valid_until_ms": 1483232399999
+      },
+      "expected": {
+        "azimuth_degrees": 0.344782117451232,
+        "altitude_degrees": -89.90167164833886,
+        "hour_angle_degrees": -160.5272940283456
+      }
+    },
+    {
+      "unix_ms": 1483228799999,
+      "position": {
+        "ra_degrees": 180,
+        "dec_degrees": -89.9
+      },
+      "site": {
+        "latitude_degrees": -89.9,
+        "longitude_degrees": -179.9,
+        "elevation_meters": 3000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225199999,
+        "valid_until_ms": 1483232399999
+      },
+      "expected": {
+        "azimuth_degrees": 187.02328095296693,
+        "altitude_degrees": 89.90072228668548,
+        "hour_angle_degrees": 83.10820068256191
+      }
+    },
+    {
+      "unix_ms": 1483228800000,
+      "position": {
+        "ra_degrees": 0,
+        "dec_degrees": 0
+      },
+      "site": {
+        "latitude_degrees": 35,
+        "longitude_degrees": -120,
+        "elevation_meters": 1000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225200000,
+        "valid_until_ms": 1483232400000
+      },
+      "expected": {
+        "azimuth_degrees": 148.4189294289884,
+        "altitude_degrees": 50.68561129269488,
+        "hour_angle_degrees": -19.378466033307674
+      }
+    },
+    {
+      "unix_ms": 1483228800000,
+      "position": {
+        "ra_degrees": 83,
+        "dec_degrees": -5
+      },
+      "site": {
+        "latitude_degrees": 35,
+        "longitude_degrees": -120,
+        "elevation_meters": 1000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225200000,
+        "valid_until_ms": 1483232400000
+      },
+      "expected": {
+        "azimuth_degrees": 86.98823284521458,
+        "altitude_degrees": -12.992210819841134,
+        "hour_angle_degrees": -102.37671550474535
+      }
+    },
+    {
+      "unix_ms": 1483228800000,
+      "position": {
+        "ra_degrees": 359.999,
+        "dec_degrees": 89.9
+      },
+      "site": {
+        "latitude_degrees": 35,
+        "longitude_degrees": -120,
+        "elevation_meters": 1000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225200000,
+        "valid_until_ms": 1483232400000
+      },
+      "expected": {
+        "azimuth_degrees": 0.0022185505566612224,
+        "altitude_degrees": 34.99967250912511,
+        "hour_angle_degrees": -100.2146599276606
+      }
+    },
+    {
+      "unix_ms": 1483228800000,
+      "position": {
+        "ra_degrees": 180,
+        "dec_degrees": -89.9
+      },
+      "site": {
+        "latitude_degrees": 35,
+        "longitude_degrees": -120,
+        "elevation_meters": 1000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225200000,
+        "valid_until_ms": 1483232400000
+      },
+      "expected": {
+        "azimuth_degrees": 180.00889360008458,
+        "altitude_degrees": -35.00976601095239,
+        "hour_angle_degrees": 143.28213105872354
+      }
+    },
+    {
+      "unix_ms": 1483228800000,
+      "position": {
+        "ra_degrees": 0,
+        "dec_degrees": 0
+      },
+      "site": {
+        "latitude_degrees": -35,
+        "longitude_degrees": 149,
+        "elevation_meters": 500
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225200000,
+        "valid_until_ms": 1483232400000
+      },
+      "expected": {
+        "azimuth_degrees": 101.94957814562726,
+        "altitude_degrees": -16.62942334172996,
+        "hour_angle_degrees": -110.37837186769026
+      }
+    },
+    {
+      "unix_ms": 1483228800000,
+      "position": {
+        "ra_degrees": 83,
+        "dec_degrees": -5
+      },
+      "site": {
+        "latitude_degrees": -35,
+        "longitude_degrees": 149,
+        "elevation_meters": 500
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225200000,
+        "valid_until_ms": 1483232400000
+      },
+      "expected": {
+        "azimuth_degrees": 200.177324105802,
+        "altitude_degrees": -48.07303068681236,
+        "hour_angle_degrees": 166.62334000634874
+      }
+    },
+    {
+      "unix_ms": 1483228800000,
+      "position": {
+        "ra_degrees": 359.999,
+        "dec_degrees": 89.9
+      },
+      "site": {
+        "latitude_degrees": -35,
+        "longitude_degrees": 149,
+        "elevation_meters": 500
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225200000,
+        "valid_until_ms": 1483232400000
+      },
+      "expected": {
+        "azimuth_degrees": 359.99965211423864,
+        "altitude_degrees": -35.00173845013883,
+        "hour_angle_degrees": 170.69091450247163
+      }
+    },
+    {
+      "unix_ms": 1483228800000,
+      "position": {
+        "ra_degrees": 180,
+        "dec_degrees": -89.9
+      },
+      "site": {
+        "latitude_degrees": -35,
+        "longitude_degrees": 149,
+        "elevation_meters": 500
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225200000,
+        "valid_until_ms": 1483232400000
+      },
+      "expected": {
+        "azimuth_degrees": 180.01167600867694,
+        "altitude_degrees": 35.00752601324574,
+        "hour_angle_degrees": 51.797028672899835
+      }
+    },
+    {
+      "unix_ms": 1483228800000,
+      "position": {
+        "ra_degrees": 0,
+        "dec_degrees": 0
+      },
+      "site": {
+        "latitude_degrees": 89.9,
+        "longitude_degrees": 179.9,
+        "elevation_meters": 0
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225200000,
+        "valid_until_ms": 1483232400000
+      },
+      "expected": {
+        "azimuth_degrees": 100.52142640397217,
+        "altitude_degrees": 0.11187744433711089,
+        "hour_angle_degrees": -79.47839728323285
+      }
+    },
+    {
+      "unix_ms": 1483228800000,
+      "position": {
+        "ra_degrees": 83,
+        "dec_degrees": -5
+      },
+      "site": {
+        "latitude_degrees": 89.9,
+        "longitude_degrees": 179.9,
+        "elevation_meters": 0
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225200000,
+        "valid_until_ms": 1483232400000
+      },
+      "expected": {
+        "azimuth_degrees": 17.525924294661287,
+        "altitude_degrees": -5.0871731317482585,
+        "hour_angle_degrees": -162.47673103849016
+      }
+    },
+    {
+      "unix_ms": 1483228800000,
+      "position": {
+        "ra_degrees": 359.999,
+        "dec_degrees": 89.9
+      },
+      "site": {
+        "latitude_degrees": 89.9,
+        "longitude_degrees": 179.9,
+        "elevation_meters": 0
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225200000,
+        "valid_until_ms": 1483232400000
+      },
+      "expected": {
+        "azimuth_degrees": 0.3301325857198737,
+        "altitude_degrees": 89.89832282987308,
+        "hour_angle_degrees": -160.7272782641922
+      }
+    },
+    {
+      "unix_ms": 1483228800000,
+      "position": {
+        "ra_degrees": 180,
+        "dec_degrees": -89.9
+      },
+      "site": {
+        "latitude_degrees": 89.9,
+        "longitude_degrees": 179.9,
+        "elevation_meters": 0
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225200000,
+        "valid_until_ms": 1483232400000
+      },
+      "expected": {
+        "azimuth_degrees": 186.8163992864706,
+        "altitude_degrees": -89.89776780662694,
+        "hour_angle_degrees": 82.90819964243802
+      }
+    },
+    {
+      "unix_ms": 1483228800000,
+      "position": {
+        "ra_degrees": 0,
+        "dec_degrees": 0
+      },
+      "site": {
+        "latitude_degrees": -89.9,
+        "longitude_degrees": -179.9,
+        "elevation_meters": 3000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225200000,
+        "valid_until_ms": 1483232400000
+      },
+      "expected": {
+        "azimuth_degrees": 79.27825269483708,
+        "altitude_degrees": -0.0750131302589665,
+        "hour_angle_degrees": -79.27839728349505
+      }
+    },
+    {
+      "unix_ms": 1483228800000,
+      "position": {
+        "ra_degrees": 83,
+        "dec_degrees": -5
+      },
+      "site": {
+        "latitude_degrees": -89.9,
+        "longitude_degrees": -179.9,
+        "elevation_meters": 3000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225200000,
+        "valid_until_ms": 1483232400000
+      },
+      "expected": {
+        "azimuth_degrees": 162.2793643006976,
+        "altitude_degrees": 4.896559857668748,
+        "hour_angle_degrees": -162.27673103865618
+      }
+    },
+    {
+      "unix_ms": 1483228800000,
+      "position": {
+        "ra_degrees": 359.999,
+        "dec_degrees": 89.9
+      },
+      "site": {
+        "latitude_degrees": -89.9,
+        "longitude_degrees": -179.9,
+        "elevation_meters": 3000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225200000,
+        "valid_until_ms": 1483232400000
+      },
+      "expected": {
+        "azimuth_degrees": 0.34478204136056634,
+        "altitude_degrees": -89.90167164710451,
+        "hour_angle_degrees": -160.52728448529814
+      }
+    },
+    {
+      "unix_ms": 1483228800000,
+      "position": {
+        "ra_degrees": 180,
+        "dec_degrees": -89.9
+      },
+      "site": {
+        "latitude_degrees": -89.9,
+        "longitude_degrees": -179.9,
+        "elevation_meters": 3000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1483225200000,
+        "valid_until_ms": 1483232400000
+      },
+      "expected": {
+        "azimuth_degrees": 187.02328086043877,
+        "altitude_degrees": 89.9007222867985,
+        "hour_angle_degrees": 83.1082001546805
+      }
+    },
+    {
+      "unix_ms": 1790409600125,
+      "position": {
+        "ra_degrees": 0,
+        "dec_degrees": 0
+      },
+      "site": {
+        "latitude_degrees": 35,
+        "longitude_degrees": -120,
+        "elevation_meters": 1000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1790406000125,
+        "valid_until_ms": 1790413200125
+      },
+      "expected": {
+        "azimuth_degrees": 188.35367888992909,
+        "altitude_degrees": 54.865585185138514,
+        "hour_angle_degrees": 4.796115126617242
+      }
+    },
+    {
+      "unix_ms": 1790409600125,
+      "position": {
+        "ra_degrees": 83,
+        "dec_degrees": -5
+      },
+      "site": {
+        "latitude_degrees": 35,
+        "longitude_degrees": -120,
+        "elevation_meters": 1000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1790406000125,
+        "valid_until_ms": 1790413200125
+      },
+      "expected": {
+        "azimuth_degrees": 100.9152743023106,
+        "altitude_degrees": 6.736596376884265,
+        "hour_angle_degrees": -78.1866805987906
+      }
+    },
+    {
+      "unix_ms": 1790409600125,
+      "position": {
+        "ra_degrees": 359.999,
+        "dec_degrees": 89.9
+      },
+      "site": {
+        "latitude_degrees": 35,
+        "longitude_degrees": -120,
+        "elevation_meters": 1000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1790406000125,
+        "valid_until_ms": 1790413200125
+      },
+      "expected": {
+        "azimuth_degrees": 0.009216615413931586,
+        "altitude_degrees": 34.95016109675087,
+        "hour_angle_degrees": -171.38085711639033
+      }
+    },
+    {
+      "unix_ms": 1790409600125,
+      "position": {
+        "ra_degrees": 180,
+        "dec_degrees": -89.9
+      },
+      "site": {
+        "latitude_degrees": 35,
+        "longitude_degrees": -120,
+        "elevation_meters": 1000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1790406000125,
+        "valid_until_ms": 1790413200125
+      },
+      "expected": {
+        "azimuth_degrees": 179.99632923862606,
+        "altitude_degrees": -34.95004918330905,
+        "hour_angle_degrees": -3.447003366324853
+      }
+    },
+    {
+      "unix_ms": 1790409600125,
+      "position": {
+        "ra_degrees": 0,
+        "dec_degrees": 0
+      },
+      "site": {
+        "latitude_degrees": -35,
+        "longitude_degrees": 149,
+        "elevation_meters": 500
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1790406000125,
+        "valid_until_ms": 1790413200125
+      },
+      "expected": {
+        "azimuth_degrees": 87.69573219068582,
+        "altitude_degrees": 3.0214893053998537,
+        "hour_angle_degrees": -86.2038170524939
+      }
+    },
+    {
+      "unix_ms": 1790409600125,
+      "position": {
+        "ra_degrees": 83,
+        "dec_degrees": -5
+      },
+      "site": {
+        "latitude_degrees": -35,
+        "longitude_degrees": 149,
+        "elevation_meters": 500
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1790406000125,
+        "valid_until_ms": 1790413200125
+      },
+      "expected": {
+        "azimuth_degrees": 163.5335376388104,
+        "altitude_degrees": -48.747446953289995,
+        "hour_angle_degrees": -169.18659374346305
+      }
+    },
+    {
+      "unix_ms": 1790409600125,
+      "position": {
+        "ra_degrees": 359.999,
+        "dec_degrees": 89.9
+      },
+      "site": {
+        "latitude_degrees": -35,
+        "longitude_degrees": 149,
+        "elevation_meters": 500
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1790406000125,
+        "valid_until_ms": 1790413200125
+      },
+      "expected": {
+        "azimuth_degrees": 359.9390923076749,
+        "altitude_degrees": -35.00659534903558,
+        "hour_angle_degrees": 97.5480813224935
+      }
+    },
+    {
+      "unix_ms": 1790409600125,
+      "position": {
+        "ra_degrees": 180,
+        "dec_degrees": -89.9
+      },
+      "site": {
+        "latitude_degrees": -35,
+        "longitude_degrees": 149,
+        "elevation_meters": 500
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1790406000125,
+        "valid_until_ms": 1790413200125
+      },
+      "expected": {
+        "azimuth_degrees": 179.9390070657948,
+        "altitude_degrees": 34.99617759346326,
+        "hour_angle_degrees": -94.3573282404742
+      }
+    },
+    {
+      "unix_ms": 1790409600125,
+      "position": {
+        "ra_degrees": 0,
+        "dec_degrees": 0
+      },
+      "site": {
+        "latitude_degrees": 89.9,
+        "longitude_degrees": 179.9,
+        "elevation_meters": 0
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1790406000125,
+        "valid_until_ms": 1790413200125
+      },
+      "expected": {
+        "azimuth_degrees": 124.69592849670649,
+        "altitude_degrees": 0.20908437202413666,
+        "hour_angle_degrees": -55.30381231159012
+      }
+    },
+    {
+      "unix_ms": 1790409600125,
+      "position": {
+        "ra_degrees": 83,
+        "dec_degrees": -5
+      },
+      "site": {
+        "latitude_degrees": 89.9,
+        "longitude_degrees": 179.9,
+        "elevation_meters": 0
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1790406000125,
+        "valid_until_ms": 1790413200125
+      },
+      "expected": {
+        "azimuth_degrees": 41.719173281322995,
+        "altitude_degrees": -5.051776230076257,
+        "hour_angle_degrees": -138.28666550016493
+      }
+    },
+    {
+      "unix_ms": 1790409600125,
+      "position": {
+        "ra_degrees": 359.999,
+        "dec_degrees": 89.9
+      },
+      "site": {
+        "latitude_degrees": 89.9,
+        "longitude_degrees": 179.9,
+        "elevation_meters": 0
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1790406000125,
+        "valid_until_ms": 1790413200125
+      },
+      "expected": {
+        "azimuth_degrees": 343.270162801243,
+        "altitude_degrees": 89.86286590436445,
+        "hour_angle_degrees": 128.437305092606
+      }
+    },
+    {
+      "unix_ms": 1790409600125,
+      "position": {
+        "ra_degrees": 180,
+        "dec_degrees": -89.9
+      },
+      "site": {
+        "latitude_degrees": 89.9,
+        "longitude_degrees": 179.9,
+        "elevation_meters": 0
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1790406000125,
+        "valid_until_ms": 1790413200125
+      },
+      "expected": {
+        "azimuth_degrees": 159.90398922252493,
+        "altitude_degrees": -89.86971314681085,
+        "hour_angle_degrees": -63.463750551883734
+      }
+    },
+    {
+      "unix_ms": 1790409600125,
+      "position": {
+        "ra_degrees": 0,
+        "dec_degrees": 0
+      },
+      "site": {
+        "latitude_degrees": -89.9,
+        "longitude_degrees": -179.9,
+        "elevation_meters": 3000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1790406000125,
+        "valid_until_ms": 1790413200125
+      },
+      "expected": {
+        "azimuth_degrees": 55.103635438906544,
+        "altitude_degrees": -0.09495279978355597,
+        "hour_angle_degrees": -55.10381231168593
+      }
+    },
+    {
+      "unix_ms": 1790409600125,
+      "position": {
+        "ra_degrees": 83,
+        "dec_degrees": -5
+      },
+      "site": {
+        "latitude_degrees": -89.9,
+        "longitude_degrees": -179.9,
+        "elevation_meters": 3000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1790406000125,
+        "valid_until_ms": 1790413200125
+      },
+      "expected": {
+        "azimuth_degrees": 138.0924388966297,
+        "altitude_degrees": 4.902712293874373,
+        "hour_angle_degrees": -138.0866655003721
+      }
+    },
+    {
+      "unix_ms": 1790409600125,
+      "position": {
+        "ra_degrees": 359.999,
+        "dec_degrees": 89.9
+      },
+      "site": {
+        "latitude_degrees": -89.9,
+        "longitude_degrees": -179.9,
+        "elevation_meters": 3000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1790406000125,
+        "valid_until_ms": 1790413200125
+      },
+      "expected": {
+        "azimuth_degrees": 330.12664834525503,
+        "altitude_degrees": -89.92096582899643,
+        "hour_angle_degrees": 128.63730519898013
+      }
+    },
+    {
+      "unix_ms": 1790409600125,
+      "position": {
+        "ra_degrees": 180,
+        "dec_degrees": -89.9
+      },
+      "site": {
+        "latitude_degrees": -89.9,
+        "longitude_degrees": -179.9,
+        "elevation_meters": 3000
+      },
+      "orientation": {
+        "ut1_minus_utc_seconds": 0.123,
+        "polar_motion_x_radians": 1E-06,
+        "polar_motion_y_radians": -2E-06,
+        "valid_from_ms": 1790406000125,
+        "valid_until_ms": 1790413200125
+      },
+      "expected": {
+        "azimuth_degrees": 150.02820542029863,
+        "altitude_degrees": 89.91054872801813,
+        "hour_angle_degrees": -63.26375070237416
+      }
+    }
+  ]
+}

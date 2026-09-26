@@ -1054,6 +1054,54 @@ cargo test --locked -p psf-guard-director-ledger
 cargo clippy --locked -p psf-guard-director-ledger --all-targets -- -D warnings
 ```
 
+#### Shared visibility geometry
+
+`director-core::visibility` accepts the canonical full-breakpoint horizon
+export developed in plugin PR #13. It preserves NINA's linear segments,
+modulo-360 queries, explicit 0/360 discontinuities, and sub-sample obstructions.
+Fixed-minimum mode is explicit, not a substituted zero-degree curve. Local and
+project altitude minima/maxima are intersected, equality is excluded, and
+project horizon offsets cannot lower the local obstruction curve. Conflicting
+but individually valid limits produce no visibility rather than malformed data.
+
+The same module transforms ICRS J2000 positions to topocentric azimuth, altitude,
+and hour angle with the published, pinned `sofars` 0.6.1 crate. It uses zero
+proper motion/parallax and no atmospheric refraction, matching NINA's
+zero-pressure transform mode. Earth-orientation corrections and their validity
+interval are explicit inputs; missing or stale evidence is not zero correction.
+UTC is converted through a two-part SOFA quasi-Julian date, including leap-day
+length. The wrapper explicitly restricts years to 1970-2028 because the pinned
+translation drops SOFA's dubious-year warning; future model updates require
+review. The bound also prevents the dependency's ephemeris unwrap from seeing
+out-of-range dates. No live time, network fetch or host-local state enters the
+calculation.
+
+The independent reference fixture was generated from nightly 3.3.0.1058's
+`SOFA_2023_10_11.dll`, with its hash recorded in the JSON. Forty-eight cases cover
+northern/southern and near-polar sites, RA wrap, polar targets, and the 2016/2017
+leap-second boundary. Rust agrees within 1e-9 degrees. Regenerate explicitly with:
+
+```powershell
+dotnet run --project tools/director-astronomy-reference --configuration Release -- <NINA-SOFA-DLL> crates/director-core/tests/fixtures/nina-sofa-positions.json
+```
+
+This is numerical parity against the native library shipped by NINA, not a
+complete native sequence or server test. The existing selector/IPC are unchanged
+and do not yet consume this geometry. Continuous whole-exposure visibility,
+complete transit search, darkness, constraint IPC and cache identity,
+Earth-orientation acquisition, and production dispatch enforcement remain gates.
+Point visibility alone must not authorize a shutter operation. In particular,
+do not generate safe intervals with a coarse time grid that misses narrow
+obstructions between samples.
+
+SOFA attribution and the full upstream terms live in
+`crates/director-core/THIRD_PARTY_NOTICES.md` and `SOFARS-LICENSE.txt`.
+The runtime CI artifact now includes these files beside the executable.
+The plugin's next pin update must deliberately accept, validate, and package
+both notices; its old single-file artifact allowlist correctly rejects this
+new artifact layout until that coordinated change. Existing pinned artifacts
+and the published preview are unchanged.
+
 ### Phase 1: meta database and global project model
 
 - [ ] Add opt-in meta storage, migrations, backup/restore, and stable mappings.

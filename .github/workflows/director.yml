@@ -43,8 +43,16 @@ jobs:
       - if: runner.os == 'Windows'
         run: dotnet run --project tools/director-sidecar --configuration Release -- target/release/psf-guard-director-runtime.exe crates/director-core/tests/fixtures/decisions.json crates/director-core/tests/fixtures/rig-windows.json
       - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Copy-Item crates/director-core/SOFARS-LICENSE.txt target/release/SOFARS-LICENSE.txt
+          Copy-Item crates/director-core/THIRD_PARTY_NOTICES.md target/release/THIRD_PARTY_NOTICES.md
+      - if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: director-runtime-windows-x64
-          path: target/release/psf-guard-director-runtime.exe
+          path: |
+            target/release/psf-guard-director-runtime.exe
+            target/release/SOFARS-LICENSE.txt
+            target/release/THIRD_PARTY_NOTICES.md
           if-no-files-found: error

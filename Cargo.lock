@@ -4232,8 +4232,10 @@ dependencies = [
 name = "psf-guard-director-core"
 version = "0.2.0"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
+ "sofars",
 ]
 
 [[package]]
@@ -5722,6 +5724,12 @@ dependencies = [
  "libc",
  "windows-sys 0.59.0",
 ]
+
+[[package]]
+name = "sofars"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5dd1c9b1b5d34e1e949deb0dac9ad612e20746c59eaa737e52fd29703c19ec5c"
 
 [[package]]
 name = "softbuffer"
