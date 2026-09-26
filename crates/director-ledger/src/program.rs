@@ -78,7 +78,7 @@ impl Ledger {
         self.program.as_ref().map(BoundProgram::snapshot)
     }
 
-    fn check_program_configuration(
+    pub(super) fn check_program_configuration(
         &self,
         configuration: &Configuration,
     ) -> Result<&BoundProgram, Error> {
@@ -101,7 +101,7 @@ impl Ledger {
             .check_program_configuration(&local.configuration)?
             .preparation_context(goal_id, local)
             .map_err(Error::Program)?;
-        self.begin_preparation_inner(id, context, estimates, state)
+        self.begin_preparation_inner(id, context, estimates, state, None)
     }
 
     pub fn advance_program_preparation(
@@ -111,7 +111,7 @@ impl Ledger {
         configuration: &Configuration,
     ) -> Result<Next, Error> {
         self.check_program_configuration(configuration)?;
-        self.advance_preparation_inner(id, state)
+        self.advance_preparation_inner(id, state, None)
     }
 
     pub fn reserve_program_prepared(
@@ -122,7 +122,7 @@ impl Ledger {
         configuration: &Configuration,
     ) -> Result<Reservation, Error> {
         self.check_program_configuration(configuration)?;
-        self.reserve_prepared_inner(id, capture_id, state)
+        self.reserve_prepared_inner(id, capture_id, state, None)
     }
 
     /// Resolve the exact persisted settings for a capture after reservation or

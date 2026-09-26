@@ -9,12 +9,14 @@ use psf_guard_director_core::{
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::{fmt, path::Path, time::Duration};
+pub mod geometry;
 pub mod preparation;
 pub mod program;
+use psf_guard_director_core::geometry::{BoundGeometry, Constraints};
 use psf_guard_director_core::program::{BoundProgram, Program};
 
 const APPLICATION_ID: i32 = 0x5047444c;
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 const CAPTURE_EVENT_VERSION: u32 = 1;
 const MAX_EVENT_PAGE: usize = 256;
 
@@ -25,6 +27,7 @@ pub enum Error {
     Planner(psf_guard_director_core::Error),
     Preparation(psf_guard_director_core::preparation::Error),
     Program(psf_guard_director_core::program::Error),
+    Geometry(psf_guard_director_core::geometry::Error),
     InvalidInput,
     ForeignDatabase,
     UnsupportedSchema,
@@ -144,6 +147,7 @@ pub struct Ledger {
     assignment: Assignment,
     ledger_id: String,
     program: Option<BoundProgram>,
+    geometry: Option<BoundGeometry>,
 }
 
 fn valid_id(value: &str) -> bool {
@@ -163,13 +167,28 @@ impl Ledger {
     /// Read-only selection using durable progress. This is not a reservation or
     /// dispatch permit; preparation and capture still revalidate at their boundary.
     pub fn evaluate(&mut self, state: State) -> Result<Decision, Error> {
+        self.evaluate_inner(state, None)
+    }
+
+    fn evaluate_inner(
+        &mut self,
+        state: State,
+        constraints: Option<&Constraints>,
+    ) -> Result<Decision, Error> {
+        self.check_geometry_mode(constraints.is_some())?;
         let tx = self.connection.transaction()?;
-        let decision = psf_guard_director_core::evaluate(&Request {
+        let request = Request {
             contract_version: CONTRACT_VERSION,
             assignment: current_assignment(&tx, &self.assignment)?,
             state,
-        })
-        .map_err(Error::Planner)?;
+        };
+        let decision = match (&self.geometry, constraints) {
+            (Some(geometry), Some(current)) => geometry
+                .evaluate(&request, current)
+                .map_err(Error::Geometry)?,
+            (None, None) => psf_guard_director_core::evaluate(&request).map_err(Error::Planner)?,
+            _ => return Err(Error::ConflictingEvidence),
+        };
         let decision = if matches!(decision, Decision::Stop { .. } | Decision::Continue { .. }) {
             decision
         } else if preparation::has_active(&tx)? {
@@ -212,7 +231,7 @@ impl Ledger {
     /// accepted/pending counters. Do not create another ledger on revision changes:
     /// revision activation and cursor reconciliation are not implemented yet.
     pub fn open(path: &Path, assignment: Assignment, state: State) -> Result<Self, Error> {
-        Self::open_internal(path, assignment, state, None)
+        Self::open_internal(path, assignment, state, None, None)
     }
 
     /// Bind the exact observing program at creation. Existing unbound ledgers
@@ -224,6 +243,7 @@ impl Ledger {
             bound.snapshot().assignment.clone(),
             state,
             Some(bound),
+            None,
         )
     }
 
@@ -232,6 +252,7 @@ impl Ledger {
         assignment: Assignment,
         state: State,
         program: Option<BoundProgram>,
+        geometry: Option<BoundGeometry>,
     ) -> Result<Self, Error> {
         // Absolute filesystem paths exclude SQLite's temporary/":memory:" names
         // and URI connection parameters that can silently disable persistence.
@@ -305,15 +326,20 @@ impl Ledger {
             preparation::create_tables(&tx)?;
             program::create_table(&tx)?;
             program::insert(&tx, program.as_ref())?;
+            geometry::create_table(&tx)?;
+            geometry::insert(&tx, geometry.as_ref())?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         } else if application != APPLICATION_ID {
             return Err(Error::ForeignDatabase);
-        } else if version == 1 || version == 2 {
+        } else if (1..=3).contains(&version) {
             if version == 1 {
                 preparation::create_tables(&tx)?;
             }
-            tx.execute_batch("ALTER TABLE allocation ADD COLUMN program_required INTEGER NOT NULL DEFAULT 0 CHECK(program_required IN (0,1));")?;
-            program::create_table(&tx)?;
+            if version <= 2 {
+                tx.execute_batch("ALTER TABLE allocation ADD COLUMN program_required INTEGER NOT NULL DEFAULT 0 CHECK(program_required IN (0,1));")?;
+                program::create_table(&tx)?;
+            }
+            geometry::create_table(&tx)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         } else if version != SCHEMA_VERSION {
             return Err(Error::UnsupportedSchema);
@@ -333,6 +359,7 @@ impl Ledger {
             return Err(Error::AssignmentMismatch);
         }
         program::verify(&tx, program.as_ref())?;
+        geometry::verify(&tx, geometry.as_ref())?;
         tx.commit()?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         let journal_mode: String =
@@ -345,6 +372,7 @@ impl Ledger {
             assignment: request.assignment,
             ledger_id,
             program,
+            geometry,
         })
     }
 

@@ -45,6 +45,19 @@ impl BoundGeometry {
 }
 
 impl GeometryPreparation<'_> {
+    pub fn id(&self) -> &str {
+        self.inner.id()
+    }
+
+    pub fn estimates(&self) -> Estimates {
+        self.inner.estimates()
+    }
+
+    /// Informational only; next must still revalidate before reservation.
+    pub fn steps_completed(&self) -> bool {
+        self.inner.steps_completed()
+    }
+
     /// Supply original program intent with projected progress and fresh state.
     /// Remaining setup plus exposure must fit one computed window. Any changed
     /// constraint latches a check-in even if the next snapshot changes back.

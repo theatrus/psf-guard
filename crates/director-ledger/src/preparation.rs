@@ -5,7 +5,10 @@ use super::*;
 use psf_guard_director_core::preparation::{
     Command, Completion, Context, Estimates, Next, Observation, Outcome, Preparation,
 };
+use psf_guard_director_core::program::LocalState;
 use sha2::{Digest, Sha256};
+mod reducer;
+use reducer::Reducer;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -99,13 +102,13 @@ pub(super) fn has_active(connection: &Connection) -> Result<bool, Error> {
     )?)
 }
 
-struct Stored {
-    preparation: Preparation,
+struct Stored<'a> {
+    preparation: Reducer<'a>,
     lifecycle: Lifecycle,
     capture_id: Option<String>,
 }
 
-impl Stored {
+impl Stored<'_> {
     fn record(&self) -> Record {
         Record {
             preparation_id: self.preparation.id().into(),
@@ -119,7 +122,11 @@ impl Stored {
     }
 }
 
-fn read(connection: &Connection, id: &str) -> Result<Option<Stored>, Error> {
+fn read<'a>(
+    connection: &Connection,
+    id: &str,
+    geometry: Option<&'a BoundGeometry>,
+) -> Result<Option<Stored<'a>>, Error> {
     if !valid_id(id) {
         return Err(Error::InvalidInput);
     }
@@ -137,7 +144,7 @@ fn read(connection: &Connection, id: &str) -> Result<Option<Stored>, Error> {
         if Sha256::digest(&checkpoint).as_slice() != digest {
             return Err(Error::CorruptLedger);
         }
-        let preparation = Preparation::restore(&checkpoint).map_err(|_| Error::CorruptLedger)?;
+        let preparation = Reducer::restore(&checkpoint, geometry)?;
         let lifecycle = match status.as_str() {
             "active" => Lifecycle::Active,
             "closed" => Lifecycle::Closed,
@@ -156,7 +163,7 @@ fn read(connection: &Connection, id: &str) -> Result<Option<Stored>, Error> {
     .transpose()
 }
 
-fn persist(connection: &Connection, preparation: &Preparation) -> Result<(), Error> {
+fn persist(connection: &Connection, preparation: &Reducer<'_>) -> Result<(), Error> {
     let checkpoint = preparation.checkpoint().map_err(|_| Error::CorruptLedger)?;
     connection.execute(
         "UPDATE preparation SET checkpoint=?1,checkpoint_digest=?2 WHERE id=?3",
@@ -220,7 +227,7 @@ impl Ledger {
         if self.program.is_some() {
             return Err(Error::ConflictingEvidence);
         }
-        self.begin_preparation_inner(id, context, estimates, state)
+        self.begin_preparation_inner(id, context, estimates, state, None)
     }
 
     pub(super) fn begin_preparation_inner(
@@ -229,14 +236,16 @@ impl Ledger {
         context: Context,
         estimates: Estimates,
         state: State,
+        geometry_input: Option<(&Constraints, LocalState)>,
     ) -> Result<Started, Error> {
+        self.check_geometry_mode(geometry_input.is_some())?;
         if !valid_id(id) {
             return Err(Error::InvalidInput);
         }
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(stored) = read(&tx, id)? {
+        if let Some(stored) = read(&tx, id, self.geometry.as_ref())? {
             if stored.preparation.context() != &context
                 || stored.preparation.estimates() != estimates
             {
@@ -256,8 +265,25 @@ impl Ledger {
             return Err(Error::ConflictingEvidence);
         }
         let request = snapshot(&tx, &self.assignment, state)?;
-        let preparation = Preparation::new(id.into(), &request, context.clone(), estimates)
-            .map_err(Error::Preparation)?;
+        let preparation = match (&self.geometry, geometry_input) {
+            (Some(geometry), Some((current, local))) => Reducer::Geometry(Box::new(
+                geometry
+                    .preparation(
+                        id.into(),
+                        &request,
+                        current,
+                        &context.goal_id,
+                        local,
+                        estimates,
+                    )
+                    .map_err(Error::Geometry)?,
+            )),
+            (None, None) => Reducer::Legacy(Box::new(
+                Preparation::new(id.into(), &request, context.clone(), estimates)
+                    .map_err(Error::Preparation)?,
+            )),
+            _ => return Err(Error::ConflictingEvidence),
+        };
         let checkpoint = preparation.checkpoint().map_err(|_| Error::InvalidInput)?;
         tx.execute(
             "INSERT INTO preparation(id,status,checkpoint,checkpoint_digest) VALUES (?1,'active',?2,?3)",
@@ -289,18 +315,20 @@ impl Ledger {
         if self.program.is_some() {
             return Err(Error::ConflictingEvidence);
         }
-        self.advance_preparation_inner(id, state)
+        self.advance_preparation_inner(id, state, None)
     }
 
     pub(super) fn advance_preparation_inner(
         &mut self,
         id: &str,
         state: State,
+        current: Option<&Constraints>,
     ) -> Result<Next, Error> {
+        self.check_geometry_mode(current.is_some())?;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let mut stored = read(&tx, id)?.ok_or(Error::InvalidInput)?;
+        let mut stored = read(&tx, id, self.geometry.as_ref())?.ok_or(Error::InvalidInput)?;
         if stored.lifecycle != Lifecycle::Active {
             return Err(Error::ConflictingEvidence);
         }
@@ -308,8 +336,7 @@ impl Ledger {
         let now = state.now_ms;
         let next = stored
             .preparation
-            .next(&snapshot(&tx, &self.assignment, state)?)
-            .map_err(Error::Preparation)?;
+            .next(&snapshot(&tx, &self.assignment, state)?, current)?;
         persist(&tx, &stored.preparation)?;
         if let Next::Run(command) = &next {
             append(
@@ -345,12 +372,9 @@ impl Ledger {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let id = completion.preparation_id.clone();
-        let mut stored = read(&tx, &id)?.ok_or(Error::InvalidInput)?;
+        let mut stored = read(&tx, &id, self.geometry.as_ref())?.ok_or(Error::InvalidInput)?;
         let before = stored.preparation.observations().len();
-        stored
-            .preparation
-            .complete(completion)
-            .map_err(Error::Preparation)?;
+        stored.preparation.complete(completion)?;
         if stored.preparation.observations().len() != before {
             if stored.lifecycle != Lifecycle::Active {
                 return Err(Error::ConflictingEvidence);
@@ -376,7 +400,7 @@ impl Ledger {
     }
 
     pub fn preparation(&self, id: &str) -> Result<Option<Record>, Error> {
-        Ok(read(&self.connection, id)?.map(|stored| stored.record()))
+        Ok(read(&self.connection, id, self.geometry.as_ref())?.map(|stored| stored.record()))
     }
 
     /// Discover durable work after a lost begin response or host restart. A
@@ -392,7 +416,7 @@ impl Ledger {
             .optional()?;
         let record = id
             .map(|id| {
-                read(&tx, &id)?
+                read(&tx, &id, self.geometry.as_ref())?
                     .map(|stored| stored.record())
                     .ok_or(Error::CorruptLedger)
             })
@@ -407,7 +431,7 @@ impl Ledger {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let mut stored = read(&tx, id)?.ok_or(Error::InvalidInput)?;
+        let mut stored = read(&tx, id, self.geometry.as_ref())?.ok_or(Error::InvalidInput)?;
         if stored.lifecycle != Lifecycle::Active {
             return Ok(stored.record());
         }
@@ -444,7 +468,7 @@ impl Ledger {
         if self.program.is_some() {
             return Err(Error::ConflictingEvidence);
         }
-        self.reserve_prepared_inner(id, capture_id, state)
+        self.reserve_prepared_inner(id, capture_id, state, None)
     }
 
     pub(super) fn reserve_prepared_inner(
@@ -452,14 +476,16 @@ impl Ledger {
         id: &str,
         capture_id: &str,
         state: State,
+        current: Option<&Constraints>,
     ) -> Result<Reservation, Error> {
+        self.check_geometry_mode(current.is_some())?;
         if !valid_id(capture_id) {
             return Err(Error::InvalidInput);
         }
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let mut stored = read(&tx, id)?.ok_or(Error::InvalidInput)?;
+        let mut stored = read(&tx, id, self.geometry.as_ref())?.ok_or(Error::InvalidInput)?;
         if stored.lifecycle == Lifecycle::Captured {
             if stored.capture_id.as_deref() != Some(capture_id) {
                 return Err(Error::ConflictingEvidence);
@@ -477,8 +503,7 @@ impl Ledger {
         let now = state.now_ms;
         let next = stored
             .preparation
-            .next(&snapshot(&tx, &self.assignment, state)?)
-            .map_err(Error::Preparation)?;
+            .next(&snapshot(&tx, &self.assignment, state)?, current)?;
         persist(&tx, &stored.preparation)?;
         let Next::ReadyToReserve { goal_id } = next else {
             let Next::Decision(decision) = next else {
