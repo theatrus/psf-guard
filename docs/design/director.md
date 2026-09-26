@@ -79,7 +79,7 @@ untested integration requirements unchecked.
 | --- | --- |
 | Global project | Desired result, targets, objectives, participants, lifecycle, and outputs. |
 | Observation objective | Required coverage, bandpass, exposure purpose, quality, depth, resolution, or cadence. |
-| Site | Location, horizon, availability, and site-specific constraints. |
+| Site | Latitude/longitude/elevation, time context, and weather inputs for planning and acquisition. |
 | Rig | Stable equipment identity, capabilities, and versioned configurations. |
 | Contribution plan | How a particular rig can satisfy an objective, including framing, panels, recipes, and quality requirements. |
 | Assignment | Versioned, bounded authorization for an executor to pursue specified contributions. |
@@ -96,6 +96,33 @@ A rig identity outlives a catalog file. Record equipment and site configuration
 revisions so a changed camera, telescope, or location does not rewrite history.
 Historical catalogs may contain several configurations; do not require a
 destructive split to adopt Director.
+
+### Site and rig responsibilities
+
+Sites are shared planning/acquisition context, not project ownership, catalog
+identity, or an acquisition executor. They supply latitude, longitude and
+elevation for visibility, darkness and transit calculations; a time zone for
+local-night boundaries and display; and weather sources/conditions relevant to
+the location. Keep event timestamps and scheduling instants in UTC. Weather
+forecasts help planning, while observed weather carries its source, observation
+time and expiry for acquisition decisions. A site does not grant permission to
+run equipment or turn a forecast into a safety guarantee.
+
+Rigs at one site may have different horizons, altitude limits, meridian limits,
+equipment capabilities and local safety devices. Those belong to the rig's
+versioned setup, not the site. N.I.N.A.'s local unsafe state and operator override
+always take precedence over favorable site weather or server plans. Missing or
+stale required weather/safety evidence blocks new acquisition; offline behavior
+must use explicitly configured local sources and freshness rules, not the last
+server report indefinitely. Multiple rigs can reference one site revision
+without sharing a horizon or rewriting historical configurations.
+
+The current schema-2 meta prototype stores the horizon inside `SiteSnapshot`.
+That does not yet implement this ownership boundary. Move it into `RigSetup`
+with a versioned migration that preserves every referenced effective horizon;
+do not silently replace it with a common site curve. Time-zone and weather
+configuration, freshness policy and their planning/acquisition integration are
+also still required.
 
 Short and long exposures through the same filter are separate objectives when
 they serve different purposes. Recipes include duration, filter mapping,
@@ -1615,7 +1642,9 @@ supported migration workflow.
 
 Schema 2 adds named sites, immutable site snapshots and immutable rig setups.
 Each site snapshot retains the complete location and native horizon, including
-unequal 0/360-degree endpoints. Each rig setup binds one exact equipment
+unequal 0/360-degree endpoints. This is the current storage shape, not the final
+ownership model: the site/rig separation above requires migrating the horizon
+to each referencing rig setup. Each rig setup binds one exact equipment
 configuration ID to a site snapshot, rig altitude bounds and asymmetric meridian
 exclusion. Its coordinator setup UUID is distinct from the native equipment
 fingerprint (N.I.N.A. uses `nina-...`); retain that native ID unchanged in planning
@@ -1674,6 +1703,10 @@ are unchanged.
 - [x] Add separate owned meta storage, transactional migrations, snapshot
   backup/restore, UUID identities and explicit catalog mapping primitives (#488).
 - [x] Persist immutable sites and rig configurations with shared validation (#489).
+- [ ] Separate site location/time/weather from rig horizon and equipment
+  constraints; migrate existing snapshots without changing effective geometry.
+- [ ] Add site time-zone and weather-source configuration, forecast versus
+  observed-condition provenance/freshness, and local safety precedence tests.
 - [ ] Merge and validate the opt-in operator API and identity UI (#490/#494/#495).
 - [ ] Merge the shared objective/contribution model and persisted intent
   (#492/#493), then add the actual objective/configuration editor.
