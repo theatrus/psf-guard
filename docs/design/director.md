@@ -3,7 +3,7 @@
 Status: phase 0 in progress. Shared-core, sidecar, and native simulated
 acquisition spikes implemented. An experimental runtime-only plugin preview is
 published in the theatr.us registry; no production acquisition plugin yet.
-Last updated: 2026-09-25.
+Last updated: 2026-09-26.
 
 This is the tracking document for Director. Update the phase checklist and
 record implementation PRs here as work lands. Keep durable architecture here;
@@ -1087,19 +1087,60 @@ dotnet run --project tools/director-astronomy-reference --configuration Release 
 
 This is numerical parity against the native library shipped by NINA, not a
 complete native sequence or server test. The existing selector/IPC are unchanged
-and do not yet consume this geometry. Continuous whole-exposure visibility,
-complete transit search, darkness, constraint IPC and cache identity,
+and do not yet consume this geometry. Complete transit search, darkness,
+constraint IPC and cache identity,
 Earth-orientation acquisition, and production dispatch enforcement remain gates.
 Point visibility alone must not authorize a shutter operation. In particular,
 do not generate safe intervals with a coarse time grid that misses narrow
 obstructions between samples.
 
+`check_altitude_span` now screens an entire closed interval, including its finish
+instant, against altitude and the full horizon curve. Callers must include
+exposure and blocking overhead and rerun after slow preparation. `Clear` is
+altitude evidence only, not assignment, meridian, darkness, safety, or hardware
+authorization. A sampled violation returns `Blocked` with its time; malformed,
+stale, unsupported, unresolved, or over-budget geometry returns a typed error.
+None of those errors may be treated as clear or replaced by endpoint checks.
+
+The fixed-star, zero-pressure model uses a conservative angular motion envelope
+of 0.01 degrees/second. This is over twice terrestrial sidereal rotation
+(less than 0.0042 degrees/second), with room for the much slower apparent-star
+terms in the pinned SOFA model. Proper motion, parallax, moving objects, and
+refraction are excluded by `observe`; this bound must be reviewed before adding
+any of them or changing the astronomy dependency. An additional 0.001-degree
+guard covers floating-point error. It is not a model of mount pointing error
+or a substitute for measured local clearance margins. A span crossing a SOFA
+UTC offset adjustment is refused: a single constant DUT1 value cannot model
+that transition, even when the caller declares a longer validity period.
+Supporting such spans requires time-varying orientation evidence, not a larger
+numeric guard. Ordinary midnight crossings remain supported.
+
+At each interval midpoint, a spherical cap bounds every direction in that
+interval. Altitude extrema follow directly from the cap radius. The spherical
+metric bounds the azimuth sweep using the largest absolute altitude in the cap;
+a pole-touching cap cannot assume a narrow azimuth range. The maximum horizon
+over that sweep includes every piecewise-linear breakpoint and both sides of
+the 0/360 discontinuity. Narrow obstructions cannot disappear between time
+samples. Intervals that cannot be certified split depth-first. At one millisecond
+resolution they remain unresolved, never clear. Requests are bounded to 24 hours
+and 8192 sky observations; memory grows with subdivision depth, not duration.
+This conservative test can refuse otherwise usable time near a boundary.
+
+Tests cover midpoint obstructions with clear endpoints, unsampled adjacent-float
+horizon spikes, north discontinuities, extra overhead crossing altitude limits,
+strict finish-time Earth-orientation validity, leap seconds, and dense SOFA
+cross-checks across sites and polar targets. These tests exercise the shared
+crate, not a native acquisition or server loop. Observing-window construction
+and integration of this screening into the selector and dispatch contract remain
+required; no existing planner result gains new hardware authority here.
+
 SOFA attribution and the full upstream terms live in
 `crates/director-core/THIRD_PARTY_NOTICES.md` and `SOFARS-LICENSE.txt`.
 The runtime CI artifact now includes these files beside the executable.
-The plugin's next pin update must deliberately accept, validate, and package
-both notices; its old single-file artifact allowlist correctly rejects this
-new artifact layout until that coordinated change. Existing pinned artifacts
+Plugin [PR #20](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/20)
+adopted the merged geometry runtime and verifies and packages both notices.
+Its fetch tests reject missing, corrupted, or extra artifact files and repair
+missing or changed cached notices. Existing published preview artifacts
 and the published preview are unchanged.
 
 ### Phase 1: meta database and global project model
