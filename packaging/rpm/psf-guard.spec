@@ -8,7 +8,7 @@
 %global rustflags_debuginfo 0
 
 Name:           psf-guard
-Version:        0.10.1
+Version:        0.10.2
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -93,6 +93,14 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Sat Sep 26 2026 Yann Ramin <github@theatr.us> - 0.10.2-1
+- Stack in WBPP runs PixInsight's WeightedBatchPreprocessing on the server, with a queue across databases
+- WBPP settings for exports and runs: quality, Fast Integration, drizzle, autocrop, rejection
+- Automatic import scans image directories on open and on a schedule
+- AstroBin acquisition CSV from the Overview and the astrobin-csv command
+- RGB masters preview in colour instead of crashing the preview worker
+- N.I.N.A. flat coverage sync no longer fails after a server update
+
 * Thu Sep 24 2026 Yann Ramin <github@theatr.us> - 0.10.1-1
 - Empty catalogs and projects show zero grading counts instead of a database error
 
