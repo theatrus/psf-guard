@@ -9,6 +9,6 @@ description = "Experimental deterministic goal selection for PSF Guard Director"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 sofars = "=0.6.1"

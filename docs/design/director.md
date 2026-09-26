@@ -1224,13 +1224,27 @@ A changed constraint latches a check-in; changing it back does not revive the ol
 preparation. An in-flight action still needs its correlated receipt, and safety
 stops retain precedence. No failure, uncertainty or lost receipt authorizes replay.
 
-This is a Rust selection/preparation path, not yet the durable ledger or IPC path
-and not a hardware permit. It deliberately does not expose a serializable
-geometry preparation or the inner legacy reducer. The ledger cannot replace its
-immutable allocation with diagnostic window lists. Production adoption must
-retain both source intent and geometry identity in durable storage, recompile
-from verified inputs on reopen, and refuse legacy paths that would bypass the
-binding. Reservation and final native dispatch still need fresh revalidation.
+Geometry preparation has an opaque, versioned checkpoint for local persistence.
+Restore requires a separately compiled binding from the original trusted program
+and constraints. It compares the complete inputs, reconstructs the initial
+narrowed request, and rejects changed saved windows or preparation context.
+Pending commands remain pending, late receipts remain admissible, and stored
+constraint stops, safety stops, failures and uncertainty survive recovery.
+Readiness is never restored as a dispatch permit: the next call still requires
+fresh state and constraints. Exact JSON float round-tripping preserves adjacent
+horizon vertices. The complete checkpoint has a 2 MiB decode/encode cap, and the
+inner operation journal keeps its existing size cap; a checkpoint error must
+prevent dispatch, not fall back to unjournaled execution. The legacy preparation
+loader rejects the geometry envelope. These bytes are neither authentication
+nor tamper protection; the owning journal must atomically commit and verify an
+integrity digest along with operation events before returning any Run command.
+
+This is a Rust selection/preparation/recovery path, not yet the durable ledger or
+IPC path and not a hardware permit. The ledger cannot replace its immutable
+allocation with diagnostic window lists. Production adoption must retain both
+source intent and geometry identity in durable storage and refuse legacy paths
+that would bypass the binding. Reservation and final native dispatch still need
+fresh revalidation.
 Compilation is bounded by the program/geometry limits but can be expensive for
 many distinct targets; schedule it off the interactive/dispatch path. Shared
 darkness calculation, other observing criteria, and the full server/N.I.N.A.

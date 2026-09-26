@@ -10,6 +10,8 @@ use psf_guard_director_core::{
     *,
 };
 use serde_json::json;
+#[path = "geometry/recovery.rs"]
+mod recovery;
 
 const START: u64 = 1_790_409_600_000;
 

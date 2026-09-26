@@ -4,6 +4,7 @@ use super::{BoundGeometry, Constraints, Error};
 use crate::preparation::{Command, Completion, Context, Estimates, Next, Observation, Preparation};
 use crate::program::LocalState;
 use crate::{Decision, Request};
+mod checkpoint;
 
 /// Geometry-aware native operation policy, not durable execution authority.
 /// The inner reducer cannot be extracted to bypass current constraint checks.
@@ -12,6 +13,8 @@ use crate::{Decision, Request};
 pub struct GeometryPreparation<'a> {
     geometry: &'a BoundGeometry,
     inner: Preparation,
+    initial: Request,
+    local: LocalState,
 }
 
 impl BoundGeometry {
@@ -28,13 +31,15 @@ impl BoundGeometry {
         self.check_current(request, current)?;
         let context = self
             .source
-            .preparation_context(goal_id, local)
+            .preparation_context(goal_id, local.clone())
             .map_err(Error::Program)?;
         let inner =
             Preparation::new(id, &narrowed, context, estimates).map_err(Error::Preparation)?;
         Ok(GeometryPreparation {
             geometry: self,
             inner,
+            initial: request.clone(),
+            local,
         })
     }
 }

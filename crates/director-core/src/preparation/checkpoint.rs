@@ -21,6 +21,13 @@ struct Checkpoint {
 }
 
 impl Preparation {
+    pub(crate) fn same_inputs(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.initial == other.initial
+            && self.context == other.context
+            && self.estimates == other.estimates
+    }
+
     /// Opaque, versioned persistence data. Hosts must commit it before returning
     /// a Run command, not after dispatch. It is not an IPC request or a permit.
     pub fn checkpoint(&self) -> Result<Vec<u8>, Error> {
