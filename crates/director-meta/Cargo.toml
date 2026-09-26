@@ -8,7 +8,9 @@ publish = false
 description = "Opt-in coordination identity storage for PSF Guard Director"
 
 [dependencies]
+psf-guard-director-core = { path = "../director-core" }
 rusqlite = { version = "0.40", features = ["backup", "bundled"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
 tempfile = "3.27"
 uuid = { version = "1", features = ["v4", "serde"] }

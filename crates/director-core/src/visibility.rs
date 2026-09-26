@@ -102,6 +102,34 @@ fn bounded(value: f64, minimum: f64, maximum: f64) -> bool {
     value.is_finite() && (minimum..=maximum).contains(&value)
 }
 
+impl Site {
+    pub fn validate(&self) -> Result<(), VisibilityError> {
+        if !bounded(self.latitude_degrees, -90.0, 90.0)
+            || !bounded(self.longitude_degrees, -180.0, 180.0)
+            || !bounded(self.elevation_meters, -1000.0, 100_000.0)
+        {
+            return Err(VisibilityError::InvalidSite);
+        }
+        Ok(())
+    }
+}
+
+impl AltitudeLimits {
+    pub fn validate(&self) -> Result<(), VisibilityError> {
+        if !bounded(self.rig_minimum_degrees, -90.0, 90.0)
+            || !bounded(self.project_minimum_degrees, -90.0, 90.0)
+            || !bounded(self.rig_maximum_degrees, -90.0, 90.0)
+            || !bounded(self.project_maximum_degrees, -90.0, 90.0)
+            || !bounded(self.horizon_offset_degrees, 0.0, 180.0)
+            || self.rig_maximum_degrees <= self.rig_minimum_degrees
+            || self.project_maximum_degrees <= self.project_minimum_degrees
+        {
+            return Err(VisibilityError::InvalidAltitudeLimits);
+        }
+        Ok(())
+    }
+}
+
 impl Horizon {
     pub fn validate(&self) -> Result<(), VisibilityError> {
         let Self::Custom { points } = self else {
@@ -156,16 +184,7 @@ pub fn altitude_allowed(
     azimuth_degrees: f64,
     altitude_degrees: f64,
 ) -> Result<bool, VisibilityError> {
-    if !bounded(limits.rig_minimum_degrees, -90.0, 90.0)
-        || !bounded(limits.project_minimum_degrees, -90.0, 90.0)
-        || !bounded(limits.rig_maximum_degrees, -90.0, 90.0)
-        || !bounded(limits.project_maximum_degrees, -90.0, 90.0)
-        || !bounded(limits.horizon_offset_degrees, 0.0, 180.0)
-        || limits.rig_maximum_degrees <= limits.rig_minimum_degrees
-        || limits.project_maximum_degrees <= limits.project_minimum_degrees
-    {
-        return Err(VisibilityError::InvalidAltitudeLimits);
-    }
+    limits.validate()?;
     if !bounded(altitude_degrees, -90.0, 90.0) {
         return Err(VisibilityError::InvalidPosition);
     }
@@ -208,12 +227,7 @@ fn observe_with_declination(
     {
         return Err(VisibilityError::InvalidPosition);
     }
-    if !bounded(site.latitude_degrees, -90.0, 90.0)
-        || !bounded(site.longitude_degrees, -180.0, 180.0)
-        || !bounded(site.elevation_meters, -1000.0, 100_000.0)
-    {
-        return Err(VisibilityError::InvalidSite);
-    }
+    site.validate()?;
     if !bounded(orientation.ut1_minus_utc_seconds, -1.0, 1.0)
         || !bounded(orientation.polar_motion_x_radians, -0.001, 0.001)
         || !bounded(orientation.polar_motion_y_radians, -0.001, 0.001)

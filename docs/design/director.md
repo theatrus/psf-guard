@@ -1373,8 +1373,30 @@ paths. Stable catalog identity adoption is not yet implemented.
 Writes use short SQLite transactions with foreign keys, WAL and full synchronous
 commits. Renames require an expected revision; retries cannot overwrite another
 editor's work or silently move a source project to a different global project.
-The store refuses foreign databases and unsupported schema versions. Future
-migrations must be transactional and preserve its instance and entity IDs.
+The store refuses foreign databases and unsupported schema versions. Opening a
+schema-1 store upgrades it to schema 2 in one writer transaction, preserving its
+instance and entity IDs; failed or competing migrations cannot partially commit.
+Future migrations must retain those properties. Back up before upgrading and
+stop older coordinator processes first; mixed-version online operation is not a
+supported migration workflow.
+
+Schema 2 adds named sites, immutable site snapshots and immutable rig setups.
+Each site snapshot retains the complete location and native horizon, including
+unequal 0/360-degree endpoints. Each rig setup binds one exact equipment
+configuration ID to a site snapshot, rig altitude bounds and asymmetric meridian
+exclusion. Its coordinator setup UUID is distinct from the native equipment
+fingerprint (N.I.N.A. uses `nina-...`); retain that native ID unchanged in planning
+programs. Geometry can change under a new setup UUID without inventing a new
+equipment fingerprint. Changed content requires a new snapshot/setup ID;
+registering the same ID again is idempotent only for unchanged content. Bounded ID
+inventories support discovery, but neither their ordering nor a display name selects a
+"latest" configuration. Planning must name an explicit revision.
+
+Equipment, site, horizon and altitude validation use the shared core. Snapshot
+payloads must fit its request-size bound; oversize horizons are refused, never
+thinned. A configuration snapshot is not a complete planning request and does not
+guarantee the combined request fits the IPC frame. Dynamic Earth orientation,
+current conditions, observing windows and authorization remain separate inputs.
 
 Backup uses SQLite's snapshot API, including committed WAL content, then publishes
 a checked standalone file without overwriting a destination. Restore likewise
@@ -1384,7 +1406,7 @@ include catalogs, images, or Director's local execution journal. Stop the old
 coordinator before switching to a restored path. Online replacement and automated
 restore/configuration switching are not supported.
 
-This is identity storage only. Site/configuration revisions, objectives, recipes,
+This is identity and configuration storage only. Objectives, recipes,
 allocation authority, enrollment/permissions, catalog adoption, HTTP and UI remain
 required before the phase is complete. No assignment or hardware authority is
 created by registering a rig or catalog.
