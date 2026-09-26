@@ -255,3 +255,61 @@ fn failed_sql_write_rolls_back_rename_and_leaves_revision_usable() {
         2
     );
 }
+
+#[test]
+fn bounded_id_pages_survive_renames_restarts_and_same_named_records() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let mut store = MetaStore::create(&path).unwrap();
+    for n in [4, 2, 1, 3] {
+        store.create_project(Uuid::from_u128(n), "M31").unwrap();
+        store.create_rig(Uuid::from_u128(n), "Redcat").unwrap();
+    }
+    let page = store.projects(None, 2).unwrap();
+    assert_eq!(
+        page.items.iter().map(|p| p.id).collect::<Vec<_>>(),
+        vec![Uuid::from_u128(1), Uuid::from_u128(2)]
+    );
+    assert_eq!(page.next_after, Some(Uuid::from_u128(2)));
+    store.rename_project(Uuid::from_u128(1), 1, "Z").unwrap();
+    drop(store);
+    let store = MetaStore::open(&path).unwrap();
+    let next = store.projects(page.next_after, 2).unwrap();
+    assert_eq!(
+        next.items.iter().map(|p| p.id).collect::<Vec<_>>(),
+        vec![Uuid::from_u128(3), Uuid::from_u128(4)]
+    );
+    assert_eq!(next.next_after, None);
+    assert!(store
+        .projects(Some(Uuid::from_u128(4)), 2)
+        .unwrap()
+        .items
+        .is_empty());
+    assert_eq!(store.rigs(None, 3).unwrap().items.len(), 3);
+    assert_eq!(
+        store.rigs(None, 3).unwrap().next_after,
+        Some(Uuid::from_u128(3))
+    );
+    for limit in [0, 257, usize::MAX] {
+        assert!(matches!(
+            store.projects(None, limit),
+            Err(Error::InvalidInput)
+        ));
+    }
+    assert!(matches!(
+        store.rigs(Some(Uuid::nil()), 1),
+        Err(Error::InvalidInput)
+    ));
+}
+
+#[test]
+fn corrupt_page_identity_is_not_returned_as_a_new_record() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let store = MetaStore::create(&path).unwrap();
+    Connection::open(&path)
+        .unwrap()
+        .execute("INSERT INTO rig VALUES('not-a-uuid','Rig',1)", [])
+        .unwrap();
+    assert!(matches!(store.rigs(None, 10), Err(Error::CorruptDatabase)));
+}

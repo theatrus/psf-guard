@@ -1364,8 +1364,10 @@ create a new file or open a recognized existing file. Schema 1 stores the
 coordinator instance UUID, global project and rig identities, originating catalog
 identities, and explicit catalog/source-project-GUID links. Names and URL slugs
 never establish identity; rigs outlive catalogs, and one global project may link
-to several catalogs. Catalog IDs must be explicitly registered and retained by
-the future adoption workflow, not regenerated on every import or inferred from
+to several catalogs. Project and rig listings use bounded, stable-ID cursor pages;
+renaming an entity does not move it across a page boundary. Catalog IDs must be
+explicitly registered and retained by the future adoption workflow, not
+regenerated on every import or inferred from
 paths. Stable catalog identity adoption is not yet implemented.
 
 Writes use short SQLite transactions with foreign keys, WAL and full synchronous

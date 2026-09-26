@@ -56,6 +56,13 @@ pub struct NamedIdentity {
     pub revision: u64,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityPage {
+    pub items: Vec<NamedIdentity>,
+    pub next_after: Option<Uuid>,
+}
+
 /// The originating catalog identity is not a URL slug, file name or telescope.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -97,6 +104,14 @@ impl MetaStore {
     }
     pub fn rig(&self, id: Uuid) -> Result<Option<NamedIdentity>, Error> {
         read_named(&self.connection, Kind::Rig, id)
+    }
+    /// Stable ID ordering, not display-name matching. Each page is a fresh read;
+    /// concurrent inserts before the cursor appear on the next complete listing.
+    pub fn projects(&self, after: Option<Uuid>, limit: usize) -> Result<IdentityPage, Error> {
+        self.list_named(Kind::Project, after, limit)
+    }
+    pub fn rigs(&self, after: Option<Uuid>, limit: usize) -> Result<IdentityPage, Error> {
+        self.list_named(Kind::Rig, after, limit)
     }
     pub fn rename_project(
         &mut self,
@@ -219,6 +234,44 @@ impl MetaStore {
         Ok(result)
     }
 
+    fn list_named(
+        &self,
+        kind: Kind,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> Result<IdentityPage, Error> {
+        if !(1..=256).contains(&limit) {
+            return Err(Error::InvalidInput);
+        }
+        if let Some(id) = after {
+            valid_id(id)?;
+        }
+        let cursor = after.map(|id| id.to_string()).unwrap_or_default();
+        let mut stmt = self.connection.prepare(&format!(
+            "SELECT id,name,revision FROM {} WHERE id>?1 ORDER BY id LIMIT ?2",
+            kind.table()
+        ))?;
+        let rows = stmt.query_map(params![cursor, (limit + 1) as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        let mut items = Vec::with_capacity(limit + 1);
+        for row in rows {
+            let (id, name, revision) = row?;
+            items.push(named(parse_id(&id)?, name, revision)?);
+        }
+        let next_after = if items.len() > limit {
+            items.pop();
+            items.last().map(|item| item.id)
+        } else {
+            None
+        };
+        Ok(IdentityPage { items, next_after })
+    }
+
     fn rename(
         &mut self,
         kind: Kind,
@@ -306,13 +359,17 @@ fn read_named(conn: &Connection, kind: Kind, id: Uuid) -> Result<Option<NamedIde
         )
         .optional()?;
     record
-        .map(|(name, revision)| {
-            valid_name(&name).map_err(|_| Error::CorruptDatabase)?;
-            if revision <= 0 {
-                return Err(Error::CorruptDatabase);
-            }
-            let revision = revision as u64;
-            Ok(NamedIdentity { id, name, revision })
-        })
+        .map(|(name, revision)| named(id, name, revision))
         .transpose()
+}
+fn named(id: Uuid, name: String, revision: i64) -> Result<NamedIdentity, Error> {
+    valid_name(&name).map_err(|_| Error::CorruptDatabase)?;
+    if revision <= 0 {
+        return Err(Error::CorruptDatabase);
+    }
+    Ok(NamedIdentity {
+        id,
+        name,
+        revision: revision as u64,
+    })
 }
