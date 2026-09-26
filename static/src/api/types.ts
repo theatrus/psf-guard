@@ -1467,8 +1467,24 @@ export interface WbppPublishOutcome {
   finished_at: number | null;
 }
 
+/** A run waiting its turn; positions count across every database. */
+export interface WbppQueuedRun {
+  id: string;
+  scope: string;
+  project_id: number | null;
+  target_id: number | null;
+  /** 1 is next. */
+  position: number;
+  queued_at: number;
+}
+
 export interface WbppRunStatus {
+  /** POST: whether PixInsight started now. GET: whether a run is under way. */
   started: boolean;
+  /** Set when a start was queued rather than started. */
+  queue_id?: string | null;
+  /** This database's runs waiting their turn. */
+  queued: WbppQueuedRun[];
   progress: WbppRunProgress;
 }
 
