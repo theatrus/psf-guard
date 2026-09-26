@@ -4,6 +4,34 @@ use serde_json::{json, value::to_raw_value};
 use tempfile::TempDir;
 use tokio::io::{duplex, DuplexStream};
 
+#[test]
+fn geometry_errors_keep_existing_scoped_storage_codes() {
+    use psf_guard_director_core::{geometry::Error as Geometry, preparation::Error as Preparation};
+    use psf_guard_director_ledger::Error as LedgerError;
+    for (error, expected) in [
+        (Geometry::ConstraintsChanged, StorageError::InvalidSnapshot),
+        (Geometry::InvalidCheckpoint, StorageError::CorruptLedger),
+        (
+            Geometry::Preparation(Preparation::NotSelected),
+            StorageError::PreparationNotSelected,
+        ),
+        (
+            Geometry::Preparation(Preparation::ClockRegression),
+            StorageError::ClockRegression,
+        ),
+        (
+            Geometry::Preparation(Preparation::InvalidCompletion),
+            StorageError::InvalidCompletion,
+        ),
+        (
+            Geometry::Program(psf_guard_director_core::program::Error::ConfigurationMismatch),
+            StorageError::InvalidProgram,
+        ),
+    ] {
+        assert_eq!(StorageError::from(LedgerError::Geometry(error)), expected);
+    }
+}
+
 pub(super) fn fixture() -> Request {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
         "../../director-core/tests/fixtures/decisions.json"

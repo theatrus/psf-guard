@@ -73,6 +73,10 @@ pub struct BoundGeometry {
 }
 
 impl BoundGeometry {
+    pub fn constraints(&self) -> &Constraints {
+        &self.constraints
+    }
+
     pub fn new(
         source: BoundProgram,
         mut constraints: Constraints,

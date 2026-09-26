@@ -432,7 +432,7 @@ fn version_one_migration_preserves_identity_capture_evidence_and_event_schema() 
     drop(ledger);
     let db = Connection::open(&path).unwrap();
     db.execute_batch(
-        "DROP TABLE preparation; DROP TABLE preparation_event; DROP TABLE execution_program; ALTER TABLE allocation DROP COLUMN program_required; PRAGMA user_version=1;",
+        "DROP TABLE preparation; DROP TABLE preparation_event; DROP TABLE execution_program; ALTER TABLE allocation DROP COLUMN program_required; DROP TABLE execution_geometry; ALTER TABLE allocation DROP COLUMN geometry_required; PRAGMA user_version=1;",
     )
     .unwrap();
     drop(db);
@@ -572,7 +572,7 @@ fn migration_failure_does_not_modify_another_assignments_ledger() {
     drop(open(&path));
     let db = Connection::open(&path).unwrap();
     db.execute_batch(
-        "DROP TABLE preparation; DROP TABLE preparation_event; DROP TABLE execution_program; ALTER TABLE allocation DROP COLUMN program_required; PRAGMA user_version=1;",
+        "DROP TABLE preparation; DROP TABLE preparation_event; DROP TABLE execution_program; ALTER TABLE allocation DROP COLUMN program_required; DROP TABLE execution_geometry; ALTER TABLE allocation DROP COLUMN geometry_required; PRAGMA user_version=1;",
     )
     .unwrap();
     let mut r = request();

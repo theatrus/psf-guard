@@ -325,7 +325,7 @@ fn migration_retains_unbound_preparation_without_reinterpreting_it() {
     let events = ledger.preparation_events_after(0, 256).unwrap();
     drop(ledger);
     let db = Connection::open(&path).unwrap();
-    db.execute_batch("DROP TABLE execution_program; ALTER TABLE allocation DROP COLUMN program_required; PRAGMA user_version=2;").unwrap();
+    db.execute_batch("DROP TABLE execution_program; ALTER TABLE allocation DROP COLUMN program_required; DROP TABLE execution_geometry; ALTER TABLE allocation DROP COLUMN geometry_required; PRAGMA user_version=2;").unwrap();
     assert!(matches!(
         Ledger::open_program(&path, program(), request.state.clone()),
         Err(Error::AssignmentMismatch)
@@ -356,7 +356,7 @@ fn migration_retains_unbound_preparation_without_reinterpreting_it() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
             .unwrap(),
-        3
+        4
     );
 }
 

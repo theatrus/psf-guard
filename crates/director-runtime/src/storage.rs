@@ -191,6 +191,16 @@ impl From<Error> for StorageError {
             Error::InvalidInput => Self::InvalidInput,
             Error::Planner(_) => Self::InvalidSnapshot,
             Error::Program(_) => Self::InvalidProgram,
+            Error::Geometry(error) => match error {
+                psf_guard_director_core::geometry::Error::Preparation(error) => {
+                    Self::from(Error::Preparation(error))
+                }
+                psf_guard_director_core::geometry::Error::Program(error) => {
+                    Self::from(Error::Program(error))
+                }
+                psf_guard_director_core::geometry::Error::InvalidCheckpoint => Self::CorruptLedger,
+                _ => Self::InvalidSnapshot,
+            },
             Error::Preparation(error) => match error {
                 PreparationError::NotSelected => Self::PreparationNotSelected,
                 PreparationError::InvalidCompletion => Self::InvalidCompletion,

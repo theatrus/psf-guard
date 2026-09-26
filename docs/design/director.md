@@ -1239,12 +1239,25 @@ loader rejects the geometry envelope. These bytes are neither authentication
 nor tamper protection; the owning journal must atomically commit and verify an
 integrity digest along with operation events before returning any Run command.
 
-This is a Rust selection/preparation/recovery path, not yet the durable ledger or
-IPC path and not a hardware permit. The ledger cannot replace its immutable
-allocation with diagnostic window lists. Production adoption must retain both
-source intent and geometry identity in durable storage and refuse legacy paths
-that would bypass the binding. Reservation and final native dispatch still need
-fresh revalidation.
+Ledger schema 4 adds an immutable geometry-bound mode. `open_geometry` recompiles
+the supplied original program and constraints before opening a writer transaction,
+then compares them with stored program and geometry metadata and their integrity
+digests. Legacy/program-only ledgers cannot adopt this mode, and geometry-bound
+ledgers cannot downgrade. Schema 1-3 migrations retain the original ledger ID,
+pending operations, captures and outboxes without reinterpreting their evidence.
+
+Geometry-aware selection, begin, advance and final reservation use durable
+progress. Advance and reservation require fresh constraints and an exact current
+equipment configuration. The journal shares the existing one-active-preparation
+and one-unresolved-capture invariants; it writes checkpoints, events and capture
+links atomically. Reopen restores pending commands as pending, and a failed event
+write rolls back the accompanying checkpoint or reservation. Read-only recovery
+and completion receipts remain available after constraints change. Tests cover
+competing handles and abrupt process exit, not just orderly close/reopen.
+The legacy mutation and selection entry points reject geometry-bound ledgers.
+
+This is a Rust ledger path, not yet the runtime IPC or native dispatch path and
+not a hardware permit. Final native dispatch still needs fresh revalidation.
 Compilation is bounded by the program/geometry limits but can be expensive for
 many distinct targets; schedule it off the interactive/dispatch path. Shared
 darkness calculation, other observing criteria, and the full server/N.I.N.A.
