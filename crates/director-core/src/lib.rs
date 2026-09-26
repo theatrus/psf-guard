@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 pub mod preparation;
+pub mod program;
 pub mod windows;
 use windows::{observing_windows, Interval, MeridianExclusion, TransitCoverage, WindowError};
 

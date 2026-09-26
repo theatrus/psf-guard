@@ -801,6 +801,67 @@ integrated durable journals, restart reconciliation, and core-authorized native
 N.I.N.A. dispatch remain phase-0 gates.
 The existing Sync plugin is unchanged.
 
+#### Execution program bindings
+
+[`director-core::program`](../../crates/director-core/src/program.rs) adds a
+version-1 execution-program model above the unchanged planning contract 2.
+The program contains one immutable allocation, its rig/configuration snapshot,
+targets, exposure recipes, and exactly one target/recipe binding per goal.
+It is a shared Rust API, not a new IPC command, server endpoint, or acquisition
+permit. The current ledger/IPC preparation path does not enforce it yet.
+
+Bindings use stable IDs, never display names or nearby coordinates. Duplicate
+IDs, missing/extra goal mappings, and unused target/recipe definitions fail
+validation. The recipe duration must equal the goal duration used by the
+selector. Short and long exposures can share a filter and target while keeping
+separate recipes and goal accounting. A validated program owns its snapshot;
+mutable caller data cannot change a resolved binding afterward.
+
+Configuration includes camera identity, fixed-filter or wheel-slot mappings,
+allowed binning pairs and readout modes, exposure limits, gain/offset support,
+and local slew/dither preferences. Range and discrete gain/offset capabilities
+are distinct. Null gain/offset means unsupported, not "use the current value";
+supported controls require an explicit allowed value. The initial model uses
+nonnegative control values and explicit readout modes compatible with the current
+N.I.N.A. execution baseline. Unrepresentable capabilities must block adoption,
+not silently become a guessed mode or setting. Hosts must export and refresh
+actual capabilities before this model is used for equipment dispatch.
+
+Coordinates are ICRS integer milliarcseconds: RA and position angle lie in
+`[0, 360 * 3_600_000)`, declination in `[-90 * 3_600_000, 90 * 3_600_000]`.
+Round to the nearest milliarcsecond at the input boundary, at most 0.5 mas per
+coordinate, and convert to degrees only at an astronomy/device boundary. TS RA
+in hours must first be converted to degrees. These values are exact in both
+Rust and C# JSON integer representations. A null position angle means no
+requested rotation, not zero. The initial preparation path requires a connected
+rotator and enabled centering when an angle is requested; manual rotation
+attestation is not implemented.
+
+`BoundProgram::preparation` resolves IDs, filter, readout, and dither settings
+from the program and then uses the existing shared reducer. The current local
+equipment snapshot must equal the bound snapshot, not merely reuse its ID.
+It does not select
+work itself. The owning ledger may project accepted/pending/remaining-attempt
+counters, but cannot alter recipes, priorities, durations, windows, allocation
+identity, or expand the original remaining attempt budget. This API does not
+authenticate caller-supplied progress; the ledger remains its required owner.
+
+Remembered framing includes the complete target and configuration identity.
+Changed coordinates, rotation, or configuration require new-target preparation
+even when the stable target ID is unchanged. Hosts must invalidate remembered
+pointing after manual movement, failures, profile changes, or other lost
+evidence; merely remembering the same name/ID is not enough.
+
+Program payloads retain the 256 KiB bound and strict fields, including explicitly
+present nullable settings. Tests cover typed/JSON roundtrips, integer fidelity,
+capability rejection, complete mappings, distinct short/long recipes, immutable
+snapshots, stale framing, projection restrictions, and fresh safety decisions.
+Next, persist this exact program with the ledger, expose a versioned bound
+preparation path, and bind native capture settings to the same resolved recipe.
+Do not claim recipe enforcement from the existing unbound IPC 4 API. Pairing,
+meta-database authority, native container execution, effective horizon refresh,
+and the full server/N.I.N.A. gate remain open.
+
 #### Shared exposure preparation
 
 [`director-core::preparation`](../../crates/director-core/src/preparation.rs)
