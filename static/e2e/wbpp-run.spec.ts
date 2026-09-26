@@ -10,7 +10,8 @@ let fakeBinary: string;
  * A stand-in for PixInsight: reads the script and output folder out of the
  * `-r=` argument the way PixInsight would hand them to WBPP, writes a WBPP
  * style log and a master, and exits. The real thing takes an hour and a
- * licence; the plumbing around it is what this checks.
+ * licence; the plumbing around it is what this checks. It takes a few
+ * seconds so a test can queue a second project behind the running one.
  */
 function installFakePixInsight(root: string): string {
   const bin = path.join(root, 'bin');
@@ -35,7 +36,7 @@ echo "Weighted Batch Preprocessing Script 3.1.0" > "$LOG"
 echo "stand-in for PixInsight; script <raw>$SCRIPT</raw>" >> "$LOG"
 printf '%s' "$R" | tr ',' '\\n' | sed 's/^/automation mode parameter: /' >> "$LOG"
 echo "* Begin registration of light frames" >> "$LOG"
-sleep 1
+sleep 8
 echo "* End registration of light frames" >> "$LOG"
 cp "$SCRIPT" "$OUT/master/masterLight_BIN-1_FILTER-B.xisf"
 echo "* WeightedBatchPreprocessing: 00:00:01.000" >> "$LOG"
