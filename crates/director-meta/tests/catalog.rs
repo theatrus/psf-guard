@@ -30,6 +30,90 @@ fn project_link(mapping: &ProjectMapping) -> ProjectLink {
 }
 
 #[test]
+fn adoption_preview_and_failed_batches_never_leave_registration_or_partial_mappings() {
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let mut mapping = fixture(&mut store);
+    mapping.catalog_id = Uuid::new_v4();
+    let catalog = CatalogIdentity {
+        id: mapping.catalog_id,
+        origin_instance_id: store.instance_id(),
+    };
+    store
+        .preview_catalog_adoption(catalog, &[mapping.clone()], true)
+        .unwrap();
+    assert_eq!(store.catalog_identity(catalog.id).unwrap(), None);
+    let conflicting = ProjectMapping {
+        source_project_guid: Uuid::new_v4(),
+        rig_id: store.create_rig(Uuid::new_v4(), "Other rig").unwrap().id,
+        ..mapping.clone()
+    };
+    for preview in [true, false] {
+        let result = if preview {
+            store.preview_catalog_adoption(catalog, &[mapping.clone(), conflicting.clone()], true)
+        } else {
+            store.adopt_catalog_projects(catalog, &[mapping.clone(), conflicting.clone()])
+        };
+        assert!(matches!(result, Err(Error::Conflict)));
+        assert_eq!(store.catalog_identity(catalog.id).unwrap(), None);
+        assert_eq!(
+            store
+                .linked_project(catalog.id, mapping.source_project_guid)
+                .unwrap(),
+            None
+        );
+    }
+    for _ in 0..2 {
+        store
+            .adopt_catalog_projects(catalog, &[mapping.clone()])
+            .unwrap();
+    }
+    assert!(matches!(
+        store.preview_catalog_adoption(catalog, &[mapping.clone()], true),
+        Err(Error::Conflict)
+    ));
+    assert!(matches!(
+        store.adopt_catalog_projects_after(catalog, &[mapping.clone()], true, || panic!(
+            "conflicting identity must not finalize"
+        )),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.catalog_identity(catalog.id).unwrap(), Some(catalog));
+    assert_eq!(
+        store
+            .catalog_project_mappings(catalog.id, None, 256)
+            .unwrap()
+            .items,
+        vec![mapping]
+    );
+}
+
+#[test]
+fn catalog_commit_failure_rolls_back_coordinator_registration_and_mappings() {
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let mut mapping = fixture(&mut store);
+    mapping.catalog_id = Uuid::new_v4();
+    let catalog = CatalogIdentity {
+        id: mapping.catalog_id,
+        origin_instance_id: store.instance_id(),
+    };
+    assert!(matches!(
+        store.adopt_catalog_projects_after(catalog, &[mapping.clone()], true, || Err(
+            Error::Conflict
+        )),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.catalog_identity(catalog.id).unwrap(), None);
+    assert_eq!(
+        store
+            .linked_project(catalog.id, mapping.source_project_guid)
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
 fn confirmed_links_are_idempotent_and_survive_rename_restart_and_backup() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("meta.sqlite");

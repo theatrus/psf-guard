@@ -40,17 +40,45 @@ struct Profile {
 }
 
 #[derive(Debug, Serialize)]
-struct Evidence {
+pub(super) struct Evidence {
     has_project_guid: bool,
     has_profile_id: bool,
     projects: Vec<Project>,
     profiles: Vec<Profile>,
 }
 
+impl Evidence {
+    pub(super) fn mapping_names(
+        &self,
+        mappings: &[psf_guard_director_meta::catalog::ProjectMapping],
+    ) -> Result<Vec<String>, Error> {
+        mappings
+            .iter()
+            .map(|mapping| {
+                let project = self
+                    .projects
+                    .iter()
+                    .find(|project| {
+                        project.source_project_guid == Some(mapping.source_project_guid)
+                    })
+                    .ok_or(Error::Conflict)?;
+                if !project.issues.is_empty()
+                    || project.source_profile_id.as_deref()
+                        != Some(mapping.source_profile_id.as_str())
+                {
+                    return Err(Error::Conflict);
+                }
+                project.name.clone().ok_or(Error::Conflict)
+            })
+            .collect()
+    }
+}
+
 #[derive(Serialize)]
 pub(super) struct Discovery {
     catalog_slug: String,
     catalog_name: String,
+    catalog_identity: Option<psf_guard_director_meta::CatalogIdentity>,
     // An optimistic-preview token, not a catalog identity or execution authority.
     snapshot_digest: String,
     evidence: Evidence,
@@ -108,15 +136,14 @@ pub(super) async fn discover(
     let result = tokio::task::spawn_blocking(move || {
         // Cancellation keeps admission held until the SQLite read actually ends.
         let _permit = permit;
-        let evidence = read_catalog(Path::new(&catalog.database_path))?;
-        let bytes = serde_json::to_vec(&evidence).map_err(|_| Error::Internal)?;
-        let mut snapshot_digest = String::with_capacity(64);
-        for byte in Sha256::digest(bytes) {
-            write!(snapshot_digest, "{byte:02x}").expect("writing to a String cannot fail");
-        }
+        let (evidence, catalog_identity) = read_snapshot(Path::new(&catalog.database_path))?;
+        let bytes =
+            serde_json::to_vec(&(&evidence, catalog_identity)).map_err(|_| Error::Internal)?;
+        let snapshot_digest = digest(&bytes);
         Ok::<_, DiscoveryError>(Discovery {
             catalog_slug: catalog.id.clone(),
             catalog_name: catalog.name.clone(),
+            catalog_identity,
             snapshot_digest,
             evidence,
         })
@@ -129,7 +156,22 @@ pub(super) async fn discover(
     Ok(Json(ApiResponse::success(result)))
 }
 
+pub(super) fn digest(bytes: &[u8]) -> String {
+    let mut digest = String::with_capacity(64);
+    for byte in Sha256::digest(bytes) {
+        write!(digest, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    digest
+}
+
+#[cfg(test)]
 fn read_catalog(path: &Path) -> Result<Evidence, DiscoveryError> {
+    read_snapshot(path).map(|(evidence, _)| evidence)
+}
+
+fn read_snapshot(
+    path: &Path,
+) -> Result<(Evidence, Option<psf_guard_director_meta::CatalogIdentity>), DiscoveryError> {
     let mut connection = super::super::database_context::open_scheduler_connection_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -139,11 +181,12 @@ fn read_catalog(path: &Path) -> Result<Evidence, DiscoveryError> {
     connection.busy_timeout(Duration::from_secs(2))?;
     let tx = connection.transaction()?;
     let evidence = read_evidence(&tx)?;
+    let identity = crate::catalog_identity::read(&tx).map_err(Error::from)?;
     tx.commit()?;
-    Ok(evidence)
+    Ok((evidence, identity))
 }
 
-fn read_evidence(connection: &Connection) -> Result<Evidence, DiscoveryError> {
+pub(super) fn read_evidence(connection: &Connection) -> Result<Evidence, DiscoveryError> {
     if !connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='project' COLLATE NOCASE)",
         [], |row| row.get::<_, bool>(0),
