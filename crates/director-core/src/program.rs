@@ -227,17 +227,8 @@ impl BoundProgram {
         }
         let mut targets = BTreeMap::new();
         for (index, target) in program.targets.iter().enumerate() {
-            if !valid_id(&target.id)
-                || target.name.trim().is_empty()
-                || target.name.len() > 256
-                || target.name.chars().any(char::is_control)
-                || target.icrs_ra_mas >= FULL_CIRCLE
-                || !(-POLE..=POLE).contains(&target.icrs_dec_mas)
-                || target
-                    .position_angle_mas
-                    .is_some_and(|angle| angle >= FULL_CIRCLE)
-                || targets.insert(&target.id, index).is_some()
-            {
+            validate_target(target)?;
+            if targets.insert(&target.id, index).is_some() {
                 return Err(Error::InvalidTarget);
             }
         }
@@ -432,18 +423,51 @@ pub fn validate_configuration(config: &Configuration) -> Result<(), Error> {
     Ok(())
 }
 
-fn validate_recipe(recipe: &Recipe, config: &Configuration) -> Result<(), Error> {
-    if !valid_id(&recipe.id)
-        || !config
-            .filters
-            .iter()
-            .any(|filter| filter.id == recipe.filter_id)
+/// Validate framing without inventing an allocated goal or current conditions.
+pub fn validate_target(target: &Target) -> Result<(), Error> {
+    if !valid_id(&target.id)
+        || target.name.trim().is_empty()
+        || target.name.len() > 256
+        || target.name.chars().any(char::is_control)
+        || target.icrs_ra_mas >= FULL_CIRCLE
+        || !(-POLE..=POLE).contains(&target.icrs_dec_mas)
+        || target
+            .position_angle_mas
+            .is_some_and(|angle| angle >= FULL_CIRCLE)
+    {
+        return Err(Error::InvalidTarget);
+    }
+    Ok(())
+}
+
+/// Validate a concrete recipe against an already validated configuration.
+pub fn validate_recipe(recipe: &Recipe, config: &Configuration) -> Result<(), Error> {
+    validate_recipe_shape(recipe)?;
+    if !config
+        .filters
+        .iter()
+        .any(|filter| filter.id == recipe.filter_id)
         || recipe.exposure_ms < config.exposure_min_ms
         || recipe.exposure_ms > config.exposure_max_ms
         || !config.binning_modes.contains(&recipe.binning)
         || !config.readout_modes.contains(&recipe.readout_mode)
         || !config.gain.accepts(recipe.gain)
         || !config.offset.accepts(recipe.offset)
+    {
+        return Err(Error::InvalidRecipe);
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_recipe_shape(recipe: &Recipe) -> Result<(), Error> {
+    if !valid_id(&recipe.id)
+        || !valid_id(&recipe.filter_id)
+        || recipe.exposure_ms == 0
+        || recipe.binning.x < 1
+        || recipe.binning.y < 1
+        || recipe.readout_mode < 0
+        || recipe.gain.is_some_and(|value| value < 0)
+        || recipe.offset.is_some_and(|value| value < 0)
     {
         return Err(Error::InvalidRecipe);
     }

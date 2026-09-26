@@ -12,8 +12,9 @@
   starts on its own when the running job ends. **Queue stacking** replaces
   the refusal.
 
-- An opt-in Director metadata API can create, list, and rename global project
-  identities in a separate SQLite store. Enable it with `--director-meta` and
+- An opt-in Director metadata API can create, list, and rename global project,
+  site and rig identities, and retain complete immutable horizon and equipment
+  snapshots in a separate SQLite store. Enable it with `--director-meta` and
   database management on a CLI server. It follows user authentication and does
   not yet enable pairing or acquisition. See `docs/DIRECTOR.md`.
 
