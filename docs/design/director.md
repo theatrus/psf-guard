@@ -681,14 +681,14 @@ peer process ID. The launcher supplies the pipe name, host PID, and optionally
 an absolute state directory. No credentials appear in process arguments. The
 protocol has no network or equipment operations; local persistence is opt-in.
 
-IPC version 3 uses a four-byte little-endian length followed by UTF-8 JSON.
+IPC version 4 uses a four-byte little-endian length followed by UTF-8 JSON.
 Frames are limited to 266,240 bytes before body allocation. The nested planning
 request retains its original JSON and the core's 262,144-byte limit, including
 duplicate-field validation. Every envelope contains `protocol_version`,
 `session_id`, `request_id`, and `payload`; payloads use a `type` discriminator.
 
 - `hello` must be request 0 with a fresh 32-hex-character session ID. It binds
-  the rig ID and requires exact runtime 0.2.1, engine 0.2.0, and contract 2.
+  the rig ID and requires exact runtime 0.3.0, engine 0.2.0, and contract 2.
   `ready` confirms all versions, the rig, and whether storage is enabled.
 - `evaluate` wraps one core request and returns a `decision` with the unchanged
   core response. Valid requests for another assignment rig terminate the session.
@@ -709,8 +709,9 @@ duplicate-field validation. Every envelope contains `protocol_version`,
   and stale/duplicate requests end the session without a replayed response.
   A new child must negotiate a new session and receive a fresh snapshot.
 
-The Director preview pins runtime 0.2.1 / IPC 3 with the typed ledger host and
-shutdown drain handshake together. A mismatched version is refused, never
+The published Director preview still pins runtime 0.2.1 / IPC 3 with the typed
+ledger host and shutdown drain handshake together. It cannot use IPC 4 until
+the adapter and bundle pin are updated. A mismatched version is refused, never
 silently downgraded. Publishing this runtime artifact alone does not update
 installed plugins or change the existing Sync plugin.
 
@@ -731,28 +732,56 @@ ledger operation or hardware dispatch.
 
 - `open` validates and binds the original core `request`. Its reply contains
   stable ledger, assignment, revision, rig, and configuration identities.
+- Ledger `evaluate` takes only current state, projects durable pending progress
+  and attempt budgets, and returns a read-only core decision. It never reserves
+  an exposure or accepts caller-supplied progress. Active preparation or an
+  unresolved capture blocks new selection; safety still wins. This is distinct
+  from the forbidden stateless envelope-level `evaluate` after ledger opening.
 - `reserve` takes a capture ID and current core state. The shared evaluator and
   ledger return a newly committed reservation, existing evidence, recovery
   required, or a non-acquisition decision. Only the first case is new work;
   none is a hardware permission or a restart dispatch token.
 - `record` accepts verified saved/failed/uncertain evidence. `attempt` reads a
   capture's evidence without changing it, including after reconnect.
+- `unresolved_attempt` discovers outstanding capture evidence without needing
+  the ID from a possibly lost reservation reply.
 - `events` pages at most 64 events after a cursor and returns the next cursor.
   There is no acknowledgement, pruning, revision activation, or grading yet.
+- `begin_preparation` binds a resolved context, estimates, and current state.
+  It returns a created/existing flag and evidence, never a native command.
+- `advance_preparation` returns the shared reducer's `run`, `in_flight`,
+  `ready_to_reserve`, or `decision` result. Only a newly committed `run` issues
+  an operation. Nested results use `status` and `value`; operation ordinals
+  and preparation/goal/target/recipe IDs correlate the eventual receipt.
+- `complete_preparation` records the correlated outcome and measured duration.
+  `preparation` reads by ID; `active_preparation` discovers durable work after
+  a lost begin reply. Returned pending commands are evidence, never dispatch
+  permissions. These reads do not advance the reducer or its clock.
+- `close_preparation` explicitly releases unused work but refuses pending or
+  uncertain operations. `reserve_prepared` rechecks the final boundary and
+  atomically links a capture reservation; a retry returns existing evidence.
+- `preparation_events` pages at most 32 events on its separate cursor. Its
+  worst-case escaped payload stays within the unchanged frame limit. Nullable
+  context/recovery fields must be present explicitly; omission is not reset.
 
 SQLite work runs on the blocking executor, serialized within the pipe session.
 Structured storage failures carry codes, not paths or raw database errors. Wrong
 rig identity or malformed commands terminate the session; ordinary busy/invalid
 operation errors do not. If a response is lost, the operation may have committed.
-Reconnect with the same ledger/allocation and query the stable capture ID; never
+Reconnect with the same ledger/allocation and query the active preparation or
+unresolved capture (or their known stable IDs); never
 interpret a retry returning existing evidence as permission to capture again.
+Preparation-not-selected, invalid-completion, clock-regression, and conflicting
+evidence failures have distinct bounded codes. They leave the session available
+for status/recovery and never authorize a client-side retry of device work.
 
 Portable protocol tests cover loss of the reservation reply, duplicate/unknown
 fields, wrong-rig commands, bounded event pages with escaped maximum-length IDs,
 contention, exclusive ownership, and refusal to bypass ledger progress. The real
 Windows named-pipe harness passed 36 golden decisions and lifecycle/storage checks
-across 17 owned sidecars on 2026-09-25, including forced termination after uncertain
-and saved outcomes. This is process-level recovery evidence, not a N.I.N.A. or
+across 30 owned sidecars, including forced termination after an issued preparation
+operation and its linked capture reservation. It discovers recovery IDs, preserves
+exact 64-bit timings, and refuses redispatch. This is process-level recovery evidence, not a N.I.N.A. or
 server-loop test.
 
 Run the real Windows process tests:
@@ -776,8 +805,8 @@ The existing Sync plugin is unchanged.
 
 [`director-core::preparation`](../../crates/director-core/src/preparation.rs)
 models the first native-operation boundaries without device APIs or I/O. This
-is an internal Rust API, not an extension of planning JSON contract 2 or IPC 3.
-It does not change the published plugin's behavior.
+is an internal Rust API exposed by IPC 4 through the durable ledger. Planning
+JSON contract 2 and the published plugin's behavior are unchanged.
 
 The reducer follows the pinned TS reference's preparation order: unpark when
 needed; center/rotate and the Before New Target hook on a target transition;
@@ -813,8 +842,8 @@ conditions, and final-boundary revalidation. Run it with:
 cargo test --locked -p psf-guard-director-core --test preparation
 ```
 
-Versioned preparation IPC, recipe/configuration binding, and native container
-execution remain required before hardware use. A host must
+Recipe/configuration binding and native container execution remain required
+before hardware use. A host must
 not reconstruct lost reducer state and replay an operation whose outcome is
 unknown. Preparation does not consume capture attempts or credit images; the
 ledger and a fresh native dispatch check remain separate requirements. Session
@@ -825,7 +854,7 @@ open parts of the operation inventory, not implied by this initial reducer.
 
 [`crates/director-ledger`](../../crates/director-ledger/src/lib.rs) owns the
 first local attempt/event storage contract. It depends on the shared core and
-SQLite, leaving the planner itself free of I/O. IPC 3 exposes it through explicit
+SQLite, leaving the planner itself free of I/O. IPC 4 exposes it through explicit
 storage operations, but the native capture adapter does not use it yet. It
 changes no existing catalog, Sync endpoint, or installed plugin package.
 
@@ -877,7 +906,7 @@ Ledger schema 2 adds a preparation journal using the same writer transactions.
 It migrates an owned schema-1 ledger without changing its UUID, allocation,
 attempts, or capture events. Wrong allocations/engines roll back the migration;
 older binaries refuse schema 2. Capture event schema 1 remains unchanged.
-This is a local internal API, not a new IPC 3 operation or a plugin release.
+IPC 4 exposes these local APIs; it is not a plugin release or a server endpoint.
 
 `begin_preparation` binds the resolved context to ledger-derived progress.
 `advance_preparation` checkpoints the pure reducer and appends an issued event

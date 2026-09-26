@@ -156,6 +156,41 @@ fn status(evidence: &Evidence) -> &'static str {
 }
 
 impl Ledger {
+    /// Read-only selection using durable progress. This is not a reservation or
+    /// dispatch permit; preparation and capture still revalidate at their boundary.
+    pub fn evaluate(&mut self, state: State) -> Result<Decision, Error> {
+        let tx = self.connection.transaction()?;
+        let decision = psf_guard_director_core::evaluate(&Request {
+            contract_version: CONTRACT_VERSION,
+            assignment: current_assignment(&tx, &self.assignment)?,
+            state,
+        })
+        .map_err(Error::Planner)?;
+        let decision = if matches!(decision, Decision::Stop { .. } | Decision::Continue { .. }) {
+            decision
+        } else if preparation::has_active(&tx)? {
+            Decision::CheckIn {
+                reason: "preparation_active".into(),
+            }
+        } else if read_unresolved_attempt(&tx)?.is_some() {
+            Decision::CheckIn {
+                reason: "capture_recovery_required".into(),
+            }
+        } else {
+            decision
+        };
+        tx.commit()?;
+        Ok(decision)
+    }
+
+    /// Discover unresolved capture evidence even when the reserve reply was lost.
+    pub fn unresolved_attempt(&mut self) -> Result<Option<Attempt>, Error> {
+        let tx = self.connection.transaction()?;
+        let attempt = read_unresolved_attempt(&tx)?;
+        tx.commit()?;
+        Ok(attempt)
+    }
+
     pub fn info(&self) -> LedgerInfo {
         LedgerInfo {
             ledger_id: self.ledger_id.clone(),
@@ -414,6 +449,18 @@ impl Ledger {
         })
         .collect()
     }
+}
+
+fn read_unresolved_attempt(connection: &Connection) -> Result<Option<Attempt>, Error> {
+    let id: Option<String> = connection
+        .query_row(
+            "SELECT capture_id FROM attempt WHERE status IN ('reserved','uncertain') LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    id.map(|id| read_attempt(connection, &id)?.ok_or(Error::CorruptLedger))
+        .transpose()
 }
 
 fn read_attempt(connection: &Connection, id: &str) -> Result<Option<Attempt>, Error> {

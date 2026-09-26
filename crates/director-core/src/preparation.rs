@@ -16,6 +16,7 @@ pub struct Context {
     pub goal_id: String,
     pub target_id: String,
     pub recipe_id: String,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub previous_target_id: Option<String>,
     pub filter_id: String,
     pub readout_mode: i16,
@@ -24,6 +25,7 @@ pub struct Context {
     pub enable_slew_center: bool,
     pub dither_every: u32,
     /// None inherits the target cadence; zero explicitly disables dithering.
+    #[serde(deserialize_with = "Option::deserialize")]
     pub dither_override: Option<u32>,
     /// Confirmed exposures in this filter since the last successful dither.
     /// Different recipes using the same filter share this counter.
@@ -65,7 +67,13 @@ pub struct Command {
     pub operation: Operation,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "status",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum Next {
     /// Issued once. Calling next again cannot dispatch it a second time.
     Run(Command),

@@ -4,7 +4,7 @@ use serde_json::{json, value::to_raw_value};
 use tempfile::TempDir;
 use tokio::io::{duplex, DuplexStream};
 
-fn fixture() -> Request {
+pub(super) fn fixture() -> Request {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
         "../../director-core/tests/fixtures/decisions.json"
     ))
@@ -19,7 +19,7 @@ fn fixture() -> Request {
     request
 }
 
-fn ledger_command(id: u64, operation: Operation) -> Message {
+pub(super) fn ledger_command(id: u64, operation: Operation) -> Message {
     command(
         id,
         Command::Ledger {
@@ -28,7 +28,11 @@ fn ledger_command(id: u64, operation: Operation) -> Message {
     )
 }
 
-async fn exchange(client: &mut DuplexStream, id: u64, operation: Operation) -> StorageReply {
+pub(super) async fn exchange(
+    client: &mut DuplexStream,
+    id: u64,
+    operation: Operation,
+) -> StorageReply {
     send(client, &ledger_command(id, operation)).await;
     let reply = receive_reply(client).await;
     assert_eq!(reply.request_id, id);
@@ -38,7 +42,7 @@ async fn exchange(client: &mut DuplexStream, id: u64, operation: Operation) -> S
     response
 }
 
-async fn stop(client: &mut DuplexStream, id: u64) {
+pub(super) async fn stop(client: &mut DuplexStream, id: u64) {
     send(client, &command(id, Command::Shutdown)).await;
     assert!(matches!(
         receive_reply(client).await.payload,

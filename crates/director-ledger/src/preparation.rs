@@ -21,9 +21,12 @@ pub struct Record {
     pub preparation_id: String,
     pub lifecycle: Lifecycle,
     pub goal_id: String,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub pending: Option<Command>,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub halted: Option<Decision>,
     pub observations: Vec<Observation>,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub capture_id: Option<String>,
 }
 
@@ -350,6 +353,28 @@ impl Ledger {
 
     pub fn preparation(&self, id: &str) -> Result<Option<Record>, Error> {
         Ok(read(&self.connection, id)?.map(|stored| stored.record()))
+    }
+
+    /// Discover durable work after a lost begin response or host restart. A
+    /// returned pending command is evidence, never permission to dispatch it.
+    pub fn active_preparation(&mut self) -> Result<Option<Record>, Error> {
+        let tx = self.connection.transaction()?;
+        let id: Option<String> = tx
+            .query_row(
+                "SELECT id FROM preparation WHERE status='active'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let record = id
+            .map(|id| {
+                read(&tx, &id)?
+                    .map(|stored| stored.record())
+                    .ok_or(Error::CorruptLedger)
+            })
+            .transpose()?;
+        tx.commit()?;
+        Ok(record)
     }
 
     /// Explicitly end unused preparation; never discard an unknown operation.
