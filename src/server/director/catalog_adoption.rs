@@ -35,6 +35,78 @@ pub(super) struct Report {
     applied: bool,
 }
 
+#[derive(Serialize)]
+pub(super) struct MappingInventory {
+    catalog_identity: Option<CatalogIdentity>,
+    items: Vec<ProjectMapping>,
+    next_after: Option<Uuid>,
+}
+
+pub(super) async fn mappings(
+    State(state): State<Arc<AppState>>,
+    Path(slug): Path<String>,
+    axum::extract::Query(page): axum::extract::Query<Page>,
+) -> Result<Json<ApiResponse<MappingInventory>>, AdoptionError> {
+    let service = enabled(&state)?;
+    if !(1..=256).contains(&page.limit) || page.after.is_some_and(|id| id.is_nil()) {
+        return Err(Error::Invalid.into());
+    }
+    let catalog = state.get_database(&slug).ok_or(Error::Missing)?;
+    let permit = service
+        .discovery_admission
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| Error::Busy)?;
+    let identity = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let connection = super::super::database_context::open_scheduler_connection_with_flags(
+            FilePath::new(&catalog.database_path),
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(StoreError::from)
+        .map_err(Error::from)?;
+        connection
+            .busy_timeout(Duration::from_secs(2))
+            .map_err(StoreError::from)
+            .map_err(Error::from)?;
+        catalog_identity::read(&connection).map_err(Error::from)
+    })
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "Director catalog mapping discovery worker failed");
+        Error::Internal
+    })??;
+    let inventory = service
+        .run(move |store| {
+            let Some(identity) = identity else {
+                return Ok(MappingInventory {
+                    catalog_identity: None,
+                    items: vec![],
+                    next_after: None,
+                });
+            };
+            match store.catalog_identity(identity.id)? {
+                Some(registered) if registered != identity => return Err(StoreError::Conflict),
+                None => {
+                    return Ok(MappingInventory {
+                        catalog_identity: Some(identity),
+                        items: vec![],
+                        next_after: None,
+                    })
+                }
+                _ => {}
+            }
+            let mappings = store.catalog_project_mappings(identity.id, page.after, page.limit)?;
+            Ok(MappingInventory {
+                catalog_identity: Some(identity),
+                items: mappings.items,
+                next_after: mappings.next_after,
+            })
+        })
+        .await?;
+    Ok(Json(ApiResponse::success(inventory)))
+}
+
 pub(super) async fn preview(
     State(state): State<Arc<AppState>>,
     Path(slug): Path<String>,
