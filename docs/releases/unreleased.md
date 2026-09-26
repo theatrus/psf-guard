@@ -79,3 +79,5 @@
   after a server update. Rotation and ROI now compare within a tolerance,
   so a change in how the server parses a 17-digit float no longer reads as
   a changed capture; the first replay rewrites the stored values.
+- An RGB master, such as one WBPP integrated, now previews in colour with a
+  stretch per channel. Before, its preview crashed the preview worker.
