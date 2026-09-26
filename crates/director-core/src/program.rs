@@ -304,6 +304,18 @@ impl BoundProgram {
         estimates: Estimates,
     ) -> Result<Preparation, Error> {
         self.validate_projection(&request.assignment)?;
+        Preparation::new(
+            id,
+            request,
+            self.preparation_context(goal_id, local)?,
+            estimates,
+        )
+        .map_err(Error::Preparation)
+    }
+
+    /// Resolve preparation parameters without making a scheduling decision.
+    /// Durable hosts use this for idempotent begin retries with projected progress.
+    pub fn preparation_context(&self, goal_id: &str, local: LocalState) -> Result<Context, Error> {
         if local.configuration != self.program.configuration {
             return Err(Error::ConfigurationMismatch);
         }
@@ -326,27 +338,21 @@ impl BoundProgram {
         {
             return Err(Error::RotationUnavailable);
         }
-        Preparation::new(
-            id,
-            request,
-            Context {
-                goal_id: goal_id.into(),
-                target_id: resolved.target.id.clone(),
-                recipe_id: resolved.recipe.id.clone(),
-                previous_target_id,
-                filter_id: resolved.recipe.filter_id.clone(),
-                readout_mode: resolved.recipe.readout_mode,
-                mount_parked: local.mount_parked,
-                rotator_connected: local.rotator_connected
-                    && resolved.target.position_angle_mas.is_some(),
-                enable_slew_center: resolved.configuration.enable_slew_center,
-                dither_every: resolved.configuration.dither_every,
-                dither_override: resolved.recipe.dither_override,
-                filter_exposures_since_dither: local.filter_exposures_since_dither,
-            },
-            estimates,
-        )
-        .map_err(Error::Preparation)
+        Ok(Context {
+            goal_id: goal_id.into(),
+            target_id: resolved.target.id.clone(),
+            recipe_id: resolved.recipe.id.clone(),
+            previous_target_id,
+            filter_id: resolved.recipe.filter_id.clone(),
+            readout_mode: resolved.recipe.readout_mode,
+            mount_parked: local.mount_parked,
+            rotator_connected: local.rotator_connected
+                && resolved.target.position_angle_mas.is_some(),
+            enable_slew_center: resolved.configuration.enable_slew_center,
+            dither_every: resolved.configuration.dither_every,
+            dither_override: resolved.recipe.dither_override,
+            filter_exposures_since_dither: local.filter_exposures_since_dither,
+        })
     }
 
     /// The owning ledger supplies progress. Only counters may differ; a caller

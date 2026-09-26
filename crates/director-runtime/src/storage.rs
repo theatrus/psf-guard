@@ -154,6 +154,7 @@ impl From<Error> for StorageError {
         match error {
             Error::InvalidInput => Self::InvalidInput,
             Error::Planner(_) => Self::InvalidSnapshot,
+            Error::Program(_) => Self::InvalidSnapshot,
             Error::Preparation(error) => match error {
                 PreparationError::NotSelected => Self::PreparationNotSelected,
                 PreparationError::InvalidCompletion => Self::InvalidCompletion,

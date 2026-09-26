@@ -808,7 +808,8 @@ version-1 execution-program model above the unchanged planning contract 2.
 The program contains one immutable allocation, its rig/configuration snapshot,
 targets, exposure recipes, and exactly one target/recipe binding per goal.
 It is a shared Rust API, not a new IPC command, server endpoint, or acquisition
-permit. The current ledger/IPC preparation path does not enforce it yet.
+permit. The ledger has explicit program-bound APIs; the existing unbound IPC 4
+preparation path does not expose them yet.
 
 Bindings use stable IDs, never display names or nearby coordinates. Duplicate
 IDs, missing/extra goal mappings, and unused target/recipe definitions fail
@@ -856,8 +857,9 @@ Program payloads retain the 256 KiB bound and strict fields, including explicitl
 present nullable settings. Tests cover typed/JSON roundtrips, integer fidelity,
 capability rejection, complete mappings, distinct short/long recipes, immutable
 snapshots, stale framing, projection restrictions, and fresh safety decisions.
-Next, persist this exact program with the ledger, expose a versioned bound
-preparation path, and bind native capture settings to the same resolved recipe.
+The ledger persists this exact program and resolves saved capture bindings.
+Next, expose a versioned bound preparation path and bind native capture
+settings to the same resolved recipe.
 Do not claim recipe enforcement from the existing unbound IPC 4 API. Pairing,
 meta-database authority, native container execution, effective horizon refresh,
 and the full server/N.I.N.A. gate remain open.
@@ -903,7 +905,7 @@ conditions, and final-boundary revalidation. Run it with:
 cargo test --locked -p psf-guard-director-core --test preparation
 ```
 
-Recipe/configuration binding and native container execution remain required
+Program-bound IPC integration and native container execution remain required
 before hardware use. A host must
 not reconstruct lost reducer state and replay an operation whose outcome is
 unknown. Preparation does not consume capture attempts or credit images; the
@@ -1000,6 +1002,32 @@ tests cover real child-process exit after issue/completion, partial transaction
 rollback, concurrent issue, delayed/conflicting receipts, final readiness,
 schema migration, and checkpoint corruption. They do not replace the required
 native-container/server end-to-end test.
+
+Ledger schema 3 adds immutable execution programs. `open_program` validates and
+stores the allocation and complete program in one transaction. Reopening
+requires the exact original program, including target coordinates, recipes,
+equipment capabilities, and wheel slots. A separate required-program marker
+and payload digest detect missing or damaged program data; they are integrity
+checks, not authentication against database writers. Existing schema-1/2
+ledgers migrate as unbound without changing their identity or evidence. Bound
+and unbound ledgers cannot switch modes, even when empty; failed adoption rolls
+back migration. Older binaries refuse schema 3.
+
+`begin_program_preparation` resolves context from the persisted program and
+uses only ledger-derived progress. Bound advance and reservation APIs require
+the full current configuration snapshot to match, while the shared reducer
+still checks fresh conditions at each boundary. Unbound begin, advance, and
+reservation calls refuse program-bound ledgers. Completion, recovery reads,
+and explicit closure remain available because they cannot issue new work.
+An identical begin retry returns existing evidence without reselecting a goal
+after progress has changed. `capture_binding` returns the saved target, recipe,
+configuration, and attempt identity; it is evidence, never a dispatch permit.
+
+Program-ledger tests cover exact reopen, mode separation, full configuration
+checks, migration rollback, damaged metadata, concurrent issue/reservation,
+transaction rollback, and real process exits with issued operations or reserved
+captures. This is an internal Rust storage API, not a new IPC command, released
+plugin feature, or proof of native equipment integration.
 
 Run the isolated storage regressions with:
 
