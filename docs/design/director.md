@@ -156,9 +156,11 @@ flip margins, an exposure straddling an exclusion, both sides of transit,
 horizon gaps after transit, both file formats, 0/360 wrap, narrow obstructions,
 minimum altitude/offset, invalid files, same-path edits, and profile switches.
 These are single-rig phase-0/phase-2 requirements, not deferred multi-rig work.
-The initial shared-core spike only accepts one precomputed interval per goal;
-it does not yet import horizons or evaluate these meridian constraints. Extend
-that representation and prove parity before connecting it to acquisition.
+The shared-core contract now accepts multiple precomputed intervals per goal
+and subtracts effective rig-level meridian exclusions. It does not yet import
+horizon files, calculate sky positions, or resolve TS/N.I.N.A. preferences.
+Prove those adapter calculations against the pinned implementations before
+connecting the evaluator to acquisition.
 
 ## Storage and authority
 
@@ -194,10 +196,36 @@ before production coordination data is stored.
 
 ## Shared planning core
 
-Preferred implementation: a standalone Rust planning crate used directly by
-PSF Guard and through a small native interface by the C# Director plugin.
-Validate that packaging and interop boundary early; it is not yet implemented.
+Implementation direction: a standalone Rust planning crate used directly by
+PSF Guard and by a bundled Director sidecar. The C# N.I.N.A. plugin communicates
+with that sidecar over versioned local IPC. The sidecar boundary and plugin
+packaging still need implementation and validation.
 Do not maintain parallel Rust and C# versions of the scheduling algorithm.
+
+The core currently lives in this repository; the installable Director plugin
+will live in a separate repository from both PSF Guard and PSF Guard Sync. The
+current `tools/director-interop` program is a console proof, not that plugin.
+Follow Chatstronomy's core/plugin release separation: the plugin consumes a
+pinned, verified Rust artifact and does not compile its own copy of the engine.
+Adopt Chatstronomy's bundled backend executable and named-pipe pattern for the
+Windows plugin. This isolates planner failures from N.I.N.A. The existing native
+DLL experiment remains a test fixture, not the selected production runtime.
+The sidecar must consume the same crate and golden decision fixtures, not add a
+second scheduling implementation.
+
+The plugin starts a pinned, verified sidecar artifact and negotiates protocol,
+engine, and contract versions before accepting decisions. Use bounded messages
+with request/session IDs over a current-user-restricted pipe. Credentials must
+not appear in command-line arguments, environment variables, or generated
+configuration files. Follow the existing Chatstronomy implementation patterns
+for artifact identity, checksums, signatures, lifecycle, and transport security.
+
+Sidecar exit, timeout, protocol mismatch, or malformed responses revoke pending
+decisions and prevent new dispatch. N.I.N.A. remains responsible for an in-flight
+operation and continuous safety handling. On restart, reconcile the durable
+execution journal and resubmit current state; never replay a stale decision just
+because its IPC request was retried. The exact pipe framing, startup handshake,
+and failure policy belong to the phase-0 sidecar/plugin slice.
 
 The core has no HTTP, SQLite, N.I.N.A., or TS dependencies. Hosts provide inputs
 and execute outputs. Time and randomness are explicit inputs, not hidden global
@@ -221,9 +249,10 @@ durations. Director supplies actual events and elapsed times. Both exercise the
 same decision logic. Forecasts show uncertainty rather than promising exact
 clock-time playback. Persist engine and duration-model versions for replay.
 
-The native boundary needs versioned messages, explicit memory ownership, error
-handling, compatible architecture packaging, and a clear unsupported-version
-state. No native failure may silently turn into permission to acquire.
+The IPC boundary needs versioned messages, bounded allocation, error handling,
+compatible architecture packaging, and a clear unsupported-version state. No
+runtime failure may silently turn into permission to acquire. The retained DLL
+test boundary also requires explicit memory ownership and bounded buffers.
 
 ## Execution and check-ins
 
@@ -375,10 +404,15 @@ its acceptance gate passes and its review and validation evidence is linked here
 - [ ] Audit/port the local asymmetric meridian constraints and prove N.I.N.A.
   horizon export/parity; include multiple safe intervals in the engine contract.
 - [ ] Prove the shared Rust core loads and returns decisions in PSF Guard and
-  a minimal C# plugin, including native packaging and error handling.
+  a minimal C# plugin through the bundled sidecar, including packaging, version
+  negotiation, restart reconciliation, and error handling.
 - [x] Implement a deterministic core linked into the PSF Guard Rust library and
   replay shared vectors through a native library from a .NET 10 console host.
-- [ ] Decide crate ownership, interop format, local state layout, and contracts.
+- [x] Represent multiple eligibility intervals and subtract asymmetric local
+  meridian exclusions without bridging horizon gaps; validate transit coverage.
+- [x] Choose a separate thin plugin plus bundled Rust sidecar, following the
+  Chatstronomy core/plugin distribution model with versioned local IPC.
+- [ ] Finalize crate ownership, IPC framing, local state layout, and contracts.
 
 Gate: one simulated target/exposure runs through the supported adapter; the
 same recorded input yields matching server/plugin decisions. No Sync changes
@@ -387,6 +421,7 @@ are required to run existing workflows.
 #### Phase 0 evidence and remaining work
 
 Implementation review: [shared-core and native interop spike, PR #460](https://github.com/theatrus/psf-guard/pull/460).
+Follow-on review: [rig meridian exclusions and multiple safe intervals, PR #461](https://github.com/theatrus/psf-guard/pull/461).
 
 Baseline checked on 2026-09-25:
 
@@ -429,6 +464,32 @@ Timestamps are nonnegative Unix milliseconds and durations are milliseconds;
 all arithmetic is checked integer arithmetic. Safety remains continuously
 enforced by the host, not only when this evaluator runs.
 
+JSON contract 2 / engine 0.2.0 replaces the single goal interval with
+`eligible_windows` and requires effective `state.meridian_exclusion` durations.
+These local restrictions are intersected with assignment validity, not taken
+from project preferences. The snapshot producer must bind these values and the
+horizon to `configuration_id`; changing either requires a new configuration
+revision. This remains a host-assembled snapshot, not an authenticated wire
+assignment. The buffer-based C ABI remains version 1 because its calling
+convention has not changed; consumers must check the JSON contract as well.
+
+When either exclusion side is enabled, every goal needs known transit results
+with complete search coverage from assignment start minus the after margin to
+assignment end plus the before margin. This includes transits outside the
+assignment whose exclusions overlap it. Known absence is an empty result with
+adequate coverage; missing, duplicate, unsorted, or out-of-coverage transit data
+is an error. The core does not claim to validate the astronomy itself. All
+non-acquisition responses and errors authorize no new work.
+
+[`windows.rs`](../../crates/director-core/src/windows.rs) normalizes overlapping
+or touching eligibility intervals, intersects them with assignment validity,
+and subtracts each exclusion without merging across gaps. Exposure plus overhead
+must fit one resulting interval. A later fitting interval yields `wait`, while
+no authorized fitting interval yields `check_in`. Empty visibility is valid but
+does not authorize acquisition. Interval and transit counts are bounded and
+time arithmetic is checked. There is no inherited 120-minute clamp: the adapter
+must supply transit coverage wide enough for its actual effective limits.
+
 Both Rust and .NET consume the same golden decision vectors, including slow
 autofocus, pending grades, retry limits, safety, expiry, wrong-rig state, and
 invalid protocol input. The C ABI uses caller-owned UTF-8 buffers, a version
@@ -441,7 +502,7 @@ Run from the repository root on Windows:
 cargo test --locked -p psf-guard-director-core -p psf-guard-director-ffi
 cargo clippy --locked -p psf-guard-director-core -p psf-guard-director-ffi --all-targets -- -D warnings
 cargo build --locked --profile director -p psf-guard-director-ffi
-dotnet run --project tools/director-interop --configuration Release -- target/director/psf_guard_director_ffi.dll crates/director-core/tests/fixtures/decisions.json
+dotnet run --project tools/director-interop --configuration Release -- target/director/psf_guard_director_ffi.dll crates/director-core/tests/fixtures/decisions.json crates/director-core/tests/fixtures/rig-windows.json
 ```
 
 The dedicated `director` Cargo profile unwinds panics so the native boundary can

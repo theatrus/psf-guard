@@ -21,19 +21,23 @@ fn merge(value: &mut Value, patch: &Value) {
 
 #[test]
 fn shared_cross_host_vectors() {
-    let fixture = fixture();
-    for case in fixture["cases"].as_array().unwrap() {
-        let mut input = fixture["base"].clone();
-        merge(&mut input, &case["patch"]);
-        let response = evaluate_json(&serde_json::to_vec(&input).unwrap());
-        assert_eq!(response.contract_version, CONTRACT_VERSION);
-        assert_eq!(response.engine_version, ENGINE_VERSION);
-        assert_eq!(
-            serde_json::to_value(response.outcome).unwrap(),
-            case["expected"],
-            "{}",
-            case["name"]
-        );
+    for fixture in [
+        fixture(),
+        serde_json::from_str(include_str!("fixtures/rig-windows.json")).unwrap(),
+    ] {
+        for case in fixture["cases"].as_array().unwrap() {
+            let mut input = fixture["base"].clone();
+            merge(&mut input, &case["patch"]);
+            let response = evaluate_json(&serde_json::to_vec(&input).unwrap());
+            assert_eq!(response.contract_version, CONTRACT_VERSION);
+            assert_eq!(response.engine_version, ENGINE_VERSION);
+            assert_eq!(
+                serde_json::to_value(response.outcome).unwrap(),
+                case["expected"],
+                "{}",
+                case["name"]
+            );
+        }
     }
 }
 
@@ -92,7 +96,7 @@ fn priority_ties_use_stable_identity_not_input_order() {
 fn future_windows_wait_only_if_exposure_can_fit() {
     let mut r = base();
     for g in &mut r.assignment.goals {
-        g.eligible_from_ms = 80000;
+        g.eligible_windows[0].start_ms = 80000;
     }
     assert!(matches!(evaluate(&r), Ok(Decision::Wait { reason }) if reason == "future_window"));
     r.assignment.expires_at_ms = 85000;
@@ -118,7 +122,7 @@ fn near_timestamp_limit_does_not_wrap_to_feasible_work() {
     r.state.now_ms = u64::MAX - 1;
     r.state.conditions_valid_until_ms = u64::MAX;
     for g in &mut r.assignment.goals {
-        g.eligible_until_ms = u64::MAX;
+        g.eligible_windows[0].end_ms = u64::MAX;
     }
     assert!(
         matches!(evaluate(&r), Ok(Decision::CheckIn { reason }) if reason == "no_authorized_feasible_work")

@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -36,4 +35,4 @@ jobs:
       - run: cargo clippy --locked -p psf-guard-director-core -p psf-guard-director-ffi --all-targets -- -D warnings
       - run: cargo test --locked -p psf-guard-director-core -p psf-guard-director-ffi
       - run: cargo build --locked --profile director -p psf-guard-director-ffi
-      - run: dotnet run --project tools/director-interop --configuration Release -- target/director/${{ matrix.library }} crates/director-core/tests/fixtures/decisions.json
+      - run: dotnet run --project tools/director-interop --configuration Release -- target/director/${{ matrix.library }} crates/director-core/tests/fixtures/decisions.json crates/director-core/tests/fixtures/rig-windows.json

@@ -4160,7 +4160,7 @@ dependencies = [
 
 [[package]]
 name = "psf-guard-director-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4168,7 +4168,7 @@ dependencies = [
 
 [[package]]
 name = "psf-guard-director-ffi"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "psf-guard-director-core",
  "serde_json",
