@@ -1626,6 +1626,42 @@
   border: 1px solid var(--color-danger, #c44);
 }
 
+.tauri-settings .api-tokens {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--color-border-secondary);
+}
+
+.tauri-settings .token-secret {
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-primary-alpha-40, var(--color-border-secondary));
+  border-radius: 8px;
+  background: var(--color-primary-alpha-10);
+}
+
+.tauri-settings .token-secret p {
+  margin: 0 0 10px;
+}
+
+.tauri-settings .token-secret-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.tauri-settings .token-secret-value {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: var(--color-bg-elevated);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
 .tauri-settings .user-management-note {
   margin-top: 20px;
 }

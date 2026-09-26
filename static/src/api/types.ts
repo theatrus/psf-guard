@@ -1590,6 +1590,35 @@ export interface UpdateAuthUserRequest {
   password?: string;
 }
 
+/** A personal API token, minus its secret. */
+export interface AuthTokenSummary {
+  id: string;
+  username: string;
+  label: string;
+  /** The access the token grants now: its user's role, narrowed by read_only. */
+  role: AccessRole;
+  read_only: boolean;
+  /** Unix seconds. */
+  created_at: number;
+  /** Unix seconds; absent means the token does not expire. */
+  expires_at?: number;
+}
+
+export interface CreateAuthTokenRequest {
+  label: string;
+  read_only?: boolean;
+  expires_in_days?: number;
+  /** Mint for another user; editors only. */
+  username?: string;
+}
+
+/** The one response that carries a token's secret. */
+export interface MintedAuthToken {
+  token: string;
+  summary: AuthTokenSummary;
+  tokens: AuthTokenSummary[];
+}
+
 export interface ReleaseNotice {
   schema_version: number;
   version: string;

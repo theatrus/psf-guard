@@ -34,6 +34,7 @@ import ProcessingSetupsManager from './ProcessingSetupsManager';
 import CalibrationLibrarySummary from './CalibrationLibrarySummary';
 import AstroBinFilterSummary from './AstroBinFilterSummary';
 import UserManagement from './UserManagement';
+import ApiTokenManagement from './ApiTokenManagement';
 import './TauriSettings.css';
 
 /**
@@ -1853,7 +1854,13 @@ export default function TauriSettings({
           )}
 
           {currentTab === 'users' && (
-            <UserManagement currentUsername={access.status.username} />
+            <>
+              <UserManagement currentUsername={access.status.username} />
+              <ApiTokenManagement
+                currentUsername={access.status.username}
+                isEditor={access.status.role === 'read_write'}
+              />
+            </>
           )}
         </div>
 

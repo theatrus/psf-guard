@@ -131,3 +131,94 @@ fn add_list_replace_and_remove_users() {
     let contents = fs::read_to_string(auth_path).unwrap();
     assert!(contents.contains("\"users\": []"));
 }
+
+#[test]
+fn tokens_are_minted_listed_and_revoked_without_storing_the_secret() {
+    let directory = tempfile::tempdir().unwrap();
+    let database_registry = directory.path().join("test-config.json");
+    let password_file = directory.path().join("password");
+    fs::write(&password_file, "long-user-password\n").unwrap();
+    let registry_arg = path_arg(&database_registry);
+    let password_arg = path_arg(&password_file);
+    let added = run(&[
+        "users",
+        "add",
+        "editor",
+        "--role",
+        "read-write",
+        "--password-file",
+        &password_arg,
+        "--registry",
+        &registry_arg,
+    ]);
+    assert!(added.status.success());
+
+    let unknown = run(&[
+        "users",
+        "token",
+        "create",
+        "ghost",
+        "--label",
+        "x",
+        "--registry",
+        &registry_arg,
+    ]);
+    assert!(!unknown.status.success());
+
+    let created = run(&[
+        "users",
+        "token",
+        "create",
+        "editor",
+        "--label",
+        "claude on laptop",
+        "--read-only",
+        "--expires-days",
+        "30",
+        "--registry",
+        &registry_arg,
+    ]);
+    let stdout = String::from_utf8_lossy(&created.stdout).into_owned();
+    assert!(
+        created.status.success(),
+        "{}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    let secret = stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("psfg_") && line.len() == 69)
+        .unwrap_or_else(|| panic!("no token in output:\n{stdout}"))
+        .to_string();
+
+    let auth_path = directory.path().join("test-config.auth.json");
+    let contents = fs::read_to_string(&auth_path).unwrap();
+    assert!(!contents.contains(&secret));
+    assert!(contents.contains("\"label\": \"claude on laptop\""));
+    assert!(contents.contains("\"read_only\": true"));
+
+    let listed = run(&["users", "token", "list", "--registry", &registry_arg]);
+    let listed_out = String::from_utf8_lossy(&listed.stdout).into_owned();
+    assert!(listed.status.success());
+    assert!(listed_out.contains("claude on laptop"), "{listed_out}");
+    assert!(listed_out.contains("read-only"));
+    assert!(!listed_out.contains(&secret));
+    let id = listed_out
+        .lines()
+        .find(|line| line.contains("claude on laptop"))
+        .and_then(|line| line.split_whitespace().next())
+        .unwrap()
+        .to_string();
+
+    let revoked = run(&["users", "token", "revoke", &id, "--registry", &registry_arg]);
+    assert!(
+        revoked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&revoked.stderr)
+    );
+    assert!(!fs::read_to_string(&auth_path)
+        .unwrap()
+        .contains("claude on laptop"));
+    let again = run(&["users", "token", "revoke", &id, "--registry", &registry_arg]);
+    assert!(!again.status.success());
+}

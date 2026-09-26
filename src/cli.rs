@@ -1171,6 +1171,12 @@ pub enum UserCommand {
         registry: Option<String>,
     },
 
+    /// Manage personal API tokens for scripts and MCP clients.
+    Token {
+        #[command(subcommand)]
+        action: TokenCommand,
+    },
+
     /// Remove a browser user.
     Remove {
         /// Login name.
@@ -1180,6 +1186,55 @@ pub enum UserCommand {
         /// authentication after restart.
         #[arg(long)]
         allow_empty: bool,
+
+        /// Path to the database registry JSON file. The auth registry sits
+        /// beside it. Defaults to the platform config directory.
+        #[arg(long)]
+        registry: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum TokenCommand {
+    /// List tokens. The secret is never shown again.
+    List {
+        /// Show one user's tokens.
+        #[arg(long)]
+        user: Option<String>,
+
+        /// Path to the database registry JSON file. The auth registry sits
+        /// beside it. Defaults to the platform config directory.
+        #[arg(long)]
+        registry: Option<String>,
+    },
+
+    /// Mint a token for a user and print it once.
+    Create {
+        /// The user the token acts as.
+        username: String,
+
+        /// What the token is for, such as "claude on laptop".
+        #[arg(long)]
+        label: String,
+
+        /// Grant read access only, whatever the user's role.
+        #[arg(long)]
+        read_only: bool,
+
+        /// Expire after this many days. Omit for no expiry.
+        #[arg(long)]
+        expires_days: Option<u32>,
+
+        /// Path to the database registry JSON file. The auth registry sits
+        /// beside it. Defaults to the platform config directory.
+        #[arg(long)]
+        registry: Option<String>,
+    },
+
+    /// Revoke a token by id.
+    Revoke {
+        /// The token id from `users token list`.
+        id: String,
 
         /// Path to the database registry JSON file. The auth registry sits
         /// beside it. Defaults to the platform config directory.
