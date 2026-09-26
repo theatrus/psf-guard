@@ -12,6 +12,8 @@ internal sealed class RuntimeSession : IAsyncDisposable
     internal const int MaxFrameBytes = 262144 + 4096;
     internal const string EngineVersion = "0.2.0";
     internal const int ContractVersion = 2;
+    internal const int ProtocolVersion = 3;
+    internal const string RuntimeVersion = "0.2.1";
     private readonly NamedPipeServerStream pipe;
     private readonly Process process;
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -30,7 +32,8 @@ internal sealed class RuntimeSession : IAsyncDisposable
     internal int ProcessId => process.Id;
 
     internal static async Task<RuntimeSession> StartAsync(string executable, string rigId,
-        Action<int> started, string engineVersion = EngineVersion, uint? parentOverride = null)
+        Action<int> started, string engineVersion = EngineVersion, uint? parentOverride = null,
+        string? storageDirectory = null, string runtimeVersion = RuntimeVersion)
     {
         var pipeName = $"psf-guard-director-{Guid.NewGuid():N}";
         var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1,
@@ -49,6 +52,11 @@ internal sealed class RuntimeSession : IAsyncDisposable
             info.ArgumentList.Add(pipeName);
             info.ArgumentList.Add("--parent-pid");
             info.ArgumentList.Add((parentOverride ?? (uint)Environment.ProcessId).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (storageDirectory is not null)
+            {
+                info.ArgumentList.Add("--state-directory");
+                info.ArgumentList.Add(storageDirectory);
+            }
             process = Process.Start(info) ?? throw new IOException("Sidecar did not start.");
             started(process.Id);
             session = new RuntimeSession(pipe, process);
@@ -64,16 +72,17 @@ internal sealed class RuntimeSession : IAsyncDisposable
             var payload = new JsonObject
             {
                 ["type"] = "hello",
-                ["runtime_version"] = "0.1.1",
+                ["runtime_version"] = runtimeVersion,
                 ["engine_version"] = engineVersion,
                 ["contract_version"] = ContractVersion,
                 ["rig_id"] = rigId
             };
             var result = await session.ExchangeAsync(0, payload, "ready", startup.Token);
-            if (result["runtime_version"]?.GetValue<string>() != "0.1.1" ||
+            if (result["runtime_version"]?.GetValue<string>() != RuntimeVersion ||
                 result["engine_version"]?.GetValue<string>() != EngineVersion ||
                 result["contract_version"]?.GetValue<int>() != ContractVersion ||
-                result["rig_id"]?.GetValue<string>() != rigId)
+                result["rig_id"]?.GetValue<string>() != rigId ||
+                result["storage_enabled"]?.GetValue<bool>() != (storageDirectory is not null))
                 throw new InvalidDataException("Sidecar handshake identity/version mismatch.");
             session.ready = true;
             return session;
@@ -107,6 +116,7 @@ internal sealed class RuntimeSession : IAsyncDisposable
             var expected = payload["type"]?.GetValue<string>() switch
             {
                 "evaluate" => "decision",
+                "ledger" => "ledger",
                 "ping" => "pong",
                 "shutdown" => "stopped",
                 _ => throw new InvalidDataException("Unsupported host request.")
@@ -138,7 +148,7 @@ internal sealed class RuntimeSession : IAsyncDisposable
     {
         var message = new JsonObject
         {
-            ["protocol_version"] = 2,
+            ["protocol_version"] = ProtocolVersion,
             ["session_id"] = sessionId,
             ["request_id"] = id,
             ["payload"] = payload.DeepClone()
@@ -146,7 +156,7 @@ internal sealed class RuntimeSession : IAsyncDisposable
         await WriteFrameAsync(pipe, JsonSerializer.SerializeToUtf8Bytes(message), token);
         if (replyDelay is { } delay) await Task.Delay(delay, token);
         var response = JsonNode.Parse(await ReadFrameAsync(pipe, token))!.AsObject();
-        if (response.Count != 4 || response["protocol_version"]?.GetValue<int>() != 2 ||
+        if (response.Count != 4 || response["protocol_version"]?.GetValue<int>() != ProtocolVersion ||
             response["session_id"]?.GetValue<string>() != sessionId ||
             response["request_id"]?.GetValue<ulong>() != id ||
             response["payload"]?["type"]?.GetValue<string>() != expected)
@@ -186,7 +196,7 @@ internal sealed class RuntimeSession : IAsyncDisposable
     {
         var message = new JsonObject
         {
-            ["protocol_version"] = 2,
+            ["protocol_version"] = ProtocolVersion,
             ["session_id"] = sessionId,
             ["request_id"] = nextId - 1,
             ["payload"] = new JsonObject { ["type"] = "ping" }

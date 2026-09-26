@@ -1,5 +1,5 @@
 //! Versioned, bounded local IPC. The sidecar computes decisions but never owns
-//! equipment, credentials, assignment persistence, or acquisition dispatch.
+//! equipment, credentials, or acquisition dispatch. Persistence is explicitly opt-in.
 
 use psf_guard_director_core::{evaluate_json, Request, Response, CONTRACT_VERSION, ENGINE_VERSION};
 use serde::{Deserialize, Serialize};
@@ -7,7 +7,8 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time::timeout;
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub mod storage;
+pub const PROTOCOL_VERSION: u32 = 3;
 pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_FRAME_BYTES: usize = psf_guard_director_core::MAX_REQUEST_BYTES + 4096;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -35,6 +36,9 @@ pub enum Command {
     Evaluate {
         request: Box<serde_json::value::RawValue>,
     },
+    Ledger {
+        operation: Box<serde_json::value::RawValue>,
+    },
     Ping,
     Shutdown,
 }
@@ -55,6 +59,12 @@ impl<'de> Deserialize<'de> for Command {
             request: Box<serde_json::value::RawValue>,
         }
         #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct LedgerOperation {
+            r#type: String,
+            operation: Box<serde_json::value::RawValue>,
+        }
+        #[derive(Deserialize)]
         #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
         enum Control {
             Hello {
@@ -73,6 +83,14 @@ impl<'de> Deserialize<'de> for Command {
             debug_assert_eq!(evaluation.r#type, "evaluate");
             return Ok(Self::Evaluate {
                 request: evaluation.request,
+            });
+        }
+        if tag.r#type == "ledger" {
+            let operation: LedgerOperation =
+                serde_json::from_str(raw.get()).map_err(serde::de::Error::custom)?;
+            debug_assert_eq!(operation.r#type, "ledger");
+            return Ok(Self::Ledger {
+                operation: operation.operation,
             });
         }
         let control: Control = serde_json::from_str(raw.get()).map_err(serde::de::Error::custom)?;
@@ -111,9 +129,13 @@ pub enum ResultMessage {
         engine_version: String,
         contract_version: u32,
         rig_id: String,
+        storage_enabled: bool,
     },
     Decision {
         response: Response,
+    },
+    Ledger {
+        response: storage::StorageReply,
     },
     Pong,
     Stopped,
@@ -131,6 +153,8 @@ pub enum ProtocolError {
     RequestOrder,
     WrongRig,
     Serialization,
+    StorageFailure,
+    UntrackedEvaluation,
 }
 
 /// Read one little-endian u32 length-prefixed UTF-8 JSON frame. Limits are
@@ -221,6 +245,13 @@ async fn reply<S: AsyncWrite + Unpin>(
 /// decision replay or reconnect. The host must create a new session and fresh
 /// snapshot after failure. Heartbeats consume request IDs like any other command.
 pub async fn serve<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S) -> Result<(), ProtocolError> {
+    serve_with_storage(&mut stream, None).await
+}
+
+pub async fn serve_with_storage<S: AsyncRead + AsyncWrite + Unpin>(
+    mut stream: S,
+    mut storage: Option<storage::Storage>,
+) -> Result<(), ProtocolError> {
     let Some(hello) = receive(&mut stream, HANDSHAKE_TIMEOUT).await? else {
         return Ok(());
     };
@@ -260,6 +291,7 @@ pub async fn serve<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S) -> Result<(
             engine_version,
             contract_version,
             rig_id: rig_id.clone(),
+            storage_enabled: storage.is_some(),
         },
     )
     .await?;
@@ -296,6 +328,11 @@ pub async fn serve<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S) -> Result<(
                 };
             }
             Command::Evaluate { request } => {
+                // Once durable accounting is active, caller-supplied progress
+                // must not bypass the ledger's pending work and attempt budget.
+                if storage.as_ref().is_some_and(storage::Storage::is_open) {
+                    return Err(ProtocolError::UntrackedEvaluation);
+                }
                 // Invalid planning input remains a core error response, distinct
                 // from invalid IPC. Valid snapshots must belong to this rig.
                 if let Ok(snapshot) = serde_json::from_str::<Request>(request.get())
@@ -307,11 +344,28 @@ pub async fn serve<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S) -> Result<(
                     response: evaluate_json(request.get().as_bytes()),
                 }
             }
+            Command::Ledger { operation } => {
+                if operation.get().len() > psf_guard_director_core::MAX_REQUEST_BYTES {
+                    ResultMessage::Ledger {
+                        response: storage::StorageReply::Error {
+                            code: storage::StorageError::InvalidInput,
+                        },
+                    }
+                } else {
+                    let operation = serde_json::from_str(operation.get())
+                        .map_err(|_| ProtocolError::InvalidMessage)?;
+                    ResultMessage::Ledger {
+                        response: storage::execute(&mut storage, operation, &rig_id).await?,
+                    }
+                }
+            }
         };
         reply(&mut stream, &hello.session_id, message.request_id, payload).await?;
     }
     Ok(())
 }
 
+#[cfg(test)]
+mod storage_tests;
 #[cfg(test)]
 mod tests;

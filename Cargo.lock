@@ -4188,11 +4188,14 @@ dependencies = [
 
 [[package]]
 name = "psf-guard-director-runtime"
-version = "0.1.1"
+version = "0.2.1"
 dependencies = [
  "psf-guard-director-core",
+ "psf-guard-director-ledger",
+ "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "windows-sys 0.61.2",
 ]

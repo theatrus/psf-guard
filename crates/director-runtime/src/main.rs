@@ -6,9 +6,13 @@ mod windows_host {
 
     pub async fn run() -> Result<(), &'static str> {
         let args: Vec<_> = std::env::args().skip(1).collect();
-        if args.len() != 4 || args[0] != "--pipe" || args[2] != "--parent-pid" {
+        if !matches!(args.len(), 4 | 6)
+            || args[0] != "--pipe"
+            || args[2] != "--parent-pid"
+            || (args.len() == 6 && args[4] != "--state-directory")
+        {
             return Err(
-                "usage: psf-guard-director-runtime --pipe <local-pipe-name> --parent-pid <pid>",
+                "usage: psf-guard-director-runtime --pipe <local-pipe-name> --parent-pid <pid> [--state-directory <absolute-directory>]",
             );
         }
         let Some(suffix) = args[1].strip_prefix("psf-guard-director-") else {
@@ -47,7 +51,18 @@ mod windows_host {
         {
             return Err("control pipe parent identity mismatch");
         }
-        psf_guard_director_runtime::serve(pipe)
+        // Do not touch storage until the process peer is verified.
+        let storage = if args.len() == 6 {
+            Some(
+                psf_guard_director_runtime::storage::Storage::acquire(std::path::Path::new(
+                    &args[5],
+                ))
+                .map_err(|_| "execution storage unavailable")?,
+            )
+        } else {
+            None
+        };
+        psf_guard_director_runtime::serve_with_storage(pipe, storage)
             .await
             .map_err(|_| "control protocol failed")
     }

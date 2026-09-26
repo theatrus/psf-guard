@@ -651,26 +651,28 @@ member, so normal application builds do not package the experimental native DLL.
 same core into a separate executable. The Windows-only
 [.NET process harness](../../tools/director-sidecar/Program.cs) launches it over
 a random, current-user-only, first-instance named pipe. Both ends verify the
-peer process ID. Only the pipe name and host PID appear in process arguments;
-this protocol has no credential, network, database, or equipment operations.
+peer process ID. The launcher supplies the pipe name, host PID, and optionally
+an absolute state directory. No credentials appear in process arguments. The
+protocol has no network or equipment operations; local persistence is opt-in.
 
-IPC version 1 uses a four-byte little-endian length followed by UTF-8 JSON.
+IPC version 2 uses a four-byte little-endian length followed by UTF-8 JSON.
 Frames are limited to 266,240 bytes before body allocation. The nested planning
 request retains its original JSON and the core's 262,144-byte limit, including
 duplicate-field validation. Every envelope contains `protocol_version`,
 `session_id`, `request_id`, and `payload`; payloads use a `type` discriminator.
 
 - `hello` must be request 0 with a fresh 32-hex-character session ID. It binds
-  the rig ID and requires exact runtime 0.1.1, engine 0.2.0, and contract 2.
-  `ready` confirms all versions and the rig.
+  the rig ID and requires exact runtime 0.2.1, engine 0.2.0, and contract 2.
+  `ready` confirms all versions, the rig, and whether storage is enabled.
 - `evaluate` wraps one core request and returns a `decision` with the unchanged
   core response. Valid requests for another assignment rig terminate the session.
   Invalid planning inputs return core errors; invalid IPC terminates the session.
-- IPC 2 adds a shutdown drain handshake: `ping` returns `pong`; `shutdown`
-  returns `stopped`, then waits at most two seconds for the host to close its
-  pipe after reading the reply. The host closes before waiting for process exit.
-  This avoids dropping an unread Windows pipe reply. No more commands may run
-  after shutdown. Every message
+  After opening a ledger, stateless `evaluate` terminates the session: it must
+  not bypass durable pending work or attempt limits with a caller's old snapshot.
+- `ping` returns `pong`; `shutdown` returns `stopped`, then waits at most two
+  seconds for the host to close its pipe after reading the reply. The host
+  closes before waiting for process exit. This avoids dropping an unread
+  Windows pipe reply. No more commands may run after shutdown. Every message
   after hello requires the next consecutive request ID, including heartbeats.
 - Pipe connection and hello each have a 15-second deadline. After hello, each
   complete incoming frame has a 30-second deadline; writes have 10 seconds.
@@ -680,6 +682,47 @@ duplicate-field validation. Every envelope contains `protocol_version`,
 - Clean EOF ends the child normally. Truncation, timeout, incompatible versions,
   and stale/duplicate requests end the session without a replayed response.
   A new child must negotiate a new session and receive a fresh snapshot.
+
+The existing Director plugin remains pinned to runtime 0.1.0 / IPC 1 until its
+typed host and capture flow adopt IPC 2 together. A mismatched version is refused,
+never silently downgraded. Publishing this runtime artifact alone does not update
+installed plugins or change the existing Sync plugin.
+
+With `--state-directory`, the launcher supplies a private existing directory for
+one profile/rig. The runtime verifies the pipe peer before touching storage,
+takes an exclusive OS lock on `director-runtime.lock`, and uses the fixed
+`execution.sqlite` filename. It never accepts paths in IPC messages or unlinks
+the lock file. Another sidecar cannot own the same directory while this owner
+or its blocking database operation lives. Process death releases the lock; it
+does not clear capture evidence.
+
+`ledger` wraps a strict `operation` object with an `action` discriminator:
+
+- `open` validates and binds the original core `request`. Its reply contains
+  stable ledger, assignment, revision, rig, and configuration identities.
+- `reserve` takes a capture ID and current core state. The shared evaluator and
+  ledger return a newly committed reservation, existing evidence, recovery
+  required, or a non-acquisition decision. Only the first case is new work;
+  none is a hardware permission or a restart dispatch token.
+- `record` accepts verified saved/failed/uncertain evidence. `attempt` reads a
+  capture's evidence without changing it, including after reconnect.
+- `events` pages at most 64 events after a cursor and returns the next cursor.
+  There is no acknowledgement, pruning, revision activation, or grading yet.
+
+SQLite work runs on the blocking executor, serialized within the pipe session.
+Structured storage failures carry codes, not paths or raw database errors. Wrong
+rig identity or malformed commands terminate the session; ordinary busy/invalid
+operation errors do not. If a response is lost, the operation may have committed.
+Reconnect with the same ledger/allocation and query the stable capture ID; never
+interpret a retry returning existing evidence as permission to capture again.
+
+Portable protocol tests cover loss of the reservation reply, duplicate/unknown
+fields, wrong-rig commands, bounded event pages with escaped maximum-length IDs,
+contention, exclusive ownership, and refusal to bypass ledger progress. The real
+Windows named-pipe harness passed 36 golden decisions and lifecycle/storage checks
+across 17 owned sidecars on 2026-09-25, including forced termination after uncertain
+and saved outcomes. This is process-level recovery evidence, not a N.I.N.A. or
+server-loop test.
 
 Run the real Windows process tests:
 
@@ -702,9 +745,9 @@ The existing Sync plugin is unchanged.
 
 [`crates/director-ledger`](../../crates/director-ledger/src/lib.rs) owns the
 first local attempt/event storage contract. It depends on the shared core and
-SQLite, leaving the planner itself free of I/O. This crate is not yet exposed
-through sidecar IPC or used by the native capture adapter. It changes no existing
-catalog, Sync endpoint, plugin package, or runtime protocol.
+SQLite, leaving the planner itself free of I/O. IPC 2 exposes it through explicit
+storage operations, but the native capture adapter does not use it yet. It
+changes no existing catalog, Sync endpoint, or installed plugin package.
 
 The initial ledger binds one immutable allocation, its original accepted/pending
 baseline, the rig/configuration, and the exact engine/contract versions. Each
