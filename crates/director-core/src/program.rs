@@ -36,7 +36,7 @@ pub struct Binning {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "support", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Control {
-    Unsupported,
+    Unsupported {},
     Range { minimum: i32, maximum: i32 },
     Values { values: Vec<i32> },
 }
@@ -44,7 +44,7 @@ pub enum Control {
 impl Control {
     fn validate(&self) -> bool {
         match self {
-            Self::Unsupported => true,
+            Self::Unsupported {} => true,
             Self::Range { minimum, maximum } => *minimum >= 0 && maximum >= minimum,
             Self::Values { values } => {
                 !values.is_empty()
@@ -57,7 +57,7 @@ impl Control {
 
     fn accepts(&self, value: Option<i32>) -> bool {
         match (self, value) {
-            (Self::Unsupported, None) => true,
+            (Self::Unsupported {}, None) => true,
             (Self::Range { minimum, maximum }, Some(value)) => {
                 value >= *minimum && value <= *maximum
             }
@@ -149,9 +149,11 @@ pub enum Error {
 }
 
 /// Local observations, never a replacement recipe or an alternative target.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LocalState {
     pub configuration: Configuration,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub previous_pointing: Option<PointingContext>,
     pub mount_parked: bool,
     pub rotator_connected: bool,
@@ -159,7 +161,8 @@ pub struct LocalState {
 }
 
 /// A remembered name or ID alone cannot prove that framing is unchanged.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PointingContext {
     pub configuration_id: String,
     pub target: Target,

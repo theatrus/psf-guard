@@ -681,14 +681,14 @@ peer process ID. The launcher supplies the pipe name, host PID, and optionally
 an absolute state directory. No credentials appear in process arguments. The
 protocol has no network or equipment operations; local persistence is opt-in.
 
-IPC version 4 uses a four-byte little-endian length followed by UTF-8 JSON.
+IPC version 5 uses a four-byte little-endian length followed by UTF-8 JSON.
 Frames are limited to 266,240 bytes before body allocation. The nested planning
 request retains its original JSON and the core's 262,144-byte limit, including
 duplicate-field validation. Every envelope contains `protocol_version`,
 `session_id`, `request_id`, and `payload`; payloads use a `type` discriminator.
 
 - `hello` must be request 0 with a fresh 32-hex-character session ID. It binds
-  the rig ID and requires exact runtime 0.3.0, engine 0.2.0, and contract 2.
+  the rig ID and requires exact runtime 0.4.0, engine 0.2.0, and contract 2.
   `ready` confirms all versions, the rig, and whether storage is enabled.
 - `evaluate` wraps one core request and returns a `decision` with the unchanged
   core response. Valid requests for another assignment rig terminate the session.
@@ -710,9 +710,9 @@ duplicate-field validation. Every envelope contains `protocol_version`,
   A new child must negotiate a new session and receive a fresh snapshot.
 
 The published Director preview still pins runtime 0.2.1 / IPC 3 with the typed
-ledger host and shutdown drain handshake together. It cannot use IPC 4 until
-the adapter and bundle pin are updated. A mismatched version is refused, never
-silently downgraded. Publishing this runtime artifact alone does not update
+ledger host and shutdown drain handshake together. Newer IPC 4/5 development
+hosts need their matching adapter and bundle pin. A mismatched version is
+refused, never silently downgraded. Publishing this runtime artifact alone does not update
 installed plugins or change the existing Sync plugin.
 
 With `--state-directory`, the launcher supplies a private existing directory for
@@ -731,7 +731,23 @@ ledger operation or hardware dispatch.
 `ledger` wraps a strict `operation` object with an `action` discriminator:
 
 - `open` validates and binds the original core `request`. Its reply contains
-  stable ledger, assignment, revision, rig, and configuration identities.
+  stable ledger, assignment, revision, rig, and configuration identities. This
+  is the unbound compatibility path, not observing-program enforcement.
+- `open_program` takes the complete version-1 execution `program` and current
+  `state`. It returns `program_opened` with the stable ledger `info` and
+  `program_version`. Reopening requires the exact original program. It cannot
+  adopt an unbound ledger or downgrade a bound ledger to the older API.
+- `begin_program_preparation` takes preparation/goal IDs, `local` equipment and
+  remembered-pointing observations, estimates, and current state. The ledger
+  resolves the target and recipe itself and owns progress projection.
+- `advance_program_preparation` and `reserve_program_prepared` take the full
+  current `configuration` and state, not merely its ID. They use the existing
+  preparation/reservation replies and check fresh conditions at each boundary.
+  Bound ledgers refuse the older unbound begin/advance/reserve commands.
+- `capture_binding` reads the saved target, recipe, configuration, attempt,
+  and ledger identity for a capture. `capture_binding_found.binding` is an
+  explicit nullable field. This is recovery evidence, never a dispatch permit.
+  Completion, read, close, and event commands work in both modes.
 - Ledger `evaluate` takes only current state, projects durable pending progress
   and attempt budgets, and returns a read-only core decision. It never reserves
   an exposure or accepts caller-supplied progress. Active preparation or an
@@ -772,17 +788,19 @@ Reconnect with the same ledger/allocation and query the active preparation or
 unresolved capture (or their known stable IDs); never
 interpret a retry returning existing evidence as permission to capture again.
 Preparation-not-selected, invalid-completion, clock-regression, and conflicting
-evidence failures have distinct bounded codes. They leave the session available
+evidence failures have distinct bounded codes. Invalid program content returns
+`invalid_program`; a changed persisted program or current configuration returns
+`assignment_mismatch`. These errors leave the session available
 for status/recovery and never authorize a client-side retry of device work.
 
 Portable protocol tests cover loss of the reservation reply, duplicate/unknown
 fields, wrong-rig commands, bounded event pages with escaped maximum-length IDs,
 contention, exclusive ownership, and refusal to bypass ledger progress. The real
 Windows named-pipe harness passed 36 golden decisions and lifecycle/storage checks
-across 30 owned sidecars, including forced termination after an issued preparation
-operation and its linked capture reservation. It discovers recovery IDs, preserves
-exact 64-bit timings, and refuses redispatch. This is process-level recovery evidence, not a N.I.N.A. or
-server-loop test.
+across 33 owned sidecars, including forced termination after unbound and bound
+preparation operations and their linked capture reservations. It discovers
+recovery IDs, preserves exact 64-bit timings, and refuses redispatch. This is
+process-level recovery evidence, not a N.I.N.A. or server-loop test.
 
 Run the real Windows process tests:
 
@@ -807,9 +825,9 @@ The existing Sync plugin is unchanged.
 version-1 execution-program model above the unchanged planning contract 2.
 The program contains one immutable allocation, its rig/configuration snapshot,
 targets, exposure recipes, and exactly one target/recipe binding per goal.
-It is a shared Rust API, not a new IPC command, server endpoint, or acquisition
-permit. The ledger has explicit program-bound APIs; the existing unbound IPC 4
-preparation path does not expose them yet.
+The shared Rust API and program-bound IPC 5 commands expose it to local hosts,
+not as a server endpoint or acquisition permit. The older unbound preparation
+commands cannot bypass a program-bound ledger.
 
 Bindings use stable IDs, never display names or nearby coordinates. Duplicate
 IDs, missing/extra goal mappings, and unused target/recipe definitions fail
@@ -858,17 +876,16 @@ present nullable settings. Tests cover typed/JSON roundtrips, integer fidelity,
 capability rejection, complete mappings, distinct short/long recipes, immutable
 snapshots, stale framing, projection restrictions, and fresh safety decisions.
 The ledger persists this exact program and resolves saved capture bindings.
-Next, expose a versioned bound preparation path and bind native capture
-settings to the same resolved recipe.
-Do not claim recipe enforcement from the existing unbound IPC 4 API. Pairing,
-meta-database authority, native container execution, effective horizon refresh,
+IPC 5 exposes the bound preparation path; native capture settings must next use
+the same resolved recipe. Do not claim recipe enforcement from unbound APIs.
+Pairing, meta-database authority, native container execution, effective horizon refresh,
 and the full server/N.I.N.A. gate remain open.
 
 #### Shared exposure preparation
 
 [`director-core::preparation`](../../crates/director-core/src/preparation.rs)
 models the first native-operation boundaries without device APIs or I/O. This
-is an internal Rust API exposed by IPC 4 through the durable ledger. Planning
+is an internal Rust API exposed since IPC 4 through the durable ledger. Planning
 JSON contract 2 and the published plugin's behavior are unchanged.
 
 The reducer follows the pinned TS reference's preparation order: unpark when
@@ -905,7 +922,7 @@ conditions, and final-boundary revalidation. Run it with:
 cargo test --locked -p psf-guard-director-core --test preparation
 ```
 
-Program-bound IPC integration and native container execution remain required
+Program-bound plugin integration and native container execution remain required
 before hardware use. A host must
 not reconstruct lost reducer state and replay an operation whose outcome is
 unknown. Preparation does not consume capture attempts or credit images; the
@@ -917,7 +934,7 @@ open parts of the operation inventory, not implied by this initial reducer.
 
 [`crates/director-ledger`](../../crates/director-ledger/src/lib.rs) owns the
 first local attempt/event storage contract. It depends on the shared core and
-SQLite, leaving the planner itself free of I/O. IPC 4 exposes it through explicit
+SQLite, leaving the planner itself free of I/O. IPC exposes it through explicit
 storage operations, but the native capture adapter does not use it yet. It
 changes no existing catalog, Sync endpoint, or installed plugin package.
 
@@ -969,7 +986,7 @@ Ledger schema 2 adds a preparation journal using the same writer transactions.
 It migrates an owned schema-1 ledger without changing its UUID, allocation,
 attempts, or capture events. Wrong allocations/engines roll back the migration;
 older binaries refuse schema 2. Capture event schema 1 remains unchanged.
-IPC 4 exposes these local APIs; it is not a plugin release or a server endpoint.
+IPC 4 introduced these local APIs; this is not a plugin release or server endpoint.
 
 `begin_preparation` binds the resolved context to ledger-derived progress.
 `advance_preparation` checkpoints the pure reducer and appends an issued event
@@ -1026,8 +1043,9 @@ configuration, and attempt identity; it is evidence, never a dispatch permit.
 Program-ledger tests cover exact reopen, mode separation, full configuration
 checks, migration rollback, damaged metadata, concurrent issue/reservation,
 transaction rollback, and real process exits with issued operations or reserved
-captures. This is an internal Rust storage API, not a new IPC command, released
-plugin feature, or proof of native equipment integration.
+captures. IPC 5 exposes these storage APIs through explicit bound commands;
+older protocol versions fail negotiation before opening storage. This does not
+change the released plugin or prove native equipment integration.
 
 Run the isolated storage regressions with:
 

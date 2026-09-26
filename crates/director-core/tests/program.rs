@@ -240,7 +240,7 @@ fn unsupported_settings_never_fall_back_to_current_device_state() {
         );
     }
     let mut unsupported = program();
-    unsupported.configuration.gain = Control::Unsupported;
+    unsupported.configuration.gain = Control::Unsupported {};
     assert!(bound(unsupported.clone()).is_err());
     unsupported.recipes[0].gain = None;
     assert!(bound(unsupported).is_ok());

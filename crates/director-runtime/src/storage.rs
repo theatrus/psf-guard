@@ -3,10 +3,12 @@ use crate::ProtocolError;
 use psf_guard_director_core::preparation::{
     Completion, Context, Error as PreparationError, Estimates, Next,
 };
+use psf_guard_director_core::program::{Configuration, LocalState, Program, PROGRAM_VERSION};
 use psf_guard_director_core::{Request, State};
 use psf_guard_director_ledger::preparation::{
     Event as PreparationEvent, Record as PreparationRecord,
 };
+use psf_guard_director_ledger::program::CaptureBinding;
 use psf_guard_director_ledger::{
     Attempt, Error, Evidence, ExecutionEvent, Ledger, LedgerInfo, Reservation,
 };
@@ -29,6 +31,31 @@ pub enum Operation {
     UnresolvedAttempt {},
     Open {
         request: Request,
+    },
+    OpenProgram {
+        program: Box<Program>,
+        state: State,
+    },
+    BeginProgramPreparation {
+        preparation_id: String,
+        goal_id: String,
+        local: Box<LocalState>,
+        estimates: Estimates,
+        state: State,
+    },
+    AdvanceProgramPreparation {
+        preparation_id: String,
+        configuration: Box<Configuration>,
+        state: State,
+    },
+    ReserveProgramPrepared {
+        preparation_id: String,
+        capture_id: String,
+        configuration: Box<Configuration>,
+        state: State,
+    },
+    CaptureBinding {
+        capture_id: String,
     },
     Reserve {
         capture_id: String,
@@ -85,6 +112,14 @@ pub enum StorageReply {
     Opened {
         info: LedgerInfo,
     },
+    ProgramOpened {
+        info: LedgerInfo,
+        program_version: u32,
+    },
+    CaptureBindingFound {
+        #[serde(deserialize_with = "Option::deserialize")]
+        binding: Option<Box<CaptureBinding>>,
+    },
     Reserved {
         outcome: Reservation,
     },
@@ -133,6 +168,7 @@ pub enum StorageError {
     AlreadyOpen,
     InvalidInput,
     InvalidSnapshot,
+    InvalidProgram,
     InvalidDirectory,
     Unavailable,
     Busy,
@@ -154,7 +190,7 @@ impl From<Error> for StorageError {
         match error {
             Error::InvalidInput => Self::InvalidInput,
             Error::Planner(_) => Self::InvalidSnapshot,
-            Error::Program(_) => Self::InvalidSnapshot,
+            Error::Program(_) => Self::InvalidProgram,
             Error::Preparation(error) => match error {
                 PreparationError::NotSelected => Self::PreparationNotSelected,
                 PreparationError::InvalidCompletion => Self::InvalidCompletion,
@@ -249,6 +285,30 @@ impl Storage {
             return Err(ProtocolError::WrongRig);
         }
         match &operation {
+            Operation::OpenProgram { program, state }
+                if program.assignment.rig_id != rig_id
+                    || program.configuration.rig_id != rig_id
+                    || state.rig_id != rig_id =>
+            {
+                return Err(ProtocolError::WrongRig)
+            }
+            Operation::BeginProgramPreparation { local, state, .. }
+                if local.configuration.rig_id != rig_id || state.rig_id != rig_id =>
+            {
+                return Err(ProtocolError::WrongRig)
+            }
+            Operation::AdvanceProgramPreparation {
+                configuration,
+                state,
+                ..
+            }
+            | Operation::ReserveProgramPrepared {
+                configuration,
+                state,
+                ..
+            } if configuration.rig_id != rig_id || state.rig_id != rig_id => {
+                return Err(ProtocolError::WrongRig)
+            }
             Operation::Open { request }
                 if request.assignment.rig_id != rig_id || request.state.rig_id != rig_id =>
             {
@@ -271,6 +331,18 @@ impl Storage {
     }
 
     fn apply(&mut self, operation: Operation) -> Result<StorageReply, StorageError> {
+        if let Operation::OpenProgram { program, state } = operation {
+            if self.ledger.is_some() {
+                return Err(StorageError::AlreadyOpen);
+            }
+            let ledger = Ledger::open_program(&self.path, *program, state)?;
+            let info = ledger.info();
+            self.ledger = Some(ledger);
+            return Ok(StorageReply::ProgramOpened {
+                info,
+                program_version: PROGRAM_VERSION,
+            });
+        }
         if let Operation::Open { request } = operation {
             if self.ledger.is_some() {
                 return Err(StorageError::AlreadyOpen);
@@ -291,7 +363,49 @@ impl Storage {
             Operation::UnresolvedAttempt {} => StorageReply::Found {
                 attempt: ledger.unresolved_attempt()?,
             },
-            Operation::Open { .. } => unreachable!("handled above"),
+            Operation::Open { .. } | Operation::OpenProgram { .. } => unreachable!("handled above"),
+            Operation::BeginProgramPreparation {
+                preparation_id,
+                goal_id,
+                local,
+                estimates,
+                state,
+            } => {
+                let started = ledger.begin_program_preparation(
+                    &preparation_id,
+                    &goal_id,
+                    *local,
+                    estimates,
+                    state,
+                )?;
+                StorageReply::PreparationStarted {
+                    created: started.created,
+                    record: started.record,
+                }
+            }
+            Operation::AdvanceProgramPreparation {
+                preparation_id,
+                configuration,
+                state,
+            } => StorageReply::PreparationAdvanced {
+                next: ledger.advance_program_preparation(&preparation_id, state, &configuration)?,
+            },
+            Operation::ReserveProgramPrepared {
+                preparation_id,
+                capture_id,
+                configuration,
+                state,
+            } => StorageReply::Reserved {
+                outcome: ledger.reserve_program_prepared(
+                    &preparation_id,
+                    &capture_id,
+                    state,
+                    &configuration,
+                )?,
+            },
+            Operation::CaptureBinding { capture_id } => StorageReply::CaptureBindingFound {
+                binding: ledger.capture_binding(&capture_id)?.map(Box::new),
+            },
             Operation::Reserve { capture_id, state } => StorageReply::Reserved {
                 outcome: ledger.reserve(&capture_id, state)?,
             },

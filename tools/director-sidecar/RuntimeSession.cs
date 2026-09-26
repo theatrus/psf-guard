@@ -12,8 +12,8 @@ internal sealed class RuntimeSession : IAsyncDisposable
     internal const int MaxFrameBytes = 262144 + 4096;
     internal const string EngineVersion = "0.2.0";
     internal const int ContractVersion = 2;
-    internal const int ProtocolVersion = 4;
-    internal const string RuntimeVersion = "0.3.0";
+    internal const int ProtocolVersion = 5;
+    internal const string RuntimeVersion = "0.4.0";
     private readonly NamedPipeServerStream pipe;
     private readonly Process process;
     private readonly SemaphoreSlim gate = new(1, 1);
