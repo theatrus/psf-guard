@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-const MAX_WINDOWS: usize = 128;
+pub(crate) const MAX_WINDOWS: usize = 128;
 const MAX_TRANSITS: usize = 64;
 
 /// Half-open interval in Unix milliseconds. An operation may finish at `end_ms`.

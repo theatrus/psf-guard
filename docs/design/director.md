@@ -1130,9 +1130,29 @@ Tests cover midpoint obstructions with clear endpoints, unsampled adjacent-float
 horizon spikes, north discontinuities, extra overhead crossing altitude limits,
 strict finish-time Earth-orientation validity, leap seconds, and dense SOFA
 cross-checks across sites and polar targets. These tests exercise the shared
-crate, not a native acquisition or server loop. Observing-window construction
+crate, not a native acquisition or server loop. Complete observing-window construction
 and integration of this screening into the selector and dispatch contract remain
 required; no existing planner result gains new hardware authority here.
+
+`altitude_windows` builds conservative altitude-only windows over the same
+bounded search span. It reuses the span check's spherical envelope and horizon
+extrema. Entirely clear or blocked caps prune the search; uncertain caps split
+until one-second resolution. The result separates certified `windows` from
+`unresolved` intervals, so an empty list of usable windows is not necessarily
+proof of total obstruction. Unknown regions never become eligible windows.
+Adjacent certified regions merge, but neither an obstruction nor an unresolved
+gap can be bridged. Both output lists are capped at the selector's 128-window
+limit; invalid inputs or exhausted count/observation budgets return no partial
+coverage. Fully obstructed regions are skipped without testing every second.
+
+Tests feed the resulting windows into the existing selector and meridian
+interval composition. Exposure plus overhead must fit a single surviving
+window; a narrow horizon obstruction can force waiting for the next one.
+Day-long dense SOFA checks verify the generated clear regions across sites.
+This is not yet the complete availability compiler: darkness, actual transit
+search, immutable constraint identity, IPC, and production dispatch binding
+remain separate requirements. The native integration must not treat these
+altitude windows alone as an observing assignment or hardware permit.
 
 SOFA attribution and the full upstream terms live in
 `crates/director-core/THIRD_PARTY_NOTICES.md` and `SOFARS-LICENSE.txt`.
