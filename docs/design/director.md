@@ -1,8 +1,10 @@
 # PSF Guard Director: goal-driven acquisition
 
-Status: phase 0 in progress. Shared-core, sidecar, and native simulated
-acquisition spikes implemented. An experimental runtime-only plugin preview is
-published in the theatr.us registry; no production acquisition plugin yet.
+Status: phases 0 and 1 are partially implemented; no phase acceptance gate is
+complete. Shared-core, durable sidecar and native simulator building blocks are
+merged. The published Director 0.1.0.1 preview is runtime-only, not an acquisition
+scheduler. See the implementation audit below before treating a capability as
+available to users.
 Last updated: 2026-09-26.
 
 This is the tracking document for Director. Update the phase checklist and
@@ -42,6 +44,34 @@ sync semantics.
 - Keep equipment control, safety, and operator overrides local to N.I.N.A.
 - Start with one coordinating instance per project. Federation is a later phase,
   not multi-master editing of the same plan.
+- Own PSF Guard's internal catalog and Director schemas. Target Scheduler is an
+  import and bidirectional sync integration, not the required storage schema.
+- Support ordinary N.I.N.A. Advanced Sequencer hooks and third-party extensions,
+  with useful native defaults that do not require optional plugins.
+- Support connected rig monitoring and intentionally offline acquisition with
+  bounded cached authorization and batched check-in. Neither mode requires
+  image uploads to keep control/progress evidence moving.
+
+## Implementation audit
+
+Audited 2026-09-26 against PSF Guard main `034d5ef` and Director plugin main
+`8f6d8c2`, plus the open PR heads listed below. **Merged building block** does
+not mean a production workflow or phase gate passed. Open PR work is not in
+main. Update this table and the relevant checklist when a PR lands; keep
+untested integration requirements unchecked.
+
+| Area | Implemented evidence | Still missing |
+| --- | --- | --- |
+| Shared engine | Merged `crates/director-core`: deterministic selection, program/recipe binding, preparation reducer, conservative altitude/horizon and meridian geometry; shared Rust/.NET fixtures. | Complete observing criteria, production Earth-orientation source, full operation inventory, duration learning and server simulation. |
+| Sidecar and local recovery | Merged `crates/director-ledger` and `crates/director-runtime`: schema-4 journal, capture/preparation outboxes, IPC 7, one-shot dispatch checks, process crash/reopen tests; PSF Guard #464-487. | Remote inbox/acknowledgements, pruning, grade feedback, assignment replacement and complete operator recovery. No network batch check-in yet. |
+| NINA native execution | Plugin [#18](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/18), [#19](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/19), [#22](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/22), [#23](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/23), [#24](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/24) merged: transient native items, target context, complete horizon export and post-hook geometry checks. Real nightly #58 OmniSim probe captured three filtered FITS frames with correlated evidence. | Public production session container, all trigger/condition/hook contexts, plugin compatibility matrix, native defaults, full autofocus/guiding/flip/calibration/safety recovery and continuous ownership integration. Probe uses fixture allocations and synthetic orientation evidence, not a server session. |
+| Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
+| Meta storage | [#488](https://github.com/theatrus/psf-guard/pull/488) and [#489](https://github.com/theatrus/psf-guard/pull/489) merged: separate schema-2 store, UUIDs, mappings, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. | Catalog adoption workflow, permissions/enrollment, active revisions, allocation authority and progress projections. |
+| Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492) and [#493](https://github.com/theatrus/psf-guard/pull/493) implemented/tested in open PRs: shared objective/contribution model and schema-3 intent persistence. | Not merged; objective editor, depth/FOV/sampling compatibility and authoritative allocation remain open. |
+| Operator API and UI | [#490](https://github.com/theatrus/psf-guard/pull/490), [#494](https://github.com/theatrus/psf-guard/pull/494), [#495](https://github.com/theatrus/psf-guard/pull/495) implemented/tested in open PRs: identities/snapshots API and identity management screen. | Not merged. No project planning editor, rig pairing, acquisition control or live rig dashboard. UI tests are not equipment tests. |
+| Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
+| Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. | Central telemetry ingestion/dashboard, scoped pairing, remote acknowledgements, offline authorization lifecycle, manual/sequence batch reconcile and reconnect activation are not implemented. |
+| End-to-end lifecycle | Core, process, native simulator and isolated management HTTP/UI tests exist separately. | No PSF Guard allocation -> real NINA simulator acquisition -> central telemetry/grade -> batch reconciliation/replan test. TS/Sync/Chatstronomy coexistence gates remain open. |
 
 ## Domain model
 
@@ -168,16 +198,16 @@ These are single-rig phase-0/phase-2 requirements, not deferred multi-rig work.
 The shared core accepts multiple allocated intervals per goal and now calculates
 conservative altitude and meridian windows from the resolved program target and
 canonical rig constraints. The N.I.N.A. adapter exports native horizon curves;
-the core does not read rig files. Production IPC, preference resolution, and
-dispatch binding remain unfinished. Prove the combined path against the pinned
-implementations before connecting this geometry-aware evaluator to acquisition.
+the core does not read rig files. IPC and internal post-hook dispatch bindings
+are merged. Complete preference resolution, production time/orientation inputs,
+the public container and the combined server session remain unverified.
 
 ## Storage and authority
 
 | Store | Owns |
 | --- | --- |
 | Meta database | Global projects and objectives, sites, rig capabilities, mappings, contribution plans, assignments, permissions, and progress projections. |
-| Per-rig catalog databases | TS-compatible acquisition history, image records, grades, calibration records, and local evidence. |
+| Per-rig catalog databases | PSF Guard-owned acquisition history, image records, grades, calibration records and local evidence; TS compatibility is provided at the import/sync boundary. |
 | Director local state | Cached assignments, execution journal, unsent events, recovery state, and operation timing observations. |
 
 Start with a separate coordination SQLite database, provisionally named
@@ -204,12 +234,64 @@ Adoption is opt-in. Existing catalogs and Sync endpoints continue to work
 without a meta database. Define backup, restore, and schema migration behavior
 before production coordination data is stored.
 
+### Native catalogs and Target Scheduler exchange
+
+Decision, 2026-09-26: neither Director nor future PSF Guard catalogs must use the
+TS schema internally. The meta/per-rig split remains: global coordination in the
+meta store, local acquisition and image evidence in PSF Guard-owned per-rig
+catalogs, and offline execution evidence in Director's local journal. This is
+the intended architecture, not the current catalog implementation. Existing
+catalog code still reads/writes TS-shaped tables; no migration has shipped.
+
+The future Settings/UI workflow is **Import Target Scheduler database** into a
+native catalog, then optionally retain a named TS sync connection. Import alone
+does not grant ongoing writeback. That connection identifies source provenance,
+destination catalog, supported schema version, selected data classes and
+direction, conflict policy, last successful sync and pending differences.
+Preview before Apply for operator transfers. A one-time import, recurring sync,
+and opening a legacy catalog are distinct operations, not aliases.
+
+Build explicit adapters for transferable projects, targets, recipes/templates,
+exposure plans, capture metadata, grades/reject reasons, and supported flat
+history/coverage. Maintain a versioned capability/mapping matrix in both
+directions. Probe optional fields and schema variants. Unrepresentable native
+objectives, cross-rig allocations, execution state or processing provenance stay
+native; the preview reports omissions and conflicts rather than silently
+flattening them or claiming a lossless round trip. Never export Director hardware
+authority or credentials into TS. Importing a TS project does not activate it.
+
+Preserve external GUIDs with an explicit origin and native-ID mapping. Repeated
+imports/syncs are idempotent; a mirrored capture remains one capture. Names,
+paths, nearby coordinates and TS-local integers are not cross-system identity.
+Convert RA hours at the adapter boundary. Grades, reject reasons, calibration
+coverage invalidation and TS progress/summary updates retain their current
+documented semantics for fields that are transferred. Do not put calibration
+frames into TS light-frame rows or replace a whole running TS database to apply
+a narrow update. Use consistent source snapshots and short writes; no database
+transaction waits on HTTP or image transfer.
+
+Migrate incrementally behind catalog access interfaces, with versioned owned
+schemas, explicit database type detection, backups and a rollback path. Never
+convert an external TS source file in place. Keep original files and provenance,
+prove native/legacy query and grading parity on copied real catalogs, and
+preserve existing registered-catalog URLs or provide explicit remapping.
+New native catalogs must not depend on TS installation or TS-shaped tables.
+Existing directly opened TS catalogs remain supported during transition; their
+eventual migration/deprecation needs a separate reviewed release decision.
+
+PSF Guard Sync remains a supported external integration. Its current published
+API and transfer-bundle contracts must keep working through adapters or a
+negotiated upgrade. Schema independence is not permission to break installed
+Sync plugins or drop data that previously transferred. The phase-1 gate below
+tracks this migration independently from Director's runtime preview.
+
 ## Shared planning core
 
 Implementation direction: a standalone Rust planning crate used directly by
 PSF Guard and by a bundled Director sidecar. The C# N.I.N.A. plugin communicates
 with that sidecar over versioned local IPC. The process boundary is implemented
-as a testable spike; plugin packaging and equipment integration remain pending.
+with a published runtime-only plugin and tested internal native adapters. The
+production acquisition container and server integration remain pending.
 Do not maintain parallel Rust and C# versions of the scheduling algorithm.
 
 The core lives in this repository; the Director plugin lives in
@@ -235,8 +317,9 @@ Sidecar exit, timeout, protocol mismatch, or malformed responses revoke pending
 decisions and prevent new dispatch. N.I.N.A. remains responsible for an in-flight
 operation and continuous safety handling. On restart, reconcile the durable
 execution journal and resubmit current state; never replay a stale decision just
-because its IPC request was retried. The phase-0 protocol described below proves
-the process boundary, not durable recovery or permission to operate equipment.
+because its IPC request was retried. The protocol and local ledger prove bounded
+process recovery, not coordinator reconciliation or permission to operate
+equipment. A recovered command is evidence, never a fresh dispatch grant.
 
 The core has no HTTP, SQLite, N.I.N.A., or TS dependencies. Hosts provide inputs
 and execute outputs. Time and randomness are explicit inputs, not hidden global
@@ -364,6 +447,59 @@ progress reporting, and session completion where useful. Show current goal,
 operation, assignment revision, next checkpoint, connectivity, and reasons for
 waiting or switching. Avoid an indefinite generic "Working" status.
 
+### Advanced Sequencer hooks and native defaults
+
+The production Director container must participate in the full supported N.I.N.A.
+Advanced Sequencer item, trigger and condition lifecycle, not just a private
+before/after-exposure callback. Inventory the pinned N.I.N.A. interfaces and TS
+behavior, then publish a compatibility matrix with supported, tested and
+unsupported states for each operation/context. Include third-party safety
+actions such as "When Becomes Unsafe" where supplied by plugins; do not assume
+their names, semantics or presence without checking the installed extension.
+
+Required attachment boundaries are session start/end, target entry/exit,
+before/after native operations and exposures, waits, condition changes, unsafe
+transition/recovery, cancellation and failure cleanup. Map these to native
+lifecycles; do not invent a second trigger scheduler. Nested containers retain
+target/profile context, trigger cadence, condition evaluation, cancellation,
+failure propagation and native validation/serialization behavior. Hooks that
+consume time or change equipment must report their actual outcome and duration,
+invalidate stale pointing/capability evidence, and cause a fresh core decision
+before the next acquisition operation. Preserve one-shot dispatch authority.
+
+Ordinary native and compatible plugin actions should work in these slots. An
+action that itself acquires science frames must use an explicit Director
+reservation/progress adapter, or be refused with a visible reason. It must not
+bypass budgets because it is nested inside a hook. Unsupported or missing
+plugins produce a validation error, not silently skipped actions. Local safety
+and operator stop preempt the current operation even if the sidecar/server is
+unavailable; canceling the main sequence must not cancel required safe cleanup.
+Specify how safety transitions interrupt hooks, nested waits and cleanup, and
+test repeated unsafe/safe transitions without duplicate park/shutdown work.
+
+Director must also offer a useful default session with no TS, Chatstronomy or
+optional acquisition/safety plugin installed. Use N.I.N.A.'s native equipment
+and sequencing services for connection/cooling, unpark, slew/center, filter and
+readout setup, autofocus, guiding, dither/settle, flip handling, capture/save,
+safe wait/resume, park and configured shutdown. The Rust core owns when these
+operations are needed and evaluates their measured costs; C# executes native
+items and returns observations. Capability-dependent steps are explicit: a
+fixed-filter rig needs no wheel, for example, while a required disconnected
+guider or missing configured safety monitor is not silently ignored.
+
+Resolve each policy as Director default, explicit user configuration, or a
+named native/plugin hook. Show the effective owner and prevent double execution
+(two autofocus, dither or safety policies for one boundary). Defaults use actual
+profile/capability settings and conservative timing estimates, not universal
+hidden constants or a fabricated safe state. With no safety source configured,
+require an explicit local operating policy during commissioning; loss of a
+previously required source blocks new acquisition. Remote plans can tighten
+limits but cannot override native safety, flip handling or operator settings.
+
+This is a phase-2 requirement. Merged internal sequence items currently cover
+only a subset; the runtime preview does not expose this production container or
+the default-policy UI.
+
 Director has a distinct plugin identity, configuration, credentials, queues,
 and release flow from Sync. Detect competing acquisition controllers. Define
 ownership for shared sync/upload duties so coexistence does not create duplicate
@@ -444,6 +580,77 @@ define retention and summary policies. Log decisions and structured transitions
 with correlation IDs, without credentials. Expose queue depth, last successful
 check-in, current operation duration, and recoverable errors to the operator.
 
+### Central rig telemetry
+
+Phase 2 includes a PSF Guard rig-monitoring UI, not just local logs or a future
+Chatstronomy bridge. A connected Director sends scoped status and durable
+execution events to the coordinating instance so operators can watch rigs,
+current project/target/objective, active operation and elapsed time, safety,
+assignment/revision, accepted versus pending progress, next check-in, local
+errors and queue depth. Label forecasts as estimates and show the age of every
+snapshot. A disconnected or stale rig becomes unknown/stale, never falsely
+"still exposing" or successfully stopped. The monitoring page should not require
+image bytes, thumbnails, or a completed catalog reconcile.
+
+Separate bounded, coalescible status snapshots from durable operation/capture
+events. Network telemetry must not block the image-save path or N.I.N.A. safety
+thread. Define versioned ingestion, backpressure, reconnect and browser updates,
+rig-scoped authentication and operator read permissions. Capture/configuration/
+assignment identity must accompany relevant state; suppress credentials and
+machine-local paths. A reported state or a dashboard button is not an allocation
+or unrestricted device command. Any allowed request enters local authorization
+and a safe boundary; immediate remote stop cannot be promised while disconnected.
+
+Persist authoritative transitions before transmission and derive monitoring
+projections from acknowledged events plus timestamped live status. Keep server
+receipt time distinct from rig event time and clock uncertainty. Old events
+backfilled after an outage must not replace fresher live status. Retention may
+compact disposable samples, but not unacknowledged capture/operation evidence.
+Expose storage pressure before exhaustion and stop new work if required durable
+evidence cannot be recorded. Live telemetry and event-delivery APIs are not yet
+implemented; the current sidecar outbox is a local building block only.
+
+### Offline and batch check-in
+
+Offline operation is a supported mode, not just an accidental lost connection.
+After commissioning/pairing and a successful assignment check-in, a rig may
+start or continue authorized work from a cached, validated program without
+central PSF Guard running. It still needs valid local conditions, geometry/time
+evidence and safety. Authentication, assignment validity, attempt budgets and
+pending-grade limits are separate; a cached login is not indefinite authority.
+The first pairing/new allocation cannot occur offline. Assignment expiry,
+missing required evidence or exhausted local storage prevents new work while
+preserving safe completion/cleanup and unsent evidence.
+
+Provide explicit **Check in** / **Reconcile Director** actions in plugin settings
+and as sequencer steps, plus automatic start/end, target/block, periodic and
+significant-condition checkpoints. Support connected, periodic and deliberate
+end-of-session batch delivery without requiring a permanently reachable server.
+These share one resumable reconciliation path, not different merge rules. Batch
+check-in transfers bounded event pages, timings, progress/assessment revisions
+and requested intent/configuration changes; it is not streaming whole SQLite
+files back and forth. Image transport remains separate and may be deferred until
+after the batch check-in, with missing pixels represented explicitly.
+
+Use stable rig/ledger identity and independent cursors for each existing event
+feed. A server inbox commits deduplication, event application and acknowledgements
+atomically. The client retains unsent/unacknowledged evidence across crashes and
+lost replies, retries idempotently, and only compacts acknowledged history under
+the retention policy. Show phase, counts, cursor progress, last success and
+recoverable failures, not "Working". Define page/byte limits and cancellation
+between committed pages, so large backlogs resume without resending everything.
+
+On reconnect, account for old-revision captures before activating replacement
+intent and allocation. An acknowledgement must name the exact accepted event
+cursors and grading/configuration revisions used in the next baseline; retries
+cannot add local pending credit twice. Record unsupported/conflicting events
+without discarding them or falsely acknowledging them as applied. Do not silently
+shrink an offline rig's authorization and assign the same outstanding budget to
+another rig. Release acknowledgement or conservative expiry/clock-skew rules
+must fence that handoff. This protocol must also work when the central instance
+restarts during a batch. Telemetry reconnect and manual batch reconcile use the
+same durable evidence and admission rules.
+
 ## Quality, calibration, and processing loop
 
 Track started, saved, cataloged, pending assessment, accepted, rejected, and
@@ -486,12 +693,16 @@ bounded authorization defines that risk.
 
 ## Phased delivery
 
-Phase 0 is in progress; later phases are pending. A phase is complete only when
-its acceptance gate passes and its review and validation evidence is linked here.
+Phases 0 and 1 have merged building blocks; neither acceptance gate is complete.
+Phases 2-6 remain incomplete even where a lower-level primitive exists. Checked
+items below refer only to the stated implementation scope, not adjacent goals.
+A phase is complete only when its full acceptance gate passes and its review and
+validation evidence is linked here.
 
 ### Phase 0: compatibility and execution spike
 
-- [ ] Pin current N.I.N.A. 3.3 nightly and record the supported version matrix.
+- [x] Pin N.I.N.A. nightly #58 (`3.3.0.1058-nightly`), record the tested reference
+  matrix and publish a runtime-only plugin with an exact sidecar artifact pin.
 - [ ] Prove Director-owned execution through supported N.I.N.A. APIs without
   TS installed; preserve ordinary TS and Sync behavior when separately installed.
 - [ ] Inventory the pinned TS container options, operation policies, conditions,
@@ -500,9 +711,10 @@ its acceptance gate passes and its review and validation evidence is linked here
 - [ ] Validate asymmetric meridian constraints against local TS reference cases
   and prove N.I.N.A. horizon export/parity; include multiple safe intervals in
   the engine contract.
-- [ ] Prove the shared Rust core loads and returns decisions in PSF Guard and
-  a minimal C# plugin through the bundled sidecar, including packaging, version
-  negotiation, restart reconciliation, and error handling.
+- [x] Link the same core into PSF Guard and a bundled sidecar, and exercise typed
+  C# planning, version negotiation, packaging, local failure and recovery tests.
+- [ ] Connect that tested local path to PSF Guard allocations and acknowledgements
+  in a real N.I.N.A. session; local restart evidence is not this integration gate.
 - [x] Implement a deterministic core linked into the PSF Guard Rust library and
   replay shared vectors through a native library from a .NET 10 console host.
 - [x] Represent multiple eligibility intervals and subtract asymmetric local
@@ -511,6 +723,8 @@ its acceptance gate passes and its review and validation evidence is linked here
   Chatstronomy core/plugin distribution model with versioned local IPC.
 - [x] Exercise the same golden decisions through a real Windows sidecar with
   bounded framing, version negotiation, peer checks, and process failure tests.
+- [x] Add native exposure/target items and post-hook dispatch checks, and run the
+  internal adapter in an isolated N.I.N.A./OmniSim sequence with FITS readback.
 - [ ] Finalize crate ownership, IPC framing, local state layout, and contracts.
 - [ ] Define and test Director's public state/context contract with Chatstronomy,
   preserving its existing TS state and safe-boundary command integrations.
@@ -532,6 +746,10 @@ Planner bridge: [typed evaluation and Rust-selected native capture, Director PR 
 Execution storage: [durable attempt reservations and event outbox, PR #464](https://github.com/theatrus/psf-guard/pull/464).
 Storage IPC: [versioned ledger operations and process recovery, PR #465](https://github.com/theatrus/psf-guard/pull/465).
 
+The following evidence records incremental building blocks, not independent
+claims of current product completeness. The audit above identifies what is
+merged, published, under review and still missing.
+
 The Director host pins N.I.N.A. `3.3.0.1058-nightly` and the tested sidecar by
 commit, CI run/artifact identity, SHA-256, and wire versions. The C# build consumes
 the artifact rather than compiling Rust. Its initial settings surface exposes
@@ -542,9 +760,9 @@ discovery, runtime Start/Stop, child-failure recovery, profile-switch cleanup,
 normal shutdown, and abrupt parent-exit cleanup on 2026-09-25. Those tests used
 fresh redirected profile/plugin directories with no TS and no connected devices;
 they did not replace the installed N.I.N.A. 3.2 application. They are not the
-full-stack acquisition gate. Signed durable artifacts, native execution, and
-Chatstronomy state integration remain open gates; the current CI artifact pin
-is developmental.
+full-stack acquisition gate. Signed artifact provenance and Chatstronomy state
+integration remain open gates. Later probes cover internal native execution,
+not a production coordinator session.
 
 The internal capture adapter uses N.I.N.A.'s public imaging and save interfaces.
 It reserves a capture GUID before dispatch, snapshots the original profile's save
@@ -552,7 +770,7 @@ settings, writes `PGCAPID` into FITS/XISF metadata, and waits for a correlated f
 save receipt. Queue admission is not save completion. Timeouts and cancellation
 after admission retain uncertain evidence; they do not authorize another attempt.
 The profile-scoped journal records identity, destination, and monotonic timings,
-but it is not yet the sidecar event ledger or recovery engine. Alongside public
+and later internal adapters correlate it with the sidecar ledger. Alongside public
 mediator and native-header tests, a test-only sequencer probe ran the actual
 adapter in official nightly #58 with ASCOM OmniSim camera, mount, and filter wheel
 on 2026-09-25. It connected, unparked, slewed, captured three filtered one-second
@@ -572,9 +790,9 @@ not implement the selection policy. These evaluations are recommendations for
 their snapshots, not durable authorization tokens.
 
 The fixture assignment and simulated-safe state are not a server allocation or
-recovery ledger. Durable attempt/event accounting, actual hardware-boundary
-ownership/safety, recovery, and server feedback remain prerequisites for a
-production Director sequencer item and the full-stack gate. The native smoke
+recovery ledger. Durable accounting and native boundary checks now exist as
+building blocks. Complete ownership/safety, operator recovery and server feedback
+remain prerequisites for a production sequencer item. The original native smoke
 test does not claim autofocus, guiding, meridian/horizon enforcement, or
 Sync/Chatstronomy coexistence coverage.
 
@@ -589,16 +807,17 @@ Baseline checked on 2026-09-25:
 Earlier exploration considered a TS execution-provider extension because its
 container constructs its planner and private plan container directly. That
 direction is superseded: no TS extension or port is required for Director.
-Its meridian behavior remains useful reference evidence. The next execution
-slice must instead prove native N.I.N.A. sequencing, event hooks, image-save
-observation, and cancellation. No TS source or installed N.I.N.A. plugins are
+Its meridian behavior remains useful reference evidence. Native sequencing,
+hooks, image-save observation and cancellation now have partial adapter coverage;
+the complete compatibility matrix is still required. No TS source or installed N.I.N.A. plugins are
 changed by the shared-core spike.
 
 The initial implementation lives in
 [`crates/director-core`](../../crates/director-core/src/lib.rs) and
 [`crates/director-ffi`](../../crates/director-ffi/src/lib.rs). PSF Guard re-exports
 the core as `psf_guard::director`; the native library calls the same evaluator.
-There is no server route, database migration, or hardware dispatch yet. The
+These two crates alone contain no server route, migration or hardware dispatch;
+later crates and adapters provide the building blocks below. The
 [.NET harness](../../tools/director-interop/Program.cs) is a console interop test,
 not a N.I.N.A. plugin or a substitute for the required simulator session.
 
@@ -668,8 +887,8 @@ made recoverable by this wrapper; no plugin installation is authorized by this
 spike. Packaging and host-failure safety still require review before deployment.
 
 The Director CI workflow runs Rust checks and the .NET/native vectors on
-Windows, Linux, and macOS. Only local Windows results are evidence until those
-hosted jobs pass. The existing application remains the default Cargo workspace
+Windows, Linux, and macOS. Record hosted CI separately from local results and
+require both for each changed contract. The existing application remains the default Cargo workspace
 member, so normal application builds do not package the experimental native DLL.
 
 #### Sidecar protocol spike
@@ -710,9 +929,9 @@ duplicate-field validation. Every envelope contains `protocol_version`,
   and stale/duplicate requests end the session without a replayed response.
   A new child must negotiate a new session and receive a fresh snapshot.
 
-The published Director preview still pins runtime 0.2.1 / IPC 3 with the typed
-ledger host and shutdown drain handshake together. Newer IPC 4/5/6/7 development
-hosts need their matching adapter and bundle pin. A mismatched version is
+The published 0.1.0.1 Director runtime preview pins runtime 0.6.0 / IPC 7, including
+the typed ledger host and shutdown drain handshake. Earlier IPC 3-6 packages
+must not be mixed with newer sidecars. A mismatched version is
 refused, never silently downgraded. Publishing this runtime artifact alone does not update
 installed plugins or change the existing Sync plugin.
 
@@ -815,9 +1034,9 @@ CI runs portable protocol tests on all three platforms and Windows process
 tests against a release executable. Release panic-abort is intentional here:
 the failure stays in the child process, outside N.I.N.A. The sidecar alone is not
 a plugin. The separate development host bundles this tested executable and has
-passed real N.I.N.A. runtime-lifecycle smoke tests. Signed release artifacts,
-integrated durable journals, restart reconciliation, and core-authorized native
-N.I.N.A. dispatch remain phase-0 gates.
+passed real N.I.N.A. runtime-lifecycle smoke tests. Signed release provenance and
+full coordinator reconciliation remain gates. Internal native dispatch and local
+journal recovery are implemented; the public session container is not.
 The existing Sync plugin is unchanged.
 
 #### Execution program bindings
@@ -877,9 +1096,9 @@ present nullable settings. Tests cover typed/JSON roundtrips, integer fidelity,
 capability rejection, complete mappings, distinct short/long recipes, immutable
 snapshots, stale framing, projection restrictions, and fresh safety decisions.
 The ledger persists this exact program and resolves saved capture bindings.
-IPC 5 exposes the bound preparation path; native capture settings must next use
-the same resolved recipe. Do not claim recipe enforcement from unbound APIs.
-Pairing, meta-database authority, native container execution, effective horizon refresh,
+IPC 5 introduced the bound preparation path; merged native adapters use the same
+resolved recipe. Do not claim recipe enforcement from unbound APIs.
+Pairing, allocation authority, production container execution,
 and the full server/N.I.N.A. gate remain open.
 
 #### Shared exposure preparation
@@ -923,8 +1142,8 @@ conditions, and final-boundary revalidation. Run it with:
 cargo test --locked -p psf-guard-director-core --test preparation
 ```
 
-Program-bound plugin integration and native container execution remain required
-before hardware use. A host must
+The internal program-bound adapter has native simulator coverage; production
+container execution remains required before unattended use. A host must
 not reconstruct lost reducer state and replay an operation whose outcome is
 unknown. Preparation does not consume capture attempts or credit images; the
 ledger and a fresh native dispatch check remain separate requirements. Session
@@ -936,8 +1155,9 @@ open parts of the operation inventory, not implied by this initial reducer.
 [`crates/director-ledger`](../../crates/director-ledger/src/lib.rs) owns the
 first local attempt/event storage contract. It depends on the shared core and
 SQLite, leaving the planner itself free of I/O. IPC exposes it through explicit
-storage operations, but the native capture adapter does not use it yet. It
-changes no existing catalog, Sync endpoint, or installed plugin package.
+storage operations. The merged internal native adapter and simulator probe now
+use the ledger; server delivery and a production container are still missing.
+It changes no existing catalog or Sync endpoint.
 
 The initial ledger binds one immutable allocation, its original accepted/pending
 baseline, the rig/configuration, and the exact engine/contract versions. Each
@@ -979,8 +1199,9 @@ resolution must be specified before production use.
 
 A reservation is not a hardware permit. Sidecar session fencing, actual dispatch
 boundary safety/ownership checks, and native-journal reconciliation are still
-required. The current adapter and ASCOM probe have not exercised this ledger.
-The next integration must preserve these distinctions rather than treating a
+required. The current internal adapter and ASCOM probe exercise this ledger;
+the full coordinator/production-container integration must preserve these
+distinctions rather than treating a
 replayed reservation or an old `acquire` decision as permission to capture.
 
 Ledger schema 2 adds a preparation journal using the same writer transactions.
@@ -1087,10 +1308,9 @@ dotnet run --project tools/director-astronomy-reference --configuration Release 
 ```
 
 This is numerical parity against the native library shipped by NINA, not a
-complete native sequence or server test. The existing selector/IPC are unchanged
-and do not yet consume this geometry. Complete transit search, darkness,
-constraint IPC and cache identity,
-Earth-orientation acquisition, and production dispatch enforcement remain gates.
+complete native sequence or server test. Later geometry-bound selector, ledger
+and IPC paths consume this model. Darkness, Earth-orientation acquisition and
+the full production dispatch workflow remain gates.
 Point visibility alone must not authorize a shutter operation. In particular,
 do not generate safe intervals with a coarse time grid that misses narrow
 obstructions between samples.
@@ -1131,9 +1351,9 @@ Tests cover midpoint obstructions with clear endpoints, unsampled adjacent-float
 horizon spikes, north discontinuities, extra overhead crossing altitude limits,
 strict finish-time Earth-orientation validity, leap seconds, and dense SOFA
 cross-checks across sites and polar targets. These tests exercise the shared
-crate, not a native acquisition or server loop. Complete observing-window construction
-and integration of this screening into the selector and dispatch contract remain
-required; no existing planner result gains new hardware authority here.
+crate, not a native acquisition or server loop. Later window compilation and
+dispatch bindings use this screening. Complete observing criteria remain
+required; point/span geometry does not itself provide hardware authority.
 
 `altitude_windows` builds conservative altitude-only windows over the same
 bounded search span. It reuses the span check's spherical envelope and horizon
@@ -1150,9 +1370,9 @@ Tests feed the resulting windows into the existing selector and meridian
 interval composition. Exposure plus overhead must fit a single surviving
 window; a narrow horizon obstruction can force waiting for the next one.
 Day-long dense SOFA checks verify the generated clear regions across sites.
-This is not yet the complete availability compiler: darkness,
-immutable constraint identity, IPC, and production dispatch binding
-remain separate requirements. The native integration must not treat these
+This is not the complete availability compiler: darkness and the production
+session remain missing. Immutable constraints and IPC bindings are implemented
+by later layers. The native integration must not treat these
 altitude windows alone as an observing assignment or hardware permit.
 
 `meridian_windows` now constructs conservative upper-meridian exclusion windows
@@ -1239,8 +1459,8 @@ This core check returns a decision, never `Run`, a new command, or a replay perm
 feasibility result requires the original one-shot command from the current live
 session and local native checks. A recovered pending command remains uncertain
 evidence. The durable journal commits these checks through the entry points
-below, exposed in IPC 7. The native before-hook boundary still needs to adopt
-them before production dispatch; the existing preview gains no authority.
+below, exposed in IPC 7. The merged internal adapter calls them after native
+before-hooks; the preview gains no acquisition authority.
 
 Geometry preparation has an opaque, versioned checkpoint for local persistence.
 Restore requires a separately compiled binding from the original trusted program
@@ -1288,8 +1508,8 @@ A program plus a large horizon may exceed this transport limit even when each
 is valid separately; refuse it rather than thinning the horizon or dropping
 constraints. Compilation runs on the blocking storage worker. Process tests kill
 and restart the Windows sidecar after issued work and capture reservation,
-checking that neither can be dispatched twice. The plugin adapter and artifact
-pin must be updated together before this mode can be used from N.I.N.A.
+checking that neither can be dispatched twice. Plugin PRs #21-25 updated the
+adapter and artifact pin together; the internal N.I.N.A. probe exercises them.
 
 After a prepared capture is reserved, native before-exposure hooks can still
 consume its observing window. `check_geometry_capture_dispatch` rechecks the
@@ -1308,7 +1528,7 @@ program-only and legacy entry points preserve mode separation. `Continue` is not
 readiness; even `Acquire` is only fresh feasibility for the original live-session
 reservation, not a replay grant. The host must retain its one-shot dispatch
 authority and revalidate native ownership and safety at the actual boundary.
-Native adoption remains required, and no published plugin gains authority.
+The internal native adapter adopts this check; the preview gains no authority.
 
 `check_geometry_pending_dispatch` requires the exact pending command, fresh
 constraints, current equipment configuration and boundary state. In one writer
@@ -1451,20 +1671,55 @@ coordinator must separately reserve outstanding allocation and bind intent
 provenance before an executor can use it. Existing program and IPC contracts
 are unchanged.
 
-- [ ] Add opt-in meta storage, migrations, backup/restore, and stable mappings.
-- [ ] Model sites, rig configurations, objectives, recipes, and contribution plans.
+- [x] Add separate owned meta storage, transactional migrations, snapshot
+  backup/restore, UUID identities and explicit catalog mapping primitives (#488).
+- [x] Persist immutable sites and rig configurations with shared validation (#489).
+- [ ] Merge and validate the opt-in operator API and identity UI (#490/#494/#495).
+- [ ] Merge the shared objective/contribution model and persisted intent
+  (#492/#493), then add the actual objective/configuration editor.
 - [ ] Link existing catalogs without rewriting TS history or merging names.
 - [ ] Add scoped project views that distinguish global and rig-local projects.
+- [ ] Define PSF Guard-owned per-rig catalog schemas and versioned access
+  interfaces; remove TS-table assumptions from new Director code.
+- [ ] Implement explicit TS import/sync connections in Settings/UI, with a
+  bidirectional field/capability matrix, GUID mapping, preview/apply, conflict
+  and unsupported-data reports. Preserve published Sync endpoint compatibility.
+- [ ] Migrate copied real catalogs into native storage with backup/rollback,
+  stable URLs/identity and grading/calibration/processing parity. Never mutate
+  an external TS source schema in place.
 
 Gate: one project references two rigs/catalogs with different FOVs and distinct
 short/long objectives; identities survive catalog relocation and projections
 rebuild without counting mirrored captures twice.
 
+Schema-independence gate: a native per-rig catalog with no TS-shaped schema
+supports the normal catalog/grading/calibration/processing workflows and a
+Director contribution. Import then repeat bidirectional sync against supported
+TS versions, proving idempotent supported-field transfer and explicit reports
+for unsupported data. A same-name entity or relocated source cannot acquire a
+new identity accidentally. An old Sync plugin still works through its documented
+API; existing direct-TS catalogs continue to work during migration. This gate
+is not satisfied by the separate meta database alone.
+
 ### Phase 2: single-rig autonomous Director
 
 - [ ] Implement versioned allocation, acknowledgements, checkpoints, and limits.
-- [ ] Add durable event delivery, local recovery, offline operation, and status UI.
-- [ ] Support native sequence safety/hooks and explicit Sync coexistence rules.
+- [x] Implement the local ledger's durable reservation/preparation/outbox
+  primitives and crash/reopen tests; these do not include remote acknowledgement.
+- [ ] Add rig pairing, bounded cached offline authorization, remote inbox/outbox
+  acknowledgement, retry/backpressure and safe revision activation.
+- [ ] Add central rig telemetry ingestion and a permission-scoped live dashboard
+  with current operation, elapsed time, progress, freshness and disconnected states.
+- [ ] Add one resumable batch check-in path used by manual settings controls,
+  sequence actions, periodic checkpoints and end-of-session reconciliation.
+  Report counters/cursors and keep image uploads independent.
+- [ ] Support the full native item/condition/trigger hook contract, including
+  unsafe/recovery, nested waits, cancellation and cleanup; publish the tested
+  compatibility matrix, including third-party safety actions.
+- [ ] Ship capability-aware default operation policies through native N.I.N.A.
+  without optional plugins. Expose policy ownership and prevent duplicate native,
+  Director and plugin actions. Validate missing required devices/safety sources.
+- [ ] Prove explicit TS/Sync coexistence and the optional Chatstronomy adapter.
 - [ ] Implement the shared-core operation state machine and the TS-style native
   container/options contract. Test configured trigger order and frequency,
   nested operations, cancellation, and failure propagation in real N.I.N.A.
@@ -1477,10 +1732,27 @@ failed centering, reprioritization, network loss, restart, and operator stop.
 It never starts unauthorized work and reports ambiguous capture outcomes.
 It does not start an exposure across a meridian exclusion or below the effective
 local horizon, including after unexpectedly slow setup operations.
+Run the same complete session with default policies and no optional plugins,
+then with native and compatible plugin hooks (including unsafe/recovery). Test
+safety changes while a hook or nested wait runs and during cleanup. A slow hook
+causes fresh feasibility evaluation, not a duplicated action or stale exposure.
+
+Telemetry/offline gate: watch the rig in central PSF Guard, stop the server,
+continue within an already cached offline allocation, and restart the plugin and
+server. Then deliver a large backlog in bounded batches with dropped replies,
+duplicate events, cancellation and resumed cursors. The central view becomes
+stale during the outage and correct on reconnect; it does not show historic
+backfilled operations as current. Pending counts, grade revisions, timing data
+and attempt limits reconcile without double credit. Cached expiry, required
+evidence loss and storage pressure stop new work visibly. Repeat with deliberate
+end-of-night check-in and deferred image upload. No server availability or image
+copy is required for local safety or an already authorized offline session.
 
 ### Phase 3: timing-aware shared simulation
 
-- [ ] Instrument operations and learn contextual duration distributions.
+- [x] Record correlated monotonic preparation/capture durations in local evidence.
+- [ ] Complete all operation/hook instrumentation and central delivery; learn
+  contextual duration distributions with versioned, capability-aware defaults.
 - [ ] Add virtual-clock simulation, decision explanations, and replay fixtures.
 - [ ] Display uncertainty, constraints, and predicted versus actual progress.
 
@@ -1490,7 +1762,9 @@ than timetable catch-up. Live tests from phase 2 become replay regressions.
 
 ### Phase 4: quality and calibration feedback
 
-- [ ] Account for pending/accepted/rejected contributions and bounded reacquisition.
+- [x] Reserve local attempts and keep saved captures pending rather than accepted.
+- [ ] Reconcile central pending/accepted/rejected assessment revisions and bounded
+  reacquisition, including delayed batch delivery and late image availability.
 - [ ] Request replacement calibration when coverage is invalidated.
 - [ ] Connect project readiness and processing provenance to existing workflows.
 
@@ -1554,6 +1828,17 @@ contracts or execution behavior and before an experimental release.
   operator stop, safety loss, server disconnection, sidecar failure, and restart.
   Verify recovery reconciles actual execution without replaying a stale decision
   or starting work outside the assignment or local safety constraints.
+- Run the native-default session without optional sequencing/safety plugins,
+  then add native and third-party Advanced Sequencer hooks. Verify startup,
+  target/exposure hooks, conditions, unsafe/recovery, cancellation, nested
+  waits and cleanup. Missing extensions or unsupported contexts must fail
+  validation visibly. Inspect actual hook ordering, cadence and timings.
+- Watch the session in the central rig dashboard, including elapsed operations,
+  errors and stale/offline state. Stop the server and finish an authorized
+  offline block. Reconnect through manual and sequencer batch check-in, drop an
+  acknowledgement mid-batch and restart both ends. Confirm resumable cursors,
+  assessment reconciliation and bounded new allocation with no double credit.
+  Repeat with unavailable remote image files and deferred end-of-night upload.
 - In a separate coexistence pass, install TS and Sync and re-run their ordinary
   workflows. Check that conflicting acquisition ownership is rejected.
 - Run Chatstronomy with TS-only and Director-only sessions. Verify accurate,

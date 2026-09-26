@@ -9,6 +9,13 @@ Last updated: 2026-07-23
 > documentation. See [the contributor guide](../../CLAUDE.md) and the main
 > [README](../../README.md) for the live architecture and user workflow.
 
+Future direction, 2026-09-26: [Director's storage plan](director.md#native-catalogs-and-target-scheduler-exchange)
+retains meta/per-rig separation and catalog-scoped URLs but removes the long-term
+requirement for per-rig catalogs to use the Target Scheduler schema. TS data is
+imported and synced through explicit adapters and Settings/UI connections.
+Existing directly opened TS catalogs remain supported during the transition;
+this is not a completed migration or a change to the historical design below.
+
 ## 1. Goal
 
 Allow the **server** to operate on multiple N.I.N.A. scheduler SQLite databases simultaneously in a single session — regardless of whether it's launched from the Tauri app or via `psf-guard server`. Each database has its own set of image base directories. Users can navigate between databases; every read and write is scoped to the database the user selected.
