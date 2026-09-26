@@ -89,6 +89,7 @@ await using (var session = await RuntimeSession.StartAsync(args[0], "rig-1", sta
     Assert(await session.WaitForExitAsync() == 0, "restart handshake and shutdown");
 }
 await StorageChecks.RunAsync(args[0], args[1], started.Add);
+await PreparationChecks.RunAsync(args[0], args[1], started.Add);
 
 foreach (var pid in started)
 {
