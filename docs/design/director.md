@@ -504,6 +504,7 @@ Native capture building block: [journaled capture and save lifecycle, Director P
 Native simulator sequence: [ASCOM capture and FITS readback, Director PR #4](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/4).
 Planner bridge: [typed evaluation and Rust-selected native capture, Director PR #5](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/5).
 Execution storage: [durable attempt reservations and event outbox, PR #464](https://github.com/theatrus/psf-guard/pull/464).
+Storage IPC: [versioned ledger operations and process recovery, PR #465](https://github.com/theatrus/psf-guard/pull/465).
 
 The Director host pins N.I.N.A. `3.3.0.1058-nightly` and the tested sidecar by
 commit, CI run/artifact identity, SHA-256, and wire versions. The C# build consumes
