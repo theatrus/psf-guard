@@ -502,6 +502,7 @@ Plugin review: [N.I.N.A. 3.3 runtime host and development bundle, Director PR #1
 Live host validation: [isolated N.I.N.A. nightly smoke tests, Director PR #2](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/2).
 Native capture building block: [journaled capture and save lifecycle, Director PR #3](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/3).
 Native simulator sequence: [ASCOM capture and FITS readback, Director PR #4](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/4).
+Planner bridge: [typed evaluation and Rust-selected native capture, Director PR #5](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/5).
 
 The Director host pins N.I.N.A. `3.3.0.1058-nightly` and the tested sidecar by
 commit, CI run/artifact identity, SHA-256, and wire versions. The C# build consumes
@@ -528,12 +529,26 @@ mediator and native-header tests, a test-only sequencer probe ran the actual
 adapter in official nightly #58 with ASCOM OmniSim camera, mount, and filter wheel
 on 2026-09-25. It connected, unparked, slewed, captured three filtered one-second
 lights, reloaded their FITS pixels and `PGCAPID`, matched durable journals, parked,
-disconnected, and stopped its verified sidecar. This required no TS. The probe is
-excluded from the plugin ZIP and checks simulator context, not planning approval.
-Core authorization, ownership/safety lifetime, recovery, and server/sidecar
-feedback remain prerequisites for a production Director sequencer item and the
-full-stack gate. The native smoke test does not claim autofocus, guiding,
-meridian/horizon enforcement, or Sync/Chatstronomy coexistence coverage.
+disconnected, and stopped its verified sidecar. This required no TS. The probe
+is excluded from the plugin ZIP.
+
+The runtime host now exposes typed, bounded planning evaluation with immutable
+snapshots, exact integer identities, strict reply correlation, and cancellation
+integrated with its lifecycle. In a follow-on real nightly run, Rust selected
+each fixture goal and revalidated it after filter preparation at the adapter's
+dispatch callback. Each saved image incremented pending work, not accepted
+credit. Seven recorded decisions comprised six acquire results (selection and
+revalidation for each filter) followed by `wait: pending_assessment`. The run
+passed FITS/journal checks and cleanup; 102 automated tests also passed. C# does
+not implement the selection policy. These evaluations are recommendations for
+their snapshots, not durable authorization tokens.
+
+The fixture assignment and simulated-safe state are not a server allocation or
+recovery ledger. Durable attempt/event accounting, actual hardware-boundary
+ownership/safety, recovery, and server feedback remain prerequisites for a
+production Director sequencer item and the full-stack gate. The native smoke
+test does not claim autofocus, guiding, meridian/horizon enforcement, or
+Sync/Chatstronomy coexistence coverage.
 
 Baseline checked on 2026-09-25:
 
