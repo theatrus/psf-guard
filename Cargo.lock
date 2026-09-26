@@ -4186,6 +4186,7 @@ dependencies = [
  "mime_guess",
  "nalgebra",
  "psf-guard-director-core",
+ "psf-guard-director-meta",
  "rand 0.10.2",
  "rayon",
  "reflink-copy",
@@ -4255,6 +4256,16 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
+name = "psf-guard-director-meta"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde",
  "tempfile",
  "uuid",
 ]
