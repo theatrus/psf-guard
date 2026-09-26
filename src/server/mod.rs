@@ -6,6 +6,7 @@ pub mod cache;
 pub mod calibration_settings;
 pub mod catalog_install;
 pub mod database_context;
+pub mod director;
 pub mod embedded_static;
 pub mod export_job;
 pub mod export_settings;
@@ -73,6 +74,8 @@ pub struct ServerConfig {
     /// Allow HTTP clients to mutate the configured database list. Off by
     /// default for CLI servers; Tauri always enables it.
     pub allow_database_management: bool,
+    /// Explicit experimental coordination store, separate from every catalog.
+    pub director_meta: Option<PathBuf>,
     /// Trust every session-less caller even on a routable bind address, so a
     /// server with no user accounts stays open the way a localhost server is.
     /// Off by default. Loopback binds are trusted without it.
@@ -105,6 +108,7 @@ pub async fn run_server(
     pregeneration_config: PregenerationConfig,
     registry_path: Option<PathBuf>,
     allow_database_management: bool,
+    director_meta: Option<PathBuf>,
     allow_anonymous_access: bool,
     site_banner: Option<crate::config::SiteBannerConfig>,
     auth: Option<auth::ServerAuth>,
@@ -136,6 +140,7 @@ pub async fn run_server(
         pregeneration_config,
         registry_path,
         allow_database_management,
+        director_meta,
         allow_anonymous_access,
         site_banner,
         auth,
@@ -206,6 +211,15 @@ async fn run_server_internal(
         config.auth.is_some(),
     )?;
 
+    director::validate_registry_separation(
+        config.director_meta.as_deref(),
+        config.registry_path.as_deref(),
+    )?;
+    let director = director::Service::configured(
+        config.director_meta.as_deref(),
+        config.allow_database_management,
+    )?;
+
     tracing::info!("🚀 Starting PSF Guard server");
     tracing::info!(
         "📊 Databases ({}):{}",
@@ -240,7 +254,8 @@ async fn run_server_internal(
         config.pregeneration_config.clone(),
         config.astrometry_config.clone(),
     ) {
-        Ok(state) => {
+        Ok(mut state) => {
+            state.director = director;
             tracing::info!("✅ Application state initialized successfully");
             state.set_registry_path(config.registry_path.clone());
             state.set_allow_database_management(config.allow_database_management);
@@ -719,6 +734,7 @@ async fn run_server_internal(
             axum::routing::delete(processing_setups::delete_setup),
         )
         .route("/update-notice", get(handlers::get_update_notice))
+        .nest("/director/v1", director::routes())
         .route(
             "/astrometry/capabilities",
             get(handlers::get_astrometry_capabilities),

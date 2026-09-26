@@ -39,6 +39,8 @@ pub struct AppState {
     /// set, the CRUD endpoints (`POST/PUT/DELETE /api/databases/...`) persist
     /// changes here. `None` disables the CRUD endpoints (e.g. in tests).
     pub registry_path: RwLock<Option<PathBuf>>,
+    /// Startup-only opt-in. Never inferred from a catalog or the registry path.
+    pub director: Option<Arc<crate::server::director::Service>>,
     /// Serializes read-modify-write cycles on the processing-setups file that
     /// sits beside the registry. The file is tiny; a mutex beats a cache.
     pub processing_setups_write: Mutex<()>,
@@ -420,6 +422,7 @@ impl AppState {
             pregeneration_config,
             cache_dir_root: cache_dir.clone(),
             registry_path: RwLock::new(None),
+            director: None,
             processing_setups_write: Mutex::new(()),
             allow_database_management: RwLock::new(false),
             site_banner: RwLock::new(None),
@@ -594,6 +597,7 @@ impl AppState {
             pregeneration_config: crate::cli::PregenerationConfig::default(),
             cache_dir_root: "/tmp/psf-guard-test".to_string(),
             registry_path: RwLock::new(None),
+            director: None,
             processing_setups_write: Mutex::new(()),
             allow_database_management: RwLock::new(false),
             site_banner: RwLock::new(None),

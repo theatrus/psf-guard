@@ -1359,8 +1359,12 @@ and the published preview are unchanged.
 
 The `psf-guard-director-meta` crate starts the coordination store, separately
 from catalogs and the local execution ledger. It is linked into PSF Guard but
-has no automatic open, server route, or registry migration. Hosts must explicitly
-create a new file or open a recognized existing file. Schema 1 stores the
+has no implicit registry migration or catalog adoption. A CLI server can opt in
+with `--director-meta` and database management; omission opens no store. The
+[metadata API](../DIRECTOR.md) exposes authenticated, bounded global-project
+listing, creation and revision-checked renames. It grants no rig or acquisition
+authority. Other hosts must explicitly create a new file or open a recognized
+existing file. Schema 1 stores the
 coordinator instance UUID, global project and rig identities, originating catalog
 identities, and explicit catalog/source-project-GUID links. Names and URL slugs
 never establish identity; rigs outlive catalogs, and one global project may link
@@ -1407,7 +1411,7 @@ coordinator before switching to a restored path. Online replacement and automate
 restore/configuration switching are not supported.
 
 This is identity and configuration storage only. Objectives, recipes,
-allocation authority, enrollment/permissions, catalog adoption, HTTP and UI remain
+allocation authority, rig enrollment/permissions, catalog adoption and UI remain
 required before the phase is complete. No assignment or hardware authority is
 created by registering a rig or catalog.
 
