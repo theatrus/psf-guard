@@ -628,7 +628,10 @@ async fn busy_database_returns_scoped_error_and_retry_cannot_duplicate_work() {
         ),
     )
     .await;
-    let frame = read_frame(&mut client, Duration::from_secs(4))
+    // This deliberately exhausts SQLite's two-second busy timeout. Allow for
+    // runner scheduling delays; this test asserts the scoped error and retry
+    // identity, not wall-clock latency. Production deadlines remain unchanged.
+    let frame = read_frame(&mut client, Duration::from_secs(30))
         .await
         .unwrap()
         .unwrap();
