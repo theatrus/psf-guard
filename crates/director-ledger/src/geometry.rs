@@ -140,6 +140,20 @@ impl Ledger {
         self.advance_preparation_inner(id, state, Some(current))
     }
 
+    /// Fresh feasibility for one linked reservation, never a recovery replay grant.
+    pub fn check_geometry_capture_dispatch(
+        &mut self,
+        preparation_id: &str,
+        capture_id: &str,
+        state: State,
+        configuration: &Configuration,
+        current: &Constraints,
+    ) -> Result<Decision, Error> {
+        self.check_geometry_mode(true)?;
+        self.check_program_configuration(configuration)?;
+        self.check_capture_dispatch_inner(preparation_id, capture_id, state, Some(current))
+    }
+
     pub fn reserve_geometry_prepared(
         &mut self,
         id: &str,

@@ -1273,8 +1273,28 @@ and restart the Windows sidecar after issued work and capture reservation,
 checking that neither can be dispatched twice. The plugin adapter and artifact
 pin must be updated together before this mode can be used from N.I.N.A.
 
-This is a Rust ledger path exposed through IPC 6, not yet the native dispatch path and
-not a hardware permit. Final native dispatch still needs fresh revalidation.
+After a prepared capture is reserved, native before-exposure hooks can still
+consume its observing window. `check_geometry_capture_dispatch` rechecks the
+exact preparation/capture link with fresh state, full constraints and equipment
+configuration. It accepts only a still-reserved attempt, never saved, failed or
+uncertain evidence. The temporary progress projection adds back only that
+reservation's attempt for the core's feasibility calculation; the stored attempt
+budget is not refunded, and no new capture is reserved. Completed preparation
+is not charged twice; exposure and remaining capture overhead must still fit.
+
+The check atomically commits the preparation clock and any new sticky refusal.
+An event-write failure rolls both back. A changed constraint or closed window
+cannot be undone by reopening the ledger or restoring the old conditions; safety
+stops retain precedence and verified save receipts remain admissible. Matching
+program-only and legacy entry points preserve mode separation. `Continue` is not
+readiness; even `Acquire` is only fresh feasibility for the original live-session
+reservation, not a replay grant. The host must retain its one-shot dispatch
+authority and revalidate native ownership and safety at the actual boundary.
+IPC/native adoption remains required, and no published plugin gains authority.
+
+Geometry planning is exposed through IPC 6; this new dispatch check still needs
+IPC and native adoption. Neither path is a hardware permit.
+Final native dispatch still needs fresh revalidation.
 Compilation is bounded by the program/geometry limits but can be expensive for
 many distinct targets; schedule it off the interactive/dispatch path. Shared
 darkness calculation, other observing criteria, and the full server/N.I.N.A.

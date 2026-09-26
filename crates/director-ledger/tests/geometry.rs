@@ -16,6 +16,9 @@ use tempfile::TempDir;
 
 const START: u64 = 1_790_409_600_000;
 
+#[path = "geometry/capture_dispatch.rs"]
+mod capture_dispatch;
+
 #[derive(Clone)]
 struct Fixture {
     program: Program,

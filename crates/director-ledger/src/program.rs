@@ -114,6 +114,18 @@ impl Ledger {
         self.advance_preparation_inner(id, state, None)
     }
 
+    /// Fresh feasibility for one linked reservation, never a recovery replay grant.
+    pub fn check_program_capture_dispatch(
+        &mut self,
+        preparation_id: &str,
+        capture_id: &str,
+        state: State,
+        configuration: &Configuration,
+    ) -> Result<Decision, Error> {
+        self.check_program_configuration(configuration)?;
+        self.check_capture_dispatch_inner(preparation_id, capture_id, state, None)
+    }
+
     pub fn reserve_program_prepared(
         &mut self,
         id: &str,

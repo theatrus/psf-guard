@@ -7,6 +7,7 @@ use psf_guard_director_core::preparation::{
 };
 use psf_guard_director_core::program::LocalState;
 use sha2::{Digest, Sha256};
+mod capture_dispatch;
 mod reducer;
 use reducer::Reducer;
 
