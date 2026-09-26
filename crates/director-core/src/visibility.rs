@@ -10,6 +10,8 @@ use chrono::{Datelike, Timelike};
 use serde::{Deserialize, Serialize};
 mod span;
 pub use span::{check_altitude_span, AltitudeSpan};
+mod windows;
+pub use windows::{altitude_windows, AltitudeWindows};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -90,6 +92,7 @@ pub enum VisibilityError {
     InvalidSpan,
     UnresolvedSpan,
     SpanBudgetExceeded,
+    TooManyVisibilityWindows,
 }
 
 fn bounded(value: f64, minimum: f64, maximum: f64) -> bool {

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 const MOTION_DEGREES_PER_SECOND: f64 = 0.01;
 const ANGULAR_GUARD_DEGREES: f64 = 0.001;
 const MAX_SPAN_MS: u64 = 86_400_000;
-const MAX_OBSERVATIONS: usize = 8192;
+pub(super) const MAX_OBSERVATIONS: usize = 8192;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
@@ -61,18 +61,7 @@ fn check_span(
     span: Interval,
     budget: usize,
 ) -> Result<AltitudeSpan, VisibilityError> {
-    if span.start_ms >= span.end_ms || span.end_ms - span.start_ms > MAX_SPAN_MS {
-        return Err(VisibilityError::InvalidSpan);
-    }
-    // Validate both endpoints before reporting even a blocked start: stale or
-    // unsupported end evidence means this is not a valid whole-span request.
-    let first = observe(position, site, orientation, span.start_ms)?;
-    let last = observe(position, site, orientation, span.end_ms)?;
-    if tai_minus_utc_day(span.start_ms)? != tai_minus_utc_day(span.end_ms)? {
-        // A single constant DUT1 cannot model an offset adjustment. The caller
-        // cannot repair this by extending the evidence's declared validity.
-        return Err(VisibilityError::EarthOrientationDiscontinuity);
-    }
+    let [first, last] = validate_span(position, site, orientation, span)?;
     for (at_ms, point) in [(span.start_ms, first), (span.end_ms, last)] {
         if !altitude_allowed(
             horizon,
@@ -89,7 +78,7 @@ fn check_span(
         if observations >= budget {
             return Err(VisibilityError::SpanBudgetExceeded);
         }
-        let midpoint = part.start_ms + (part.end_ms - part.start_ms) / 2;
+        let (midpoint, radius) = midpoint_and_radius(part);
         let point = observe(position, site, orientation, midpoint)?;
         observations += 1;
         if !altitude_allowed(
@@ -100,10 +89,7 @@ fn check_span(
         )? {
             return Ok(AltitudeSpan::Blocked { at_ms: midpoint });
         }
-        // ceil half-span also covers odd millisecond lengths and both endpoints.
-        let radius = (part.end_ms - midpoint) as f64 / 1000.0 * MOTION_DEGREES_PER_SECOND
-            + ANGULAR_GUARD_DEGREES;
-        if cap_clear(horizon, limits, point, radius)? {
+        if classify_cap(horizon, limits, point, radius)? == CapClearance::Clear {
             continue;
         }
         if part.end_ms - part.start_ms <= 1 {
@@ -123,6 +109,32 @@ fn check_span(
     Ok(AltitudeSpan::Clear)
 }
 
+pub(super) fn validate_span(
+    position: IcrsPosition,
+    site: Site,
+    orientation: EarthOrientation,
+    span: Interval,
+) -> Result<[ObservedPosition; 2], VisibilityError> {
+    if span.start_ms >= span.end_ms || span.end_ms - span.start_ms > MAX_SPAN_MS {
+        return Err(VisibilityError::InvalidSpan);
+    }
+    // Validate both endpoints before returning any coverage or blocked result.
+    let first = observe(position, site, orientation, span.start_ms)?;
+    let last = observe(position, site, orientation, span.end_ms)?;
+    if tai_minus_utc_day(span.start_ms)? != tai_minus_utc_day(span.end_ms)? {
+        return Err(VisibilityError::EarthOrientationDiscontinuity);
+    }
+    Ok([first, last])
+}
+
+pub(super) fn midpoint_and_radius(span: Interval) -> (u64, f64) {
+    let midpoint = span.start_ms + (span.end_ms - span.start_ms) / 2;
+    // ceil half-span covers odd millisecond lengths and both endpoints.
+    let radius = (span.end_ms - midpoint) as f64 / 1000.0 * MOTION_DEGREES_PER_SECOND
+        + ANGULAR_GUARD_DEGREES;
+    (midpoint, radius)
+}
+
 fn tai_minus_utc_day(unix_ms: u64) -> Result<f64, VisibilityError> {
     let millis = i64::try_from(unix_ms).map_err(|_| VisibilityError::UnsupportedTime)?;
     let time =
@@ -131,27 +143,51 @@ fn tai_minus_utc_day(unix_ms: u64) -> Result<f64, VisibilityError> {
         .map_err(|_| VisibilityError::AstronomyUnavailable)
 }
 
-fn cap_clear(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CapClearance {
+    Clear,
+    Blocked,
+    Unresolved,
+}
+
+pub(super) fn classify_cap(
     horizon: &Horizon,
     limits: AltitudeLimits,
     center: ObservedPosition,
     radius: f64,
-) -> Result<bool, VisibilityError> {
+) -> Result<CapClearance, VisibilityError> {
     let lower = center.altitude_degrees - radius;
     let upper = center.altitude_degrees + radius;
-    if lower
-        <= limits
-            .rig_minimum_degrees
-            .max(limits.project_minimum_degrees)
-        || upper
-            >= limits
-                .rig_maximum_degrees
-                .min(limits.project_maximum_degrees)
-    {
-        return Ok(false);
+    let minimum = limits
+        .rig_minimum_degrees
+        .max(limits.project_minimum_degrees);
+    let maximum = limits
+        .rig_maximum_degrees
+        .min(limits.project_maximum_degrees);
+    if minimum >= maximum || upper <= minimum || lower >= maximum {
+        return Ok(CapClearance::Blocked);
     }
+    let mut clear = lower > minimum && upper < maximum;
+    if let Some((horizon_minimum, horizon_maximum)) = horizon_range(horizon, center, radius)? {
+        if upper <= horizon_minimum + limits.horizon_offset_degrees {
+            return Ok(CapClearance::Blocked);
+        }
+        clear &= lower > horizon_maximum + limits.horizon_offset_degrees;
+    }
+    Ok(if clear {
+        CapClearance::Clear
+    } else {
+        CapClearance::Unresolved
+    })
+}
+
+fn horizon_range(
+    horizon: &Horizon,
+    center: ObservedPosition,
+    radius: f64,
+) -> Result<Option<(f64, f64)>, VisibilityError> {
     let Horizon::Custom { points } = horizon else {
-        return Ok(true);
+        return Ok(None);
     };
     // Spherical metric ds^2 = dh^2 + cos(h)^2 da^2. On this cap, |h| is
     // bounded by |center altitude| + radius. Integrating gives |da| <= r/cos(h).
@@ -162,19 +198,23 @@ fn cap_clear(
     } else {
         (radius / maximum_latitude.to_radians().cos()).min(180.0)
     };
-    let maximum = if azimuth_radius >= 180.0 {
+    let range = if azimuth_radius >= 180.0 {
         points
             .iter()
-            .map(|p| p.altitude_degrees)
-            .fold(-90.0, f64::max)
+            .fold((90.0_f64, -90.0_f64), |(minimum, maximum), p| {
+                (
+                    minimum.min(p.altitude_degrees),
+                    maximum.max(p.altitude_degrees),
+                )
+            })
     } else {
         let azimuth = center.azimuth_degrees.rem_euclid(360.0);
         let start = azimuth - azimuth_radius;
         let end = azimuth + azimuth_radius;
-        let mut maximum = horizon
-            .altitude(start)?
-            .unwrap()
-            .max(horizon.altitude(end)?.unwrap());
+        let left = horizon.altitude(start)?.unwrap();
+        let right = horizon.altitude(end)?.unwrap();
+        let mut minimum = left.min(right);
+        let mut maximum = left.max(right);
         // A linear curve reaches its extrema at endpoints or knots. Include ALL
         // knots in the swept arc, including both sides of the north discontinuity.
         for point in points {
@@ -183,17 +223,62 @@ fn cap_clear(
                 .any(|offset| (start..=end).contains(&(point.azimuth_degrees + offset)))
             {
                 maximum = maximum.max(point.altitude_degrees);
+                minimum = minimum.min(point.altitude_degrees);
             }
         }
-        maximum
+        (minimum, maximum)
     };
-    Ok(lower > maximum + limits.horizon_offset_degrees)
+    Ok(Some(range))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::visibility::HorizonPoint;
+
+    #[test]
+    fn narrow_horizon_notch_cannot_be_certified_fully_blocked() {
+        let horizon = Horizon::Custom {
+            points: vec![
+                HorizonPoint {
+                    azimuth_degrees: 0.0,
+                    altitude_degrees: 80.0,
+                },
+                HorizonPoint {
+                    azimuth_degrees: 100.0_f64.next_down(),
+                    altitude_degrees: 80.0,
+                },
+                HorizonPoint {
+                    azimuth_degrees: 100.0,
+                    altitude_degrees: -80.0,
+                },
+                HorizonPoint {
+                    azimuth_degrees: 100.0_f64.next_up(),
+                    altitude_degrees: 80.0,
+                },
+                HorizonPoint {
+                    azimuth_degrees: 360.0,
+                    altitude_degrees: 80.0,
+                },
+            ],
+        };
+        let limits = AltitudeLimits {
+            rig_minimum_degrees: -90.0,
+            project_minimum_degrees: -90.0,
+            horizon_offset_degrees: 0.0,
+            rig_maximum_degrees: 90.0,
+            project_maximum_degrees: 90.0,
+        };
+        let center = ObservedPosition {
+            azimuth_degrees: 100.0001,
+            altitude_degrees: 40.0,
+            hour_angle_degrees: 0.0,
+        };
+        assert_eq!(
+            classify_cap(&horizon, limits, center, 0.001).unwrap(),
+            CapClearance::Unresolved
+        );
+    }
 
     #[test]
     fn exhausting_observation_budget_never_returns_clear() {
@@ -268,7 +353,10 @@ mod tests {
                 altitude_degrees: 40.0,
                 hour_angle_degrees: 0.0,
             };
-            assert!(!cap_clear(&horizon, limits, point, 0.001).unwrap());
+            assert_ne!(
+                classify_cap(&horizon, limits, point, 0.001).unwrap(),
+                CapClearance::Clear
+            );
         }
         let horizon = Horizon::Custom {
             points: vec![
@@ -287,6 +375,9 @@ mod tests {
             altitude_degrees: 40.0,
             hour_angle_degrees: 0.0,
         };
-        assert!(!cap_clear(&horizon, limits, point, 0.001).unwrap());
+        assert_ne!(
+            classify_cap(&horizon, limits, point, 0.001).unwrap(),
+            CapClearance::Clear
+        );
     }
 }
