@@ -178,6 +178,15 @@ jobs:
         cd static
         npx playwright test
 
+    - name: Run isolated Director UI tests
+      env:
+        PSF_GUARD_E2E_BINARY: ${{ runner.temp }}/psf-guard-bin/psf-guard
+        CI: 'true'
+      run: |
+        cd static
+        npm run build
+        npx playwright test --config playwright.director.config.ts
+
     - name: Upload Playwright report on failure
       if: failure()
       uses: actions/upload-artifact@v7

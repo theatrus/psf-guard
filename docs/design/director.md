@@ -1419,8 +1419,15 @@ include catalogs, images, or Director's local execution journal. Stop the old
 coordinator before switching to a restored path. Online replacement and automated
 restore/configuration switching are not supported.
 
+The opt-in Director management page lists, creates and renames global projects,
+sites and rigs, independently of catalog selection. It shows stable UUIDs and
+revision checks, honors read-only accounts, and keeps the selected collection in
+the URL. Real-server browser tests cover create, reload, conflicting renames and
+mobile layout without any catalogs or acquisition authority. Configuration and
+objective editing are not yet part of this screen.
+
 This is identity and configuration storage only. Objectives, recipes,
-allocation authority, rig enrollment/permissions, catalog adoption and UI remain
+allocation authority, rig enrollment/permissions, catalog adoption and planning UI remain
 required before the phase is complete. No assignment or hardware authority is
 created by registering a rig or catalog.
 
