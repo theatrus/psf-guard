@@ -90,6 +90,37 @@ fn ready(ledger: &mut Ledger) -> State {
 }
 
 #[test]
+fn legacy_reserved_capture_check_retains_one_attempt_and_sticky_refusal() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("execution.sqlite");
+    let mut ledger = open(&path);
+    begin(&mut ledger);
+    let mut state = ready(&mut ledger);
+    ledger
+        .reserve_prepared("prep-1", "capture", state.clone())
+        .unwrap();
+    assert!(matches!(
+        ledger.check_prepared_capture_dispatch("prep-1", "capture", state.clone()),
+        Ok(Decision::Acquire { .. })
+    ));
+    state.conditions_valid_until_ms = state.now_ms;
+    let refusal = ledger
+        .check_prepared_capture_dispatch("prep-1", "capture", state.clone())
+        .unwrap();
+    assert!(matches!(refusal, Decision::CheckIn { .. }));
+    drop(ledger);
+    let mut ledger = open(&path);
+    state.conditions_valid_until_ms += 120_000;
+    assert_eq!(
+        ledger
+            .check_prepared_capture_dispatch("prep-1", "capture", state)
+            .unwrap(),
+        refusal
+    );
+    assert_eq!(ledger.events_after(0, 256).unwrap().len(), 1);
+}
+
+#[test]
 fn lost_reply_and_reopen_never_repeat_native_dispatch() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("execution.sqlite");
