@@ -6,6 +6,16 @@
 
 ## Added
 
+- The server is an **MCP server** at `/api/mcp`, so an agent such as
+  Claude Code can list catalogs, read grades and quality evidence, score
+  sequences, apply grades, and start imports, quality scans and WBPP runs.
+  Write tools follow the caller's role, and the WBPP tools follow the
+  database-management gate as the UI does. See `docs/MCP.md`.
+- **API tokens** for scripts and MCP clients: mint one under **Settings →
+  Users → API tokens** or with `psf-guard users token create`, send it as
+  `Authorization: Bearer psfg_…`. A token acts as its user, can be made
+  read only or given an expiry, and is shown once. Revoke it in the same
+  place or with `users token revoke`; removing a user revokes their tokens.
 - **Automatic import.** A database can scan its image directories on its
   own, on open and on a schedule, and import the lights and calibration
   frames it does not have yet. Turn it on per database under **Settings →

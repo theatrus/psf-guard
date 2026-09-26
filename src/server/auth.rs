@@ -18,7 +18,7 @@ use std::{
 };
 
 use crate::{
-    auth_registry::{AuthRegistry, AuthUserRecord},
+    auth_registry::{AuthRegistry, AuthTokenRecord, AuthUserRecord, TOKEN_PREFIX},
     config::ServerAuthConfig,
     server::{api::ApiResponse, state::AppState},
 };
@@ -35,11 +35,16 @@ const LOGIN_ATTEMPT_BURST: f64 = 4.0;
 pub struct RequestAccess {
     pub role: AccessRole,
     pub username: Option<String>,
+    /// True when an `Authorization: Bearer psfg_…` token authenticated the
+    /// request rather than a browser session. Token management stays with
+    /// sessions, so a token cannot mint more tokens.
+    pub api_token: bool,
 }
 
 #[derive(Clone)]
 pub struct ServerAuth {
     users: Arc<RwLock<Vec<AuthUser>>>,
+    tokens: Arc<RwLock<Vec<AuthTokenRecord>>>,
     sessions: Arc<Mutex<HashMap<String, Session>>>,
     login_rate_limit: Arc<Mutex<LoginRateLimit>>,
     user_management_lock: Arc<Mutex<()>>,
@@ -70,6 +75,31 @@ pub struct AuthUserSummary {
     pub role: AccessRole,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
+}
+
+/// What a client may learn about a token after it is minted: everything but
+/// the secret.
+#[derive(Debug, Clone, Serialize)]
+pub struct AuthTokenSummary {
+    pub id: String,
+    pub username: String,
+    pub label: String,
+    /// The access the token grants now: its user's role, narrowed to
+    /// read-only when the token asked for that.
+    pub role: AccessRole,
+    pub read_only: bool,
+    pub created_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
+}
+
+/// A freshly minted token. The `token` field is the only time the secret
+/// leaves the server.
+#[derive(Debug, Clone, Serialize)]
+pub struct MintedToken {
+    pub token: String,
+    pub summary: AuthTokenSummary,
+    pub tokens: Vec<AuthTokenSummary>,
 }
 
 #[derive(Clone)]
@@ -132,6 +162,7 @@ impl ServerAuth {
         }
         Ok(Some(Self {
             users: Arc::new(RwLock::new(users)),
+            tokens: Arc::new(RwLock::new(registry.tokens.clone())),
             sessions: Arc::new(Mutex::new(HashMap::new())),
             login_rate_limit: Arc::new(Mutex::new(LoginRateLimit {
                 available: LOGIN_ATTEMPT_BURST,
@@ -338,7 +369,107 @@ impl ServerAuth {
                 .retain(|_, session| !changed.contains(session.username.as_str()));
         }
         *users = next_users;
+        drop(users);
+        *self.tokens.write().unwrap() = registry.tokens;
         Ok(result)
+    }
+
+    /// Resolve a bearer token to the user and role it grants now. An expired
+    /// token, a token whose user is gone, or an unknown secret answer `None`.
+    pub(crate) fn token_access(&self, secret: &str) -> Option<(String, AccessRole)> {
+        let now = crate::auth_registry::unix_now();
+        let token = {
+            let tokens = self.tokens.read().unwrap();
+            tokens
+                .iter()
+                .find(|token| token.matches(secret))
+                .filter(|token| !token.is_expired_at(now))
+                .cloned()?
+        };
+        let user_role = self
+            .users
+            .read()
+            .unwrap()
+            .iter()
+            .find(|user| user.username == token.username)
+            .map(|user| user.role)?;
+        let role = if token.read_only {
+            AccessRole::ReadOnly
+        } else {
+            user_role
+        };
+        Some((token.username, role))
+    }
+
+    fn token_summary(&self, token: &AuthTokenRecord) -> AuthTokenSummary {
+        let user_role = self
+            .users
+            .read()
+            .unwrap()
+            .iter()
+            .find(|user| user.username == token.username)
+            .map(|user| user.role)
+            .unwrap_or(AccessRole::ReadOnly);
+        AuthTokenSummary {
+            id: token.id.clone(),
+            username: token.username.clone(),
+            label: token.label.clone(),
+            role: if token.read_only {
+                AccessRole::ReadOnly
+            } else {
+                user_role
+            },
+            read_only: token.read_only,
+            created_at: token.created_at,
+            expires_at: token.expires_at,
+        }
+    }
+
+    /// Tokens visible to a caller: every token, or one user's when `owner`
+    /// is given. Newest first.
+    pub(crate) fn token_summaries(&self, owner: Option<&str>) -> Vec<AuthTokenSummary> {
+        let tokens = self.tokens.read().unwrap().clone();
+        let mut summaries = tokens
+            .iter()
+            .filter(|token| owner.is_none_or(|owner| token.username == owner))
+            .map(|token| self.token_summary(token))
+            .collect::<Vec<_>>();
+        summaries.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        summaries
+    }
+
+    pub(crate) fn create_token(
+        &self,
+        registry_path: &FilePath,
+        username: &str,
+        label: &str,
+        read_only: bool,
+        expires_in_days: Option<u32>,
+    ) -> anyhow::Result<MintedToken> {
+        let (secret, record) = AuthTokenRecord::mint(username, label, read_only, expires_in_days)?;
+        let stored = record.clone();
+        self.update_users(registry_path, move |registry| registry.add_token(stored))?;
+        Ok(MintedToken {
+            token: secret,
+            summary: self.token_summary(&record),
+            tokens: self.token_summaries(None),
+        })
+    }
+
+    pub(crate) fn revoke_token(
+        &self,
+        registry_path: &FilePath,
+        id: &str,
+        owner: Option<&str>,
+    ) -> anyhow::Result<()> {
+        self.update_users(registry_path, |registry| {
+            registry.revoke_token(id, owner).map(|_| ())
+        })
     }
 
     pub(crate) fn add_user(
@@ -556,20 +687,38 @@ pub async fn authorize_api(
         request.extensions_mut().insert(RequestAccess {
             role: AccessRole::ReadWrite,
             username: None,
+            api_token: false,
         });
         return next.run(request).await;
     };
 
-    let Some(session) = session_from_headers(&auth, request.headers()) else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            [(CACHE_CONTROL, "no-store")],
-            Json(ApiResponse::<()>::error("Sign in to continue".to_string())),
-        )
-            .into_response();
+    // A bearer token wins over any cookie the client also sent: a script that
+    // presents one wants to be judged by it.
+    let (username, role, api_token) = if let Some(secret) = bearer_token(request.headers()) {
+        let Some((username, role)) = auth.token_access(secret) else {
+            return (
+                StatusCode::UNAUTHORIZED,
+                [(CACHE_CONTROL, "no-store")],
+                Json(ApiResponse::<()>::error(
+                    "The API token is invalid, expired, or revoked".to_string(),
+                )),
+            )
+                .into_response();
+        };
+        (username, role, true)
+    } else {
+        let Some(session) = session_from_headers(&auth, request.headers()) else {
+            return (
+                StatusCode::UNAUTHORIZED,
+                [(CACHE_CONTROL, "no-store")],
+                Json(ApiResponse::<()>::error("Sign in to continue".to_string())),
+            )
+                .into_response();
+        };
+        (session.username, session.role, false)
     };
-    let can_compute = auth.can_compute(session.role);
-    if session.role == AccessRole::ReadOnly && requires_write(request.method(), path, can_compute) {
+    let can_compute = auth.can_compute(role);
+    if role == AccessRole::ReadOnly && requires_write(request.method(), path, can_compute) {
         return (
             StatusCode::FORBIDDEN,
             [(CACHE_CONTROL, "no-store")],
@@ -581,8 +730,9 @@ pub async fn authorize_api(
     }
 
     request.extensions_mut().insert(RequestAccess {
-        role: session.role,
-        username: Some(session.username),
+        role,
+        username: Some(username),
+        api_token,
     });
     let mut response = next.run(request).await;
     mark_response_private(&mut response);
@@ -653,6 +803,23 @@ fn same_origin_request_is_https(headers: &HeaderMap) -> Option<bool> {
     Some(scheme_is_https)
 }
 
+/// The secret from `Authorization: Bearer psfg_…`. Other bearer values are
+/// not ours (remote sync keys live on routes this middleware skips) and read
+/// as no token, so the cookie still gets its turn.
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let value = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .trim();
+    let (scheme, rest) = value.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+    let secret = rest.trim();
+    secret.starts_with(TOKEN_PREFIX).then_some(secret)
+}
+
 fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers
         .get(COOKIE)?
@@ -673,6 +840,12 @@ fn is_public_auth_path(path: &str) -> bool {
 
 fn requires_write(method: &Method, path: &str, can_compute: bool) -> bool {
     if matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
+        return false;
+    }
+    // MCP carries every operation as a POST and ends sessions with DELETE;
+    // each tool checks the role itself. Token management checks ownership
+    // in its handlers so a viewer can mint and revoke their own tokens.
+    if path == "/mcp" || path.starts_with("/mcp/") || path.starts_with("/auth/tokens") {
         return false;
     }
     if method != Method::POST {

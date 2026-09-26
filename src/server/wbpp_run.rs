@@ -290,7 +290,7 @@ pub async fn update_pixinsight_settings(
 // Runs
 // ----------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct StartWbppRunRequest {
     #[serde(default)]
     pub project_id: Option<i32>,

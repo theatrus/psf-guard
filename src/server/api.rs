@@ -1075,7 +1075,7 @@ pub struct FileStatusResponse {
 
 // Sequence analysis request/response types
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct SequenceAnalysisQuery {
     /// Analyze one target. Exactly one scope must be supplied.
     pub target_id: Option<i32>,

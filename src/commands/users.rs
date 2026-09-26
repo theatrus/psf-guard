@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 use crate::{
-    auth_registry::{AuthRegistry, AuthUserRecord},
-    cli::UserCommand,
+    auth_registry::{AuthRegistry, AuthTokenRecord, AuthUserRecord},
+    cli::{TokenCommand, UserCommand},
     db_registry::DbRegistry,
 };
 
@@ -12,6 +12,11 @@ pub fn manage_users(action: UserCommand) -> Result<()> {
         UserCommand::List { registry }
         | UserCommand::Add { registry, .. }
         | UserCommand::Remove { registry, .. } => registry,
+        UserCommand::Token { action } => match action {
+            TokenCommand::List { registry, .. }
+            | TokenCommand::Create { registry, .. }
+            | TokenCommand::Revoke { registry, .. } => registry,
+        },
     };
     let database_registry_path = match registry_argument {
         Some(path) => PathBuf::from(path),
@@ -84,8 +89,90 @@ pub fn manage_users(action: UserCommand) -> Result<()> {
             println!("Removed user '{}' from {}", username, auth_path.display());
             println!("Restart the server to apply this change.");
         }
+        UserCommand::Token { action } => manage_tokens(action, &mut registry, &auth_path)?,
     }
     Ok(())
+}
+
+fn manage_tokens(
+    action: TokenCommand,
+    registry: &mut AuthRegistry,
+    auth_path: &std::path::Path,
+) -> Result<()> {
+    match action {
+        TokenCommand::List { user, .. } => {
+            let tokens = registry
+                .tokens
+                .iter()
+                .filter(|token| user.as_deref().is_none_or(|user| token.username == user))
+                .collect::<Vec<_>>();
+            if tokens.is_empty() {
+                println!("No API tokens in {}", auth_path.display());
+                return Ok(());
+            }
+            println!(
+                "{:<18} {:<24} {:<11} {:<20} {:<20} LABEL",
+                "ID", "USERNAME", "ACCESS", "CREATED", "EXPIRES"
+            );
+            for token in tokens {
+                println!(
+                    "{:<18} {:<24} {:<11} {:<20} {:<20} {}",
+                    token.id,
+                    token.username,
+                    if token.read_only {
+                        "read-only"
+                    } else {
+                        "user role"
+                    },
+                    format_unix(token.created_at),
+                    token
+                        .expires_at
+                        .map(format_unix)
+                        .unwrap_or_else(|| "never".to_string()),
+                    token.label
+                );
+            }
+            println!("\nAuth registry: {}", auth_path.display());
+        }
+        TokenCommand::Create {
+            username,
+            label,
+            read_only,
+            expires_days,
+            ..
+        } => {
+            if !registry.users.iter().any(|user| user.username == username) {
+                anyhow::bail!("user '{username}' does not exist");
+            }
+            let (secret, record) =
+                AuthTokenRecord::mint(&username, &label, read_only, expires_days)?;
+            let id = record.id.clone();
+            registry.add_token(record)?;
+            registry.save(auth_path)?;
+            println!("Created token {id} for '{username}'. Copy it now; it is not shown again:");
+            println!();
+            println!("{secret}");
+            println!();
+            println!("Send it as `Authorization: Bearer {secret}`.");
+            println!("Restart the server to apply this change.");
+        }
+        TokenCommand::Revoke { id, .. } => {
+            let removed = registry.revoke_token(&id, None)?;
+            registry.save(auth_path)?;
+            println!(
+                "Revoked token {} ('{}') of '{}'",
+                removed.id, removed.label, removed.username
+            );
+            println!("Restart the server to apply this change.");
+        }
+    }
+    Ok(())
+}
+
+fn format_unix(seconds: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, 0)
+        .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|| seconds.to_string())
 }
 
 fn read_new_password(password_file: Option<&str>) -> Result<String> {

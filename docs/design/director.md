@@ -1,7 +1,8 @@
 # PSF Guard Director: goal-driven acquisition
 
 Status: phase 0 in progress. Shared-core, sidecar, and native simulated
-acquisition spikes implemented; no production Director plugin yet.
+acquisition spikes implemented. An experimental runtime-only plugin preview is
+published in the theatr.us registry; no production acquisition plugin yet.
 Last updated: 2026-09-25.
 
 This is the tracking document for Director. Update the phase checklist and
@@ -771,6 +772,55 @@ integrated durable journals, restart reconciliation, and core-authorized native
 N.I.N.A. dispatch remain phase-0 gates.
 The existing Sync plugin is unchanged.
 
+#### Shared exposure preparation
+
+[`director-core::preparation`](../../crates/director-core/src/preparation.rs)
+models the first native-operation boundaries without device APIs or I/O. This
+is an internal Rust API, not an extension of planning JSON contract 2 or IPC 3.
+It does not change the published plugin's behavior.
+
+The reducer follows the pinned TS reference's preparation order: unpark when
+needed; center/rotate and the Before New Target hook on a target transition;
+dither when the effective per-filter cadence requires it; switch filter; set
+readout mode. Disabling automatic slew/center leaves the target hook enabled.
+A recipe may inherit the target's dither cadence or explicitly disable it.
+Recipes sharing a filter share its confirmed exposure counter; a target
+transition starts with fresh dither history. The caller supplies resolved
+recipe identifiers, equipment context, and confirmed history. This reducer
+does not yet own that history or resolve device settings.
+
+Each operation has a preparation ID and ordinal and is issued once. A matching
+completion records the observed monotonic duration separately from wall time.
+Identical receipts are idempotent; conflicting or unrelated receipts cannot
+advance the sequence. A delayed receipt remains valid after a newer status
+poll without moving the snapshot clock backwards. Hook durations include
+nested native work; callers must not add child durations a second time.
+
+Every boundary runs the shared selector with the remaining preparation and
+capture overhead estimates. Actual elapsed time, rather than the original
+estimate, determines whether the next operation/exposure still fits. Safety
+and operator stop win immediately. Changed assignments/configurations latch a
+check-in and wait for the current indivisible action's receipt; failures or
+uncertain outcomes cannot silently retry. A final ReadyToReserve result is
+only a fresh recommendation, never a stored dispatch permit.
+
+The focused regression suite covers ordering/options, per-filter cadence,
+remaining estimates, slow-operation reselection, delayed/conflicting receipts,
+in-flight assignment changes, configuration changes, safety, expiry, stale
+conditions, and final-boundary revalidation. Run it with:
+
+```powershell
+cargo test --locked -p psf-guard-director-core --test preparation
+```
+
+Versioned preparation IPC, recipe/configuration binding, and native container
+execution remain required before hardware use. A host must
+not reconstruct lost reducer state and replay an operation whose outcome is
+unknown. Preparation does not consume capture attempts or credit images; the
+ledger and a fresh native dispatch check remain separate requirements. Session
+startup/shutdown, autofocus policy, guiding, flips, and calibration are still
+open parts of the operation inventory, not implied by this initial reducer.
+
 #### Durable execution ledger
 
 [`crates/director-ledger`](../../crates/director-ledger/src/lib.rs) owns the
@@ -822,6 +872,44 @@ boundary safety/ownership checks, and native-journal reconciliation are still
 required. The current adapter and ASCOM probe have not exercised this ledger.
 The next integration must preserve these distinctions rather than treating a
 replayed reservation or an old `acquire` decision as permission to capture.
+
+Ledger schema 2 adds a preparation journal using the same writer transactions.
+It migrates an owned schema-1 ledger without changing its UUID, allocation,
+attempts, or capture events. Wrong allocations/engines roll back the migration;
+older binaries refuse schema 2. Capture event schema 1 remains unchanged.
+This is a local internal API, not a new IPC 3 operation or a plugin release.
+
+`begin_preparation` binds the resolved context to ledger-derived progress.
+`advance_preparation` checkpoints the pure reducer and appends an issued event
+before returning `Run`. Lost replies, restart, and competing callers return
+in-flight evidence rather than reissuing the operation. Correlated completion
+and its measured duration commit with the outbox record; duplicate delivery
+does not add an event. Core checkpoints are bounded/versioned and validate
+operation order, receipt identity, terminal state, and time ordering. A stored
+SHA-256 digest detects damaged checkpoint bytes, including valid JSON that
+would otherwise erase an in-flight operation. This is local integrity checking,
+not authentication against someone who can rewrite the database.
+
+Ordinary capture reservation is blocked while a preparation is active.
+`reserve_prepared` refreshes conditions and rig/configuration at the final
+boundary and atomically creates the capture reservation and preparation link.
+It does not charge completed preparation estimates a second time. Repeating
+the same reservation returns existing evidence; it never permits redispatch.
+Explicit closure can release unused preparation, but cannot discard pending
+or uncertain operations. A correlated late receipt can finish a pending action.
+An explicit uncertain completion remains blocked: an operator-attested recovery
+contract is still required rather than silently clearing it.
+
+Preparation has a separate bounded, replayable outbox with its own cursor.
+Events carry ledger/allocation/rig/configuration/engine identity and a capture
+link when reserved. Consumers must keep preparation and capture cursors distinct;
+there is no implied global order between the two feeds. No acknowledgement or
+pruning is implemented. Status reads use `preparation`; `advance_preparation`
+is a durable boundary mutation, not a high-frequency UI poll. The new storage
+tests cover real child-process exit after issue/completion, partial transaction
+rollback, concurrent issue, delayed/conflicting receipts, final readiness,
+schema migration, and checkpoint corruption. They do not replace the required
+native-container/server end-to-end test.
 
 Run the isolated storage regressions with:
 
