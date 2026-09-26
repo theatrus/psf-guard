@@ -1,7 +1,7 @@
 //! Immutable observing programs. Bound and unbound ledgers never switch modes.
 
 use super::*;
-use psf_guard_director_core::preparation::{Estimates, Next};
+use psf_guard_director_core::preparation::{Command, Estimates, Next};
 use psf_guard_director_core::program::{Configuration, LocalState, Recipe, Target};
 use sha2::{Digest, Sha256};
 
@@ -124,6 +124,17 @@ impl Ledger {
     ) -> Result<Decision, Error> {
         self.check_program_configuration(configuration)?;
         self.check_capture_dispatch_inner(preparation_id, capture_id, state, None)
+    }
+
+    /// Fresh feasibility only; never issues a command or authorizes recovery replay.
+    pub fn check_program_pending_dispatch(
+        &mut self,
+        command: &Command,
+        state: State,
+        configuration: &Configuration,
+    ) -> Result<Decision, Error> {
+        self.check_program_configuration(configuration)?;
+        self.check_pending_dispatch_inner(command, state, None)
     }
 
     pub fn reserve_program_prepared(

@@ -121,6 +121,41 @@ fn legacy_reserved_capture_check_retains_one_attempt_and_sticky_refusal() {
 }
 
 #[test]
+fn legacy_dispatch_check_preserves_pending_and_latches_expiry() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("execution.sqlite");
+    let mut ledger = open(&path);
+    begin(&mut ledger);
+    let mut state = request().state;
+    let command = issue(&mut ledger, &state);
+    assert!(matches!(
+        ledger.check_pending_preparation_dispatch(&command, state.clone()),
+        Ok(Decision::Acquire { .. })
+    ));
+    state.now_ms = request().assignment.expires_at_ms;
+    let refusal = ledger
+        .check_pending_preparation_dispatch(&command, state.clone())
+        .unwrap();
+    assert!(!matches!(
+        refusal,
+        Decision::Acquire { .. } | Decision::Continue { .. }
+    ));
+    drop(ledger);
+    let mut ledger = open(&path);
+    assert_eq!(
+        ledger
+            .check_pending_preparation_dispatch(&command, state.clone())
+            .unwrap(),
+        refusal
+    );
+    assert_eq!(ledger.preparation_events_after(0, 256).unwrap().len(), 3);
+    assert_eq!(
+        ledger.preparation("prep-1").unwrap().unwrap().pending,
+        Some(command)
+    );
+}
+
+#[test]
 fn lost_reply_and_reopen_never_repeat_native_dispatch() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("execution.sqlite");

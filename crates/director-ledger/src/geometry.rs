@@ -1,7 +1,7 @@
 //! Persist the original geometry binding, never caller-supplied computed windows.
 
 use super::*;
-use psf_guard_director_core::preparation::{Estimates, Next};
+use psf_guard_director_core::preparation::{Command, Estimates, Next};
 use psf_guard_director_core::program::{Configuration, LocalState};
 use sha2::{Digest, Sha256};
 
@@ -152,6 +152,19 @@ impl Ledger {
         self.check_geometry_mode(true)?;
         self.check_program_configuration(configuration)?;
         self.check_capture_dispatch_inner(preparation_id, capture_id, state, Some(current))
+    }
+
+    /// Fresh feasibility only; never issues a command or authorizes recovery replay.
+    pub fn check_geometry_pending_dispatch(
+        &mut self,
+        command: &Command,
+        state: State,
+        configuration: &Configuration,
+        current: &Constraints,
+    ) -> Result<Decision, Error> {
+        self.check_geometry_mode(true)?;
+        self.check_program_configuration(configuration)?;
+        self.check_pending_dispatch_inner(command, state, Some(current))
     }
 
     pub fn reserve_geometry_prepared(
