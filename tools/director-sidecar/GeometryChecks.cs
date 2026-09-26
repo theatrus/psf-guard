@@ -17,9 +17,8 @@ internal static class GeometryChecks
         goal["exposure_ms"] = 5000;
         goal["overhead_ms"] = 1000;
         program["recipes"]![0]!["exposure_ms"] = 5000;
-        var directory = Directory.CreateTempSubdirectory("psf-guard-director-geometry-");
         JsonNode issued;
-        try
+        await TestDirectory.RunAsync("psf-guard-director-geometry-", async directory =>
         {
             await using (var session = await RuntimeSession.StartAsync(executable, "rig-1", started, storageDirectory: directory.FullName))
             {
@@ -111,12 +110,7 @@ internal static class GeometryChecks
                 await session.SendAsync(new JsonObject { ["type"] = "shutdown" });
                 Assert(await session.WaitForExitAsync() == 0, "geometry recovery shuts down cleanly");
             }
-        }
-        finally
-        {
-            // Only this test-owned temporary directory is removed.
-            directory.Delete(recursive: true);
-        }
+        });
     }
 
     private static async Task CheckDispatch(RuntimeSession session, JsonNode program, JsonNode constraints, JsonNode state,

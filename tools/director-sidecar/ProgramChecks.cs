@@ -6,10 +6,9 @@ internal static class ProgramChecks
     {
         var program = JsonNode.Parse(File.ReadAllText(Path.Combine(Path.GetDirectoryName(fixturePath)!, "execution-program.json")))!.AsObject();
         var state = JsonNode.Parse(File.ReadAllText(fixturePath))!["base"]!["state"]!;
-        var directory = Directory.CreateTempSubdirectory("psf-guard-director-program-");
         JsonObject issued;
         JsonObject binding;
-        try
+        await TestDirectory.RunAsync("psf-guard-director-program-", async directory =>
         {
             await using (var session = await RuntimeSession.StartAsync(executable, "rig-1", started, storageDirectory: directory.FullName))
             {
@@ -100,12 +99,7 @@ internal static class ProgramChecks
                 await captured.SendAsync(new JsonObject { ["type"] = "shutdown" });
                 Assert(await captured.WaitForExitAsync() == 0, "bound program recovery shuts down cleanly");
             }
-        }
-        finally
-        {
-            // This is the owned temporary directory, never a user catalog.
-            directory.Delete(recursive: true);
-        }
+        });
     }
 
     private static JsonObject Open(JsonObject program, JsonNode state) => new()
