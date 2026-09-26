@@ -44,6 +44,7 @@ async fn stop(client: &mut DuplexStream, id: u64) {
         receive_reply(client).await.payload,
         ResultMessage::Stopped
     ));
+    client.shutdown().await.unwrap();
 }
 
 #[tokio::test]

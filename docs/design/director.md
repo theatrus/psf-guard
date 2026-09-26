@@ -680,7 +680,7 @@ peer process ID. The launcher supplies the pipe name, host PID, and optionally
 an absolute state directory. No credentials appear in process arguments. The
 protocol has no network or equipment operations; local persistence is opt-in.
 
-IPC version 2 uses a four-byte little-endian length followed by UTF-8 JSON.
+IPC version 3 uses a four-byte little-endian length followed by UTF-8 JSON.
 Frames are limited to 266,240 bytes before body allocation. The nested planning
 request retains its original JSON and the core's 262,144-byte limit, including
 duplicate-field validation. Every envelope contains `protocol_version`,
@@ -708,9 +708,9 @@ duplicate-field validation. Every envelope contains `protocol_version`,
   and stale/duplicate requests end the session without a replayed response.
   A new child must negotiate a new session and receive a fresh snapshot.
 
-The existing Director plugin remains pinned to runtime 0.1.0 / IPC 1 until its
-typed host and capture flow adopt IPC 2 together. A mismatched version is refused,
-never silently downgraded. Publishing this runtime artifact alone does not update
+The Director preview pins runtime 0.2.1 / IPC 3 with the typed ledger host and
+shutdown drain handshake together. A mismatched version is refused, never
+silently downgraded. Publishing this runtime artifact alone does not update
 installed plugins or change the existing Sync plugin.
 
 With `--state-directory`, the launcher supplies a private existing directory for
@@ -775,7 +775,7 @@ The existing Sync plugin is unchanged.
 
 [`crates/director-ledger`](../../crates/director-ledger/src/lib.rs) owns the
 first local attempt/event storage contract. It depends on the shared core and
-SQLite, leaving the planner itself free of I/O. IPC 2 exposes it through explicit
+SQLite, leaving the planner itself free of I/O. IPC 3 exposes it through explicit
 storage operations, but the native capture adapter does not use it yet. It
 changes no existing catalog, Sync endpoint, or installed plugin package.
 
