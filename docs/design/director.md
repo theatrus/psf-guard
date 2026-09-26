@@ -1224,6 +1224,23 @@ A changed constraint latches a check-in; changing it back does not revive the ol
 preparation. An in-flight action still needs its correlated receipt, and safety
 stops retain precedence. No failure, uncertainty or lost receipt authorizes replay.
 
+An issued preparation command still needs a fresh feasibility check after native
+before-hooks, since those hooks can consume its window before dispatch.
+`GeometryPreparation::check_pending_dispatch` checks the exact pending command
+against fresh state and constraints, retaining the pending step's full estimate
+plus all later preparation and capture overhead. Completed steps are not charged
+again. A refusal is sticky and survives the existing checkpoint format; safety
+stops override other refusals and correlated receipts remain admissible.
+Normal `next` polls retain their in-flight behavior and never reinterpret an
+already running operation as new work.
+
+This core check returns a decision, never `Run`, a new command, or a replay permit.
+`Continue` is not permission to start another operation. Even an `Acquire`
+feasibility result requires the original one-shot command from the current live
+session and local native checks. A recovered pending command remains uncertain
+evidence. The durable journal, IPC and native before-hook boundary must adopt
+this check before production dispatch; the existing preview gains no authority.
+
 Geometry preparation has an opaque, versioned checkpoint for local persistence.
 Restore requires a separately compiled binding from the original trusted program
 and constraints. It compares the complete inputs, reconstructs the initial

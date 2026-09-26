@@ -262,6 +262,54 @@ impl Preparation {
         self.next_with_constraint_change(request, false)
     }
 
+    /// Recheck the exact issued command after inherited native hooks, before
+    /// starting its operation. This issues nothing and cannot authorize replay
+    /// after recovery: the host still needs its original one-shot Run command.
+    /// Include the pending step's full estimate because it has not started yet.
+    pub fn check_pending_dispatch(
+        &mut self,
+        request: &Request,
+        command: &Command,
+    ) -> Result<Decision, Error> {
+        self.check_pending_dispatch_with_constraint_change(request, command, false)
+    }
+
+    pub(crate) fn check_pending_dispatch_with_constraint_change(
+        &mut self,
+        request: &Request,
+        command: &Command,
+        constraints_changed: bool,
+    ) -> Result<Decision, Error> {
+        if self.pending() != Some(command) {
+            return Err(Error::InvalidContext);
+        }
+        // Keep ordinary pending polls unchanged: they wait for a receipt and
+        // must not reinterpret a running operation as new work.
+        if let Next::Decision(decision) =
+            self.next_with_constraint_change(request, constraints_changed)?
+        {
+            return Ok(decision);
+        }
+        if let Some(decision) = &self.halted {
+            return Ok(decision.clone());
+        }
+        let decision = match self.evaluate_remaining(request)? {
+            Decision::Acquire { goal_id, .. } if goal_id != self.context.goal_id => {
+                Decision::CheckIn {
+                    reason: "preparation_goal_changed".into(),
+                }
+            }
+            other => other,
+        };
+        if !matches!(
+            decision,
+            Decision::Acquire { .. } | Decision::Continue { .. }
+        ) {
+            self.halted = Some(decision.clone());
+        }
+        Ok(decision)
+    }
+
     pub(crate) fn next_with_constraint_change(
         &mut self,
         request: &Request,

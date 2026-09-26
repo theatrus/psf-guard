@@ -70,6 +70,22 @@ impl GeometryPreparation<'_> {
             .map_err(Error::Preparation)
     }
 
+    /// Feasibility of this exact pending operation after native before-hooks.
+    /// Never returns Run, changes its issue time, or grants recovery replay.
+    /// A refusal is sticky, while correlated completion remains admissible.
+    pub fn check_pending_dispatch(
+        &mut self,
+        request: &Request,
+        current: &Constraints,
+        command: &Command,
+    ) -> Result<Decision, Error> {
+        let narrowed = self.geometry.narrow(request)?;
+        let changed = self.geometry.check_current(request, current).is_err();
+        self.inner
+            .check_pending_dispatch_with_constraint_change(&narrowed, command, changed)
+            .map_err(Error::Preparation)
+    }
+
     /// Receipts remain admissible after a constraint change or safety stop.
     pub fn complete(&mut self, completion: Completion) -> Result<(), Error> {
         self.inner.complete(completion).map_err(Error::Preparation)
