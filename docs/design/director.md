@@ -1383,6 +1383,29 @@ explicitly registered and retained by the future adoption workflow, not
 regenerated on every import or inferred from
 paths. Stable catalog identity adoption is not yet implemented.
 
+The `src/catalog_identity.rs` storage primitive supplies an opt-in identity for
+a PSF Guard-managed catalog destination. A versioned, PSF Guard-owned singleton
+table retains the catalog UUID and its originating coordinator UUID. It does
+not change TS tables, GUIDs, grades, `application_id` or `user_version`. Ordinary
+reads return an unadopted result without creating anything. No startup, sync,
+discovery, HTTP or UI path invokes adoption yet.
+
+The future preview/apply workflow must confirm the destination, retain the
+proposed IDs across retries, and revalidate preview evidence in the same SQLite
+transaction as adoption. Adoption uses a savepoint inside that transaction;
+only the host's outer commit makes it durable. A conflicting identity or damaged
+record is refused, not repaired or reassigned. Never adopt a read-only TS sync
+source. Catalog and coordinator commits are separate: retain the catalog's
+committed identity and retry registration after an interrupted coordinator write.
+
+SQLite-aware backup and file moves preserve this identity. A copied catalog is
+the same lineage, not a new rig or independent catalog. Registering multiple
+paths to that lineage must not duplicate contributions; an independent fork
+requires an explicit future workflow. Identity alone grants no execution rights
+and does not prove that every historical frame belongs to a given rig. The
+preview/apply API, registry integration, mapping UI and duplicate-mount checks
+remain unimplemented.
+
 Writes use short SQLite transactions with foreign keys, WAL and full synchronous
 commits. Renames require an expected revision; retries cannot overwrite another
 editor's work or silently move a source project to a different global project.
