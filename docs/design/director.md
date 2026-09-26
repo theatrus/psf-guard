@@ -500,6 +500,7 @@ Follow-on review: [rig meridian exclusions and multiple safe intervals, PR #461]
 Sidecar review: [bounded IPC and process harness, PR #462](https://github.com/theatrus/psf-guard/pull/462).
 Plugin review: [N.I.N.A. 3.3 runtime host and development bundle, Director PR #1](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/1).
 Live host validation: [isolated N.I.N.A. nightly smoke tests, Director PR #2](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/2).
+Native capture building block: [journaled capture and save lifecycle, Director PR #3](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/3).
 
 The Director host pins N.I.N.A. `3.3.0.1058-nightly` and the tested sidecar by
 commit, CI run/artifact identity, SHA-256, and wire versions. The C# build consumes
@@ -514,6 +515,17 @@ they did not replace the installed N.I.N.A. 3.2 application. They are not the
 full-stack acquisition gate. Signed durable artifacts, native execution, and
 Chatstronomy state integration remain open gates; the current CI artifact pin
 is developmental.
+
+The internal capture adapter uses N.I.N.A.'s public imaging and save interfaces.
+It reserves a capture GUID before dispatch, snapshots the original profile's save
+settings, writes `PGCAPID` into FITS/XISF metadata, and waits for a correlated final
+save receipt. Queue admission is not save completion. Timeouts and cancellation
+after admission retain uncertain evidence; they do not authorize another attempt.
+The profile-scoped journal records identity, destination, and monotonic timings,
+but it is not yet the sidecar event ledger or recovery engine. Tests use public
+mediator mocks and native header serializers; this adapter is not yet exposed as
+a sequencer item or validated with a simulated camera. Core authorization,
+ownership/safety lifetime, recovery, and sidecar feedback must be connected first.
 
 Baseline checked on 2026-09-25:
 
@@ -652,10 +664,10 @@ dotnet run --project tools/director-sidecar --configuration Release -- target/re
 CI runs portable protocol tests on all three platforms and Windows process
 tests against a release executable. Release panic-abort is intentional here:
 the failure stays in the child process, outside N.I.N.A. The sidecar alone is not
-a plugin. The separate development host bundles this tested executable, but
-signed release artifacts, N.I.N.A.-validated lifecycle behavior,
-durable journals, restart reconciliation, and native N.I.N.A. dispatch remain
-phase-0 gates.
+a plugin. The separate development host bundles this tested executable and has
+passed real N.I.N.A. runtime-lifecycle smoke tests. Signed release artifacts,
+integrated durable journals, restart reconciliation, and core-authorized native
+N.I.N.A. dispatch remain phase-0 gates.
 The existing Sync plugin is unchanged.
 
 ### Phase 1: meta database and global project model
