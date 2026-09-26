@@ -183,6 +183,44 @@ of attaching to an existing name or coordinate match. `--lights-only` and
 `--calibration-only` scope the run to one frame kind. `remove-imported` can
 remove projects created by an import; always preview it first.
 
+## Import new frames automatically
+
+A database can scan its image directories on its own and import what is
+new, so a night's frames are in the catalog by the time you sit down.
+Turn it on per database under **Settings → Databases → Edit → Automatic
+import**:
+
+- **Run when the app or server opens this database**: once at start, and
+  once when you first enable it.
+- **Schedule**: every 15 minutes up to every day, or only on open.
+- **Import**: lights and calibration frames, lights only, or calibration
+  frames only.
+- **Analyze quality of the new frames in the background**: queues the
+  quality scan for the targets a run touched, as the Import preview's
+  checkbox does.
+- **Include frames from other rigs**: off by default, as for a manual
+  import.
+
+A run needs no confirmation. It takes the configured image directories
+only, never a path it was not given, so it works without
+`--allow-database-management`. Before reading a single header it drops
+every file the catalog already has: a light by its basename, a calibration
+frame by its path and fingerprint. A folder of thousands of known frames
+therefore costs a directory walk and one query, and a run that finds
+nothing new writes nothing. The rest goes through the same matching rules
+as the Import button.
+
+The database row shows the schedule, the last run's result, and when the
+next run is due, with a **Run now** button that takes the same settings.
+The run appears in the same progress line as a manual import. A run waits
+while another import, a remote upload, or an interactive job is under way,
+and tries again on the next tick. On a server with accounts, **Run now**
+needs an editor.
+
+The same run is available to scripts and agents as `POST
+/api/db/{db}/autoimport/run`, and the settings travel with the database
+entry in the registry as `autoimport`.
+
 ## Organize projects and targets
 
 Overview's **Edit** actions rename projects and targets, move a whole target

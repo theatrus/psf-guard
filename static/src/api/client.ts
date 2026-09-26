@@ -54,6 +54,8 @@ import type {
   CreateDatabaseResponse,
   ImportRequest,
   ImportStatus,
+  AutoImportSettings,
+  AutoImportStatus,
   FileCheckResponse,
   DirectoryTreeResponse,
   ProjectOverview,
@@ -589,6 +591,8 @@ export const apiClient = {
       export_dir?: string;
       /** New process directory; empty string clears it. */
       process_dir?: string;
+      /** Replace the automatic import settings; the defaults (off) clear them. */
+      autoimport?: AutoImportSettings;
     }
   ): Promise<DatabaseSummary> => {
     const apiInstance = await getApi();
@@ -833,6 +837,26 @@ export const apiClient = {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<ImportStatus>>(dbPath(dbId, '/import'));
     if (!data.data) throw new Error('Failed to get import status');
+    return data.data;
+  },
+
+  /** The automatic import's settings, schedule, and last run. */
+  getAutoImportStatus: async (dbId: string): Promise<AutoImportStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<AutoImportStatus>>(
+      dbPath(dbId, '/autoimport')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read automatic import status');
+    return data.data;
+  },
+
+  /** Run the automatic import now, with its configured scope. */
+  runAutoImport: async (dbId: string): Promise<ImportStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<ImportStatus>>(
+      dbPath(dbId, '/autoimport/run')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to start the import');
     return data.data;
   },
 

@@ -84,6 +84,7 @@ impl Harness {
                         remote_image_upload: Some(config(SOURCE_TOKEN)),
                         export_dir: None,
                         process_dir: None,
+                        autoimport: None,
                     },
                     DbEntry {
                         id: "destination".into(),
@@ -94,6 +95,7 @@ impl Harness {
                         remote_image_upload: Some(config(DESTINATION_TOKEN)),
                         export_dir: None,
                         process_dir: None,
+                        autoimport: None,
                     },
                 ],
                 directory

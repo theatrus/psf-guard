@@ -1056,6 +1056,7 @@ directory = "./cache"
             remote_image_upload: None,
             export_dir: None,
             process_dir: None,
+            autoimport: None,
         }
     }
 

@@ -415,6 +415,9 @@ pub struct DatabaseSummary {
     /// saved below it. When present the run dialog offers the save.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub process_directory: Option<String>,
+    /// Automatic import of new frames, when turned on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub autoimport: Option<crate::db_registry::AutoImportSettings>,
 }
 
 #[derive(Debug, Serialize)]
@@ -996,6 +999,10 @@ pub struct UpdateDatabaseRequest {
     /// New process directory. `Some("")` clears it; absent leaves it alone.
     #[serde(default)]
     pub process_dir: Option<String>,
+    /// Replace the automatic import settings. Absent leaves them alone; the
+    /// defaults (off) clear them.
+    #[serde(default)]
+    pub autoimport: Option<crate::db_registry::AutoImportSettings>,
 }
 
 #[derive(Debug, Serialize)]

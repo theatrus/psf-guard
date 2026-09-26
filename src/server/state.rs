@@ -84,6 +84,8 @@ pub struct AppState {
     pub stack_previews: crate::server::stack_preview::StackPreviewManager,
     /// Refreshes of remembered stack previews waiting on new frames or grades.
     pub auto_stacks: crate::server::stack_preview::automatic::AutomaticStackRefresh,
+    /// When each database's automatic import last ran, for the schedule.
+    pub autoimport: crate::server::autoimport::AutoImportScheduler,
     /// Process-global, single-flight Seiza catalog installation with progress
     /// that survives closing and reopening the Settings page.
     pub catalog_install: crate::server::catalog_install::CatalogInstallManager,
@@ -409,16 +411,7 @@ impl AppState {
         .map_err(anyhow::Error::msg)?;
         let mut map = HashMap::with_capacity(databases.len());
         for entry in databases {
-            let ctx = Arc::new(DatabaseContext::new(
-                entry.id.clone(),
-                entry.name,
-                entry.db_path,
-                entry.image_dirs,
-                entry.remote_image_upload,
-                entry.export_dir,
-                entry.process_dir,
-                cache_dir.clone(),
-            )?);
+            let ctx = Arc::new(DatabaseContext::from_entry(&entry, cache_dir.clone())?);
             map.insert(entry.id, ctx);
         }
 
@@ -440,6 +433,7 @@ impl AppState {
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
             auto_stacks: crate::server::stack_preview::automatic::AutomaticStackRefresh::default(),
+            autoimport: crate::server::autoimport::AutoImportScheduler::default(),
             catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
             sync_previews: crate::server::sync_preview::SyncPreviewManager::new(&cache_dir),
             sync_apply_lock: tokio::sync::Mutex::new(()),
@@ -566,6 +560,7 @@ impl AppState {
                 remote_image_upload: None,
                 export_dir: None,
                 process_dir: None,
+                autoimport: None,
             }],
             cache_dir,
             pregeneration_config,
@@ -612,6 +607,7 @@ impl AppState {
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
             auto_stacks: crate::server::stack_preview::automatic::AutomaticStackRefresh::default(),
+            autoimport: crate::server::autoimport::AutoImportScheduler::default(),
             catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
             sync_previews: crate::server::sync_preview::SyncPreviewManager::new(
                 "/tmp/psf-guard-test",
