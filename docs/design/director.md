@@ -1,6 +1,6 @@
 # PSF Guard Director: goal-driven acquisition
 
-Status: phase 0 in progress. Shared-core/native interop spike implemented;
+Status: phase 0 in progress. Shared-core and sidecar spikes implemented;
 no acquisition integration or production Director plugin yet.
 Last updated: 2026-09-25.
 
@@ -12,7 +12,10 @@ completed implementation checklist indefinitely.
 ## Purpose
 
 PSF Guard Director is a new N.I.N.A. plugin that pursues PSF Guard observing
-goals through Target Scheduler (TS). It is not a downloaded schedule player.
+goals through N.I.N.A.'s supported sequencing and equipment APIs. Target
+Scheduler (TS) is a behavioral reference and optional data source, not a base
+class, required plugin, or execution dependency. Director is not a downloaded
+schedule player.
 Autofocus, centering, weather, and equipment delays change what is feasible;
 Director must make useful local decisions from actual conditions and progress.
 
@@ -31,8 +34,10 @@ sync semantics.
 - Make global projects independent of rigs, database files, and local TS IDs.
 - Exchange goals, constraints, and bounded assignments, not fixed timetables.
 - Run the same planning core in PSF Guard and Director.
-- Use TS as the execution adapter in Director-controlled sessions; retain its
-  existing planner for ordinary TS sessions.
+- Own scheduling and feedback policy in the shared Rust core; use a thin
+  Director adapter to execute through supported N.I.N.A. APIs.
+- Use TS as inspiration and for optional import/coexistence, not as Director's
+  planner, execution engine, or required database.
 - Keep equipment control, safety, and operator overrides local to N.I.N.A.
 - Start with one coordinating instance per project. Federation is a later phase,
   not multi-master editing of the same plan.
@@ -50,9 +55,10 @@ sync semantics.
 | Contribution | Captured data, provenance, assessment state, and its relationship to objectives. |
 | Execution event | Durable evidence of an operation, capture, decision, or state transition. |
 
-A global project can map to multiple rig-local TS projects. Persist those
-mappings by stable identifiers. Do not join by project name, telescope name,
-nearby coordinates, or database-local integer IDs. Existing TS GUIDs remain
+A global project can map to multiple rig-local contributions and catalogs,
+including optional imported TS projects. Director does not require a TS project
+to acquire. Persist mappings by stable identifiers. Do not join by project name,
+telescope name, nearby coordinates, or database-local integer IDs. Existing TS GUIDs remain
 intact. Database slugs remain URL scope, not federation identity.
 
 A rig identity outlives a catalog file. Record equipment and site configuration
@@ -81,8 +87,9 @@ may tighten local limits, but cannot relax a rig's hard restrictions.
 
 ### Meridian policy
 
-Preserve the local TS fork's asymmetric avoidance behavior when introducing the
-3.3 execution adapter. The inspected branch is
+Use the local TS fork's asymmetric avoidance behavior as a reference when
+implementing Director's rig constraints, without depending on the fork. The
+inspected branch is
 `codex/pier-west-meridian-avoidance` at
 `8b549b1123520add0cb65124f469e9cb5723b13d`. Its
 `MeridianAvoidanceClipper` resolves independent before/after values from project
@@ -136,10 +143,11 @@ breakpoints, resolve a supported export or a parity-tested conversion before
 enabling remote planning with it. Do not reflect private N.I.N.A. arrays.
 
 Compose the curve with rig minimum-altitude restrictions and applicable project
-minimum altitude/horizon offset. Preserve TS's equality-at-horizon rejection and
-its effective-altitude behavior, with fixtures against the actual N.I.N.A./TS
-implementations. Geographic site identity alone is insufficient: two nearby rigs
-may have different obstructions, so each rig configuration binds its own horizon.
+minimum altitude/horizon offset. Retain conservative equality-at-horizon rejection
+and verify effective-altitude behavior against N.I.N.A. and TS reference fixtures.
+TS is not needed at runtime. Geographic site identity alone is insufficient:
+two nearby rigs may have different obstructions, so each rig configuration
+binds its own horizon.
 
 Subscribe to profile, location, and `HorizonChanged` events. Also detect a file
 edited in place at controlled refresh/check-in points; the path can stay the
@@ -158,7 +166,7 @@ minimum altitude/offset, invalid files, same-path edits, and profile switches.
 These are single-rig phase-0/phase-2 requirements, not deferred multi-rig work.
 The shared-core contract now accepts multiple precomputed intervals per goal
 and subtracts effective rig-level meridian exclusions. It does not yet import
-horizon files, calculate sky positions, or resolve TS/N.I.N.A. preferences.
+horizon files, calculate sky positions, or resolve N.I.N.A./Director preferences.
 Prove those adapter calculations against the pinned implementations before
 connecting the evaluator to acquisition.
 
@@ -202,8 +210,9 @@ with that sidecar over versioned local IPC. The process boundary is implemented
 as a testable spike; plugin packaging and equipment integration remain pending.
 Do not maintain parallel Rust and C# versions of the scheduling algorithm.
 
-The core currently lives in this repository; the installable Director plugin
-will live in a separate repository from both PSF Guard and PSF Guard Sync. The
+The core lives in this repository; the Director plugin lives in
+[`theatrus/psf-guard-director-nina-plugin`](https://github.com/theatrus/psf-guard-director-nina-plugin),
+separate from both PSF Guard and PSF Guard Sync. The
 current `tools/director-interop` program is a console proof, not that plugin.
 Follow Chatstronomy's core/plugin release separation: the plugin consumes a
 pinned, verified Rust artifact and does not compile its own copy of the engine.
@@ -261,7 +270,7 @@ Global objectives and rig capabilities
   -> coordinator allocates bounded goals
   -> Director validates, caches, and acknowledges an assignment
   -> shared engine selects useful local work
-  -> TS executes through N.I.N.A.
+  -> Director's adapter executes through supported N.I.N.A. APIs
   -> actual results update local state and duration estimates
   -> engine reevaluates at execution boundaries
   -> check-in reconciles progress and revises allocation
@@ -295,26 +304,37 @@ release is acknowledged or authorization has safely expired. Specify clock
 skew handling, reconnect reconciliation, and limits on unavoidable overlap.
 
 Use stable operation and capture IDs with idempotent event delivery. After a
-restart, reconcile saved files and TS history before retrying uncertain work.
+restart, reconcile the Director journal, saved files, and catalog evidence before
+retrying uncertain work. TS history is optional evidence for imported workflows,
+not Director's required execution journal.
 Do not claim exactly-once hardware execution across a crash. Surface ambiguous
 outcomes and handle late events from old revisions without losing real captures.
 
-## TS and N.I.N.A. boundary
+## Director and N.I.N.A. boundary
 
-Baseline discovery identified N.I.N.A. 3.3 nightly and TS's 3.3 branch as the
-starting point. Recheck and pin exact source/package versions in phase 0;
-nightly branch heads and published releases are not interchangeable.
+N.I.N.A. 3.3 nightly is the integration baseline. Recheck and pin exact
+source/package versions in phase 0; nightly branch heads and published releases
+are not interchangeable.
 
-Add a supported optional plan-provider/execution interface to TS. Preserve its
-default planner unchanged. The initial source inspection found a read-oriented
-REST surface, not a sufficient acquisition-control API. Do not drive this by
-replacing its live database, reflecting private methods, or copying its entire
-execution loop.
+Director does not need a TS provider extension or fork. The shared Rust core
+owns objective selection, scheduling, progress accounting, retry policy, and
+timing-aware replanning. PSF Guard simulation and the local sidecar use that
+same code; do not put a second scheduler in C# or delegate selection to TS.
 
-In Director-controlled mode, Director's shared engine owns work selection; TS
-translates approved work into its established execution machinery. N.I.N.A.
-retains hardware, guiding, autofocus, flips, safety, cancellation, and image
-saving. Respect native sequence hooks and locally configured safety policies.
+The thin C# adapter translates approved work into supported N.I.N.A. sequence
+items, mediators, and services. Reuse N.I.N.A.'s hardware, guiding, autofocus,
+centering, flip, cancellation, and image-saving machinery rather than copying
+TS's execution loop or calling private APIs. Prove each required public API in
+phase 0; do not assume the existence of a generic execute-plan endpoint.
+
+N.I.N.A. retains continuous local safety and operator control. Director's own
+session container coordinates operation boundaries and reports actual results
+and durations to the shared core. Native triggers may insert local operations,
+but they must not silently authorize another exposure. After slow preparation
+such as autofocus or centering, refresh the snapshot and ask the core again
+before capture; recheck assignment revision, expiry, safety, and rig constraints
+at dispatch. A C# adapter validates and enforces decisions; it does not select a
+different goal or invent retry work when the core is unavailable.
 
 Expose a Director session container and focused sequence actions for check-in,
 progress reporting, and session completion where useful. Show current goal,
@@ -324,8 +344,57 @@ waiting or switching. Avoid an indefinite generic "Working" status.
 Director has a distinct plugin identity, configuration, credentials, queues,
 and release flow from Sync. Detect competing acquisition controllers. Define
 ownership for shared sync/upload duties so coexistence does not create duplicate
-uploads or competing planning writes. TS compatibility remains a public contract,
+uploads or competing planning writes. Reject concurrent controller ownership
+rather than letting Director and a TS sequence operate the same equipment.
+Optional TS import/catalog compatibility remains a public contract,
 including stable GUIDs, schema variation, grade values, and RA unit conversion.
+
+### Chatstronomy interoperability
+
+Retain Chatstronomy's existing TS integration and provide equivalent Director
+visibility without making TS a runtime dependency. This is part of the N.I.N.A.
+integration, not a later federation feature. Director must also work without
+Chatstronomy installed.
+
+The inspected Chatstronomy plugin main at `4add689` consumes N.I.N.A.
+`IMessageBroker` topics `TargetScheduler-WaitStart`,
+`TargetScheduler-NewTargetStart`, and `TargetScheduler-TargetStart`, projecting
+them into `TS-WAITSTART`, `TS-NEWTARGETSTART`, and `TS-TARGETSTART`. It also
+projects the native sequence tree and keeps TS-specific command target identity
+across per-exposure plan containers. Existing TS behavior must remain intact.
+
+Director needs an explicit, versioned public state/event contract that
+Chatstronomy can consume. Prefer N.I.N.A.'s message broker for event delivery
+plus an explicit snapshot contract for startup/reconnection. Include provider
+identity, rig/profile/session IDs, monotonic event sequence, assignment revision,
+stable project/target/objective IDs, operation state, progress, waiting reason,
+and next checkpoint. Label forecast times as estimates rather than promised
+end times. Publish actual state transitions and operation results, not the
+planner's proposals as if execution had already happened.
+
+Do not impersonate TS by emitting `TS-*` events or depending on its private
+container types. Add a source-aware Director adapter to Chatstronomy and its
+backend presentation/state model where needed. Preserve event deduplication,
+bounded replay, profile/session isolation, privacy/access policy, and notification
+preferences. A stale or disconnected Director session must not leave chat
+reporting an old target as actively acquiring. Native image/equipment events and
+Director target events must not produce duplicate notifications for one action.
+
+Chatstronomy commands still enter through N.I.N.A.'s local permissions and safe
+sequence hooks. Its TS-specific target resolver is not a Director resolver.
+Expose stable Director execution context through a supported contract, invalidate
+queued commands when target/assignment/profile ownership changes, and report any
+injected operation and its duration to the core before it selects more work.
+Neither status consumption nor a chat request bypasses allocation limits or
+local safety. Unsupported command paths must reject explicitly, not fall back
+to unrestricted equipment control.
+
+Acceptance requires TS-only, Director-only, both installed with one active
+controller, and Director-without-Chatstronomy cases. With Chatstronomy present,
+verify target changes, waits, current operation, progress, stop/failure, restart,
+notification suppression/privacy, and safe-boundary commands against the actual
+plugins and backend. Preserve the existing TS fixtures while adding equivalent
+Director fixtures; do not weaken their identity and safety checks.
 
 ## Operation timing and observability
 
@@ -360,9 +429,10 @@ under a bounded policy so delayed grading does not cause runaway acquisition.
 Rejection can reopen a deficit, but retries need limits and an operator-visible
 reason to avoid repeating an impossible objective all night.
 
-Invalid flats can invalidate calibration coverage and authorize replacement
-flats through the existing calibration/TS flat-history contracts. Distinguish
-suspect evidence from confirmed invalidation. Keep calibration records separate
+Invalid flats can invalidate Director calibration coverage and authorize
+replacement flats without a TS installation. Preserve the existing calibration
+and optional TS flat-history sync contracts for users who also use Sync.
+Distinguish suspect evidence from confirmed invalidation. Keep calibration records separate
 from TS light-frame acquisition records and preserve original files.
 
 Processing retains recipes, calibration provenance, and output relationships.
@@ -398,11 +468,12 @@ its acceptance gate passes and its review and validation evidence is linked here
 
 ### Phase 0: compatibility and execution spike
 
-- [ ] Pin current N.I.N.A. 3.3 nightly and TS 3.3 versions; audit custom TS fixes
-  before porting them and record the supported version matrix.
-- [ ] Prove the TS execution extension while retaining ordinary TS behavior.
-- [ ] Audit/port the local asymmetric meridian constraints and prove N.I.N.A.
-  horizon export/parity; include multiple safe intervals in the engine contract.
+- [ ] Pin current N.I.N.A. 3.3 nightly and record the supported version matrix.
+- [ ] Prove Director-owned execution through supported N.I.N.A. APIs without
+  TS installed; preserve ordinary TS and Sync behavior when separately installed.
+- [ ] Validate asymmetric meridian constraints against local TS reference cases
+  and prove N.I.N.A. horizon export/parity; include multiple safe intervals in
+  the engine contract.
 - [ ] Prove the shared Rust core loads and returns decisions in PSF Guard and
   a minimal C# plugin through the bundled sidecar, including packaging, version
   negotiation, restart reconciliation, and error handling.
@@ -415,31 +486,85 @@ its acceptance gate passes and its review and validation evidence is linked here
 - [x] Exercise the same golden decisions through a real Windows sidecar with
   bounded framing, version negotiation, peer checks, and process failure tests.
 - [ ] Finalize crate ownership, IPC framing, local state layout, and contracts.
+- [ ] Define and test Director's public state/context contract with Chatstronomy,
+  preserving its existing TS state and safe-boundary command integrations.
 
-Gate: one simulated target/exposure runs through the supported adapter; the
-same recorded input yields matching server/plugin decisions. No Sync changes
-are required to run existing workflows.
+Gate: one simulated target/exposure runs through Director's N.I.N.A. adapter
+without TS installed; the same recorded input yields matching server/plugin
+decisions. No Sync changes are required to run existing workflows.
 
 #### Phase 0 evidence and remaining work
 
 Implementation review: [shared-core and native interop spike, PR #460](https://github.com/theatrus/psf-guard/pull/460).
 Follow-on review: [rig meridian exclusions and multiple safe intervals, PR #461](https://github.com/theatrus/psf-guard/pull/461).
+Sidecar review: [bounded IPC and process harness, PR #462](https://github.com/theatrus/psf-guard/pull/462).
+Plugin review: [N.I.N.A. 3.3 runtime host and development bundle, Director PR #1](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/1).
+Live host validation: [isolated N.I.N.A. nightly smoke tests, Director PR #2](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/2).
+Native capture building block: [journaled capture and save lifecycle, Director PR #3](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/3).
+Native simulator sequence: [ASCOM capture and FITS readback, Director PR #4](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/4).
+Planner bridge: [typed evaluation and Rust-selected native capture, Director PR #5](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/5).
+
+The Director host pins N.I.N.A. `3.3.0.1058-nightly` and the tested sidecar by
+commit, CI run/artifact identity, SHA-256, and wire versions. The C# build consumes
+the artifact rather than compiling Rust. Its initial settings surface exposes
+explicit runtime Start/Stop only; no pairing or equipment dispatch is present.
+It has local process/protocol tests and WPF render tests using N.I.N.A.'s button
+template. A separately extracted official 3.3 nightly also passed real plugin
+discovery, runtime Start/Stop, child-failure recovery, profile-switch cleanup,
+normal shutdown, and abrupt parent-exit cleanup on 2026-09-25. Those tests used
+fresh redirected profile/plugin directories with no TS and no connected devices;
+they did not replace the installed N.I.N.A. 3.2 application. They are not the
+full-stack acquisition gate. Signed durable artifacts, native execution, and
+Chatstronomy state integration remain open gates; the current CI artifact pin
+is developmental.
+
+The internal capture adapter uses N.I.N.A.'s public imaging and save interfaces.
+It reserves a capture GUID before dispatch, snapshots the original profile's save
+settings, writes `PGCAPID` into FITS/XISF metadata, and waits for a correlated final
+save receipt. Queue admission is not save completion. Timeouts and cancellation
+after admission retain uncertain evidence; they do not authorize another attempt.
+The profile-scoped journal records identity, destination, and monotonic timings,
+but it is not yet the sidecar event ledger or recovery engine. Alongside public
+mediator and native-header tests, a test-only sequencer probe ran the actual
+adapter in official nightly #58 with ASCOM OmniSim camera, mount, and filter wheel
+on 2026-09-25. It connected, unparked, slewed, captured three filtered one-second
+lights, reloaded their FITS pixels and `PGCAPID`, matched durable journals, parked,
+disconnected, and stopped its verified sidecar. This required no TS. The probe
+is excluded from the plugin ZIP.
+
+The runtime host now exposes typed, bounded planning evaluation with immutable
+snapshots, exact integer identities, strict reply correlation, and cancellation
+integrated with its lifecycle. In a follow-on real nightly run, Rust selected
+each fixture goal and revalidated it after filter preparation at the adapter's
+dispatch callback. Each saved image incremented pending work, not accepted
+credit. Seven recorded decisions comprised six acquire results (selection and
+revalidation for each filter) followed by `wait: pending_assessment`. The run
+passed FITS/journal checks and cleanup; 102 automated tests also passed. C# does
+not implement the selection policy. These evaluations are recommendations for
+their snapshots, not durable authorization tokens.
+
+The fixture assignment and simulated-safe state are not a server allocation or
+recovery ledger. Durable attempt/event accounting, actual hardware-boundary
+ownership/safety, recovery, and server feedback remain prerequisites for a
+production Director sequencer item and the full-stack gate. The native smoke
+test does not claim autofocus, guiding, meridian/horizon enforcement, or
+Sync/Chatstronomy coexistence coverage.
 
 Baseline checked on 2026-09-25:
 
 | Component | Inspected baseline |
 | --- | --- |
 | N.I.N.A. | 3.3 NIGHTLY #58; NuGet `NINA.Plugin` `3.3.0.1058-nightly`. |
-| TS | Upstream `release/nightly-3.3`, commit `65478b96c52b47d4860e781c0249799cac2749e1`; source assembly version `5.10.4.0`. |
-| TS dependencies | `net10.0-windows7.0`, NINA package `3.3.0.1037-nightly`; compatibility with #58 is not yet runtime-tested. |
+| TS reference only | Upstream `release/nightly-3.3`, commit `65478b96c52b47d4860e781c0249799cac2749e1`; source assembly version `5.10.4.0`. Not a Director dependency. |
 | Local .NET SDK | `10.0.302`. |
 
-TS's `TargetSchedulerContainer.Execute` constructs `Planner` directly, then
-creates a private `PlanContainer` and executes it. The next TS change must
-introduce an optional provider at work selection while preserving event hooks,
-history, image-save observation, cancellation, and the default planner. Auditing
-and porting local TS modifications remains pending. No TS source or installed
-N.I.N.A. plugins are changed by the shared-core spike.
+Earlier exploration considered a TS execution-provider extension because its
+container constructs its planner and private plan container directly. That
+direction is superseded: no TS extension or port is required for Director.
+Its meridian behavior remains useful reference evidence. The next execution
+slice must instead prove native N.I.N.A. sequencing, event hooks, image-save
+observation, and cancellation. No TS source or installed N.I.N.A. plugins are
+changed by the shared-core spike.
 
 The initial implementation lives in
 [`crates/director-core`](../../crates/director-core/src/lib.rs) and
@@ -561,9 +686,11 @@ dotnet run --project tools/director-sidecar --configuration Release -- target/re
 
 CI runs portable protocol tests on all three platforms and Windows process
 tests against a release executable. Release panic-abort is intentional here:
-the failure stays in the child process, outside N.I.N.A. This is not yet an
-installable plugin. Signed/pinned artifacts, a production lifecycle controller,
-durable journals, restart reconciliation, and TS dispatch remain phase-0 gates.
+the failure stays in the child process, outside N.I.N.A. The sidecar alone is not
+a plugin. The separate development host bundles this tested executable and has
+passed real N.I.N.A. runtime-lifecycle smoke tests. Signed release artifacts,
+integrated durable journals, restart reconciliation, and core-authorized native
+N.I.N.A. dispatch remain phase-0 gates.
 The existing Sync plugin is unchanged.
 
 ### Phase 1: meta database and global project model
@@ -643,9 +770,9 @@ replace the stable Sync registry entry.
 
 ### Full-stack end-to-end gate
 
-Once the Director plugin, shared crate/sidecar, TS adapter, and corresponding
-PSF Guard changes are available, run them together. Passing core fixtures or
-the console process harness does not satisfy this gate. Run the first integrated
+Once the Director plugin, shared crate/sidecar, native N.I.N.A. adapter, and
+corresponding PSF Guard changes are available, run them together. Passing core
+fixtures or the console process harness does not satisfy this gate. Run the first integrated
 test as soon as those components exist, then repeat it after changes to their
 contracts or execution behavior and before an experimental release.
 
@@ -654,11 +781,12 @@ contracts or execution behavior and before an experimental release.
   `--registry`, and a temporary image receive directory. Do not write to live
   catalogs, production endpoints, or the user's real registry.
 - Install the candidate Director plugin and its pinned runtime into the test
-  N.I.N.A. setup with the supported TS build. Use simulated camera, mount, and
+  N.I.N.A. setup without TS installed. Use simulated camera, mount, and
   other required devices, an isolated profile, and a real sequencer run.
 - Pair with the local server, check in, obtain an assignment, select work in
-  the shared engine, execute through TS, and record the resulting image and
-  timing events. Verify progress in PSF Guard and the plugin UI, not just logs.
+  the shared engine, execute through native N.I.N.A. APIs, and record the
+  resulting image and timing events. Verify progress in PSF Guard and the plugin
+  UI, not just logs.
 - Grade the captured work in PSF Guard and check in again. Confirm accepted
   work completes its objective, rejected work can request a bounded retry, and
   pending assessments do not cause duplicate acquisition.
@@ -666,8 +794,13 @@ contracts or execution behavior and before an experimental release.
   operator stop, safety loss, server disconnection, sidecar failure, and restart.
   Verify recovery reconciles actual execution without replaying a stale decision
   or starting work outside the assignment or local safety constraints.
-- Re-run ordinary TS and existing Sync workflows to check coexistence. Retain
-  exact commits/package versions, sequence/profile fixtures, redacted logs,
+- In a separate coexistence pass, install TS and Sync and re-run their ordinary
+  workflows. Check that conflicting acquisition ownership is rejected.
+- Run Chatstronomy with TS-only and Director-only sessions. Verify accurate,
+  source-aware state and target/wait/progress notifications, privacy and delivery
+  controls, restart recovery, and permitted safe-boundary commands. Repeat
+  Director acquisition without Chatstronomy installed to prove it is optional.
+- Retain exact commits/package versions, sequence/profile fixtures, redacted logs,
   execution events, assertions, and UI captures with the relevant PR evidence.
 
 Mark unavailable paths as untested and keep the gate open; do not substitute
@@ -676,11 +809,14 @@ claims this full-stack test has run.
 
 Open design choices include objective depth equivalence across instruments,
 coordinate/time precision policy, conservative expiry margins, duration-model
-retention, and exact TS extension API. Resolve these with documented evidence
-in the relevant phase, not implicit defaults in implementation.
+retention, and the supported N.I.N.A. execution API surface. Resolve these with
+documented evidence in the relevant phase, not implicit defaults in implementation.
 
 ## References
 
+- [Chatstronomy N.I.N.A. plugin](https://github.com/theatrus/chatstronomy-nina-plugin):
+  existing TS message-broker events, sequence state projection, privacy controls,
+  and safe-boundary commands must coexist with Director.
 - [Data transfer and remote sync](data-transfer.md): existing directional merge
   and grading contracts; Director coordination is additive.
 - [Multi-database architecture](multi-database.md): catalog scope and identity.
