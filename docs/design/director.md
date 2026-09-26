@@ -51,6 +51,8 @@ sync semantics.
 - Support connected rig monitoring and intentionally offline acquisition with
   bounded cached authorization and batched check-in. Neither mode requires
   image uploads to keep control/progress evidence moving.
+- Define planning behavior as global defaults with optional site, rig and
+  project overrides, not a required copy of scheduling settings on every project.
 
 ## Implementation audit
 
@@ -63,6 +65,7 @@ untested integration requirements unchecked.
 | Area | Implemented evidence | Still missing |
 | --- | --- | --- |
 | Shared engine | Merged `crates/director-core`: deterministic selection, program/recipe binding, preparation reducer, conservative altitude/horizon and meridian geometry; shared Rust/.NET fixtures. | Complete observing criteria, production Earth-orientation source, full operation inventory, duration learning and server simulation. |
+| Planning policy inheritance | Prototype engine inputs carry concrete priorities and preparation preferences. | Versioned global defaults, optional site/rig/project overrides, shared-core resolution and provenance UI are not implemented. Concrete input fields are not an inheritance model. |
 | Sidecar and local recovery | Merged `crates/director-ledger` and `crates/director-runtime`: schema-4 journal, capture/preparation outboxes, IPC 7, one-shot dispatch checks, process crash/reopen tests; PSF Guard #464-487. | Remote inbox/acknowledgements, pruning, grade feedback, assignment replacement and complete operator recovery. No network batch check-in yet. |
 | NINA native execution | Plugin [#18](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/18), [#19](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/19), [#22](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/22), [#23](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/23), [#24](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/24) merged: transient native items, target context, complete horizon export and post-hook geometry checks. Real nightly #58 OmniSim probe captured three filtered FITS frames with correlated evidence. | Public production session container, all trigger/condition/hook contexts, plugin compatibility matrix, native defaults, full autofocus/guiding/flip/calibration/safety recovery and continuous ownership integration. Probe uses fixture allocations and synthetic orientation evidence, not a server session. |
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
@@ -123,6 +126,47 @@ with a versioned migration that preserves every referenced effective horizon;
 do not silently replace it with a common site curve. Time-zone and weather
 configuration, freshness policy and their planning/acquisition integration are
 also still required.
+
+### Inherited planning policy
+
+Smart filter selection, soft avoidance rules, priority/scoring strategy and
+weights, and other scheduling preferences start as global defaults. Sites,
+rigs and projects may override only the settings they need. Projects must not
+require a duplicate TS-style settings form to get normal scheduling behavior.
+Resolve each field in this order: global default -> site override -> rig
+override -> project override. A multi-rig project therefore has an effective
+policy for each participating rig/site configuration, not one flattened policy
+that accidentally erases those differences.
+
+An unset override means inherit. Explicit false/off, zero where valid, and an
+explicit strategy selection remain actual overrides. Use typed per-field
+resolution, not sentinel numbers or wholesale replacement of a partially filled
+settings object. Keep the original overrides and their provenance; do not copy
+inherited values into every project when saving. The UI should show the
+effective value and its source, with an explicit override control and reset to
+inherit action. Changing a parent default then reaches its inheriting children.
+
+The shared Rust core resolves and validates this policy for both server
+simulation and local Director execution. A resolved snapshot includes the
+policy/schema version, contributing scope IDs/revisions and per-field source.
+Cache keys and check-in data retain that snapshot so online simulation and
+offline acquisition use the same rules. A policy update takes effect at an
+authorized safe boundary and triggers reevaluation; it does not rewrite an
+in-flight operation or implicitly expand a cached assignment.
+
+Separate preferences from hard constraints. Soft filter/Moon avoidance,
+observing preferences and relative priority may inherit and be overridden.
+Local unsafe state, equipment limits, required fresh evidence, rig horizon and
+hard meridian/altitude limits still intersect the resulting policy and cannot
+be relaxed by a project override. Hard-limit commissioning remains explicit and
+local. Site-level planning overrides do not make sites own rig hardware or
+horizons. The policy resolver selects behavior; N.I.N.A. remains the equipment
+and safety execution boundary.
+
+Current objective priorities and preparation preferences are concrete prototype
+inputs. They do not yet implement this inheritance. Persist optional overrides
+in owned intent/configuration records and bind validated effective values for
+the engine without losing the editable source hierarchy.
 
 Short and long exposures through the same filter are separate objectives when
 they serve different purposes. Recipes include duration, filter mapping,
@@ -1707,6 +1751,9 @@ are unchanged.
   constraints; migrate existing snapshots without changing effective geometry.
 - [ ] Add site time-zone and weather-source configuration, forecast versus
   observed-condition provenance/freshness, and local safety precedence tests.
+- [ ] Persist versioned global planning defaults and optional site/rig/project
+  overrides. Add shared-core per-field resolution, effective-value provenance
+  and UI override/reset controls rather than duplicating settings per project.
 - [x] Enable opt-in operator project identity API with authentication and the
   database-management gate (#490).
 - [ ] Merge and validate site/rig operator APIs and identity UI (#494/#495).
@@ -1738,6 +1785,9 @@ is not satisfied by the separate meta database alone.
 
 ### Phase 2: single-rig autonomous Director
 
+- [ ] Use the same resolved smart-filter, avoidance and priority policy in
+  simulation and acquisition. Test inherited/off/zero values, mixed overrides,
+  parent edits, multi-rig scope, hard-limit precedence and offline version parity.
 - [ ] Implement versioned allocation, acknowledgements, checkpoints, and limits.
 - [x] Implement the local ledger's durable reservation/preparation/outbox
   primitives and crash/reopen tests; these do not include remote acknowledgement.
