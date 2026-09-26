@@ -69,7 +69,7 @@ sync semantics.
 
 ## Implementation audit
 
-Audited 2026-09-26 against PSF Guard main `31b02d4` and Director plugin main
+Audited 2026-09-26 against PSF Guard main `dfd6a66` and Director plugin main
 `8f6d8c2`, plus the open PR heads listed below. **Merged building block** does
 not mean a production workflow or phase gate passed. Open PR work is not in
 main. Update this table and the relevant checklist when a PR lands; keep
@@ -86,8 +86,8 @@ untested integration requirements unchecked.
 | Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492): shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493): schema-3 intent persistence with validated immutable setup references. | Objective editor, depth/FOV/sampling compatibility and authoritative allocation remain open. |
 | Project framing wizard | Project intent retains target coordinates and rig-specific framing/recipes as building blocks only. | Survey-map backgrounds, target/reference selection, interactive FOV and rotation, mosaics, versioned optical geometry, multi-rig/site preview, draft editing and reviewed activation are not implemented. |
 | Catalog discovery | [#498](https://github.com/theatrus/psf-guard/pull/498) merged: operator-scoped read-only project/profile evidence from registered TS-compatible catalogs, with bounded results and invalid/duplicate identity reports. | Discovery does not infer rig ownership or read image history. |
-| Catalog adoption | [#502](https://github.com/theatrus/psf-guard/pull/502) merged explicit durable lineage; [#503](https://github.com/theatrus/psf-guard/pull/503) merged operator preview/apply, exact identity matching, stale-review refusal and interrupted-write recovery. [#506](https://github.com/theatrus/psf-guard/pull/506) adds the reviewed mapping UI and read-only inventory, with real-server browser tests. | Independent forks, historical-image attribution, contribution accounting and acquisition authorization remain separate work. |
-| Operator API and UI | [#490](https://github.com/theatrus/psf-guard/pull/490) and [#494](https://github.com/theatrus/psf-guard/pull/494) merged: opt-in project/site/rig identity and site/rig snapshot APIs. [#495](https://github.com/theatrus/psf-guard/pull/495) merged the identity management screen; [#506](https://github.com/theatrus/psf-guard/pull/506) adds the explicit catalog mapping workflow. Both have real-server browser tests. | No project planning editor, rig pairing, acquisition control or live rig dashboard. UI tests are not equipment tests. |
+| Catalog adoption | [#502](https://github.com/theatrus/psf-guard/pull/502) merged explicit durable lineage; [#503](https://github.com/theatrus/psf-guard/pull/503) merged operator preview/apply, exact identity matching, stale-review refusal and interrupted-write recovery. [#506](https://github.com/theatrus/psf-guard/pull/506) merged the reviewed mapping UI and read-only inventory, with real-server browser tests. | Independent forks, historical-image attribution, contribution accounting and acquisition authorization remain separate work. |
+| Operator API and UI | [#490](https://github.com/theatrus/psf-guard/pull/490) and [#494](https://github.com/theatrus/psf-guard/pull/494) merged: opt-in project/site/rig identity and site/rig snapshot APIs. [#495](https://github.com/theatrus/psf-guard/pull/495) merged the identity management screen; [#506](https://github.com/theatrus/psf-guard/pull/506) merged the explicit catalog mapping workflow. Both have real-server browser tests. | No project planning editor, rig pairing, acquisition control or live rig dashboard. UI tests are not equipment tests. |
 | Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
 | Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. | Central telemetry ingestion/dashboard, scoped pairing, remote acknowledgements, offline authorization lifecycle, manual/sequence batch reconcile and reconnect activation are not implemented. |
 | End-to-end lifecycle | Core, process, native simulator and isolated management HTTP/UI tests exist separately. | No PSF Guard allocation -> real NINA simulator acquisition -> central telemetry/grade -> batch reconciliation/replan test. TS/Sync/Chatstronomy coexistence gates remain open. |
@@ -1793,6 +1793,24 @@ session and local native checks. A recovered pending command remains uncertain
 evidence. The durable journal commits these checks through the entry points
 below, exposed in IPC 7. The merged internal adapter calls them after native
 before-hooks; the preview gains no acquisition authority.
+
+The internal `director-core::dispatch` API also computes an inclusive latest
+start for the selected work in its current safe window. Its result includes the
+evaluated timestamp and no deadline for non-acquisition decisions. Preparation
+checks include the pending operation, remaining steps and capture overhead;
+completed steps are not charged again. Geometry checks use the compiled horizon
+and meridian windows, never a later window beyond a gap. Assignment expiry and
+exclusive condition freshness further constrain the bound.
+
+This is an internal shared-core building block, not yet wired through the ledger,
+IPC or native adapter. The existing IPC 7 result still has no dispatch deadline.
+The follow-on transport must preserve both timestamps exactly. Native enforcement
+must measure monotonic elapsed time (rounded up to milliseconds) from before
+requesting the check, compare it
+with the returned slack, also reject wall-clock regression/expiry, and retain
+fresh local safety/ownership/configuration checks. A successful but late reply
+must not dispatch. This bound is feasibility for the already issued work, never
+a reservation, replay grant, or promise that its priority rank remains highest.
 
 Geometry preparation has an opaque, versioned checkpoint for local persistence.
 Restore requires a separately compiled binding from the original trusted program
