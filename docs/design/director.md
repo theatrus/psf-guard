@@ -501,6 +501,7 @@ Sidecar review: [bounded IPC and process harness, PR #462](https://github.com/th
 Plugin review: [N.I.N.A. 3.3 runtime host and development bundle, Director PR #1](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/1).
 Live host validation: [isolated N.I.N.A. nightly smoke tests, Director PR #2](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/2).
 Native capture building block: [journaled capture and save lifecycle, Director PR #3](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/3).
+Native simulator sequence: [ASCOM capture and FITS readback, Director PR #4](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/4).
 
 The Director host pins N.I.N.A. `3.3.0.1058-nightly` and the tested sidecar by
 commit, CI run/artifact identity, SHA-256, and wire versions. The C# build consumes
@@ -522,10 +523,17 @@ settings, writes `PGCAPID` into FITS/XISF metadata, and waits for a correlated f
 save receipt. Queue admission is not save completion. Timeouts and cancellation
 after admission retain uncertain evidence; they do not authorize another attempt.
 The profile-scoped journal records identity, destination, and monotonic timings,
-but it is not yet the sidecar event ledger or recovery engine. Tests use public
-mediator mocks and native header serializers; this adapter is not yet exposed as
-a sequencer item or validated with a simulated camera. Core authorization,
-ownership/safety lifetime, recovery, and sidecar feedback must be connected first.
+but it is not yet the sidecar event ledger or recovery engine. Alongside public
+mediator and native-header tests, a test-only sequencer probe ran the actual
+adapter in official nightly #58 with ASCOM OmniSim camera, mount, and filter wheel
+on 2026-09-25. It connected, unparked, slewed, captured three filtered one-second
+lights, reloaded their FITS pixels and `PGCAPID`, matched durable journals, parked,
+disconnected, and stopped its verified sidecar. This required no TS. The probe is
+excluded from the plugin ZIP and checks simulator context, not planning approval.
+Core authorization, ownership/safety lifetime, recovery, and server/sidecar
+feedback remain prerequisites for a production Director sequencer item and the
+full-stack gate. The native smoke test does not claim autofocus, guiding,
+meridian/horizon enforcement, or Sync/Chatstronomy coexistence coverage.
 
 Baseline checked on 2026-09-25:
 
