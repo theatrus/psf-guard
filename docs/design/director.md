@@ -79,8 +79,8 @@ untested integration requirements unchecked.
 | --- | --- | --- |
 | Shared engine | Merged `crates/director-core`: deterministic selection, program/recipe binding, preparation reducer, conservative altitude/horizon and meridian geometry; shared Rust/.NET fixtures. | Complete observing criteria, production Earth-orientation source, full operation inventory, duration learning and server simulation. |
 | Planning policy inheritance | Prototype engine inputs carry concrete priorities and preparation preferences. | Versioned global defaults, optional site/rig/project overrides, shared-core resolution and provenance UI are not implemented. Concrete input fields are not an inheritance model. |
-| Sidecar and local recovery | Merged `crates/director-ledger` and `crates/director-runtime`: schema-4 journal, capture/preparation outboxes, IPC 7, one-shot dispatch checks, process crash/reopen tests; PSF Guard #464-487. | Remote inbox/acknowledgements, pruning, grade feedback, assignment replacement and complete operator recovery. No network batch check-in yet. |
-| NINA native execution | Plugin [#18](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/18), [#19](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/19), [#22](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/22), [#23](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/23), [#24](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/24) merged: transient native items, target context, complete horizon export and post-hook geometry checks. Real nightly #58 OmniSim probe captured three filtered FITS frames with correlated evidence. | Public production session container, all trigger/condition/hook contexts, plugin compatibility matrix, native defaults, full autofocus/guiding/flip/calibration/safety recovery and continuous ownership integration. Probe uses fixture allocations and synthetic orientation evidence, not a server session. |
+| Sidecar and local recovery | Merged `crates/director-ledger` and `crates/director-runtime`: schema-4 journal, capture/preparation outboxes, IPC 8/runtime 0.7.0, one-shot dispatch checks with exact latest-start deadlines, process crash/reopen tests; PSF Guard #464-487 and [#518](https://github.com/theatrus/psf-guard/pull/518). | Remote inbox/acknowledgements, pruning, grade feedback, assignment replacement and complete operator recovery. No network batch check-in yet. |
+| NINA native execution | Plugin [#18](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/18), [#19](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/19), [#22](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/22), [#23](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/23), [#24](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/24) and [#26](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/26) merged: transient native items, target context, complete horizon export, post-hook geometry checks and tested internal TS-style instruction slots with a compatibility matrix. Real nightly OmniSim probes captured three filtered FITS frames with correlated evidence. | Public TS-compatible session container and UI, all trigger/condition/hook contexts, native defaults, full autofocus/guiding/flip/calibration/safety recovery and continuous ownership integration. Probe uses fixture allocations and synthetic orientation evidence, not a server session. |
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
 | Meta storage | Separate schema-5 store on by default beside the registry, UUIDs, reviewed one-to-one database/rig binding, confirmed source project links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. Unambiguous prototype links retain rig IDs. | Conflict-resolution UI for ambiguous prototype rigs, permissions/enrollment, active revisions, allocation authority and progress projections. |
 | Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492): shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493): schema-3 intent persistence with validated immutable setup references. | Objective editor, depth/FOV/sampling compatibility and authoritative allocation remain open. |
@@ -924,6 +924,16 @@ This is a phase-2 requirement. Merged internal sequence items currently cover
 only a subset; the runtime preview does not expose this production container or
 the default-policy UI.
 
+Director plugin [#26](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/26)
+adds internal seven-slot configuration and one-use native invocations. Cloning,
+JSON persistence, nested target context, inherited triggers/conditions,
+cancellation and failed/skipped child reporting have native tests. See the
+[TS compatibility matrix](https://github.com/theatrus/psf-guard-director-nina-plugin/blob/main/docs/native-capture.md#target-scheduler-compatible-instruction-slots).
+This is not the public container or its UI. The production coordinator still
+owns slot cadence, policy ownership, exposure-in-hook admission and safe cleanup.
+In particular, TS's internal `AfterAllTargetsContainer` is labeled **After Each
+Target Instructions**; its name must not be interpreted as a session-end hook.
+
 Director has a distinct plugin identity, configuration, credentials, queues,
 and release flow from Sync. Detect competing acquisition controllers. Define
 ownership for shared sync/upload duties so coexistence does not create duplicate
@@ -1093,8 +1103,9 @@ treat TS tables as the planner's internal schema.
 | Central reporting | Coalesced live status is separate from durable capture/preparation receipts. Network errors update connectivity only; they do not fail an otherwise authorized local exposure or erase evidence. | No Director telemetry ingestion endpoint yet. |
 | Batch reconciliation | Bounded independent event pages, exact feed cursors, idempotent acknowledgements, grading/configuration revisions and replacement assignment proposal. Manual, sequencer and automatic check-ins use the same implementation. | Local capture/preparation feeds exist; remote inbox/acknowledgements and grade application remain open. |
 
-Backend API names must be finalized with their implementation under
-`/api/director/v1`; the plugin must not silently call a guessed endpoint or
+The planning-flow endpoint table names the intended `/api/director/v1`
+interfaces and records which are still planned. Finalize their wire contracts
+with implementation; the plugin must not silently call an unimplemented endpoint or
 reuse the operator-only metadata API for rig credentials. Keep browser/operator
 management and rig execution authority separate. Enrollment binds the caller to
 one coordinator/catalog/rig tuple; every check-in must reject a mismatched tuple
@@ -1135,9 +1146,9 @@ Slow hooks invalidate the previous decision and require fresh core dispatch
 validation. Do not turn a native container's apparently successful return into
 success when a child failed, was skipped, or never completed.
 
-Next implementation order: transport and enforce core dispatch deadlines;
-establish tested TS-compatible native slot/option primitives; define the
-database-bound assignment and acknowledgement APIs with backend work; replace
+Core dispatch deadline transport and the internal TS-style slot primitives are
+implemented. Next, define the database-bound assignment and acknowledgement
+APIs with backend work, complete the native option contracts, and replace
 the simulator-only loop with the guarded session coordinator; then expose the
 familiar public container/UI and live/batch status. Each increment must state
 its missing gates. The full gate remains a real N.I.N.A. simulator sequence
@@ -1979,15 +1990,30 @@ decision-only APIs project the same result for compatibility. Deadlines are not
 persisted as replay authority, and recovered work still requires explicit
 reconciliation rather than redispatch.
 
-This is not yet wired through IPC or the native adapter. The existing IPC 7
-result still has no dispatch deadline.
-The follow-on transport must preserve both timestamps exactly. Native enforcement
-must measure monotonic elapsed time (rounded up to milliseconds) from before
-requesting the check, compare it
-with the returned slack, also reject wall-clock regression/expiry, and retain
-fresh local safety/ownership/configuration checks. A successful but late reply
-must not dispatch. This bound is feasibility for the already issued work, never
-a reservation, replay grant, or promise that its priority rank remains highest.
+PSF Guard [#518](https://github.com/theatrus/psf-guard/pull/518) exposes both
+timestamps in IPC 8/runtime 0.7.0. `dispatch_checked` includes required
+`evaluated_at_ms` equal to the submitted state timestamp, and required
+`latest_start_ms` (inclusive for Acquire, explicit null for other decisions).
+Director plugin [#27](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/27)
+strictly decodes these integer fields and rejects mismatched evaluation time,
+wrong goals or deadlines outside assignment/condition validity. The native
+adapter measures monotonic elapsed time, rounded up to milliseconds, from
+before sampling the check request through a final one-use synchronous guard.
+That guard runs after native setting checks, progress callbacks and durable
+pre-capture journal writes, immediately before entering the native operation.
+It also checks the freshly sampled wall clock and rejects regression or expiry.
+A late successful reply cannot dispatch. The one-use/session fences remain in force.
+This bound is feasibility for already issued work, never a reservation, replay
+grant, real-time safety interlock or promise of highest priority until dispatch.
+
+The combined plugin passed 494 tests and the official N.I.N.A. nightly #59
+ASCOM simulator sequence on 2026-09-27: three verified FITS captures, seven
+preparation receipts, six inherited exposure hooks, ledger reopen retaining
+pending credit, same-path horizon-change detection and successful cleanup.
+The plugin retains the #58 API minimum; the smoke launcher explicitly permits
+the reviewed #58/#59 hosts. This fixture uses synthetic safe/Earth-orientation
+evidence and a local program, not a server allocation. It does not exercise all
+seven configured slots or satisfy the full coordinator/offline acceptance gate.
 
 Geometry preparation has an opaque, versioned checkpoint for local persistence.
 Restore requires a separately compiled binding from the original trusted program
