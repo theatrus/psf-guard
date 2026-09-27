@@ -244,3 +244,58 @@ async fn the_plan_list_joins_framing_plan_and_activation_per_project() {
     assert_eq!(heart["links"][0]["source_name"], "Heart Nebula");
     let _ = a.objective;
 }
+
+#[tokio::test]
+async fn listing_counts_frames_per_target_across_linked_databases() {
+    let a = activated().await;
+    let (_, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/apply", a.project),
+        json!({"preview_digest": preview["data"]["preview_digest"]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    a.db.execute(
+        "UPDATE exposureplan SET acquired = 10, accepted = 8 WHERE targetid = (SELECT Id FROM target WHERE name = 'IC 1805 r1c1')",
+        [],
+    )
+    .unwrap();
+    let (status, listed) = call(&a.f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let row = listed["data"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["project"]["id"] == a.project.to_string())
+        .unwrap();
+    assert_eq!(
+        row["progress"],
+        json!({"desired": 144, "acquired": 10, "accepted": 8, "targets": 2}),
+        "{row}"
+    );
+    let targets = row["links"][0]["targets"].as_array().unwrap();
+    assert_eq!(targets.len(), 2);
+    assert_eq!(targets[0]["name"], "IC 1805 r1c1");
+    assert_eq!(targets[0]["accepted"], 8);
+    assert_eq!(targets[1]["name"], "IC 1805 r2c1");
+    assert_eq!(targets[1]["desired"], 72);
+    // A plan whose databases hold no target yet has no progress to report.
+    let bare = listed["data"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["project"]["name"] == "M31")
+        .unwrap();
+    assert_eq!(bare["progress"], Value::Null);
+    let _ = (a.rig, a.objective);
+}

@@ -14,7 +14,7 @@ const ok = (data: unknown) => ({ success: true, data, error: null });
 const record = { id: '11111111-1111-4111-8111-111111111111', name: 'M31', revision: 1 };
 const rig = { id: '22222222-2222-4222-8222-222222222222', name: 'C925', revision: 1 };
 const enabled = { protocol_version: 1, enabled: true, instance_id: record.id, acquisition_available: false };
-const row = (project = record, extra: Partial<DirectorPlanRow> = {}): DirectorPlanRow => ({ project, links: [], framing: null, plan: null, activation: null, ...extra });
+const row = (project = record, extra: Partial<DirectorPlanRow> = {}): DirectorPlanRow => ({ project, links: [], progress: null, framing: null, plan: null, activation: null, ...extra });
 const list = (rows: DirectorPlanRow[], warnings: string[] = []) => ({ rows, warnings });
 function Location() {
   const location = useLocation();
@@ -96,7 +96,9 @@ describe('Director management', () => {
   it('shows each plan with its stage and opens Rig planning at its linked database row', async () => {
     mount(false, undefined, [
       http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list([
-        row(record, { links: [{ catalog_slug: 'c925', catalog_name: 'C925', rig, source_project_guid: 'g', source_row_id: 7, source_name: 'Andromeda subs' }],
+        row(record, { links: [{ catalog_slug: 'c925', catalog_name: 'C925', rig, source_project_guid: 'g', source_row_id: 7, source_name: 'Andromeda subs',
+          targets: [{ name: 'M31 r1c1', desired: 72, acquired: 40, accepted: 36 }, { name: 'M31 r2c1', desired: 72, acquired: 0, accepted: 0 }] }],
+          progress: { desired: 144, acquired: 40, accepted: 36, targets: 2 },
           framing: { revision: 2, target_name: 'M31', panels: 4, panel_rig_id: rig.id }, plan: { revision: 1, objectives: 2, rigs: 1 }, activation: null }),
         row({ ...record, id: '33333333-3333-4333-8333-333333333333', name: 'Bare' }),
       ], ['Odd file: has no Target Scheduler project table'])))),
@@ -106,7 +108,9 @@ describe('Director management', () => {
     ]);
     expect(await screen.findByText('M31')).toBeInTheDocument();
     expect(screen.getByText('Planned: 2 objectives, 1 rig, not activated')).toBeInTheDocument();
-    expect(screen.getByText('C925: Andromeda subs')).toBeInTheDocument();
+    expect(screen.getByText(/C925: Andromeda subs/)).toBeInTheDocument();
+    expect(screen.getByText('M31 r1c1 36/72 frames · M31 r2c1 0/72 frames')).toBeInTheDocument();
+    expect(screen.getByText('36/144 frames accepted so far')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open M31' })).toHaveAttribute('href', `/director?db=old-catalog&project=123&directorProject=${record.id}`);
     expect(screen.getByText('Not linked to any database')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Bare' })).toBeInTheDocument();

@@ -299,6 +299,8 @@ export interface DirectorMosaicPreview {
   warnings: string[];
 }
 
+/** One target of a linked project, with the frames its exposure plans ask for, have and have accepted. */
+export interface DirectorTargetProgress { name: string; desired: number; acquired: number; accepted: number }
 export interface DirectorPlanLink {
   catalog_slug: string;
   catalog_name: string;
@@ -306,10 +308,13 @@ export interface DirectorPlanLink {
   source_project_guid: string;
   source_row_id: number | null;
   source_name: string | null;
+  targets: DirectorTargetProgress[];
 }
 export interface DirectorPlanRow {
   project: DirectorIdentity;
   links: DirectorPlanLink[];
+  /** Frames across every linked database; null until some database holds a target. */
+  progress: { desired: number; acquired: number; accepted: number; targets: number } | null;
   framing: { revision: number; target_name: string; panels: number; panel_rig_id: string | null } | null;
   plan: { revision: number; objectives: number; rigs: number } | null;
   activation: { revision: number; applied_at_ms: number; rigs: number } | null;
