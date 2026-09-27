@@ -27,6 +27,12 @@ simulate opportunities, acquire, evaluate quality and calibration, request
 replacement data, process, and assess completion. A project can span different
 telescopes, sites, catalogs, and eventually collaborating PSF Guard instances.
 
+Director covers acquisition planning and acquisition within that lifecycle; it
+does not replace PSF Guard's Overview or take ownership of catalog review,
+grading, calibration inspection or processing. Overview remains a key project
+and collected-data view, including the per-rig catalogs already represented
+under its projects. Both surfaces refer to the same projects.
+
 The existing PSF Guard Sync plugin remains a separate supported product.
 Director must not require users to migrate away from Sync or change existing
 sync semantics.
@@ -140,12 +146,24 @@ user-facing project. An existing project can gain planning and rig participation
 through a reviewed adoption workflow that reuses its data and identity links.
 Never silently combine same-named projects or infer rig ownership from a name.
 
-Use one Projects workspace for review, planning, rig participation and rollup.
-Reuse the existing database settings for source/import/sync connections; expose
-source links within the project when needed. The current experimental Director
+Keep Overview and Director as complementary views of the same project, not one
+replacement workspace. Overview retains project browsing, per-rig catalog
+contributions, collected-data summaries and entry points to review, grading and
+processing. Director provides framing, objectives, rig participation, planning
+and acquisition status. A project can exist in Overview without using Director;
+planning can also begin before a project has any captured data.
+
+Provide contextual navigation between an Overview project and its Director
+plan, preserving project identity and any applicable rig/database scope on the
+return path. Shared progress projections can appear in both views; neither view
+creates a second project or independently editable copy of acquisition history.
+Adding planning to an existing project must not move or recreate its catalog.
+
+Reuse existing database settings for source/import/sync connections and expose
+source links in project context when needed. The current experimental Director
 identity lists and Catalogs mapping tab are implementation scaffolding, not the
-intended navigation. Replace that parallel workflow rather than adding another
-catalog registry or asking users to recreate all existing projects and rigs.
+intended catalog navigation. Retire that parallel catalog workflow without
+removing Overview's projects or per-rig catalog access.
 
 ### Site and rig responsibilities
 
@@ -2009,10 +2027,13 @@ allocation accounting and native assignment delivery are not implemented here.
   history or merging names (#503, #506).
 - [x] Discover registered catalog project/profile evidence read-only, without
   inventing rig identities or changing source schemas (#498).
-- [ ] Unify existing project review and Director planning in one Projects
-  workspace. Add rigs as contribution plans within the same project, with
-  reviewed reuse of existing project/source identities instead of manual
-  duplicate project creation.
+- [ ] Connect Overview projects to Director planning using the same project
+  identity. Preserve Overview's project/per-rig catalog navigation and existing
+  review workflows; Director covers planning and acquisition, not their
+  replacement. Add rigs as contribution plans without duplicate projects.
+- [ ] Browser-test navigation from an existing Overview project to its Director
+  plan and back with project/rig/database scope intact, plus catalog-only
+  projects without Director and planned projects without captured images.
 - [ ] Move source/import/sync linking into existing database settings and
   contextual project views; retire the standalone Director Catalogs workflow.
 - [ ] Show objective-level project rollup and per-rig progress without treating
