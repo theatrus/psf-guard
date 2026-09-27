@@ -281,7 +281,7 @@ export interface DirectorRigStatusView {
 
 export interface DirectorResolvedName { query: string; name: string; ra_degrees: number; dec_degrees: number; source: string }
 
-export interface DirectorNightTarget { id: string; hours_up: number; hours_up_moon_down: number; max_altitude_degrees: number; min_moon_separation_degrees: number }
+export interface DirectorNightTarget { id: string; hours_up: number; hours_up_moon_down: number; hours_lost_to_meridian: number; transit_ms: number | null; max_altitude_degrees: number; min_moon_separation_degrees: number }
 export interface DirectorNight {
   date: string;
   noon_ms: number;
@@ -296,7 +296,7 @@ export interface DirectorNightSample {
   t_ms: number;
   sun_altitude_degrees: number;
   moon_altitude_degrees: number;
-  targets: Array<{ altitude_degrees: number; azimuth_degrees: number; horizon_altitude_degrees: number | null; allowed: boolean }>;
+  targets: Array<{ altitude_degrees: number; azimuth_degrees: number; horizon_altitude_degrees: number | null; allowed: boolean; meridian_blocked: boolean }>;
 }
 export interface DirectorRigFeasibility {
   rig: DirectorIdentity;

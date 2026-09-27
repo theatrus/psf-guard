@@ -6,6 +6,10 @@
 
 ## Added
 
+- The visibility chart marks the target's meridian transit and draws the
+  rig's meridian pause as a break in the track; the hours lost to it are
+  taken out of the visible time and named in the verdict.
+
 - Framing now behaves like N.I.N.A.'s framing assistant: a rectangle for the
   rig's field appears at once (rigs take their optics from their own frames
   when they are adopted), you drag it to move the target and its handle to

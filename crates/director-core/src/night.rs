@@ -5,9 +5,10 @@
 
 use crate::ephemeris::{moon_illumination, moon_position, separation_degrees, sun_position};
 use crate::visibility::{
-    altitude_allowed, observe, AltitudeLimits, EarthOrientation, Horizon, IcrsPosition, Site,
-    VisibilityError,
+    altitude_allowed, meridian_windows, observe, AltitudeLimits, EarthOrientation, Horizon,
+    IcrsPosition, Site, VisibilityError,
 };
+use crate::windows::{Interval, MeridianExclusion};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_NIGHTS: u32 = 31;
@@ -35,16 +36,32 @@ pub struct NightRequest {
     pub step_ms: u64,
     /// Sun altitude below which it counts as dark, such as -12 or -18.
     pub dark_below_degrees: f64,
+    /// The rig's pause around the meridian; zero and zero means none.
+    #[serde(default = "no_exclusion")]
+    pub meridian_exclusion: MeridianExclusion,
+}
+
+fn no_exclusion() -> MeridianExclusion {
+    MeridianExclusion {
+        before_ms: 0,
+        after_ms: 0,
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TargetNight {
     pub id: String,
-    /// Dark hours with the target above the horizon curve and inside limits.
+    /// Dark hours with the target above the horizon curve, inside limits and
+    /// outside the rig's meridian pause.
     pub hours_up: f64,
     /// The same, while the Moon is below the horizon.
     pub hours_up_moon_down: f64,
+    /// Dark hours the target was up but the meridian pause forbade.
+    pub hours_lost_to_meridian: f64,
+    /// The upper transit within this noon-to-noon night, when it happens.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub transit_ms: Option<u64>,
     pub max_altitude_degrees: f64,
     pub min_moon_separation_degrees: f64,
 }
@@ -74,6 +91,8 @@ pub struct TargetSample {
     pub horizon_altitude_degrees: Option<f64>,
     /// Inside the rig's limits and above its horizon at this instant.
     pub allowed: bool,
+    /// Inside the rig's meridian pause at this instant.
+    pub meridian_blocked: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -196,10 +215,44 @@ fn one_night(
             id: target.id.clone(),
             hours_up: 0.0,
             hours_up_moon_down: 0.0,
+            hours_lost_to_meridian: 0.0,
+            transit_ms: None,
             max_altitude_degrees: -90.0,
             min_moon_separation_degrees: 180.0,
         })
         .collect();
+    // Allowed intervals around the meridian for each target, once per night.
+    // The search widens the span by the pause on each side and allows at most
+    // a day, so ask for the night less those margins; the margins fall around
+    // local noon, where nothing is dark anyway.
+    let paused =
+        request.meridian_exclusion.before_ms > 0 || request.meridian_exclusion.after_ms > 0;
+    let span = Interval {
+        start_ms: noon + request.meridian_exclusion.before_ms + 1_000,
+        end_ms: next_noon.saturating_sub(request.meridian_exclusion.after_ms + 1_000),
+    };
+    let allowed_by_meridian: Vec<Option<Vec<Interval>>> = request
+        .targets
+        .iter()
+        .map(|target| {
+            if !paused {
+                return Ok(None);
+            }
+            if span.start_ms >= span.end_ms {
+                // A pause longer than the day blocks everything.
+                return Ok(Some(vec![]));
+            }
+            meridian_windows(
+                target.position,
+                request.site,
+                orientation,
+                span,
+                request.meridian_exclusion,
+            )
+            .map(|found| Some(found.windows))
+        })
+        .collect::<Result<_, VisibilityError>>()?;
+    let mut last_hour_angle: Vec<Option<f64>> = vec![None; request.targets.len()];
     let mut t = noon;
     while t < next_noon {
         let sun = sun_position(t).ok_or(VisibilityError::AstronomyUnavailable)?;
@@ -225,38 +278,59 @@ fn one_night(
             }
         }
         let mut target_samples = Vec::new();
-        if wanted {
-            for (target, entry) in request.targets.iter().zip(per_target.iter_mut()) {
-                let observed = observe(target.position, request.site, orientation, t)?;
-                let allowed = altitude_allowed(
-                    &request.horizon,
-                    request.limits,
-                    observed.azimuth_degrees,
-                    observed.altitude_degrees,
-                )?;
-                if dark {
-                    entry.max_altitude_degrees =
-                        entry.max_altitude_degrees.max(observed.altitude_degrees);
-                    entry.min_moon_separation_degrees = entry
-                        .min_moon_separation_degrees
-                        .min(separation_degrees(target.position, moon));
-                    if allowed {
-                        entry.hours_up += step_hours;
-                        if !moon_up {
-                            entry.hours_up_moon_down += step_hours;
-                        }
+        // Transit detection needs every sample, dark or not.
+        for (index, (target, entry)) in request
+            .targets
+            .iter()
+            .zip(per_target.iter_mut())
+            .enumerate()
+        {
+            let observed = observe(target.position, request.site, orientation, t)?;
+            if let Some(previous) = last_hour_angle[index]
+                && previous < 0.0
+                && observed.hour_angle_degrees >= 0.0
+                && observed.hour_angle_degrees - previous < 180.0
+            {
+                entry.transit_ms = Some(t);
+            }
+            last_hour_angle[index] = Some(observed.hour_angle_degrees);
+            if !wanted {
+                continue;
+            }
+            let allowed = altitude_allowed(
+                &request.horizon,
+                request.limits,
+                observed.azimuth_degrees,
+                observed.altitude_degrees,
+            )?;
+            let meridian_blocked = allowed_by_meridian[index].as_ref().is_some_and(|windows| {
+                t >= span.start_ms
+                    && t < span.end_ms
+                    && !windows.iter().any(|w| t >= w.start_ms && t < w.end_ms)
+            });
+            if dark {
+                entry.max_altitude_degrees =
+                    entry.max_altitude_degrees.max(observed.altitude_degrees);
+                entry.min_moon_separation_degrees = entry
+                    .min_moon_separation_degrees
+                    .min(separation_degrees(target.position, moon));
+                if allowed && meridian_blocked {
+                    entry.hours_lost_to_meridian += step_hours;
+                } else if allowed {
+                    entry.hours_up += step_hours;
+                    if !moon_up {
+                        entry.hours_up_moon_down += step_hours;
                     }
                 }
-                if keep_samples {
-                    target_samples.push(TargetSample {
-                        altitude_degrees: observed.altitude_degrees,
-                        azimuth_degrees: observed.azimuth_degrees,
-                        horizon_altitude_degrees: request
-                            .horizon
-                            .altitude(observed.azimuth_degrees)?,
-                        allowed,
-                    });
-                }
+            }
+            if keep_samples {
+                target_samples.push(TargetSample {
+                    altitude_degrees: observed.altitude_degrees,
+                    azimuth_degrees: observed.azimuth_degrees,
+                    horizon_altitude_degrees: request.horizon.altitude(observed.azimuth_degrees)?,
+                    allowed,
+                    meridian_blocked,
+                });
             }
         }
         if keep_samples {
@@ -325,7 +399,43 @@ mod tests {
             nights: 2,
             step_ms: 300_000,
             dark_below_degrees: -12.0,
+            meridian_exclusion: MeridianExclusion {
+                before_ms: 0,
+                after_ms: 0,
+            },
         }
+    }
+
+    #[test]
+    fn a_meridian_pause_takes_dark_hours_away_and_the_transit_is_found() {
+        let open = night_preview(&request()).unwrap();
+        let mut paused = request();
+        paused.meridian_exclusion = MeridianExclusion {
+            before_ms: 3_600_000,
+            after_ms: 1_800_000,
+        };
+        let nights = night_preview(&paused).unwrap();
+        let heart_open = &open[0].targets[0];
+        let heart = &nights[0].targets[0];
+        assert_eq!(heart_open.hours_lost_to_meridian, 0.0);
+        assert!(
+            heart.hours_lost_to_meridian > 1.0 && heart.hours_lost_to_meridian <= 1.6,
+            "{heart:?}"
+        );
+        assert!((heart.hours_up + heart.hours_lost_to_meridian - heart_open.hours_up).abs() < 0.01);
+        // At the equinox sidereal time matches UT at Greenwich, so RA 2h33m
+        // transits Los Angeles near 10:10 UTC, about fourteen hours after its
+        // local noon.
+        let transit = heart.transit_ms.expect("transit");
+        assert!(
+            transit > nights[0].noon_ms + 13 * 3_600_000
+                && transit < nights[0].noon_ms + 15 * 3_600_000,
+            "{transit}"
+        );
+        assert_eq!(heart.transit_ms, heart_open.transit_ms);
+        let curve = night_curve(&paused, 0).unwrap();
+        assert!(curve.samples.iter().any(|s| s.targets[0].meridian_blocked));
+        assert!(curve.samples.iter().any(|s| !s.targets[0].meridian_blocked));
     }
 
     #[test]
