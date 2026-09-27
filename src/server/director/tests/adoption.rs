@@ -5,6 +5,7 @@ mod activation;
 mod database_rig;
 mod framing;
 mod plan;
+mod program;
 mod rig_profile;
 
 const PREVIEW: &str = "/catalogs/catalog/adoption/preview";

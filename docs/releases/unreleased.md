@@ -6,6 +6,11 @@
 
 ## Added
 
+- The Director plugin can now pull a rig's program over the API: one goal per
+  activated exposure plan with the frames still owed, the panel targets and
+  the recipes bound to the filters the rig reported, valid for 36 hours per
+  pull so a rig keeps working through a network outage.
+
 - Rig planning can now activate a project: after a preview, PSF Guard writes
   one Target Scheduler project per participating rig, a target per mosaic
   panel and an exposure plan per objective into that rig's database, and
