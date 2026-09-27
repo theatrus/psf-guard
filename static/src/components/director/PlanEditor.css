@@ -18,3 +18,7 @@
 .plan-contributions select { width: 100%; }
 .plan-contributions .plan-goal input { width: 5rem; }
 @media (max-width: 700px) { .plan-contributions thead { display: none; } .plan-contributions tr { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px 0; } .plan-contributions td { border: none; padding: 0; } }
+.plan-panels { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin: 6px 0 2px 28px; font-size: 13px; }
+.plan-panel { flex-direction: row !important; align-items: center; gap: 4px !important; color: var(--color-text-primary) !important; }
+.plan-panel input { width: 16px; height: 16px; accent-color: var(--color-primary); }
+.plan-gaps { margin: 0; padding-left: 18px; }

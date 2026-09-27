@@ -525,9 +525,11 @@ follow from the rig split above and from how rigs differ in field size:
   into one stack; the mosaic preview is a review aid for coverage and a
   starting point for processing, not a processed image.
 
-Open work for this: per-rig panel selection in the plan editor and in
-activation, per-panel progress in the plan list, and the mosaic preview
-built on the existing stack-preview jobs.
+Done: per-rig panel selection in the plan editor (a panel chooser per rig,
+every panel by default), activation writing only the targets and plans a rig
+owns and naming uncovered panels, and per-rig totals scaled by panels. Open:
+per-panel progress in the plan list and the mosaic preview built on the
+existing stack-preview jobs.
 
 ### Survey backgrounds for framing
 

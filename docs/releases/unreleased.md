@@ -6,6 +6,11 @@
 
 ## Added
 
+- Mosaic plans can give each rig its own panels: a wide rig takes the whole
+  field while a long-focus rig takes a corner. Activation writes only the
+  panels a rig owns, and both the plan and the activation preview name any
+  panel no rig covers.
+
 - The framing view now says whether the target is visible tonight from each
   rig and for how long, and draws the night's altitude chart with the rig's
   custom horizon, the Moon and the darkness bands, with a week of nights and
