@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 10;
+const SCHEMA_VERSION: i32 = 11;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -38,6 +38,7 @@ impl MetaStore {
         create_plan_draft_table(&tx)?;
         create_activation_table(&tx)?;
         create_inbox_tables(&tx)?;
+        super::client::create_tables(&tx)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         conn.close().map_err(|(_, error)| Error::Sqlite(error))?;
@@ -80,7 +81,10 @@ impl MetaStore {
             if version < 9 {
                 create_activation_table(&tx)?;
             }
-            create_inbox_tables(&tx)?;
+            if version < 10 {
+                create_inbox_tables(&tx)?;
+            }
+            super::client::create_tables(&tx)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;
@@ -192,6 +196,14 @@ fn validate(conn: &Connection) -> Result<Uuid, Error> {
             "SELECT ledger_id,sequence,rig_id,goal_id,capture_id,state,payload,received_at_ms FROM rig_event LIMIT 0",
             "SELECT ledger_id,rig_id,highest_contiguous,highest_seen,last_checkin_ms FROM rig_feed LIMIT 0",
             "SELECT rig_id,session_id,reported_at_ms,payload,received_at_ms FROM rig_status LIMIT 0",
+        ] {
+            conn.prepare(sql).map_err(|_| Error::CorruptDatabase)?;
+        }
+    }
+    if version >= 11 {
+        for sql in [
+            "SELECT token_hash,catalog_id,rig_id,expires_at_ms FROM director_pairing LIMIT 0",
+            "SELECT id,catalog_id,rig_id,profile_id,name,token_hash,created_at_ms FROM director_client LIMIT 0",
         ] {
             conn.prepare(sql).map_err(|_| Error::CorruptDatabase)?;
         }

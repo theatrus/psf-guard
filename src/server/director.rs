@@ -1,4 +1,4 @@
-//! Opt-in coordinator management, not a rig pairing or acquisition protocol.
+//! Opt-in coordinator management and scoped rig reporting, not acquisition authority.
 //! The outer API middleware owns browser authentication and write-role checks.
 
 use super::{api::ApiResponse, state::AppState};
@@ -23,6 +23,7 @@ mod catalog_rig;
 mod checkin;
 mod feasibility;
 mod framing;
+pub(super) mod pairing;
 mod plan;
 mod plans;
 mod program;
@@ -246,6 +247,7 @@ impl IntoResponse for Error {
 
 pub(super) fn routes() -> Router<Arc<AppState>> {
     Router::new()
+        .merge(pairing::routes())
         .route("/status", get(status))
         .route(
             "/catalogs/{slug}/discovery",

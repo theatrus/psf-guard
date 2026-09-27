@@ -1,8 +1,9 @@
 # Director management
 
 Director is experimental. This API manages global project, site and rig identities in a
-separate meta database. It does not yet pair rigs, allocate work, or enable
-acquisition. The NINA runtime preview and PSF Guard Sync remain separate.
+separate meta database. Director clients can pair to inspect programs and report
+receipts/status. Pairing does not allocate work or enable acquisition. The NINA
+runtime preview and PSF Guard Sync remain separate.
 
 ## Where the store lives
 
@@ -83,7 +84,90 @@ authentication or a user API token when accounts are configured. The existing
 trusted-loopback and explicit anonymous-access policies still apply when no
 accounts exist. A database Sync key or pairing code does
 not grant access. Read-only users may inspect identities but cannot mutate them.
-All metadata routes also require the database-management gate.
+All metadata routes also require the database-management gate. Scoped Director
+client credentials are the limited exception to operator authentication described
+below; Sync credentials remain unrelated.
+
+### Pair a Director client
+
+This operator API has no pairing UI yet. Open Director to adopt the registered
+database first, then use its exact `catalog_id` and bound `rig_id`; get the coordinator's
+`instance_id` from `/status`. Use an interactive read-write browser session, or the
+existing explicitly trusted local/anonymous operator mode, to issue a code:
+
+```text
+POST /api/director/v1/rigs/{rig_id}/pairing-token
+{"coordinator_instance_id":"<instance UUID>","catalog_id":"<catalog UUID>"}
+```
+
+The response `data` contains `protocol_version: 1`, `coordinator_instance_id`,
+`catalog_id`, `rig_id`, `pairing_token` and `expires_at_ms` (Unix milliseconds).
+Codes start with `psfdpt_` and expire after one hour. Issuing another code for the
+same rig invalidates its previous unused code, not its existing clients. Operator
+API tokens and read-only sessions cannot issue, list or revoke Director clients.
+
+The plugin exchanges the code without an Authorization header:
+
+```text
+POST /api/director/v1/pair
+{"protocol_version":1,"pairing_token":"<code>","profile_id":"<NINA profile UUID>","client_name":"NINA observatory"}
+```
+
+`profile_id` must be a nonnil UUID; `client_name` is 1-80 UTF-8 bytes, without
+control characters or leading/trailing whitespace. Requests reject unknown fields
+and bodies over 4096 bytes. The response `data` is:
+
+```json
+{
+  "protocol_version": 1,
+  "coordinator_instance_id": "<instance UUID>",
+  "catalog_id": "<catalog UUID>",
+  "rig_id": "<rig UUID>",
+  "profile_id": "<NINA profile UUID>",
+  "client_id": "<client UUID>",
+  "token": "psfdrc_<64 lowercase hex digits>",
+  "scopes": ["program:read", "checkin:write", "status:write"]
+}
+```
+
+Persist the token only in the OS credential manager, separate from Sync. Do not
+log or display it. Store the nonsecret binding tuple with the NINA profile and
+validate the response before replacing any previous pairing. Use HTTPS off a
+trusted local network; pairing codes and tokens are bearer secrets. Do not follow
+redirects with either secret. Responses are `Cache-Control: no-store`.
+
+For subsequent requests send `Authorization: Bearer <token>` and exactly one
+`X-PSF-Director-Profile: <canonical lowercase NINA profile UUID>` header. Only these
+exact methods/routes are allowed, for the paired rig:
+
+- `GET /api/director/v1/rigs/{rig_id}/program`
+- `POST /api/director/v1/rigs/{rig_id}/checkin`
+- `POST /api/director/v1/rigs/{rig_id}/status`
+
+Their existing coordinator/catalog query or body fields are still required and
+validated. A ledger already reported by one rig cannot accept any sequence from
+another rig, even if that rig has its own valid credential. Equipment registration,
+planning edits and operator-wide status remain
+operator-managed. A profile header asserts the profile context; possession of the
+bearer token remains the authentication proof. It is not equipment attestation.
+
+An operator lists nonsecret client records with `GET /rigs/{rig_id}/clients` and
+revokes with `DELETE /rigs/{rig_id}/clients/{client_id}` (both relative to the API
+prefix above). Listing returns an array of `client_id`, `catalog_id`, `rig_id`,
+`profile_id`, `client_name`, `created_at_ms` records; revocation returns
+`{"revoked":true}` or `false` if absent. The limit is 256 clients per rig; revoke
+unused records before issuing more. Every authenticated request rechecks the
+credential and current catalog-rig binding. Invalid credentials, profile or route
+scope return 401; disabled management returns 403 and a busy metadata store 503.
+
+Metadata schema 11 stores only SHA-256 hashes of random 256-bit secrets in separate
+Director tables. Code consumption and client creation commit together. A failed
+write leaves the code usable; if a successful pair response is lost, issue a new
+code and revoke the orphan client. Codes and clients survive restart; backups
+contain their hashes, so protect backups and never run a restored coordinator
+beside its source. Neither pairing nor receiving the current program is permission
+to activate a durable ledger: allocation/refresh correctness remains a separate
+delivery requirement.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
@@ -98,8 +182,8 @@ All metadata routes also require the database-management gate.
 The same identity operations and body/query shapes are available at `/sites`
 and `/rigs`. The latter remains a compatibility API for prototype references;
 normal clients should enable planning on a registered database instead. Identity
-names never establish a binding. No route deletes an identity or grants a rig
-credentials.
+names never establish a binding. Identity routes do not delete an identity or
+grant credentials; the separate pairing routes above do the latter.
 
 A global project identity is not a Target Scheduler project or a catalog-local
 integer ID. Same-name projects stay distinct. Keep the caller-generated UUID
@@ -148,10 +232,10 @@ routes do not select a latest/active setup, replace an in-flight assignment, or
 make a registered rig eligible to acquire. See the typed
 [configuration model](../crates/director-meta/src/configuration.rs).
 
-These are operator APIs using ordinary user authentication. Dedicated rig
-pairing, scoped check-in credentials, assignment issuance and snapshot editing remain
-separate work. Do not put an operator API token in a plugin profile as a substitute
-for pairing.
+These are operator APIs using ordinary user authentication. Scoped Director
+credentials cannot edit snapshots or register equipment. Assignment issuance and
+snapshot editing remain separate work. Do not put an operator API token in a
+plugin profile as a substitute for pairing.
 
 ## Rig profile
 

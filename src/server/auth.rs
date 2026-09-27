@@ -669,6 +669,21 @@ pub async fn authorize_api(
     next: Next,
 ) -> Response {
     let path = api_path(request.uri().path());
+    if request.method() != Method::OPTIONS {
+        match super::director::pairing::authorize(&state, path, request.method(), request.headers())
+            .await
+        {
+            Ok(true) => {
+                let mut response = next.run(request).await;
+                response
+                    .headers_mut()
+                    .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+                return response;
+            }
+            Err(response) => return response,
+            Ok(false) => {}
+        }
+    }
     if request.method() == Method::OPTIONS
         || is_public_auth_path(path)
         || uses_remote_bearer_token(path)

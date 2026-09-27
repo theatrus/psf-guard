@@ -19,6 +19,11 @@
   no database yet starts its framing from a name looked up in the CDS
   catalogs or typed coordinates. Rig setup expands in place from the rig list.
 
+- Director clients can pair using one-use operator-issued codes, with separate
+  per-rig and per-NINA-profile credentials for program inspection and receipt/status
+  reporting. Operators can list and revoke clients; pairing does not authorize
+  equipment control or acquisition.
+
 - The Director page is now a plan list: every project with the databases it
   is linked to, how far its framing, plan and activation have come, and a
   Rig planning link, above a rig list with each database's planning state,

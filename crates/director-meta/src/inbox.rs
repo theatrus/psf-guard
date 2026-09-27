@@ -72,7 +72,8 @@ fn payload_ok(value: &serde_json::Value) -> Result<String, Error> {
 impl MetaStore {
     /// Store one page of receipts from one ledger in one transaction. The
     /// answer says what happened to each and the cursor the caller may now
-    /// acknowledge. A conflict never blocks the receipts around it.
+    /// acknowledge. A content conflict never blocks the receipts around it;
+    /// a ledger owned by another rig rejects the entire page.
     pub fn store_receipts(
         &mut self,
         receipts: &[Receipt],
@@ -110,6 +111,17 @@ impl MetaStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         if read_named(&tx, Kind::Rig, rig)?.is_none() {
             return Err(Error::NotFound);
+        }
+        // Ledger IDs are globally keyed. Check both projections before any
+        // insert, including legacy feeds whose events/cursor disagree.
+        let wrong_owner: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM rig_feed WHERE ledger_id=?1 AND rig_id!=?2)
+                 OR EXISTS(SELECT 1 FROM rig_event WHERE ledger_id=?1 AND rig_id!=?2)",
+            params![ledger, rig.to_string()],
+            |row| row.get(0),
+        )?;
+        if wrong_owner {
+            return Err(Error::Conflict);
         }
         let mut outcomes = Vec::with_capacity(receipts.len());
         for receipt in receipts {
@@ -267,10 +279,11 @@ fn recompute_cursor(
     ledger: &str,
     now_ms: u64,
 ) -> Result<FeedCursor, Error> {
-    let mut statement =
-        conn.prepare("SELECT sequence FROM rig_event WHERE ledger_id=?1 ORDER BY sequence")?;
+    let mut statement = conn.prepare(
+        "SELECT sequence FROM rig_event WHERE ledger_id=?1 AND rig_id=?2 ORDER BY sequence",
+    )?;
     let sequences = statement
-        .query_map([ledger], |row| row.get::<_, i64>(0))?
+        .query_map(params![ledger, rig.to_string()], |row| row.get::<_, i64>(0))?
         .collect::<Result<Vec<_>, _>>()?;
     let mut contiguous = 0u64;
     for sequence in &sequences {
