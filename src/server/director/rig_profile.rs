@@ -41,6 +41,10 @@ pub(super) struct Edit {
     horizon: Option<Edited<Horizon>>,
     sky_quality: Option<Edited<SkyQuality>>,
     limits: Edited<Limits>,
+    /// A registered Sync peer that holds this rig's database, or `null` when
+    /// the rig executes from the database on this server.
+    #[serde(default)]
+    peer_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -109,6 +113,15 @@ pub(super) async fn put(
 ) -> Result<Json<ApiResponse<ProfileView>>, Error> {
     let service = enabled(&state)?;
     let catalog = state.get_database(&slug).ok_or(Error::Missing)?;
+    // Only a peer this server knows can be named; the select in the browser
+    // offers exactly those, so anything else is a stale or forged request.
+    if let Some(peer) = &edit.peer_id
+        && !crate::server::peers::registered_peers(&state)
+            .iter()
+            .any(|entry| &entry.id == peer)
+    {
+        return Err(Error::Invalid);
+    }
     for source in [
         edit.optics.as_ref().map(|part| &part.source),
         edit.site.as_ref().map(|part| &part.source),
@@ -140,6 +153,7 @@ pub(super) async fn put(
         );
         next.limits = stamp(Some(edit.limits), previous.map(|p| &p.limits), now)
             .expect("limits are always present");
+        next.peer_id = edit.peer_id;
         next.updated_at_ms = now;
         let saved = store.save_rig_profile(&next, edit.expected_revision)?;
         Ok(view(rig, saved, Defaults::default()))

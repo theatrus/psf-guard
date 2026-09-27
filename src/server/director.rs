@@ -334,6 +334,10 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             axum::routing::post(activation::apply),
         )
         .route(
+            "/projects/{id}/activation/push",
+            axum::routing::post(activation::push),
+        )
+        .route(
             "/projects/{id}/plan",
             get(plan::get_plan)
                 .put(plan::put_plan)

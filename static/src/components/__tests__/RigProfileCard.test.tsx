@@ -16,7 +16,7 @@ const site = { latitude_degrees: 34.2, longitude_degrees: -118.3, elevation_mete
 const empty: DirectorRigProfile = {
   rig_id: rig.id, revision: 0, optics: null, site: null, horizon: null, sky_quality: null,
   limits: { value: { minimum_altitude_degrees: 20, maximum_altitude_degrees: 90, meridian_exclusion: { before_ms: 0, after_ms: 0 } }, source: { kind: 'manual' }, reported_at_ms: 1 },
-  configuration: null, updated_at_ms: 1,
+  configuration: null, peer_id: null, updated_at_ms: 1,
 };
 function fixture(conflictOnce = false) {
   const saves: DirectorRigProfileEdit[] = [];
@@ -30,6 +30,7 @@ function fixture(conflictOnce = false) {
     },
   });
   server.use(
+    http.get('/api/peers', () => HttpResponse.json(ok([{ id: 'obs', name: 'Observatory', base_url: 'https://obs.example', catalog_id: null, token_configured: true }]))),
     http.get('/api/director/v1/catalogs/catalog/rig/profile', () => HttpResponse.json(ok(view()))),
     http.put('/api/director/v1/catalogs/catalog/rig/profile', async ({ request }) => {
       const edit = await request.json() as DirectorRigProfileEdit;
@@ -39,7 +40,7 @@ function fixture(conflictOnce = false) {
         optics: edit.optics ? { ...edit.optics, reported_at_ms: 3 } : null,
         site: edit.site ? { ...edit.site, reported_at_ms: 3 } : null,
         sky_quality: edit.sky_quality ? { ...edit.sky_quality, reported_at_ms: 3 } : null,
-        limits: { ...edit.limits, reported_at_ms: 3 } };
+        limits: { ...edit.limits, reported_at_ms: 3 }, peer_id: edit.peer_id };
       return HttpResponse.json(ok({ ...view(), profile, field_of_view: { width_degrees: 5.38, height_degrees: 3.6, pixel_scale_arcsec: 3.1, focal_ratio: 4.9 } }));
     }),
   );
@@ -94,6 +95,26 @@ describe('Rig profile card', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('This rig changed since you loaded it');
     expect(screen.getByRole('button', { name: 'Save rig profile' })).toBeDisabled();
+  });
+
+  it('names a registered peer the plans push to, and keeps an unregistered one visible', async () => {
+    const { saves } = fixture(); mount();
+    const select = await screen.findByLabelText('Plans push to');
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Observatory' })).toBeInTheDocument());
+    expect(select).toHaveValue('');
+    fireEvent.change(select, { target: { value: 'obs' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
+    expect(await screen.findByText('Saved rig profile revision 1.')).toBeInTheDocument();
+    expect(saves[0].peer_id).toBe('obs');
+    expect(saves[0].limits.value.minimum_altitude_degrees).toBe(20);
+    fireEvent.change(select, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(saves[1].peer_id).toBeNull();
+    // A peer the registry no longer has still shows on the form, so the operator sees what will not happen.
+    const gone = formFromProfile({ ...empty, peer_id: 'old-site' });
+    expect(gone.peerId).toBe('old-site');
+    expect((editFromForm(gone, empty) as DirectorRigProfileEdit).peer_id).toBe('old-site');
   });
 
   it('shows values read only without a save button', async () => {

@@ -20,6 +20,8 @@ export default function DirectorRigs() {
   const [openSetup, setOpenSetup] = useState<string | null>(null);
   const profiles = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: false, refetchOnWindowFocus: false });
   const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, retry: false, refetchInterval: 30_000 });
+  // Only needed to name a peer; most servers have none.
+  const peers = useQuery({ queryKey: ['peers'], queryFn: apiClient.getPeers, retry: false, refetchOnWindowFocus: false, enabled: profiles.data?.some(entry => entry.profile?.peer_id) ?? false });
   return <section aria-label="Rig databases" className="director-records">
     <div className="director-toolbar"><h2>Rigs</h2></div>
     <p className="director-muted">Each registered database is one rig, and its projects are plans. Setup holds the rig's optics, site and limits; the Director plugin reports the rest.</p>
@@ -36,6 +38,7 @@ export default function DirectorRigs() {
             <span className="director-muted">{!profiles.data ? (profiles.isError ? 'Rig state unavailable' : 'Checking rig...') : !profile ? 'Not yet a rig; open Plans once to adopt it'
               : profile.field_of_view ? `Field ${formatDegrees(profile.field_of_view.width_degrees)} × ${formatDegrees(profile.field_of_view.height_degrees)}, ${profile.field_of_view.pixel_scale_arcsec.toFixed(2)}″/px${profile.profile?.configuration ? ', camera reported' : ', camera not reported yet'}`
               : 'Planning enabled, no optics yet'}</span>
+            {profile?.profile?.peer_id && <span className="director-muted">Plans push to {peers.data?.find(peer => peer.id === profile.profile?.peer_id)?.name ?? profile.profile.peer_id}</span>}
             {status && <span className="director-muted">Plugin: {describeStatus(status.status.payload, status.status.reported_at_ms)}</span>}
           </div>
           <Link to={`/?${new URLSearchParams({ db: db.id, dbfilter: db.id })}`}>Overview</Link>

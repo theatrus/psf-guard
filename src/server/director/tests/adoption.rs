@@ -9,6 +9,7 @@ mod framing;
 mod plan;
 mod plans;
 mod program;
+mod remote_push;
 mod rig_profile;
 
 const PREVIEW: &str = "/catalogs/catalog/adoption/preview";

@@ -8,6 +8,8 @@ export interface RigProfileForm {
   latitude: string; longitude: string; elevation: string; siteSource: DirectorSource | null;
   bortle: string; sqm: string;
   minAltitude: string; maxAltitude: string; meridianBefore: string; meridianAfter: string;
+  /** Registered peer id, or '' when the rig executes from this server. */
+  peerId: string;
 }
 
 const text = (value: number | null | undefined) => value === null || value === undefined ? '' : String(value);
@@ -27,6 +29,7 @@ export function formFromProfile(profile: DirectorRigProfile): RigProfileForm {
     bortle: text(profile.sky_quality?.value.bortle_class), sqm: text(profile.sky_quality?.value.sqm_mag_per_arcsec2),
     minAltitude: text(limits.minimum_altitude_degrees), maxAltitude: text(limits.maximum_altitude_degrees),
     meridianBefore: text(limits.meridian_exclusion.before_ms / 60000), meridianAfter: text(limits.meridian_exclusion.after_ms / 60000),
+    peerId: profile.peer_id ?? '',
   };
 }
 
@@ -97,6 +100,7 @@ export function editFromForm(form: RigProfileForm, profile: DirectorRigProfile):
     horizon: profile.horizon ? { value: profile.horizon.value, source: profile.horizon.source } : null,
     sky_quality: bortle !== null ? { value: { bortle_class: bortle, sqm_mag_per_arcsec2: finite(sqm) ? sqm : null }, source: manual } : null,
     limits: { value: { minimum_altitude_degrees: minAlt, maximum_altitude_degrees: maxAlt, meridian_exclusion: { before_ms: Math.round(before * 60000), after_ms: Math.round(after * 60000) } }, source: manual },
+    peer_id: form.peerId || null,
   };
 }
 

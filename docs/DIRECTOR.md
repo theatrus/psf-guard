@@ -256,8 +256,14 @@ reported by the plugin. The field of view and pixel scale update as you type.
 | Method | Route | Body or query |
 | --- | --- | --- |
 | GET | `/catalogs/{slug}/rig/profile` | The rig, its profile (revision 0 when nothing is saved), the computed `field_of_view`, and header-derived `defaults`. `404` until planning is enabled on the database. |
-| PUT | `/catalogs/{slug}/rig/profile` | `expected_revision` plus `optics`, `site`, `horizon`, `sky_quality` (each `{value, source}` or `null`) and `limits`. Sources may be `manual` or `frame_headers`; `409` when the revision moved. The plugin's configuration is kept as stored. |
+| PUT | `/catalogs/{slug}/rig/profile` | `expected_revision` plus `optics`, `site`, `horizon`, `sky_quality` (each `{value, source}` or `null`), `limits`, and `peer_id` (a registered Sync peer or `null`). Sources may be `manual` or `frame_headers`; `409` when the revision moved, `400` for a peer this server does not know. The plugin's configuration is kept as stored. |
 | PUT | `/rigs/{rig}/equipment` | Plugin report: `coordinator_instance_id`, `catalog_id`, core `configuration`, `optics`, optional `site`, `horizon` and `limits`, and `reported_at_ms`. All three identities must match this server's binding or the call returns `403`. An identical report does not bump the revision. |
+
+**Remote site** names the Sync peer that holds the rig's real database when
+the rig runs on another PSF Guard. The database registered here is then a
+copy pulled from that peer, and activation pushes the plan back to it; see
+[Activation](#activation). Leave it at **This server only** for a rig whose
+N.I.N.A. writes into this server's database.
 
 Optics hold the unbinned sensor size in pixels, pixel pitch in micrometres,
 effective focal length and clear aperture in millimetres, and how the camera
@@ -355,19 +361,45 @@ meta store, so it appears under Project planning links at once.
 
 **Preview activation** shows, per rig database, what would be created,
 updated or left alone, names any objective and panel no rig covers, and gives
-any reason a rig is skipped: no registered database
-on this server (a Sync push will cover it later), a Target Scheduler schema
-older than 22, or a database with no N.I.N.A. profile yet. **Apply** carries
-the preview digest and is refused when the framing, plan or database changed
-in between. A rig whose plugin has not yet reported its camera still gets its
-rows; the Target Scheduler plugin can run them until Director acquisition
-arrives.
+any reason a rig is skipped: no registered database on this server, a Target
+Scheduler schema older than 22, or a database with no N.I.N.A. profile yet.
+**Apply** carries the preview digest and is refused when the framing, plan or
+database changed in between. A rig whose plugin has not yet reported its
+camera still gets its rows; the Target Scheduler plugin can run them until
+Director acquisition arrives.
+
+### Rigs at another site
+
+A rig can run on another PSF Guard, at a remote observatory, with its own
+database that N.I.N.A. and Target Scheduler write. To plan for it from here:
+
+1. Register that PSF Guard as a peer under **Settings, Remote PSF Guard**,
+   and pull its catalog into a database on this server. That copy is the rig
+   here: it is adopted like any other and holds the rig's profile.
+2. Open **Rigs, Setup** for the copy and set **Remote site** to the peer.
+3. Activate as usual. Apply writes the rows into the copy, then sends the
+   planning tables (projects, targets, exposure plans, templates and rule
+   weights) to the peer through Sync's planning push, previewed and applied on
+   the peer in one step. Captures and grades never travel this way.
+
+The **Remote site** column of the report says what happened per rig: *Pushed
+to* the peer, or the peer's refusal or the network error, in which case the
+local activation still stands. **Push to remote sites again** resends the
+last activation to every remote rig's peer, for a site that was offline at
+Apply. A peer removed from the registry is named in the rig's warnings and the
+plan stays on this server until Setup names another.
+
+The remote PSF Guard sees the pushed rows as ordinary Target Scheduler
+projects with the same GUIDs, so its own Overview and Sync work on them; it
+does not become a second planner for them. The rig's Director plugin still
+pulls its program from this server, the coordinator, and reports here.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
 | GET | `/projects/{id}/activation` | `{ activation }`: the last applied activation (revision, framing and plan revisions, and per rig the project, target and plan GUIDs) or `null`. |
 | POST | `/projects/{id}/activation/preview` | Empty body. Computes and rolls back; returns the per-rig report and `preview_digest`. `422` until the project has a framing with a panel size and a plan with a ticked rig. |
-| POST | `/projects/{id}/activation/apply` | `{ preview_digest }`. Commits each rig database in turn, records the activation, links new projects; `409` when the digest no longer matches. |
+| POST | `/projects/{id}/activation/apply` | `{ preview_digest }`. Commits each rig database in turn, records the activation, links new projects, then pushes each remote rig's planning rows to its peer; `409` when the digest no longer matches. Each rig row carries `push` (`peer_id`, `peer_name`, `applied`, `summary`, `error`) or `null`. |
+| POST | `/projects/{id}/activation/push` | Empty body. Sends the last activation's rows again to every remote rig's peer and returns one row per pushed rig; `422` before any activation. An unreachable peer is an `error` in its row, not a failed call. |
 
 ## Program pull
 

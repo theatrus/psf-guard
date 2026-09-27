@@ -5,7 +5,12 @@
 //! touched; removed panels leave their targets behind.
 
 use super::*;
-use crate::ts_schema::new_guid;
+use crate::{
+    commands::sync::{sync_remote, RemoteDirection, RemoteSyncOptions},
+    db_registry::PeerEntry,
+    server::peers::registered_peers,
+    ts_schema::new_guid,
+};
 use psf_guard_director_core::{
     bandpass::frames_for_hours,
     framing::{FramingRequest, Panel},
@@ -20,6 +25,7 @@ use psf_guard_director_meta::{
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use std::{
     collections::BTreeMap,
+    path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -31,6 +37,30 @@ struct Change {
     detail: String,
 }
 
+/// A rig whose real database lives on another PSF Guard: the local copy is
+/// written like any other, then its planning rows travel by Sync.
+#[derive(Clone, Serialize)]
+struct Push {
+    peer_id: String,
+    peer_name: String,
+    /// True once the peer applied the planning rows.
+    applied: bool,
+    summary: BTreeMap<String, i64>,
+    error: Option<String>,
+}
+
+impl Push {
+    fn planned(peer: &PeerEntry) -> Self {
+        Self {
+            peer_id: peer.id.clone(),
+            peer_name: peer.name.clone(),
+            applied: false,
+            summary: BTreeMap::new(),
+            error: None,
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct RigReport {
     rig: NamedIdentity,
@@ -40,6 +70,23 @@ struct RigReport {
     changes: Vec<Change>,
     warnings: Vec<String>,
     applied: bool,
+    /// Set when the rig's profile names a Sync peer; filled in after Apply.
+    push: Option<Push>,
+}
+
+#[derive(Serialize)]
+struct PushedRig {
+    rig: NamedIdentity,
+    catalog_name: String,
+    push: Push,
+}
+
+#[derive(Serialize)]
+pub(super) struct PushReport {
+    project: NamedIdentity,
+    activation_revision: u64,
+    rigs: Vec<PushedRig>,
+    warnings: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -171,7 +218,9 @@ async fn execute(
         .clone()
         .try_acquire_owned()
         .map_err(|_| Error::Busy)?;
-    let report = tokio::task::spawn_blocking(move || {
+    let peers = registered_peers(&state);
+    let known_peers = peers.clone();
+    let mut report = tokio::task::spawn_blocking(move || {
         let _permits = (metadata_permit, catalog_permit);
         let applying = expected.is_some();
         let mut store = service.store.lock().map_err(|_| Error::Internal)?;
@@ -263,10 +312,11 @@ async fn execute(
                     profile_id: None,
                     changes: vec![],
                     warnings: vec![
-                        "Rig has no registered database on this server; push it through Sync later."
+                        "Rig has no registered database on this server; pull its database from its peer, then name the peer under Rigs, Setup."
                             .into(),
                     ],
                     applied: false,
+                    push: None,
                 });
                 continue;
             };
@@ -275,6 +325,20 @@ async fn execute(
             if profile.as_ref().is_none_or(|p| p.configuration.is_none()) {
                 warnings.push("The N.I.N.A. plugin has not reported this rig's camera yet; the Target Scheduler plugin can still run these rows.".into());
             }
+            // A rig on another PSF Guard: its rows land here first, then go
+            // to the peer by Sync once Apply has committed them.
+            let push = match profile.as_ref().and_then(|p| p.peer_id.as_deref()) {
+                None => None,
+                Some(peer_id) => match known_peers.iter().find(|peer| peer.id == peer_id) {
+                    Some(peer) => Some(Push::planned(peer)),
+                    None => {
+                        warnings.push(format!(
+                            "Its peer '{peer_id}' is no longer registered; the plan stays on this server until Setup names another."
+                        ));
+                        None
+                    }
+                },
+            };
             // A preview performs the same writes and rolls them back, so the
             // connection is read-write either way; nothing lands without Apply.
             let mut connection = super::super::database_context::open_scheduler_connection_with_flags(
@@ -333,6 +397,7 @@ async fn execute(
                     changes: vec![],
                     warnings,
                     applied: false,
+                    push: None,
                 });
                 continue;
             };
@@ -344,6 +409,7 @@ async fn execute(
                 changes: outcome.changes,
                 warnings,
                 applied: false,
+                push,
             });
             pending.push((*rig_id, connection, outcome.record, outcome.created_project));
         }
@@ -358,7 +424,16 @@ async fn execute(
             plan.revision,
             reports
                 .iter()
-                .map(|r| (r.rig.id, &r.catalog_slug, &r.profile_id, &r.changes, &r.warnings))
+                .map(|r| {
+                    (
+                        r.rig.id,
+                        &r.catalog_slug,
+                        &r.profile_id,
+                        &r.changes,
+                        &r.warnings,
+                        r.push.as_ref().map(|p| &p.peer_id),
+                    )
+                })
                 .collect::<Vec<_>>(),
             service.instance_id,
             catalogs
@@ -435,7 +510,142 @@ async fn execute(
         tracing::error!(%error, "Director activation worker failed");
         Error::Internal
     })??;
+    if report.applied {
+        // The local rows are committed; now each remote rig's peer. A push
+        // that fails leaves the activation standing and says so in its row.
+        for rig in report.rigs.iter_mut().filter(|rig| rig.applied) {
+            let (Some(push), Some(slug)) = (rig.push.as_mut(), rig.catalog_slug.as_deref()) else {
+                continue;
+            };
+            let (Some(peer), Some(context)) = (
+                peers.iter().find(|peer| peer.id == push.peer_id),
+                state.get_database(slug),
+            ) else {
+                continue;
+            };
+            *push = push_planning(&state, &context, peer).await;
+        }
+    }
     Ok(Json(ApiResponse::success(report)))
+}
+
+/// Send a rig database's planning rows to the peer that holds the rig's real
+/// database: a Sync planning push, reviewed and applied on the peer. Captures
+/// and grades never travel this way.
+async fn push_planning(state: &AppState, context: &DatabaseContext, peer: &PeerEntry) -> Push {
+    let mut push = Push::planned(peer);
+    // The same lock a local Sync apply takes, so a pull cannot rewrite the
+    // rows while the bundle is being read.
+    let _guard = state.sync_apply_lock.lock().await;
+    match sync_remote(RemoteSyncOptions {
+        direction: RemoteDirection::PushPlanning,
+        local_path: PathBuf::from(&context.database_path),
+        local_id: context.id.clone(),
+        peer_url: peer.base_url.clone(),
+        peer_token: peer.token.clone(),
+        peer_catalog: peer.catalog_id.clone(),
+        reviewed_only: true,
+        dry_run: false,
+        with_image_data: false,
+    })
+    .await
+    {
+        Ok(outcome) => {
+            push.applied = outcome.applied;
+            push.summary = outcome.summary;
+        }
+        Err(error) => {
+            tracing::warn!(peer = %peer.id, catalog = %context.id, error = %format!("{error:#}"), "Director planning push failed");
+            push.error = Some(format!("{error:#}"));
+        }
+    }
+    push
+}
+
+/// Push the last activation's rows again to every remote rig's peer, for a
+/// peer that was unreachable at Apply or has since been repaired.
+pub(super) async fn push(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ApiResponse<PushReport>>, ActivationError> {
+    let service = enabled(&state)?;
+    let catalogs: Vec<Arc<DatabaseContext>> = state
+        .databases
+        .read()
+        .map_err(|_| Error::Internal)?
+        .values()
+        .cloned()
+        .collect();
+    let peers = registered_peers(&state);
+    let metadata_permit = admit(&service.admission).await?;
+    let catalog_permit = admit(&service.discovery_admission).await?;
+    let (project, revision, targets, mut warnings) = tokio::task::spawn_blocking(move || {
+        let _permits = (metadata_permit, catalog_permit);
+        let store = service.store.lock().map_err(|_| Error::Internal)?;
+        let project = store.project(id)?.ok_or(Error::Missing)?;
+        let activation = store
+            .activation(id)?
+            .ok_or(ActivationError::NotReady("Apply an activation first."))?;
+        let mut targets: Vec<(NamedIdentity, Arc<DatabaseContext>, String)> = Vec::new();
+        let mut warnings = Vec::new();
+        for activated in &activation.rigs {
+            let rig = store.rig(activated.rig_id)?.ok_or(Error::Missing)?;
+            let Some(peer_id) = store
+                .rig_profile(activated.rig_id)?
+                .and_then(|profile| profile.peer_id)
+            else {
+                continue;
+            };
+            match catalogs.iter().find(|catalog| {
+                read_identity(&catalog.database_path)
+                    .is_some_and(|identity| identity.id == activated.catalog_id)
+            }) {
+                Some(context) => targets.push((rig, context.clone(), peer_id)),
+                None => warnings.push(format!(
+                    "{}: its database is no longer registered on this server.",
+                    rig.name
+                )),
+            }
+        }
+        Ok::<_, ActivationError>((project, activation.revision, targets, warnings))
+    })
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "Director activation push worker failed");
+        Error::Internal
+    })??;
+    let mut rigs = Vec::with_capacity(targets.len());
+    for (rig, context, peer_id) in targets {
+        let push = match peers.iter().find(|peer| peer.id == peer_id) {
+            Some(peer) => push_planning(&state, &context, peer).await,
+            None => Push {
+                peer_id: peer_id.clone(),
+                peer_name: peer_id.clone(),
+                applied: false,
+                summary: BTreeMap::new(),
+                error: Some(
+                    "This peer is no longer registered; name another under Rigs, Setup.".into(),
+                ),
+            },
+        };
+        rigs.push(PushedRig {
+            rig,
+            catalog_name: context.name.clone(),
+            push,
+        });
+    }
+    if rigs.is_empty() && warnings.is_empty() {
+        warnings.push(
+            "No rig in this activation pushes to a remote site; name a peer under Rigs, Setup."
+                .into(),
+        );
+    }
+    Ok(Json(ApiResponse::success(PushReport {
+        project,
+        activation_revision: revision,
+        rigs,
+        warnings,
+    })))
 }
 
 /// Keep a transaction's writes without committing: end the `Transaction`

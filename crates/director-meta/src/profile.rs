@@ -72,6 +72,11 @@ pub struct RigProfile {
     pub limits: Reported<Limits>,
     /// Only the plugin reports this; operators cannot type a camera's modes.
     pub configuration: Option<Reported<Configuration>>,
+    /// The registered Sync peer that holds this rig's database when the rig
+    /// runs on another PSF Guard. Activation pushes the plan there. `None`
+    /// means the database on this server is the one the rig executes from.
+    #[serde(default)]
+    pub peer_id: Option<String>,
     pub updated_at_ms: u64,
 }
 
@@ -90,10 +95,13 @@ impl RigProfile {
                 reported_at_ms: now_ms,
             },
             configuration: None,
+            peer_id: None,
             updated_at_ms: now_ms,
         }
     }
 }
+
+const MAX_PEER_ID_LEN: usize = 128;
 
 const MAX_TIME_MS: u64 = 4_102_444_800_000; // 2100-01-01
 
@@ -121,6 +129,14 @@ fn valid_reported<T>(reported: &Reported<T>) -> Result<(), Error> {
 pub(crate) fn validate_profile(profile: &RigProfile) -> Result<(), Error> {
     valid_id(profile.rig_id)?;
     if profile.updated_at_ms > MAX_TIME_MS {
+        return Err(Error::InvalidInput);
+    }
+    if let Some(peer) = &profile.peer_id
+        && (peer.is_empty()
+            || peer.len() > MAX_PEER_ID_LEN
+            || peer.trim() != peer
+            || peer.chars().any(char::is_control))
+    {
         return Err(Error::InvalidInput);
     }
     if let Some(optics) = &profile.optics {
