@@ -107,3 +107,73 @@ export interface DirectorRigProfileEdit {
   sky_quality: DirectorEdited<DirectorSkyQuality> | null;
   limits: DirectorEdited<DirectorLimits>;
 }
+
+export interface DirectorSurvey {
+  id: string;
+  name: string;
+  hips: string;
+  kind: 'broadband' | 'narrowband' | 'panorama';
+  bandpass: string;
+  attribution: string;
+}
+export interface DirectorSkyPosition { ra_degrees: number; dec_degrees: number }
+export interface DirectorPanelSize { width_degrees: number; height_degrees: number }
+export interface DirectorMosaic { rows: number; columns: number; overlap_percent: number }
+export interface DirectorFramingRequest {
+  center: DirectorSkyPosition;
+  position_angle_degrees: number;
+  panel: DirectorPanelSize;
+  mosaic: DirectorMosaic;
+  overlays: Array<{ id: string; size: DirectorPanelSize; position_angle_degrees: number }>;
+  view: { center: DirectorSkyPosition; rotation_degrees: number } | null;
+}
+/** Tangent-plane degrees from the view center: east positive, view up positive. */
+export type DirectorOffset = [number, number];
+export interface DirectorFootprint {
+  id: string;
+  center: DirectorSkyPosition;
+  corners: [DirectorSkyPosition, DirectorSkyPosition, DirectorSkyPosition, DirectorSkyPosition];
+  view_corners: [DirectorOffset, DirectorOffset, DirectorOffset, DirectorOffset] | null;
+}
+export interface DirectorFramingPreview {
+  schema_version: number;
+  panels: Array<DirectorFootprint & { row: number; column: number }>;
+  overlays: DirectorFootprint[];
+  extent: DirectorPanelSize;
+  view_center_offset: DirectorOffset | null;
+}
+export interface DirectorFramingDraft {
+  project_id: string;
+  revision: number;
+  target_name: string;
+  center: DirectorSkyPosition;
+  position_angle_degrees: number;
+  mosaic: DirectorMosaic;
+  panel_rig_id: string | null;
+  panel: DirectorPanelSize | null;
+  shown_rig_ids: string[];
+  survey_id: string;
+  view_fov_degrees: number;
+  updated_at_ms: number;
+}
+export interface DirectorFramingDraftView { project: DirectorIdentity; draft: DirectorFramingDraft | null }
+export interface DirectorRigProfileSummary {
+  rig: DirectorIdentity;
+  catalog_slug: string;
+  catalog_name: string;
+  profile: DirectorRigProfile | null;
+  field_of_view: DirectorFieldOfView | null;
+}
+export interface DirectorCutoutRequest {
+  survey: string;
+  ra: number;
+  dec: number;
+  fov: number;
+  width: number;
+  height: number;
+  rotation: number;
+}
+export type DirectorCutoutResult =
+  | { state: 'ready'; blob: Blob }
+  | { state: 'generating' }
+  | { state: 'failed'; error: string };

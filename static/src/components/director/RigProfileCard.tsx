@@ -25,7 +25,9 @@ export default function RigProfileCard({ slug }: { slug: string }) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const queryKey = ['directorRigProfile', slug];
-  const loaded = useQuery({ queryKey, queryFn: () => apiClient.getDirectorRigProfile(slug), retry: false, refetchOnWindowFocus: false });
+  const loaded = useQuery({ queryKey, queryFn: () => apiClient.getDirectorRigProfile(slug), refetchOnWindowFocus: false,
+    // Director admits one metadata request at a time; a 503 means wait, not fail.
+    retry: (count, error) => count < 5 && (isAxiosError(error) ? error.response?.status : error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined) === 503, retryDelay: 700 });
   const [form, setForm] = useState<RigProfileForm | null>(null);
   const [problem, setProblem] = useState('');
   const [notice, setNotice] = useState('');

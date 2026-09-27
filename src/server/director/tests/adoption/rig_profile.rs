@@ -31,10 +31,10 @@ pub(super) async fn bound_fixture() -> (Fixture, Uuid) {
     let f = Fixture::new();
     f.source
         .execute_batch(
-            "ALTER TABLE acquiredimage ADD COLUMN filename TEXT;
+            r#"ALTER TABLE acquiredimage ADD COLUMN metadata TEXT;
              ALTER TABLE acquiredimage ADD COLUMN acquireddate INTEGER;
-             UPDATE acquiredimage SET filename='old.fits', acquireddate=10;
-             INSERT INTO acquiredimage(Id,gradingStatus,filename,acquireddate) VALUES(2,1,'C:\\\\frames\\\\newest.fits',20);",
+             UPDATE acquiredimage SET metadata='{"FileName":"old.fits"}', acquireddate=10;
+             INSERT INTO acquiredimage(Id,gradingStatus,metadata,acquireddate) VALUES(2,1,'{"FileName":"C:\\frames\\newest.fits","ExposureDuration":60.0}',20);"#,
         )
         .unwrap();
     write_fits(

@@ -231,16 +231,8 @@ async fn run_bound<T: Send + 'static>(
         + Send
         + 'static,
 ) -> Result<T, Error> {
-    let metadata_permit = service
-        .admission
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| Error::Busy)?;
-    let catalog_permit = service
-        .discovery_admission
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| Error::Busy)?;
+    let metadata_permit = admit(&service.admission).await?;
+    let catalog_permit = admit(&service.discovery_admission).await?;
     tokio::task::spawn_blocking(move || {
         let _permits = (metadata_permit, catalog_permit);
         let mut connection = super::super::database_context::open_scheduler_connection_with_flags(
@@ -330,6 +322,8 @@ fn header_defaults(catalog: &DatabaseContext, connection: &Connection) -> Defaul
     defaults
 }
 
+/// Target Scheduler keeps the file name inside the metadata JSON, not in a
+/// column, so read the newest rows and pull it out the way the sky view does.
 fn recent_file_names(connection: &Connection) -> Option<Vec<String>> {
     let mut columns = connection
         .prepare("PRAGMA table_info(acquiredimage)")
@@ -340,7 +334,7 @@ fn recent_file_names(connection: &Connection) -> Option<Vec<String>> {
         .filter_map(Result::ok)
         .collect();
     let has = |name: &str| columns.iter().any(|c| c.eq_ignore_ascii_case(name));
-    if !has("filename") {
+    if !has("metadata") {
         return None;
     }
     let order = if has("acquireddate") {
@@ -350,13 +344,14 @@ fn recent_file_names(connection: &Connection) -> Option<Vec<String>> {
     };
     let mut statement = connection
         .prepare(&format!(
-            "SELECT filename FROM acquiredimage WHERE filename IS NOT NULL ORDER BY {order} LIMIT ?1"
+            "SELECT metadata FROM acquiredimage WHERE metadata IS NOT NULL ORDER BY {order} LIMIT ?1"
         ))
         .ok()?;
     let names = statement
         .query_map([HEADER_CANDIDATES as i64], |row| row.get::<_, String>(0))
         .ok()?
         .filter_map(Result::ok)
+        .filter_map(|metadata| super::super::handlers::filename_from_metadata(&metadata))
         .collect();
     Some(names)
 }
