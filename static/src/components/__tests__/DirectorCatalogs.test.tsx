@@ -6,7 +6,7 @@ import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
 import { AccessContext, useAccess } from '../../auth/access';
-import DirectorCatalogs from '../director/DirectorCatalogs';
+import { DatabaseProjectLinks } from '../director/DirectorCatalogs';
 import type { DirectorAdoptionPlan } from '../../api/directorTypes';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
@@ -24,7 +24,7 @@ function fixture() {
       { source_row_id: 1, source_project_guid: guid, source_profile_id: 'profile-a', name: 'M31', issues: [] },
       { source_row_id: 2, source_project_guid: null, source_profile_id: 'profile-a', name: 'Broken row', issues: ['missing_project_guid'] },
     ], profiles: [{ source_profile_id: 'profile-a', project_count: 2 }] } }))),
-    http.get('/api/director/v1/catalogs/catalog/mappings', () => HttpResponse.json(ok({ catalog_identity: identity(), items: state.saved?.mappings ?? [], next_after: null }))),
+    http.get('/api/director/v1/catalogs/catalog/mappings', () => HttpResponse.json(ok({ catalog_identity: identity(), rig, items: state.saved?.mappings ?? [], next_after: null }))),
     http.get('/api/director/v1/projects', () => HttpResponse.json(ok({ items: [project], next_after: null }))),
     http.get('/api/director/v1/rigs', () => HttpResponse.json(ok({ items: [rig], next_after: null }))),
     http.post('/api/director/v1/catalogs/catalog/adoption/preview', async ({ request }) => { const plan = await request.json() as DirectorAdoptionPlan; state.previews.push(plan); return HttpResponse.json(ok(report(plan))); }),
@@ -38,17 +38,71 @@ function mount(canWrite = true) {
     const access = useAccess();
     return <QueryClientProvider client={client}><AccessContext.Provider value={{ ...access, canWrite }}><MemoryRouter initialEntries={['/director?directorView=catalogs&directorCatalog=catalog']}>{children}</MemoryRouter></AccessContext.Provider></QueryClientProvider>;
   }
-  return render(<DirectorCatalogs instanceId={project.id} />, { wrapper: Wrapper });
+  return render(<DatabaseProjectLinks instanceId={project.id} slug="catalog" />, { wrapper: Wrapper });
 }
 async function choose() {
   const check = await screen.findByRole('checkbox', { name: 'Select M31 (1)' });
   await waitFor(() => expect(check).toBeEnabled());
   fireEvent.click(check);
-  fireEvent.change(screen.getByLabelText('Global project for M31 (1)'), { target: { value: project.id } });
-  fireEvent.change(screen.getByLabelText('Rig for M31 (1)'), { target: { value: rig.id } });
+  fireEvent.change(screen.getByLabelText('Project for M31 (1)'), { target: { value: project.id } });
+  expect(screen.queryByLabelText('Rig for M31 (1)')).not.toBeInTheDocument();
 }
 
 describe('Director catalog mapping', () => {
+  function unboundFixture() {
+    fixture();
+    const previews: unknown[] = [];
+    const applies: unknown[] = [];
+    let bound = false;
+    server.use(
+      http.get('/api/director/v1/catalogs/catalog/mappings', () => HttpResponse.json(ok({ catalog_identity: null, rig: bound ? rig : null, items: [], next_after: null }))),
+      http.post('/api/director/v1/catalogs/catalog/rig/preview', async ({ request }) => {
+        const plan = await request.json(); previews.push(plan);
+        return HttpResponse.json(ok({ binding: { catalog: plan, rig }, preview_digest: 'b'.repeat(64), applied: false }));
+      }),
+      http.post('/api/director/v1/catalogs/catalog/rig/apply', async ({ request }) => {
+        applies.push(await request.json()); bound = true;
+        return applies.length === 1 ? HttpResponse.error() : HttpResponse.json(ok({ applied: true }));
+      }),
+    );
+    return { previews, applies };
+  }
+
+  it('reviews database rig setup and retries the exact request after a lost response', async () => {
+    const { previews, applies } = unboundFixture(); mount();
+    expect(await screen.findByText('Planning not enabled')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Enable planning' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview rig setup' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Enable planning' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Network Error');
+    fireEvent.click(screen.getByRole('button', { name: 'Enable planning' }));
+    await screen.findByRole('checkbox', { name: 'Select M31 (1)' });
+    expect(previews).toHaveLength(1);
+    expect(applies).toHaveLength(2);
+    expect(applies[0]).toEqual(applies[1]);
+    expect(applies[0]).toEqual({ plan: previews[0], preview_digest: 'b'.repeat(64) });
+  });
+
+  it('requires another rig setup review after a conflict', async () => {
+    const { previews } = unboundFixture();
+    server.use(http.post('/api/director/v1/catalogs/catalog/rig/apply', () => HttpResponse.json({ error: 'Rig associations conflict' }, { status: 409 })));
+    mount(); fireEvent.click(await screen.findByRole('button', { name: 'Preview rig setup' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Enable planning' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Rig associations conflict');
+    expect(screen.queryByRole('button', { name: 'Enable planning' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview rig setup' }));
+    await screen.findByRole('button', { name: 'Enable planning' });
+    expect(previews).toHaveLength(2);
+    expect(previews[0]).toEqual(previews[1]);
+  });
+
+  it('does not let a reader enable database planning', async () => {
+    const { previews, applies } = unboundFixture(); mount(false);
+    await screen.findByText('Planning not enabled');
+    expect(screen.queryByRole('button', { name: 'Preview rig setup' })).not.toBeInTheDocument();
+    expect(previews).toEqual([]); expect(applies).toEqual([]);
+  });
+
   it('requires review, blocks invalid rows, and reloads saved links', async () => {
     const { state } = fixture(); mount(); await choose();
     expect(screen.getByRole('checkbox', { name: 'Select Broken row (2)' })).toBeDisabled();
@@ -97,15 +151,15 @@ describe('Director catalog mapping', () => {
 
   it('reuses inline creation identity on retry', async () => {
     fixture(); const requests: unknown[] = [];
-    server.use(http.post('/api/director/v1/rigs', async ({ request }) => {
+    server.use(http.post('/api/director/v1/projects', async ({ request }) => {
       const body = await request.json() as { id: string; name: string }; requests.push(body);
       return requests.length === 1 ? HttpResponse.error() : HttpResponse.json(ok({ ...body, revision: 1 }));
     }));
-    mount(); await choose(); fireEvent.click(screen.getByRole('button', { name: 'New rig for M31' }));
-    fireEvent.change(screen.getByLabelText('New rig name'), { target: { value: 'Redcat' } });
+    mount(); await choose(); fireEvent.click(screen.getByRole('button', { name: 'New project for M31' }));
+    fireEvent.change(screen.getByLabelText('New project name'), { target: { value: 'Andromeda project' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
     await screen.findByRole('alert'); fireEvent.click(screen.getByRole('button', { name: 'Create' }));
-    await waitFor(() => expect(screen.queryByLabelText('New rig name')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByLabelText('New project name')).not.toBeInTheDocument());
     expect(requests).toHaveLength(2); expect(requests[0]).toEqual(requests[1]);
   });
 
@@ -132,17 +186,17 @@ describe('Director catalog mapping', () => {
     expect(screen.getByRole('button', { name: 'Refresh catalog' })).toBeEnabled();
   });
 
-  it('shares one rig choice across valid projects from the same source profile', async () => {
+  it('uses the database rig across source profiles without another rig selector', async () => {
     const { state } = fixture();
     const second = '44444444-4444-4444-8444-444444444444';
     server.use(http.get('/api/director/v1/catalogs/catalog/discovery', () => HttpResponse.json(ok({ catalog_slug: 'catalog', catalog_name: 'Telescope catalog', catalog_identity: null, snapshot_digest: 'shared', evidence: { projects: [
       { source_row_id: 1, source_project_guid: guid, source_profile_id: 'profile-a', name: 'M31', issues: [] },
-      { source_row_id: 2, source_project_guid: second, source_profile_id: 'profile-a', name: 'M42', issues: [] },
+      { source_row_id: 2, source_project_guid: second, source_profile_id: 'profile-b', name: 'M42', issues: [] },
     ], profiles: [{ source_profile_id: 'profile-a', project_count: 2 }] } }))));
     mount(); await choose();
-    expect(screen.getByLabelText('Rig for M42 (2)')).toHaveValue(rig.id);
+    expect(screen.queryByLabelText('Rig for M42 (2)')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Select M42 (2)' }));
-    fireEvent.change(screen.getByLabelText('Global project for M42 (2)'), { target: { value: project.id } });
+    fireEvent.change(screen.getByLabelText('Project for M42 (2)'), { target: { value: project.id } });
     fireEvent.click(screen.getByRole('button', { name: 'Preview mappings' }));
     await screen.findByRole('button', { name: 'Apply mappings' });
     expect(state.previews[0].mappings).toHaveLength(2);

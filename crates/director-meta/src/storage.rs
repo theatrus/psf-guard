@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 5;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -32,6 +32,7 @@ impl MetaStore {
         create_configuration_tables(&tx)?;
         create_project_tables(&tx)?;
         create_catalog_mapping_tables(&tx)?;
+        create_catalog_rig_table(&tx)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         conn.close().map_err(|(_, error)| Error::Sqlite(error))?;
@@ -56,7 +57,10 @@ impl MetaStore {
             if version < 3 {
                 create_project_tables(&tx)?;
             }
-            create_catalog_mapping_tables(&tx)?;
+            if version < 4 {
+                create_catalog_mapping_tables(&tx)?;
+            }
+            create_catalog_rig_table(&tx)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;
@@ -143,6 +147,10 @@ fn validate(conn: &Connection) -> Result<Uuid, Error> {
             conn.prepare(sql).map_err(|_| Error::CorruptDatabase)?;
         }
     }
+    if version >= 5 {
+        conn.prepare("SELECT catalog_id,rig_id FROM catalog_rig LIMIT 0")
+            .map_err(|_| Error::CorruptDatabase)?;
+    }
     let id: String = conn.query_row(
         "SELECT instance_id FROM meta WHERE singleton=1",
         [],
@@ -186,6 +194,15 @@ fn create_catalog_mapping_tables(conn: &Connection) -> Result<(), Error> {
             PRIMARY KEY(catalog_id,source_project_guid),
             FOREIGN KEY(catalog_id,source_project_guid) REFERENCES project_catalog(catalog_id,source_project_guid),
             FOREIGN KEY(catalog_id,source_profile_id) REFERENCES catalog_profile(catalog_id,source_profile_id));"
+    )?;
+    Ok(())
+}
+
+fn create_catalog_rig_table(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch(
+        "CREATE TABLE catalog_rig(
+            catalog_id TEXT PRIMARY KEY NOT NULL REFERENCES catalog(id),
+            rig_id TEXT UNIQUE NOT NULL REFERENCES rig(id));",
     )?;
     Ok(())
 }

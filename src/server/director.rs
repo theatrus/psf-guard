@@ -18,6 +18,7 @@ use std::{
 use tokio::sync::Semaphore;
 mod catalog_adoption;
 mod catalog_discovery;
+mod catalog_rig;
 
 pub(super) fn validate_registry_separation(
     meta: Option<&FilePath>,
@@ -209,6 +210,14 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         )
         .route("/projects", get(list_projects).post(create_project))
         .route("/catalogs/{slug}/mappings", get(catalog_adoption::mappings))
+        .route(
+            "/catalogs/{slug}/rig/preview",
+            axum::routing::post(catalog_rig::preview),
+        )
+        .route(
+            "/catalogs/{slug}/rig/apply",
+            axum::routing::post(catalog_rig::apply),
+        )
         .route(
             "/catalogs/{slug}/adoption/preview",
             axum::routing::post(catalog_adoption::preview).layer(DefaultBodyLimit::max(

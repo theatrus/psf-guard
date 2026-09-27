@@ -1,6 +1,7 @@
 use super::*;
 use psf_guard_director_meta::CatalogIdentity;
 use rusqlite::{Connection, TransactionBehavior};
+mod database_rig;
 
 const PREVIEW: &str = "/catalogs/catalog/adoption/preview";
 const APPLY: &str = "/catalogs/catalog/adoption/apply";
@@ -423,11 +424,21 @@ async fn gates_bounds_and_missing_preview_protect_the_adoption_routes() {
         StatusCode::OK
     );
     fixture.state.set_allow_database_management(false);
-    for endpoint in [PREVIEW, APPLY] {
-        let body = if endpoint == PREVIEW {
-            fixture.plan.clone()
+    for endpoint in [
+        PREVIEW,
+        APPLY,
+        database_rig::RIG_PREVIEW,
+        database_rig::RIG_APPLY,
+    ] {
+        let plan = if endpoint.starts_with("/catalogs/catalog/rig/") {
+            json!({"catalog_id":fixture.plan["catalog_id"]})
         } else {
-            json!({"plan":fixture.plan,"preview_digest":"0".repeat(64)})
+            fixture.plan.clone()
+        };
+        let body = if endpoint.ends_with("/preview") {
+            plan
+        } else {
+            json!({"plan":plan,"preview_digest":"0".repeat(64)})
         };
         assert_eq!(
             call(&fixture.app, "POST", endpoint, body, None).await.0,
@@ -456,7 +467,12 @@ async fn adoption_requires_an_operator_not_a_sync_key_or_read_only_account() {
     fixture
         .state
         .set_server_auth(auth::ServerAuth::from_sources(None, &registry, 3000).unwrap());
-    for endpoint in [PREVIEW, APPLY] {
+    for endpoint in [
+        PREVIEW,
+        APPLY,
+        database_rig::RIG_PREVIEW,
+        database_rig::RIG_APPLY,
+    ] {
         for token in [None, Some("database-sync-key")] {
             assert_eq!(
                 call(&fixture.app, "POST", endpoint, json!({}), token)

@@ -30,7 +30,7 @@ test('global Director identities survive reload, conflicts, and narrow viewports
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByText('Renamed Andromeda survey.')).toBeVisible();
 
-  for (const [tab, kind, name] of [['Sites', 'site', 'Starfront observatory'], ['Rigs', 'rig', 'C925 remote telescope']] as const) {
+  for (const [tab, kind, name] of [['Sites', 'site', 'Starfront observatory']] as const) {
     await page.getByRole('navigation', { name: 'Director views' }).getByRole('button', { name: tab }).click();
     await page.getByRole('button', { name: `New ${kind}` }).click();
     await page.getByLabel(`${tab.slice(0, -1)} name`).fill(name);
@@ -42,12 +42,15 @@ test('global Director identities survive reload, conflicts, and narrow viewports
   }
   await page.screenshot({ path: testInfo.outputPath('director-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 375, height: 812 });
-  await page.getByRole('button', { name: 'Rename C925 remote telescope' }).click();
-  await expect(page.getByLabel('Rig name')).toBeVisible();
+  await page.getByRole('button', { name: 'Rename Starfront observatory' }).click();
+  await expect(page.getByLabel('Site name')).toBeVisible();
   expect(await page.locator('.director-page').evaluate(element => element.scrollWidth <= element.clientWidth)).toBeTruthy();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   await page.screenshot({ path: testInfo.outputPath('director-mobile.png'), fullPage: true });
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Director views' }).getByRole('button', { name: 'Rigs' }).click();
+  await expect(page.getByRole('button', { name: 'Add database' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'New rig' })).toHaveCount(0);
   expect(browserErrors).toEqual([]);
   expect(scopedRequests).toEqual([]);
   expect((await (await request.get('/api/databases')).json()).data).toEqual([]);

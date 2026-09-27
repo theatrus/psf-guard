@@ -1,5 +1,5 @@
 import { apiClient } from '../../api/client';
-import type { DirectorIdentityPage, DirectorMappingPage } from '../../api/directorTypes';
+import type { DirectorIdentity, DirectorIdentityPage, DirectorMappingPage } from '../../api/directorTypes';
 
 async function allPages<T>(read: (after?: string) => Promise<{ items: T[]; next_after: string | null }>): Promise<T[]> {
   const items: T[] = [];
@@ -18,6 +18,8 @@ async function allPages<T>(read: (after?: string) => Promise<{ items: T[]; next_
 
 export async function loadCatalog(slug: string) {
   const discovery = await apiClient.discoverDirectorCatalog(slug);
+  let rig: DirectorIdentity | null = null;
+  let firstPage = true;
   // Metadata admission is deliberately serial; do not fan out these requests.
   const mappings = await allPages(async after => {
     const page: DirectorMappingPage = await apiClient.getDirectorMappings(slug, after);
@@ -25,17 +27,18 @@ export async function loadCatalog(slug: string) {
       || page.catalog_identity?.origin_instance_id !== discovery.catalog_identity?.origin_instance_id) {
       throw new Error('Catalog identity changed. Refresh the catalog.');
     }
+    if (!firstPage && JSON.stringify(page.rig ?? null) !== JSON.stringify(rig)) {
+      throw new Error('Database rig changed. Refresh the catalog.');
+    }
+    rig = page.rig ?? null;
+    firstPage = false;
     return page;
   });
   const projects = await allPages(async after => {
     const page: DirectorIdentityPage = await apiClient.getDirectorIdentities('projects', after);
     return page;
   });
-  const rigs = await allPages(async after => {
-    const page: DirectorIdentityPage = await apiClient.getDirectorIdentities('rigs', after);
-    return page;
-  });
-  return { discovery, mappings, projects, rigs };
+  return { discovery, mappings, projects, rig: rig as DirectorIdentity | null };
 }
 
 export type CatalogData = Awaited<ReturnType<typeof loadCatalog>>;

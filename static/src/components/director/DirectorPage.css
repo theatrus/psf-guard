@@ -1,5 +1,10 @@
 .director-page { flex: 1; overflow: auto; padding: 24px; min-height: 0; }
 .director-page > * { max-width: 1000px; margin-left: auto; margin-right: auto; }
+.director-database-links { padding: 16px 0; border-top: 1px solid var(--color-border-secondary); }
+.director-page a { display: inline-flex; gap: 6px; align-items: center; color: var(--color-primary); }
+.director-project-context { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; }
+.director-project-context dt { color: var(--color-text-secondary); }
+.director-project-context dd { margin: 0; overflow-wrap: anywhere; }
 .director-heading, .director-toolbar, .director-actions, .director-edit-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .director-heading h1 { font-size: 24px; margin: 0; }
 .director-preview { color: var(--color-warning-light); font-size: 13px; }

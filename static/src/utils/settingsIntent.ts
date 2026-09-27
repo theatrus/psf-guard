@@ -8,7 +8,7 @@
  */
 
 /** Which form the settings modal should open on, if any. */
-export type SettingsIntent = 'add' | 'create';
+export type SettingsIntent = 'add' | 'create' | { kind: 'director-links'; dbId: string };
 
 export const OPEN_SETTINGS_EVENT = 'psf-guard:open-settings';
 
