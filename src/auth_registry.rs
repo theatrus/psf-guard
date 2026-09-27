@@ -11,7 +11,7 @@ use argon2::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     fmt,
     io::Write,
     path::{Path, PathBuf},
@@ -38,14 +38,21 @@ impl fmt::Display for AccessRole {
     }
 }
 
+/// Fields a newer PSF Guard wrote that this version does not know. They are
+/// carried through load and save untouched, so a server that ran a newer
+/// build can come back to this one and go forward again without losing
+/// anything; nothing in them is acted on here.
+type UnknownFields = BTreeMap<String, serde_json::Value>;
+
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AuthUserRecord {
     pub username: String,
     pub role: AccessRole,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
     password_hash: String,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: UnknownFields,
 }
 
 impl fmt::Debug for AuthUserRecord {
@@ -79,6 +86,7 @@ impl AuthUserRecord {
             role,
             email: normalize_email(email)?,
             password_hash,
+            extra: UnknownFields::new(),
         })
     }
 
@@ -132,10 +140,13 @@ pub(crate) fn verify_password_hash(password_hash: &str, password: &str) -> bool 
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AuthRegistry {
     pub schema_version: u32,
     pub users: Vec<AuthUserRecord>,
+    /// Newer builds add top-level fields such as `tokens` (personal API
+    /// tokens). Kept verbatim and written back; not honoured by this version.
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: UnknownFields,
 }
 
 impl Default for AuthRegistry {
@@ -143,6 +154,7 @@ impl Default for AuthRegistry {
         Self {
             schema_version: CURRENT_SCHEMA_VERSION,
             users: Vec::new(),
+            extra: UnknownFields::new(),
         }
     }
 }
@@ -419,6 +431,56 @@ mod tests {
             AuthRegistry::path_for_database_registry(Path::new("/tmp/demo.json")),
             Path::new("/tmp/demo.auth.json")
         );
+    }
+
+    #[test]
+    fn fields_written_by_a_newer_build_survive_load_and_save() {
+        // What a newer PSF Guard writes once someone mints an API token, plus
+        // a made-up per-user field, so the shape of a future file is covered.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("auth.json");
+        let hash = hash_password_without_policy("long-view-secret").unwrap();
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "schema_version": 1,
+                "users": [{"username": "viewer", "role": "read_only", "password_hash": hash, "theme": "dark"}],
+                "tokens": [{"id": "tok1", "username": "viewer", "label": "script", "token_hash": "abc", "read_only": true, "created_at": 1}],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut loaded = AuthRegistry::load(&path).unwrap();
+        assert_eq!(loaded.users.len(), 1);
+        assert!(loaded.users[0].verify_password("long-view-secret"));
+        loaded
+            .add(
+                AuthUserRecord::new("editor", AccessRole::ReadWrite, "long-edit-secret").unwrap(),
+                false,
+            )
+            .unwrap();
+        loaded.save(&path).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["tokens"][0]["id"], "tok1");
+        assert_eq!(written["users"].as_array().unwrap().len(), 2);
+        let viewer = written["users"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|u| u["username"] == "viewer")
+            .unwrap();
+        assert_eq!(viewer["theme"], "dark");
+        // A record this version made carries nothing extra.
+        let editor = written["users"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|u| u["username"] == "editor")
+            .unwrap();
+        assert!(editor.get("theme").is_none());
+        // Unknown fields never override the ones this version owns.
+        assert_eq!(written["schema_version"], 1);
     }
 
     #[test]

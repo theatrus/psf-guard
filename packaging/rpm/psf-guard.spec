@@ -8,7 +8,7 @@
 %global rustflags_debuginfo 0
 
 Name:           psf-guard
-Version:        0.10.2
+Version:        0.10.3
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -93,6 +93,9 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Sun Sep 27 2026 Yann Ramin <github@theatr.us> - 0.10.3-1
+- A server that ran a newer preview build starts again on 0.10: the browser user file keeps fields this version does not know, such as API tokens, instead of refusing to load
+
 * Sat Sep 26 2026 Yann Ramin <github@theatr.us> - 0.10.2-1
 - Stack in WBPP runs PixInsight's WeightedBatchPreprocessing on the server, with a queue across databases
 - WBPP settings for exports and runs: quality, Fast Integration, drizzle, autocrop, rejection
