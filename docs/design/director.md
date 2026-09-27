@@ -1802,8 +1802,17 @@ completed steps are not charged again. Geometry checks use the compiled horizon
 and meridian windows, never a later window beyond a gap. Assignment expiry and
 exclusive condition freshness further constrain the bound.
 
-This is an internal shared-core building block, not yet wired through the ledger,
-IPC or native adapter. The existing IPC 7 result still has no dispatch deadline.
+The ledger's geometry deadline checks preserve that result through the same
+transaction that validates the exact issued command or linked capture and
+persists any refusal. A capture check temporarily restores only its already-spent
+attempt for feasibility; it never changes stored credit or reserves another
+exposure. Successful checks add no issuance or capture events. Existing
+decision-only APIs project the same result for compatibility. Deadlines are not
+persisted as replay authority, and recovered work still requires explicit
+reconciliation rather than redispatch.
+
+This is not yet wired through IPC or the native adapter. The existing IPC 7
+result still has no dispatch deadline.
 The follow-on transport must preserve both timestamps exactly. Native enforcement
 must measure monotonic elapsed time (rounded up to milliseconds) from before
 requesting the check, compare it
