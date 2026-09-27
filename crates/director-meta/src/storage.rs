@@ -85,7 +85,9 @@ impl MetaStore {
             if version < 10 {
                 create_inbox_tables(&tx)?;
             }
-            super::client::create_tables(&tx)?;
+            if version < 11 {
+                super::client::create_tables(&tx)?;
+            }
             if version < 12 {
                 create_contact_table(&tx)?;
             }
