@@ -256,6 +256,13 @@ split. They narrow the sections above for this stage; they do not replace them.
   Director plugin fetches its program over HTTP, runs semi-offline within that
   program's validity, and checks in later with journaled receipts. Live status
   while connected is welcome but never required for execution.
+- **A remote rig is a pulled copy plus a peer.** A rig at another site is
+  represented here by the database pulled from that site's PSF Guard, a
+  registered Sync peer. Its rig profile names the peer; activation writes the
+  copy, then hands the planning tables to the peer through Sync's planning
+  push, so the same GUIDs exist in both files and the remote Target Scheduler
+  runs them. The remote PSF Guard stores those rows; it does not plan them.
+  The plugin at that site still pulls its program from the coordinator.
 - **Optics and site come from N.I.N.A.** Sensor size, pixel size, focal length,
   aperture, rotator presence and camera angle offset, plus site location and
   horizon, are defined in N.I.N.A. profiles. The plugin syncs them into a rig
@@ -340,8 +347,12 @@ input and must not call an endpoint before its row above says it exists.
    and `/apply` write the TS project, per-panel targets and per-objective
    exposure plans with the side tables above, record the activation in meta
    schema 9, and link new projects. `GET /rigs/{rig}/program` serves the
-   core program from those rows and the plugin's equipment report. Open: the
-   planning push to remote rigs through Sync.
+   core program from those rows and the plugin's equipment report. Remote
+   rigs done: a rig profile names a registered Sync peer (`peer_id`), Apply
+   pushes the rig database's planning tables to that peer with Sync's
+   planning push after the local commit, `POST
+   /projects/{id}/activation/push` resends the last activation, and every
+   report row says whether the peer took it.
 7. Check-in and live status. Backend done: meta schema 10 inbox
    (`rig_event`, `rig_feed`, `rig_status`), `POST /rigs/{rig}/checkin`,
    `POST /rigs/{rig}/status`, `GET /rigs/status`; the plugin side and the

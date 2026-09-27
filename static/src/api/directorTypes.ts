@@ -86,6 +86,8 @@ export interface DirectorRigProfile {
   limits: DirectorReported<DirectorLimits>;
   /** Only the N.I.N.A. plugin reports this; the form never edits it. */
   configuration: DirectorReported<unknown> | null;
+  /** The Sync peer holding this rig's real database; null when it is on this server. */
+  peer_id: string | null;
   updated_at_ms: number;
 }
 export interface DirectorRigProfileView {
@@ -106,6 +108,7 @@ export interface DirectorRigProfileEdit {
   horizon: DirectorEdited<DirectorHorizon> | null;
   sky_quality: DirectorEdited<DirectorSkyQuality> | null;
   limits: DirectorEdited<DirectorLimits>;
+  peer_id: string | null;
 }
 
 export interface DirectorSurvey {
@@ -227,6 +230,14 @@ export interface DirectorPlanView { project: DirectorIdentity; plan: DirectorPla
 
 export type DirectorActivationAction = 'create' | 'update' | 'unchanged';
 export interface DirectorActivationChange { kind: 'project' | 'target' | 'plan'; action: DirectorActivationAction; name: string; detail: string }
+/** A rig on another PSF Guard: its rows go there by Sync once Apply has committed them here. */
+export interface DirectorActivationPush {
+  peer_id: string;
+  peer_name: string;
+  applied: boolean;
+  summary: Record<string, number>;
+  error: string | null;
+}
 export interface DirectorActivationRig {
   rig: DirectorIdentity;
   catalog_slug: string | null;
@@ -235,6 +246,13 @@ export interface DirectorActivationRig {
   changes: DirectorActivationChange[];
   warnings: string[];
   applied: boolean;
+  push: DirectorActivationPush | null;
+}
+export interface DirectorActivationPushReport {
+  project: DirectorIdentity;
+  activation_revision: number;
+  rigs: Array<{ rig: DirectorIdentity; catalog_name: string; push: DirectorActivationPush }>;
+  warnings: string[];
 }
 export interface DirectorActivationReport {
   project: DirectorIdentity;

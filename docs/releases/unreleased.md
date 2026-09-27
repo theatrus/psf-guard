@@ -126,6 +126,13 @@
   read only or given an expiry, and is shown once. Revoke it in the same
   place or with `users token revoke`; removing a user revokes their tokens.
 
+- A rig at another site can be planned from here. Set **Remote site** on
+  the rig's profile to the Sync peer that holds its real database; Apply
+  then writes the plan into the local copy and pushes the same Target
+  Scheduler rows to the peer, and **Push to remote sites again** resends the
+  last activation when a site was offline. The activation report says per rig
+  whether the peer took the rows.
+
 ## Changed
 
 ## Fixed

@@ -28,6 +28,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
   const loaded = useQuery({ queryKey, queryFn: () => apiClient.getDirectorRigProfile(slug), refetchOnWindowFocus: false,
     // Director admits one metadata request at a time; a 503 means wait, not fail.
     retry: (count, error) => count < 5 && (isAxiosError(error) ? error.response?.status : error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined) === 503, retryDelay: 700 });
+  const peers = useQuery({ queryKey: ['peers'], queryFn: apiClient.getPeers, retry: false, refetchOnWindowFocus: false });
   const [form, setForm] = useState<RigProfileForm | null>(null);
   const [problem, setProblem] = useState('');
   const [notice, setNotice] = useState('');
@@ -121,6 +122,21 @@ export default function RigProfileCard({ slug }: { slug: string }) {
           <Field id={`${slug}-meridian-before`} label="Stop before meridian" unit="min" value={form.meridianBefore} disabled={disabled} onChange={meridianBefore => update({ meridianBefore })} />
           <Field id={`${slug}-meridian-after`} label="Resume after meridian" unit="min" value={form.meridianAfter} disabled={disabled} onChange={meridianAfter => update({ meridianAfter })} />
         </div>
+      </fieldset>
+      <fieldset disabled={disabled}>
+        <legend>Remote site</legend>
+        <p className="director-muted">When this rig's real database lives on another PSF Guard, name that peer. Activation writes the plan into the copy here, then pushes the same rows there through Sync.</p>
+        <label className="rig-profile-field" htmlFor={`${slug}-peer`}><span>Plans push to</span>
+          <span className="rig-profile-input">
+            <select id={`${slug}-peer`} aria-label="Plans push to" value={form.peerId} onChange={event => update({ peerId: event.target.value })}>
+              <option value="">This server only</option>
+              {peers.data?.map(peer => <option key={peer.id} value={peer.id}>{peer.name}</option>)}
+              {form.peerId && !peers.data?.some(peer => peer.id === form.peerId) && <option value={form.peerId}>{form.peerId} (no longer registered)</option>}
+            </select>
+          </span>
+        </label>
+        {peers.isError && <p className="director-muted">Peers could not be loaded; they are kept under Settings, Remote PSF Guard.</p>}
+        {peers.data?.length === 0 && <p className="director-muted">No peer registered yet; add one under Settings, Remote PSF Guard.</p>}
       </fieldset>
       <p className="director-muted">Camera modes and filters: {data.profile.configuration ? describeSource(data.profile.configuration.source, data.profile.configuration.reported_at_ms) : 'not reported yet; the N.I.N.A. plugin supplies them.'}</p>
       {(problem || save.isError) && !stale && <p className="director-error" role="alert">{problem || message(save.error)}</p>}
