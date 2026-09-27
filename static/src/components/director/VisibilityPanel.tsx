@@ -51,7 +51,10 @@ export function AltitudeChart({ rig }: { rig: DirectorRigFeasibility }) {
   }
   if (open) bands.push({ from: open.from, to: end, deep: open.deep });
   const minimum = rig.limits.minimum_altitude_degrees;
-  const target = line(s => s.targets[0]?.altitude_degrees ?? null);
+  // The target's track breaks where the rig pauses at the meridian.
+  const target = line(s => s.targets[0] && !s.targets[0].meridian_blocked ? s.targets[0].altitude_degrees : null);
+  const paused = line(s => s.targets[0]?.meridian_blocked ? s.targets[0].altitude_degrees : null);
+  const transit = night.targets[0]?.transit_ms ?? null;
   const horizon = line(s => Math.max(s.targets[0]?.horizon_altitude_degrees ?? 0, minimum));
   const moon = line(s => s.moon_altitude_degrees);
   const ticks: number[] = [];
@@ -63,6 +66,8 @@ export function AltitudeChart({ rig }: { rig: DirectorRigFeasibility }) {
     {ticks.map(t => <text key={t} className="axis" x={x(t)} y={H - 8} textAnchor="middle">{clock(t)}</text>)}
     <path className="horizon" d={horizon} />
     <path className="moon" d={moon} />
+    {transit !== null && transit >= start && transit <= end && <g className="transit"><line x1={x(transit)} x2={x(transit)} y1={PAD.top} y2={H - PAD.bottom} /><text x={x(transit) + 4} y={PAD.top + 12}>meridian</text></g>}
+    <path className="paused" d={paused} />
     <path className="target" d={target} />
     <line className="frame" x1={PAD.left} x2={W - PAD.right} y1={y(0)} y2={y(0)} />
   </svg>;
@@ -95,11 +100,11 @@ export default function VisibilityPanel({ projectId, center, enabled = true }: {
         const up = tonight?.targets[0]?.hours_up ?? 0;
         const verdict = !tonight || tonight.dark_hours === 0 ? `No darkness tonight at ${rig.catalog_name}.`
           : up <= 0 ? `Not visible tonight from ${rig.catalog_name}: never above ${rig.limits.minimum_altitude_degrees}°${rig.custom_horizon ? ' and its horizon' : ''} while dark.`
-          : `Visible ${formatHours(up)} tonight from ${rig.catalog_name} (${formatHours(tonight.dark_hours)} dark, peak ${tonight.targets[0].max_altitude_degrees.toFixed(0)}°). Moon ${Math.round(tonight.moon_illumination * 100)}% lit, ${tonight.targets[0].min_moon_separation_degrees.toFixed(0)}° away, up ${formatHours(tonight.moon_hours_up_in_dark)} of the dark.`;
+          : `Visible ${formatHours(up)} tonight from ${rig.catalog_name} (${formatHours(tonight.dark_hours)} dark, peak ${tonight.targets[0].max_altitude_degrees.toFixed(0)}°${tonight.targets[0].hours_lost_to_meridian > 0 ? `, ${formatHours(tonight.targets[0].hours_lost_to_meridian)} lost to the meridian pause` : ''}). Moon ${Math.round(tonight.moon_illumination * 100)}% lit, ${tonight.targets[0].min_moon_separation_degrees.toFixed(0)}° away, up ${formatHours(tonight.moon_hours_up_in_dark)} of the dark.`;
         return <p className={up > 0 ? 'visibility-verdict' : 'visibility-verdict is-down'} data-testid="visibility-verdict">{verdict}</p>;
       })()}
       <AltitudeChart rig={rig} />
-      <p className="director-muted visibility-legend"><span className="key target" />target <span className="key horizon" />{rig.custom_horizon ? 'custom horizon and limit' : `minimum altitude ${rig.limits.minimum_altitude_degrees}°`} <span className="key moon" />Moon <span className="key dark" />dark (Sun below −12°) <span className="key deep" />astronomical night</p>
+      <p className="director-muted visibility-legend"><span className="key target" />target <span className="key horizon" />{rig.custom_horizon ? 'custom horizon and limit' : `minimum altitude ${rig.limits.minimum_altitude_degrees}°`} <span className="key moon" />Moon <span className="key paused" />meridian pause <span className="key dark" />dark (Sun below −12°) <span className="key deep" />astronomical night</p>
       <div className="director-table-scroll"><table className="visibility-nights"><thead><tr><th>Night</th><th>Dark</th><th>Target up</th><th>Moon down too</th><th>Moon</th></tr></thead><tbody>
         {rig.nights.map(night => <tr key={night.date}>
           <td>{night.date}</td><td>{formatHours(night.dark_hours)}</td><td>{formatHours(night.targets[0]?.hours_up ?? 0)}</td><td>{formatHours(night.targets[0]?.hours_up_moon_down ?? 0)}</td>

@@ -172,6 +172,7 @@ pub(super) async fn evaluate(
                 nights,
                 step_ms: STEP_MS,
                 dark_below_degrees: DARK_BELOW_DEGREES,
+                meridian_exclusion: limits.meridian_exclusion,
             };
             let nights_out = match night_preview(&night_request) {
                 Ok(nights) => nights,

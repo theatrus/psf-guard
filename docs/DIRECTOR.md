@@ -426,7 +426,9 @@ minimum altitude and its custom horizon when it has one, the peak altitude,
 the Moon's phase, separation and hours up. Below it an altitude chart draws
 the night from an hour before dusk to an hour after dawn: the target's track,
 the horizon curve at the target's azimuth (or the flat minimum), the Moon's
-track dashed, and shaded bands for darkness and astronomical night. A table
+track dashed, a marker at the target's meridian transit with the rig's
+meridian pause drawn as a broken red stretch and left out of the visible
+hours, and shaded bands for darkness and astronomical night. A table
 gives the same numbers for the coming week, and a rig in the plan gets an
 estimate of the nights it needs at this week's rate. Pick another rig from the
 list to compare sites.

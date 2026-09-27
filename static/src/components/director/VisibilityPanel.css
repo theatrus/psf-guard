@@ -21,3 +21,7 @@
 .visibility-nights { width: 100%; border-collapse: collapse; font-size: 13px; }
 .visibility-nights th { text-align: left; font-weight: 500; color: var(--color-text-secondary); padding: 4px 6px; }
 .visibility-nights td { padding: 4px 6px; border-top: 1px solid var(--color-border-secondary); }
+.visibility-chart .paused { fill: none; stroke: #ff6b6b; stroke-width: 2.5; stroke-dasharray: 3 5; }
+.visibility-chart .transit line { stroke: rgba(255, 255, 255, 0.5); stroke-width: 1; stroke-dasharray: 2 4; }
+.visibility-chart .transit text { fill: #a9b4c4; font-size: 10px; }
+.visibility-legend .key.paused { background: #ff6b6b; }
