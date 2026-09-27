@@ -759,6 +759,18 @@ may extend the container and options, but must not require TS's private containe
 types or TS installation. This is behavioral compatibility, not reuse of TS's
 runtime identity or a promise that saved TS sequences deserialize unchanged.
 
+The TS target container **and its UI** are the compatibility baseline, not just
+inspiration for a smaller set of callbacks. Preserve familiar slot names,
+ordering, enablement, container options, nested instructions, and the native
+trigger/condition editing experience wherever the behavior applies. The seven
+instruction slots are **Before Wait**, **After Wait**, **Before New Target**,
+**After Each Exposure**, **After New Target**, **After Each Target**, and
+**After Target Complete**. These are distinct from ordinary N.I.N.A. Triggers
+and Conditions; supporting one does not establish compatibility with the other.
+Document any intentional difference next to the compatibility matrix before
+changing the public UI. Director defaults extend this surface with explicit
+policy ownership, not duplicate automatic actions or a separate hook scheduler.
+
 N.I.N.A. retains continuous local safety and operator control. Director's own
 session container coordinates operation boundaries and reports actual results
 and durations to the shared core. Native triggers may insert local operations,
@@ -976,6 +988,75 @@ another rig. Release acknowledgement or conservative expiry/clock-skew rules
 must fence that handoff. This protocol must also work when the central instance
 restarts during a batch. Telemetry reconnect and manual batch reconcile use the
 same durable evidence and admission rules.
+
+### Executor and coordinator interface handoff
+
+This is the required interface for the plugin/backend work split, not a claim
+that the endpoints or production container exist. Frontend/setup work must not
+invent a second rig or project identity to satisfy the plugin. The plugin uses
+the registered database's reviewed `catalog_rig` binding and the shared Rust
+program/geometry contracts. It does not read arbitrary remote SQLite files or
+treat TS tables as the planner's internal schema.
+
+| Boundary | Required information and behavior | Current state |
+| --- | --- | --- |
+| Commissioning | Coordinator instance UUID, durable catalog UUID, bound rig UUID, local N.I.N.A. profile binding, permitted projects and scoped credentials. The database slug is a locator, not identity. | Database/rig binding exists; Director pairing/enrollment does not. Sync credentials are not Director authority. |
+| Assignment check-in | Versioned immutable program, assignment ID/revision/validity, project/contribution/source-project identities, configuration/site/rig revisions, effective policy provenance, and offline authorization/budgets. Validate engine and contract compatibility before activation. | Program/geometry/ledger models exist locally; central assignment delivery and activation do not. |
+| Native execution | Rust selects and issues work. N.I.N.A. runs native items in target context with inherited triggers/conditions and the TS-compatible instruction slots. Each newly issued command/reservation has one native invocation. | Internal adapters and simulator loop exist; production session loop, complete options UI and hook lifecycle remain unfinished. |
+| Local status | Session/ledger, database/rig/project/target/goal IDs, assignment revision, operation and monotonic elapsed time, wait reason, local safety, connectivity, last successful check-in and queue depth. | Runtime Start/Stop status exists; acquisition session status contract/stream remains to be implemented. |
+| Central reporting | Coalesced live status is separate from durable capture/preparation receipts. Network errors update connectivity only; they do not fail an otherwise authorized local exposure or erase evidence. | No Director telemetry ingestion endpoint yet. |
+| Batch reconciliation | Bounded independent event pages, exact feed cursors, idempotent acknowledgements, grading/configuration revisions and replacement assignment proposal. Manual, sequencer and automatic check-ins use the same implementation. | Local capture/preparation feeds exist; remote inbox/acknowledgements and grade application remain open. |
+
+Backend API names must be finalized with their implementation under
+`/api/director/v1`; the plugin must not silently call a guessed endpoint or
+reuse the operator-only metadata API for rig credentials. Keep browser/operator
+management and rig execution authority separate. Enrollment binds the caller to
+one coordinator/catalog/rig tuple; every check-in must reject a mismatched tuple
+even when the supplied slug exists. A database rename or move preserves that
+tuple. A cloned independent rig requires explicit new lineage and enrollment.
+
+The assignment envelope must carry stable links from shared project/objective
+to rig contribution, source project GUID, target and recipe. Multiple projects
+within the selected rig database remain candidates; the local core decides
+what to acquire. A local integer row ID, display name or profile ID cannot
+substitute for source identity. Downstream projects with different framing or
+exposure purpose retain their own contribution identity and are not equivalent
+accepted-progress credit merely because they roll up to the same project.
+
+Commissioning selects the database-backed rig and local profile once; saved
+sequence configuration retains those identities and hook/default options, never
+credentials, live callbacks or a serialized dispatch permit. Session startup
+validates the cached assignment, current profile/equipment, local horizon,
+site/time evidence, safety policy and exclusive acquisition ownership. An
+offline start is permitted only within the cached authorization and evidence
+validity. No connection, startup hook or status subscriber may fabricate a safe
+state, extend expiry, reset attempt budgets or revive an uncertain operation.
+
+Preparation/capture receipts are journaled before delivery. A page acknowledgement
+must name its coordinator, catalog, rig, ledger, feed and highest contiguous
+committed cursor. Never acknowledge beyond the page, across feeds or across
+ledgers. A lost reply is retried with identical event IDs; late old-session
+status cannot overwrite current live state. The local queue retains evidence
+until exact acknowledgement; no image bytes or thumbnails are required for
+status or execution reconciliation. Deferred image upload is a separate policy.
+
+The public container needs one production coordinator that owns target entry/
+exit, wait transitions, preparation and capture boundaries, safe stop/cleanup,
+and checkpoint scheduling. Slot helpers alone do not decide when **After Each
+Target** or **After Target Complete** is due. Distinguish completed objective,
+temporary target switch, failed operation and interrupted session in receipts.
+Slow hooks invalidate the previous decision and require fresh core dispatch
+validation. Do not turn a native container's apparently successful return into
+success when a child failed, was skipped, or never completed.
+
+Next implementation order: transport and enforce core dispatch deadlines;
+establish tested TS-compatible native slot/option primitives; define the
+database-bound assignment and acknowledgement APIs with backend work; replace
+the simulator-only loop with the guarded session coordinator; then expose the
+familiar public container/UI and live/batch status. Each increment must state
+its missing gates. The full gate remains a real N.I.N.A. simulator sequence
+against an isolated PSF Guard instance, including an outage, restart, slow hook,
+unsafe transition and idempotent batch reconnect.
 
 ## Quality, calibration, and processing loop
 
