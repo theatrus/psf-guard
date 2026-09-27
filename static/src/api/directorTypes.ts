@@ -38,8 +38,15 @@ export interface DirectorDiscovery {
 }
 export interface DirectorMappingPage {
   catalog_identity: DirectorCatalogIdentity | null;
+  rig: DirectorIdentity | null;
   items: DirectorMapping[];
   next_after: string | null;
+}
+export interface DirectorRigPlan { catalog_id: string }
+export interface DirectorRigReport {
+  binding: { catalog: DirectorCatalogIdentity; rig: DirectorIdentity };
+  preview_digest: string;
+  applied: boolean;
 }
 export interface DirectorAdoptionPlan { catalog_id: string; mappings: DirectorMapping[] }
 export interface DirectorAdoptionReport {

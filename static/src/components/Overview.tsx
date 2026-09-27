@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Merge } from 'lucide-react';
+import { useDirectorStatus } from '../hooks/useDirectorStatus';
 import { apiClient } from '../api/client';
 import type {
   ExportChoice,
@@ -78,6 +79,7 @@ function projectKey(dbId: string, projectId: number): string {
 
 export default function Overview() {
   const color = useColorPreview();
+  const director = useDirectorStatus();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [projectSearch, setProjectSearch] = useState('');
@@ -1495,6 +1497,12 @@ export default function Overview() {
           projectName={schedulerProject.name}
           canEdit={organizeAllowed}
           onClose={() => setSchedulerProject(null)}
+          onPlan={director.data?.enabled && director.data.protocol_version === 1 && director.data.instance_id ? () => {
+            const params = new URLSearchParams({ db: schedulerProject.dbId, project: String(schedulerProject.id), directorSource: schedulerProject.dbId, directorView: 'projects' });
+            if (dbFilter) params.set('dbfilter', dbFilter);
+            setSchedulerProject(null);
+            navigate(`/director?${params}`);
+          } : undefined}
         />
       )}
 

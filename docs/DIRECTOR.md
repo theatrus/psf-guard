@@ -25,10 +25,17 @@ switching are not exposed. Catalog adoption requires the explicit workflow below
 
 ## Management screen
 
-When enabled, the **Director** navigation entry opens global **Projects**,
-**Sites**, **Rigs**, and **Catalogs**. Editors can create and rename identities; readers
-can inspect them. The selected view stays in the URL. Catalog selection does
-not scope Director identities, and a catalog is not required to use this page.
+Overview remains the project and collected-data workspace. Its existing
+**Plan & coordinates** dialog opens **Rig planning**, reusing the same target,
+coordinate and exposure-plan editor. Returning to Overview preserves the source
+database, project and database filter. This edits existing TS-compatible project
+metadata; it does not yet generate downstream projects or executable intent.
+
+The **Director** entry has **Projects**, **Sites** and **Rigs**. Projects and
+sites retain the prototype identity editor. **Rigs** lists the existing database
+registry, not a second inventory to create manually. **Configure** opens that
+database's settings. Profiles within a database are setup provenance, not
+separate rigs. Shared project progress and the framing wizard remain planned.
 
 Names do not establish identity. Each row includes its stable UUID and current
 revision. Create retries retain the same UUID. A conflicting rename keeps the
@@ -38,12 +45,18 @@ the current record. Listings load in bounded pages with a refresh action.
 This first management screen does not edit observing objectives, configuration
 snapshots, assignments, or plugin credentials. Acquisition remains unavailable.
 
-### Map a catalog
+### Enable database planning
 
-Open **Catalogs** and choose a configured catalog. Select source projects, then
-choose or create a global project and a rig for each. Projects sharing a source
-profile share one rig choice. Multiple source projects and rigs can contribute
-to the same global project. Nothing infers rig identity from the database name.
+Open the database's **Project planning links** in Settings. Choose **Preview rig
+setup**, then **Enable planning**. This binds the database's durable lineage to
+one rig, including an empty database. A single unambiguous prototype rig is
+retained so existing setup and intent references survive. Conflicting prototype
+associations are reported without rewriting them; their reassignment workflow
+is not implemented yet. Merely listing databases does not write an identity.
+
+Select source projects, then choose or create their shared project. Every source
+profile uses this database's rig. Projects in different databases can contribute
+to the same shared project. Names never establish ownership or merge projects.
 
 Choose **Preview mappings**, check the source, global project and rig names and
 UUIDs, then **Apply mappings**. Changed source evidence or destination revisions
@@ -51,7 +64,8 @@ discard the stale review; preview again. An interrupted Apply retains the exact
 reviewed request for retry. Creating an identity is a separate operation and
 does not map it until Apply succeeds.
 
-The selected catalog stays in the `directorCatalog` URL parameter. Existing
+Legacy `directorView=catalogs&directorCatalog=<slug>` links open the selected
+database's settings; there is no separate Director Catalogs tab. Existing
 links are read-only; a changed source profile is flagged instead of silently
 reassigned. Missing, invalid or duplicate source identities cannot be selected.
 Readers can inspect saved links but cannot create identities or apply mappings.
@@ -72,15 +86,17 @@ All metadata routes also require the database-management gate.
 | --- | --- | --- |
 | GET | `/status` | Reports `protocol_version`, `enabled`, `instance_id`, and `acquisition_available: false`. |
 | GET | `/catalogs/{slug}/discovery` | Read project/profile evidence from one already registered catalog. |
-| GET | `/catalogs/{slug}/mappings` | Optional `after` source-project UUID and `limit` 1-256; returns `catalog_identity`, `items` and `next_after`. |
+| GET | `/catalogs/{slug}/mappings` | Optional `after` source-project UUID and `limit` 1-256; returns `catalog_identity`, optional bound `rig`, `items` and `next_after`. |
 | GET | `/projects` | Optional `after` UUID cursor and `limit` from 1 to 256 (default 64). |
 | POST | `/projects` | `{"id":"<caller-generated UUID>","name":"M31"}` |
 | GET | `/projects/{id}` | Exact project UUID. |
 | PATCH | `/projects/{id}` | `{"expected_revision":1,"name":"Andromeda"}` |
 
 The same identity operations and body/query shapes are available at `/sites`
-and `/rigs`. Identities in those namespaces remain independent, even if their
-names or UUIDs match. No route deletes an identity or grants a rig credentials.
+and `/rigs`. The latter remains a compatibility API for prototype references;
+normal clients should enable planning on a registered database instead. Identity
+names never establish a binding. No route deletes an identity or grants a rig
+credentials.
 
 A global project identity is not a Target Scheduler project or a catalog-local
 integer ID. Same-name projects stay distinct. Keep the caller-generated UUID
@@ -96,6 +112,24 @@ There is no deletion endpoint.
 
 ## Catalog adoption
 
+First bind the database to its rig using these operator-only routes:
+
+| Method | Route | Body |
+| --- | --- | --- |
+| POST | `/catalogs/{slug}/rig/preview` | `{"catalog_id":"<durable or proposed UUID>"}` |
+| POST | `/catalogs/{slug}/rig/apply` | `{"plan":<same plan>,"preview_digest":"<preview result>"}` |
+
+The report contains `binding` (`catalog` and `rig`), `preview_digest`, and
+`applied`. Schema 5 adds a one-to-one catalog/rig binding without automatically
+rewriting schema-4 mappings. Multiple legacy rigs in one database, or one legacy
+rig shared by independent databases, return `409` for explicit resolution.
+Unambiguous adoption preserves old rig IDs. New rigs use the catalog UUID.
+Once bound, project mappings must use that rig; another catalog cannot reuse it.
+Copies retaining the same lineage retain the binding rather than creating rigs.
+Preview/apply uses fresh evidence, a read-only source preview, bounded admission,
+and the same identity-first retry protocol as project mappings below. The
+database name/locator and existing identity revisions are part of the review.
+
 These operator-only POST routes preview and apply explicit catalog mappings.
 They require database management and normal write access, not a Sync key. The
 catalog slug must already exist in the registry; no client filesystem path is
@@ -109,7 +143,7 @@ metadata transaction to check the same constraints as Apply.
 
 Each mapping names `catalog_id`, `source_project_guid`, `source_profile_id`,
 `project_id` and `rig_id`. Use exact source GUIDs/profile IDs from discovery and
-existing Director project/rig UUIDs. Names and row numbers cannot establish a
+existing project UUIDs and the database's bound rig UUID. Names and row numbers cannot establish a
 mapping. All entries must use the plan's catalog UUID. Plans contain 1-256
 distinct source projects and fit within 256 KiB. Missing/invalid/duplicate source
 identities must be corrected before adoption; the API does not invent them.
@@ -134,7 +168,7 @@ the coordinator writer; if the final meta commit fails, retry the same plan and
 digest to finish registration. Do not mint a replacement identity. A changed
 preview still requires review before retrying.
 
-The Catalogs view invokes these routes after explicit review. Its mapping
+Database settings invoke these routes after explicit review. The mapping
 inventory endpoint is read-only, allows readers, and requires database
 management. An unadopted catalog returns a null identity and no mappings without
 creating anything. Reading the identity does not scan images or project history.
@@ -193,8 +227,8 @@ project GUIDs are flagged; equivalent UUID spellings count as duplicates.
 
 This is discovery, not adoption. It does not create rigs, link projects, infer
 equipment or horizons, or change source tables. Profile IDs are source evidence,
-not friendly rig names. A database can contain several profiles and one rig can
-have several catalogs. Confirm mappings in the adoption workflow above rather
+not friendly rig names. A database can contain several profiles; they share its
+database-backed rig. Confirm mappings in the adoption workflow above rather
 than treating a slug, source row ID, name or snapshot digest as global identity.
 The digest detects changes to the returned evidence; it grants no write or
 execution authority and is not an image/catalog-content checksum.

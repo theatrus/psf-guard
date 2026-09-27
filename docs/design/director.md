@@ -82,12 +82,12 @@ untested integration requirements unchecked.
 | Sidecar and local recovery | Merged `crates/director-ledger` and `crates/director-runtime`: schema-4 journal, capture/preparation outboxes, IPC 7, one-shot dispatch checks, process crash/reopen tests; PSF Guard #464-487. | Remote inbox/acknowledgements, pruning, grade feedback, assignment replacement and complete operator recovery. No network batch check-in yet. |
 | NINA native execution | Plugin [#18](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/18), [#19](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/19), [#22](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/22), [#23](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/23), [#24](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/24) merged: transient native items, target context, complete horizon export and post-hook geometry checks. Real nightly #58 OmniSim probe captured three filtered FITS frames with correlated evidence. | Public production session container, all trigger/condition/hook contexts, plugin compatibility matrix, native defaults, full autofocus/guiding/flip/calibration/safety recovery and continuous ownership integration. Probe uses fixture allocations and synthetic orientation evidence, not a server session. |
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
-| Meta storage | [#488](https://github.com/theatrus/psf-guard/pull/488), [#489](https://github.com/theatrus/psf-guard/pull/489) and [#499](https://github.com/theatrus/psf-guard/pull/499) merged: separate schema-4 store, UUIDs, confirmed catalog/profile/project/rig links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. | Permissions/enrollment, active revisions, allocation authority and progress projections. |
+| Meta storage | Separate schema-5 store, UUIDs, reviewed one-to-one database/rig binding, confirmed source project links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. Unambiguous prototype links retain rig IDs. | Conflict-resolution UI for ambiguous prototype rigs, permissions/enrollment, active revisions, allocation authority and progress projections. |
 | Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492): shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493): schema-3 intent persistence with validated immutable setup references. | Objective editor, depth/FOV/sampling compatibility and authoritative allocation remain open. |
 | Project framing wizard | Project intent retains target coordinates and rig-specific framing/recipes as building blocks only. | Survey-map backgrounds, target/reference selection, interactive FOV and rotation, mosaics, versioned optical geometry, multi-rig/site preview, draft editing and reviewed activation are not implemented. |
 | Catalog discovery | [#498](https://github.com/theatrus/psf-guard/pull/498) merged: operator-scoped read-only project/profile evidence from registered TS-compatible catalogs, with bounded results and invalid/duplicate identity reports. | Discovery does not infer rig ownership or read image history. |
 | Catalog adoption | [#502](https://github.com/theatrus/psf-guard/pull/502) merged explicit durable lineage; [#503](https://github.com/theatrus/psf-guard/pull/503) merged operator preview/apply, exact identity matching, stale-review refusal and interrupted-write recovery. [#506](https://github.com/theatrus/psf-guard/pull/506) merged the reviewed mapping UI and read-only inventory, with real-server browser tests. | Independent forks, historical-image attribution, contribution accounting and acquisition authorization remain separate work. |
-| Operator API and UI | [#490](https://github.com/theatrus/psf-guard/pull/490) and [#494](https://github.com/theatrus/psf-guard/pull/494) merged: opt-in project/site/rig identity and site/rig snapshot APIs. [#495](https://github.com/theatrus/psf-guard/pull/495) merged the identity management screen; [#506](https://github.com/theatrus/psf-guard/pull/506) merged the explicit catalog mapping workflow. Both have real-server browser tests. | No project planning editor, rig pairing, acquisition control or live rig dashboard. UI tests are not equipment tests. |
+| Operator API and UI | Opt-in identity/snapshot APIs; rigs listed from registered databases, reviewed planning links in database settings, and Overview's existing target/exposure editor reused in scoped Director planning. Desktop/mobile real-server tests cover two databases contributing to one project and return navigation. | Full framing/objective wizard, downstream project generation, rig pairing, acquisition control and live dashboard. UI tests are not equipment tests. |
 | Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
 | Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. | Central telemetry ingestion/dashboard, scoped pairing, remote acknowledgements, offline authorization lifecycle, manual/sequence batch reconcile and reconnect activation are not implemented. |
 | End-to-end lifecycle | Core, process, native simulator and isolated management HTTP/UI tests exist separately. | No PSF Guard allocation -> real NINA simulator acquisition -> central telemetry/grade -> batch reconciliation/replan test. TS/Sync/Chatstronomy coexistence gates remain open. |
@@ -149,8 +149,9 @@ review and combined progress; Director plans and acquires contributions. Reuse
 TS project metadata to seed that planning flow, not to create parallel catalogs.
 
 This supersedes the independent rig-identity/profile-assignment model in the
-early metadata API and mapping UI. Those merged primitives are implementation
-history, not evidence that database-backed rigs are implemented. Migration
+early metadata API and mapping UI. Schema 5 now binds registered database
+lineage to a rig after review and uses the registry as the normal rig inventory.
+Prototype links are migration history, not a second inventory. Migration
 must preview existing links, flag conflicts such as two independent catalogs
 sharing one prototype rig, retain source GUIDs/history, and be transactional and
 retryable. Do not silently rewrite a user's mappings or invent rigs at check-in.
@@ -2120,26 +2121,32 @@ allocation accounting and native assignment delivery are not implemented here.
   history or merging names (#503, #506).
 - [x] Discover registered catalog project/profile evidence read-only, without
   inventing rig identities or changing source schemas (#498).
-- [ ] Derive the Director rig inventory from registered per-rig project databases
+- [x] Derive the Director rig inventory from registered per-rig project databases
   using durable catalog identities. Retire standalone rig creation/profile-to-rig
   selection from the normal flow; retain profiles as setup provenance.
-- [ ] Preview and migrate prototype independent rig links to database-backed
+- [x] Preview and migrate unambiguous prototype rig links to database-backed
   rigs, reporting conflicts without changing source GUIDs or capture history.
+- [ ] Add explicit resolution for conflicting prototype links (several rigs in
+  one database or one rig shared by independent databases). Preserve immutable
+  setup/intent references; current adoption refuses these cases without writes.
 - [ ] Bind plugin enrollment/check-in and site/setup resolution to that selected
   database context, including offline cached evidence and reconnect validation.
 - [ ] Connect Overview projects to Director planning using the same project
   identity. Preserve Overview's project/per-rig catalog navigation and existing
   review workflows; Director covers planning and acquisition, not their
   replacement. Add rigs as contribution plans without duplicate projects.
-  An unmerged local UI increment reuses the existing project/target editor and
-  catalog mapping APIs. Its standalone rig selector still needs correction to
-  the database-backed rig model before release. It is not a framing wizard,
+  The current UI reuses the existing project/target editor and reviewed mapping
+  APIs with the database-backed rig model. Overview -> Rig planning -> Overview
+  preserves source scope. It is not a framing wizard,
   intent export, downstream-project generator or combined progress implementation.
-- [ ] Browser-test navigation from an existing Overview project to its Director
-  plan and back with project/rig/database scope intact, plus catalog-only
-  projects without Director and planned projects without captured images.
-- [ ] Move source/import/sync linking into existing database settings and
+- [x] Browser-test navigation from an existing Overview project to its Director
+  plan and back with project/rig/database scope intact, and two database-backed
+  rigs linked to one project. Check desktop/mobile layouts and stale reviews.
+- [ ] Extend browser coverage to the full planned-project workflow without
+  captured images once downstream plan creation exists.
+- [x] Move current source/project linking into existing database settings and
   contextual project views; retire the standalone Director Catalogs workflow.
+  Full TS import/sync connection management remains separate work below.
 - [ ] Show objective-level project rollup and per-rig progress without treating
   incompatible footprints, sampling, bands or exposure purposes as equivalent.
 - [ ] Define PSF Guard-owned per-rig catalog schemas and versioned access
@@ -2166,12 +2173,14 @@ is not satisfied by the separate meta database alone.
 
 #### Confirmed catalog mappings
 
-The following describes the merged schema-4 prototype, not the intended rig
-ownership model. Its many-catalogs-to-independent-rig association and manual
-rig choice are superseded by "Rigs are registered project databases" above.
-Keep this behavior documented until the reviewed migration replaces it.
+Schema 5 adds a one-to-one `catalog_rig` binding. The migration creates the table
+but does not assign historical records. Operator preview/apply binds a registered
+database, retaining one unambiguous prototype rig or creating a rig keyed by the
+durable catalog UUID. It rejects ambiguous links without rewriting history.
+Bound mappings must use that database's rig, and another independent catalog
+cannot claim it. Copied/moved catalogs retain the same lineage and binding.
 
-The meta crate's schema 4 adds explicit source-profile-to-rig links and binds
+The earlier schema 4 added explicit source-profile-to-rig links and binds
 each confirmed source project to that profile and a global project. A caller
 first registers the stable catalog identity and creates or selects the global
 project and rig. `link_catalog_project` then records both links in one writer
@@ -2181,7 +2190,7 @@ project name, and never changes a source catalog.
 or storage failure rolls back the entire batch, including any earlier entries.
 
 Profiles are scoped by catalog identity and retained as exact opaque source
-IDs. Several profiles/catalogs may link to one rig, and several rig-local
+IDs. Several profiles within the bound database share its rig, and several rig-local
 projects may contribute to one global project. A profile within one catalog
 cannot silently change rigs; a source project cannot silently change its
 profile or global project. Identical retries succeed; changed mappings conflict.
@@ -2193,8 +2202,8 @@ GUID, with at most 256 entries per page. They describe explicit associations,
 not equipment compatibility, image attribution or acquisition permission. A
 project's current profile does not prove every historical image came from that
 rig. The adoption API verifies fresh source evidence, retains durable catalog
-identity across relocation/copies, and previews the proposed links. The Catalogs
-view uses a read-only, paged mapping inventory and requires explicit Apply.
+identity across relocation/copies, and previews the proposed links. Database
+settings use a read-only, paged mapping inventory and require explicit Apply.
 Ambiguous historical frame ownership and contribution accounting still need a
 separate workflow; these mappings alone do not resolve them.
 

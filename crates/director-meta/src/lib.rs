@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, path::Path, time::Duration};
 pub use uuid::Uuid;
 pub mod catalog;
+pub mod catalog_rig;
 pub mod configuration;
 pub mod project;
 mod storage;
@@ -83,7 +84,7 @@ pub struct ProjectLink {
 }
 
 /// Local blocking storage. Hosts must not hold this across network operations.
-/// A rig is independent of a catalog; neither is inferred from display names.
+/// Database-backed rig bindings are explicit; names never establish identity.
 pub struct MetaStore {
     connection: Connection,
     instance_id: Uuid,

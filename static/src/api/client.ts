@@ -2,7 +2,7 @@ import axios from 'axios';
 import type { AxiosInstance } from 'axios';
 import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
-import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorDiscovery, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorStatus } from './directorTypes';
+import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorDiscovery, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorStatus, DirectorRigPlan, DirectorRigReport } from './directorTypes';
 import type {
   ProjectProcessingSettings,
   StackColorInputSources,
@@ -259,6 +259,18 @@ export const apiClient = {
     const api = await getApi();
     const { data } = await api.post<ApiResponse<DirectorAdoptionReport>>(`/director/v1/catalogs/${encodeURIComponent(slug)}/adoption/preview`, plan);
     if (!data.data) throw new Error(data.error || 'Failed to preview mappings');
+    return data.data;
+  },
+  previewDirectorRig: async (slug: string, plan: DirectorRigPlan): Promise<DirectorRigReport> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<DirectorRigReport>>(`/director/v1/catalogs/${encodeURIComponent(slug)}/rig/preview`, plan);
+    if (!data.data) throw new Error(data.error || 'Failed to preview database rig');
+    return data.data;
+  },
+  applyDirectorRig: async (slug: string, plan: DirectorRigPlan, preview_digest: string): Promise<DirectorRigReport> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<DirectorRigReport>>(`/director/v1/catalogs/${encodeURIComponent(slug)}/rig/apply`, { plan, preview_digest });
+    if (!data.data) throw new Error(data.error || 'Failed to enable database planning');
     return data.data;
   },
   applyDirectorAdoption: async (slug: string, plan: DirectorAdoptionPlan, preview_digest: string): Promise<DirectorAdoptionReport> => {

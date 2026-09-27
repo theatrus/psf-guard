@@ -102,12 +102,13 @@ describe('Director management', () => {
   it('separates site and rig collections while retaining catalog URL state', async () => {
     server.use(
       http.get('/api/director/v1/sites', () => HttpResponse.json(ok({ items: [{ ...record, name: 'Remote observatory' }], next_after: null }))),
-      http.get('/api/director/v1/rigs', () => HttpResponse.json(ok({ items: [{ ...record, name: 'C925' }], next_after: null }))),
+      http.get('/api/databases', () => HttpResponse.json(ok([{ id: 'c925', name: 'C925' }]))),
     );
     mount(true, '/director?db=old-catalog&project=123&directorView=sites');
     expect(await screen.findByText('Remote observatory')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Rigs' }));
     expect(await screen.findByText('C925')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New rig' })).not.toBeInTheDocument();
     expect(screen.queryByText('Remote observatory')).not.toBeInTheDocument();
     expect(screen.getByTestId('location')).toHaveTextContent('?db=old-catalog&project=123&directorView=rigs|scope=global');
   });

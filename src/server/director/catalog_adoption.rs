@@ -38,6 +38,7 @@ pub(super) struct Report {
 #[derive(Serialize)]
 pub(super) struct MappingInventory {
     catalog_identity: Option<CatalogIdentity>,
+    rig: Option<NamedIdentity>,
     items: Vec<ProjectMapping>,
     next_after: Option<Uuid>,
 }
@@ -81,6 +82,7 @@ pub(super) async fn mappings(
             let Some(identity) = identity else {
                 return Ok(MappingInventory {
                     catalog_identity: None,
+                    rig: None,
                     items: vec![],
                     next_after: None,
                 });
@@ -90,6 +92,7 @@ pub(super) async fn mappings(
                 None => {
                     return Ok(MappingInventory {
                         catalog_identity: Some(identity),
+                        rig: None,
                         items: vec![],
                         next_after: None,
                     })
@@ -99,6 +102,7 @@ pub(super) async fn mappings(
             let mappings = store.catalog_project_mappings(identity.id, page.after, page.limit)?;
             Ok(MappingInventory {
                 catalog_identity: Some(identity),
+                rig: store.catalog_rig(identity.id)?.map(|binding| binding.rig),
                 items: mappings.items,
                 next_after: mappings.next_after,
             })
@@ -285,6 +289,7 @@ async fn execute(
 pub(super) enum AdoptionError {
     Api(Error),
     Discovery(catalog_discovery::DiscoveryError),
+    RigConflict,
 }
 
 impl From<Error> for AdoptionError {
@@ -307,6 +312,9 @@ impl IntoResponse for AdoptionError {
         match self {
             Self::Api(error) => error.into_response(),
             Self::Discovery(error) => error.into_response(),
+            Self::RigConflict => (StatusCode::CONFLICT, Json(ApiResponse::<()>::error(
+                "Database has conflicting prototype rig associations; review its existing links before enabling planning".into()
+            ))).into_response(),
         }
     }
 }

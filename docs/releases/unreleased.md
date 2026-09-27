@@ -6,9 +6,16 @@
 
 ## Added
 
-- Director's Catalogs view maps existing source projects and profiles to global
-  projects and rigs through an explicit preview and Apply. It shows saved links,
-  flags invalid identities and changed profiles, and supports read-only users.
+- Director's rig list now uses registered project databases. Reviewed setup
+  binds each database to one rig across its source profiles, preserves existing
+  unambiguous links, and reports conflicting prototype links without rewriting
+  history. Separate databases can contribute to one shared project.
+
+- Database settings now hold project planning links with explicit preview and
+  Apply, instead of a separate Director Catalogs view. Overview's existing
+  project plan dialog opens rig planning with the same targets, coordinates and
+  exposure templates, and returns to the original project and database scope.
+  Framing, downstream plan generation and combined progress remain in development.
 
 - Director's experimental operator API can preview and apply confirmed catalog
   project/profile links to global projects and rigs. It preserves catalog
@@ -43,4 +50,3 @@
 ## Changed
 
 ## Fixed
-

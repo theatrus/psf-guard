@@ -1,6 +1,6 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Check, Pencil, Plus, RefreshCw, X } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import type { DirectorCollection, DirectorIdentity } from '../../api/directorTypes';
@@ -8,7 +8,9 @@ import { useAccess } from '../../auth/access';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import './DirectorPage.css';
 import { identityId } from './identityId';
-import DirectorCatalogs from './DirectorCatalogs';
+import DirectorProjectContext from './DirectorProjectContext';
+import DirectorRigs from './DirectorRigs';
+import { openSettings } from '../../utils/settingsIntent';
 
 const labels = { projects: 'Project', sites: 'Site', rigs: 'Rig' };
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
@@ -118,8 +120,20 @@ export default function DirectorPage() {
   const status = useDirectorStatus();
   const [params, setParams] = useSearchParams();
   const selected = params.get('directorView');
-  const collection = selected === 'sites' || selected === 'rigs' || selected === 'catalogs' ? selected : 'projects';
+  const collection = selected === 'sites' || selected === 'rigs' ? selected : 'projects';
   const available = status.data?.enabled && status.data.protocol_version === 1 && !!status.data.instance_id;
+  const sourceSlug = params.get('directorSource');
+  const rawProject = params.get('project') ?? '';
+  const projectId = /^\d+$/.test(rawProject) && Number.isSafeInteger(Number(rawProject)) ? Number(rawProject) : null;
+  useEffect(() => {
+    if (selected !== 'catalogs' || !available) return;
+    const slug = params.get('directorCatalog');
+    if (slug) openSettings({ kind: 'director-links', dbId: slug });
+    else openSettings();
+    const next = new URLSearchParams(params);
+    next.set('directorView', 'projects'); next.delete('directorCatalog');
+    setParams(next, { replace: true });
+  }, [selected, available, params, setParams]);
   return (
     <main className="director-page">
       <header className="director-heading"><h1>Director</h1><span className="director-preview">Experimental</span></header>
@@ -129,15 +143,17 @@ export default function DirectorPage() {
       {available && status.data && <>
         {!status.data.acquisition_available && <p className="director-muted">Acquisition is not yet available.</p>}
         <nav className="director-tabs" aria-label="Director views">
-          {(['projects', 'sites', 'rigs', 'catalogs'] as const).map(value => <button type="button" key={value} aria-current={collection === value ? 'page' : undefined} onClick={() => {
+          {(['projects', 'sites', 'rigs'] as const).map(value => <button type="button" key={value} aria-current={collection === value ? 'page' : undefined} onClick={() => {
             const next = new URLSearchParams(params);
             next.set('directorView', value);
             setParams(next);
-          }}>{value === 'catalogs' ? 'Catalogs' : `${labels[value]}s`}</button>)}
+          }}>{`${labels[value]}s`}</button>)}
         </nav>
-        {collection === 'catalogs'
-          ? <DirectorCatalogs key={status.data.instance_id} instanceId={status.data.instance_id!} />
-          : <Records key={`${status.data.instance_id}:${collection}`} instanceId={status.data.instance_id!} collection={collection} />}
+        {collection === 'rigs' ? <DirectorRigs /> : collection === 'projects' && sourceSlug
+          ? projectId !== null && sourceSlug === params.get('db')
+            ? <DirectorProjectContext key={`${status.data.instance_id}:${sourceSlug}:${projectId}`} instanceId={status.data.instance_id!} slug={sourceSlug} projectId={projectId} />
+            : <p role="alert">Invalid project scope. <Link to="/">Overview</Link></p>
+          : <><Link to="/">Overview projects</Link><Records key={`${status.data.instance_id}:${collection}`} instanceId={status.data.instance_id!} collection={collection} /></>}
       </>}
     </main>
   );
