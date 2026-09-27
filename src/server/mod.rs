@@ -75,7 +75,8 @@ pub struct ServerConfig {
     /// Allow HTTP clients to mutate the configured database list. Off by
     /// default for CLI servers; Tauri always enables it.
     pub allow_database_management: bool,
-    /// Explicit experimental coordination store, separate from every catalog.
+    /// Director coordination store, separate from every catalog. `None` means
+    /// the default file beside `registry_path` when database management is on.
     pub director_meta: Option<PathBuf>,
     /// Trust every session-less caller even on a routable bind address, so a
     /// server with no user accounts stays open the way a localhost server is.
@@ -212,14 +213,20 @@ async fn run_server_internal(
         config.auth.is_some(),
     )?;
 
-    director::validate_registry_separation(
+    let director_meta = director::resolve_meta_path(
         config.director_meta.as_deref(),
         config.registry_path.as_deref(),
-    )?;
-    let director = director::Service::configured(
-        config.director_meta.as_deref(),
         config.allow_database_management,
+    );
+    director::validate_registry_separation(
+        director_meta.as_deref(),
+        config.registry_path.as_deref(),
     )?;
+    let director =
+        director::Service::configured(director_meta.as_deref(), config.allow_database_management)?;
+    if let Some(path) = &director_meta {
+        tracing::info!("🧭 Director meta store: {}", path.display());
+    }
 
     tracing::info!("🚀 Starting PSF Guard server");
     tracing::info!(
