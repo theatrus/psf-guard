@@ -305,7 +305,9 @@ input and must not call an endpoint before its row above says it exists.
    (meta schema 6), edited per database with header-derived defaults and
    accepted from `PUT /rigs/{rig}/equipment`. Done. Activation freezes a setup
    revision from it later.
-3. Survey cutout service with cache and provider allowlist.
+3. Survey cutout service with cache and provider allowlist: `GET /sky/surveys`
+   and `GET /sky/cutout`, N.I.N.A.'s HiPS list, tangent-plane JPEGs from
+   HiPS2FITS fetched off the request path. Done.
 4. Framing view: center, rotation, coverage, mosaic panels, per-rig footprints,
    saved as a draft on the global project.
 5. Objectives and contributions: hours or frames per bandpass, template
@@ -521,6 +523,14 @@ and [HiPS2FITS adapter](https://github.com/isbeorn/nina/blob/fdf546fc2bea0de1eef
 and the CDS [HiPS survey registry](https://aladin.cds.unistra.fr/hips/list).
 Verify provider availability and terms again when implementing; these references
 do not promise service uptime or uniform all-sky coverage.
+
+Implemented 2026-09-27: the server fetches HiPS2FITS tangent-plane cutouts for
+N.I.N.A.'s survey list through `GET /api/director/v1/sky/cutout`, off the
+request path with a `202` poll contract, and caches them under the cache root.
+Aladin Lite was not adopted; the browser draws footprints over the cutout with
+PSF Guard's own projection code. Provider terms: CDS asks for attribution,
+which the survey list carries; persistent caching for the operator's own
+framing is within ordinary use.
 
 ## Rig constraints and local horizons
 

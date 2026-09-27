@@ -20,6 +20,7 @@ mod catalog_adoption;
 mod catalog_discovery;
 mod catalog_rig;
 mod rig_profile;
+mod sky_image;
 
 /// The default store sits beside the registry, like `auth.json`, so a test
 /// registry gets its own meta store and nothing lands in the real config dir.
@@ -279,6 +280,8 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
                 psf_guard_director_core::MAX_REQUEST_BYTES,
             )),
         )
+        .route("/sky/surveys", get(sky_image::surveys))
+        .route("/sky/cutout", get(sky_image::cutout))
         .route("/projects/{id}", get(project).patch(rename_project))
         .merge(configuration_api::routes())
         .layer(DefaultBodyLimit::max(4096))

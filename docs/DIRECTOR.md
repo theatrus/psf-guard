@@ -246,6 +246,27 @@ server folds both back to the sensor before offering them. Typed models:
 [optics](../crates/director-core/src/optics.rs) and
 [profile](../crates/director-meta/src/profile.rs).
 
+## Sky survey cutouts
+
+The framing view draws on survey imagery fetched by the server from the CDS
+HiPS2FITS service, the same source N.I.N.A.'s framing assistant uses. The
+survey list matches N.I.N.A.'s: DSS2 color, red, blue and near infrared, SDSS,
+DESI Legacy, SkyMapper, 2MASS, CTA-FRAM, the Mellinger panorama, the Finkbeiner
+H-alpha composite and the Northern Sky Narrowband Survey layers. Narrowband
+layers are marked as such and never stand in for one another.
+
+| Method | Route | Body or query |
+| --- | --- | --- |
+| GET | `/sky/surveys` | The allowed surveys: `id`, `name`, `hips`, `kind` (`broadband`, `narrowband`, `panorama`), `bandpass`, `attribution`. |
+| GET | `/sky/cutout` | `survey` (an `id` from the list), `ra` and `dec` in ICRS degrees, `fov` (image width in degrees, 0.02 to 40), optional `width` and `height` in pixels (64 to 2048, default 1024) and `rotation` in degrees east of north. A cached image answers `200 image/jpeg`. A miss starts one fetch and answers `202` with `Retry-After: 1`; poll the same URL. A failed fetch answers `502` with the reason for about a minute. |
+
+Cutouts are tangent-plane JPEGs cached under `<cache>/director/sky/` by
+survey, center, field, size and rotation, so a framing session that returns to
+the same view works without the network. The server only ever calls the one
+provider with an allowed HiPS identifier and bounded sizes; it is not a URL
+proxy. Imagery is attributed to its survey in the response list and remains a
+composition aid, not evidence of pointing, transparency or coverage.
+
 ## Contention and recovery
 
 Storage runs off the asynchronous HTTP worker. Only one operation is admitted
