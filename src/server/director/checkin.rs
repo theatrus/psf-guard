@@ -351,11 +351,7 @@ pub(super) async fn statuses(
             // Every bound database is a rig; name the database beside it.
             let mut rigs: std::collections::BTreeMap<Uuid, (Option<String>, Option<String>)> =
                 std::collections::BTreeMap::new();
-            for catalog in &catalogs {
-                let Some(identity) = super::activation::read_identity(&catalog.database_path)
-                else {
-                    continue;
-                };
+            for (identity, catalog) in identified_catalogs(&catalogs).iter() {
                 if let Some(binding) = store.catalog_rig(identity.id)? {
                     rigs.insert(
                         binding.rig.id,

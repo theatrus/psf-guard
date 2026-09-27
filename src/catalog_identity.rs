@@ -92,6 +92,58 @@ pub fn read(connection: &Connection) -> Result<Option<CatalogIdentity>, Error> {
 /// IMMEDIATE. Commit the outer transaction to make adoption durable. Reuse the
 /// exact proposed IDs on retry; neither origin nor identity can be reassigned.
 /// A savepoint ensures an error leaves no partial table even if the host commits.
+/// Plain SQL on purpose: this file is shared with N.I.N.A., Target Scheduler
+/// and whatever SQLite build a user points at it, so nothing here may need a
+/// newer SQLite than the rows around it. The CHECKs carry what `STRICT` did.
+const IDENTITY_DDL: &str = "CREATE TABLE main.psf_guard_catalog_identity (
+            singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+            format TEXT NOT NULL CHECK(format='psf-guard-catalog'),
+            schema_version INTEGER NOT NULL CHECK(schema_version>=1),
+            catalog_id TEXT NOT NULL CHECK(typeof(catalog_id)='text'),
+            origin_instance_id TEXT NOT NULL CHECK(typeof(origin_instance_id)='text')
+        );";
+
+/// Whether a table's stored DDL ends in `STRICT`, the SQLite 3.37 keyword an
+/// earlier build used and older readers reject as a malformed schema.
+pub fn is_strict(connection: &Connection, table: &str) -> Result<bool, Error> {
+    let sql: Option<String> = connection
+        .query_row(
+            "SELECT sql FROM main.sqlite_schema WHERE type='table' AND name=?1",
+            [table],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(sql.is_some_and(|sql| {
+        sql.trim_end()
+            .trim_end_matches(';')
+            .trim_end()
+            .to_ascii_uppercase()
+            .ends_with("STRICT")
+    }))
+}
+
+/// Rebuild a table written by an earlier build with `STRICT` as the same
+/// table in plain SQL, rows intact. `ddl` creates the new table under the
+/// same name; the caller runs inside a write transaction.
+pub fn relax_strict_table(connection: &Connection, table: &str, ddl: &str) -> Result<bool, Error> {
+    if !is_strict(connection, table)? {
+        return Ok(false);
+    }
+    connection.execute_batch(&format!(
+        "ALTER TABLE main.{table} RENAME TO {table}_strict_old;
+         {ddl}
+         INSERT INTO main.{table} SELECT * FROM main.{table}_strict_old;
+         DROP TABLE main.{table}_strict_old;"
+    ))?;
+    Ok(true)
+}
+
+/// Repair an identity table an earlier build created `STRICT`. A no-op for
+/// a table already in plain SQL; the identity itself never changes.
+pub fn relax_strict(connection: &Connection) -> Result<bool, Error> {
+    relax_strict_table(connection, "psf_guard_catalog_identity", IDENTITY_DDL)
+}
+
 pub fn adopt(
     transaction: &mut Transaction<'_>,
     proposed: CatalogIdentity,
@@ -102,21 +154,14 @@ pub fn adopt(
     let savepoint = transaction.savepoint()?;
     if let Some(existing) = read(&savepoint)? {
         return if existing == proposed {
+            relax_strict(&savepoint)?;
             savepoint.commit()?;
             Ok(existing)
         } else {
             Err(Error::Conflict)
         };
     }
-    savepoint.execute_batch(
-        "CREATE TABLE main.psf_guard_catalog_identity (
-            singleton INTEGER PRIMARY KEY CHECK(singleton=1),
-            format TEXT NOT NULL CHECK(format='psf-guard-catalog'),
-            schema_version INTEGER NOT NULL CHECK(schema_version>=1),
-            catalog_id TEXT NOT NULL,
-            origin_instance_id TEXT NOT NULL
-        ) STRICT;",
-    )?;
+    savepoint.execute_batch(IDENTITY_DDL)?;
     savepoint.execute(
         "INSERT INTO main.psf_guard_catalog_identity VALUES(1,'psf-guard-catalog',1,?1,?2)",
         params![

@@ -91,6 +91,18 @@ not touched since its GUID migration) is skipped until it gets one. A file
 that cannot be written, or has no project table, is reported at the top of
 the plan list and left out.
 
+The identity table, `psf_guard_catalog_identity`, and the Director side
+tables are plain SQL, so N.I.N.A., Target Scheduler and any SQLite tool open
+the file as before; a table an earlier preview build created with `STRICT`
+is rebuilt in place, rows intact, the next time PSF Guard writes it. Sync
+never carries these tables: a planning push, a grade push or a pull moves
+Target Scheduler rows only, so a database synced from a peer gets an
+identity of its own when it is adopted here. Copying the file by hand does
+carry the identity, and two registered files with one identity are one
+catalog: the first by slug stands for it and the copy is named at the top of
+the plan list and left out of planning until it is removed from the registry
+or its identity table is dropped.
+
 ## Protocol 1
 
 Routes below start with `/api/director/v1`. Responses use the normal

@@ -299,3 +299,78 @@ async fn listing_counts_frames_per_target_across_linked_databases() {
     assert_eq!(bare["progress"], Value::Null);
     let _ = (a.rig, a.objective);
 }
+
+#[tokio::test]
+async fn a_copied_database_file_is_named_and_left_out_of_planning() {
+    let a = activated().await;
+    // Adopt the rig database, then copy the file byte for byte and register the copy.
+    let (status, _) = call(&a.f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let original = a.f._dir.path().join("rig.sqlite");
+    let copy = a.f._dir.path().join("rig-copy.sqlite");
+    std::fs::copy(&original, &copy).unwrap();
+    let context = crate::server::database_context::DatabaseContext::new(
+        "rig-copy".into(),
+        "RedCat copy".into(),
+        copy.to_string_lossy().into(),
+        vec![a.f._dir.path().to_string_lossy().into()],
+        None,
+        None,
+        None,
+        a.f._dir.path().join("cache").to_string_lossy().into(),
+    )
+    .unwrap();
+    a.f.state
+        .databases
+        .write()
+        .unwrap()
+        .insert("rig-copy".into(), Arc::new(context));
+
+    let (status, listed) = call(&a.f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let warnings = listed["data"]["warnings"].as_array().unwrap();
+    assert!(
+        warnings.iter().any(|w| w
+            .as_str()
+            .unwrap()
+            .starts_with("RedCat copy: carries the same catalog identity as RedCat rig")),
+        "{warnings:?}"
+    );
+    // No plan links to the copy; the original keeps its link.
+    for row in listed["data"]["rows"].as_array().unwrap() {
+        for link in row["links"].as_array().unwrap() {
+            assert_ne!(link["catalog_slug"], "rig-copy", "{row}");
+        }
+    }
+    let (_, rigs) = call(&a.f.app, "GET", "/rigs/profiles", Value::Null, None).await;
+    let slugs: Vec<&str> = rigs["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["catalog_slug"].as_str().unwrap())
+        .collect();
+    assert!(
+        slugs.contains(&"rig") && !slugs.contains(&"rig-copy"),
+        "{slugs:?}"
+    );
+    // Activation writes the original, never the copy, and says why.
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["data"]["rigs"][0]["catalog_slug"], "rig");
+    assert!(
+        preview["data"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("RedCat copy")),
+        "{preview}"
+    );
+    let _ = (a.rig, a.objective);
+}

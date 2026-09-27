@@ -2,7 +2,6 @@
 //! by its plate solve over the plan's geometry. A review aid for coverage and
 //! seams, never a processed image; panels from different rigs stay apart.
 
-use super::activation::read_identity;
 use super::*;
 use crate::server::{
     database_context::DatabaseContext,
@@ -117,13 +116,11 @@ pub(super) async fn get(
             BTreeMap::new();
         let mut panels = Vec::new();
         let mut warnings = Vec::new();
+        let found = identified_catalogs(&catalogs);
+        warnings.extend(found.duplicates.iter().cloned());
         for activated in &activation.rigs {
             let rig = store.rig(activated.rig_id)?.ok_or(Error::Missing)?;
-            let context = catalogs.iter().find(|catalog| {
-                read_identity(&catalog.database_path)
-                    .is_some_and(|identity| identity.id == activated.catalog_id)
-            });
-            let Some(context) = context else {
+            let Some(context) = found.get(activated.catalog_id) else {
                 warnings.push(format!(
                     "{}: its database is no longer registered on this server.",
                     rig.name

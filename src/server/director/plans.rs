@@ -257,15 +257,21 @@ pub(super) async fn list(
     let list = tokio::task::spawn_blocking(move || {
         let _permits = (metadata_permit, catalog_permit);
         let mut store = service.store.lock().map_err(|_| Error::Internal)?;
-        let mut warnings = Vec::new();
+        // A hand-copied file carries its original's identity: name it and
+        // leave it alone, so it never gets plans or links of its own.
+        let before = identified_catalogs(&catalogs);
+        let mut warnings = before.duplicates.clone();
         for catalog in &catalogs {
+            if before.is_duplicate(&catalog.id) {
+                continue;
+            }
             if let Err(warning) = ensure_adopted(&mut store, service.instance_id, catalog) {
                 warnings.push(warning);
             }
         }
         // Links first: each bound database's mappings, joined to its rows.
         let mut links: BTreeMap<Uuid, Vec<PlanLink>> = BTreeMap::new();
-        for catalog in &catalogs {
+        for (identity, catalog) in identified_catalogs(&catalogs).iter() {
             let Ok(connection) =
                 super::super::database_context::open_scheduler_connection_with_flags(
                     FilePath::new(&catalog.database_path),
@@ -277,9 +283,6 @@ pub(super) async fn list(
             if connection.busy_timeout(Duration::from_secs(1)).is_err() {
                 continue;
             }
-            let Some(identity) = crate::catalog_identity::read(&connection).ok().flatten() else {
-                continue;
-            };
             let Some(binding) = store.catalog_rig(identity.id)? else {
                 continue;
             };

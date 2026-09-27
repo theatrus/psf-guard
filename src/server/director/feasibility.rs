@@ -133,8 +133,9 @@ pub(super) async fn evaluate(
         let mut warnings = Vec::new();
         let mut rigs = Vec::new();
         let mut names = std::collections::BTreeMap::new();
-        for catalog in &catalogs {
-            let Some(identity) = read_identity(&catalog.database_path) else { continue };
+        let found = identified_catalogs(&catalogs);
+        warnings.extend(found.duplicates.iter().cloned());
+        for (identity, catalog) in found.iter() {
             if let Some(binding) = store.catalog_rig(identity.id)? {
                 names.insert(binding.rig.id, (binding.rig, catalog.name.clone()));
             }
@@ -249,16 +250,4 @@ pub(super) async fn evaluate(
         Error::Internal
     })??;
     Ok(Json(ApiResponse::success(view)))
-}
-
-fn read_identity(path: &str) -> Option<psf_guard_director_meta::CatalogIdentity> {
-    let connection = super::super::database_context::open_scheduler_connection_with_flags(
-        FilePath::new(path),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .ok()?;
-    connection
-        .busy_timeout(std::time::Duration::from_secs(1))
-        .ok()?;
-    crate::catalog_identity::read(&connection).ok().flatten()
 }

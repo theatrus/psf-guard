@@ -276,3 +276,51 @@ fn discovery_transaction_keeps_its_snapshot_across_concurrent_adoption() {
     snapshot.commit().unwrap();
     assert_eq!(read(&reader).unwrap(), Some(identity));
 }
+
+#[test]
+fn a_strict_identity_table_from_an_earlier_build_is_rebuilt_in_plain_sql() {
+    let mut connection = Connection::open_in_memory().unwrap();
+    let identity = candidate();
+    connection
+        .execute_batch(&format!(
+            "CREATE TABLE main.psf_guard_catalog_identity (
+                singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                format TEXT NOT NULL CHECK(format='psf-guard-catalog'),
+                schema_version INTEGER NOT NULL CHECK(schema_version>=1),
+                catalog_id TEXT NOT NULL,
+                origin_instance_id TEXT NOT NULL
+            ) STRICT;
+            INSERT INTO psf_guard_catalog_identity VALUES(1,'psf-guard-catalog',1,'{}','{}');",
+            identity.id, identity.origin_instance_id
+        ))
+        .unwrap();
+    assert!(is_strict(&connection, "psf_guard_catalog_identity").unwrap());
+    // Reading never repairs; re-adopting the same identity does.
+    assert_eq!(read(&connection).unwrap(), Some(identity));
+    assert!(is_strict(&connection, "psf_guard_catalog_identity").unwrap());
+    assert_eq!(commit(&mut connection, identity).unwrap(), identity);
+    assert!(!is_strict(&connection, "psf_guard_catalog_identity").unwrap());
+    assert_eq!(read(&connection).unwrap(), Some(identity));
+    let sql: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE name='psf_guard_catalog_identity'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!sql.to_ascii_uppercase().contains("STRICT"), "{sql}");
+    // A table this build made is left alone, and the CHECKs still bite.
+    assert!(!relax_strict(&connection).unwrap());
+    assert!(connection
+        .execute("UPDATE psf_guard_catalog_identity SET format='other'", [])
+        .is_err());
+    // A copy that is not a table is refused as before.
+    let mut other = Connection::open_in_memory().unwrap();
+    other
+        .execute_batch("CREATE VIEW psf_guard_catalog_identity AS SELECT 1")
+        .unwrap();
+    assert!(read(&other).is_err());
+    let mut tx = other.transaction().unwrap();
+    assert!(adopt(&mut tx, identity).is_err());
+    tx.commit().unwrap();
+}

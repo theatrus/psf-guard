@@ -188,6 +188,54 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// PSF Guard's own tables in a rig database, in plain SQL: the file is
+/// shared with N.I.N.A. and Target Scheduler, so nothing here may need a
+/// newer SQLite than theirs. Type CHECKs stand in for `STRICT`.
+const DIRECTOR_TABLES: [(&str, &str); 3] = [
+    (
+        "psf_guard_director_project",
+        "CREATE TABLE IF NOT EXISTS main.psf_guard_director_project(
+            project_guid TEXT PRIMARY KEY NOT NULL,
+            global_project_id TEXT NOT NULL,
+            coordinator_instance_id TEXT NOT NULL,
+            activation_revision INTEGER NOT NULL CHECK(typeof(activation_revision)='integer'),
+            applied_at_ms INTEGER NOT NULL CHECK(typeof(applied_at_ms)='integer'));",
+    ),
+    (
+        "psf_guard_director_target",
+        "CREATE TABLE IF NOT EXISTS main.psf_guard_director_target(
+            target_guid TEXT PRIMARY KEY NOT NULL,
+            project_guid TEXT NOT NULL,
+            panel_id TEXT NOT NULL,
+            framing_revision INTEGER NOT NULL CHECK(typeof(framing_revision)='integer'),
+            UNIQUE(project_guid, panel_id));",
+    ),
+    (
+        "psf_guard_director_plan",
+        "CREATE TABLE IF NOT EXISTS main.psf_guard_director_plan(
+            exposureplan_guid TEXT PRIMARY KEY NOT NULL,
+            target_guid TEXT NOT NULL,
+            contribution_id TEXT NOT NULL,
+            objective_id TEXT NOT NULL,
+            bandpass_id TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            required_frames INTEGER NOT NULL CHECK(typeof(required_frames)='integer'),
+            plan_revision INTEGER NOT NULL CHECK(typeof(plan_revision)='integer'),
+            UNIQUE(target_guid, contribution_id));",
+    ),
+];
+
+/// Create the side tables, first rebuilding any an earlier build made
+/// `STRICT`, rows intact.
+fn ensure_director_tables(tx: &Connection) -> Result<(), RigError> {
+    for (name, ddl) in DIRECTOR_TABLES {
+        crate::catalog_identity::relax_strict_table(tx, name, ddl)
+            .map_err(|error| RigError::Failed(Error::from(error)))?;
+        tx.execute_batch(ddl)?;
+    }
+    Ok(())
+}
+
 /// A participating rig's registered database, found by catalog identity.
 struct RigCatalog {
     identity: CatalogIdentity,
@@ -281,19 +329,19 @@ async fn execute(
                 coverage_warnings.push(format!("No rig shoots {} on any panel.", objective.bandpass_id));
             }
         }
-        // Which registered database each participating rig is bound to.
+        // Which registered database each participating rig is bound to. A
+        // hand-copied file with the same identity is named and never written.
+        let found = identified_catalogs(&catalogs);
+        coverage_warnings.extend(found.duplicates.iter().cloned());
         let mut rig_catalogs: BTreeMap<Uuid, RigCatalog> = BTreeMap::new();
-        for context in &catalogs {
-            let Some(identity) = read_identity(&context.database_path) else {
-                continue;
-            };
+        for (identity, context) in found.iter() {
             if let Some(binding) = store.catalog_rig(identity.id)?
                 && by_rig.contains_key(&binding.rig.id)
             {
                 rig_catalogs.insert(
                     binding.rig.id,
                     RigCatalog {
-                        identity,
+                        identity: *identity,
                         context: context.clone(),
                     },
                 );
@@ -587,7 +635,8 @@ pub(super) async fn push(
             .activation(id)?
             .ok_or(ActivationError::NotReady("Apply an activation first."))?;
         let mut targets: Vec<(NamedIdentity, Arc<DatabaseContext>, String)> = Vec::new();
-        let mut warnings = Vec::new();
+        let found = identified_catalogs(&catalogs);
+        let mut warnings = found.duplicates.clone();
         for activated in &activation.rigs {
             let rig = store.rig(activated.rig_id)?.ok_or(Error::Missing)?;
             let Some(peer_id) = store
@@ -596,10 +645,7 @@ pub(super) async fn push(
             else {
                 continue;
             };
-            match catalogs.iter().find(|catalog| {
-                read_identity(&catalog.database_path)
-                    .is_some_and(|identity| identity.id == activated.catalog_id)
-            }) {
+            match found.get(activated.catalog_id) {
                 Some(context) => targets.push((rig, context.clone(), peer_id)),
                 None => warnings.push(format!(
                     "{}: its database is no longer registered on this server.",
@@ -661,16 +707,6 @@ impl CommitPending for rusqlite::Transaction<'_> {
         std::mem::forget(self);
         Ok(())
     }
-}
-
-pub(super) fn read_identity(path: &str) -> Option<CatalogIdentity> {
-    let connection = super::super::database_context::open_scheduler_connection_with_flags(
-        FilePath::new(path),
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .ok()?;
-    connection.busy_timeout(Duration::from_secs(1)).ok()?;
-    crate::catalog_identity::read(&connection).ok().flatten()
 }
 
 struct Inputs<'a> {
@@ -738,30 +774,7 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                 .into(),
         )
     })?;
-    tx.execute_batch(
-        "CREATE TABLE IF NOT EXISTS main.psf_guard_director_project(
-            project_guid TEXT PRIMARY KEY NOT NULL,
-            global_project_id TEXT NOT NULL,
-            coordinator_instance_id TEXT NOT NULL,
-            activation_revision INTEGER NOT NULL,
-            applied_at_ms INTEGER NOT NULL) STRICT;
-         CREATE TABLE IF NOT EXISTS main.psf_guard_director_target(
-            target_guid TEXT PRIMARY KEY NOT NULL,
-            project_guid TEXT NOT NULL,
-            panel_id TEXT NOT NULL,
-            framing_revision INTEGER NOT NULL,
-            UNIQUE(project_guid, panel_id)) STRICT;
-         CREATE TABLE IF NOT EXISTS main.psf_guard_director_plan(
-            exposureplan_guid TEXT PRIMARY KEY NOT NULL,
-            target_guid TEXT NOT NULL,
-            contribution_id TEXT NOT NULL,
-            objective_id TEXT NOT NULL,
-            bandpass_id TEXT NOT NULL,
-            purpose TEXT NOT NULL,
-            required_frames INTEGER NOT NULL,
-            plan_revision INTEGER NOT NULL,
-            UNIQUE(target_guid, contribution_id)) STRICT;",
-    )?;
+    ensure_director_tables(tx)?;
     let mut changes = Vec::new();
     let project_name = inputs.project.name.clone();
     let target_base = if inputs.framing.target_name.is_empty() {
