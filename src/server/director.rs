@@ -23,6 +23,7 @@ mod catalog_rig;
 mod checkin;
 mod framing;
 mod plan;
+mod plans;
 mod program;
 mod rig_profile;
 mod sky_image;
@@ -315,6 +316,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             )),
         )
         .route("/rigs/status", get(checkin::statuses))
+        .route("/plans", get(plans::list))
         .route("/projects/{id}/activation", get(activation::last))
         .route(
             "/projects/{id}/activation/preview",

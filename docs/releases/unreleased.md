@@ -6,6 +6,12 @@
 
 ## Added
 
+- The Director page is now a plan list: every project with the databases it
+  is linked to, how far its framing, plan and activation have come, and a
+  Rig planning link, above a rig list with each database's planning state,
+  optics and last plugin status. The old Projects, Sites and Rigs tabs are
+  gone; their links land on the same page.
+
 - The Director plugin can check in its capture receipts and report live
   status over the API. Receipts are stored once and acknowledged by cursor,
   saved frames count as pending credit until grading accepts them, and both

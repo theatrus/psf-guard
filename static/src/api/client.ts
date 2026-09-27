@@ -2,7 +2,7 @@ import axios from 'axios';
 import type { AxiosInstance } from 'axios';
 import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
-import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorActivation, DirectorActivationReport, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey } from './directorTypes';
+import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorActivation, DirectorActivationReport, DirectorPlanDraft, DirectorPlanRow, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey } from './directorTypes';
 import type {
   ProjectProcessingSettings,
   StackColorInputSources,
@@ -377,6 +377,20 @@ export const apiClient = {
     const api = await getApi();
     const { data } = await api.post<ApiResponse<DirectorActivationReport>>(`/director/v1/projects/${encodeURIComponent(projectId)}/activation/apply`, { preview_digest });
     if (!data.data) throw new Error(data.error || 'Failed to apply activation');
+    return data.data;
+  },
+
+  getDirectorPlans: async (): Promise<DirectorPlanRow[]> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorPlanRow[]>>('/director/v1/plans');
+    if (!data.data) throw new Error(data.error || 'Failed to load plans');
+    return data.data;
+  },
+
+  getDirectorRigStatuses: async (): Promise<DirectorRigStatusView[]> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorRigStatusView[]>>('/director/v1/rigs/status');
+    if (!data.data) throw new Error(data.error || 'Failed to load rig status');
     return data.data;
   },
 

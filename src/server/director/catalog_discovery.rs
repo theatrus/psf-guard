@@ -48,6 +48,16 @@ pub(super) struct Evidence {
 }
 
 impl Evidence {
+    /// Source rows that carry a usable GUID: `(guid, row id, name)`.
+    pub(super) fn identified_rows(&self) -> impl Iterator<Item = (Uuid, i64, Option<&str>)> {
+        self.projects.iter().filter_map(|project| {
+            project
+                .source_project_guid
+                .filter(|_| project.issues.is_empty())
+                .map(|guid| (guid, project.source_row_id, project.name.as_deref()))
+        })
+    }
+
     pub(super) fn mapping_names(
         &self,
         mappings: &[psf_guard_director_meta::catalog::ProjectMapping],
@@ -128,11 +138,7 @@ pub(super) async fn discover(
     let catalog = state
         .get_database(&slug)
         .ok_or(DiscoveryError::MissingCatalog)?;
-    let permit = service
-        .discovery_admission
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| Error::Busy)?;
+    let permit = admit(&service.discovery_admission).await?;
     let result = tokio::task::spawn_blocking(move || {
         // Cancellation keeps admission held until the SQLite read actually ends.
         let _permit = permit;

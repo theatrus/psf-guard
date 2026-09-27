@@ -34,25 +34,27 @@ switching are not exposed. Catalog adoption requires the explicit workflow below
 
 ## Management screen
 
-Overview remains the project and collected-data workspace. Its existing
-**Plan & coordinates** dialog opens **Rig planning**, reusing the same target,
-coordinate and exposure-plan editor. Returning to Overview preserves the source
-database, project and database filter. This edits existing TS-compatible project
-metadata; it does not yet generate downstream projects or executable intent.
+The **Director** entry in the header opens one page with two sections.
 
-The **Director** entry has **Projects**, **Sites** and **Rigs**. Projects and
-sites retain the prototype identity editor. **Rigs** lists the existing database
-registry, not a second inventory to create manually. **Configure** opens that
-database's settings. Profiles within a database are setup provenance, not
-separate rigs. Shared project progress and the framing wizard remain planned.
+**Plans** lists every global project with where it is linked (each database
+and the source project there), how far its planning has come (not linked,
+framed, planned, or activated with the revision and date), a **Rig planning**
+link that opens the first linked database row, and a rename control. **New
+project** creates an unlinked global project; the usual way to get one is to
+link a database's projects under that database's project planning links,
+which can create the global project on the spot. A project can appear under
+Overview without ever using Director, and planning can begin before a project
+has any captured data.
 
-Names do not establish identity. Each row includes its stable UUID and current
-revision. Create retries retain the same UUID. A conflicting rename keeps the
-draft without overwriting the other editor's change: cancel, refresh, then edit
-the current record. Listings load in bounded pages with a refresh action.
+**Rigs** lists every registered database as a rig: whether planning is
+enabled, its field of view and pixel scale from the rig profile, whether the
+plugin has reported its camera, and the plugin's last live status. The gear
+opens the database's settings; **Overview** opens its catalog.
 
-This first management screen does not edit observing objectives, configuration
-snapshots, assignments, or plugin credentials. Acquisition remains unavailable.
+Older links that named the Catalogs, Sites or Rigs tabs still work: the
+Catalogs link opens the database's settings and the others land on this page.
+Sites are no longer edited as their own records; a rig's site lives in its
+rig profile. The identity API for sites remains for the plugin.
 
 ### Enable database planning
 

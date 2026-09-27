@@ -78,6 +78,12 @@ test('database rigs contribute to one project and reuse its source editor', asyn
     await expect(page.getByText('C925 data', { exact: true })).toBeVisible();
     await expect(page.getByText('Redcat data', { exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'New rig' })).toHaveCount(0);
+    // The plan list shows the shared project linked from both databases and
+    // opens Rig planning at the first linked row.
+    await expect(page.getByText('Andromeda campaign revised', { exact: true })).toBeVisible();
+    await expect(page.getByText('C925 data: Andromeda exposures')).toBeVisible();
+    await expect(page.getByText('Redcat data: Andromeda exposures')).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Rig planning' }).first()).toHaveAttribute('href', new RegExp(`db=${slugs[0]}&project=1`));
     await page.getByRole('button', { name: 'Configure C925 data' }).click();
     await expect(page.getByText('Linked', { exact: true })).toHaveCount(2);
     await page.setViewportSize({ width: 375, height: 812 });

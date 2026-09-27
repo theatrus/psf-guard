@@ -74,3 +74,7 @@
 .rig-profile-source .link-button { background: none; border: none; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; }
 
 .director-section-heading { margin: 28px 0 0; font-size: 18px; }
+
+.director-plan { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 16px 0; }
+.director-plan-links { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 13px; color: var(--color-text-secondary); }
+@media (max-width: 600px) { .director-plan { grid-template-columns: minmax(0, 1fr); } }

@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { Check, Eye, Plus, RefreshCw, X } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorIdentity } from '../../api/directorTypes';
 import { identityId } from './identityId';
-import { loadCatalog, type CatalogData } from './catalogData';
+import { loadCatalog, retryWhenBusy, type CatalogData } from './catalogData';
 import './DirectorPage.css';
 import DatabaseRigReview from './DatabaseRigReview';
 import RigProfileCard from './RigProfileCard';
@@ -134,10 +134,17 @@ function MappingForm({ data, refreshing, onBusy, onApplied }: {
 export function DatabaseProjectLinks({ instanceId, slug }: { instanceId: string; slug: string }) {
   const currentSlug = useRef(slug);
   currentSlug.current = slug;
+  const queryClient = useQueryClient();
+  // The Director page's plan and rig lists stay mounted behind Settings; a
+  // saved binding or mapping must reach them without a reload.
+  const refreshLists = () => {
+    void queryClient.invalidateQueries({ queryKey: ['directorPlans'] });
+    void queryClient.invalidateQueries({ queryKey: ['directorRigProfiles'] });
+  };
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const loaded = useQuery({ queryKey: ['directorCatalog', instanceId, slug], queryFn: () => loadCatalog(slug),
-    retry: false, refetchOnWindowFocus: false });
+    retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
   const data = loaded.data;
   const key = data ? `${slug}:${data.discovery.snapshot_digest}:${JSON.stringify(data.mappings)}:${data.rig?.id}` : slug;
   return <section className="director-page director-database-links" aria-label="Project planning links">
@@ -150,10 +157,12 @@ export function DatabaseProjectLinks({ instanceId, slug }: { instanceId: string;
     {data && !loaded.isError && (data.rig ? <>
       <RigProfileCard slug={slug} />
       <MappingForm key={key} data={data} refreshing={loaded.isFetching} onBusy={setBusy} onApplied={() => {
+        refreshLists();
         if (currentSlug.current !== slug) return;
         setNotice('Mappings saved.'); void loaded.refetch();
       }} />
     </> : <DatabaseRigReview key={key} data={data} refreshing={loaded.isFetching} onBusy={setBusy} onApplied={() => {
+      refreshLists();
       if (currentSlug.current === slug) void loaded.refetch();
     }} />)}
   </section>;

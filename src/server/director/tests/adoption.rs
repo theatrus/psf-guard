@@ -6,6 +6,7 @@ mod checkin;
 mod database_rig;
 mod framing;
 mod plan;
+mod plans;
 mod program;
 mod rig_profile;
 

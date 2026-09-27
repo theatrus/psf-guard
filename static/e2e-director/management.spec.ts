@@ -30,27 +30,23 @@ test('global Director identities survive reload, conflicts, and narrow viewports
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByText('Renamed Andromeda survey.')).toBeVisible();
 
-  for (const [tab, kind, name] of [['Sites', 'site', 'Starfront observatory']] as const) {
-    await page.getByRole('navigation', { name: 'Director views' }).getByRole('button', { name: tab }).click();
-    await page.getByRole('button', { name: `New ${kind}` }).click();
-    await page.getByLabel(`${tab.slice(0, -1)} name`).fill(name);
-    await page.getByRole('button', { name: 'Save', exact: true }).click();
-    await expect(page.getByText(`Created ${name}.`)).toBeVisible();
-    await page.reload();
-    await expect(page.getByText(name, { exact: true })).toBeVisible();
-    expect(new URL(page.url().split('#')[1], 'http://test').searchParams.get('db')).toBe('parked-catalog');
-  }
+  await page.reload();
+  await expect(page.getByText('Andromeda survey', { exact: true })).toBeVisible();
+  await expect(page.locator('.director-plan', { hasText: 'Andromeda survey' }).getByText('Not linked to any database')).toBeVisible();
+  expect(new URL(page.url().split('#')[1], 'http://test').searchParams.get('db')).toBe('parked-catalog');
   await page.screenshot({ path: testInfo.outputPath('director-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 375, height: 812 });
-  await page.getByRole('button', { name: 'Rename Starfront observatory' }).click();
-  await expect(page.getByLabel('Site name')).toBeVisible();
+  await page.getByRole('button', { name: 'Rename Andromeda survey' }).click();
+  await expect(page.getByLabel('Project name')).toBeVisible();
   expect(await page.locator('.director-page').evaluate(element => element.scrollWidth <= element.clientWidth)).toBeTruthy();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   await page.screenshot({ path: testInfo.outputPath('director-mobile.png'), fullPage: true });
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await page.getByRole('navigation', { name: 'Director views' }).getByRole('button', { name: 'Rigs' }).click();
+  // Rigs are a section of the same page; with no databases it offers to add one.
+  await expect(page.getByRole('heading', { name: 'Rigs' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Add database' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'New rig' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'New site' })).toHaveCount(0);
   expect(browserErrors).toEqual([]);
   expect(scopedRequests).toEqual([]);
   expect((await (await request.get('/api/databases')).json()).data).toEqual([]);
