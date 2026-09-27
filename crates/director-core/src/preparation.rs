@@ -237,7 +237,7 @@ impl Preparation {
         Ok(preparation)
     }
 
-    fn evaluate_remaining(&self, request: &Request) -> Result<Decision, Error> {
+    fn remaining_request(&self, request: &Request) -> Result<Request, Error> {
         let overhead =
             self.steps[self.cursor..]
                 .iter()
@@ -253,7 +253,11 @@ impl Preparation {
             .find(|goal| goal.id == self.context.goal_id)
             .ok_or(Error::InvalidContext)?;
         goal.overhead_ms = overhead;
-        evaluate(&request).map_err(Error::Core)
+        Ok(request)
+    }
+
+    fn evaluate_remaining(&self, request: &Request) -> Result<Decision, Error> {
+        evaluate(&self.remaining_request(request)?).map_err(Error::Core)
     }
 
     /// Reevaluate at every native operation boundary. A target switch, stale
@@ -272,6 +276,70 @@ impl Preparation {
         command: &Command,
     ) -> Result<Decision, Error> {
         self.check_pending_dispatch_with_constraint_change(request, command, false)
+    }
+
+    /// Same exact-command check, with a latest-start bound for IPC/native delay.
+    /// Includes the pending operation and every remaining blocking estimate.
+    pub fn check_pending_dispatch_deadline(
+        &mut self,
+        request: &Request,
+        command: &Command,
+    ) -> Result<crate::dispatch::DispatchCheck, Error> {
+        self.check_pending_dispatch_deadline_with_constraint_change(request, command, false)
+    }
+
+    pub(crate) fn check_pending_dispatch_deadline_with_constraint_change(
+        &mut self,
+        request: &Request,
+        command: &Command,
+        changed: bool,
+    ) -> Result<crate::dispatch::DispatchCheck, Error> {
+        let decision =
+            self.check_pending_dispatch_with_constraint_change(request, command, changed)?;
+        self.dispatch_check(request, decision)
+    }
+
+    /// Feasibility after preparation, not proof of a durable capture reservation.
+    /// The owning ledger must verify the exact reserved capture link separately.
+    pub fn check_capture_dispatch_deadline(
+        &mut self,
+        request: &Request,
+    ) -> Result<crate::dispatch::DispatchCheck, Error> {
+        self.check_capture_dispatch_deadline_with_constraint_change(request, false)
+    }
+
+    pub(crate) fn check_capture_dispatch_deadline_with_constraint_change(
+        &mut self,
+        request: &Request,
+        changed: bool,
+    ) -> Result<crate::dispatch::DispatchCheck, Error> {
+        if self.cursor != self.steps.len() || self.pending().is_some() {
+            return Err(Error::InvalidContext);
+        }
+        let decision = match self.next_with_constraint_change(request, changed)? {
+            Next::ReadyToReserve { goal_id } => Decision::Acquire {
+                goal_id,
+                reason: "prepared_capture_ready".into(),
+            },
+            Next::Decision(decision) => decision,
+            _ => return Err(Error::InvalidContext),
+        };
+        self.dispatch_check(request, decision)
+    }
+
+    fn dispatch_check(
+        &self,
+        request: &Request,
+        decision: Decision,
+    ) -> Result<crate::dispatch::DispatchCheck, Error> {
+        // A sticky refusal may accompany changed or removed intent. It has no
+        // deadline and must not attempt to resolve the old goal's remaining work.
+        let remaining = if matches!(decision, Decision::Acquire { .. }) {
+            self.remaining_request(request)?
+        } else {
+            request.clone()
+        };
+        crate::dispatch::for_decision(&remaining, decision).map_err(Error::Core)
     }
 
     pub(crate) fn check_pending_dispatch_with_constraint_change(
