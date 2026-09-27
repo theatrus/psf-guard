@@ -179,14 +179,14 @@ fn validate_setup(setup: &RigSetup) -> Result<(Uuid, Uuid), Error> {
     .map_err(|_| Error::InvalidInput)?;
     Ok((setup.id, rig))
 }
-fn encode(value: &impl Serialize) -> Result<String, Error> {
+pub(super) fn encode(value: &impl Serialize) -> Result<String, Error> {
     let json = serde_json::to_string(value).map_err(|_| Error::InvalidInput)?;
     if json.len() > MAX_REQUEST_BYTES {
         return Err(Error::InvalidInput);
     }
     Ok(json)
 }
-fn decode<T: serde::de::DeserializeOwned>(bytes: Vec<u8>) -> Result<T, Error> {
+pub(super) fn decode<T: serde::de::DeserializeOwned>(bytes: Vec<u8>) -> Result<T, Error> {
     if bytes.len() > MAX_REQUEST_BYTES {
         return Err(Error::CorruptDatabase);
     }
@@ -211,7 +211,7 @@ fn read_site(conn: &Connection, id: Uuid) -> Result<Option<SiteSnapshot>, Error>
     })
     .transpose()
 }
-fn read_setup(conn: &Connection, id: Uuid) -> Result<Option<RigSetup>, Error> {
+pub(super) fn read_setup(conn: &Connection, id: Uuid) -> Result<Option<RigSetup>, Error> {
     valid_id(id)?;
     let row: Option<(String, String, Vec<u8>)> = conn.query_row(
         "SELECT rig_id,site_snapshot_id,substr(CAST(payload AS BLOB),1,?2) FROM rig_setup WHERE id=?1",
@@ -229,7 +229,7 @@ fn read_setup(conn: &Connection, id: Uuid) -> Result<Option<RigSetup>, Error> {
     })
     .transpose()
 }
-fn snapshot_ids(
+pub(super) fn snapshot_ids(
     conn: &Connection,
     sql: &str,
     owner: Uuid,

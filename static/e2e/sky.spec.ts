@@ -1,14 +1,56 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { registerFixtureDb, resetDatabases, waitForCacheReady } from './helpers';
 
 let dbId: string;
 
-test.beforeEach(async ({ request }) => {
+test.beforeEach(async ({ request, page }) => {
+  // Keep the banner layout deterministic instead of depending on a live release.
+  await page.route('**/api/update-notice', (route) => route.fulfill({ json: {
+    success: true,
+    data: {
+      notice: {
+        schema_version: 1,
+        version: '999.0.0',
+        release_url: 'https://github.com/theatrus/psf-guard/releases/latest',
+        summary: 'A test release with an update notice above the sky map.',
+        urgency: 'normal',
+        minimum_supported_version: '0.0.0',
+        published_at: '2026-07-26T18:00:00Z',
+      },
+      checking: false,
+      checked_at_unix_seconds: 1_774_806_400,
+    },
+    error: null,
+    status: 'ready',
+  } }));
   await resetDatabases(request);
   const entry = await registerFixtureDb(request, { name: 'Sky Rig', slug: 'sky-rig' });
   dbId = entry.id;
   await waitForCacheReady(request, dbId);
 });
+
+async function dragMap(page: Page, dx: number, dy: number) {
+  const map = page.locator('.sky-map');
+  await expect(page.locator('.update-notice')).toBeVisible();
+  // Raw mouse actions do not scroll their target into view like locator clicks.
+  await map.scrollIntoViewIfNeeded();
+  const box = await map.boundingBox();
+  if (!box) throw new Error('no map');
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  const endX = x + box.width * dx;
+  const endY = y + box.height * dy;
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error('no viewport');
+  for (const [point, limit] of [[x, viewport.width], [endX, viewport.width], [y, viewport.height], [endY, viewport.height]]) {
+    expect(point).toBeGreaterThan(0);
+    expect(point).toBeLessThan(limit);
+  }
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(endX, endY, { steps: 8 });
+  await page.mouse.up();
+}
 
 test('the sky page maps every target, tells its story on hover, and opens it in Images', async ({ page }) => {
   await page.goto('/');
@@ -92,14 +134,8 @@ test('the sky remembers its turn and zoom while you are away in another view', a
   await page.getByRole('button', { name: 'Zoom in' }).click();
   await page.getByRole('button', { name: 'Zoom in' }).click();
   await expect(map).toHaveAttribute('data-zoom', '2.56');
-  const box = await map.boundingBox();
-  if (!box) throw new Error('no map');
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width / 2 + box.width / 8, box.y + box.height / 2 + box.height / 8, { steps: 6 });
-  await page.mouse.up();
-  const turned = await map.getAttribute('data-center');
-  expect(turned).not.toBe('180.0,0.0');
+  await dragMap(page, 1 / 8, 1 / 8);
+  await expect(map).not.toHaveAttribute('data-center', '180.0,0.0');
   await page.getByRole('radio', { name: 'Galactic' }).click();
   await expect(map).toHaveAttribute('data-zoom', '1.00');
   await page.getByRole('button', { name: 'Zoom in' }).click();
@@ -119,35 +155,25 @@ test('the globe turns when dragged and the flat map spins its central meridian',
   await expect(map).toBeVisible({ timeout: 15_000 });
   await expect(map).toHaveAttribute('data-center', '180.0,0.0');
 
-  const box = await map.boundingBox();
-  if (!box) throw new Error('no map');
-  const drag = async (dx: number, dy: number) => {
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(box.x + box.width / 2 + dx / 2, box.y + box.height / 2 + dy / 2, { steps: 4 });
-    await page.mouse.move(box.x + box.width / 2 + dx, box.y + box.height / 2 + dy, { steps: 4 });
-    await page.mouse.up();
-  };
-
   const dustBefore = await page.locator('.sky-stars circle').first().getAttribute('cx');
-  await drag(box.width / 4, 0);
+  await dragMap(page, 1 / 4, 0);
   await expect(map).toHaveAttribute('data-center', '270.0,0.0');
   // The stars turn with the sky: nothing on the map stays put.
   expect(await page.locator('.sky-stars circle').first().getAttribute('cx')).not.toBe(dustBefore);
   // A vertical drag tilts the flat map too: the viewer is inside the sphere.
-  await drag(0, box.height / 4);
+  await dragMap(page, 0, 1 / 4);
   await expect(map).toHaveAttribute('data-center', '270.0,45.0');
   // Zoomed in, a drag still turns the sky rather than sliding a picture.
   await page.getByRole('button', { name: 'Zoom in' }).click();
   await expect(map).toHaveAttribute('data-zoom', '1.60');
-  await drag(-box.width / 8, 0);
+  await dragMap(page, -1 / 8, 0);
   await expect(map).toHaveAttribute('data-center', /^241\.9,45\.0$/);
   await page.getByRole('button', { name: 'Whole sky' }).click();
   await expect(map).toHaveAttribute('data-center', '180.0,0.0');
 
   await page.getByRole('radio', { name: 'Globe' }).click();
   await expect(map).toHaveAttribute('data-center', '180.0,25.0');
-  await drag(0, -box.height / 4);
+  await dragMap(page, 0, -1 / 4);
   await expect(map).toHaveAttribute('data-center', '180.0,-5.0');
   await expect(page.locator('.sky-target')).toHaveCount(2);
 

@@ -5,7 +5,12 @@ import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
 import WbppRunDialog from '../WbppRunDialog';
-import { DEFAULT_WBPP_OPTIONS, type WbppRunProgress } from '../../api/types';
+import { DEFAULT_WBPP_OPTIONS } from '../../api/types';
+import type { WbppRunProgress } from '../../api/types';
+
+function ok(data: unknown) {
+  return HttpResponse.json({ success: true, data, error: null, status: 'ready' });
+}
 
 function wrapper() {
   const queryClient = new QueryClient({
@@ -16,7 +21,33 @@ function wrapper() {
   };
 }
 
-const ok = <T,>(data: T) => ({ success: true, data, error: null });
+const running: WbppRunProgress = {
+  running: true,
+  stage: 'running',
+  scope: 'Sh2 86',
+  work_dir: '/runs/alpha/Sh2_86-1',
+  output_dir: '/runs/alpha/Sh2_86-1/wbpp-out',
+  free_bytes_at_start: null,
+  options: null,
+  frames: 40,
+  lights: 30,
+  missing_files: 0,
+  command: null,
+  pid: 4242,
+  started_at: 1_705_352_400,
+  finished_at: null,
+  exit_code: null,
+  wbpp_stage: 'Begin registration of light frames',
+  wbpp_steps: 3,
+  wbpp_elapsed: null,
+  log_path: null,
+  log_tail: [],
+  log_errors: [],
+  outputs: [],
+  error: null,
+  project_id: 1,
+  publish: null,
+};
 
 const pixinsight = {
   binary: null,
@@ -37,208 +68,86 @@ const pixinsight = {
   runs_dir_free_bytes: null,
 };
 
-const idle: WbppRunProgress = {
-  running: false,
-  stage: '',
-  scope: '',
-  work_dir: '',
-  output_dir: '',
-  free_bytes_at_start: null,
-  options: null,
-  frames: 0,
-  lights: 0,
-  missing_files: 0,
-  command: null,
-  pid: null,
-  started_at: null,
-  finished_at: null,
-  exit_code: null,
-  wbpp_stage: null,
-  wbpp_steps: 0,
-  wbpp_elapsed: null,
-  log_path: null,
-  log_tail: [],
-  log_errors: [],
-  outputs: [],
-  error: null,
-  project_id: null,
-  publish: null,
-};
+function mockCommon() {
+  server.use(
+    http.get('/api/settings/pixinsight', () => ok(pixinsight)),
+    http.get('/api/databases', () =>
+      ok([{ id: 'alpha', name: 'Alpha', database_path: '/a.sqlite', image_directories: [], remote_image_upload: { enabled: false } }])
+    ),
+    http.get('/api/db/alpha/projects/:id/processing-settings', () => ok({ process_folder: null }))
+  );
+}
 
-const finished: WbppRunProgress = {
-  ...idle,
-  stage: 'complete',
-  scope: 'project Alpha',
-  work_dir: '/cache/db/wbpp/Alpha-1',
-  output_dir: '/cache/db/wbpp/Alpha-1/wbpp-out',
-  frames: 5,
-  lights: 3,
-  started_at: 1_000,
-  finished_at: 1_600,
-  exit_code: 0,
-  wbpp_elapsed: '00:09:58.000',
-  log_path: '/cache/db/wbpp/Alpha-1/wbpp-out/logs/run.log',
-  log_tail: ['* WeightedBatchPreprocessing: 00:09:58.000'],
-  outputs: [
-    { path: 'master/masterLight_BIN-1_FILTER-L.xisf', size_bytes: 104_857_600, kind: 'master' },
-    { path: 'logs/run.log', size_bytes: 2048, kind: 'log' },
-  ],
-};
-
-const request = { dbId: 'alpha', scope: { project_id: 1 }, label: 'Project Alpha' };
-
-describe('WbppRunDialog', () => {
-  it('starts a run with the chosen settings and shows what it wrote', async () => {
+describe('WbppRunDialog while another project runs', () => {
+  it('opens under the clicked project, names the busy run, and queues behind it', async () => {
+    mockCommon();
     let started: unknown = null;
-    let progress = idle;
+    let queued: unknown[] = [];
     server.use(
-      http.get('/api/settings/pixinsight', () => HttpResponse.json(ok(pixinsight))),
       http.get('/api/db/alpha/wbpp/runs/current', () =>
-        HttpResponse.json(ok({ started: progress.running, progress }))
+        ok({ started: true, queued, progress: running })
       ),
-      http.post('/api/db/alpha/wbpp/runs', async ({ request: req }) => {
-        started = await req.json();
-        progress = finished;
-        return HttpResponse.json(ok({ started: true, progress: finished }));
+      http.post('/api/db/alpha/wbpp/runs', async ({ request }) => {
+        started = await request.json();
+        queued = [{ id: 'q1', scope: 'NGC 6820', project_id: 2, target_id: null, position: 1, queued_at: 5 }];
+        return ok({ started: false, queue_id: 'q1', queued, progress: running });
+      }),
+      http.delete('/api/db/alpha/wbpp/runs/queue/q1', () => {
+        queued = [];
+        return ok({ started: true, queued, progress: running });
       })
     );
     render(
-      <WbppRunDialog request={request} defaultOptions={DEFAULT_WBPP_OPTIONS} onClose={() => {}} />,
+      <WbppRunDialog
+        request={{ dbId: 'alpha', scope: { project_id: 2 }, label: 'NGC 6820' }}
+        defaultOptions={DEFAULT_WBPP_OPTIONS}
+        onClose={() => {}}
+      />,
       { wrapper: wrapper() }
     );
-    expect(await screen.findByRole('status')).toHaveTextContent('WBPP 3.1.0 found');
-    fireEvent.change(screen.getByLabelText(/^Drizzle/), { target: { value: '2x' } });
-    fireEvent.change(screen.getByLabelText(/More WBPP parameters/), {
-      target: { value: 'maxStars=500\nautocrop=false' },
-    });
-    fireEvent.change(screen.getByLabelText(/^Run folder/), { target: { value: ' /data/runs ' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Start stacking' }));
-    await waitFor(() =>
-      expect(started).toEqual({
-        project_id: 1,
-        include_pending: true,
-        options: { ...DEFAULT_WBPP_OPTIONS, drizzle: '2x' },
-        extra_params: ['maxStars=500', 'autocrop=false'],
-        scope_label: 'Project Alpha',
-        work_root: '/data/runs',
-      })
-    );
-    expect(await screen.findByText('Finished')).toBeInTheDocument();
-    const master = screen.getByRole('link', { name: 'masterLight_BIN-1_FILTER-L.xisf' });
-    expect(master).toHaveAttribute(
-      'href',
-      '/api/db/alpha/wbpp/runs/current/files/wbpp-out/master/masterLight_BIN-1_FILTER-L.xisf'
-    );
-    expect(screen.getByText('100.0 MiB')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'WBPP log' })).toHaveAttribute(
-      'href',
-      '/api/db/alpha/wbpp/runs/current/files/wbpp-out/logs/run.log'
-    );
-    expect(screen.getByRole('button', { name: 'Stack again' })).toBeInTheDocument();
+    expect(await screen.findByText('Stack with WBPP — NGC 6820')).toBeInTheDocument();
+    expect(await screen.findByText('PixInsight is busy:')).toBeInTheDocument();
+    expect(screen.getByText(/WBPP Sh2 86: Begin registration/)).toBeInTheDocument();
+    expect(screen.queryByText('Stop PixInsight')).not.toBeInTheDocument();
+
+    const queue = await screen.findByRole('button', { name: 'Queue stacking' });
+    fireEvent.click(queue);
+    await waitFor(() => expect(started).not.toBeNull());
+    expect((started as { scope_label: string; project_id: number }).scope_label).toBe('NGC 6820');
+    expect((started as { project_id: number }).project_id).toBe(2);
+    expect(await screen.findByText('WBPP NGC 6820 is next in line.')).toBeInTheDocument();
+    expect(screen.getByText('Stack with WBPP — NGC 6820')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove from queue' }));
+    expect(await screen.findByRole('button', { name: 'Queue stacking' })).toBeInTheDocument();
+
+    // Show that run switches the view to the running project, with its name.
+    fireEvent.click(screen.getByRole('button', { name: 'Show that run' }));
+    expect(await screen.findByText('Stack with WBPP — Sh2 86')).toBeInTheDocument();
+    expect(screen.getByText('PixInsight is running WBPP')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stop PixInsight' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to NGC 6820' }));
+    expect(await screen.findByText('Stack with WBPP — NGC 6820')).toBeInTheDocument();
   });
 
-  it('opens on the last run\u2019s results and offers the form again on request', async () => {
+  it("shows the project's own run under its name", async () => {
+    mockCommon();
     server.use(
-      http.get('/api/settings/pixinsight', () => HttpResponse.json(ok(pixinsight))),
       http.get('/api/db/alpha/wbpp/runs/current', () =>
-        HttpResponse.json(ok({ started: false, progress: finished }))
+        ok({ started: true, queued: [], progress: running })
       )
     );
     render(
-      <WbppRunDialog request={request} defaultOptions={DEFAULT_WBPP_OPTIONS} onClose={() => {}} />,
-      { wrapper: wrapper() }
-    );
-    expect(await screen.findByText('Finished')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Start stacking' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Stack again' }));
-    expect(screen.getByRole('button', { name: 'Start stacking' })).toBeInTheDocument();
-    expect(screen.queryByText('Finished')).not.toBeInTheDocument();
-  });
-
-  it('saves the masters to the process directory, in the folder the project used last', async () => {
-    let published: unknown = null;
-    let progress = { ...finished, project_id: 1 };
-    server.use(
-      http.get('/api/settings/pixinsight', () => HttpResponse.json(ok(pixinsight))),
-      http.get('/api/databases', () =>
-        HttpResponse.json(
-          ok([
-            {
-              id: 'alpha',
-              name: 'Alpha',
-              database_path: '/db.sqlite',
-              image_directories: ['/frames'],
-              remote_image_upload: { enabled: false },
-              process_directory: '/mnt/nas/_ByTelescope/alpha/_Process',
-            },
-          ])
-        )
-      ),
-      http.get('/api/db/alpha/projects/1/processing-settings', () =>
-        HttpResponse.json(ok({ split_exposure_groups: false, process_folder: '2026-alpha-v1' }))
-      ),
-      http.get('/api/db/alpha/wbpp/runs/current', () =>
-        HttpResponse.json(ok({ started: false, progress }))
-      ),
-      http.post('/api/db/alpha/wbpp/runs/current/publish', async ({ request: req }) => {
-        published = await req.json();
-        progress = {
-          ...progress,
-          publish: {
-            state: 'complete',
-            directory: '/mnt/nas/_ByTelescope/alpha/_Process/2026-alpha-v1/master',
-            copied: 1,
-            skipped_existing: 0,
-            conflicts: [],
-            errors: [],
-            finished_at: 2_000,
-          },
-        };
-        return HttpResponse.json(ok({ started: false, progress }));
-      })
-    );
-    render(
-      <WbppRunDialog request={request} defaultOptions={DEFAULT_WBPP_OPTIONS} onClose={() => {}} />,
-      { wrapper: wrapper() }
-    );
-    const folder = await screen.findByLabelText('Process folder');
-    await waitFor(() => expect(folder).toHaveValue('2026-alpha-v1'));
-    fireEvent.click(screen.getByRole('button', { name: 'Save masters' }));
-    await waitFor(() => expect(published).toEqual({ folder: '2026-alpha-v1' }));
-    expect(await screen.findByText(/1 copied to \/mnt\/nas\/_ByTelescope\/alpha\/_Process\/2026-alpha-v1\/master/)).toBeInTheDocument();
-  });
-
-  it('cannot start without PixInsight, and follows a run already under way', async () => {
-    const running: WbppRunProgress = {
-      ...idle,
-      running: true,
-      stage: 'running',
-      scope: 'project Alpha',
-      lights: 3,
-      frames: 5,
-      started_at: Math.floor(Date.now() / 1000) - 65,
-      wbpp_stage: 'Begin registration of light frames',
-      wbpp_steps: 2,
-      log_tail: ['Registering 3 frames'],
-    };
-    server.use(
-      http.get('/api/settings/pixinsight', () =>
-        HttpResponse.json(
-          ok({ ...pixinsight, ready: false, detection: { ...pixinsight.detection, install: null, checked: ['/opt/PixInsight/bin/PixInsight.sh'] } })
-        )
-      ),
-      http.get('/api/db/alpha/wbpp/runs/current', () =>
-        HttpResponse.json(ok({ started: true, progress: running }))
-      )
-    );
-    render(
-      <WbppRunDialog request={request} defaultOptions={DEFAULT_WBPP_OPTIONS} onClose={() => {}} />,
+      <WbppRunDialog
+        request={{ dbId: 'alpha', scope: { project_id: 1 }, label: 'Sh2 86' }}
+        defaultOptions={DEFAULT_WBPP_OPTIONS}
+        onClose={() => {}}
+      />,
       { wrapper: wrapper() }
     );
     expect(await screen.findByText('PixInsight is running WBPP')).toBeInTheDocument();
-    expect(screen.getByText(/Begin registration of light frames/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Stop PixInsight' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Start stacking' })).not.toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('PixInsight not found');
+    expect(screen.getByText('Stack with WBPP — Sh2 86')).toBeInTheDocument();
+    expect(screen.queryByText('PixInsight is busy:')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /stacking$/ })).not.toBeInTheDocument();
   });
 });

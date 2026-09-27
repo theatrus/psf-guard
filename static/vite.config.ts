@@ -16,7 +16,7 @@ export default defineConfig({
     testTimeout: 20_000,
     // Don't let vitest scan the Playwright suite — those specs use
     // `@playwright/test` and can't run under vitest.
-    exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**'],
+    exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**', 'e2e-director/**'],
   },
   server: {
     proxy: {

@@ -88,6 +88,8 @@ pub struct AppState {
     pub auto_stacks: crate::server::stack_preview::automatic::AutomaticStackRefresh,
     /// When each database's automatic import last ran, for the schedule.
     pub autoimport: crate::server::autoimport::AutoImportScheduler,
+    /// WBPP runs waiting for PixInsight, across every database.
+    pub wbpp_queue: crate::server::wbpp_queue::WbppQueue,
     /// Process-global, single-flight Seiza catalog installation with progress
     /// that survives closing and reopening the Settings page.
     pub catalog_install: crate::server::catalog_install::CatalogInstallManager,
@@ -437,6 +439,7 @@ impl AppState {
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
             auto_stacks: crate::server::stack_preview::automatic::AutomaticStackRefresh::default(),
             autoimport: crate::server::autoimport::AutoImportScheduler::default(),
+            wbpp_queue: crate::server::wbpp_queue::WbppQueue::default(),
             catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
             sync_previews: crate::server::sync_preview::SyncPreviewManager::new(&cache_dir),
             sync_apply_lock: tokio::sync::Mutex::new(()),
@@ -612,6 +615,7 @@ impl AppState {
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
             auto_stacks: crate::server::stack_preview::automatic::AutomaticStackRefresh::default(),
             autoimport: crate::server::autoimport::AutoImportScheduler::default(),
+            wbpp_queue: crate::server::wbpp_queue::WbppQueue::default(),
             catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
             sync_previews: crate::server::sync_preview::SyncPreviewManager::new(
                 "/tmp/psf-guard-test",

@@ -132,7 +132,7 @@ export function isSkyPath(pathname: string): boolean {
 
 /** Routes that show every database, where a parked `db` slug means nothing. */
 export function isMergedPath(pathname: string): boolean {
-  return isOverviewPath(pathname) || isSkyPath(pathname);
+  return isOverviewPath(pathname) || isSkyPath(pathname) || pathname === '/director';
 }
 
 /**
