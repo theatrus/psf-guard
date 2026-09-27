@@ -1312,7 +1312,10 @@ is absent from the current server envelope and is not claimed by this client.
 ### Pairing, preview cache and capture checkpoint increment
 
 Implementation and local evidence, 2026-09-27; this is not a published acquisition
-workflow. Director-specific `psfdpt_` one-use codes mint `psfdrc_` credentials
+workflow. Backend [#535](https://github.com/theatrus/psf-guard/pull/535) and plugin
+[#29](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/29) carry this
+increment; plugin validation includes 574 passing tests and 12 nonblank WPF renders.
+Director-specific `psfdpt_` one-use codes mint `psfdrc_` credentials
 bound to the coordinator/catalog/rig and NINA profile, with a separate client ID.
 Schema 11 stores only secret hashes; issue/consume/revoke are independent of Sync.
 The three scopes permit only GET program and POST checkin/status. Operator APIs
