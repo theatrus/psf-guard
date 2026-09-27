@@ -71,13 +71,29 @@ impl<'a> Reducer<'a> {
         request: &Request,
         command: &Command,
         current: Option<&Constraints>,
-    ) -> Result<Decision, Error> {
+    ) -> Result<DispatchCheck, Error> {
         match (self, current) {
             (Self::Legacy(inner), None) => inner
-                .check_pending_dispatch(request, command)
+                .check_pending_dispatch_deadline(request, command)
                 .map_err(Error::Preparation),
             (Self::Geometry(inner), Some(current)) => inner
-                .check_pending_dispatch(request, current, command)
+                .check_pending_dispatch_deadline(request, current, command)
+                .map_err(Error::Geometry),
+            _ => Err(Error::ConflictingEvidence),
+        }
+    }
+
+    pub(super) fn check_capture_dispatch(
+        &mut self,
+        request: &Request,
+        current: Option<&Constraints>,
+    ) -> Result<DispatchCheck, Error> {
+        match (self, current) {
+            (Self::Legacy(inner), None) => inner
+                .check_capture_dispatch_deadline(request)
+                .map_err(Error::Preparation),
+            (Self::Geometry(inner), Some(current)) => inner
+                .check_capture_dispatch_deadline(request, current)
                 .map_err(Error::Geometry),
             _ => Err(Error::ConflictingEvidence),
         }

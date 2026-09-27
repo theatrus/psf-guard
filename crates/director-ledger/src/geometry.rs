@@ -1,6 +1,7 @@
 //! Persist the original geometry binding, never caller-supplied computed windows.
 
 use super::*;
+use psf_guard_director_core::dispatch::DispatchCheck;
 use psf_guard_director_core::preparation::{Command, Estimates, Next};
 use psf_guard_director_core::program::{Configuration, LocalState};
 use sha2::{Digest, Sha256};
@@ -149,6 +150,26 @@ impl Ledger {
         configuration: &Configuration,
         current: &Constraints,
     ) -> Result<Decision, Error> {
+        self.check_geometry_capture_dispatch_deadline(
+            preparation_id,
+            capture_id,
+            state,
+            configuration,
+            current,
+        )
+        .map(|check| check.decision)
+    }
+
+    /// Compute the shared-core latest start while committing any durable refusal.
+    /// A successful result still requires the original live one-shot reservation.
+    pub fn check_geometry_capture_dispatch_deadline(
+        &mut self,
+        preparation_id: &str,
+        capture_id: &str,
+        state: State,
+        configuration: &Configuration,
+        current: &Constraints,
+    ) -> Result<DispatchCheck, Error> {
         self.check_geometry_mode(true)?;
         self.check_program_configuration(configuration)?;
         self.check_capture_dispatch_inner(preparation_id, capture_id, state, Some(current))
@@ -162,6 +183,19 @@ impl Ledger {
         configuration: &Configuration,
         current: &Constraints,
     ) -> Result<Decision, Error> {
+        self.check_geometry_pending_dispatch_deadline(command, state, configuration, current)
+            .map(|check| check.decision)
+    }
+
+    /// Bound the exact issued command, including all remaining blocking work.
+    /// No time bound is returned for a refusal, and recovery never grants replay.
+    pub fn check_geometry_pending_dispatch_deadline(
+        &mut self,
+        command: &Command,
+        state: State,
+        configuration: &Configuration,
+        current: &Constraints,
+    ) -> Result<DispatchCheck, Error> {
         self.check_geometry_mode(true)?;
         self.check_program_configuration(configuration)?;
         self.check_pending_dispatch_inner(command, state, Some(current))
