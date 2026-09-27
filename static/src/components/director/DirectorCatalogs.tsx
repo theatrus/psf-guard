@@ -9,6 +9,7 @@ import { identityId } from './identityId';
 import { loadCatalog, type CatalogData } from './catalogData';
 import './DirectorPage.css';
 import DatabaseRigReview from './DatabaseRigReview';
+import RigProfileCard from './RigProfileCard';
 
 const message = (error: unknown) => isAxiosError(error)
   ? error.response?.data?.error || error.message
@@ -146,10 +147,13 @@ export function DatabaseProjectLinks({ instanceId, slug }: { instanceId: string;
     {notice && <p role="status">{notice}</p>}
     {loaded.isFetching && <p role="status">Loading catalog mappings...</p>}
     {loaded.isError && <p className="director-error" role="alert">{message(loaded.error)}</p>}
-    {data && !loaded.isError && (data.rig ? <MappingForm key={key} data={data} refreshing={loaded.isFetching} onBusy={setBusy} onApplied={() => {
-      if (currentSlug.current !== slug) return;
-      setNotice('Mappings saved.'); void loaded.refetch();
-    }} /> : <DatabaseRigReview key={key} data={data} refreshing={loaded.isFetching} onBusy={setBusy} onApplied={() => {
+    {data && !loaded.isError && (data.rig ? <>
+      <RigProfileCard slug={slug} />
+      <MappingForm key={key} data={data} refreshing={loaded.isFetching} onBusy={setBusy} onApplied={() => {
+        if (currentSlug.current !== slug) return;
+        setNotice('Mappings saved.'); void loaded.refetch();
+      }} />
+    </> : <DatabaseRigReview key={key} data={data} refreshing={loaded.isFetching} onBusy={setBusy} onApplied={() => {
       if (currentSlug.current === slug) void loaded.refetch();
     }} />)}
   </section>;

@@ -6,6 +6,12 @@
 
 ## Added
 
+- Each planning-enabled database now has a rig profile under its project
+  planning links: sensor and optics, site, sky quality, altitude and meridian
+  limits, with a one-click fill from the newest frame's headers and a live
+  field-of-view readout. The N.I.N.A. Director plugin can report the same
+  values, and the card says where each one came from.
+
 - Director planning is on by default. The server and the desktop app keep the
   planning store in `director-meta.sqlite` beside the database registry
   whenever database management is allowed; `--director-meta` still moves it.

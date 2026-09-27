@@ -27,6 +27,9 @@ function fixture() {
     http.get('/api/director/v1/catalogs/catalog/mappings', () => HttpResponse.json(ok({ catalog_identity: identity(), rig, items: state.saved?.mappings ?? [], next_after: null }))),
     http.get('/api/director/v1/projects', () => HttpResponse.json(ok({ items: [project], next_after: null }))),
     http.get('/api/director/v1/rigs', () => HttpResponse.json(ok({ items: [rig], next_after: null }))),
+    http.get('/api/director/v1/catalogs/catalog/rig/profile', () => HttpResponse.json(ok({ rig, field_of_view: null, defaults: { optics: null, site: null, field_of_view: null },
+      profile: { rig_id: rig.id, revision: 0, optics: null, site: null, horizon: null, sky_quality: null, configuration: null, updated_at_ms: 1,
+        limits: { value: { minimum_altitude_degrees: 20, maximum_altitude_degrees: 90, meridian_exclusion: { before_ms: 0, after_ms: 0 } }, source: { kind: 'manual' }, reported_at_ms: 1 } } }))),
     http.post('/api/director/v1/catalogs/catalog/adoption/preview', async ({ request }) => { const plan = await request.json() as DirectorAdoptionPlan; state.previews.push(plan); return HttpResponse.json(ok(report(plan))); }),
     http.post('/api/director/v1/catalogs/catalog/adoption/apply', async ({ request }) => { const body = await request.json() as { plan: DirectorAdoptionPlan }; state.applies.push(body); state.saved = body.plan; return HttpResponse.json(ok({ ...report(body.plan), applied: true })); }),
   );

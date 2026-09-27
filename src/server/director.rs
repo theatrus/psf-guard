@@ -19,6 +19,7 @@ use tokio::sync::Semaphore;
 mod catalog_adoption;
 mod catalog_discovery;
 mod catalog_rig;
+mod rig_profile;
 
 /// The default store sits beside the registry, like `auth.json`, so a test
 /// registry gets its own meta store and nothing lands in the real config dir.
@@ -155,6 +156,8 @@ enum Error {
     Invalid,
     Missing,
     Conflict,
+    /// The coordinator, catalog and rig identities in a report do not agree.
+    WrongRig,
     Busy,
     Internal,
 }
@@ -210,6 +213,10 @@ impl IntoResponse for Error {
                 StatusCode::CONFLICT,
                 "Director record conflicts with stored content; reload before retrying",
             ),
+            Self::WrongRig => (
+                StatusCode::FORBIDDEN,
+                "Coordinator, catalog and rig identities do not match this server's binding",
+            ),
             Self::Busy => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Director metadata is busy; retry shortly",
@@ -245,6 +252,20 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .route(
             "/catalogs/{slug}/rig/apply",
             axum::routing::post(catalog_rig::apply),
+        )
+        .route(
+            "/catalogs/{slug}/rig/profile",
+            get(rig_profile::get)
+                .put(rig_profile::put)
+                .layer(DefaultBodyLimit::max(
+                    psf_guard_director_core::MAX_REQUEST_BYTES,
+                )),
+        )
+        .route(
+            "/rigs/{rig}/equipment",
+            axum::routing::put(rig_profile::report_equipment).layer(DefaultBodyLimit::max(
+                psf_guard_director_core::MAX_REQUEST_BYTES,
+            )),
         )
         .route(
             "/catalogs/{slug}/adoption/preview",

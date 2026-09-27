@@ -8,6 +8,7 @@ pub use uuid::Uuid;
 pub mod catalog;
 pub mod catalog_rig;
 pub mod configuration;
+pub mod profile;
 pub mod project;
 mod storage;
 
