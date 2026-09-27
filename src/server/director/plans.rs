@@ -5,7 +5,10 @@ use super::rig_profile;
 use super::*;
 use crate::catalog_identity;
 use crate::server::database_context::DatabaseContext;
-use psf_guard_director_core::framing::FramingRequest;
+use psf_guard_director_core::{
+    framing::{FramingRequest, Mosaic, PanelSize},
+    visibility::IcrsPosition,
+};
 use psf_guard_director_meta::{catalog::ProjectMapping, profile::RigProfile, CatalogIdentity};
 use rusqlite::{OpenFlags, TransactionBehavior};
 use std::{collections::BTreeMap, time::Duration};
@@ -43,12 +46,21 @@ struct Progress {
     targets: u32,
 }
 
+/// Enough of the framing for the plan list to draw a thumbnail: the
+/// survey view at the center, with the panel rectangles over it.
 #[derive(Serialize)]
 struct FramingSummary {
     revision: u64,
     target_name: String,
     panels: u32,
     panel_rig_id: Option<Uuid>,
+    center: IcrsPosition,
+    position_angle_degrees: f64,
+    panel: Option<PanelSize>,
+    mosaic: Mosaic,
+    survey_id: String,
+    /// The whole mosaic along the camera axes, once a panel size is known.
+    extent: Option<PanelSize>,
 }
 
 #[derive(Serialize)]
@@ -341,30 +353,36 @@ pub(super) async fn list(
         }
         let mut rows = Vec::with_capacity(projects.len());
         for project in projects {
-            let framing = store
-                .framing_draft(project.id)?
-                .map(|draft| FramingSummary {
+            let framing = store.framing_draft(project.id)?.map(|draft| {
+                let preview = draft.panel.and_then(|panel| {
+                    FramingRequest {
+                        center: draft.center,
+                        position_angle_degrees: draft.position_angle_degrees,
+                        panel,
+                        mosaic: draft.mosaic,
+                        overlays: vec![],
+                        view: None,
+                    }
+                    .preview()
+                    .ok()
+                });
+                FramingSummary {
                     revision: draft.revision,
                     target_name: draft.target_name.clone(),
-                    panels: draft
-                        .panel
-                        .map(|panel| {
-                            FramingRequest {
-                                center: draft.center,
-                                position_angle_degrees: draft.position_angle_degrees,
-                                panel,
-                                mosaic: draft.mosaic,
-                                overlays: vec![],
-                                view: None,
-                            }
-                            .preview()
-                            .map(|p| p.panels.len() as u32)
-                            .unwrap_or(0)
-                        })
+                    panels: preview
+                        .as_ref()
+                        .map(|p| p.panels.len() as u32)
                         // No panel size yet; the grid still says how many.
                         .unwrap_or(draft.mosaic.rows * draft.mosaic.columns),
                     panel_rig_id: draft.panel_rig_id,
-                });
+                    center: draft.center,
+                    position_angle_degrees: draft.position_angle_degrees,
+                    panel: draft.panel,
+                    mosaic: draft.mosaic,
+                    survey_id: draft.survey_id.clone(),
+                    extent: preview.map(|p| p.extent),
+                }
+            });
             let plan = store.plan_draft(project.id)?.map(|plan| PlanSummary {
                 revision: plan.revision,
                 objectives: plan.objectives.len() as u32,

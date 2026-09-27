@@ -8,7 +8,7 @@ import { AccessContext, useAccess } from '../../auth/access';
 import FramingView from '../director/FramingView';
 import type { DirectorFramingDraft, DirectorFramingRequest, DirectorMosaicPreview } from '../../api/directorTypes';
 import type { SkyPreview } from '../../api/types';
-import { moveBy, offsetFrom, skyAtStage, stackMatrix, toStage } from '../director/framingModel';
+import { moveBy, offsetFrom, skyAtStage, stackMatrix, thumbnailFov, toStage } from '../director/framingModel';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
 const rigA = { rig: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'RedCat', revision: 1 }, catalog_slug: 'redcat', catalog_name: 'RedCat 61',
@@ -88,17 +88,19 @@ describe('Framing view', () => {
     const { previews, saves, cutouts } = fixture(); mount();
     expect(await screen.findByLabelText('Target name')).toHaveValue('M31');
     expect(screen.getByLabelText('Position angle degrees')).toHaveValue(35);
-    expect(screen.getByTestId('framing-extent')).toHaveTextContent('Choose a rig or enter a panel size');
+    // The first rig with optics frames on its own once rigs load; choosing it
+    // by hand before or after that leaves one preview either way.
     fireEvent.change(screen.getByLabelText('Panel rig'), { target: { value: rigA.rig.id } });
     await waitFor(() => expect(previews).toHaveLength(1));
     expect(previews[0].panel).toEqual({ width_degrees: 5.38, height_degrees: 3.6 });
     expect(previews[0].position_angle_degrees).toBe(35);
     expect(previews[0].view).toEqual({ center: seed.center, rotation_degrees: 0 });
-    await waitFor(() => expect(screen.getByTestId('framing-extent')).toHaveTextContent('1 panel, 5.38° × 3.60° in all.'));
+    await waitFor(() => expect(screen.getByTestId('framing-extent')).toHaveTextContent('1 panel, 5.38° × 3.60° in all.'), { timeout: 4000 });
     expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1);
-    // The 202 was polled once and the image then took the stage.
-    await waitFor(() => expect(cutouts.length).toBeGreaterThanOrEqual(2), { timeout: 3000 });
-    await waitFor(() => expect(document.querySelector('.framing-stage img')).toHaveAttribute('src', 'blob:stage'));
+    // The 202 was polled once and the image then took the stage. The poll
+    // waits a second by design, so give a loaded test runner room.
+    await waitFor(() => expect(cutouts.length).toBeGreaterThanOrEqual(2), { timeout: 8000 });
+    await waitFor(() => expect(document.querySelector('.framing-stage img')).toHaveAttribute('src', 'blob:stage'), { timeout: 4000 });
     expect(cutouts[0]).toContain('survey=dss2_color');
     expect(cutouts[0]).toContain('width=1024');
 
@@ -240,6 +242,23 @@ describe('Framing view', () => {
     expect(e + a * 100).toBeCloseTo(512, 0); expect(f + d * 50).toBeCloseTo(384, 0);
     fireEvent.click(screen.getByLabelText('Show finished stacks on the sky'));
     expect(screen.queryByTestId('framing-stack')).not.toBeInTheDocument();
+  });
+
+  it('switches the survey from the chips on the sky and remembers it in the draft', async () => {
+    const { cutouts, saves } = fixture(); mount();
+    await waitFor(() => expect(cutouts.length).toBeGreaterThan(0));
+    const chips = screen.getByRole('group', { name: 'Survey layers' });
+    expect(chips).toHaveTextContent('DSS2');
+    expect(chips).toHaveTextContent('Hα Finkbeiner');
+    fireEvent.click(screen.getByRole('button', { name: 'Hα Finkbeiner' }));
+    expect(screen.getByRole('button', { name: 'Hα Finkbeiner' })).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => expect(cutouts.some(query => query.includes('survey=finkbeiner_halpha'))).toBe(true));
+    expect(screen.getByLabelText('Survey')).toHaveValue('finkbeiner_halpha');
+    fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].survey_id).toBe('finkbeiner_halpha');
+    expect(thumbnailFov({ extent: { width_degrees: 2, height_degrees: 1.5 }, panel: null })).toBeCloseTo(3.2, 5);
+    expect(thumbnailFov({ extent: null, panel: null })).toBeCloseTo(1.6, 5);
   });
 
   it('projects sky positions onto the view plane the way the server does', () => {

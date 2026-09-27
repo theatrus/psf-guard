@@ -80,6 +80,17 @@
 @media (max-width: 600px) { .director-plan { grid-template-columns: minmax(0, 1fr); } }
 
 .director-workspace h2 { margin: 16px 0 0; font-size: 22px; }
+/* Planning is a wide screen: the sky takes the width the window has. */
+.director-page > .director-workspace { max-width: 1760px; }
+.director-workspace-columns { display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr); gap: 24px; align-items: start; }
+@media (max-width: 1100px) { .director-workspace-columns { grid-template-columns: minmax(0, 1fr); } }
+.director-plan.has-thumb { grid-template-columns: auto minmax(0, 1fr) auto; }
+.plan-thumb { position: relative; width: 200px; aspect-ratio: 4 / 3; background: #05070c; border: 1px solid var(--color-border-secondary); border-radius: 6px; overflow: hidden; }
+.plan-thumb img, .plan-thumb svg, .plan-thumb-empty { position: absolute; inset: 0; width: 100%; height: 100%; }
+.plan-thumb img { object-fit: fill; }
+.plan-thumb-empty { display: flex; align-items: center; justify-content: center; color: var(--color-text-secondary); font-size: 12px; }
+.plan-thumb-panel { fill: rgba(80, 180, 255, 0.14); stroke: #5ab4ff; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+@media (max-width: 600px) { .director-plan.has-thumb { grid-template-columns: minmax(0, 1fr); } .plan-thumb { width: 100%; } }
 .director-workspace .director-list li > .director-database-links { border-top: none; padding-top: 0; }
 
 /* Rows whose actions carry text: stack them on a phone instead of squeezing

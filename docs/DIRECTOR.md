@@ -51,7 +51,10 @@ table refreshes every fifteen seconds.
 
 **Plans** lists every global project with where it is linked (each database
 and the source project there) and how far its planning has come: not linked,
-framed, planned, or activated with the revision and date. Once a database
+framed, planned, or activated with the revision and date. A framed plan
+shows a thumbnail of the sky it was framed on, from the same survey cache
+the framing view uses, with its panels drawn where the plan puts them, so a
+glance down the list says what each plan covers. Once a database
 holds targets for the project, the row also counts frames accepted against
 desired across every rig, and each link gives the count per target, so a
 mosaic shows every panel's progress at a glance. **Open plan** goes to the
@@ -302,10 +305,16 @@ server folds both back to the sensor before offering them. Typed models:
 
 ## Framing view
 
-Open a plan from the Director page. **Framing** shows the sky around the
-project's first target on a survey image, with the target's catalog
-coordinates and rotation already filled in, the way N.I.N.A.'s framing
-assistant does. The rectangle is the field of the **panel rig**: the first rig
+Open a plan from the Director page. The workspace is a wide screen:
+**Framing** comes first and the sky takes the width the window has, up to
+the height of the screen, with the controls beside it; the plan and
+activation sit under it side by side, and the linked databases last.
+**Framing** shows the sky around the project's first target on a survey
+image, with the target's catalog coordinates and rotation already filled in,
+the way N.I.N.A.'s framing assistant does. Chips on the sky switch the layer:
+the DSS2 colour plates N.I.N.A. starts from, and the narrowband surveys
+(Finkbeiner H-alpha and the Northern Sky Narrowband Survey's H-alpha, O III,
+SHO and colour layers); the **Survey** list under View holds every layer. The rectangle is the field of the **panel rig**: the first rig
 holding the project that knows its optics is chosen for you (rigs take their
 optics from their own frames when they are adopted), and you can pick another
 or type a panel size. Drag the rectangle to move the target, drag its handle

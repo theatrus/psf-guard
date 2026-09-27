@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import { AccessContext, useAccess } from '../../auth/access';
 import { useScopedDbId } from '../../hooks/useUrlState';
@@ -34,11 +34,18 @@ function mount(canWrite = true, route = '/director?db=old-catalog&project=123', 
     http.get('/api/databases', () => HttpResponse.json(ok([{ id: 'c925', name: 'C925' }]))),
     http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([]))),
     http.get('/api/director/v1/rigs/status', () => HttpResponse.json(ok([]))),
+    // Plan thumbnails: a survey image and the panel geometry to draw on it.
+    http.get('/api/director/v1/sky/cutout', () => HttpResponse.arrayBuffer(new Uint8Array([255, 216, 255]).buffer, { status: 200, headers: { 'content-type': 'image/jpeg' } })),
+    http.post('/api/director/v1/framing/preview', () => HttpResponse.json(ok({ schema_version: 1, overlays: [], extent: { width_degrees: 2, height_degrees: 1.5 }, view_center_offset: [0, 0],
+      panels: [{ id: 'r1c1', row: 1, column: 1, center: { ra_degrees: 10, dec_degrees: 41 }, corners: [], view_corners: [[1, 0.75], [1, -0.75], [-1, -0.75], [-1, 0.75]] }] }))),
   );
   render(<DirectorPage />, { wrapper: Wrapper });
 }
 
 describe('Director management', () => {
+  beforeEach(() => { vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:thumb'), revokeObjectURL: vi.fn() })); });
+  afterEach(() => vi.unstubAllGlobals());
+
   it('creates with the same UUID after an ambiguous failure, and trims names', async () => {
     const requests: { id: string; name: string }[] = [];
     let committed = false;
@@ -99,7 +106,7 @@ describe('Director management', () => {
         row(record, { links: [{ catalog_slug: 'c925', catalog_name: 'C925', rig, source_project_guid: 'g', source_row_id: 7, source_name: 'Andromeda subs',
           targets: [{ name: 'M31 r1c1', desired: 72, acquired: 40, accepted: 36 }, { name: 'M31 r2c1', desired: 72, acquired: 0, accepted: 0 }] }],
           progress: { desired: 144, acquired: 40, accepted: 36, targets: 2 },
-          framing: { revision: 2, target_name: 'M31', panels: 4, panel_rig_id: rig.id }, plan: { revision: 1, objectives: 2, rigs: 1 }, activation: null }),
+          framing: { revision: 2, target_name: 'M31', panels: 4, panel_rig_id: rig.id, center: { ra_degrees: 10.68, dec_degrees: 41.27 }, position_angle_degrees: 35, panel: { width_degrees: 1, height_degrees: 0.75 }, mosaic: { rows: 2, columns: 2, overlap_percent: 20 }, survey_id: 'dss2_color', extent: { width_degrees: 1.8, height_degrees: 1.35 } }, plan: { revision: 1, objectives: 2, rigs: 1 }, activation: null }),
         row({ ...record, id: '33333333-3333-4333-8333-333333333333', name: 'Bare' }),
       ], ['Odd file: has no Target Scheduler project table'])))),
       http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([{ rig, catalog_slug: 'c925', catalog_name: 'C925', profile: null,
@@ -112,6 +119,11 @@ describe('Director management', () => {
     expect(screen.getByText(/C925: Andromeda subs/)).toBeInTheDocument();
     expect(screen.getByText('M31 r1c1 36/72 frames · M31 r2c1 0/72 frames')).toBeInTheDocument();
     expect(screen.getByText('36/144 frames accepted so far')).toBeInTheDocument();
+    // A framed plan shows its survey thumbnail with the panels drawn on it.
+    const thumb = screen.getByRole('img', { name: 'Framing of M31 on dss2 color' });
+    await waitFor(() => expect(thumb.querySelector('img')).toBeInTheDocument());
+    await waitFor(() => expect(thumb.querySelectorAll('.plan-thumb-panel')).toHaveLength(1));
+    expect(screen.queryByRole('img', { name: /Framing of Bare/ })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open M31' })).toHaveAttribute('href', `/director?db=old-catalog&project=123&directorProject=${record.id}`);
     expect(screen.getByText('Not linked to any database')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Bare' })).toBeInTheDocument();

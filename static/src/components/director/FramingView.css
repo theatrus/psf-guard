@@ -1,8 +1,8 @@
 /* Framing: the sky on the left, controls on the right; stacked on a phone. */
-.framing { display: grid; grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); gap: 20px; align-items: start; margin-top: 16px; }
-@media (max-width: 900px) { .framing { grid-template-columns: minmax(0, 1fr); } }
+.framing { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: 24px; align-items: start; margin-top: 16px; }
+@media (max-width: 1000px) { .framing { grid-template-columns: minmax(0, 1fr); } }
 .framing-stage-wrap { min-width: 0; }
-.framing-stage { position: relative; width: 100%; aspect-ratio: 4 / 3; background: #05070c; border: 1px solid var(--color-border-secondary); border-radius: 6px; overflow: hidden; cursor: grab; touch-action: none; user-select: none; }
+.framing-stage { position: relative; width: min(100%, calc(80vh * 4 / 3)); aspect-ratio: 4 / 3; background: #05070c; border: 1px solid var(--color-border-secondary); border-radius: 6px; overflow: hidden; cursor: grab; touch-action: none; user-select: none; }
 .framing-stage:active { cursor: grabbing; }
 .framing-stage img, .framing-stage svg, .framing-stage-empty { position: absolute; inset: 0; width: 100%; height: 100%; }
 .framing-stage img { object-fit: fill; transition: opacity 150ms; }
@@ -45,3 +45,8 @@
 .framing-stacks { margin: 8px 0 0; font-size: 13px; }
 .framing-stacks ul { margin: 4px 0 0; padding-left: 18px; color: var(--color-text-secondary); }
 .framing-stacks li { margin: 2px 0; }
+.framing-stage-surveys { position: absolute; left: 10px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 4px; max-width: 70%; }
+.framing-stage-surveys button { min-height: 26px; padding: 2px 9px; font-size: 12px; border-radius: 12px; background: rgba(0, 0, 0, 0.65); color: #fff; border: 1px solid rgba(255, 255, 255, 0.25); }
+.framing-stage-surveys button[aria-pressed="true"] { background: rgba(90, 180, 255, 0.85); color: #06121f; border-color: #5ab4ff; }
+.framing-stage-surveys button:hover:not(:disabled) { background: rgba(40, 40, 40, 0.85); }
+.framing-stage-surveys button[aria-pressed="true"]:hover { background: rgba(90, 180, 255, 0.95); }
