@@ -256,3 +256,24 @@ export interface DirectorActivation {
   applied_at_ms: number;
   rigs: Array<{ rig_id: string; catalog_id: string; project_guid: string; profile_id: string; targets: Array<{ panel_id: string; target_guid: string }>; plans: Array<{ contribution_id: string; objective_id: string; target_guid: string; exposureplan_guid: string; required_frames: number }> }>;
 }
+
+export interface DirectorPlanLink {
+  catalog_slug: string;
+  catalog_name: string;
+  rig: DirectorIdentity;
+  source_project_guid: string;
+  source_row_id: number | null;
+  source_name: string | null;
+}
+export interface DirectorPlanRow {
+  project: DirectorIdentity;
+  links: DirectorPlanLink[];
+  framing: { revision: number; target_name: string; panels: number; panel_rig_id: string | null } | null;
+  plan: { revision: number; objectives: number; rigs: number } | null;
+  activation: { revision: number; applied_at_ms: number; rigs: number } | null;
+}
+export interface DirectorRigStatusView {
+  rig: DirectorIdentity;
+  status: { rig_id: string; session_id: string; reported_at_ms: number; payload: Record<string, unknown>; received_at_ms: number };
+  checkins: Array<{ rig_id: string; ledger_id: string; highest_contiguous: number; highest_seen: number; last_checkin_ms: number }>;
+}

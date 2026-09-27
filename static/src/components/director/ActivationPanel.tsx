@@ -30,7 +30,7 @@ export default function ActivationPanel({ projectId }: { projectId: string }) {
   const apply = useMutation({
     retry: false,
     mutationFn: () => { if (!report) throw new Error('Preview first'); return apiClient.applyDirectorActivation(projectId, report.preview_digest); },
-    onSuccess: applied => { setReport(applied); void client.invalidateQueries({ queryKey: ['directorActivation', projectId] }); void client.invalidateQueries({ queryKey: ['db'] }); void client.invalidateQueries({ queryKey: ['directorCatalog'] }); },
+    onSuccess: applied => { setReport(applied); for (const key of [['directorActivation', projectId], ['db'], ['directorCatalog'], ['directorPlans']]) void client.invalidateQueries({ queryKey: key }); },
     onError: error => { if (httpStatus(error) === 409) setReport(null); },
   });
   const run = (action: () => void) => { if (busy.current) return; busy.current = true; try { action(); } finally { busy.current = false; } };

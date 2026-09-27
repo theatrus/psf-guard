@@ -1,3 +1,4 @@
+import { isAxiosError } from 'axios';
 import { apiClient } from '../../api/client';
 import type { DirectorIdentity, DirectorIdentityPage, DirectorMappingPage } from '../../api/directorTypes';
 
@@ -42,3 +43,10 @@ export async function loadCatalog(slug: string) {
 }
 
 export type CatalogData = Awaited<ReturnType<typeof loadCatalog>>;
+
+/** Director admits one metadata request at a time and answers 503 while busy; wait, do not fail. */
+export function retryWhenBusy(count: number, error: Error): boolean {
+  const status = isAxiosError(error) ? error.response?.status
+    : error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined;
+  return status === 503 && count < 5;
+}

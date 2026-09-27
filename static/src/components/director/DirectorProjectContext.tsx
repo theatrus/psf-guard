@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Settings } from 'lucide-react';
-import { loadCatalog } from './catalogData';
+import { loadCatalog, retryWhenBusy } from './catalogData';
 import { openSettings } from '../../utils/settingsIntent';
 import { ProjectPlanEditor } from '../ProjectSchedulerDialog';
 import { useAccess } from '../../auth/access';
@@ -17,7 +17,7 @@ export default function DirectorProjectContext({ instanceId, slug, projectId }: 
   const [params] = useSearchParams();
   const { canWrite } = useAccess();
   const info = useQuery({ queryKey: ['serverInfo'], queryFn: apiClient.getServerInfo, staleTime: 300_000 });
-  const query = useQuery({ queryKey: ['directorCatalog', instanceId, slug], queryFn: () => loadCatalog(slug), retry: false });
+  const query = useQuery({ queryKey: ['directorCatalog', instanceId, slug], queryFn: () => loadCatalog(slug), retry: retryWhenBusy, retryDelay: 700 });
   const scheduler = useQuery({ queryKey: ['db', slug, 'project-scheduler', projectId], queryFn: () => apiClient.getProjectScheduler(slug, projectId), retry: false });
   const data = query.data;
   const source = data?.discovery.evidence.projects.find(project => project.source_row_id === projectId);

@@ -53,11 +53,7 @@ pub(super) async fn mappings(
         return Err(Error::Invalid.into());
     }
     let catalog = state.get_database(&slug).ok_or(Error::Missing)?;
-    let permit = service
-        .discovery_admission
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| Error::Busy)?;
+    let permit = admit(&service.discovery_admission).await?;
     let identity = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         let connection = super::super::database_context::open_scheduler_connection_with_flags(

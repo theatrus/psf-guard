@@ -87,7 +87,7 @@ untested integration requirements unchecked.
 | Project framing wizard | Framing view under Rig planning: survey backgrounds from N.I.N.A.'s HiPS list, interactive center, angle and zoom, mosaic rows/columns/overlap, per-rig footprints from rig profiles, draft editing with compare-and-set. Objectives/contributions and preview/apply activation into rig databases landed in #526-527. | Reference images with WCS, layer comparison, offline region cache, rotation feasibility per rig and per-night preview. Database activation does not establish equipment authorization. |
 | Catalog discovery | [#498](https://github.com/theatrus/psf-guard/pull/498) merged: operator-scoped read-only project/profile evidence from registered TS-compatible catalogs, with bounded results and invalid/duplicate identity reports. | Discovery does not infer rig ownership or read image history. |
 | Catalog adoption | [#502](https://github.com/theatrus/psf-guard/pull/502) merged explicit durable lineage; [#503](https://github.com/theatrus/psf-guard/pull/503) merged operator preview/apply, exact identity matching, stale-review refusal and interrupted-write recovery. [#506](https://github.com/theatrus/psf-guard/pull/506) merged the reviewed mapping UI and read-only inventory, with real-server browser tests. | Independent forks, historical-image attribution, contribution accounting and acquisition authorization remain separate work. |
-| Operator API and UI | Management-gated identity/snapshot APIs; rigs listed from registered databases, reviewed planning links and rig profiles in database settings, and Overview's existing target/exposure editor reused in scoped Director planning. Survey framing, objectives and downstream project preview/apply are implemented. | Rig pairing, acquisition control and live dashboard. UI tests are not equipment tests. |
+| Operator API and UI | Director page is a plan list (`GET /plans`: links, framing/plan/activation stage, Rig planning entry) over a rig list (planning state, optics, last plugin status); reviewed planning links and rig profiles in database settings; Rig planning holds framing, plan and activation over Overview's existing target/exposure editor. The identity lists and Catalogs tab are retired; old links redirect. Desktop/mobile real-server tests cover two databases contributing to one project and return navigation. | Rig pairing, acquisition control and a live dashboard with connectivity. UI tests are not equipment tests. |
 | Program delivery | #528 adds `GET /rigs/{rig}/program`, compiling activated rig rows and reported configuration into core Program plus identity links and rig context. | Immutable issued allocations, explicit filter mapping, progress-preserving refresh and plugin HTTP intake. The current compiler response must not yet arm acquisition; see the program-intake audit below. |
 | Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
 | Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. | Central telemetry ingestion/dashboard, scoped pairing, remote acknowledgements, offline authorization lifecycle, manual/sequence batch reconcile and reconnect activation are not implemented. |
@@ -336,9 +336,10 @@ input and must not call an endpoint before its row above says it exists.
    `POST /rigs/{rig}/status`, `GET /rigs/status`; the plugin side and the
    operator dashboard are next.
 
-The Director page changes as these land: the identity lists give way to a
-plan list across databases, rig setup moves under database settings, and
-sites are edited inside the rig setup flow.
+The Director page changed with these: the identity lists gave way to a plan
+list across databases (`GET /plans`) over a rig list with live status, rig
+setup moved under database settings, and sites are edited inside the rig
+profile.
 
 ### Site and rig responsibilities
 
