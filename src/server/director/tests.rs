@@ -12,6 +12,7 @@ use axum::{
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
+mod adoption;
 mod configuration;
 
 fn state(dir: &TempDir, enable: bool) -> AppState {

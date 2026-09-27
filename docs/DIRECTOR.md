@@ -20,8 +20,8 @@ access. Prefer accounts; see [authentication](AUTHENTICATION.md).
 
 Back up the meta store with its SQLite-aware storage API before an upgrade.
 Do not copy a live SQLite main file without its WAL. Stop older coordinator
-processes before opening an upgraded store. HTTP backup, restore, path switching,
-and catalog adoption are deliberately not exposed.
+processes before opening an upgraded store. HTTP backup, restore and path
+switching are not exposed. Catalog adoption requires the explicit workflow below.
 
 ## Protocol 1
 
@@ -57,6 +57,50 @@ name. Each page is a fresh read, not a long-running snapshot; restart a full
 listing to discover concurrent inserts before its cursor. Request bodies are
 limited to 4 KiB for identity operations, and unknown fields are rejected.
 There is no deletion endpoint.
+
+## Catalog adoption
+
+These operator-only POST routes preview and apply explicit catalog mappings.
+They require database management and normal write access, not a Sync key. The
+catalog slug must already exist in the registry; no client filesystem path is
+accepted. Preview opens the catalog read-only. It uses a short rollback-only
+metadata transaction to check the same constraints as Apply.
+
+| Method | Route | Body |
+| --- | --- | --- |
+| POST | `/catalogs/{slug}/adoption/preview` | A plan containing `catalog_id` and `mappings`. |
+| POST | `/catalogs/{slug}/adoption/apply` | `{"plan":<same plan>,"preview_digest":"<preview result>"}` |
+
+Each mapping names `catalog_id`, `source_project_guid`, `source_profile_id`,
+`project_id` and `rig_id`. Use exact source GUIDs/profile IDs from discovery and
+existing Director project/rig UUIDs. Names and row numbers cannot establish a
+mapping. All entries must use the plan's catalog UUID. Plans contain 1-256
+distinct source projects and fit within 256 KiB. Missing/invalid/duplicate source
+identities must be corrected before adoption; the API does not invent them.
+
+Discovery returns `catalog_identity` when the catalog is already adopted. Keep
+that UUID. For an unadopted catalog, generate a new catalog UUID and retain it
+across preview, apply and retries. An unadopted file cannot claim a catalog UUID
+already registered in the coordinator.
+
+Preview returns the effective catalog identity, source and destination names,
+destination revisions, mappings, `preview_digest`, and `applied: false`. Apply
+revalidates the source in its write transaction and requires the exact preview
+digest. Changed evidence, choices, destination names/revisions or registered
+locator require a new preview. Success returns `applied: true`; identical retries
+remain idempotent. The digest checks stale input; it is not authorization.
+
+Apply adds only a PSF Guard-owned identity table to the catalog. It does not
+change TS project GUIDs, image grades or history, import frames, infer historical
+rig ownership, or authorize acquisition. Catalog registration and all mappings
+commit together in the meta store. Catalog identity commits first while holding
+the coordinator writer; if the final meta commit fails, retry the same plan and
+digest to finish registration. Do not mint a replacement identity. A changed
+preview still requires review before retrying.
+
+No UI invokes these routes yet. Catalog copies retain lineage; the same
+catalog/project mapping is not duplicated for another path. Independent forks,
+historical frame attribution and contribution accounting remain separate work.
 
 ## Configuration snapshots
 
@@ -109,7 +153,7 @@ project GUIDs are flagged; equivalent UUID spellings count as duplicates.
 This is discovery, not adoption. It does not create rigs, link projects, infer
 equipment or horizons, or change source tables. Profile IDs are source evidence,
 not friendly rig names. A database can contain several profiles and one rig can
-have several catalogs. Confirm mappings in the future adoption workflow rather
+have several catalogs. Confirm mappings in the adoption workflow above rather
 than treating a slug, source row ID, name or snapshot digest as global identity.
 The digest detects changes to the returned evidence; it grants no write or
 execution authority and is not an image/catalog-content checksum.
