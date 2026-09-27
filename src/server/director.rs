@@ -20,6 +20,7 @@ mod catalog_adoption;
 mod catalog_discovery;
 mod catalog_rig;
 mod framing;
+mod plan;
 mod rig_profile;
 mod sky_image;
 
@@ -296,6 +297,15 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
                 )),
         )
         .route("/rigs/profiles", get(framing::rig_profiles))
+        .route("/catalogs/{slug}/templates", get(plan::templates))
+        .route(
+            "/projects/{id}/plan",
+            get(plan::get_plan)
+                .put(plan::put_plan)
+                .layer(DefaultBodyLimit::max(
+                    psf_guard_director_core::MAX_REQUEST_BYTES,
+                )),
+        )
         .route("/sky/surveys", get(sky_image::surveys))
         .route("/sky/cutout", get(sky_image::cutout))
         .route("/projects/{id}", get(project).patch(rename_project))

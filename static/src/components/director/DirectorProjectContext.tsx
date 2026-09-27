@@ -7,6 +7,7 @@ import { ProjectPlanEditor } from '../ProjectSchedulerDialog';
 import { useAccess } from '../../auth/access';
 import { apiClient } from '../../api/client';
 import FramingView from './FramingView';
+import PlanEditor from './PlanEditor';
 import type { FramingSeed } from './framingModel';
 
 export default function DirectorProjectContext({ instanceId, slug, projectId }: {
@@ -51,6 +52,7 @@ export default function DirectorProjectContext({ instanceId, slug, projectId }: 
       <h3 className="director-section-heading">Framing</h3>
       {project ? (scheduler.isPending ? <p role="status">Loading targets...</p> : <FramingView projectId={project.id} seed={seed} />)
         : <p className="director-muted">Link this project under Project planning links to frame it across rigs.</p>}
+      {project && <><h3 className="director-section-heading">Plan</h3><PlanEditor projectId={project.id} /></>}
     </> : <p role="alert">Project no longer exists in this database.</p>)}
   </section>;
 }

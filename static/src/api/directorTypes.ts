@@ -163,6 +163,8 @@ export interface DirectorRigProfileSummary {
   catalog_name: string;
   profile: DirectorRigProfile | null;
   field_of_view: DirectorFieldOfView | null;
+  /** Starting exposure lengths for this rig's optics and sky. */
+  default_exposure_seconds: { broadband: number; narrowband: number };
 }
 export interface DirectorCutoutRequest {
   survey: string;
@@ -177,3 +179,48 @@ export type DirectorCutoutResult =
   | { state: 'ready'; blob: Blob }
   | { state: 'generating' }
   | { state: 'failed'; error: string };
+
+export interface DirectorBandpass { id: string; name: string; kind: 'broadband' | 'narrowband' }
+export interface DirectorTemplate {
+  id: number;
+  guid: string | null;
+  profile_id: string;
+  name: string;
+  filter_name: string;
+  gain: number | null;
+  offset: number | null;
+  bin: number | null;
+  readout_mode: number | null;
+  default_exposure: number;
+  bandpass: DirectorBandpass;
+}
+export interface DirectorTemplateList { catalog_slug: string; catalog_name: string; rig: DirectorIdentity | null; templates: DirectorTemplate[] }
+export type DirectorGoal = { kind: 'hours'; value: number } | { kind: 'frames'; value: number };
+export interface DirectorObjective { id: string; bandpass_id: string; purpose: string; goal: DirectorGoal; priority: number }
+export interface DirectorTemplateChoice {
+  template_guid: string | null;
+  template_id: number | null;
+  name: string;
+  filter_name: string;
+  gain: number | null;
+  offset: number | null;
+  bin: number | null;
+  readout_mode: number | null;
+}
+export interface DirectorContribution {
+  id: string;
+  objective_id: string;
+  rig_id: string;
+  template: DirectorTemplateChoice;
+  exposure_seconds: number;
+  panel_ids: string[];
+  enabled: boolean;
+}
+export interface DirectorPlanDraft {
+  project_id: string;
+  revision: number;
+  objectives: DirectorObjective[];
+  contributions: DirectorContribution[];
+  updated_at_ms: number;
+}
+export interface DirectorPlanView { project: DirectorIdentity; plan: DirectorPlanDraft | null }
