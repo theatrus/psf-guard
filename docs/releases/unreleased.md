@@ -138,6 +138,10 @@
   beside the planned rectangles, with a list of every panel's accepted
   frames and why a stack is missing. A checkbox hides the stacks.
 
+- The plan list counts frames accepted against desired for every plan whose
+  databases hold targets, and per target under each database, so a mosaic
+  shows each panel's progress without opening it.
+
 ## Changed
 
 ## Fixed

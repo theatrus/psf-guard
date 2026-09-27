@@ -10,6 +10,16 @@ use psf_guard_director_meta::{catalog::ProjectMapping, profile::RigProfile, Cata
 use rusqlite::{OpenFlags, TransactionBehavior};
 use std::{collections::BTreeMap, time::Duration};
 
+/// One target of a linked project and its frames: what the exposure plans
+/// ask for, have, and have accepted. A mosaic has one per panel.
+#[derive(Clone, Serialize)]
+struct TargetProgress {
+    name: String,
+    desired: i64,
+    acquired: i64,
+    accepted: i64,
+}
+
 #[derive(Serialize)]
 struct PlanLink {
     catalog_slug: String,
@@ -19,6 +29,18 @@ struct PlanLink {
     /// The row and name in that database, when the project still exists there.
     source_row_id: Option<i64>,
     source_name: Option<String>,
+    /// The project's targets in that database, in row order.
+    targets: Vec<TargetProgress>,
+}
+
+/// Frames across every linked database, so the list can say how far a plan
+/// has come without opening it.
+#[derive(Serialize)]
+struct Progress {
+    desired: i64,
+    acquired: i64,
+    accepted: i64,
+    targets: u32,
 }
 
 #[derive(Serialize)]
@@ -47,12 +69,44 @@ struct ActivationSummary {
 pub(super) struct PlanRow {
     project: NamedIdentity,
     links: Vec<PlanLink>,
+    /// `None` until some linked database holds a target for the project.
+    progress: Option<Progress>,
     framing: Option<FramingSummary>,
     plan: Option<PlanSummary>,
     activation: Option<ActivationSummary>,
 }
 
 const MAX_PROJECTS: usize = 1024;
+
+/// Every target's frame counts, grouped by project row. A catalog whose
+/// schema lacks the columns reports no progress rather than failing the list.
+fn target_progress(connection: &rusqlite::Connection) -> BTreeMap<i64, Vec<TargetProgress>> {
+    let mut by_project: BTreeMap<i64, Vec<TargetProgress>> = BTreeMap::new();
+    let Ok(mut statement) = connection.prepare(
+        "SELECT t.projectid, t.name, COALESCE(SUM(e.desired), 0), COALESCE(SUM(e.acquired), 0), COALESCE(SUM(e.accepted), 0)
+         FROM target t LEFT JOIN exposureplan e ON e.targetid = t.Id
+         GROUP BY t.Id ORDER BY t.Id",
+    ) else {
+        return by_project;
+    };
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            TargetProgress {
+                name: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                desired: row.get(2)?,
+                acquired: row.get(3)?,
+                accepted: row.get(4)?,
+            },
+        ))
+    });
+    if let Ok(rows) = rows {
+        for (project, target) in rows.flatten() {
+            by_project.entry(project).or_default().push(target);
+        }
+    }
+    by_project
+}
 
 #[derive(Serialize)]
 pub(super) struct PlanList {
@@ -237,6 +291,7 @@ pub(super) async fn list(
                         .collect(),
                     Err(_) => BTreeMap::new(),
                 };
+            let progress = target_progress(&connection);
             let mut after = None;
             loop {
                 let page = store.catalog_project_mappings(identity.id, after, 256)?;
@@ -249,6 +304,10 @@ pub(super) async fn list(
                         source_project_guid: mapping.source_project_guid,
                         source_row_id: row.map(|(id, _)| *id),
                         source_name: row.and_then(|(_, name)| name.clone()),
+                        targets: row
+                            .and_then(|(id, _)| progress.get(id))
+                            .cloned()
+                            .unwrap_or_default(),
                     });
                 }
                 match page.next_after {
@@ -319,8 +378,17 @@ pub(super) async fn list(
                 applied_at_ms: a.applied_at_ms,
                 rigs: a.rigs.len() as u32,
             });
+            let links = links.remove(&project.id).unwrap_or_default();
+            let targets: Vec<&TargetProgress> = links.iter().flat_map(|l| &l.targets).collect();
+            let progress = (!targets.is_empty()).then(|| Progress {
+                desired: targets.iter().map(|t| t.desired).sum(),
+                acquired: targets.iter().map(|t| t.acquired).sum(),
+                accepted: targets.iter().map(|t| t.accepted).sum(),
+                targets: targets.len() as u32,
+            });
             rows.push(PlanRow {
-                links: links.remove(&project.id).unwrap_or_default(),
+                links,
+                progress,
                 project,
                 framing,
                 plan,

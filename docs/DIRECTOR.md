@@ -39,8 +39,11 @@ The **Director** entry in the header opens one page with two sections.
 
 **Plans** lists every global project with where it is linked (each database
 and the source project there) and how far its planning has come: not linked,
-framed, planned, or activated with the revision and date. **Open plan** goes
-to the project's workspace. **New project** creates an unlinked global
+framed, planned, or activated with the revision and date. Once a database
+holds targets for the project, the row also counts frames accepted against
+desired across every rig, and each link gives the count per target, so a
+mosaic shows every panel's progress at a glance. **Open plan** goes to the
+project's workspace. **New project** creates an unlinked global
 project; linking a database's projects under that database's setup can also
 create one on the spot.
 

@@ -88,3 +88,4 @@
   .director-record-wide { grid-template-columns: minmax(0, 1fr); }
   .director-record-wide > button, .director-record-wide > a { grid-column: 1; grid-row: auto; justify-self: start; }
 }
+.director-plan-panels { display: block; font-size: 12px; color: var(--color-text-secondary); }

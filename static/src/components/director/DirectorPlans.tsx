@@ -12,8 +12,13 @@ const message = (error: unknown) => error instanceof Error ? error.message : 'Di
 interface Edit { record: DirectorIdentity; creating: boolean }
 
 
+/** Frames accepted against desired, for a plan or one of its targets. */
+function frames(progress: { desired: number; accepted: number }): string {
+  return `${progress.accepted}/${progress.desired} frames`;
+}
+
 function stage(row: DirectorPlanRow): string {
-  if (row.activation) return `Activated rev ${row.activation.revision} on ${new Date(row.activation.applied_at_ms).toLocaleDateString()}, ${row.activation.rigs} rig${row.activation.rigs === 1 ? '' : 's'}`;
+  if (row.activation) return `Activated rev ${row.activation.revision} on ${new Date(row.activation.applied_at_ms).toLocaleDateString()}, ${row.activation.rigs} rig${row.activation.rigs === 1 ? '' : 's'}${row.progress ? `, ${frames(row.progress)} accepted` : ''}`;
   if (row.plan && row.plan.objectives > 0) return `Planned: ${row.plan.objectives} objective${row.plan.objectives === 1 ? '' : 's'}, ${row.plan.rigs} rig${row.plan.rigs === 1 ? '' : 's'}, not activated`;
   if (row.framing) return `Framed: ${row.framing.target_name || 'target'}, ${row.framing.panels} panel${row.framing.panels === 1 ? '' : 's'}`;
   return row.links.length ? 'Linked, not framed yet' : 'Not linked to any database';
@@ -100,7 +105,12 @@ export default function DirectorPlans({ instanceId }: { instanceId: string }) {
             <div className="director-record-name">
               <strong>{row.project.name}</strong>
               <span className="director-muted">{stage(row)}</span>
-              {row.links.length > 0 && <span className="director-plan-links">{row.links.map(link => <span key={`${link.catalog_slug}:${link.source_project_guid}`}>{link.catalog_name}{link.source_name ? `: ${link.source_name}` : ''}</span>)}</span>}
+              {row.links.length > 0 && <span className="director-plan-links">{row.links.map(link => <span key={`${link.catalog_slug}:${link.source_project_guid}`}>
+                {link.catalog_name}{link.source_name ? `: ${link.source_name}` : ''}
+                {link.targets.length === 1 && ` (${frames(link.targets[0])})`}
+                {link.targets.length > 1 && <span className="director-plan-panels">{link.targets.map(target => `${target.name} ${frames(target)}`).join(' · ')}</span>}
+              </span>)}</span>}
+              {!row.activation && row.progress && <span className="director-muted">{frames(row.progress)} accepted so far</span>}
             </div>
             <div className="director-actions">
               <Link to={workspaceHref(row.project.id)} aria-label={`Open ${row.project.name}`}><Telescope size={16} />Open plan</Link>

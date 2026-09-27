@@ -546,8 +546,10 @@ finds each activated panel's latest stack preview in its rig's cache through
 the Sky page's placement code (reference-frame solve composed with the
 stack's orientation), and the browser lays solved stacks on the view plane by
 their TAN solutions, next to the plan's rectangles, with per-panel accepted
-and desired frame counts. Unsolved stacks are listed, not drawn. Open:
-per-panel progress in the plan list.
+and desired frame counts. Unsolved stacks are listed, not drawn. The plan
+list carries per-target accepted and desired frames from every linked
+database (`targets` on each link, `progress` on the row), which for a mosaic
+is per-panel progress.
 
 ### Survey backgrounds for framing
 
