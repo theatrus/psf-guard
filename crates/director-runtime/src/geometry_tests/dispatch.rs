@@ -35,6 +35,61 @@ fn issue(f: &Fixture, storage: &mut Storage) -> NativeCommand {
     command
 }
 
+#[tokio::test]
+async fn wire_deadlines_are_exact_inclusive_and_required() {
+    for reserved in [false, true] {
+        let mut f = Fixture::new();
+        f.state.conditions_valid_until_ms = f.state.now_ms + 10_000;
+        let deadline = f.state.conditions_valid_until_ms - 1;
+        let dir = TempDir::new().unwrap();
+        let mut storage = Storage::acquire(dir.path()).unwrap();
+        let command = issue(&f, &mut storage);
+        if reserved {
+            storage
+                .handle(f.complete(command.ordinal), "rig-1")
+                .unwrap();
+            f.ready(&mut storage);
+            storage.handle(f.reserve(), "rig-1").unwrap();
+        }
+        let (mut client, server) = duplex(MAX_FRAME_BYTES);
+        let task = tokio::spawn(serve_with_storage(server, Some(storage)));
+        handshake(&mut client).await;
+        for (id, now, acquire) in [
+            (1, f.state.now_ms, true),
+            (2, deadline, true),
+            (3, deadline + 1, false),
+        ] {
+            f.state.now_ms = now;
+            let operation = if reserved {
+                capture(&f)
+            } else {
+                pending(&f, command.clone())
+            };
+            let reply = exchange(&mut client, id, operation).await;
+            let StorageReply::DispatchChecked {
+                ref decision,
+                evaluated_at_ms,
+                latest_start_ms,
+            } = reply
+            else {
+                panic!("{reply:?}");
+            };
+            assert_eq!(evaluated_at_ms, now);
+            assert_eq!(matches!(decision, Decision::Acquire { .. }), acquire);
+            assert_eq!(latest_start_ms, acquire.then_some(deadline));
+            let value = serde_json::to_value(reply).unwrap();
+            assert!(value.as_object().unwrap().contains_key("latest_start_ms"));
+            for field in ["evaluated_at_ms", "latest_start_ms"] {
+                let mut missing = value.clone();
+                missing.as_object_mut().unwrap().remove(field);
+                assert!(serde_json::from_value::<StorageReply>(missing).is_err());
+            }
+        }
+        drop(client);
+        assert_eq!(task.await.unwrap(), Ok(()));
+    }
+}
+
 #[test]
 fn strict_dispatch_commands_require_all_current_inputs() {
     let f = Fixture::new();
@@ -106,7 +161,8 @@ fn stale_command_and_capture_link_are_scoped_errors_not_authority() {
             .handle(pending(&f, command.clone()), "rig-1")
             .unwrap(),
         StorageReply::DispatchChecked {
-            decision: Decision::Acquire { .. }
+            decision: Decision::Acquire { .. },
+            ..
         }
     ));
     assert!(matches!(
@@ -127,7 +183,8 @@ fn stale_command_and_capture_link_are_scoped_errors_not_authority() {
     assert!(matches!(
         storage.handle(capture(&f), "rig-1").unwrap(),
         StorageReply::DispatchChecked {
-            decision: Decision::Acquire { .. }
+            decision: Decision::Acquire { .. },
+            ..
         }
     ));
     storage
@@ -198,7 +255,9 @@ fn both_checks_reject_slow_hooks_using_geometry_not_host_window_claims() {
         assert!(matches!(
             storage.handle(operation, "rig-1").unwrap(),
             StorageReply::DispatchChecked {
-                decision: Decision::Wait { .. }
+                decision: Decision::Wait { .. },
+                latest_start_ms: None,
+                ..
             }
         ));
     }
@@ -229,7 +288,8 @@ async fn wire_dispatch_refusals_survive_reconnect_without_new_commands_or_captur
         assert!(matches!(
             exchange(&mut client, 1, operation).await,
             StorageReply::DispatchChecked {
-                decision: Decision::Acquire { .. }
+                decision: Decision::Acquire { .. },
+                ..
             }
         ));
         let mut changed = Fixture::new();
@@ -242,7 +302,9 @@ async fn wire_dispatch_refusals_survive_reconnect_without_new_commands_or_captur
         assert!(matches!(
             exchange(&mut client, 2, operation).await,
             StorageReply::DispatchChecked {
-                decision: Decision::CheckIn { .. }
+                decision: Decision::CheckIn { .. },
+                latest_start_ms: None,
+                ..
             }
         ));
         drop(client);
@@ -262,7 +324,9 @@ async fn wire_dispatch_refusals_survive_reconnect_without_new_commands_or_captur
         assert!(matches!(
             exchange(&mut client, 2, operation).await,
             StorageReply::DispatchChecked {
-                decision: Decision::CheckIn { .. }
+                decision: Decision::CheckIn { .. },
+                latest_start_ms: None,
+                ..
             }
         ));
         let evidence = if reserved { f.reserve() } else { f.advance() };
@@ -297,7 +361,9 @@ async fn wire_dispatch_refusals_survive_reconnect_without_new_commands_or_captur
         assert!(matches!(
             exchange(&mut client, id, operation).await,
             StorageReply::DispatchChecked {
-                decision: Decision::Stop { .. }
+                decision: Decision::Stop { .. },
+                latest_start_ms: None,
+                ..
             }
         ));
         drop(client);

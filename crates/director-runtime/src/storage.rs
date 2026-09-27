@@ -150,8 +150,15 @@ pub enum Operation {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StorageReply {
+    /// IPC 8: both dispatch checks return the exact input state's time and an
+    /// inclusive latest start. A non-Acquire decision always has a null bound.
+    /// Hosts must include elapsed IPC/hook time and recheck native safety before
+    /// dispatch; this reply neither grants one-shot authority nor permits replay.
     DispatchChecked {
         decision: psf_guard_director_core::Decision,
+        evaluated_at_ms: u64,
+        #[serde(deserialize_with = "Option::deserialize")]
+        latest_start_ms: Option<u64>,
     },
     GeometryOpened {
         info: LedgerInfo,
@@ -498,29 +505,39 @@ impl Storage {
                 configuration,
                 constraints,
                 state,
-            } => StorageReply::DispatchChecked {
-                decision: ledger.check_geometry_pending_dispatch(
+            } => {
+                let check = ledger.check_geometry_pending_dispatch_deadline(
                     &command,
                     state,
                     &configuration,
                     &constraints,
-                )?,
-            },
+                )?;
+                StorageReply::DispatchChecked {
+                    decision: check.decision,
+                    evaluated_at_ms: check.evaluated_at_ms,
+                    latest_start_ms: check.latest_start_ms,
+                }
+            }
             Operation::CheckGeometryCaptureDispatch {
                 preparation_id,
                 capture_id,
                 configuration,
                 constraints,
                 state,
-            } => StorageReply::DispatchChecked {
-                decision: ledger.check_geometry_capture_dispatch(
+            } => {
+                let check = ledger.check_geometry_capture_dispatch_deadline(
                     &preparation_id,
                     &capture_id,
                     state,
                     &configuration,
                     &constraints,
-                )?,
-            },
+                )?;
+                StorageReply::DispatchChecked {
+                    decision: check.decision,
+                    evaluated_at_ms: check.evaluated_at_ms,
+                    latest_start_ms: check.latest_start_ms,
+                }
+            }
             Operation::EvaluateGeometry { constraints, state } => StorageReply::Evaluated {
                 decision: ledger.evaluate_geometry(state, &constraints)?,
             },

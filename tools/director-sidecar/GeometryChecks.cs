@@ -126,6 +126,19 @@ internal static class GeometryChecks
         var response = await Send(session, operation);
         Assert(response["status"]!.GetValue<string>() == "dispatch_checked" && response["decision"]!["action"]!.GetValue<string>() == expected,
             $"geometry {(command is null ? "capture" : "preparation")} dispatch check: {expected}");
+        Assert(response["evaluated_at_ms"]!.GetValue<ulong>() == state["now_ms"]!.GetValue<ulong>(),
+            "dispatch deadline uses exact evaluated state time");
+        Assert(response.ContainsKey("latest_start_ms"), "dispatch deadline field is explicit");
+        if (expected == "acquire")
+        {
+            var expiry = program["assignment"]!["expires_at_ms"]!.GetValue<ulong>();
+            var exposure = program["recipes"]![0]!["exposure_ms"]!.GetValue<ulong>();
+            var conditions = state["conditions_valid_until_ms"]!.GetValue<ulong>();
+            var latest = Math.Min(expiry - exposure, conditions - 1);
+            Assert(response["latest_start_ms"]!.GetValue<ulong>() == latest,
+                "dispatch carries exact inclusive latest start across IPC");
+        }
+        else Assert(response["latest_start_ms"] is null, "refusal carries no dispatch deadline");
     }
 
     private static JsonObject Open(JsonNode program, JsonNode constraints, JsonNode state) => new()
