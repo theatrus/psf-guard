@@ -151,3 +151,7 @@
 ## Changed
 
 ## Fixed
+
+- A browser-user file (`auth.json`) written by a newer PSF Guard loads
+  instead of stopping the server; fields this version does not know are
+  kept and written back unchanged.
