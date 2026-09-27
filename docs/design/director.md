@@ -43,6 +43,8 @@ sync semantics.
 - Make global projects independent of rigs, database files, and local TS IDs.
 - Present one PSF Guard project with rig-specific contributions, not a second
   Director project/catalog application alongside existing PSF Guard projects.
+- Use each existing registered per-rig project database as the rig in Director.
+  Do not require another independently maintained rig record or catalog list.
 - Exchange goals, constraints, and bounded assignments, not fixed timetables.
 - Run the same planning core in PSF Guard and Director.
 - Own scheduling and feedback policy in the shared Rust core; use a thin
@@ -97,7 +99,7 @@ untested integration requirements unchecked.
 | Global project | Desired result, targets, objectives, participants, lifecycle, and outputs. |
 | Observation objective | Required coverage, bandpass, exposure purpose, quality, depth, resolution, or cadence. |
 | Site | Latitude/longitude/elevation, time context, and weather inputs for planning and acquisition. |
-| Rig | Stable equipment identity, capabilities, and versioned configurations. |
+| Rig | An existing registered per-rig project database, with site association and versioned equipment/configuration evidence. |
 | Contribution plan | How a particular rig can satisfy an objective, including framing, panels, recipes, and quality requirements. |
 | Assignment | Versioned, bounded authorization for an executor to pursue specified contributions. |
 | Contribution | Captured data, provenance, assessment state, and its relationship to objectives. |
@@ -109,10 +111,49 @@ to acquire. Persist mappings by stable identifiers. Do not join by project name,
 telescope name, nearby coordinates, or database-local integer IDs. Existing TS GUIDs remain
 intact. Database slugs remain URL scope, not federation identity.
 
-A rig identity outlives a catalog file. Record equipment and site configuration
-revisions so a changed camera, telescope, or location does not rewrite history.
-Historical catalogs may contain several configurations; do not require a
-destructive split to adopt Director.
+A rig follows the durable identity of its registered project database, not its
+current file path, display name or URL slug. Record equipment and site
+configuration revisions so a changed camera, telescope, or location does not
+rewrite history. A database may contain multiple projects and historical
+configurations; neither creates another rig by itself.
+
+### Rigs are registered project databases
+
+The per-rig databases already visible through Overview are Director's rig
+inventory. This is why another "New rig" workflow and manually assigning each
+TS profile to an unrelated rig identity is the wrong default: it asks users to
+reconstruct information PSF Guard already has and lets the two inventories
+disagree. Selecting a participating rig means selecting one of those existing
+database contexts. One database can hold many downstream projects; this does
+not mean one new database per target or per shared project.
+
+Keep stable catalog lineage for moves, renames and synchronized copies. A copy
+of a database does not become a second telescope or earn extra project credit.
+A genuinely independent database/fork needs an explicit distinct identity. An
+internal rig surrogate key may remain for references, but it must bind to the
+canonical database identity rather than become another user-managed inventory.
+Do not derive identity from names, paths, source-profile strings or integer IDs.
+
+The Director plugin pairs/checks in against its selected database context and
+combines its associated site information with the local N.I.N.A. setup and
+current conditions. Sites supply position, time and weather; camera, optics,
+filters, horizon, meridian limits and safety evidence describe the database's
+current rig setup. A TS/N.I.N.A. profile is configuration provenance within that
+rig, not automatically another rig. Preserve and report ambiguous historical
+equipment provenance rather than pretending all frames used today's setup.
+
+The meta database coordinates project intent and contributions across those
+database-backed rigs. Each downstream project belongs to a participating rig
+database and links back to the same shared project. Overview still owns catalog
+review and combined progress; Director plans and acquires contributions. Reuse
+TS project metadata to seed that planning flow, not to create parallel catalogs.
+
+This supersedes the independent rig-identity/profile-assignment model in the
+early metadata API and mapping UI. Those merged primitives are implementation
+history, not evidence that database-backed rigs are implemented. Migration
+must preview existing links, flag conflicts such as two independent catalogs
+sharing one prototype rig, retain source GUIDs/history, and be transactional and
+retryable. Do not silently rewrite a user's mappings or invent rigs at check-in.
 
 ### One project, multiple rigs
 
@@ -164,6 +205,29 @@ source links in project context when needed. The current experimental Director
 identity lists and Catalogs mapping tab are implementation scaffolding, not the
 intended catalog navigation. Retire that parallel catalog workflow without
 removing Overview's projects or per-rig catalog access.
+
+### Planner entry and source metadata
+
+Extend the existing Overview project/target dialog ("Plan & coordinates") into
+the planner workflow. Its TS-backed project description, target coordinates and
+rotation, exposure plans, template capture settings and desired counts provide
+the starting data; do not ask users to enter these again in an identity form.
+Reuse the existing editor and read APIs before introducing additional forms.
+
+The next steps are framing against survey backgrounds, choosing participating
+rigs and their optical setups, reviewing rig-specific downstream projects, then
+activating the shared intent and bounded assignments for Director. Downstream
+projects are contributions to the originating project, not independent top-level
+campaigns. Overview retains their collected data and the combined project rollup.
+
+Seed a reviewed draft, not immediate acquisition authority. Preserve source GUIDs
+and metadata revisions; convert RA hours at the planning boundary and handle the
+declared coordinate epoch explicitly. Resolve template defaults before producing
+capture recipes. Rig constraints and inherited policy still come from their
+proper owners; importing TS project settings must not silently override them.
+Generating or updating downstream projects requires preview/apply and must not
+overwrite existing acquisition history. The shared core validates the resulting
+intent before the plugin may receive an assignment.
 
 ### Site and rig responsibilities
 
@@ -1862,10 +1926,12 @@ and rig setups under their explicit owners. Snapshot bodies retain the full
 shared-core size bound instead of the smaller identity-form limit. It grants no rig or acquisition
 authority. Other hosts must explicitly create a new file or open a recognized
 existing file. Schema 1 stores the
-coordinator instance UUID, global project and rig identities, originating catalog
-identities, and explicit catalog/source-project-GUID links. Names and URL slugs
-never establish identity; rigs outlive catalogs, and one global project may link
-to several catalogs. Project and rig listings use bounded, stable-ID cursor pages;
+coordinator instance UUID, global project and independent rig identities,
+originating catalog identities, and explicit catalog/source-project-GUID links.
+This prototype separation is superseded by the database-backed rig model above;
+its migration is not implemented. Names and URL slugs never establish identity,
+and one global project may link to several catalogs. Project and rig listings
+use bounded, stable-ID cursor pages;
 renaming an entity does not move it across a page boundary. Catalog IDs must be
 explicitly registered and retained by the operator adoption workflow, not
 regenerated on every import or inferred from
@@ -2027,10 +2093,21 @@ allocation accounting and native assignment delivery are not implemented here.
   history or merging names (#503, #506).
 - [x] Discover registered catalog project/profile evidence read-only, without
   inventing rig identities or changing source schemas (#498).
+- [ ] Derive the Director rig inventory from registered per-rig project databases
+  using durable catalog identities. Retire standalone rig creation/profile-to-rig
+  selection from the normal flow; retain profiles as setup provenance.
+- [ ] Preview and migrate prototype independent rig links to database-backed
+  rigs, reporting conflicts without changing source GUIDs or capture history.
+- [ ] Bind plugin enrollment/check-in and site/setup resolution to that selected
+  database context, including offline cached evidence and reconnect validation.
 - [ ] Connect Overview projects to Director planning using the same project
   identity. Preserve Overview's project/per-rig catalog navigation and existing
   review workflows; Director covers planning and acquisition, not their
   replacement. Add rigs as contribution plans without duplicate projects.
+  An unmerged local UI increment reuses the existing project/target editor and
+  catalog mapping APIs. Its standalone rig selector still needs correction to
+  the database-backed rig model before release. It is not a framing wizard,
+  intent export, downstream-project generator or combined progress implementation.
 - [ ] Browser-test navigation from an existing Overview project to its Director
   plan and back with project/rig/database scope intact, plus catalog-only
   projects without Director and planned projects without captured images.
@@ -2061,6 +2138,11 @@ API; existing direct-TS catalogs continue to work during migration. This gate
 is not satisfied by the separate meta database alone.
 
 #### Confirmed catalog mappings
+
+The following describes the merged schema-4 prototype, not the intended rig
+ownership model. Its many-catalogs-to-independent-rig association and manual
+rig choice are superseded by "Rigs are registered project databases" above.
+Keep this behavior documented until the reviewed migration replaces it.
 
 The meta crate's schema 4 adds explicit source-profile-to-rig links and binds
 each confirmed source project to that profile and a global project. A caller
