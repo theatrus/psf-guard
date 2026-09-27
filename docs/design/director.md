@@ -35,6 +35,8 @@ sync semantics.
 
 - Introduce a PSF Guard meta database for coordination above per-rig databases.
 - Make global projects independent of rigs, database files, and local TS IDs.
+- Present one PSF Guard project with rig-specific contributions, not a second
+  Director project/catalog application alongside existing PSF Guard projects.
 - Exchange goals, constraints, and bounded assignments, not fixed timetables.
 - Run the same planning core in PSF Guard and Director.
 - Own scheduling and feedback policy in the shared Rust core; use a thin
@@ -105,6 +107,45 @@ A rig identity outlives a catalog file. Record equipment and site configuration
 revisions so a changed camera, telescope, or location does not rewrite history.
 Historical catalogs may contain several configurations; do not require a
 destructive split to adopt Director.
+
+### One project, multiple rigs
+
+The user owns one PSF Guard project. Adding a rig gives that rig a contribution
+plan for the same project; it does not require the user to create another
+independent project and roll it up manually later. "Global project" names the
+coordinator's stable identity in the implementation, not a separate product
+concept or a second list of projects users must maintain.
+
+The project owns targets, desired coverage, objectives and completion criteria.
+Each participating rig owns the capture details needed to contribute: its
+versioned optical setup, framing and rotation, mosaic panels, sampling, filters,
+exposure lengths and acquisition recipes. A short-focal-length rig may cover a
+target in one frame while a longer-focal-length rig needs a mosaic. They still
+work on the same project. Shared-core compatibility and coverage checks decide
+which objective each contribution can satisfy; assigning a rig does not make
+its data interchangeable with every other rig's data.
+
+Accepted, quality-assessed contributions roll up to the project's objectives
+with their rig, setup, panel, bandpass and exposure-purpose provenance intact.
+Pending captures remain pending, rejected or invalidated data can reopen work,
+and mirrored catalog records never earn duplicate credit. Show combined project
+progress with a per-rig breakdown. Combining a project does not force a single
+image stack, equal raw exposure counts, or equivalent depth across instruments.
+
+Catalogs remain PSF Guard's existing database infrastructure, not Director-owned
+duplicates. Native rig-local storage holds capture history and projections of
+the shared project identity. Imported TS projects retain their source GUIDs and
+explicit adapter links, but those rows are not a requirement to create another
+user-facing project. An existing project can gain planning and rig participation
+through a reviewed adoption workflow that reuses its data and identity links.
+Never silently combine same-named projects or infer rig ownership from a name.
+
+Use one Projects workspace for review, planning, rig participation and rollup.
+Reuse the existing database settings for source/import/sync connections; expose
+source links within the project when needed. The current experimental Director
+identity lists and Catalogs mapping tab are implementation scaffolding, not the
+intended navigation. Replace that parallel workflow rather than adding another
+catalog registry or asking users to recreate all existing projects and rigs.
 
 ### Site and rig responsibilities
 
@@ -1968,7 +2009,14 @@ allocation accounting and native assignment delivery are not implemented here.
   history or merging names (#503, #506).
 - [x] Discover registered catalog project/profile evidence read-only, without
   inventing rig identities or changing source schemas (#498).
-- [ ] Add scoped project views that distinguish global and rig-local projects.
+- [ ] Unify existing project review and Director planning in one Projects
+  workspace. Add rigs as contribution plans within the same project, with
+  reviewed reuse of existing project/source identities instead of manual
+  duplicate project creation.
+- [ ] Move source/import/sync linking into existing database settings and
+  contextual project views; retire the standalone Director Catalogs workflow.
+- [ ] Show objective-level project rollup and per-rig progress without treating
+  incompatible footprints, sampling, bands or exposure purposes as equivalent.
 - [ ] Define PSF Guard-owned per-rig catalog schemas and versioned access
   interfaces; remove TS-table assumptions from new Director code.
 - [ ] Implement explicit TS import/sync connections in Settings/UI, with a
