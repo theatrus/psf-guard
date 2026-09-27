@@ -12,6 +12,14 @@ on:
       - main
       - master
   workflow_dispatch:
+    inputs:
+      retag_latest:
+        description: >-
+          Point ghcr.io/theatrus/psf-guard:latest at this already-published
+          version tag (for example 0.10.2) without building anything.
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -28,6 +36,7 @@ jobs:
   # just built (native, fast) as validation — nothing is pushed and the merge
   # job is skipped.
   build:
+    if: inputs.retag_latest == ''
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -110,7 +119,7 @@ jobs:
   # Skipped on PRs (nothing was pushed).
   merge:
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && inputs.retag_latest == ''
     needs: build
     permissions:
       contents: read
@@ -131,12 +140,17 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # `latest` is the newest release, so it moves only on a vX.Y.Z tag
+          # (cut from a release/* branch). The main tip is `main` and `edge`:
+          # it carries preview work under the previous version number and
+          # would otherwise tell its own users that a release is waiting.
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=edge,enable={{is_default_branch}}
             type=sha,prefix={{branch}}
 
       - name: Log in to GitHub Container Registry
@@ -157,3 +171,35 @@ jobs:
         run: |
           docker buildx imagetools inspect \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+
+  # Move `latest` by hand to a version that is already in the registry, for a
+  # release that published before the tag rule above existed or after a
+  # mistaken push. Copies the multi-arch index as is; nothing is rebuilt.
+  retag-latest:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.retag_latest != ''
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check the version
+        run: |
+          [[ "${{ inputs.retag_latest }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { echo "retag_latest must be X.Y.Z, got '${{ inputs.retag_latest }}'" >&2; exit 1; }
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Point latest at the version
+        run: |
+          docker buildx imagetools create \
+            -t "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.retag_latest }}"
+          docker buildx imagetools inspect "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
