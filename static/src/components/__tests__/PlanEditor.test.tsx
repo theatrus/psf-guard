@@ -16,10 +16,13 @@ const c925 = { rig: { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: 'C925', 
 const template = (id: number, name: string, filter: string, bandpass: string, kind: 'broadband' | 'narrowband', exposure: number) =>
   ({ id, guid: `00000000-0000-4000-8000-${String(id).padStart(12, '0')}`, profile_id: 'p', name, filter_name: filter, gain: 100, offset: 30, bin: 1, readout_mode: null, default_exposure: exposure, bandpass: { id: bandpass, name, kind } });
 
-function fixture(existing: DirectorPlanDraft | null = null) {
+function fixture(existing: DirectorPlanDraft | null = null, mosaic: { rows: number; columns: number; overlap_percent: number } | null = null) {
   const saves: DirectorPlanDraft[] = [];
   let plan = existing;
   server.use(
+    http.get('/api/director/v1/projects/project/framing', () => HttpResponse.json(ok({ project: { id: 'project', name: 'Heart', revision: 1 }, draft: mosaic ? {
+      project_id: 'project', revision: 1, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.45 }, position_angle_degrees: 0, mosaic, panel_rig_id: null,
+      panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 4, updated_at_ms: 1 } : null }))),
     http.get('/api/director/v1/projects/project/plan', () => HttpResponse.json(ok({ project: { id: 'project', name: 'Heart', revision: 1 }, plan }))),
     http.put('/api/director/v1/projects/project/plan', async ({ request }) => {
       const body = await request.json() as DirectorPlanDraft;
@@ -84,6 +87,32 @@ describe('Plan editor', () => {
     await waitFor(() => expect(saves).toHaveLength(2));
     expect(saves[1].revision).toBe(1);
     expect(saves[1].contributions).toHaveLength(0);
+  });
+
+  it('lets each rig own panels of a mosaic and names the panels nobody covers', async () => {
+    const objective = { id: 'o1', bandpass_id: 'h_alpha', purpose: 'faint_detail', goal: { kind: 'hours' as const, value: 6 }, priority: 1 };
+    const stored: DirectorPlanDraft = { project_id: 'project', revision: 2, objectives: [objective], updated_at_ms: 1, contributions: [
+      { id: 'c1', objective_id: 'o1', rig_id: redcat.rig.id, template: { template_guid: null, template_id: 1, name: 'Ha 300', filter_name: 'Ha', gain: 100, offset: 30, bin: 1, readout_mode: null }, exposure_seconds: 300, panel_ids: [], enabled: true },
+    ] };
+    const { saves } = fixture(stored, { rows: 2, columns: 1, overlap_percent: 20 }); mount();
+    await screen.findByText(/3 templates/);
+    expect(await screen.findByTestId('plan-coverage')).toHaveTextContent('Every objective has a rig on all 2 panels.');
+    expect(screen.getByRole('checkbox', { name: 'RedCat 61 shoots every panel' })).toBeChecked();
+    // Two panels at 72 frames each is 144 frames, twelve hours.
+    expect(screen.getByText('144 frames, 12 h')).toBeInTheDocument();
+    expect(screen.getByTestId('frames-redcat-h_alpha')).toHaveTextContent('72 per panel');
+    fireEvent.click(screen.getByRole('checkbox', { name: 'RedCat 61 shoots panel r1c1' }));
+    expect(screen.getByRole('checkbox', { name: 'RedCat 61 shoots every panel' })).not.toBeChecked();
+    expect(screen.getByTestId('plan-coverage')).toHaveTextContent('H-alpha: no rig on panel r1c1.');
+    expect(screen.getByText('72 frames, 6.0 h')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save plan' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].contributions[0].panel_ids).toEqual(['r2c1']);
+    // Ticking the panel back is the same as owning them all: no list.
+    fireEvent.click(screen.getByRole('checkbox', { name: 'RedCat 61 shoots panel r1c1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save plan' }));
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(saves[1].contributions[0].panel_ids).toEqual([]);
   });
 
   it('shows a saved plan read only and counts frames goals per rig', async () => {

@@ -208,6 +208,30 @@ async fn execute(
                 "Tick at least one rig in the plan first.",
             ));
         }
+        // Every objective should have some rig on every panel; say where not.
+        let mut coverage_warnings = Vec::new();
+        for objective in &plan.objectives {
+            let uncovered: Vec<&str> = panels
+                .iter()
+                .map(|p| p.footprint.id.as_str())
+                .filter(|panel| {
+                    !by_rig.values().flatten().any(|c| {
+                        c.objective_id == objective.id
+                            && (c.panel_ids.is_empty() || c.panel_ids.iter().any(|id| id == panel))
+                    })
+                })
+                .collect();
+            if !uncovered.is_empty() && uncovered.len() < panels.len() {
+                coverage_warnings.push(format!(
+                    "No rig shoots {} on panel{} {}.",
+                    objective.bandpass_id,
+                    if uncovered.len() == 1 { "" } else { "s" },
+                    uncovered.join(", ")
+                ));
+            } else if uncovered.len() == panels.len() {
+                coverage_warnings.push(format!("No rig shoots {} on any panel.", objective.bandpass_id));
+            }
+        }
         // Which registered database each participating rig is bound to.
         let mut rig_catalogs: BTreeMap<Uuid, RigCatalog> = BTreeMap::new();
         for context in &catalogs {
@@ -323,7 +347,7 @@ async fn execute(
             });
             pending.push((*rig_id, connection, outcome.record, outcome.created_project));
         }
-        let mut warnings = Vec::new();
+        let mut warnings = coverage_warnings;
         if pending.is_empty() {
             warnings.push("No rig database can take this plan yet.".into());
         }
@@ -618,9 +642,29 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
     )?;
     let (project_row_id, _) = project_row(tx, &project_guid)?.ok_or(Error::Internal)?;
 
-    // Targets: one per panel, matched by panel id.
+    // Targets: one per panel this rig owns, matched by panel id. A
+    // contribution with no panel list covers every panel.
+    let owned_panels: std::collections::BTreeSet<&str> = inputs
+        .contributions
+        .iter()
+        .flat_map(|c| {
+            if c.panel_ids.is_empty() {
+                inputs
+                    .panels
+                    .iter()
+                    .map(|p| p.footprint.id.as_str())
+                    .collect::<Vec<_>>()
+            } else {
+                c.panel_ids.iter().map(String::as_str).collect()
+            }
+        })
+        .collect();
     let mut targets = Vec::new();
-    for panel in inputs.panels {
+    for panel in inputs
+        .panels
+        .iter()
+        .filter(|p| owned_panels.contains(p.footprint.id.as_str()))
+    {
         let name = if mosaic {
             format!("{target_base} {}", panel.footprint.id)
         } else {
@@ -721,7 +765,10 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
             )));
         };
         let template_id = resolve_template(tx, &profile_id, contribution)?;
-        for (_, target_guid, target_name) in &targets {
+        for (panel_id, target_guid, target_name) in targets.iter().filter(|(panel_id, _, _)| {
+            contribution.panel_ids.is_empty() || contribution.panel_ids.contains(panel_id)
+        }) {
+            let _ = panel_id;
             let target_row: i64 = tx.query_row(
                 "SELECT Id FROM target WHERE guid=?1",
                 [target_guid],

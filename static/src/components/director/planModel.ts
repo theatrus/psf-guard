@@ -1,4 +1,4 @@
-import type { DirectorContribution, DirectorGoal, DirectorObjective, DirectorPlanDraft, DirectorRigProfileSummary, DirectorTemplate, DirectorTemplateChoice } from '../../api/directorTypes';
+import type { DirectorContribution, DirectorGoal, DirectorMosaic, DirectorObjective, DirectorPlanDraft, DirectorRigProfileSummary, DirectorTemplate, DirectorTemplateChoice } from '../../api/directorTypes';
 
 export const PURPOSES: Array<{ id: string; name: string }> = [
   { id: 'faint_detail', name: 'Faint detail' },
@@ -74,13 +74,13 @@ export function formatHours(hours: number): string {
 
 export interface RigTotal { rigId: string; frames: number; hours: number }
 
-export function rigTotals(plan: DirectorPlanDraft): RigTotal[] {
+export function rigTotals(plan: DirectorPlanDraft, panels: string[] = []): RigTotal[] {
   const byRig = new Map<string, RigTotal>();
   for (const contribution of plan.contributions) {
     if (!contribution.enabled) continue;
     const objective = plan.objectives.find(o => o.id === contribution.objective_id);
     if (!objective) continue;
-    const frames = framesFor(objective.goal, contribution.exposure_seconds) ?? 0;
+    const frames = (framesFor(objective.goal, contribution.exposure_seconds) ?? 0) * (panels.length > 1 ? panelFactor(contribution, panels) : 1);
     const total = byRig.get(contribution.rig_id) ?? { rigId: contribution.rig_id, frames: 0, hours: 0 };
     total.frames += frames;
     total.hours += hoursFor(frames, contribution.exposure_seconds);
@@ -103,4 +103,32 @@ export function planProblem(plan: DirectorPlanDraft): string | null {
     if (!(contribution.exposure_seconds > 0)) return 'Every rig exposure must be above zero seconds.';
   }
   return null;
+}
+
+/** Panel ids the way the core names them: row one at the top, column one east. */
+export function panelIds(mosaic: DirectorMosaic | null | undefined): string[] {
+  if (!mosaic) return [];
+  const ids: string[] = [];
+  for (let r = 1; r <= mosaic.rows; r++) for (let c = 1; c <= mosaic.columns; c++) ids.push(`r${r}c${c}`);
+  return ids;
+}
+
+/** The panels a rig owns: the union over its contributions; empty means all. */
+export function rigPanels(plan: DirectorPlanDraft, rigId: string, panels: string[]): string[] {
+  const own = plan.contributions.filter(c => c.rig_id === rigId);
+  if (own.length === 0 || own.some(c => c.panel_ids.length === 0)) return panels;
+  return panels.filter(id => own.some(c => c.panel_ids.includes(id)));
+}
+
+/** Per objective, the panels no enabled contribution covers. */
+export function coverageGaps(plan: DirectorPlanDraft, panels: string[]): Array<{ objective: DirectorObjective; panels: string[] }> {
+  return plan.objectives.map(objective => ({
+    objective,
+    panels: panels.filter(panel => !plan.contributions.some(c => c.enabled && c.objective_id === objective.id && (c.panel_ids.length === 0 || c.panel_ids.includes(panel)))),
+  })).filter(gap => gap.panels.length > 0);
+}
+
+/** Frames a rig owes across its panels, for the per-rig total. */
+export function panelFactor(contribution: DirectorContribution, panels: string[]): number {
+  return contribution.panel_ids.length === 0 ? Math.max(1, panels.length) : contribution.panel_ids.filter(id => panels.includes(id)).length;
 }

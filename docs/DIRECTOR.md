@@ -294,7 +294,11 @@ exposure length from the template's default, or from the rig's optics and sky
 when the template has none. Hours become frames per rig through that exposure,
 so a fast rig under bright skies shoots more short frames than a slow one under
 dark skies for the same goal. A rig with no template for a bandpass sits that
-one out and says so. Each rig's row totals its planned frames and hours.
+one out and says so. When the framing is a mosaic, each rig's section has a
+panel chooser: every panel by default, or the panels that rig alone should
+shoot, so a wide rig can take the whole field while a long-focus rig takes
+one corner. A **Coverage** box names any objective and panel no rig covers.
+Each rig's row totals its planned frames and hours across the panels it owns.
 **Save plan** keeps the draft on the global project with the same reload rule
 as framing. Feasibility by night and activation into rig databases follow.
 
@@ -321,8 +325,8 @@ rig's database, the same rows Target Scheduler and the Director plugin read:
 - one Target Scheduler project per rig, named after the global project, in
   the Active state, marked as a mosaic when there is more than one panel, under
   the profile that owns the database's existing projects;
-- one target per panel, named after the target with the panel id appended for
-  mosaics, at the panel center with the plan's camera angle;
+- one target per panel the rig owns, named after the target with the panel
+  id appended for mosaics, at the panel center with the plan's camera angle;
 - one exposure plan per rig objective and panel, bound to the chosen template
   (or one matching its settings, created if needed), with `desired` set to the
   frames that objective needs at that rig's exposure length.
@@ -338,7 +342,8 @@ ignore them. A newly created project is linked to the global project in the
 meta store, so it appears under Project planning links at once.
 
 **Preview activation** shows, per rig database, what would be created,
-updated or left alone and any reason a rig is skipped: no registered database
+updated or left alone, names any objective and panel no rig covers, and gives
+any reason a rig is skipped: no registered database
 on this server (a Sync push will cover it later), a Target Scheduler schema
 older than 22, or a database with no N.I.N.A. profile yet. **Apply** carries
 the preview digest and is refused when the framing, plan or database changed

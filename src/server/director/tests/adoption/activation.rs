@@ -301,6 +301,73 @@ async fn activation_previews_without_writing_then_applies_and_updates_in_place()
 }
 
 #[tokio::test]
+async fn a_rig_that_owns_one_panel_gets_only_that_target_and_gaps_are_named() {
+    let a = activated().await;
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().store.lock().unwrap();
+        let mut plan = store.plan_draft(a.project).unwrap().unwrap();
+        plan.contributions[0].panel_ids = vec!["r2c1".into()];
+        store.save_plan_draft(&plan, 1).unwrap();
+    }
+    let path = format!("/projects/{}/activation/preview", a.project);
+    let (status, preview) = call(&a.f.app, "POST", &path, json!({}), None).await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let changes = preview["data"]["rigs"][0]["changes"].as_array().unwrap();
+    let targets: Vec<&str> = changes
+        .iter()
+        .filter(|c| c["kind"] == "target")
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(targets, ["IC 1805 r2c1"]);
+    assert_eq!(changes.iter().filter(|c| c["kind"] == "plan").count(), 1);
+    let warnings = preview["data"]["warnings"].as_array().unwrap();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w == "No rig shoots h_alpha on panel r1c1."),
+        "{warnings:?}"
+    );
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/apply", a.project),
+        json!({"preview_digest": preview["data"]["preview_digest"]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    assert_eq!(count("SELECT count(*) FROM target"), 1);
+    assert_eq!(count("SELECT count(*) FROM exposureplan"), 1);
+    // Widening back to every panel adds the missing panel without touching the first.
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().store.lock().unwrap();
+        let mut plan = store.plan_draft(a.project).unwrap().unwrap();
+        plan.contributions[0].panel_ids = vec![];
+        store.save_plan_draft(&plan, 2).unwrap();
+    }
+    let (_, again) = call(&a.f.app, "POST", &path, json!({}), None).await;
+    let actions: Vec<(&str, &str)> = again["data"]["rigs"][0]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "target")
+        .map(|c| (c["name"].as_str().unwrap(), c["action"].as_str().unwrap()))
+        .collect();
+    assert!(
+        actions.contains(&("IC 1805 r2c1", "unchanged"))
+            && actions.contains(&("IC 1805 r1c1", "create")),
+        "{actions:?}"
+    );
+    assert!(again["data"]["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|w| !w.as_str().unwrap().starts_with("No rig shoots")));
+    let _ = (a.rig, a.objective);
+}
+
+#[tokio::test]
 async fn activation_names_what_is_missing_and_skips_rigs_it_cannot_write() {
     let a = activated().await;
     let other = {

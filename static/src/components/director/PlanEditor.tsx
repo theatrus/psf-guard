@@ -5,7 +5,7 @@ import { Check, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorContribution, DirectorObjective, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplate } from '../../api/directorTypes';
-import { PURPOSES, bandpassKind, bandpassOptions, defaultExposure, emptyPlan, formatHours, framesFor, hoursFor, newContribution, newObjective, planProblem, rigTotals, templatesFor } from './planModel';
+import { PURPOSES, bandpassKind, bandpassOptions, coverageGaps, defaultExposure, emptyPlan, formatHours, framesFor, hoursFor, newContribution, newObjective, panelIds, planProblem, rigPanels, rigTotals, templatesFor } from './planModel';
 import './PlanEditor.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Plan request failed';
@@ -20,6 +20,9 @@ export default function PlanEditor({ projectId }: { projectId: string }) {
   const planKey = ['directorPlan', projectId];
   const loaded = useQuery({ queryKey: planKey, queryFn: () => apiClient.getDirectorPlan(projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
   const rigs = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
+  // The framing's grid names the panels a rig can own.
+  const framing = useQuery({ queryKey: ['directorFraming', projectId], queryFn: () => apiClient.getDirectorFramingDraft(projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
+  const panels = useMemo(() => panelIds(framing.data?.draft?.mosaic), [framing.data]);
   const rigList = useMemo(() => rigs.data ?? [], [rigs.data]);
   const templateQueries = useQueries({ queries: rigList.map(rig => ({
     queryKey: ['directorTemplates', rig.catalog_slug], queryFn: () => apiClient.getDirectorTemplates(rig.catalog_slug), retry: retryWhenBusy, retryDelay: 700, staleTime: 60_000,
@@ -81,6 +84,11 @@ export default function PlanEditor({ projectId }: { projectId: string }) {
     });
     return { ...current, contributions: [...current.contributions, ...added] };
   });
+  const setRigPanels = (rig: DirectorRigProfileSummary, chosen: string[]) => update(current => ({
+    ...current,
+    // Every panel chosen is the same as no list at all.
+    contributions: current.contributions.map(c => c.rig_id === rig.rig.id ? { ...c, panel_ids: chosen.length >= panels.length ? [] : chosen } : c),
+  }));
   const setContribution = (rig: DirectorRigProfileSummary, objective: DirectorObjective, change: (current: DirectorContribution | null) => DirectorContribution | null) => update(current => {
     const existing = current.contributions.find(c => c.rig_id === rig.rig.id && c.objective_id === objective.id) ?? null;
     const next = change(existing);
@@ -91,7 +99,8 @@ export default function PlanEditor({ projectId }: { projectId: string }) {
   if (loaded.isPending) return <p role="status">Loading plan...</p>;
   if (loaded.isError) return <p className="director-error" role="alert">{message(loaded.error)}</p>;
   if (!plan) return null;
-  const totals = rigTotals(plan);
+  const totals = rigTotals(plan, panels);
+  const gaps = panels.length > 1 ? coverageGaps(plan, panels) : [];
   return <section className="plan-editor" aria-label="Acquisition plan">
     <form onSubmit={event => { event.preventDefault(); if (!canWrite || save.isPending || stale) return; setNotice(''); const trouble = planProblem(plan); setProblem(trouble ?? ''); if (!trouble) save.mutate(); }}>
       <fieldset disabled={!canWrite || stale}>
@@ -135,6 +144,15 @@ export default function PlanEditor({ projectId }: { projectId: string }) {
               <small>{rig.field_of_view ? `${rig.field_of_view.pixel_scale_arcsec.toFixed(2)}″/px${rig.field_of_view.focal_ratio ? `, f/${rig.field_of_view.focal_ratio.toFixed(1)}` : ''}` : 'no optics in its rig profile'}{loadingTemplates ? ', loading templates' : `, ${templates.length} template${templates.length === 1 ? '' : 's'}`}</small>
               {total && <span className="plan-rig-total">{total.frames} frames, {formatHours(total.hours)}</span>}
             </label>
+            {on && panels.length > 1 && (() => {
+              const owned = rigPanels(plan, rig.rig.id, panels);
+              return <div className="plan-panels" role="group" aria-label={`${rig.catalog_name} panels`}>
+                <span className="director-muted">Panels:</span>
+                <label className="plan-panel"><input type="checkbox" aria-label={`${rig.catalog_name} shoots every panel`} checked={owned.length === panels.length} onChange={event => setRigPanels(rig, event.target.checked ? panels : [])} />All</label>
+                {panels.map(id => <label key={id} className="plan-panel"><input type="checkbox" aria-label={`${rig.catalog_name} shoots panel ${id}`} checked={owned.includes(id)} onChange={event => setRigPanels(rig, event.target.checked ? [...owned, id] : owned.filter(p => p !== id))} />{id}</label>)}
+                {owned.length === 0 && <span className="director-error">No panel chosen; this rig shoots nothing.</span>}
+              </div>;
+            })()}
             {on && <table className="plan-contributions"><thead><tr><th>Objective</th><th>Template</th><th>Exposure</th><th>Frames</th><th>On</th></tr></thead><tbody>
               {plan.objectives.map(objective => {
                 const contribution = plan.contributions.find(c => c.rig_id === rig.rig.id && c.objective_id === objective.id) ?? null;
@@ -152,7 +170,7 @@ export default function PlanEditor({ projectId }: { projectId: string }) {
                       {matching.map(t => <option key={t.id} value={t.id}>{t.name} ({t.filter_name}{t.bin && t.bin > 1 ? `, ${t.bin}×${t.bin}` : ''})</option>)}
                     </select>}</td>
                   <td>{contribution && <span className="plan-goal"><input aria-label={`${rig.catalog_name} exposure for ${label}`} type="number" min={1} step="any" value={contribution.exposure_seconds} onChange={event => setContribution(rig, objective, current => current ? { ...current, exposure_seconds: number(event.target.value, current.exposure_seconds) } : current)} /><small>s</small></span>}</td>
-                  <td>{contribution && frames !== null && <span data-testid={`frames-${rig.catalog_slug}-${objective.bandpass_id}`}>{frames}<br /><small className="director-muted">{formatHours(hoursFor(frames, contribution.exposure_seconds))}</small></span>}</td>
+                  <td>{contribution && frames !== null && <span data-testid={`frames-${rig.catalog_slug}-${objective.bandpass_id}`}>{frames}{panels.length > 1 && <small className="director-muted"> per panel</small>}<br /><small className="director-muted">{formatHours(hoursFor(frames, contribution.exposure_seconds))}{panels.length > 1 ? ' each' : ''}</small></span>}</td>
                   <td>{contribution && <input type="checkbox" aria-label={`${rig.catalog_name} shoots ${label}`} checked={contribution.enabled} onChange={event => setContribution(rig, objective, current => current ? { ...current, enabled: event.target.checked } : current)} />}</td>
                 </tr>;
               })}
@@ -160,6 +178,11 @@ export default function PlanEditor({ projectId }: { projectId: string }) {
           </div>;
         })}
       </fieldset>
+      {panels.length > 1 && <fieldset><legend>Coverage</legend>
+        {gaps.length === 0
+          ? <p className="director-muted" data-testid="plan-coverage">{plan.objectives.length === 0 ? `${panels.length} panels, no objectives yet.` : `Every objective has a rig on all ${panels.length} panels.`}</p>
+          : <ul className="plan-gaps" data-testid="plan-coverage">{gaps.map(gap => <li key={gap.objective.id} className="director-error">{options.find(o => o.id === gap.objective.bandpass_id)?.name ?? gap.objective.bandpass_id}: no rig on {gap.panels.length === panels.length ? 'any panel' : `panel${gap.panels.length === 1 ? '' : 's'} ${gap.panels.join(', ')}`}.</li>)}</ul>}
+      </fieldset>}
       {notice && <p role="status">{notice}</p>}
       {stale && <p className="director-error" role="alert">This plan changed since you loaded it. Reload to see the saved plan before editing again.</p>}
       {(problem || (save.isError && !stale)) && <p className="director-error" role="alert">{problem || message(save.error)}</p>}
