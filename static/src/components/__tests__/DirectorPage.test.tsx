@@ -15,6 +15,7 @@ const record = { id: '11111111-1111-4111-8111-111111111111', name: 'M31', revisi
 const rig = { id: '22222222-2222-4222-8222-222222222222', name: 'C925', revision: 1 };
 const enabled = { protocol_version: 1, enabled: true, instance_id: record.id, acquisition_available: false };
 const row = (project = record, extra: Partial<DirectorPlanRow> = {}): DirectorPlanRow => ({ project, links: [], framing: null, plan: null, activation: null, ...extra });
+const list = (rows: DirectorPlanRow[], warnings: string[] = []) => ({ rows, warnings });
 function Location() {
   const location = useLocation();
   const db = useScopedDbId();
@@ -42,7 +43,7 @@ describe('Director management', () => {
     const requests: { id: string; name: string }[] = [];
     let committed = false;
     server.use(
-      http.get('/api/director/v1/plans', () => HttpResponse.json(ok(committed ? [row({ ...record, ...requests[0] })] : []))),
+      http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list(committed ? [row({ ...record, ...requests[0] })] : [])))),
       http.post('/api/director/v1/projects', async ({ request }) => {
         requests.push(await request.json() as { id: string; name: string });
         committed = true;
@@ -66,7 +67,7 @@ describe('Director management', () => {
     let current = record;
     const updates: unknown[] = [];
     server.use(
-      http.get('/api/director/v1/plans', () => HttpResponse.json(ok([row(current)]))),
+      http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list([row(current)])))),
       http.patch('/api/director/v1/projects/:id', async ({ request, params }) => {
         expect(params.id).toBe(record.id);
         const body = await request.json() as { expected_revision: number; name: string };
@@ -94,11 +95,11 @@ describe('Director management', () => {
 
   it('shows each plan with its stage and opens Rig planning at its linked database row', async () => {
     mount(false, undefined, [
-      http.get('/api/director/v1/plans', () => HttpResponse.json(ok([
+      http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list([
         row(record, { links: [{ catalog_slug: 'c925', catalog_name: 'C925', rig, source_project_guid: 'g', source_row_id: 7, source_name: 'Andromeda subs' }],
           framing: { revision: 2, target_name: 'M31', panels: 4, panel_rig_id: rig.id }, plan: { revision: 1, objectives: 2, rigs: 1 }, activation: null }),
         row({ ...record, id: '33333333-3333-4333-8333-333333333333', name: 'Bare' }),
-      ]))),
+      ], ['Odd file: has no Target Scheduler project table'])))),
       http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([{ rig, catalog_slug: 'c925', catalog_name: 'C925', profile: null,
         field_of_view: { width_degrees: 0.7, height_degrees: 0.5, pixel_scale_arcsec: 0.41, focal_ratio: 10 }, default_exposure_seconds: { broadband: 120, narrowband: 300 } }]))),
       http.get('/api/director/v1/rigs/status', () => HttpResponse.json(ok([{ rig, checkins: [], status: { rig_id: rig.id, session_id: 's1', reported_at_ms: 1_700_000_000_000, received_at_ms: 1_700_000_000_001, payload: { phase: 'exposing' } } }]))),
@@ -106,17 +107,19 @@ describe('Director management', () => {
     expect(await screen.findByText('M31')).toBeInTheDocument();
     expect(screen.getByText('Planned: 2 objectives, 1 rig, not activated')).toBeInTheDocument();
     expect(screen.getByText('C925: Andromeda subs')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Rig planning' })).toHaveAttribute('href', '/director?db=c925&project=7&dbfilter=c925&directorSource=c925&directorView=projects');
+    expect(screen.getByRole('link', { name: 'Open M31' })).toHaveAttribute('href', `/director?db=old-catalog&project=123&directorProject=${record.id}`);
     expect(screen.getByText('Not linked to any database')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Link a database' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Bare' })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Odd file: has no Target Scheduler project table');
     expect(screen.queryByRole('button', { name: /New project|Rename/ })).not.toBeInTheDocument();
     expect(await screen.findByText(/Field 42.0′ × 30.0′, 0.41″\/px, camera not reported yet/)).toBeInTheDocument();
     expect(screen.getByText(/Plugin: exposing/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Setup C925' })).toBeInTheDocument();
     expect(screen.getByTestId('location')).toHaveTextContent('?db=old-catalog&project=123|scope=global');
   });
 
   it('folds the old tab links into the one page while keeping catalog URL state', async () => {
-    server.use(http.get('/api/director/v1/plans', () => HttpResponse.json(ok([]))));
+    server.use(http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list([])))));
     mount(true, '/director?db=old-catalog&project=123&directorView=sites');
     expect(await screen.findByText('C925')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Plans' })).toBeInTheDocument();
@@ -126,17 +129,17 @@ describe('Director management', () => {
   });
 
   it.each([{ ...enabled, enabled: false }, { ...enabled, protocol_version: 2 }])('does not load records when unavailable: %j', async status => {
-    const list = vi.fn(() => HttpResponse.json(ok([])));
+    const plansCall = vi.fn(() => HttpResponse.json(ok(list([]))));
     mount();
-    server.use(http.get('/api/director/v1/status', () => HttpResponse.json(ok(status))), http.get('/api/director/v1/plans', list));
+    server.use(http.get('/api/director/v1/status', () => HttpResponse.json(ok(status))), http.get('/api/director/v1/plans', plansCall));
     expect(await screen.findByText('Director management is unavailable on this server.')).toBeInTheDocument();
-    expect(list).not.toHaveBeenCalled();
+    expect(plansCall).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: 'New project' })).not.toBeInTheDocument();
   });
 
   it('rejects overlong multibyte names before sending them', async () => {
     const create = vi.fn(() => HttpResponse.json(ok(record)));
-    server.use(http.get('/api/director/v1/plans', () => HttpResponse.json(ok([]))), http.post('/api/director/v1/projects', create));
+    server.use(http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list([])))), http.post('/api/director/v1/projects', create));
     mount();
     fireEvent.click(await screen.findByRole('button', { name: 'New project' }));
     fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'é'.repeat(300) } });
@@ -149,7 +152,7 @@ describe('Director management', () => {
     let fail = true;
     server.use(http.get('/api/director/v1/plans', () => fail
       ? HttpResponse.json({ error: 'Director metadata is busy; retry shortly' }, { status: 503 })
-      : HttpResponse.json(ok([row()]))));
+      : HttpResponse.json(ok(list([row()])))));
     mount();
     expect(await screen.findByRole('alert')).toHaveTextContent('busy');
     expect(screen.queryByText('No projects yet.')).not.toBeInTheDocument();

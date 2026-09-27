@@ -37,51 +37,43 @@ switching are not exposed. Catalog adoption requires the explicit workflow below
 The **Director** entry in the header opens one page with two sections.
 
 **Plans** lists every global project with where it is linked (each database
-and the source project there), how far its planning has come (not linked,
-framed, planned, or activated with the revision and date), a **Rig planning**
-link that opens the first linked database row, and a rename control. **New
-project** creates an unlinked global project; the usual way to get one is to
-link a database's projects under that database's project planning links,
-which can create the global project on the spot. A project can appear under
-Overview without ever using Director, and planning can begin before a project
-has any captured data.
+and the source project there) and how far its planning has come: not linked,
+framed, planned, or activated with the revision and date. **Open plan** goes
+to the project's workspace. **New project** creates an unlinked global
+project; linking a database's projects under that database's setup can also
+create one on the spot.
 
 **Rigs** lists every registered database as a rig: whether planning is
 enabled, its field of view and pixel scale from the rig profile, whether the
-plugin has reported its camera, and the plugin's last live status. The gear
-opens the database's settings; **Overview** opens its catalog.
+plugin has reported its camera, and the plugin's last live status. **Setup**
+expands the database's planning setup in place: enable planning, the rig
+profile, and the project links. **Overview** opens its catalog.
+
+The **workspace** for one project shows its linked databases, each with the
+familiar targets and exposures editor a click away, then **Framing**, **Plan**
+and **Activation**. A project with no linked database yet starts its framing
+by looking a name up in the CDS catalogs or by typing a center; activation
+then creates and links the Target Scheduler project in each rig database.
+Overview's plan dialog still offers **Rig planning**; for a linked project it
+lands in the same workspace.
 
 Older links that named the Catalogs, Sites or Rigs tabs still work: the
 Catalogs link opens the database's settings and the others land on this page.
 Sites are no longer edited as their own records; a rig's site lives in its
 rig profile. The identity API for sites remains for the plugin.
 
-### Enable database planning
+### Rigs and plans appear on their own
 
-Open the database's **Project planning links** in Settings. Choose **Preview rig
-setup**, then **Enable planning**. This binds the database's durable lineage to
-one rig, including an empty database. A single unambiguous prototype rig is
-retained so existing setup and intent references survive. Conflicting prototype
-associations are reported without rewriting them; their reassignment workflow
-is not implemented yet. Merely listing databases does not write an identity.
-
-Select source projects, then choose or create their shared project. Every source
-profile uses this database's rig. Projects in different databases can contribute
-to the same shared project. Names never establish ownership or merge projects.
-
-Choose **Preview mappings**, check the source, global project and rig names and
-UUIDs, then **Apply mappings**. Changed source evidence or destination revisions
-discard the stale review; preview again. An interrupted Apply retains the exact
-reviewed request for retry. Creating an identity is a separate operation and
-does not map it until Apply succeeds.
-
-Legacy `directorView=catalogs&directorCatalog=<slug>` links open the selected
-database's settings; there is no separate Director Catalogs tab. Existing
-links are read-only; a changed source profile is flagged instead of silently
-reassigned. Missing, invalid or duplicate source identities cannot be selected.
-Readers can inspect saved links but cannot create identities or apply mappings.
-Refresh reloads source evidence and saved links. The view pages source rows and
-loads at most 4096 records per inventory; each Apply accepts at most 256 projects.
+Opening the Director page takes every registered database in as a rig and
+every Target Scheduler project in it as a plan. Nothing to enable, name or
+link: the database keeps a small identity table so a moved or renamed file
+stays the same rig, and each project row with a GUID gets a plan named after
+it. Projects that share a GUID across databases, as Sync copies do, become
+one plan with several rigs; projects that merely share a name stay separate
+plans. A project row without a GUID (an old catalog that Target Scheduler has
+not touched since its GUID migration) is skipped until it gets one. A file
+that cannot be written, or has no project table, is reported at the top of
+the plan list and left out.
 
 ## Protocol 1
 
@@ -123,70 +115,13 @@ There is no deletion endpoint.
 
 ## Catalog adoption
 
-First bind the database to its rig using these operator-only routes:
-
-| Method | Route | Body |
-| --- | --- | --- |
-| POST | `/catalogs/{slug}/rig/preview` | `{"catalog_id":"<durable or proposed UUID>"}` |
-| POST | `/catalogs/{slug}/rig/apply` | `{"plan":<same plan>,"preview_digest":"<preview result>"}` |
-
-The report contains `binding` (`catalog` and `rig`), `preview_digest`, and
-`applied`. Schema 5 adds a one-to-one catalog/rig binding without automatically
-rewriting schema-4 mappings. Multiple legacy rigs in one database, or one legacy
-rig shared by independent databases, return `409` for explicit resolution.
-Unambiguous adoption preserves old rig IDs. New rigs use the catalog UUID.
-Once bound, project mappings must use that rig; another catalog cannot reuse it.
-Copies retaining the same lineage retain the binding rather than creating rigs.
-Preview/apply uses fresh evidence, a read-only source preview, bounded admission,
-and the same identity-first retry protocol as project mappings below. The
-database name/locator and existing identity revisions are part of the review.
-
-These operator-only POST routes preview and apply explicit catalog mappings.
-They require database management and normal write access, not a Sync key. The
-catalog slug must already exist in the registry; no client filesystem path is
-accepted. Preview opens the catalog read-only. It uses a short rollback-only
-metadata transaction to check the same constraints as Apply.
-
-| Method | Route | Body |
-| --- | --- | --- |
-| POST | `/catalogs/{slug}/adoption/preview` | A plan containing `catalog_id` and `mappings`. |
-| POST | `/catalogs/{slug}/adoption/apply` | `{"plan":<same plan>,"preview_digest":"<preview result>"}` |
-
-Each mapping names `catalog_id`, `source_project_guid`, `source_profile_id`,
-`project_id` and `rig_id`. Use exact source GUIDs/profile IDs from discovery and
-existing project UUIDs and the database's bound rig UUID. Names and row numbers cannot establish a
-mapping. All entries must use the plan's catalog UUID. Plans contain 1-256
-distinct source projects and fit within 256 KiB. Missing/invalid/duplicate source
-identities must be corrected before adoption; the API does not invent them.
-
-Discovery returns `catalog_identity` when the catalog is already adopted. Keep
-that UUID. For an unadopted catalog, generate a new catalog UUID and retain it
-across preview, apply and retries. An unadopted file cannot claim a catalog UUID
-already registered in the coordinator.
-
-Preview returns the effective catalog identity, source and destination names,
-destination revisions, mappings, `preview_digest`, and `applied: false`. Apply
-revalidates the source in its write transaction and requires the exact preview
-digest. Changed evidence, choices, destination names/revisions or registered
-locator require a new preview. Success returns `applied: true`; identical retries
-remain idempotent. The digest checks stale input; it is not authorization.
-
-Apply adds only a PSF Guard-owned identity table to the catalog. It does not
-change TS project GUIDs, image grades or history, import frames, infer historical
-rig ownership, or authorize acquisition. Catalog registration and all mappings
-commit together in the meta store. Catalog identity commits first while holding
-the coordinator writer; if the final meta commit fails, retry the same plan and
-digest to finish registration. Do not mint a replacement identity. A changed
-preview still requires review before retrying.
-
-Database settings invoke these routes after explicit review. The mapping
-inventory endpoint is read-only, allows readers, and requires database
-management. An unadopted catalog returns a null identity and no mappings without
-creating anything. Reading the identity does not scan images or project history.
-
-Catalog copies retain lineage; the same
-catalog/project mapping is not duplicated for another path. Independent forks,
-historical frame attribution and contribution accounting remain separate work.
+Adoption is automatic (see above). The reviewed endpoints remain for tools:
+`GET /catalogs/{slug}/discovery` lists a database's project rows with their
+GUIDs and profiles, `GET /catalogs/{slug}/mappings` lists its links,
+`POST /catalogs/{slug}/rig/preview|apply` binds it to a rig, and
+`POST /catalogs/{slug}/adoption/preview|apply` links chosen rows to a chosen
+plan with a preview digest. Same-GUID rows always join the plan that GUID
+already has; a row cannot be moved to another plan through these calls.
 
 ## Configuration snapshots
 
@@ -413,6 +348,7 @@ layers are marked as such and never stand in for one another.
 | Method | Route | Body or query |
 | --- | --- | --- |
 | GET | `/sky/surveys` | The allowed surveys: `id`, `name`, `hips`, `kind` (`broadband`, `narrowband`, `panorama`), `bandpass`, `attribution`. |
+| GET | `/sky/resolve` | `name`: an object name for CDS Sesame (Simbad, NED, VizieR). Returns the resolved `name`, ICRS `ra_degrees` and `dec_degrees` and the `source`; `404` when no catalog knows the name. A catalog position, not a pointing solution. |
 | GET | `/sky/cutout` | `survey` (an `id` from the list), `ra` and `dec` in ICRS degrees, `fov` (image width in degrees, 0.02 to 40), optional `width` and `height` in pixels (64 to 2048, default 1024) and `rotation` in degrees east of north. A cached image answers `200 image/jpeg`. A miss starts one fetch and answers `202` with `Retry-After: 1`; poll the same URL. A failed fetch answers `502` with the reason for about a minute. |
 
 Cutouts are tangent-plane JPEGs cached under `<cache>/director/sky/` by
@@ -429,33 +365,3 @@ at a time; contention returns `503` with `Retry-After: 1`. A canceled HTTP
 request may still commit its already admitted transaction. Use the same create
 identity on retry, or GET after an ambiguous rename result. Errors do not return
 filesystem paths or raw SQLite diagnostics; detailed failures are logged locally.
-
-## Catalog discovery
-
-`GET /api/director/v1/catalogs/{slug}/discovery` returns the registered catalog's
-slug and display name, a `snapshot_digest`, and `evidence` containing projects,
-profile IDs with project counts, and schema capabilities. It includes projects
-with no images. A project reports its source row ID, parsed non-nil project GUID,
-profile ID, name and `issues`. Missing GUID/profile columns in older TS schemas
-are reported rather than treated as empty catalogs. Invalid fields and duplicate
-project GUIDs are flagged; equivalent UUID spellings count as duplicates.
-
-This is discovery, not adoption. It does not create rigs, link projects, infer
-equipment or horizons, or change source tables. Profile IDs are source evidence,
-not friendly rig names. A database can contain several profiles; they share its
-database-backed rig. Confirm mappings in the adoption workflow above rather
-than treating a slug, source row ID, name or snapshot digest as global identity.
-The digest detects changes to the returned evidence; it grants no write or
-execution authority and is not an image/catalog-content checksum.
-
-Discovery uses its own read-only SQLite connection and a short snapshot of the
-project table; it reads no acquired-image records, thumbnails or image files.
-One discovery read is admitted at a time, independently of metadata operations.
-Contention returns retryable `503`; unsupported schemas or more than 4096
-projects return `422` without a partial result. Text fields are limited to 512
-UTF-8 bytes; malformed fields are flagged rather than used for mapping. The
-normal operator authentication and database-management gate apply. This route
-accepts only a registered slug, never an arbitrary file path.
-
-Project objectives, site/rig enrollment, scoped assignments, feedback, and the
-objective editor remain in the [phased Director plan](design/director.md).

@@ -64,6 +64,40 @@ function useCutout(state: FramingState | null) {
   return { image, status, error, stale: image !== null && image.key !== JSON.stringify(debounced) };
 }
 
+/** Where to point when the project has no catalog target yet: a name the
+ *  catalogs know, or coordinates typed in. */
+function StartFraming({ canWrite, onStart }: { canWrite: boolean; onStart: (seed: FramingSeed) => void }) {
+  const [name, setName] = useState('');
+  const [ra, setRa] = useState('');
+  const [dec, setDec] = useState('');
+  const [problem, setProblem] = useState('');
+  const resolve = useMutation({
+    retry: false,
+    mutationFn: (query: string) => apiClient.resolveDirectorName(query),
+    onSuccess: hit => onStart({ name: hit.name, center: { ra_degrees: hit.ra_degrees, dec_degrees: hit.dec_degrees }, position_angle_degrees: 0 }),
+  });
+  const byCoordinates = () => {
+    const [r, d] = [Number(ra), Number(dec)];
+    if (!Number.isFinite(r) || !Number.isFinite(d) || r < 0 || r >= 360 || d < -90 || d > 90) { setProblem('Enter RA in degrees from 0 to 360 and Dec from -90 to 90.'); return; }
+    setProblem('');
+    onStart({ name: name.trim() || 'Target', center: { ra_degrees: r, dec_degrees: d }, position_angle_degrees: 0 });
+  };
+  if (!canWrite) return <p className="director-muted">This project has no framing yet.</p>;
+  return <form className="framing-start" aria-label="Start framing" onSubmit={event => { event.preventDefault(); if (name.trim()) resolve.mutate(name.trim()); }}>
+    <p className="director-muted">No linked catalog target yet. Start from a name the catalogs know, or type the center.</p>
+    <div className="framing-grid">
+      <label>Object name<input aria-label="Object name to resolve" value={name} maxLength={128} placeholder="IC 1805" onChange={event => setName(event.target.value)} /></label>
+      <label>RA<span className="framing-input"><input aria-label="Start RA degrees" type="number" step="any" min={0} max={359.99999} value={ra} onChange={event => setRa(event.target.value)} /><small>°</small></span></label>
+      <label>Dec<span className="framing-input"><input aria-label="Start Dec degrees" type="number" step="any" min={-90} max={90} value={dec} onChange={event => setDec(event.target.value)} /><small>°</small></span></label>
+    </div>
+    {(problem || resolve.isError) && <p className="director-error" role="alert">{problem || message(resolve.error)}</p>}
+    <div className="director-actions">
+      <button type="submit" disabled={!name.trim() || resolve.isPending}>{resolve.isPending ? 'Looking up...' : 'Look up name'}</button>
+      <button type="button" disabled={ra.trim() === '' || dec.trim() === ''} onClick={byCoordinates}>Use these coordinates</button>
+    </div>
+  </form>;
+}
+
 export interface FramingViewProps {
   projectId: string;
   seed: FramingSeed | null;
@@ -80,11 +114,14 @@ export default function FramingView({ projectId, seed }: FramingViewProps) {
   const [state, setState] = useState<FramingState | null>(null);
   const [notice, setNotice] = useState('');
   const [problem, setProblem] = useState('');
+  // A project with no linked catalog target starts from a typed or resolved
+  // position instead; the start form supplies it.
+  const [started, setStarted] = useState<FramingSeed | null>(null);
   useEffect(() => {
     if (!draft.data) return;
     if (draft.data.draft) setState(stateFromDraft(draft.data.draft));
-    else if (seed) setState(stateFromSeed(seed, DEFAULT_SURVEY));
-  }, [draft.data, seed]);
+    else if (seed ?? started) setState(stateFromSeed((seed ?? started)!, DEFAULT_SURVEY));
+  }, [draft.data, seed, started]);
   const rigList = useMemo(() => rigs.data ?? [], [rigs.data]);
   const update = useCallback((patch: Partial<FramingState> | ((current: FramingState) => Partial<FramingState>)) => {
     setState(current => current ? { ...current, ...(typeof patch === 'function' ? patch(current) : patch) } : current);
@@ -146,7 +183,7 @@ export default function FramingView({ projectId, seed }: FramingViewProps) {
 
   if (draft.isPending) return <p role="status">Loading framing...</p>;
   if (draft.isError) return <p className="director-error" role="alert">{message(draft.error)}</p>;
-  if (!state) return <p className="director-muted">Add a target to this project first; framing starts from its coordinates.</p>;
+  if (!state) return <StartFraming canWrite={canWrite} onStart={setStarted} />;
   const geometry: DirectorFramingPreview | undefined = preview.data;
   return <section className="framing" aria-label="Framing">
     <div className="framing-stage-wrap">

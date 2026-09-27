@@ -138,9 +138,37 @@ describe('Framing view', () => {
     expect(screen.getByText('Read only')).toBeInTheDocument();
   });
 
-  it('asks for a target when there is neither a draft nor a seed', async () => {
+  it('starts an unseeded project from a resolved name or typed coordinates', async () => {
+    const { previews } = fixture();
+    server.use(http.get('/api/director/v1/sky/resolve', ({ request }) => {
+      const name = new URL(request.url).searchParams.get('name');
+      return name === 'IC 1805'
+        ? HttpResponse.json(ok({ query: name, name: 'IC 1805', ra_degrees: 38.2, dec_degrees: 61.45, source: 'CDS Sesame' }))
+        : HttpResponse.json({ success: false, data: null, error: `No object named '${name}' in the catalogs` }, { status: 404 });
+    }));
+    mount(true, false);
+    fireEvent.change(await screen.findByLabelText('Object name to resolve'), { target: { value: 'Nowhere' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Look up name' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent("No object named 'Nowhere'");
+    fireEvent.change(screen.getByLabelText('Object name to resolve'), { target: { value: 'IC 1805' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Look up name' }));
+    expect(await screen.findByLabelText('Target name')).toHaveValue('IC 1805');
+    expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(38.2);
+    fireEvent.change(screen.getByLabelText('Panel rig'), { target: { value: rigA.rig.id } });
+    await waitFor(() => expect(previews).toHaveLength(1));
+    expect(previews[0].center).toEqual({ ra_degrees: 38.2, dec_degrees: 61.45 });
+  });
+
+  it('starts from typed coordinates when no catalog knows the name', async () => {
     fixture(); mount(true, false);
-    expect(await screen.findByText(/Add a target to this project first/)).toBeInTheDocument();
+    fireEvent.change(await screen.findByLabelText('Start RA degrees'), { target: { value: '400' } });
+    fireEvent.change(screen.getByLabelText('Start Dec degrees'), { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use these coordinates' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('RA in degrees from 0 to 360');
+    fireEvent.change(screen.getByLabelText('Start RA degrees'), { target: { value: '83.8' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use these coordinates' }));
+    expect(await screen.findByLabelText('Target name')).toHaveValue('Target');
+    expect(screen.getByLabelText('Declination degrees')).toHaveValue(10);
   });
 
   it('maps offsets to the stage with north up and east left', () => {

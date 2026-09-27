@@ -188,6 +188,8 @@ explicit adapter links, but those rows are not a requirement to create another
 user-facing project. An existing project can gain planning and rig participation
 through a reviewed adoption workflow that reuses its data and identity links.
 Never silently combine same-named projects or infer rig ownership from a name.
+Shared GUIDs are identity: the same project synced to two rig databases is one
+plan with two rigs, taken in without an operator step.
 
 Keep Overview and Director as complementary views of the same project, not one
 replacement workspace. Overview retains project browsing, per-rig catalog
@@ -322,9 +324,10 @@ input and must not call an endpoint before its row above says it exists.
    contributions bound to a Target Scheduler template with an exposure
    length), `GET /catalogs/{slug}/templates` with core bandpass resolution,
    `GET/PUT /projects/{id}/plan`, core default exposures from focal ratio,
-   sky quality and band kind, and the Plan editor under Rig planning. Open:
-   the per-night feasibility preview (darkness, Moon, horizon and meridian
-   from the shared core) and panel subsets per contribution.
+   sky quality and band kind, and the Plan editor in the project workspace.
+   Open: the per-night feasibility preview (darkness, Moon, horizon and
+   meridian from the shared core) and per-rig panel ownership for mosaics
+   (see "Mosaic projects across rigs").
 6. Activation. Done for local rigs: `POST /projects/{id}/activation/preview`
    and `/apply` write the TS project, per-panel targets and per-objective
    exposure plans with the side tables above, record the activation in meta
@@ -337,9 +340,16 @@ input and must not call an endpoint before its row above says it exists.
    operator dashboard are next.
 
 The Director page changed with these: the identity lists gave way to a plan
-list across databases (`GET /plans`) over a rig list with live status, rig
-setup moved under database settings, and sites are edited inside the rig
-profile.
+list across databases (`GET /plans`) over a rig list with live status. Listing
+adopts automatically: every registered database becomes a rig and every
+project row with a GUID becomes a plan, same-GUID rows across databases one
+plan (Sync keeps GUIDs), same-name rows separate plans; the reviewed adoption
+endpoints stay for tools. A plan row opens the project workspace (its
+databases with their target and exposure editors, framing, plan with rig
+checkboxes, activation); a project with no database yet starts its framing
+from a resolved name or typed coordinates (`GET /sky/resolve`). Rig setup
+(optics, site, limits) expands inline from the rig list; the settings panel
+no longer carries planning links; sites are edited inside the rig profile.
 
 ### Site and rig responsibilities
 
@@ -484,6 +494,34 @@ turn unlike data into interchangeable credit. Cross-rig coverage and completion
 must use explicit compatibility rules and capture identity, not summed hours or
 overlapping rectangles alone. Calibration, quality and processing provenance
 remain attached to the originating rig/setup and contribution.
+
+### Mosaic projects across rigs
+
+A mosaic is one project whose framing has more than one panel. Two things
+follow from the rig split above and from how rigs differ in field size:
+
+- **Panels are owned per rig.** A contribution names the panels its rig
+  shoots (`panel_ids` in the plan draft; empty means every panel). A wide
+  rig may cover the whole target as one panel while a long-focus rig takes
+  a subset, or two similar rigs split the grid. The plan editor gives each
+  participating rig its own section: which panels it takes, its template
+  and exposure per objective, and its own frames-and-hours totals. Coverage
+  rolls up per panel and objective across rigs; a panel nobody shoots is a
+  visible gap, never silently assigned. Activation writes only the targets a
+  rig owns into that rig's database.
+- **Panels stack apart and are joined afterwards.** Each panel target has
+  its own captures, calibration and stack previews in its rig's catalog, as
+  today. A later stage registers the finished per-panel stacks by the plan's
+  panel geometry into one mosaic preview for the project: the framing's
+  tangent plane gives each panel's expected placement, a fresh solve of each
+  stack corrects it, and overlap regions show seams and depth differences.
+  Panels from different rigs keep their provenance and are never blended
+  into one stack; the mosaic preview is a review aid for coverage and a
+  starting point for processing, not a processed image.
+
+Open work for this: per-rig panel selection in the plan editor and in
+activation, per-panel progress in the plan list, and the mosaic preview
+built on the existing stack-preview jobs.
 
 ### Survey backgrounds for framing
 
