@@ -1346,6 +1346,10 @@ resumed at cursor 6 with zero new events; an independent fresh cursor replayed a
 six as server-acknowledged duplicates. The test credential was revoked and removed
 from the vault, and NINA closed normally. Local plugin evidence is
 `artifacts/nina-smoke-e60b4c8bf97d4fa6922cb47a360cb037/probe/8707ef9c7d6644599f3e1846693cb785/result.json`.
+That native run used the isolated pairing/ledger-isolation server build from
+before the #533/#534 rebase and final malformed-JSON error sanitization. Those
+final changes were validated separately by local HTTP/storage tests and clippy;
+the native run does not claim to exercise the later frontend or parsing changes.
 
 This run used fixture allocations, not a server-issued acquisition authorization.
 Production automatic/status delivery, preparation feed, manual/sequencer controls,
