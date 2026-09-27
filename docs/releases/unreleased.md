@@ -6,6 +6,14 @@
 
 ## Added
 
+- Rig planning now frames a project on the sky. Below the project editor, a
+  survey image (DSS2, SDSS, DESI Legacy, 2MASS, the Finkbeiner H-alpha map
+  and the Northern Sky Narrowband Survey layers, as in N.I.N.A.'s framing
+  assistant) shows the target with its catalog coordinates and rotation; drag
+  to pan, scroll to zoom, pick the rig whose field makes one panel, lay out a
+  mosaic with overlap, overlay other rigs' fields, and save the framing as a
+  draft on the project. Images are cached on the server for offline replanning.
+
 - Each planning-enabled database now has a rig profile under its project
   planning links: sensor and optics, site, sky quality, altitude and meridian
   limits, with a one-click fill from the newest frame's headers and a live

@@ -10,6 +10,9 @@ import DirectorProjectContext from '../director/DirectorProjectContext';
 vi.mock('../ProjectSchedulerDialog', () => ({
   ProjectPlanEditor: ({ dbId, projectId }: { dbId: string; projectId: number }) => <output>{`Source editor ${dbId}:${projectId}`}</output>,
 }));
+vi.mock('../director/FramingView', () => ({
+  default: ({ projectId, seed }: { projectId: string; seed: { name: string; center: { ra_degrees: number } } | null }) => <output>{`Framing ${projectId}:${seed ? `${seed.name}@${seed.center.ra_degrees}` : 'no seed'}`}</output>,
+}));
 const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: null });
 function mount(profile = 'profile', row = 7, linked = true) {
   server.use(
@@ -22,6 +25,7 @@ function mount(profile = 'profile', row = 7, linked = true) {
     }] : [], next_after: null })),
     http.get('/api/director/v1/projects', () => ok({ items: [{ id: 'project', name: 'Andromeda', revision: 1 }], next_after: null })),
     http.get('/api/director/v1/rigs', () => ok({ items: [{ id: 'rig', name: 'C925', revision: 1 }], next_after: null })),
+    http.get('/api/db/catalog/projects/7/scheduler', () => ok({ id: 7, name: 'Andromeda subs', exposure_templates: [], targets: [{ id: 1, name: 'M31', active: true, ra_hours: 0.5, dec_degrees: 41.27, epoch_code: 2, rotation: 35, roi: 100, exposure_plans: [] }] })),
   );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/director?db=catalog&project=7&dbfilter=catalog&directorSource=catalog&directorView=projects']}>
@@ -35,6 +39,7 @@ describe('existing project planning context', () => {
     expect(await screen.findByRole('heading', { name: 'Andromeda' })).toBeInTheDocument();
     expect(screen.getByText('Database-backed', { exact: true })).toBeInTheDocument();
     expect(screen.getByText('Source editor catalog:7')).toBeInTheDocument();
+    expect(await screen.findByText('Framing project:M31@7.5')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Overview' })).toHaveAttribute('href', '/?db=catalog&project=7&dbfilter=catalog');
     expect(screen.queryByRole('button', { name: 'New project' })).not.toBeInTheDocument();
   });
@@ -48,6 +53,8 @@ describe('existing project planning context', () => {
     mount('profile', 7, false);
     await screen.findByRole('heading', { name: 'Andromeda subs' });
     expect(screen.getByText('Source editor catalog:7')).toBeInTheDocument();
+    expect(screen.getByText(/Link this project under Project planning links/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Framing project/)).not.toBeInTheDocument();
   });
   it('never falls back to a different source row', async () => {
     mount('profile', 8);

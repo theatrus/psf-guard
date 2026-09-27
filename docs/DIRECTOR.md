@@ -246,6 +246,22 @@ server folds both back to the sensor before offering them. Typed models:
 [optics](../crates/director-core/src/optics.rs) and
 [profile](../crates/director-meta/src/profile.rs).
 
+## Framing view
+
+Open a project's plan dialog from the Overview and choose **Rig planning**.
+Below the project editor, **Framing** shows the sky around the project's first
+target on a survey image, with the target's catalog coordinates and rotation
+already filled in. Drag to pan and scroll to zoom; the view stays on the last
+image while the next one loads. Choose the **panel rig** whose field defines
+one panel, or type a panel size, then set rows, columns and overlap; every
+panel is drawn and named. **Compare rigs** overlays other rigs' fields on the
+center. **Move target to view center** and **Center view on target** keep the
+two apart on purpose: panning the sky never moves the plan. **Save framing**
+keeps a draft on the global project; a draft saved elsewhere since you loaded
+is refused until you reload. Rigs without optics in their profile are listed
+but cannot be chosen. Survey imagery is attributed below the view and is a
+composition aid, not pointing evidence.
+
 ## Framing drafts
 
 A global project can carry one framing draft: the target center, the camera

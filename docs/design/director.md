@@ -84,7 +84,7 @@ untested integration requirements unchecked.
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
 | Meta storage | Separate schema-7 store on by default beside the registry, mutable rig profiles with optics/site/limits and plugin equipment reports, per-project framing drafts, UUIDs, reviewed one-to-one database/rig binding, confirmed source project links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. Unambiguous prototype links retain rig IDs. | Conflict-resolution UI for ambiguous prototype rigs, permissions/enrollment, active revisions, allocation authority and progress projections. |
 | Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492): shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493): schema-3 intent persistence with validated immutable setup references. | Objective editor, depth/FOV/sampling compatibility and authoritative allocation remain open. |
-| Project framing wizard | Project intent retains target coordinates and rig-specific framing/recipes as building blocks only. | Survey-map backgrounds, target/reference selection, interactive FOV and rotation, mosaics, versioned optical geometry, multi-rig/site preview, draft editing and reviewed activation are not implemented. |
+| Project framing wizard | Framing view under Rig planning: survey backgrounds from N.I.N.A.'s HiPS list, interactive center, angle and zoom, mosaic rows/columns/overlap, per-rig footprints from rig profiles, draft editing with compare-and-set. | Reference images with WCS, layer comparison, offline region cache, rotation feasibility per rig, objectives and contributions, per-night preview, reviewed activation. |
 | Catalog discovery | [#498](https://github.com/theatrus/psf-guard/pull/498) merged: operator-scoped read-only project/profile evidence from registered TS-compatible catalogs, with bounded results and invalid/duplicate identity reports. | Discovery does not infer rig ownership or read image history. |
 | Catalog adoption | [#502](https://github.com/theatrus/psf-guard/pull/502) merged explicit durable lineage; [#503](https://github.com/theatrus/psf-guard/pull/503) merged operator preview/apply, exact identity matching, stale-review refusal and interrupted-write recovery. [#506](https://github.com/theatrus/psf-guard/pull/506) merged the reviewed mapping UI and read-only inventory, with real-server browser tests. | Independent forks, historical-image attribution, contribution accounting and acquisition authorization remain separate work. |
 | Operator API and UI | Opt-in identity/snapshot APIs; rigs listed from registered databases, reviewed planning links in database settings, and Overview's existing target/exposure editor reused in scoped Director planning. Desktop/mobile real-server tests cover two databases contributing to one project and return navigation. | Full framing/objective wizard, downstream project generation, rig pairing, acquisition control and live dashboard. UI tests are not equipment tests. |
@@ -308,10 +308,14 @@ input and must not call an endpoint before its row above says it exists.
 3. Survey cutout service with cache and provider allowlist: `GET /sky/surveys`
    and `GET /sky/cutout`, N.I.N.A.'s HiPS list, tangent-plane JPEGs from
    HiPS2FITS fetched off the request path. Done.
-4. Framing view. Backend done: `director-core::framing` (gnomonic plane,
-   mosaic layout, view-relative corners), framing drafts in meta schema 7 with
-   compare-and-set, `POST /framing/preview`, `GET/PUT /projects/{id}/framing`
-   and `GET /rigs/profiles`. The browser view over the survey cutout is next.
+4. Framing view. Done: `director-core::framing` (gnomonic plane, mosaic
+   layout, view-relative corners), framing drafts in meta schema 7 with
+   compare-and-set, `POST /framing/preview`, `GET/PUT /projects/{id}/framing`,
+   `GET /rigs/profiles`, and the browser view under Rig planning: survey
+   image with pan and zoom, panel rig or typed panel size, mosaic grid and
+   overlap, rig overlays, and draft save. Still open from the wizard section:
+   reference images with WCS, blink or opacity comparison of layers, a
+   prepared offline cache for a region, and per-rig rotation feasibility.
 5. Objectives and contributions: hours or frames per bandpass, template
    binding, defaults, per-night feasibility preview from the shared core.
 6. Activation: preview/apply into each local rig database with side tables,

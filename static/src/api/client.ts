@@ -2,7 +2,7 @@ import axios from 'axios';
 import type { AxiosInstance } from 'axios';
 import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
-import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorDiscovery, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport } from './directorTypes';
+import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorRigProfileSummary, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey } from './directorTypes';
 import type {
   ProjectProcessingSettings,
   StackColorInputSources,
@@ -284,6 +284,57 @@ export const apiClient = {
     const api = await getApi();
     const { data } = await api.put<ApiResponse<DirectorRigProfileView>>(`/director/v1/catalogs/${encodeURIComponent(slug)}/rig/profile`, edit);
     if (!data.data) throw new Error(data.error || 'Failed to save rig profile');
+    return data.data;
+  },
+
+  getDirectorSurveys: async (): Promise<DirectorSurvey[]> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorSurvey[]>>('/director/v1/sky/surveys');
+    if (!data.data) throw new Error(data.error || 'Failed to load surveys');
+    return data.data;
+  },
+
+  /** One survey image. 202 and 502 are answers, not errors: the view polls or explains. */
+  fetchDirectorCutout: async (request: DirectorCutoutRequest): Promise<DirectorCutoutResult> => {
+    const api = await getApi();
+    // Bytes, not a Blob: the browser and the test runner both hand those back
+    // without touching a stream, and the JSON answers decode from the same buffer.
+    const response = await api.get<ArrayBuffer>('/director/v1/sky/cutout', {
+      params: request, responseType: 'arraybuffer', validateStatus: status => status === 200 || status === 202 || status === 502,
+    });
+    const type = String(response.headers['content-type'] ?? 'image/jpeg');
+    if (response.status === 200) return { state: 'ready', blob: new Blob([response.data], { type }) };
+    if (response.status === 202) return { state: 'generating' };
+    let error = 'Survey image is unavailable';
+    try { error = (JSON.parse(new TextDecoder().decode(response.data)) as ApiResponse<unknown>).error || error; } catch { /* keep the default */ }
+    return { state: 'failed', error };
+  },
+
+  previewDirectorFraming: async (request: DirectorFramingRequest): Promise<DirectorFramingPreview> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<DirectorFramingPreview>>('/director/v1/framing/preview', request);
+    if (!data.data) throw new Error(data.error || 'Failed to compute framing');
+    return data.data;
+  },
+
+  getDirectorFramingDraft: async (projectId: string): Promise<DirectorFramingDraftView> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorFramingDraftView>>(`/director/v1/projects/${encodeURIComponent(projectId)}/framing`);
+    if (!data.data) throw new Error(data.error || 'Failed to load framing');
+    return data.data;
+  },
+
+  saveDirectorFramingDraft: async (draft: DirectorFramingDraft): Promise<DirectorFramingDraftView> => {
+    const api = await getApi();
+    const { data } = await api.put<ApiResponse<DirectorFramingDraftView>>(`/director/v1/projects/${encodeURIComponent(draft.project_id)}/framing`, draft);
+    if (!data.data) throw new Error(data.error || 'Failed to save framing');
+    return data.data;
+  },
+
+  getDirectorRigProfiles: async (): Promise<DirectorRigProfileSummary[]> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorRigProfileSummary[]>>('/director/v1/rigs/profiles');
+    if (!data.data) throw new Error(data.error || 'Failed to load rig profiles');
     return data.data;
   },
 

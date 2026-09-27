@@ -6,6 +6,8 @@ import { openSettings } from '../../utils/settingsIntent';
 import { ProjectPlanEditor } from '../ProjectSchedulerDialog';
 import { useAccess } from '../../auth/access';
 import { apiClient } from '../../api/client';
+import FramingView from './FramingView';
+import type { FramingSeed } from './framingModel';
 
 export default function DirectorProjectContext({ instanceId, slug, projectId }: {
   instanceId: string; slug: string; projectId: number;
@@ -14,12 +16,20 @@ export default function DirectorProjectContext({ instanceId, slug, projectId }: 
   const { canWrite } = useAccess();
   const info = useQuery({ queryKey: ['serverInfo'], queryFn: apiClient.getServerInfo, staleTime: 300_000 });
   const query = useQuery({ queryKey: ['directorCatalog', instanceId, slug], queryFn: () => loadCatalog(slug), retry: false });
+  const scheduler = useQuery({ queryKey: ['db', slug, 'project-scheduler', projectId], queryFn: () => apiClient.getProjectScheduler(slug, projectId), retry: false });
   const data = query.data;
   const source = data?.discovery.evidence.projects.find(project => project.source_row_id === projectId);
   const mapping = source?.issues.length === 0 && data?.mappings.find(item =>
     item.source_project_guid === source.source_project_guid && item.source_profile_id === source.source_profile_id);
   const project = mapping && data?.projects.find(item => item.id === mapping.project_id);
   const rig = data?.rig;
+  // The first catalog target seeds a framing draft: TS keeps RA in hours.
+  const seedTarget = scheduler.data?.targets[0];
+  const seed: FramingSeed | null = seedTarget ? {
+    name: seedTarget.name,
+    center: { ra_degrees: ((seedTarget.ra_hours * 15) % 360 + 360) % 360, dec_degrees: seedTarget.dec_degrees },
+    position_angle_degrees: Number.isFinite(seedTarget.rotation) ? ((seedTarget.rotation % 360) + 360) % 360 : 0,
+  } : null;
   const back = new URLSearchParams(params);
   back.delete('directorView'); back.delete('directorSource'); back.delete('directorCatalog');
   return <section aria-label="Project acquisition planning">
@@ -38,6 +48,9 @@ export default function DirectorProjectContext({ instanceId, slug, projectId }: 
         <dt>Planning link</dt><dd>{mapping ? 'Linked' : source.issues.length ? 'Source identity needs attention' : 'Not linked'}</dd>
       </dl>
       <ProjectPlanEditor dbId={slug} projectId={projectId} canEdit={canWrite && !!info.data?.allow_database_management} />
+      <h3 className="director-section-heading">Framing</h3>
+      {project ? (scheduler.isPending ? <p role="status">Loading targets...</p> : <FramingView projectId={project.id} seed={seed} />)
+        : <p className="director-muted">Link this project under Project planning links to frame it across rigs.</p>}
     </> : <p role="alert">Project no longer exists in this database.</p>)}
   </section>;
 }
