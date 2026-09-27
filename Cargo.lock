@@ -4274,7 +4274,7 @@ dependencies = [
 
 [[package]]
 name = "psf-guard-director-runtime"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "psf-guard-director-core",
  "psf-guard-director-ledger",
