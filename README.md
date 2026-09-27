@@ -310,7 +310,9 @@ docker run -d -p 3000:3000 \
   ghcr.io/theatrus/psf-guard:latest
 ```
 
-Then open http://localhost:3000/. The database mount must be **writable**
+`latest` is the newest release; a version tag such as `0.10.2` pins one, and
+`edge` follows the main branch with unreleased work. Then open
+http://localhost:3000/. The database mount must be **writable**
 because grading updates it. Mount a TOML config at
 `/data/config.toml` and append `server --config /data/config.toml
 /data/database.sqlite /images` to tune the port, cache, or preview
