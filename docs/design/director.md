@@ -84,10 +84,11 @@ untested integration requirements unchecked.
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
 | Meta storage | Separate schema-9 store on by default beside the registry, mutable rig profiles with optics/site/limits and plugin equipment reports, per-project framing and plan drafts, activation records, UUIDs, reviewed one-to-one database/rig binding, confirmed source project links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. Unambiguous prototype links retain rig IDs. | Conflict-resolution UI for ambiguous prototype rigs, permissions/enrollment, active revisions, allocation authority and progress projections. |
 | Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492): shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493): schema-3 intent persistence with validated immutable setup references. Plan drafts with an objective editor, per-rig template binding and core exposure defaults. | Depth/FOV/sampling compatibility, per-night feasibility and authoritative allocation remain open. |
-| Project framing wizard | Framing view under Rig planning: survey backgrounds from N.I.N.A.'s HiPS list, interactive center, angle and zoom, mosaic rows/columns/overlap, per-rig footprints from rig profiles, draft editing with compare-and-set. | Reference images with WCS, layer comparison, offline region cache, rotation feasibility per rig, objectives and contributions, per-night preview, reviewed activation. |
+| Project framing wizard | Framing view under Rig planning: survey backgrounds from N.I.N.A.'s HiPS list, interactive center, angle and zoom, mosaic rows/columns/overlap, per-rig footprints from rig profiles, draft editing with compare-and-set. Objectives/contributions and preview/apply activation into rig databases landed in #526-527. | Reference images with WCS, layer comparison, offline region cache, rotation feasibility per rig and per-night preview. Database activation does not establish equipment authorization. |
 | Catalog discovery | [#498](https://github.com/theatrus/psf-guard/pull/498) merged: operator-scoped read-only project/profile evidence from registered TS-compatible catalogs, with bounded results and invalid/duplicate identity reports. | Discovery does not infer rig ownership or read image history. |
 | Catalog adoption | [#502](https://github.com/theatrus/psf-guard/pull/502) merged explicit durable lineage; [#503](https://github.com/theatrus/psf-guard/pull/503) merged operator preview/apply, exact identity matching, stale-review refusal and interrupted-write recovery. [#506](https://github.com/theatrus/psf-guard/pull/506) merged the reviewed mapping UI and read-only inventory, with real-server browser tests. | Independent forks, historical-image attribution, contribution accounting and acquisition authorization remain separate work. |
-| Operator API and UI | Opt-in identity/snapshot APIs; rigs listed from registered databases, reviewed planning links in database settings, and Overview's existing target/exposure editor reused in scoped Director planning. Desktop/mobile real-server tests cover two databases contributing to one project and return navigation. | Full framing/objective wizard, downstream project generation, rig pairing, acquisition control and live dashboard. UI tests are not equipment tests. |
+| Operator API and UI | Management-gated identity/snapshot APIs; rigs listed from registered databases, reviewed planning links and rig profiles in database settings, and Overview's existing target/exposure editor reused in scoped Director planning. Survey framing, objectives and downstream project preview/apply are implemented. | Rig pairing, acquisition control and live dashboard. UI tests are not equipment tests. |
+| Program delivery | #528 adds `GET /rigs/{rig}/program`, compiling activated rig rows and reported configuration into core Program plus identity links and rig context. | Immutable issued allocations, explicit filter mapping, progress-preserving refresh and plugin HTTP intake. The current compiler response must not yet arm acquisition; see the program-intake audit below. |
 | Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
 | Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. | Central telemetry ingestion/dashboard, scoped pairing, remote acknowledgements, offline authorization lifecycle, manual/sequence batch reconcile and reconnect activation are not implemented. |
 | End-to-end lifecycle | Core, process, native simulator and isolated management HTTP/UI tests exist separately. | No PSF Guard allocation -> real NINA simulator acquisition -> central telemetry/grade -> batch reconciliation/replan test. TS/Sync/Chatstronomy coexistence gates remain open. |
@@ -1125,7 +1126,7 @@ treat TS tables as the planner's internal schema.
 | Boundary | Required information and behavior | Current state |
 | --- | --- | --- |
 | Commissioning | Coordinator instance UUID, durable catalog UUID, bound rig UUID, local N.I.N.A. profile binding, permitted projects and scoped credentials. The database slug is a locator, not identity. | Database/rig binding exists; Director pairing/enrollment does not. Sync credentials are not Director authority. |
-| Assignment check-in | Versioned immutable program, assignment ID/revision/validity, project/contribution/source-project identities, configuration/site/rig revisions, effective policy provenance, and offline authorization/budgets. Validate engine and contract compatibility before activation. | Program/geometry/ledger models exist locally; central assignment delivery and activation do not. |
+| Assignment check-in | Versioned immutable program, assignment ID/revision/validity, project/contribution/source-project identities, configuration/site/rig revisions, effective policy provenance, and offline authorization/budgets. Validate engine and contract compatibility before activation. | The server now compiles a program from database activation; immutable issuance, refresh/reconciliation and plugin intake remain missing. |
 | Native execution | Rust selects and issues work. N.I.N.A. runs native items in target context with inherited triggers/conditions and the TS-compatible instruction slots. Each newly issued command/reservation has one native invocation. | Internal adapters and simulator loop exist; production session loop, complete options UI and hook lifecycle remain unfinished. |
 | Local status | Session/ledger, database/rig/project/target/goal IDs, assignment revision, operation and monotonic elapsed time, wait reason, local safety, connectivity, last successful check-in and queue depth. | Runtime Start/Stop status exists; acquisition session status contract/stream remains to be implemented. |
 | Central reporting | Coalesced live status is separate from durable capture/preparation receipts. Network errors update connectivity only; they do not fail an otherwise authorized local exposure or erase evidence. | No Director telemetry ingestion endpoint yet. |
@@ -1182,6 +1183,71 @@ familiar public container/UI and live/batch status. Each increment must state
 its missing gates. The full gate remains a real N.I.N.A. simulator sequence
 against an isolated PSF Guard instance, including an outage, restart, slow hook,
 unsafe transition and idempotent batch reconnect.
+
+### Program-intake audit after #528
+
+Reviewed against PSF Guard `5258e4b` and Director plugin `5715e16` on
+2026-09-27. The planning and database-activation path is now present. The
+remaining gap is not a missing URL: its response must become a stable,
+accounted-for allocation before it can feed the durable native executor.
+Keep the public acquisition gate closed while these contracts are incomplete.
+
+- **Immutable issuance and expiry.** `src/server/director/program.rs` hashes
+  content without time, then rebuilds assignment validity and goal windows
+  from each pull's clock. Unconditional pulls can change the program under the
+  same assignment ID and ETag; conditional pulls can keep returning `304`
+  after its cached validity expires. The ledger correctly rejects changed
+  allocation/program bytes. Persist the exact issued snapshot, including its
+  original validity. Expiry needs an explicit successor-allocation decision,
+  never a new span under the same identity or an unconditional-pull workaround.
+- **Refresh must retain progress.** The compiler currently sets `pending` to
+  zero and derives a fresh attempt budget from accepted counts. Saved/ungraded
+  captures and outstanding attempts are not accounted for. A changed progress
+  baseline changes the assignment identity, but there is no ledger replacement
+  or acknowledged handoff yet. Never open another ledger to bypass a mismatch.
+  Check-in must reconcile stable capture IDs and outstanding allocations before
+  installing a successor; until then, do not replace active work automatically.
+- **Activated content, not drafts.** Program compilation reads the current
+  plan draft for objective priority and link metadata, not an immutable snapshot
+  matching the activation's plan revision. Editing an unactivated draft can
+  therefore change pulled scheduling behavior. Freeze that metadata at activation
+  and keep draft edits inert until reviewed Apply.
+- **Filter identity and recipe fidelity.** The native exporter sends opaque
+  filter IDs and slots; labels remain local. The server currently guesses a
+  bandpass from those IDs, which cannot resolve the real probe's `filter-0`
+  against a `Red` template. Define an explicit mapping from template GUID and
+  bandpass to the reported stable filter ID, with display names as evidence,
+  and refuse ambiguous matches. Unsupported requested gain, offset, binning or
+  readout must require review, not silent clamping or first-mode substitution.
+- **Catalog eligibility and ancestry.** The pull currently checks only the
+  exposure plan's enabled flag, not its target's `active` flag or project's
+  `state`. Preserve those operator controls when compiling candidates. Verify
+  the exposure plan still belongs to the activated target and source project;
+  independently finding each GUID does not prove the live parent links agree.
+- **Commissioning and reporting.** Equipment reporting and program pull use
+  the operator authentication surface today. A tuple check is not rig enrollment.
+  Production pairing, scoped credentials, check-in acknowledgements and live
+  status remain missing. Do not expose an operator token in plugin settings or
+  silently reuse Sync credentials. Disconnection must preserve local evidence
+  and must not erase or expand already authorized work.
+
+Plugin work can proceed on typed, bounded intake and validation without arming
+equipment. Bind the coordinator/catalog/rig tuple and local NINA profile,
+validate schema/engine compatibility and identity links, then persist a complete
+validated snapshot atomically. Handle `304` only with that exact unexpired
+snapshot; never treat it as renewed validity. An unknown or malformed response,
+configuration mismatch or unreadable cache must fail closed with useful status.
+Keep this separate from the immutable-program selection policy in Rust.
+
+Delivery order from this audit: fix immutable issuance and activated inputs;
+settle explicit equipment/template mapping; connect read-only plugin intake;
+add acknowledged checkpoint/replacement accounting; then connect the guarded
+production session and familiar TS-compatible container/UI. The seven slot
+helpers are already tested, but do not provide session cadence or automatic
+operation ownership by themselves. Before enabling acquisition, test a real
+server program with the NINA simulators, then repeat through expiry, lost
+network, restart, saved-but-ungraded captures and batch reconnect. Existing
+separate server and simulator tests do not cover this combined gate.
 
 ## Quality, calibration, and processing loop
 
