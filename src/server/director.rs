@@ -22,6 +22,7 @@ mod catalog_discovery;
 mod catalog_rig;
 mod framing;
 mod plan;
+mod program;
 mod rig_profile;
 mod sky_image;
 
@@ -299,6 +300,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         )
         .route("/rigs/profiles", get(framing::rig_profiles))
         .route("/catalogs/{slug}/templates", get(plan::templates))
+        .route("/rigs/{rig}/program", get(program::pull))
         .route("/projects/{id}/activation", get(activation::last))
         .route(
             "/projects/{id}/activation/preview",

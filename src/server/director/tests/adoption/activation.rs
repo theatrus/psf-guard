@@ -10,15 +10,15 @@ use psf_guard_director_meta::{
 
 /// A real Target Scheduler schema with one profile's H-alpha template, bound
 /// to a rig, plus a global project with a two-panel framing and an H-alpha plan.
-struct Activated {
-    f: Fixture,
-    rig: Uuid,
-    project: Uuid,
-    objective: Uuid,
-    db: Connection,
+pub(super) struct Activated {
+    pub(super) f: Fixture,
+    pub(super) rig: Uuid,
+    pub(super) project: Uuid,
+    pub(super) objective: Uuid,
+    pub(super) db: Connection,
 }
 
-async fn activated() -> Activated {
+pub(super) async fn activated() -> Activated {
     let f = Fixture::new();
     let path = f._dir.path().join("rig.sqlite");
     let db = crate::ts_schema::create_fresh_db(&path).unwrap();

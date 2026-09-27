@@ -331,6 +331,33 @@ arrives.
 | POST | `/projects/{id}/activation/preview` | Empty body. Computes and rolls back; returns the per-rig report and `preview_digest`. `422` until the project has a framing with a panel size and a plan with a ticked rig. |
 | POST | `/projects/{id}/activation/apply` | `{ preview_digest }`. Commits each rig database in turn, records the activation, links new projects; `409` when the digest no longer matches. |
 
+## Program pull
+
+The Director plugin fetches its work from the coordinator the way Sync does:
+over HTTP, on its own schedule, and it keeps running on the last program it
+holds when the network is away.
+
+| Method | Route | Body or query |
+| --- | --- | --- |
+| GET | `/rigs/{rig}/program?coordinator_instance_id=&catalog_id=` | The rig's current program. Send `If-None-Match` with the last `ETag` to get `304` when nothing changed. `403` when the coordinator, catalog and rig do not match this server's binding; `422` until the rig has reported its equipment or an activated plan gives it work; `404` when the catalog is not registered here. |
+
+The envelope carries the shared core's `Program` (schema 1): an `Assignment`
+valid for 36 hours from the pull with one goal per activated exposure plan,
+`requested` from the plan's `desired`, `accepted` from the rig database as it
+stands, `attempts_remaining` at one and a half times the frames still owed,
+and every goal eligible for the whole span so the plugin's own geometry adds
+altitude, horizon and meridian windows from its constraints. `targets` come
+from the panel rows, in ICRS milliarcseconds, with a position angle only when
+the rig reported a rotator. `recipes` bind each contribution's template to a
+filter the plugin reported, by exact name or by bandpass, with gain, offset,
+binning and readout mode checked against the reported controls. `links` join
+each goal to its global project, objective, contribution, panel, Target
+Scheduler project GUID, target GUID and exposure plan GUID. `rig` repeats the
+profile's site, horizon, limits and rotation so the plugin can build
+constraints, and `omitted` names any plan row the program could not express
+and why. The server binds the program through the core before answering; a
+program that does not bind is a `422` with the reason, never a partial pull.
+
 ## Framing drafts
 
 A global project can carry one framing draft: the target center, the camera

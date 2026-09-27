@@ -290,7 +290,7 @@ mismatched tuple even when the slug exists.
 
 | Endpoint | Owner | Purpose |
 | --- | --- | --- |
-| `GET /rigs/{rig}/program` | backend, next PRs | The current immutable program for the rig: core `Assignment` and `Program`, plus a `links` list joining each goal to its project, intent revision, objective, contribution, panel, source project GUID, target GUID and exposure plan ID, and the setup and site snapshot IDs it was built from. Supports `If-None-Match`; `304` when unchanged, `404` when nothing is active. |
+| `GET /rigs/{rig}/program` | backend, merged | The current program for the rig, built from its activated plans and its reported equipment: core `Assignment` (36 h validity, one goal per activated exposure plan with live `accepted`) and `Program`, `links` joining each goal to its project, objective, contribution, panel, source project GUID, target GUID and exposure plan GUID, `rig` context (site, horizon, limits, rotation) for the plugin's constraints, and `omitted` reasons. `If-None-Match` gives `304`; `422` until equipment is reported or a plan is activated. |
 | `PUT /rigs/{rig}/equipment` | backend, merged | The plugin reports its core `Configuration`, optics, site, horizon and limits into the rig profile with `source: plugin`. The tuple must match the server's `catalog_rig` binding (`403` otherwise); an identical report is a no-op. Activation will later freeze setup revisions from the profile and mark active plans stale when it changes. |
 | `POST /rigs/{rig}/checkin` | both, after program | Bounded pages of journaled preparation and capture receipts with exact cursors; the reply acknowledges by cursor and reports whether a newer program revision exists. |
 | `POST /rigs/{rig}/status` | both, after check-in | Coalesced live status. Loss of it changes connectivity only. |
@@ -327,8 +327,8 @@ input and must not call an endpoint before its row above says it exists.
 6. Activation. Done for local rigs: `POST /projects/{id}/activation/preview`
    and `/apply` write the TS project, per-panel targets and per-objective
    exposure plans with the side tables above, record the activation in meta
-   schema 9, and link new projects. Open: `GET /rigs/{rig}/program` (needs
-   the plugin's configuration report to build a core `Program`) and the
+   schema 9, and link new projects. `GET /rigs/{rig}/program` serves the
+   core program from those rows and the plugin's equipment report. Open: the
    planning push to remote rigs through Sync.
 7. Check-in and live status, with the plugin.
 

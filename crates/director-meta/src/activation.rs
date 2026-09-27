@@ -86,6 +86,28 @@ impl MetaStore {
         read_activation(&self.connection, project)
     }
 
+    /// Every recorded activation that gave this rig work, oldest project first.
+    /// A scan of the activation table; coordinators hold tens of projects, not
+    /// millions, and the program endpoint calls this once per pull.
+    pub fn activations_for_rig(&self, rig: Uuid) -> Result<Vec<Activation>, Error> {
+        valid_id(rig)?;
+        let mut statement = self
+            .connection
+            .prepare("SELECT project_id FROM activation ORDER BY project_id")?;
+        let projects = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut found = Vec::new();
+        for project in projects {
+            if let Some(activation) = read_activation(&self.connection, parse_id(&project)?)?
+                && activation.rigs.iter().any(|entry| entry.rig_id == rig)
+            {
+                found.push(activation);
+            }
+        }
+        Ok(found)
+    }
+
     /// Record an applied activation. The stored revision advances by one
     /// regardless of the caller's value.
     pub fn record_activation(&mut self, activation: &Activation) -> Result<Activation, Error> {
