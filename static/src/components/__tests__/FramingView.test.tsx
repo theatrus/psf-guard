@@ -33,6 +33,7 @@ function fixture(existing: DirectorFramingDraft | null = null) {
       { id: 'finkbeiner_halpha', name: 'Finkbeiner H-alpha composite', hips: 'CDS/P/Finkbeiner', kind: 'narrowband', bandpass: 'H-alpha', attribution: 'Finkbeiner via CDS' },
     ]))),
     http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB]))),
+    http.post('/api/director/v1/projects/project/feasibility', () => HttpResponse.json(ok({ center: seed.center, target_name: 'M31', nights: 7, rigs: [], warnings: ['No rig has a site yet, so nothing can be timed.'] }))),
     http.get('/api/director/v1/sky/cutout', ({ request }) => {
       cutouts.push(new URL(request.url).search);
       if (cutouts.length === 1) return HttpResponse.json(ok({ state: 'generating' }), { status: 202 });

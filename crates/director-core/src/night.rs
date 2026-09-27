@@ -63,6 +63,36 @@ pub struct Night {
     pub targets: Vec<TargetNight>,
 }
 
+/// One instant of one night, for drawing.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TargetSample {
+    pub altitude_degrees: f64,
+    pub azimuth_degrees: f64,
+    /// The custom horizon at this azimuth, when the rig has one.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub horizon_altitude_degrees: Option<f64>,
+    /// Inside the rig's limits and above its horizon at this instant.
+    pub allowed: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Sample {
+    pub t_ms: u64,
+    pub sun_altitude_degrees: f64,
+    pub moon_altitude_degrees: f64,
+    pub targets: Vec<TargetSample>,
+}
+
+/// A night's summary with the curves behind it, noon to noon.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct NightCurve {
+    pub night: Night,
+    pub samples: Vec<Sample>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NightError {
     InvalidRequest,
@@ -110,7 +140,7 @@ fn local_date(noon_ms: u64, longitude_degrees: f64) -> String {
         .unwrap_or_default()
 }
 
-pub fn night_preview(request: &NightRequest) -> Result<Vec<Night>, NightError> {
+fn validate(request: &NightRequest) -> Result<(), NightError> {
     request.site.validate()?;
     request.horizon.validate()?;
     request.limits.validate()?;
@@ -124,69 +154,124 @@ pub fn night_preview(request: &NightRequest) -> Result<Vec<Night>, NightError> {
     {
         return Err(NightError::InvalidRequest);
     }
+    Ok(())
+}
+
+pub fn night_preview(request: &NightRequest) -> Result<Vec<Night>, NightError> {
+    validate(request)?;
+    (0..request.nights)
+        .map(|index| one_night(request, index, false).map(|curve| curve.night))
+        .collect()
+}
+
+/// The curves for one of the requested nights, by index from the first.
+pub fn night_curve(request: &NightRequest, index: u32) -> Result<NightCurve, NightError> {
+    validate(request)?;
+    if index >= request.nights {
+        return Err(NightError::InvalidRequest);
+    }
+    one_night(request, index, true)
+}
+
+fn one_night(
+    request: &NightRequest,
+    index: u32,
+    keep_samples: bool,
+) -> Result<NightCurve, NightError> {
     let first_noon = first_local_noon(request.start_ms, request.site.longitude_degrees);
     let end = first_noon + u64::from(request.nights) * DAY_MS;
     let orientation = planning_orientation(first_noon, end);
     let step_hours = request.step_ms as f64 / 3_600_000.0;
-    let mut nights = Vec::with_capacity(request.nights as usize);
-    for index in 0..request.nights {
-        let noon = first_noon + u64::from(index) * DAY_MS;
-        let next_noon = noon + DAY_MS;
-        let mut dusk = None;
-        let mut dawn = None;
-        let mut dark_hours = 0.0;
-        let mut moon_hours = 0.0;
-        let mut per_target: Vec<TargetNight> = request
-            .targets
-            .iter()
-            .map(|target| TargetNight {
-                id: target.id.clone(),
-                hours_up: 0.0,
-                hours_up_moon_down: 0.0,
-                max_altitude_degrees: -90.0,
-                min_moon_separation_degrees: 180.0,
-            })
-            .collect();
-        let mut t = noon;
-        while t < next_noon {
-            let sun = sun_position(t).ok_or(VisibilityError::AstronomyUnavailable)?;
-            let sun_altitude = observe(sun, request.site, orientation, t)?.altitude_degrees;
-            let dark = sun_altitude < request.dark_below_degrees;
-            if dark {
-                if dusk.is_none() {
-                    dusk = Some(t);
-                }
-                dawn = Some(t + request.step_ms);
-                dark_hours += step_hours;
-                let moon = moon_position(t);
-                let moon_up = observe(moon, request.site, orientation, t)?.altitude_degrees > 0.0;
-                if moon_up {
-                    moon_hours += step_hours;
-                }
-                for (target, entry) in request.targets.iter().zip(per_target.iter_mut()) {
-                    let observed = observe(target.position, request.site, orientation, t)?;
+    let noon = first_noon + u64::from(index) * DAY_MS;
+    let next_noon = noon + DAY_MS;
+    let mut dusk = None;
+    let mut dawn = None;
+    let mut dark_hours = 0.0;
+    let mut moon_hours = 0.0;
+    let mut samples = Vec::new();
+    let mut per_target: Vec<TargetNight> = request
+        .targets
+        .iter()
+        .map(|target| TargetNight {
+            id: target.id.clone(),
+            hours_up: 0.0,
+            hours_up_moon_down: 0.0,
+            max_altitude_degrees: -90.0,
+            min_moon_separation_degrees: 180.0,
+        })
+        .collect();
+    let mut t = noon;
+    while t < next_noon {
+        let sun = sun_position(t).ok_or(VisibilityError::AstronomyUnavailable)?;
+        let sun_altitude = observe(sun, request.site, orientation, t)?.altitude_degrees;
+        let dark = sun_altitude < request.dark_below_degrees;
+        // Outside darkness only the drawing needs positions.
+        let wanted = dark || keep_samples;
+        let moon = moon_position(t);
+        let moon_altitude = if wanted {
+            observe(moon, request.site, orientation, t)?.altitude_degrees
+        } else {
+            0.0
+        };
+        let moon_up = moon_altitude > 0.0;
+        if dark {
+            if dusk.is_none() {
+                dusk = Some(t);
+            }
+            dawn = Some(t + request.step_ms);
+            dark_hours += step_hours;
+            if moon_up {
+                moon_hours += step_hours;
+            }
+        }
+        let mut target_samples = Vec::new();
+        if wanted {
+            for (target, entry) in request.targets.iter().zip(per_target.iter_mut()) {
+                let observed = observe(target.position, request.site, orientation, t)?;
+                let allowed = altitude_allowed(
+                    &request.horizon,
+                    request.limits,
+                    observed.azimuth_degrees,
+                    observed.altitude_degrees,
+                )?;
+                if dark {
                     entry.max_altitude_degrees =
                         entry.max_altitude_degrees.max(observed.altitude_degrees);
                     entry.min_moon_separation_degrees = entry
                         .min_moon_separation_degrees
                         .min(separation_degrees(target.position, moon));
-                    if altitude_allowed(
-                        &request.horizon,
-                        request.limits,
-                        observed.azimuth_degrees,
-                        observed.altitude_degrees,
-                    )? {
+                    if allowed {
                         entry.hours_up += step_hours;
                         if !moon_up {
                             entry.hours_up_moon_down += step_hours;
                         }
                     }
                 }
+                if keep_samples {
+                    target_samples.push(TargetSample {
+                        altitude_degrees: observed.altitude_degrees,
+                        azimuth_degrees: observed.azimuth_degrees,
+                        horizon_altitude_degrees: request
+                            .horizon
+                            .altitude(observed.azimuth_degrees)?,
+                        allowed,
+                    });
+                }
             }
-            t += request.step_ms;
         }
-        let midnight = noon + DAY_MS / 2;
-        nights.push(Night {
+        if keep_samples {
+            samples.push(Sample {
+                t_ms: t,
+                sun_altitude_degrees: sun_altitude,
+                moon_altitude_degrees: moon_altitude,
+                targets: target_samples,
+            });
+        }
+        t += request.step_ms;
+    }
+    let midnight = noon + DAY_MS / 2;
+    Ok(NightCurve {
+        night: Night {
             date: local_date(noon, request.site.longitude_degrees),
             noon_ms: noon,
             dusk_ms: dusk,
@@ -195,9 +280,9 @@ pub fn night_preview(request: &NightRequest) -> Result<Vec<Night>, NightError> {
             moon_illumination: moon_illumination(midnight).unwrap_or(0.0),
             moon_hours_up_in_dark: moon_hours,
             targets: per_target,
-        });
-    }
-    Ok(nights)
+        },
+        samples,
+    })
 }
 
 #[cfg(test)]
@@ -281,6 +366,42 @@ mod tests {
         assert_eq!(first.targets[1].hours_up, 0.0);
         assert!(first.targets[1].max_altitude_degrees < 0.0);
         assert_eq!(nights[1].date, "2026-09-26");
+    }
+
+    #[test]
+    fn a_curve_samples_the_whole_night_and_carries_the_horizon_at_each_azimuth() {
+        let mut walled = request();
+        walled.horizon = Horizon::Custom {
+            points: vec![
+                crate::visibility::HorizonPoint {
+                    azimuth_degrees: 0.0,
+                    altitude_degrees: 10.0,
+                },
+                crate::visibility::HorizonPoint {
+                    azimuth_degrees: 180.0,
+                    altitude_degrees: 40.0,
+                },
+                crate::visibility::HorizonPoint {
+                    azimuth_degrees: 360.0,
+                    altitude_degrees: 10.0,
+                },
+            ],
+        };
+        let curve = night_curve(&walled, 0).unwrap();
+        assert_eq!(curve.samples.len(), 288);
+        assert_eq!(curve.night.date, "2026-09-25");
+        assert!(curve.samples.iter().any(|s| s.sun_altitude_degrees > 0.0));
+        assert!(curve.samples.iter().any(|s| s.sun_altitude_degrees < -18.0));
+        let heart: Vec<&TargetSample> = curve.samples.iter().map(|s| &s.targets[0]).collect();
+        assert!(heart.iter().all(|t| t.horizon_altitude_degrees.is_some()));
+        assert!(heart.iter().any(|t| t.allowed) && heart.iter().any(|t| !t.allowed));
+        // The summary of the curve is the summary of the preview.
+        let preview = night_preview(&walled).unwrap();
+        assert_eq!(curve.night, preview[0]);
+        assert_eq!(
+            night_curve(&walled, 2).unwrap_err(),
+            NightError::InvalidRequest
+        );
     }
 
     #[test]

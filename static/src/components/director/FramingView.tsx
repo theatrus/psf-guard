@@ -9,6 +9,7 @@ import {
   MAX_VIEW_FOV, MIN_VIEW_FOV, STAGE_HEIGHT, STAGE_WIDTH, clampFov, draftFromState, formatDec, formatDegrees, formatRaHours,
   moveBy, panelForRig, pixelScale, polygonPoints, previewRequest, stateFromDraft, stateFromSeed, toStage, type FramingSeed, type FramingState,
 } from './framingModel';
+import VisibilityPanel from './VisibilityPanel';
 import './FramingView.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Framing request failed';
@@ -206,6 +207,7 @@ export default function FramingView({ projectId, seed }: FramingViewProps) {
         <div className="framing-stage-scale">{formatDegrees(state.viewFov)} across · N up, E left</div>
       </div>
       <p className="director-muted framing-attribution">{survey ? `${survey.name}: ${survey.bandpass}. ${survey.attribution}.` : 'Choose a survey.'} Imagery is a composition aid, not pointing evidence.</p>
+      <VisibilityPanel projectId={projectId} center={state.center} />
     </div>
     <form className="framing-controls" onSubmit={event => { event.preventDefault(); if (canWrite && !save.isPending && !stale) { setNotice(''); setProblem(''); save.mutate(); } }}>
       <fieldset>
