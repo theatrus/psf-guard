@@ -1,3 +1,5 @@
+import type { SkyPreview } from './types';
+
 export interface DirectorStatus {
   protocol_version: number;
   enabled: boolean;
@@ -273,6 +275,28 @@ export interface DirectorActivation {
   coordinator_instance_id: string;
   applied_at_ms: number;
   rigs: Array<{ rig_id: string; catalog_id: string; project_guid: string; profile_id: string; targets: Array<{ panel_id: string; target_guid: string }>; plans: Array<{ contribution_id: string; objective_id: string; target_guid: string; exposureplan_guid: string; required_frames: number }> }>;
+}
+
+/** One activated panel's latest stack, placed by its plate solve when it has one. */
+export interface DirectorMosaicPanel {
+  panel_id: string;
+  rig: DirectorIdentity;
+  catalog_slug: string | null;
+  catalog_name: string;
+  target_guid: string;
+  target_id: number | null;
+  target_name: string | null;
+  progress: { desired: number; acquired: number; accepted: number } | null;
+  status: 'ready' | 'unsolved' | 'no_stack' | 'missing_target' | 'missing_catalog';
+  preview: SkyPreview | null;
+}
+export interface DirectorMosaicPreview {
+  project: DirectorIdentity;
+  activation_revision: number | null;
+  framing_revision: number | null;
+  framing_stale: boolean;
+  panels: DirectorMosaicPanel[];
+  warnings: string[];
 }
 
 export interface DirectorPlanLink {

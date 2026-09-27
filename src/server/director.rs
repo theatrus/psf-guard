@@ -23,6 +23,7 @@ mod catalog_rig;
 mod checkin;
 mod feasibility;
 mod framing;
+mod mosaic;
 pub(super) mod pairing;
 mod plan;
 mod plans;
@@ -325,6 +326,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             axum::routing::post(feasibility::evaluate),
         )
         .route("/projects/{id}/activation", get(activation::last))
+        .route("/projects/{id}/mosaic", get(mosaic::get))
         .route(
             "/projects/{id}/activation/preview",
             axum::routing::post(activation::preview),

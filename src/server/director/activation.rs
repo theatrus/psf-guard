@@ -663,7 +663,7 @@ impl CommitPending for rusqlite::Transaction<'_> {
     }
 }
 
-fn read_identity(path: &str) -> Option<CatalogIdentity> {
+pub(super) fn read_identity(path: &str) -> Option<CatalogIdentity> {
     let connection = super::super::database_context::open_scheduler_connection_with_flags(
         FilePath::new(path),
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
