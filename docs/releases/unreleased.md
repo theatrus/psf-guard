@@ -152,6 +152,14 @@
 
 ## Fixed
 
+- The catalog identity and Director tables PSF Guard adds to a rig database
+  are plain SQL again, so N.I.N.A., Target Scheduler and older SQLite tools
+  open the file as before; tables a preview build made `STRICT` are rebuilt
+  in place with their rows the next time PSF Guard writes them.
+- A database file copied by hand carries the original's identity. The
+  Director now names the copy at the top of the plan list and leaves it out
+  of planning instead of treating both files as one rig.
+
 - A browser-user file (`auth.json`) written by a newer PSF Guard loads
   instead of stopping the server; fields this version does not know are
   kept and written back unchanged.

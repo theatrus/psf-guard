@@ -2,6 +2,7 @@
 //! The outer API middleware owns browser authentication and write-role checks.
 
 use super::{api::ApiResponse, state::AppState};
+use crate::server::database_context::DatabaseContext;
 use axum::{
     extract::{DefaultBodyLimit, Path, Query, State},
     http::{header::RETRY_AFTER, StatusCode},
@@ -9,8 +10,11 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use psf_guard_director_meta::{Error as StoreError, IdentityPage, MetaStore, NamedIdentity, Uuid};
+use psf_guard_director_meta::{
+    CatalogIdentity, Error as StoreError, IdentityPage, MetaStore, NamedIdentity, Uuid,
+};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::{
     path::Path as FilePath,
     sync::{Arc, Mutex},
@@ -244,6 +248,77 @@ impl IntoResponse for Error {
         }
         response
     }
+}
+
+/// Every registered database that carries a catalog identity, one per
+/// identity. Two files with the same identity are one catalog copied by hand;
+/// the first by slug stands for it and the rest are named, never merged, so a
+/// copy can not receive a plan meant for the original.
+pub(super) struct IdentifiedCatalogs {
+    by_id: BTreeMap<Uuid, (CatalogIdentity, Arc<DatabaseContext>)>,
+    /// One line per file left out, for the operator.
+    pub(super) duplicates: Vec<String>,
+    /// Slugs of the files left out.
+    pub(super) duplicate_slugs: Vec<String>,
+}
+
+impl IdentifiedCatalogs {
+    pub(super) fn get(&self, id: Uuid) -> Option<&Arc<DatabaseContext>> {
+        self.by_id.get(&id).map(|(_, context)| context)
+    }
+
+    pub(super) fn iter(&self) -> impl Iterator<Item = (&CatalogIdentity, &Arc<DatabaseContext>)> {
+        self.by_id
+            .values()
+            .map(|(identity, context)| (identity, context))
+    }
+
+    pub(super) fn is_duplicate(&self, slug: &str) -> bool {
+        self.duplicate_slugs.iter().any(|s| s == slug)
+    }
+}
+
+/// Read each file's identity once, in slug order so the choice is stable.
+pub(super) fn identified_catalogs(catalogs: &[Arc<DatabaseContext>]) -> IdentifiedCatalogs {
+    let mut sorted: Vec<&Arc<DatabaseContext>> = catalogs.iter().collect();
+    sorted.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut found = IdentifiedCatalogs {
+        by_id: BTreeMap::new(),
+        duplicates: Vec::new(),
+        duplicate_slugs: Vec::new(),
+    };
+    for context in sorted {
+        let Some(identity) = read_identity(&context.database_path) else {
+            continue;
+        };
+        match found.by_id.get(&identity.id) {
+            Some((_, first)) => {
+                found.duplicates.push(format!(
+                    "{}: carries the same catalog identity as {}, so it is a copy of that file; it is left out of planning. Remove it from the registry, or drop its psf_guard_catalog_identity table to make it a database of its own.",
+                    context.name, first.name
+                ));
+                found.duplicate_slugs.push(context.id.clone());
+            }
+            None => {
+                found.by_id.insert(identity.id, (identity, context.clone()));
+            }
+        }
+    }
+    found
+}
+
+/// The identity a database file carries, or `None` for an unadopted or
+/// unreadable file. Never writes.
+pub(super) fn read_identity(path: &str) -> Option<CatalogIdentity> {
+    let connection = super::database_context::open_scheduler_connection_with_flags(
+        FilePath::new(path),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    connection
+        .busy_timeout(std::time::Duration::from_secs(1))
+        .ok()?;
+    crate::catalog_identity::read(&connection).ok().flatten()
 }
 
 pub(super) fn routes() -> Router<Arc<AppState>> {

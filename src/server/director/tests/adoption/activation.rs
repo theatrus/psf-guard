@@ -430,3 +430,76 @@ async fn activation_names_what_is_missing_and_skips_rigs_it_cannot_write() {
     assert_eq!(remote["changes"], json!([]));
     let _ = a.rig;
 }
+
+#[tokio::test]
+async fn side_tables_an_earlier_build_made_strict_are_rebuilt_with_their_rows() {
+    let a = activated().await;
+    // The shape the previous build wrote, with a row that must survive.
+    a.db.execute_batch(
+        "CREATE TABLE main.psf_guard_director_plan(
+            exposureplan_guid TEXT PRIMARY KEY NOT NULL,
+            target_guid TEXT NOT NULL,
+            contribution_id TEXT NOT NULL,
+            objective_id TEXT NOT NULL,
+            bandpass_id TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            required_frames INTEGER NOT NULL,
+            plan_revision INTEGER NOT NULL,
+            UNIQUE(target_guid, contribution_id)) STRICT;
+         INSERT INTO psf_guard_director_plan VALUES('old-plan','old-target','c','o','h_alpha','faint_detail',10,1);",
+    )
+    .unwrap();
+    let strict = |name: &str| -> bool {
+        let sql: String =
+            a.db.query_row("SELECT sql FROM sqlite_schema WHERE name=?1", [name], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        sql.to_ascii_uppercase().contains("STRICT")
+    };
+    assert!(strict("psf_guard_director_plan"));
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    // A preview rolls its repair back with everything else.
+    assert!(strict("psf_guard_director_plan"));
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/apply", a.project),
+        json!({"preview_digest": preview["data"]["preview_digest"]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    for name in [
+        "psf_guard_director_project",
+        "psf_guard_director_target",
+        "psf_guard_director_plan",
+    ] {
+        assert!(!strict(name), "{name} is still STRICT");
+    }
+    let old: i64 = a.db.query_row("SELECT required_frames FROM psf_guard_director_plan WHERE exposureplan_guid='old-plan'", [], |r| r.get(0)).unwrap();
+    assert_eq!(old, 10);
+    assert_eq!(
+        a.db.query_row("SELECT count(*) FROM psf_guard_director_plan", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        3
+    );
+    // The type checks that replaced STRICT still hold.
+    assert!(a
+        .db
+        .execute(
+            "INSERT INTO psf_guard_director_target VALUES('t','p','r9c9','x')",
+            []
+        )
+        .is_err());
+    let _ = (a.rig, a.objective);
+}

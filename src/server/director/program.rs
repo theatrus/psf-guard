@@ -233,9 +233,8 @@ pub(super) fn assemble(
         return Err(Error::Internal.into());
     }
     let activations = store.activations_for_rig(rig)?;
-    let context = catalogs
-        .iter()
-        .find(|catalog| read_identity(&catalog.database_path).is_some_and(|id| id.id == catalog_id))
+    let context = identified_catalogs(catalogs)
+        .get(catalog_id)
         .cloned()
         .ok_or(Error::Missing)?;
     let connection = super::super::database_context::open_scheduler_connection_with_flags(
@@ -387,16 +386,6 @@ pub(super) fn current_revision(
         Err(PullError::NotReady(_)) => Ok(None),
         Err(other) => Err(other),
     }
-}
-
-fn read_identity(path: &str) -> Option<CatalogIdentity> {
-    let connection = super::super::database_context::open_scheduler_connection_with_flags(
-        FilePath::new(path),
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .ok()?;
-    connection.busy_timeout(Duration::from_secs(1)).ok()?;
-    crate::catalog_identity::read(&connection).ok().flatten()
 }
 
 struct Built {

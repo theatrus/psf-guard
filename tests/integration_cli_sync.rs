@@ -182,6 +182,110 @@ fn the_local_sync_commands_move_captures_grades_and_planning() {
     );
 }
 
+/// A planner's database carries PSF Guard's own tables (its catalog identity
+/// and the Director side tables) beside the Target Scheduler rows. Sync moves
+/// the scheduler rows and nothing else, in both directions: the telescope
+/// never learns the planner's identity, and a pull never disturbs it. A copy
+/// of the file, not a sync, is the only way the identity travels.
+#[test]
+fn director_tables_stay_home_while_planning_and_grades_sync() {
+    let directory = TempDir::new().unwrap();
+    let telescope = directory.path().join("telescope.sqlite");
+    let planner = directory.path().join("planner.sqlite");
+    scheduler_db(&telescope, TELESCOPE_ROWS);
+    scheduler_db(&planner, REVIEW_ROWS);
+    let identity = {
+        let mut connection = Connection::open(&planner).unwrap();
+        let mut tx = connection.transaction().unwrap();
+        let identity = psf_guard::catalog_identity::adopt(
+            &mut tx,
+            psf_guard_director_meta::CatalogIdentity {
+                id: uuid::Uuid::new_v4(),
+                origin_instance_id: uuid::Uuid::new_v4(),
+            },
+        )
+        .unwrap();
+        tx.execute_batch(
+            "CREATE TABLE main.psf_guard_director_project(project_guid TEXT PRIMARY KEY NOT NULL, global_project_id TEXT NOT NULL,
+                coordinator_instance_id TEXT NOT NULL, activation_revision INTEGER NOT NULL, applied_at_ms INTEGER NOT NULL);
+             INSERT INTO psf_guard_director_project VALUES('project-guid','gp','ci',1,1);
+             CREATE TABLE main.psf_guard_director_target(target_guid TEXT PRIMARY KEY NOT NULL, project_guid TEXT NOT NULL,
+                panel_id TEXT NOT NULL, framing_revision INTEGER NOT NULL, UNIQUE(project_guid, panel_id));
+             INSERT INTO psf_guard_director_target VALUES('target-guid','project-guid','r1c1',1);",
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        identity
+    };
+    let (telescope_arg, planner_arg) = (path_arg(&telescope), path_arg(&planner));
+    let tables = |path: &Path| -> Vec<String> {
+        let connection = Connection::open(path).unwrap();
+        let mut statement = connection
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'psf_guard_%' ORDER BY name")
+            .unwrap();
+        statement
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<String>, _>>()
+            .unwrap()
+    };
+    assert!(tables(&telescope).is_empty(), "{:?}", tables(&telescope));
+
+    // Planner -> telescope: the planned frames arrive, PSF Guard's tables do not.
+    run_ok(&[
+        "sync",
+        "planning",
+        "--from",
+        &planner_arg,
+        "--to",
+        &telescope_arg,
+    ]);
+    assert_eq!(
+        query::<i64>(
+            &telescope,
+            "SELECT desired FROM exposureplan WHERE guid='plan-guid'"
+        ),
+        60
+    );
+    assert!(tables(&telescope).is_empty(), "{:?}", tables(&telescope));
+
+    // Telescope -> planner: captures arrive, the planner's identity and side tables stay as they were.
+    run_ok(&[
+        "sync",
+        "pull",
+        "--from",
+        &telescope_arg,
+        "--to",
+        &planner_arg,
+    ]);
+    assert_eq!(count(&planner, "acquiredimage"), 2);
+    let connection = Connection::open(&planner).unwrap();
+    assert_eq!(
+        psf_guard::catalog_identity::read(&connection).unwrap(),
+        Some(identity)
+    );
+    assert_eq!(count(&planner, "psf_guard_director_target"), 1);
+    assert_eq!(
+        tables(&planner),
+        vec![
+            "psf_guard_catalog_identity",
+            "psf_guard_director_project",
+            "psf_guard_director_target"
+        ]
+    );
+
+    // Grades back to the telescope: same rule.
+    run_ok(&[
+        "sync",
+        "grades",
+        "--from",
+        &planner_arg,
+        "--to",
+        &telescope_arg,
+    ]);
+    assert!(tables(&telescope).is_empty(), "{:?}", tables(&telescope));
+}
+
 #[test]
 fn syncing_a_database_with_itself_is_refused() {
     let directory = TempDir::new().unwrap();

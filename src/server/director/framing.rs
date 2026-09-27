@@ -9,8 +9,7 @@ use psf_guard_director_core::{
     optics::FieldOfView,
 };
 use psf_guard_director_meta::{framing::FramingDraft, profile::RigProfile};
-use rusqlite::OpenFlags;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) async fn preview(
     State(state): State<Arc<AppState>>,
@@ -121,10 +120,7 @@ pub(super) async fn rig_profiles(
         let _permits = (metadata_permit, catalog_permit);
         let store = service.store.lock().map_err(|_| Error::Internal)?;
         let mut summaries = Vec::new();
-        for catalog in catalogs {
-            let Some(identity) = read_identity(&catalog.database_path) else {
-                continue;
-            };
+        for (identity, catalog) in identified_catalogs(&catalogs).iter() {
             let Some(binding) = store.catalog_rig(identity.id)? else {
                 continue;
             };
@@ -154,14 +150,4 @@ pub(super) async fn rig_profiles(
         Error::Internal
     })??;
     Ok(Json(ApiResponse::success(summaries)))
-}
-
-fn read_identity(path: &str) -> Option<psf_guard_director_meta::CatalogIdentity> {
-    let connection = super::super::database_context::open_scheduler_connection_with_flags(
-        FilePath::new(path),
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .ok()?;
-    connection.busy_timeout(Duration::from_secs(1)).ok()?;
-    crate::catalog_identity::read(&connection).ok().flatten()
 }

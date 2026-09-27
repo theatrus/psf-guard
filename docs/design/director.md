@@ -128,6 +128,14 @@ disagree. Selecting a participating rig means selecting one of those existing
 database contexts. One database can hold many downstream projects; this does
 not mean one new database per target or per shared project.
 
+PSF Guard's own tables in a rig database (`psf_guard_catalog_identity` and
+the `psf_guard_director_*` side tables) are plain SQL with type CHECKs, never
+`STRICT`: the file is shared with N.I.N.A. and Target Scheduler, and a keyword
+their SQLite does not know would make the whole schema unreadable to them.
+Sync moves Target Scheduler tables only, so identity spreads by file copy
+alone; the Director treats two registered files with one identity as one
+catalog, names the copy and plans with the first by slug.
+
 Keep stable catalog lineage for moves, renames and synchronized copies. A copy
 of a database does not become a second telescope or earn extra project credit.
 A genuinely independent database/fork needs an explicit distinct identity. An
