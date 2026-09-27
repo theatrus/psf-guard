@@ -98,13 +98,16 @@ impl RigProfile {
 const MAX_TIME_MS: u64 = 4_102_444_800_000; // 2100-01-01
 
 fn valid_source(source: &Source) -> Result<(), Error> {
-    if let Source::FrameHeaders { file_name } = source {
-        if file_name.is_empty() || file_name.len() > 512 || file_name.chars().any(char::is_control)
+    match source {
+        Source::FrameHeaders { file_name }
+            if file_name.is_empty()
+                || file_name.len() > 512
+                || file_name.chars().any(char::is_control) =>
         {
-            return Err(Error::InvalidInput);
+            Err(Error::InvalidInput)
         }
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 fn valid_reported<T>(reported: &Reported<T>) -> Result<(), Error> {

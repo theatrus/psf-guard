@@ -297,30 +297,30 @@ fn header_defaults(catalog: &DatabaseContext, connection: &Connection) -> Defaul
         let source = Source::FrameHeaders {
             file_name: base.to_owned(),
         };
-        if defaults.optics.is_none() {
-            if let Some(optics) = optics_from(&parsed, &headers) {
-                defaults.field_of_view = optics.field_of_view().ok();
-                defaults.optics = Some(Reported {
-                    value: optics,
-                    source: source.clone(),
+        if defaults.optics.is_none()
+            && let Some(optics) = optics_from(&parsed, &headers)
+        {
+            defaults.field_of_view = optics.field_of_view().ok();
+            defaults.optics = Some(Reported {
+                value: optics,
+                source: source.clone(),
+                reported_at_ms: now,
+            });
+        }
+        if defaults.site.is_none()
+            && let Some(observer) = &parsed.observer
+        {
+            let site = Site {
+                latitude_degrees: observer.value.latitude_deg,
+                longitude_degrees: observer.value.longitude_deg,
+                elevation_meters: observer.value.altitude_m,
+            };
+            if site.validate().is_ok() {
+                defaults.site = Some(Reported {
+                    value: site,
+                    source,
                     reported_at_ms: now,
                 });
-            }
-        }
-        if defaults.site.is_none() {
-            if let Some(observer) = &parsed.observer {
-                let site = Site {
-                    latitude_degrees: observer.value.latitude_deg,
-                    longitude_degrees: observer.value.longitude_deg,
-                    elevation_meters: observer.value.altitude_m,
-                };
-                if site.validate().is_ok() {
-                    defaults.site = Some(Reported {
-                        value: site,
-                        source,
-                        reported_at_ms: now,
-                    });
-                }
             }
         }
         if defaults.optics.is_some() && defaults.site.is_some() {
