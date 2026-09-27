@@ -315,6 +315,29 @@ neither of them alters a plan, a rig database or the program. Grades still
 come from PSF Guard grading the images; a receipt is evidence that a frame
 was taken, not that it passed.
 
+## Visibility
+
+Under the framing view, **Visibility** times the target from each rig that has
+a site in its rig profile, the way N.I.N.A.'s framing assistant does it for
+one site. A verdict line says whether the target is visible tonight and for
+how long: dark hours (Sun below −12°), hours the target sits above the rig's
+minimum altitude and its custom horizon when it has one, the peak altitude,
+the Moon's phase, separation and hours up. Below it an altitude chart draws
+the night from an hour before dusk to an hour after dawn: the target's track,
+the horizon curve at the target's azimuth (or the flat minimum), the Moon's
+track dashed, and shaded bands for darkness and astronomical night. A table
+gives the same numbers for the coming week, and a rig in the plan gets an
+estimate of the nights it needs at this week's rate. Pick another rig from the
+list to compare sites.
+
+| Method | Route | Body or query |
+| --- | --- | --- |
+| POST | `/projects/{id}/feasibility` | Optional `nights` (1 to 14, default 7), `center` (defaults to the saved framing's center) and `start_ms`. For every rig with a site: `nights` summaries, tonight's `curve` (five-minute samples of Sun, Moon and target altitude with the horizon at each azimuth), `hours_needed` from the plan and `nights_to_complete`; rigs without a site are named in `warnings`. `422` until there is a center to time. |
+
+Times come from the shared core's planning-grade Sun and Moon positions and
+the same horizon and limit rules the rig's geometry applies; they are
+estimates for choosing targets and nights, not the rig's dispatch decision.
+
 ## Framing drafts
 
 A global project can carry one framing draft: the target center, the camera

@@ -280,3 +280,40 @@ export interface DirectorRigStatusView {
 }
 
 export interface DirectorResolvedName { query: string; name: string; ra_degrees: number; dec_degrees: number; source: string }
+
+export interface DirectorNightTarget { id: string; hours_up: number; hours_up_moon_down: number; max_altitude_degrees: number; min_moon_separation_degrees: number }
+export interface DirectorNight {
+  date: string;
+  noon_ms: number;
+  dusk_ms: number | null;
+  dawn_ms: number | null;
+  dark_hours: number;
+  moon_illumination: number;
+  moon_hours_up_in_dark: number;
+  targets: DirectorNightTarget[];
+}
+export interface DirectorNightSample {
+  t_ms: number;
+  sun_altitude_degrees: number;
+  moon_altitude_degrees: number;
+  targets: Array<{ altitude_degrees: number; azimuth_degrees: number; horizon_altitude_degrees: number | null; allowed: boolean }>;
+}
+export interface DirectorRigFeasibility {
+  rig: DirectorIdentity;
+  catalog_name: string;
+  site: DirectorSite;
+  custom_horizon: boolean;
+  limits: DirectorLimits;
+  nights: DirectorNight[];
+  curve: { night: DirectorNight; samples: DirectorNightSample[] };
+  hours_needed: number | null;
+  nights_to_complete: number | null;
+  in_plan: boolean;
+}
+export interface DirectorFeasibility {
+  center: DirectorSkyPosition;
+  target_name: string;
+  nights: number;
+  rigs: DirectorRigFeasibility[];
+  warnings: string[];
+}

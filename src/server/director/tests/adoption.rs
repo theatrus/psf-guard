@@ -4,6 +4,7 @@ use rusqlite::{Connection, TransactionBehavior};
 mod activation;
 mod checkin;
 mod database_rig;
+mod feasibility;
 mod framing;
 mod plan;
 mod plans;

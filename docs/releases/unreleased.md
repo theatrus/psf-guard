@@ -6,6 +6,11 @@
 
 ## Added
 
+- The framing view now says whether the target is visible tonight from each
+  rig and for how long, and draws the night's altitude chart with the rig's
+  custom horizon, the Moon and the darkness bands, with a week of nights and
+  an estimate of how many nights a rig needs for its share of the plan.
+
 - Director now takes every registered database in as a rig and every project
   in it as a plan on its own; projects that share a Target Scheduler GUID
   across databases are one plan with several rigs. The project planning
