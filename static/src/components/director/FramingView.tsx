@@ -4,10 +4,10 @@ import { isAxiosError } from 'axios';
 import { Check, Crosshair, LocateFixed, RefreshCw, Undo2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
-import type { DirectorFramingDraftView, DirectorFramingPreview, DirectorRigProfileSummary } from '../../api/directorTypes';
+import type { DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigProfileSummary } from '../../api/directorTypes';
 import {
   MAX_VIEW_FOV, MIN_VIEW_FOV, STAGE_HEIGHT, STAGE_WIDTH, angleFromStage, clampFov, draftFromState, formatDec, formatDegrees, formatRaHours, handleOffset,
-  insidePolygon, moveBy, panelForRig, pixelScale, polygonPoints, previewRequest, stateFromDraft, stateFromSeed, toStage, type FramingSeed, type FramingState,
+  insidePolygon, moveBy, panelForRig, pixelScale, polygonPoints, previewRequest, stackMatrix, stateFromDraft, stateFromSeed, toStage, type FramingSeed, type FramingState,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
 import './FramingView.css';
@@ -74,6 +74,19 @@ function rotationHandle(geometry: DirectorFramingPreview, state: FramingState) {
 
 /** Where to point when the project has no catalog target yet: a name the
  *  catalogs know, or coordinates typed in. */
+/** One line per activated panel: whose it is, how far along, and whether its stack can be placed. */
+function describeStack(panel: DirectorMosaicPanel): string {
+  const who = `${panel.panel_id}, ${panel.catalog_name || panel.rig.name}`;
+  const done = panel.progress ? `${panel.progress.accepted}/${panel.progress.desired} frames accepted` : 'no exposure plans';
+  switch (panel.status) {
+    case 'ready': return `${who}: ${done}; ${panel.preview?.kind === 'color' ? 'colour' : panel.preview?.filter ?? 'mono'} stack placed by its solve.`;
+    case 'unsolved': return `${who}: ${done}; the stack has no plate solve yet, so it cannot be placed.`;
+    case 'no_stack': return `${who}: ${done}; no stack yet.`;
+    case 'missing_target': return `${who}: its target row is gone from the database.`;
+    default: return `${who}: its database is no longer registered here.`;
+  }
+}
+
 function StartFraming({ canWrite, onStart }: { canWrite: boolean; onStart: (seed: FramingSeed) => void }) {
   const [name, setName] = useState('');
   const [ra, setRa] = useState('');
@@ -153,6 +166,14 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     enabled: !!debouncedRequest, retry: false, placeholderData: previous => previous, staleTime: 60_000,
   });
   const cutout = useCutout(state);
+  // Finished per-panel stacks, drawn where their plate solves put them: a
+  // review of coverage and seams over the plan, never a processed image.
+  const [showStacks, setShowStacks] = useState(true);
+  const mosaic = useQuery({ queryKey: ['directorMosaic', projectId], queryFn: () => apiClient.getDirectorMosaic(projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false, staleTime: 60_000 });
+  const placedStacks = useMemo(() => !showStacks || !state || !mosaic.data ? [] : mosaic.data.panels.flatMap(panel => {
+    const matrix = panel.preview ? stackMatrix(panel.preview, state.viewCenter, state.viewFov) : null;
+    return panel.preview && matrix ? [{ panel, preview: panel.preview, matrix }] : [];
+  }), [showStacks, state, mosaic.data]);
   // A view narrower than the footprint hides its edges and handle; widen it
   // once when the geometry first arrives, and on request.
   const fitToFootprint = useCallback((extent: { width_degrees: number; height_degrees: number }) => {
@@ -245,6 +266,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
         {cutout.image ? <img src={cutout.image.url} alt="" draggable={false} /> : <div className="framing-stage-empty" />}
         <svg viewBox={`0 0 ${STAGE_WIDTH} ${STAGE_HEIGHT}`} aria-hidden="true">
+          {placedStacks.map(({ panel, preview, matrix }) => <image key={`${panel.rig.id}-${panel.panel_id}`} className="framing-stack" data-testid="framing-stack" href={preview.url} x={0} y={0} width={preview.width} height={preview.height} preserveAspectRatio="none" transform={matrix} />)}
           {geometry?.overlays.map(overlay => overlay.view_corners && <polygon key={overlay.id} className="framing-overlay" points={polygonPoints(overlay.view_corners, state.viewFov)} />)}
           {geometry?.panels.map(panel => panel.view_corners && <g key={panel.id} className="framing-panel">
             <polygon points={polygonPoints(panel.view_corners, state.viewFov)} />
@@ -270,6 +292,12 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
         {geometry && geometry.panels.length > 1 && <span>{geometry.panels.length} panels, {formatDegrees(geometry.extent.width_degrees)} × {formatDegrees(geometry.extent.height_degrees)}</span>}
       </p>
       <p className="director-muted framing-hint">Drag the rectangle to move the target, its handle to turn it, and the sky to look around.</p>
+      {mosaic.data && mosaic.data.activation_revision !== null && <div className="framing-stacks" data-testid="framing-stacks">
+        <label className="framing-check"><input type="checkbox" checked={showStacks} onChange={event => setShowStacks(event.target.checked)} />Show finished stacks on the sky</label>
+        {mosaic.data.framing_stale && <p className="director-muted">The framing changed since the last activation. Stacks sit where their solves put them; the rectangles are the new plan.</p>}
+        {mosaic.data.warnings.map(warning => <p key={warning} className="director-muted">{warning}</p>)}
+        <ul>{mosaic.data.panels.map(panel => <li key={`${panel.rig.id}-${panel.panel_id}`}>{describeStack(panel)}</li>)}</ul>
+      </div>}
       <p className="director-muted framing-attribution">{survey ? `${survey.name}: ${survey.bandpass}. ${survey.attribution}.` : 'Choose a survey.'} Imagery is a composition aid, not pointing evidence.</p>
       <VisibilityPanel projectId={projectId} center={state.center} />
     </div>

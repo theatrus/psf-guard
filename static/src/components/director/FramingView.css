@@ -41,3 +41,7 @@
 .framing-hint { margin: 4px 0 0; font-size: 12px; }
 .framing-turns { display: flex; gap: 6px; margin-top: 4px; }
 .framing-turns button { padding: 4px 8px; min-height: 28px; }
+.framing-stack { opacity: 0.92; }
+.framing-stacks { margin: 8px 0 0; font-size: 13px; }
+.framing-stacks ul { margin: 4px 0 0; padding-left: 18px; color: var(--color-text-secondary); }
+.framing-stacks li { margin: 2px 0; }

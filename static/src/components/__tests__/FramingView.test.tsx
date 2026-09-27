@@ -6,14 +6,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import { AccessContext, useAccess } from '../../auth/access';
 import FramingView from '../director/FramingView';
-import type { DirectorFramingDraft, DirectorFramingRequest } from '../../api/directorTypes';
-import { moveBy, skyAtStage, toStage } from '../director/framingModel';
+import type { DirectorFramingDraft, DirectorFramingRequest, DirectorMosaicPreview } from '../../api/directorTypes';
+import type { SkyPreview } from '../../api/types';
+import { moveBy, offsetFrom, skyAtStage, stackMatrix, toStage } from '../director/framingModel';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
 const rigA = { rig: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'RedCat', revision: 1 }, catalog_slug: 'redcat', catalog_name: 'RedCat 61',
   profile: null, field_of_view: { width_degrees: 5.38, height_degrees: 3.6, pixel_scale_arcsec: 3.1, focal_ratio: 4.9 }, default_exposure_seconds: { broadband: 120, narrowband: 300 } };
 const rigB = { rig: { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: 'C925', revision: 1 }, catalog_slug: 'c925', catalog_name: 'C925 data', profile: null, field_of_view: null, default_exposure_seconds: { broadband: 120, narrowband: 300 } };
 const seed = { name: 'M31', center: { ra_degrees: 10.6847, dec_degrees: 41.269 }, position_angle_degrees: 35 };
+
+/** One panel with a solved H-alpha stack one arcsecond per pixel, north up and east left, centred on the seed; one without. */
+const solvedStack: SkyPreview = { url: '/api/db/redcat/stack-previews/job/0/preview?v=1', width: 200, height: 100, kind: 'mono', filter: 'Ha',
+  wcs: { crpix1: 99.5, crpix2: 49.5, crval1: seed.center.ra_degrees, crval2: seed.center.dec_degrees, cd11: -1 / 3600, cd12: 0, cd21: 0, cd22: 1 / 3600 } };
+const mosaic: DirectorMosaicPreview = { project: { id: 'project', name: 'Andromeda', revision: 1 }, activation_revision: 1, framing_revision: 1, framing_stale: false, warnings: [], panels: [
+  { panel_id: 'r1c1', rig: rigA.rig, catalog_slug: 'redcat', catalog_name: 'RedCat 61', target_guid: 'g1', target_id: 7, target_name: 'M31 r1c1', progress: { desired: 72, acquired: 40, accepted: 36 }, status: 'ready', preview: solvedStack },
+  { panel_id: 'r2c1', rig: rigA.rig, catalog_slug: 'redcat', catalog_name: 'RedCat 61', target_guid: 'g2', target_id: 8, target_name: 'M31 r2c1', progress: { desired: 72, acquired: 0, accepted: 0 }, status: 'no_stack', preview: null },
+] };
 
 function fixture(existing: DirectorFramingDraft | null = null) {
   const previews: DirectorFramingRequest[] = [];
@@ -33,6 +42,7 @@ function fixture(existing: DirectorFramingDraft | null = null) {
       { id: 'finkbeiner_halpha', name: 'Finkbeiner H-alpha composite', hips: 'CDS/P/Finkbeiner', kind: 'narrowband', bandpass: 'H-alpha', attribution: 'Finkbeiner via CDS' },
     ]))),
     http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB]))),
+    http.get('/api/director/v1/projects/project/mosaic', () => HttpResponse.json(ok(mosaic))),
     http.post('/api/director/v1/projects/project/feasibility', () => HttpResponse.json(ok({ center: seed.center, target_name: 'M31', nights: 7, rigs: [], warnings: ['No rig has a site yet, so nothing can be timed.'] }))),
     http.get('/api/director/v1/sky/cutout', ({ request }) => {
       cutouts.push(new URL(request.url).search);
@@ -211,6 +221,37 @@ describe('Framing view', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use these coordinates' }));
     expect(await screen.findByLabelText('Target name')).toHaveValue('Target');
     expect(screen.getByLabelText('Declination degrees')).toHaveValue(10);
+  });
+
+  it('draws each solved stack where its plate solve puts it and lists every panel', async () => {
+    fixture(); mount();
+    await waitFor(() => expect(screen.getByTestId('framing-stacks')).toBeInTheDocument());
+    expect(screen.getByText(/r1c1, RedCat 61: 36\/72 frames accepted; Ha stack placed by its solve\./)).toBeInTheDocument();
+    expect(screen.getByText(/r2c1, RedCat 61: 0\/72 frames accepted; no stack yet\./)).toBeInTheDocument();
+    const image = await screen.findByTestId('framing-stack');
+    expect(image).toHaveAttribute('href', solvedStack.url);
+    // The stack spans 200″ × 100″ around the view center, so its transform is a small rectangle there.
+    const matrix = image.getAttribute('transform')!;
+    expect(matrix).toMatch(/^matrix\(/);
+    const [a, b, c, d, e, f] = matrix.slice(7, -1).split(' ').map(Number);
+    expect(b).toBeCloseTo(0, 6); expect(c).toBeCloseTo(0, 6);
+    // East (increasing RA, lower pixel x) is stage-left, so pixel x runs right on the stage; north (higher pixel y) is up, so pixel y runs up.
+    expect(a).toBeGreaterThan(0); expect(d).toBeLessThan(0);
+    expect(e + a * 100).toBeCloseTo(512, 0); expect(f + d * 50).toBeCloseTo(384, 0);
+    fireEvent.click(screen.getByLabelText('Show finished stacks on the sky'));
+    expect(screen.queryByTestId('framing-stack')).not.toBeInTheDocument();
+  });
+
+  it('projects sky positions onto the view plane the way the server does', () => {
+    const view = { ra_degrees: 10, dec_degrees: 60 };
+    expect(offsetFrom(view, view)).toEqual([0, 0]);
+    const north = offsetFrom(view, { ra_degrees: 10, dec_degrees: 61 })!;
+    expect(north[0]).toBeCloseTo(0, 9); expect(north[1]).toBeCloseTo(1, 3);
+    // Two degrees of RA at 60° is one degree on the sky, toward the east.
+    const east = offsetFrom(view, { ra_degrees: 12, dec_degrees: 60 })!;
+    expect(east[0]).toBeCloseTo(1, 2); expect(Math.abs(east[1])).toBeLessThan(0.02);
+    expect(offsetFrom(view, { ra_degrees: 190, dec_degrees: -60 })).toBeNull();
+    expect(stackMatrix({ ...solvedStack, wcs: null }, view, 2)).toBeNull();
   });
 
   it('maps offsets to the stage with north up and east left', () => {

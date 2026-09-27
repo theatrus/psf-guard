@@ -1,4 +1,6 @@
 import type { DirectorFramingDraft, DirectorFramingRequest, DirectorMosaic, DirectorOffset, DirectorPanelSize, DirectorRigProfileSummary, DirectorSkyPosition } from '../../api/directorTypes';
+import type { SkyPreview } from '../../api/types';
+import { tanPixelToSky } from '../../utils/skyProjection';
 
 /** The image the view asks the server for, in pixels; CSS scales it down. */
 export const STAGE_WIDTH = 1024;
@@ -95,6 +97,43 @@ export function moveBy(position: DirectorSkyPosition, xiDegrees: number, etaDegr
   const cos = Math.cos((position.dec_degrees * Math.PI) / 180);
   const ra = cos < 1e-6 ? position.ra_degrees : position.ra_degrees + xiDegrees / cos;
   return { ra_degrees: ((ra % 360) + 360) % 360, dec_degrees: dec };
+}
+
+/** Where a sky position falls on the view's tangent plane, in degrees east
+ *  and north of the view center; the same gnomonic projection the server's
+ *  framing preview uses. `null` beyond the plane's horizon. */
+export function offsetFrom(view: DirectorSkyPosition, position: DirectorSkyPosition): DirectorOffset | null {
+  const rad = Math.PI / 180;
+  const dec0 = view.dec_degrees * rad;
+  const dec = position.dec_degrees * rad;
+  const dra = (position.ra_degrees - view.ra_degrees) * rad;
+  const cosC = Math.sin(dec0) * Math.sin(dec) + Math.cos(dec0) * Math.cos(dec) * Math.cos(dra);
+  if (!(cosC > 1e-9)) return null;
+  const xi = (Math.cos(dec) * Math.sin(dra)) / cosC;
+  const eta = (Math.cos(dec0) * Math.sin(dec) - Math.sin(dec0) * Math.cos(dec) * Math.cos(dra)) / cosC;
+  return [xi / rad, eta / rad];
+}
+
+/** SVG matrix that lays a solved stack preview on the stage: its pixel
+ *  corners go through its TAN solution to the sky, then onto the view plane.
+ *  Fitted to three corners, which is exact for the affine a preview needs at
+ *  framing scales. `null` when any corner leaves the plane. */
+export function stackMatrix(preview: SkyPreview, view: DirectorSkyPosition, viewFov: number): string | null {
+  if (!preview.wcs || preview.width <= 0 || preview.height <= 0) return null;
+  const { width, height, wcs } = preview;
+  const points = ([[0, 0], [width, 0], [0, height]] as const).map(([x, y]) => {
+    const [ra, dec] = tanPixelToSky(wcs, x, y);
+    const offset = offsetFrom(view, { ra_degrees: ra, dec_degrees: dec });
+    return offset ? toStage(offset, viewFov) : null;
+  });
+  if (points.some(point => point === null)) return null;
+  const [p0, p1, p2] = points as [number, number][];
+  const a = (p1[0] - p0[0]) / width;
+  const b = (p1[1] - p0[1]) / width;
+  const c = (p2[0] - p0[0]) / height;
+  const d = (p2[1] - p0[1]) / height;
+  if (![a, b, c, d, p0[0], p0[1]].every(Number.isFinite)) return null;
+  return `matrix(${a} ${b} ${c} ${d} ${p0[0]} ${p0[1]})`;
 }
 
 export function clampFov(fov: number): number {

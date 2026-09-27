@@ -133,6 +133,11 @@
   last activation when a site was offline. The activation report says per rig
   whether the peer took the rows.
 
+- The framing view shows the panels a plan has already shot: each activated
+  panel's latest stack is drawn on the sky where its plate solve puts it,
+  beside the planned rectangles, with a list of every panel's accepted
+  frames and why a stack is missing. A checkbox hides the stacks.
+
 ## Changed
 
 ## Fixed

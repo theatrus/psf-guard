@@ -293,6 +293,26 @@ framing** keeps a draft on the project; a draft saved elsewhere since you
 loaded is refused until you reload. Survey imagery is attributed below the
 view and is a composition aid, not pointing evidence.
 
+### Finished stacks on the sky
+
+Once a plan is activated, the framing view also draws the panels that have
+been shot. For each activated panel it finds the rig database's latest stack
+preview of that target, the same one the Sky page and the stack preview jobs
+publish, and lays it on the sky where its plate solve puts it: the stack's
+reference frame solve carried through the stack's orientation, so a colour
+or mono stack lands on its true position, not where the plan hoped. A list
+under the image gives every panel with its rig, frames accepted against
+desired, and why a stack is missing: none built yet, or built but not solved,
+in which case it is named but not drawn. **Show finished stacks on the sky**
+hides them. Panels from different rigs are drawn side by side and never
+blended; overlaps show seams and depth differences, which is the point.
+When the framing has changed since the activation the list says so: the
+stacks stay where their solves put them and the rectangles show the new plan.
+
+| Method | Route | Body or query |
+| --- | --- | --- |
+| GET | `/projects/{id}/mosaic` | Per activated panel: `panel_id`, `rig`, `catalog_slug`, `target_id`, `progress` (`desired`, `acquired`, `accepted` over its exposure plans), `status` (`ready`, `unsolved`, `no_stack`, `missing_target`, `missing_catalog`) and the stack `preview` with its `wcs` when solved. `activation_revision` is `null` before the first activation; `framing_stale` flags a framing saved since. |
+
 The imagery comes from the same HiPS surveys N.I.N.A.'s framing assistant
 downloads, including the narrowband layers, fetched by the PSF Guard server
 and cached under its cache directory. N.I.N.A.'s own framing cache lives on

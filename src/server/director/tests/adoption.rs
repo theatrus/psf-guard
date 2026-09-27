@@ -6,6 +6,7 @@ mod checkin;
 mod database_rig;
 mod feasibility;
 mod framing;
+mod mosaic;
 mod plan;
 mod plans;
 mod program;

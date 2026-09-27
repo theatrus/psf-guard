@@ -588,7 +588,7 @@ fn footprints_for(
 
 /// The stack preview to draw for each target: the newest finished colour
 /// stack when there is one, else the mono stack with the most integration.
-fn previews_for(cache_dir: &Path) -> HashMap<i32, SkyPreview> {
+pub(crate) fn previews_for(cache_dir: &Path) -> HashMap<i32, SkyPreview> {
     use super::stack_preview::{
         color::{LatestStackColorPreviews, StackColorKind, StackColorRole},
         LatestStackPreviews, StackGroupState, StackGroupStatus, StackJobState,

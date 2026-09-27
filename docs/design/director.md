@@ -540,9 +540,14 @@ follow from the rig split above and from how rigs differ in field size:
 
 Done: per-rig panel selection in the plan editor (a panel chooser per rig,
 every panel by default), activation writing only the targets and plans a rig
-owns and naming uncovered panels, and per-rig totals scaled by panels. Open:
-per-panel progress in the plan list and the mosaic preview built on the
-existing stack-preview jobs.
+owns and naming uncovered panels, and per-rig totals scaled by panels. The
+mosaic preview is done as a framing-view layer: `GET /projects/{id}/mosaic`
+finds each activated panel's latest stack preview in its rig's cache through
+the Sky page's placement code (reference-frame solve composed with the
+stack's orientation), and the browser lays solved stacks on the view plane by
+their TAN solutions, next to the plan's rectangles, with per-panel accepted
+and desired frame counts. Unsolved stacks are listed, not drawn. Open:
+per-panel progress in the plan list.
 
 ### Survey backgrounds for framing
 
