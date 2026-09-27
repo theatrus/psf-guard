@@ -2,7 +2,7 @@ import axios from 'axios';
 import type { AxiosInstance } from 'axios';
 import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
-import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey } from './directorTypes';
+import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorActivation, DirectorActivationReport, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey } from './directorTypes';
 import type {
   ProjectProcessingSettings,
   StackColorInputSources,
@@ -356,6 +356,27 @@ export const apiClient = {
     const api = await getApi();
     const { data } = await api.put<ApiResponse<DirectorPlanView>>(`/director/v1/projects/${encodeURIComponent(plan.project_id)}/plan`, plan);
     if (!data.data) throw new Error(data.error || 'Failed to save plan');
+    return data.data;
+  },
+
+  getDirectorActivation: async (projectId: string): Promise<DirectorActivation | null> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<{ activation: DirectorActivation | null }>>(`/director/v1/projects/${encodeURIComponent(projectId)}/activation`);
+    if (!data.data) throw new Error(data.error || 'Failed to load activation');
+    return data.data.activation;
+  },
+
+  previewDirectorActivation: async (projectId: string): Promise<DirectorActivationReport> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<DirectorActivationReport>>(`/director/v1/projects/${encodeURIComponent(projectId)}/activation/preview`, {});
+    if (!data.data) throw new Error(data.error || 'Failed to preview activation');
+    return data.data;
+  },
+
+  applyDirectorActivation: async (projectId: string, preview_digest: string): Promise<DirectorActivationReport> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<DirectorActivationReport>>(`/director/v1/projects/${encodeURIComponent(projectId)}/activation/apply`, { preview_digest });
+    if (!data.data) throw new Error(data.error || 'Failed to apply activation');
     return data.data;
   },
 

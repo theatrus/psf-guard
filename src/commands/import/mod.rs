@@ -895,7 +895,7 @@ fn ensure_profile_preference(conn: &Connection, profile_id: &str) -> Result<()> 
 
 /// Default rule-weight rows every TS project carries
 /// (`ScoringRule.GetDefaultRuleWeights()`, weights are `factor * 100`).
-const DEFAULT_RULE_WEIGHTS: &[(&str, f64)] = &[
+pub(crate) const DEFAULT_RULE_WEIGHTS: &[(&str, f64)] = &[
     ("Meridian Flip Penalty", 0.0),
     ("Meridian Window Priority", 75.0),
     ("Mosaic Completion", 0.0),

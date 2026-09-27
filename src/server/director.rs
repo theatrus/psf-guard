@@ -16,6 +16,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::sync::Semaphore;
+mod activation;
 mod catalog_adoption;
 mod catalog_discovery;
 mod catalog_rig;
@@ -298,6 +299,15 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         )
         .route("/rigs/profiles", get(framing::rig_profiles))
         .route("/catalogs/{slug}/templates", get(plan::templates))
+        .route("/projects/{id}/activation", get(activation::last))
+        .route(
+            "/projects/{id}/activation/preview",
+            axum::routing::post(activation::preview),
+        )
+        .route(
+            "/projects/{id}/activation/apply",
+            axum::routing::post(activation::apply),
+        )
         .route(
             "/projects/{id}/plan",
             get(plan::get_plan)
