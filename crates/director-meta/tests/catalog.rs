@@ -502,7 +502,7 @@ fn schema_three_migration_preserves_old_links_and_rolls_back_failures() {
     let instance = store.instance_id();
     drop(store);
     let conn = Connection::open(&path).unwrap();
-    conn.execute_batch("DROP TABLE director_client; DROP TABLE director_pairing; DROP TABLE rig_status; DROP TABLE rig_feed; DROP TABLE rig_event; DROP TABLE activation; DROP TABLE plan_draft; DROP TABLE framing_draft; DROP TABLE rig_profile; DROP TABLE catalog_rig; DROP TABLE project_profile; DROP TABLE catalog_profile; PRAGMA user_version=3; CREATE VIEW project_profile AS SELECT 1 AS id").unwrap();
+    conn.execute_batch("DROP TABLE rig_contact; DROP TABLE director_client; DROP TABLE director_pairing; DROP TABLE rig_status; DROP TABLE rig_feed; DROP TABLE rig_event; DROP TABLE activation; DROP TABLE plan_draft; DROP TABLE framing_draft; DROP TABLE rig_profile; DROP TABLE catalog_rig; DROP TABLE project_profile; DROP TABLE catalog_profile; PRAGMA user_version=3; CREATE VIEW project_profile AS SELECT 1 AS id").unwrap();
     assert!(MetaStore::open(&path).is_err());
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))

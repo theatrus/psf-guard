@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 11;
+const SCHEMA_VERSION: i32 = 12;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -39,6 +39,7 @@ impl MetaStore {
         create_activation_table(&tx)?;
         create_inbox_tables(&tx)?;
         super::client::create_tables(&tx)?;
+        create_contact_table(&tx)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         conn.close().map_err(|(_, error)| Error::Sqlite(error))?;
@@ -85,6 +86,9 @@ impl MetaStore {
                 create_inbox_tables(&tx)?;
             }
             super::client::create_tables(&tx)?;
+            if version < 12 {
+                create_contact_table(&tx)?;
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;
@@ -208,6 +212,10 @@ fn validate(conn: &Connection) -> Result<Uuid, Error> {
             conn.prepare(sql).map_err(|_| Error::CorruptDatabase)?;
         }
     }
+    if version >= 12 {
+        conn.prepare("SELECT rig_id,kind,at_ms,detail FROM rig_contact LIMIT 0")
+            .map_err(|_| Error::CorruptDatabase)?;
+    }
     let id: String = conn.query_row(
         "SELECT instance_id FROM meta WHERE singleton=1",
         [],
@@ -329,6 +337,21 @@ fn create_inbox_tables(conn: &Connection) -> Result<(), Error> {
             reported_at_ms INTEGER NOT NULL,
             payload TEXT NOT NULL,
             received_at_ms INTEGER NOT NULL);",
+    )?;
+    Ok(())
+}
+
+/// The last time a rig's plugin reached this coordinator, by kind of call.
+/// One row per rig and kind, overwritten on each call: connectivity input,
+/// not evidence, so nothing here is kept as history.
+fn create_contact_table(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch(
+        "CREATE TABLE rig_contact(
+            rig_id TEXT NOT NULL REFERENCES rig(id),
+            kind TEXT NOT NULL,
+            at_ms INTEGER NOT NULL,
+            detail TEXT,
+            PRIMARY KEY(rig_id, kind));",
     )?;
     Ok(())
 }

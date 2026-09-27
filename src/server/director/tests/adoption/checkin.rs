@@ -283,5 +283,36 @@ async fn check_in_stores_receipts_once_acknowledges_cursors_and_status_feeds_the
     assert_eq!(rows[0]["status"]["session_id"], "s1");
     assert_eq!(rows[0]["checkins"][0]["ledger_id"], "ledger-1");
     assert_eq!(rows[0]["checkins"][0]["highest_contiguous"], 6);
+    // Connectivity comes from server receipt times of every kind of call.
+    let row = &rows[0];
+    assert_eq!(row["catalog_slug"], "rig");
+    assert_eq!(row["connectivity"]["state"], "online", "{row}");
+    assert!(row["connectivity"]["age_ms"].as_u64().unwrap() < 60_000);
+    assert_eq!(row["status_stale"], false);
+    assert_eq!(row["contacts"]["status"]["detail"], "s1");
+    assert_eq!(row["contacts"]["check_in"]["detail"], "ledger-1");
+    // The pull earlier in this test was noted with the revision it served.
+    assert_eq!(row["contacts"]["program_pull"]["detail"], revision);
+    assert_eq!(row["assignments"][0]["project"]["name"], "Heart Nebula");
+    assert_eq!(row["assignments"][0]["activation_revision"], 1);
+    assert!(row["pending_receipts"].as_u64().unwrap() >= 1, "{row}");
+    // A rig nobody has heard from is listed as never contacted.
+    let (_, _) = call(&a.f.app, "GET", "/plans", Value::Null, None).await;
+    let (_, listed) = call(&a.f.app, "GET", "/rigs/status", Value::Null, None).await;
+    let rows = listed["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{listed}");
+    let heard = rows.iter().find(|r| r["catalog_slug"] == "rig").unwrap();
+    assert!(
+        heard["contacts"]["program_pull"]["at_ms"].is_u64(),
+        "{heard}"
+    );
+    let quiet = rows
+        .iter()
+        .find(|r| r["catalog_slug"] == "catalog")
+        .unwrap();
+    assert_eq!(quiet["connectivity"]["state"], "never");
+    assert_eq!(quiet["status"], Value::Null);
+    assert_eq!(quiet["assignments"], json!([]));
+    assert_eq!(quiet["pending_receipts"], 0);
     let _ = a.objective;
 }
