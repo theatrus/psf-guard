@@ -4,6 +4,7 @@
 
 use super::*;
 use psf_guard_director_core::{
+    bandpass::{default_exposure_seconds, BandpassKind, ExposureContext},
     framing::{FramingPreview, FramingRequest},
     optics::FieldOfView,
 };
@@ -74,6 +75,31 @@ pub(super) struct RigProfileSummary {
     catalog_name: String,
     profile: Option<RigProfile>,
     field_of_view: Option<FieldOfView>,
+    /// Starting exposure lengths for this rig's optics and sky, per band kind.
+    default_exposure_seconds: DefaultExposures,
+}
+
+#[derive(Serialize)]
+pub(super) struct DefaultExposures {
+    broadband: f64,
+    narrowband: f64,
+}
+
+fn default_exposures(
+    profile: Option<&RigProfile>,
+    field_of_view: Option<&FieldOfView>,
+) -> DefaultExposures {
+    let context = |kind| ExposureContext {
+        focal_ratio: field_of_view.and_then(|fov| fov.focal_ratio),
+        bortle_class: profile
+            .and_then(|p| p.sky_quality.as_ref())
+            .map(|sky| sky.value.bortle_class),
+        kind,
+    };
+    DefaultExposures {
+        broadband: default_exposure_seconds(context(BandpassKind::Broadband)),
+        narrowband: default_exposure_seconds(context(BandpassKind::Narrowband)),
+    }
 }
 
 /// Every registered database that is bound to a rig, with the rig's profile.
@@ -111,6 +137,10 @@ pub(super) async fn rig_profiles(
                 rig: binding.rig,
                 catalog_slug: catalog.id.clone(),
                 catalog_name: catalog.name.clone(),
+                default_exposure_seconds: default_exposures(
+                    profile.as_ref(),
+                    field_of_view.as_ref(),
+                ),
                 profile,
                 field_of_view,
             });

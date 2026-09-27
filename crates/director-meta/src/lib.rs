@@ -9,6 +9,7 @@ pub mod catalog;
 pub mod catalog_rig;
 pub mod configuration;
 pub mod framing;
+pub mod plan;
 pub mod profile;
 pub mod project;
 mod storage;

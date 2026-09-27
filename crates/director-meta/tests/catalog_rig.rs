@@ -192,7 +192,7 @@ fn schema_four_upgrade_creates_no_bindings_and_failure_rolls_back() {
     drop(store);
     let conn = Connection::open(&path).unwrap();
     conn.execute_batch(
-        "DROP TABLE framing_draft; DROP TABLE rig_profile; DROP TABLE catalog_rig; PRAGMA user_version=4; CREATE VIEW catalog_rig AS SELECT 1 AS id",
+        "DROP TABLE plan_draft; DROP TABLE framing_draft; DROP TABLE rig_profile; DROP TABLE catalog_rig; PRAGMA user_version=4; CREATE VIEW catalog_rig AS SELECT 1 AS id",
     )
     .unwrap();
     assert!(MetaStore::open(&path).is_err());
@@ -214,7 +214,7 @@ fn schema_four_upgrade_creates_no_bindings_and_failure_rolls_back() {
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        7
+        8
     );
     let backup = dir.path().join("backup.sqlite");
     store.backup(&backup).unwrap();

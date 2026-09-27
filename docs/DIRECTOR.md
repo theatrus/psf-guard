@@ -262,6 +262,36 @@ is refused until you reload. Rigs without optics in their profile are listed
 but cannot be chosen. Survey imagery is attributed below the view and is a
 composition aid, not pointing evidence.
 
+## Acquisition plan
+
+Below Framing, **Plan** says what the project wants and which rig shoots it.
+An objective is one bandpass and purpose (faint detail or unsaturated stars)
+with a goal in accepted hours or accepted frames per rig, and a priority. Tick a
+rig to have it take part: for every objective the editor picks the rig's first
+exposure template whose filter resolves to that bandpass, and starts the
+exposure length from the template's default, or from the rig's optics and sky
+when the template has none. Hours become frames per rig through that exposure,
+so a fast rig under bright skies shoots more short frames than a slow one under
+dark skies for the same goal. A rig with no template for a bandpass sits that
+one out and says so. Each rig's row totals its planned frames and hours.
+**Save plan** keeps the draft on the global project with the same reload rule
+as framing. Feasibility by night and activation into rig databases follow.
+
+| Method | Route | Body or query |
+| --- | --- | --- |
+| GET | `/catalogs/{slug}/templates` | Every Target Scheduler exposure template in the database, across profiles, with the `bandpass` its filter name resolves to (`id`, `name`, `kind`). Read only. |
+| GET | `/projects/{id}/plan` | The project and its plan draft, or `plan: null`. |
+| PUT | `/projects/{id}/plan` | The whole draft with `revision` set to the one read. `409` when it moved; `404` for an unknown project or rig. |
+
+Filter names map to bandpasses in the shared core: `L`, `Lum` and `Clear` are
+`luminance`; `Ha`, `H-alpha` and `Ha 3nm` are `h_alpha`; `OIII` and `O3` are
+`oiii`; a name the core does not know becomes its own bandpass rather than
+being folded into a neighbour. Default exposures also come from the core:
+120 s broadband and 300 s narrowband at f/5 under Bortle 4 to 5 skies, longer
+for slower optics and darker skies, shorter under bright skies, rounded to a
+common length. Typed models: [bandpass](../crates/director-core/src/bandpass.rs)
+and [plan](../crates/director-meta/src/plan.rs).
+
 ## Framing drafts
 
 A global project can carry one framing draft: the target center, the camera

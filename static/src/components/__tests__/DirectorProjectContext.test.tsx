@@ -10,6 +10,9 @@ import DirectorProjectContext from '../director/DirectorProjectContext';
 vi.mock('../ProjectSchedulerDialog', () => ({
   ProjectPlanEditor: ({ dbId, projectId }: { dbId: string; projectId: number }) => <output>{`Source editor ${dbId}:${projectId}`}</output>,
 }));
+vi.mock('../director/PlanEditor', () => ({
+  default: ({ projectId }: { projectId: string }) => <output>{`Plan ${projectId}`}</output>,
+}));
 vi.mock('../director/FramingView', () => ({
   default: ({ projectId, seed }: { projectId: string; seed: { name: string; center: { ra_degrees: number } } | null }) => <output>{`Framing ${projectId}:${seed ? `${seed.name}@${seed.center.ra_degrees}` : 'no seed'}`}</output>,
 }));
@@ -40,6 +43,7 @@ describe('existing project planning context', () => {
     expect(screen.getByText('Database-backed', { exact: true })).toBeInTheDocument();
     expect(screen.getByText('Source editor catalog:7')).toBeInTheDocument();
     expect(await screen.findByText('Framing project:M31@7.5')).toBeInTheDocument();
+    expect(screen.getByText('Plan project')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Overview' })).toHaveAttribute('href', '/?db=catalog&project=7&dbfilter=catalog');
     expect(screen.queryByRole('button', { name: 'New project' })).not.toBeInTheDocument();
   });

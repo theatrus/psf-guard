@@ -6,6 +6,11 @@
 
 ## Added
 
+- Rig planning gains a plan below the framing: objectives per bandpass in
+  accepted hours or frames, and per rig the exposure template and exposure
+  length that meet them, with frames worked out per rig and defaults that
+  follow each rig's optics and sky. Plans save as drafts on the project.
+
 - Rig planning now frames a project on the sky. Below the project editor, a
   survey image (DSS2, SDSS, DESI Legacy, 2MASS, the Finkbeiner H-alpha map
   and the Northern Sky Narrowband Survey layers, as in N.I.N.A.'s framing

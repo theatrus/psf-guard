@@ -2,7 +2,7 @@ import axios from 'axios';
 import type { AxiosInstance } from 'axios';
 import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
-import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorRigProfileSummary, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey } from './directorTypes';
+import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey } from './directorTypes';
 import type {
   ProjectProcessingSettings,
   StackColorInputSources,
@@ -335,6 +335,27 @@ export const apiClient = {
     const api = await getApi();
     const { data } = await api.get<ApiResponse<DirectorRigProfileSummary[]>>('/director/v1/rigs/profiles');
     if (!data.data) throw new Error(data.error || 'Failed to load rig profiles');
+    return data.data;
+  },
+
+  getDirectorTemplates: async (slug: string): Promise<DirectorTemplateList> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorTemplateList>>(`/director/v1/catalogs/${encodeURIComponent(slug)}/templates`);
+    if (!data.data) throw new Error(data.error || 'Failed to load exposure templates');
+    return data.data;
+  },
+
+  getDirectorPlan: async (projectId: string): Promise<DirectorPlanView> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorPlanView>>(`/director/v1/projects/${encodeURIComponent(projectId)}/plan`);
+    if (!data.data) throw new Error(data.error || 'Failed to load plan');
+    return data.data;
+  },
+
+  saveDirectorPlan: async (plan: DirectorPlanDraft): Promise<DirectorPlanView> => {
+    const api = await getApi();
+    const { data } = await api.put<ApiResponse<DirectorPlanView>>(`/director/v1/projects/${encodeURIComponent(plan.project_id)}/plan`, plan);
+    if (!data.data) throw new Error(data.error || 'Failed to save plan');
     return data.data;
   },
 
