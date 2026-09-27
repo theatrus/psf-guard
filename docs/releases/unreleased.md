@@ -142,6 +142,12 @@
   databases hold targets, and per target under each database, so a mosaic
   shows each panel's progress without opening it.
 
+- The Director page opens with a **Live** table of rigs: whether each is
+  online, quiet, offline or never seen, from the server's own record of the
+  plugin's calls; what it last reported it was doing, marked stale when old;
+  how long since it pulled its program, checked in and reported; saved frames
+  awaiting grading; and the plans it is assigned to.
+
 ## Changed
 
 ## Fixed

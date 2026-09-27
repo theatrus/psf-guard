@@ -157,14 +157,28 @@ pub(super) async fn pull(
     let catalog_permit = admit(&service.discovery_admission).await?;
     let envelope = tokio::task::spawn_blocking(move || {
         let _permits = (metadata_permit, catalog_permit);
-        let store = service.store.lock().map_err(|_| Error::Internal)?;
+        let mut store = service.store.lock().map_err(|_| Error::Internal)?;
         let assembled = assemble(
             &store,
             &catalogs,
             service.instance_id,
             rig,
             query.catalog_id,
-        )?;
+        );
+        // The plugin reached us, program or not: that is connectivity. A
+        // failed note must not cost the plugin its program.
+        if matches!(assembled, Ok(_) | Err(PullError::NotReady(_))) {
+            let revision = assembled.as_ref().ok().map(|a| a.revision.clone());
+            if let Err(error) = store.record_contact(
+                rig,
+                psf_guard_director_meta::inbox::ContactKind::ProgramPull,
+                now_ms(),
+                revision.as_deref(),
+            ) {
+                tracing::warn!(?error, %rig, "Director program pull was not noted as contact");
+            }
+        }
+        let assembled = assembled?;
         if if_none_match.as_deref() == Some(assembled.revision.as_str()) {
             return Err(PullError::NotModified(format!(
                 "\"{}\"",

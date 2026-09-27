@@ -57,6 +57,46 @@ pub struct RigStatus {
     pub received_at_ms: u64,
 }
 
+/// Which call a rig last made. Every kind counts as contact; a program pull
+/// alone means the plugin is alive, even before it reports status.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContactKind {
+    ProgramPull,
+    CheckIn,
+    Status,
+}
+
+impl ContactKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ProgramPull => "program_pull",
+            Self::CheckIn => "check_in",
+            Self::Status => "status",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "program_pull" => Some(Self::ProgramPull),
+            "check_in" => Some(Self::CheckIn),
+            "status" => Some(Self::Status),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Contact {
+    pub rig_id: Uuid,
+    pub kind: ContactKind,
+    /// Server receipt time; the rig's own clock is not consulted.
+    pub at_ms: u64,
+    /// The program revision pulled, the ledger checked in, or the session.
+    pub detail: Option<String>,
+}
+
 fn valid_text(value: &str, max: usize) -> bool {
     !value.is_empty() && value.len() <= max && value.bytes().all(|c| c.is_ascii_graphic())
 }
@@ -249,6 +289,64 @@ impl MetaStore {
         )?;
         tx.commit()?;
         Ok(true)
+    }
+
+    /// Note that a rig's plugin just called. Later calls overwrite; an
+    /// earlier receipt time never replaces a later one.
+    pub fn record_contact(
+        &mut self,
+        rig: Uuid,
+        kind: ContactKind,
+        at_ms: u64,
+        detail: Option<&str>,
+    ) -> Result<(), Error> {
+        valid_id(rig)?;
+        if at_ms > MAX_TIME_MS
+            || detail.is_some_and(|d| d.len() > 256 || d.chars().any(char::is_control))
+        {
+            return Err(Error::InvalidInput);
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if read_named(&tx, Kind::Rig, rig)?.is_none() {
+            return Err(Error::NotFound);
+        }
+        tx.execute(
+            "INSERT INTO rig_contact(rig_id,kind,at_ms,detail) VALUES(?1,?2,?3,?4)
+             ON CONFLICT(rig_id,kind) DO UPDATE SET at_ms=excluded.at_ms, detail=excluded.detail
+             WHERE excluded.at_ms >= rig_contact.at_ms",
+            params![rig.to_string(), kind.as_str(), at_ms as i64, detail],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn contacts_for_rig(&self, rig: Uuid) -> Result<Vec<Contact>, Error> {
+        valid_id(rig)?;
+        let mut statement = self
+            .connection
+            .prepare("SELECT kind, at_ms, detail FROM rig_contact WHERE rig_id=?1 ORDER BY kind")?;
+        let rows = statement
+            .query_map([rig.to_string()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)? as u64,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(kind, at_ms, detail)| {
+                ContactKind::parse(&kind).map(|kind| Contact {
+                    rig_id: rig,
+                    kind,
+                    at_ms,
+                    detail,
+                })
+            })
+            .collect())
     }
 
     pub fn rig_status(&self, rig: Uuid) -> Result<Option<RigStatus>, Error> {

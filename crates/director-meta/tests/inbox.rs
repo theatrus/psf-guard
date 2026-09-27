@@ -158,3 +158,46 @@ fn another_rig_cannot_append_to_or_acknowledge_an_existing_ledger() {
         Err(Error::Conflict)
     ));
 }
+
+#[test]
+fn contacts_keep_the_latest_call_per_kind_and_never_go_backwards() {
+    use psf_guard_director_meta::inbox::ContactKind;
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let mut store = MetaStore::create(&path).unwrap();
+    let rig = store.create_rig(Uuid::new_v4(), "A").unwrap().id;
+    assert!(store.contacts_for_rig(rig).unwrap().is_empty());
+    store
+        .record_contact(rig, ContactKind::ProgramPull, 100, Some("rev-1"))
+        .unwrap();
+    store
+        .record_contact(rig, ContactKind::Status, 120, Some("s1"))
+        .unwrap();
+    // A late receipt keeps the newer row; a newer one replaces it.
+    store
+        .record_contact(rig, ContactKind::ProgramPull, 90, Some("rev-0"))
+        .unwrap();
+    store
+        .record_contact(rig, ContactKind::Status, 130, Some("s2"))
+        .unwrap();
+    let contacts = store.contacts_for_rig(rig).unwrap();
+    assert_eq!(contacts.len(), 2);
+    let pull = contacts
+        .iter()
+        .find(|c| c.kind == ContactKind::ProgramPull)
+        .unwrap();
+    assert_eq!((pull.at_ms, pull.detail.as_deref()), (100, Some("rev-1")));
+    let status = contacts
+        .iter()
+        .find(|c| c.kind == ContactKind::Status)
+        .unwrap();
+    assert_eq!((status.at_ms, status.detail.as_deref()), (130, Some("s2")));
+    assert!(matches!(
+        store.record_contact(Uuid::new_v4(), ContactKind::CheckIn, 1, None),
+        Err(Error::NotFound)
+    ));
+    assert!(matches!(
+        store.record_contact(rig, ContactKind::CheckIn, 1, Some("bad\u{7}")),
+        Err(Error::InvalidInput)
+    ));
+}

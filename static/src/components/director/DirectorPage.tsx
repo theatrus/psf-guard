@@ -6,6 +6,7 @@ import DirectorProjectContext from './DirectorProjectContext';
 import DirectorPlans from './DirectorPlans';
 import ProjectWorkspace from './ProjectWorkspace';
 import DirectorRigs from './DirectorRigs';
+import DirectorDashboard from './DirectorDashboard';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
@@ -43,6 +44,7 @@ export default function DirectorPage() {
             : <p role="alert">Invalid project scope. <Link to="/">Overview</Link></p>
           : <>
             <Link to="/">Overview projects</Link>
+            <DirectorDashboard />
             <DirectorPlans key={status.data.instance_id!} instanceId={status.data.instance_id!} />
             <DirectorRigs />
           </>}

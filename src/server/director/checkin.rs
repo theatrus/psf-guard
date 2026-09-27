@@ -4,8 +4,17 @@
 //! a rig database or the program; both tell the plugin whether to pull again.
 
 use super::*;
-use psf_guard_director_meta::inbox::{Receipt, RigStatus, Stored, MAX_PAGE};
+use crate::server::database_context::DatabaseContext;
+use psf_guard_director_meta::inbox::{Contact, ContactKind, Receipt, RigStatus, Stored, MAX_PAGE};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// How long after its last call a rig still counts as connected, and after
+/// how long it is written off rather than merely quiet.
+const ONLINE_MS: u64 = 3 * 60 * 1000;
+const STALE_MS: u64 = 30 * 60 * 1000;
+/// A live status older than this is shown as stale: the rig may have moved
+/// on, so "exposing" ten minutes ago must not read as exposing now.
+const STATUS_FRESH_MS: u64 = 10 * 60 * 1000;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -83,6 +92,7 @@ pub(super) async fn check_in(
             .ok_or(Error::WrongRig)?;
         let now = now_ms();
         let (outcomes, cursor) = store.store_receipts(&receipts, now)?;
+        store.record_contact(rig, ContactKind::CheckIn, now, Some(&request.ledger_id))?;
         let program_revision = program::current_revision(
             &store,
             &catalogs,
@@ -208,6 +218,7 @@ pub(super) async fn report_status(
             payload: request.status.clone(),
             received_at_ms: now,
         })?;
+        store.record_contact(rig, ContactKind::Status, now, Some(&request.session_id))?;
         let program_revision = program::current_revision(
             &store,
             &catalogs,
@@ -236,30 +247,167 @@ pub(super) async fn report_status(
 }
 
 #[derive(Serialize)]
-pub(super) struct RigStatusView {
-    rig: NamedIdentity,
-    status: RigStatus,
-    /// The last acknowledged cursor per ledger this rig has checked in with.
-    checkins: Vec<psf_guard_director_meta::inbox::FeedCursor>,
+struct ContactView {
+    at_ms: u64,
+    detail: Option<String>,
 }
 
-/// Operator view: the newest status and check-in cursors for every rig.
+#[derive(Default, Serialize)]
+struct Contacts {
+    program_pull: Option<ContactView>,
+    check_in: Option<ContactView>,
+    status: Option<ContactView>,
+}
+
+/// Derived from server receipt times only. `never` means no call yet;
+/// `offline` means nothing for half an hour. A rig is never shown as doing
+/// anything on the strength of an old report.
+#[derive(Serialize)]
+struct Connectivity {
+    state: &'static str,
+    last_contact_ms: Option<u64>,
+    age_ms: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct AssignmentView {
+    project: NamedIdentity,
+    activation_revision: u64,
+    applied_at_ms: u64,
+}
+
+#[derive(Serialize)]
+pub(super) struct RigStatusView {
+    rig: NamedIdentity,
+    catalog_slug: Option<String>,
+    catalog_name: Option<String>,
+    /// The newest coalesced report, or `None` before the first.
+    status: Option<RigStatus>,
+    status_age_ms: Option<u64>,
+    /// The report is older than ten minutes; show it as history, not as now.
+    status_stale: bool,
+    /// The last acknowledged cursor per ledger this rig has checked in with.
+    checkins: Vec<psf_guard_director_meta::inbox::FeedCursor>,
+    contacts: Contacts,
+    connectivity: Connectivity,
+    /// Activated plans this rig is part of.
+    assignments: Vec<AssignmentView>,
+    /// Saved captures the rig has reported that grading has not yet turned
+    /// into accepted frames.
+    pending_receipts: u32,
+}
+
+fn contacts(list: Vec<Contact>) -> Contacts {
+    let mut contacts = Contacts::default();
+    for contact in list {
+        let view = ContactView {
+            at_ms: contact.at_ms,
+            detail: contact.detail,
+        };
+        match contact.kind {
+            ContactKind::ProgramPull => contacts.program_pull = Some(view),
+            ContactKind::CheckIn => contacts.check_in = Some(view),
+            ContactKind::Status => contacts.status = Some(view),
+        }
+    }
+    contacts
+}
+
+fn connectivity(contacts: &Contacts, now: u64) -> Connectivity {
+    let last = [&contacts.program_pull, &contacts.check_in, &contacts.status]
+        .into_iter()
+        .flatten()
+        .map(|c| c.at_ms)
+        .max();
+    let age = last.map(|at| now.saturating_sub(at));
+    Connectivity {
+        state: match age {
+            None => "never",
+            Some(age) if age <= ONLINE_MS => "online",
+            Some(age) if age <= STALE_MS => "stale",
+            Some(_) => "offline",
+        },
+        last_contact_ms: last,
+        age_ms: age,
+    }
+}
+
+/// Operator view: every bound rig with its connectivity, newest status,
+/// check-in cursors, assignments and pending receipts. Rigs that have
+/// reported but lost their database binding are listed too.
 pub(super) async fn statuses(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Vec<RigStatusView>>>, Error> {
+    let catalogs: Vec<Arc<DatabaseContext>> = state
+        .databases
+        .read()
+        .map_err(|_| Error::Internal)?
+        .values()
+        .cloned()
+        .collect();
     let views = enabled(&state)?
-        .run(|store| {
-            let mut views = Vec::new();
-            for status in store.rig_statuses()? {
-                let Some(rig) = store.rig(status.rig_id)? else {
+        .run(move |store| {
+            let now = now_ms();
+            // Every bound database is a rig; name the database beside it.
+            let mut rigs: std::collections::BTreeMap<Uuid, (Option<String>, Option<String>)> =
+                std::collections::BTreeMap::new();
+            for catalog in &catalogs {
+                let Some(identity) = super::activation::read_identity(&catalog.database_path)
+                else {
                     continue;
                 };
+                if let Some(binding) = store.catalog_rig(identity.id)? {
+                    rigs.insert(
+                        binding.rig.id,
+                        (Some(catalog.id.clone()), Some(catalog.name.clone())),
+                    );
+                }
+            }
+            for status in store.rig_statuses()? {
+                rigs.entry(status.rig_id).or_insert((None, None));
+            }
+            let mut views = Vec::new();
+            for (rig_id, (catalog_slug, catalog_name)) in rigs {
+                let Some(rig) = store.rig(rig_id)? else {
+                    continue;
+                };
+                let status = store.rig_status(rig_id)?;
+                let status_age_ms = status
+                    .as_ref()
+                    .map(|s| now.saturating_sub(s.received_at_ms));
+                let contacts = contacts(store.contacts_for_rig(rig_id)?);
+                let connectivity = connectivity(&contacts, now);
+                let mut assignments = Vec::new();
+                for activation in store.activations_for_rig(rig_id)? {
+                    if let Some(project) = store.project(activation.project_id)? {
+                        assignments.push(AssignmentView {
+                            project,
+                            activation_revision: activation.revision,
+                            applied_at_ms: activation.applied_at_ms,
+                        });
+                    }
+                }
+                assignments.sort_by(|a, b| a.project.name.cmp(&b.project.name));
+                let pending_receipts = store
+                    .saved_captures_by_goal(rig_id)?
+                    .into_iter()
+                    .map(|(_, count)| count)
+                    .fold(0u32, u32::saturating_add);
                 views.push(RigStatusView {
                     rig,
-                    checkins: store.feed_cursors_for_rig(status.rig_id)?,
+                    catalog_slug,
+                    catalog_name,
+                    status_stale: status_age_ms.is_some_and(|age| age > STATUS_FRESH_MS),
+                    status_age_ms,
                     status,
+                    checkins: store.feed_cursors_for_rig(rig_id)?,
+                    contacts,
+                    connectivity,
+                    assignments,
+                    pending_receipts,
                 });
             }
+            views.sort_by(|a, b| a.rig.name.cmp(&b.rig.name).then(a.rig.id.cmp(&b.rig.id)));
             Ok(views)
         })
         .await?;

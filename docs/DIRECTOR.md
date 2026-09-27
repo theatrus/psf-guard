@@ -35,7 +35,19 @@ switching are not exposed. Catalog adoption requires the explicit workflow below
 
 ## Management screen
 
-The **Director** entry in the header opens one page with two sections.
+The **Director** entry in the header opens one page with three sections.
+
+**Live** is the operator's table of rigs. For each rig it shows the link
+state, from the server's own receipt times of the plugin's calls: *Online*
+within three minutes of any call, *Quiet* within thirty, *Offline* beyond,
+*Never seen* before the first. Then what the rig says it is doing, from its
+last status report (phase, target, current operation and how long, wait
+reason, safety, queue depth, and any errors it named); a report older than ten
+minutes is marked stale rather than shown as the present. The next columns
+give how long ago the rig last pulled its program (with the revision), checked
+in (with saved frames grading has not yet accepted), and reported status, and
+which activated plans it is assigned to, each a link to the workspace. The
+table refreshes every fifteen seconds.
 
 **Plans** lists every global project with where it is linked (each database
 and the source project there) and how far its planning has come: not linked,
@@ -457,7 +469,7 @@ program that does not bind is a `422` with the reason, never a partial pull.
 | --- | --- | --- |
 | POST | `/rigs/{rig}/checkin` | `coordinator_instance_id`, `catalog_id`, `ledger_id`, optional `program_revision` (the revision the plugin runs), and `events`: up to 256 ledger `ExecutionEvent`s from that one ledger in ascending sequence, sent verbatim. Returns `acknowledged_through` (every sequence up to it is stored), `highest_seen`, per-event `outcomes` (`applied`, `duplicate`, `conflict`), the sequences in `conflicts`, and `program_revision` with `program_changed`. `400` for a page that mixes ledgers or rigs, runs backwards or is empty; `403` on a tuple mismatch. |
 | POST | `/rigs/{rig}/status` | `coordinator_instance_id`, `catalog_id`, `session_id`, `reported_at_ms`, optional `program_revision`, and `status`: the plugin's coalesced live report (phase, goal and target IDs, elapsed time, wait reason, safety, connectivity, queue depth), stored verbatim. `accepted: false` means a newer report was already held for that session, or a newer session exists. |
-| GET | `/rigs/status` | Operator view: every rig's newest status with its check-in cursors per ledger. |
+| GET | `/rigs/status` | Operator view, one row per bound rig (and any rig that reported and lost its binding): `catalog_slug` and `catalog_name`; `status` (or `null`) with `status_age_ms` and `status_stale` past ten minutes; `checkins` cursors per ledger; `contacts` (`program_pull`, `check_in`, `status`, each `{at_ms, detail}` or `null`, server receipt times); `connectivity` (`state` of `online`, `stale`, `offline` or `never`, `last_contact_ms`, `age_ms`); `assignments` (activated projects with revision); and `pending_receipts`. |
 
 A receipt is stored once by ledger and sequence and never rewritten: a replay
 is acknowledged again, a replay with different content is reported as a
@@ -470,6 +482,13 @@ and status both answer `program_changed` so the plugin knows to pull again;
 neither of them alters a plan, a rig database or the program. Grades still
 come from PSF Guard grading the images; a receipt is evidence that a frame
 was taken, not that it passed.
+
+Every program pull, check-in and status report is noted as contact with its
+server receipt time, and the Live table derives connectivity from those alone.
+For the status payload the Live table reads `phase` (or `state`),
+`target_name` (or `target`), `operation` with `operation_started_ms`,
+`wait_reason`, `safety`, `queue_depth`, and `errors` (or `error`); the rest is
+stored and shown nowhere yet.
 
 ## Visibility
 

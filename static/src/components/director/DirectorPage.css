@@ -89,3 +89,12 @@
   .director-record-wide > button, .director-record-wide > a { grid-column: 1; grid-row: auto; justify-self: start; }
 }
 .director-plan-panels { display: block; font-size: 12px; color: var(--color-text-secondary); }
+.director-dashboard-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.director-dashboard-table th { text-align: left; font-weight: 500; color: var(--color-text-secondary); padding: 4px 6px; }
+.director-dashboard-table td { padding: 6px; vertical-align: top; border-top: 1px solid var(--color-border-secondary); }
+.director-dashboard-table .director-cell-label { display: none; }
+.director-connectivity { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; background: var(--color-bg-secondary); color: var(--color-text-secondary); }
+.director-connectivity.is-online { background: rgba(60, 170, 90, 0.18); color: #2f8f4e; }
+.director-connectivity.is-stale { background: rgba(230, 170, 40, 0.18); color: #a8720d; }
+.director-connectivity.is-offline { background: rgba(200, 60, 60, 0.15); color: #b93a3a; }
+@media (max-width: 800px) { .director-dashboard-table thead { display: none; } .director-dashboard-table tr { display: grid; gap: 4px; padding: 8px 0; border-top: 1px solid var(--color-border-secondary); } .director-dashboard-table td { border: none; padding: 0; } .director-dashboard-table .director-cell-label { display: inline; color: var(--color-text-secondary); margin-right: 6px; } }

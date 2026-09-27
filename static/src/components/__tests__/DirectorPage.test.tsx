@@ -104,7 +104,8 @@ describe('Director management', () => {
       ], ['Odd file: has no Target Scheduler project table'])))),
       http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([{ rig, catalog_slug: 'c925', catalog_name: 'C925', profile: null,
         field_of_view: { width_degrees: 0.7, height_degrees: 0.5, pixel_scale_arcsec: 0.41, focal_ratio: 10 }, default_exposure_seconds: { broadband: 120, narrowband: 300 } }]))),
-      http.get('/api/director/v1/rigs/status', () => HttpResponse.json(ok([{ rig, checkins: [], status: { rig_id: rig.id, session_id: 's1', reported_at_ms: 1_700_000_000_000, received_at_ms: 1_700_000_000_001, payload: { phase: 'exposing' } } }]))),
+      http.get('/api/director/v1/rigs/status', () => HttpResponse.json(ok([{ rig, catalog_slug: 'c925', catalog_name: 'C925', checkins: [], status: { rig_id: rig.id, session_id: 's1', reported_at_ms: 1_700_000_000_000, received_at_ms: 1_700_000_000_001, payload: { phase: 'exposing' } },
+        status_age_ms: 5000, status_stale: false, contacts: { program_pull: null, check_in: null, status: { at_ms: 1_700_000_000_001, detail: 's1' } }, connectivity: { state: 'online', last_contact_ms: 1_700_000_000_001, age_ms: 5000 }, assignments: [], pending_receipts: 0 }]))),
     ]);
     expect(await screen.findByText('M31')).toBeInTheDocument();
     expect(screen.getByText('Planned: 2 objectives, 1 rig, not activated')).toBeInTheDocument();
@@ -118,6 +119,8 @@ describe('Director management', () => {
     expect(screen.queryByRole('button', { name: /New project|Rename/ })).not.toBeInTheDocument();
     expect(await screen.findByText(/Field 42.0′ × 30.0′, 0.41″\/px, camera not reported yet/)).toBeInTheDocument();
     expect(screen.getByText(/Plugin: exposing/)).toBeInTheDocument();
+    expect(screen.getByText('Online')).toBeInTheDocument();
+    expect(screen.getByText('nothing activated')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Setup C925' })).toBeInTheDocument();
     expect(screen.getByTestId('location')).toHaveTextContent('?db=old-catalog&project=123|scope=global');
   });
