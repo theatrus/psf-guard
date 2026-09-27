@@ -4,19 +4,28 @@ Director is experimental. This API manages global project, site and rig identiti
 separate meta database. It does not yet pair rigs, allocate work, or enable
 acquisition. The NINA runtime preview and PSF Guard Sync remain separate.
 
-## Enable on a test server
+## Where the store lives
+
+Director is on whenever the server may manage its databases. The meta store is
+a separate SQLite file beside the database registry: `director-meta.sqlite`
+next to `config.json`, or `<registry>.director-meta.sqlite` for a registry
+with another name, so `--registry /tmp/psf-guard-test.json` gets its own
+store. The desktop app uses the same default. A server without
+`--allow-database-management` leaves Director off, because activating a plan
+writes into rig databases.
 
 ```text
-psf-guard server --host 127.0.0.1 --registry test-registry.json --allow-database-management --director-meta director-meta.sqlite
+psf-guard server --host 127.0.0.1 --registry test-registry.json --allow-database-management
+psf-guard server --host 127.0.0.1 --registry test-registry.json --allow-database-management --director-meta /srv/psf-guard/director-meta.sqlite
 ```
 
-The parent directory must exist. A missing file is created atomically; an
-existing file must be a recognized Director meta store. Catalogs, empty files,
-and unrelated SQLite databases are not adopted. Omitting `--director-meta`
-leaves Director off and does not create a store. Tauri does not enable this API
-yet. The normal server startup policy still requires accounts for database
-management on a network bind unless the operator explicitly trusts anonymous
-access. Prefer accounts; see [authentication](AUTHENTICATION.md).
+`--director-meta` keeps the store at another path. The parent directory must
+exist. A missing file is created atomically; an existing file must be a
+recognized Director meta store. Catalogs, empty files, and unrelated SQLite
+databases are not adopted. The normal server startup policy still requires
+accounts for database management on a network bind unless the operator
+explicitly trusts anonymous access. Prefer accounts; see
+[authentication](AUTHENTICATION.md).
 
 Back up the meta store with its SQLite-aware storage API before an upgrade.
 Do not copy a live SQLite main file without its WAL. Stop older coordinator

@@ -188,6 +188,37 @@ fn metadata_cannot_claim_existing_or_future_registry_files() {
 }
 
 #[test]
+fn the_store_defaults_beside_the_registry_only_when_management_is_on() {
+    use std::path::{Path, PathBuf};
+    assert_eq!(
+        default_meta_path(Path::new("/etc/psf-guard/config.json")),
+        PathBuf::from("/etc/psf-guard/director-meta.sqlite")
+    );
+    assert_eq!(
+        default_meta_path(Path::new("/tmp/psf-guard-test.json")),
+        PathBuf::from("/tmp/psf-guard-test.director-meta.sqlite")
+    );
+    let registry = Path::new("/tmp/registry.json");
+    let explicit = Path::new("/var/lib/meta.sqlite");
+    assert_eq!(
+        resolve_meta_path(Some(explicit), Some(registry), true).as_deref(),
+        Some(explicit)
+    );
+    assert_eq!(
+        resolve_meta_path(None, Some(registry), true),
+        Some(default_meta_path(registry))
+    );
+    assert_eq!(resolve_meta_path(None, Some(registry), false), None);
+    assert_eq!(resolve_meta_path(None, None, true), None);
+    for path in [
+        default_meta_path(registry),
+        default_meta_path(Path::new("/tmp/config.json")),
+    ] {
+        assert!(validate_registry_separation(Some(&path), Some(registry)).is_ok());
+    }
+}
+
+#[test]
 fn startup_is_explicit_and_never_adopts_a_foreign_file() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("meta.sqlite");

@@ -82,7 +82,7 @@ untested integration requirements unchecked.
 | Sidecar and local recovery | Merged `crates/director-ledger` and `crates/director-runtime`: schema-4 journal, capture/preparation outboxes, IPC 7, one-shot dispatch checks, process crash/reopen tests; PSF Guard #464-487. | Remote inbox/acknowledgements, pruning, grade feedback, assignment replacement and complete operator recovery. No network batch check-in yet. |
 | NINA native execution | Plugin [#18](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/18), [#19](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/19), [#22](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/22), [#23](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/23), [#24](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/24) merged: transient native items, target context, complete horizon export and post-hook geometry checks. Real nightly #58 OmniSim probe captured three filtered FITS frames with correlated evidence. | Public production session container, all trigger/condition/hook contexts, plugin compatibility matrix, native defaults, full autofocus/guiding/flip/calibration/safety recovery and continuous ownership integration. Probe uses fixture allocations and synthetic orientation evidence, not a server session. |
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
-| Meta storage | Separate schema-5 store, UUIDs, reviewed one-to-one database/rig binding, confirmed source project links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. Unambiguous prototype links retain rig IDs. | Conflict-resolution UI for ambiguous prototype rigs, permissions/enrollment, active revisions, allocation authority and progress projections. |
+| Meta storage | Separate schema-5 store on by default beside the registry, UUIDs, reviewed one-to-one database/rig binding, confirmed source project links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. Unambiguous prototype links retain rig IDs. | Conflict-resolution UI for ambiguous prototype rigs, permissions/enrollment, active revisions, allocation authority and progress projections. |
 | Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492): shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493): schema-3 intent persistence with validated immutable setup references. | Objective editor, depth/FOV/sampling compatibility and authoritative allocation remain open. |
 | Project framing wizard | Project intent retains target coordinates and rig-specific framing/recipes as building blocks only. | Survey-map backgrounds, target/reference selection, interactive FOV and rotation, mosaics, versioned optical geometry, multi-rig/site preview, draft editing and reviewed activation are not implemented. |
 | Catalog discovery | [#498](https://github.com/theatrus/psf-guard/pull/498) merged: operator-scoped read-only project/profile evidence from registered TS-compatible catalogs, with bounded results and invalid/duplicate identity reports. | Discovery does not infer rig ownership or read image history. |
@@ -229,6 +229,92 @@ proper owners; importing TS project settings must not silently override them.
 Generating or updating downstream projects requires preview/apply and must not
 overwrite existing acquisition history. The shared core validates the resulting
 intent before the plugin may receive an assignment.
+
+### Planning flow implementation plan
+
+Decisions taken on 2026-09-26 for the PSF Guard side of the plugin/backend
+split. They narrow the sections above for this stage; they do not replace them.
+
+- **Store on by default.** The meta store opens beside the database registry
+  whenever database management is on, in the server and the desktop app.
+  `--director-meta` only moves it. A read-only server leaves Director off.
+- **Rig databases keep TS-shaped tables** as the execution projection: one
+  `project` row per downstream project, one `target` row per mosaic panel, and
+  `exposureplan` rows per recipe, all with stable GUIDs. Director provenance
+  lives in PSF Guard-owned side tables in the same file, keyed by those GUIDs
+  (see below). Import, export, Sync and other PSF Guard instances keep working
+  unchanged. The native catalog schema stays planned work.
+- **Own sky map.** The framing view draws on PSF Guard's existing sky
+  projection code with server-fetched HiPS2FITS cutouts from the surveys
+  N.I.N.A.'s framing assistant uses (DSS2 color, Finkbeiner H-alpha first).
+  Cutouts are cached under the cache root. No Aladin Lite and no dependency on
+  a running N.I.N.A. or its framing cache directory.
+- **The plugin pulls, like Sync.** PSF Guard never pushes into a rig. The
+  Director plugin fetches its program over HTTP, runs semi-offline within that
+  program's validity, and checks in later with journaled receipts. Live status
+  while connected is welcome but never required for execution.
+- **Optics and site come from N.I.N.A.** Sensor size, pixel size, focal length,
+  aperture, rotator presence and camera angle offset, plus site location and
+  horizon, are defined in N.I.N.A. profiles. The plugin syncs them into a rig
+  setup revision; the same fields are editable per rig database in Settings
+  for rigs that have not checked in yet, with the source shown.
+- **Exposure templates stay.** Plans bind to each rig database's exposure
+  templates, as Target Scheduler does. The project owner enters desired
+  accepted integration as hours or frames per bandpass and purpose. A rig's
+  contribution converts between the two through its template exposure length.
+  Default exposure lengths come from the rig (focal ratio, aperture) and the
+  site's sky quality; darker sites and slower optics default longer.
+
+#### Rig database side tables
+
+PSF Guard owns these tables inside each rig database. Target Scheduler ignores
+them, Sync copies them as opaque planning data once its adapter learns them,
+and they never carry credentials or authority.
+
+| Table | Key | Holds |
+| --- | --- | --- |
+| `psfguard_director_project` | `project_guid` | global project UUID, intent revision UUID, coordinator instance UUID, applied-at |
+| `psfguard_director_target` | `target_guid` | objective ID, contribution ID, panel ID, framing revision, intent revision |
+| `psfguard_director_plan` | `exposureplan_id`, `target_guid` | recipe ID, bandpass ID, exposure purpose, required accepted frames at activation |
+
+Preview/apply writes these in the same transaction as the TS rows they
+describe. A later activation with a new intent revision updates them in place;
+it never rewrites `acquiredimage` or existing grades.
+
+#### Plugin-facing endpoints
+
+All under `/api/director/v1`. Authentication is a personal API token for now;
+enrollment-scoped credentials replace it when pairing lands. Every request
+names the coordinator instance, catalog and rig UUIDs and is refused on a
+mismatched tuple even when the slug exists.
+
+| Endpoint | Owner | Purpose |
+| --- | --- | --- |
+| `GET /rigs/{rig}/program` | backend, next PRs | The current immutable program for the rig: core `Assignment` and `Program`, plus a `links` list joining each goal to its project, intent revision, objective, contribution, panel, source project GUID, target GUID and exposure plan ID, and the setup and site snapshot IDs it was built from. Supports `If-None-Match`; `304` when unchanged, `404` when nothing is active. |
+| `PUT /rigs/{rig}/equipment` | backend, next PRs | The plugin reports its core `Configuration`, optics, site and horizon. Unchanged content returns the existing setup revision; changed content creates a new one and marks active plans stale for review. |
+| `POST /rigs/{rig}/checkin` | both, after program | Bounded pages of journaled preparation and capture receipts with exact cursors; the reply acknowledges by cursor and reports whether a newer program revision exists. |
+| `POST /rigs/{rig}/status` | both, after check-in | Coalesced live status. Loss of it changes connectivity only. |
+
+The plugin must not read TS tables from the rig database as its planning
+input and must not call an endpoint before its row above says it exists.
+
+#### Delivery order
+
+1. Store on by default; this plan. Done in the PR that added this section.
+2. Rig optics, site and horizon in the setup revision, edited per database and
+   accepted from `PUT /rigs/{rig}/equipment`, with header-derived defaults.
+3. Survey cutout service with cache and provider allowlist.
+4. Framing view: center, rotation, coverage, mosaic panels, per-rig footprints,
+   saved as a draft on the global project.
+5. Objectives and contributions: hours or frames per bandpass, template
+   binding, defaults, per-night feasibility preview from the shared core.
+6. Activation: preview/apply into each local rig database with side tables,
+   `GET /rigs/{rig}/program`, and planning push to remote rigs through Sync.
+7. Check-in and live status, with the plugin.
+
+The Director page changes as these land: the identity lists give way to a
+plan list across databases, rig setup moves under database settings, and
+sites are edited inside the rig setup flow.
 
 ### Site and rig responsibilities
 

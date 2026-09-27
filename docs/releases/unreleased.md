@@ -6,6 +6,11 @@
 
 ## Added
 
+- Director planning is on by default. The server and the desktop app keep the
+  planning store in `director-meta.sqlite` beside the database registry
+  whenever database management is allowed; `--director-meta` still moves it.
+  A read-only server leaves Director off.
+
 - Director's rig list now uses registered project databases. Reviewed setup
   binds each database to one rig across its source profiles, preserves existing
   unambiguous links, and reports conflicting prototype links without rewriting

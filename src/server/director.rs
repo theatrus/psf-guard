@@ -20,6 +20,34 @@ mod catalog_adoption;
 mod catalog_discovery;
 mod catalog_rig;
 
+/// The default store sits beside the registry, like `auth.json`, so a test
+/// registry gets its own meta store and nothing lands in the real config dir.
+pub(crate) fn default_meta_path(registry: &FilePath) -> std::path::PathBuf {
+    if registry.file_name().and_then(|name| name.to_str()) == Some("config.json") {
+        return registry.with_file_name("director-meta.sqlite");
+    }
+    let stem = registry
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("config");
+    registry.with_file_name(format!("{stem}.director-meta.sqlite"))
+}
+
+/// An explicit path always wins. Without one, a server that may manage its
+/// databases opens the default store; a read-only server leaves Director off,
+/// because planning writes into rig databases at activation.
+pub(crate) fn resolve_meta_path(
+    explicit: Option<&FilePath>,
+    registry: Option<&FilePath>,
+    management: bool,
+) -> Option<std::path::PathBuf> {
+    match explicit {
+        Some(path) => Some(path.to_path_buf()),
+        None if management => registry.map(default_meta_path),
+        None => None,
+    }
+}
+
 pub(super) fn validate_registry_separation(
     meta: Option<&FilePath>,
     registry: Option<&FilePath>,
