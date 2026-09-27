@@ -162,3 +162,31 @@ fn uncommitted_edits_are_absent_from_backup_and_later_commits_are_independent() 
     assert_eq!(copy.project(project.id).unwrap(), Some(project.clone()));
     assert_eq!(store.project(project.id).unwrap().unwrap().revision, 2);
 }
+
+/// A store left at schema 11 by the previous build (pairing and client
+/// tables present, no contact table) must open and gain only what it lacks.
+/// Re-running the schema 11 step here failed with "table director_pairing
+/// already exists" and kept every existing coordinator from starting.
+#[test]
+fn schema_eleven_upgrade_adds_contacts_without_recreating_client_tables() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let instance = MetaStore::create(&path).unwrap().instance_id();
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch("DROP TABLE rig_contact; PRAGMA user_version=11;")
+        .unwrap();
+    let store = MetaStore::open(&path).unwrap();
+    assert_eq!(store.instance_id(), instance);
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
+            .unwrap(),
+        12
+    );
+    conn.prepare("SELECT rig_id,kind,at_ms,detail FROM rig_contact")
+        .unwrap();
+    conn.prepare("SELECT token_hash FROM director_pairing")
+        .unwrap();
+    // Opening again is a no-op at the current version.
+    drop(store);
+    MetaStore::open(&path).unwrap();
+}
