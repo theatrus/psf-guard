@@ -8,6 +8,7 @@ pub use uuid::Uuid;
 pub mod activation;
 pub mod catalog;
 pub mod catalog_rig;
+pub mod client;
 pub mod configuration;
 pub mod framing;
 pub mod inbox;

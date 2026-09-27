@@ -110,3 +110,51 @@ fn status_keeps_the_newest_report_and_refuses_late_ones() {
         Err(Error::NotFound)
     ));
 }
+
+#[test]
+fn another_rig_cannot_append_to_or_acknowledge_an_existing_ledger() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let mut store = MetaStore::create(&path).unwrap();
+    let a = store.create_rig(Uuid::new_v4(), "A").unwrap().id;
+    let b = store.create_rig(Uuid::new_v4(), "B").unwrap().id;
+    let (_, cursor) = store
+        .store_receipts(&[receipt(a, 1, "reserved", "c1")], 5)
+        .unwrap();
+    assert!(matches!(
+        store.store_receipts(
+            &[receipt(b, 2, "saved", "c2"), receipt(b, 3, "saved", "c3")],
+            6
+        ),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.feed_cursor(a, "ledger-1").unwrap(), Some(cursor));
+    assert_eq!(store.feed_cursor(b, "ledger-1").unwrap(), None);
+    assert!(store.saved_captures_by_goal(b).unwrap().is_empty());
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    // A missing cursor must not erase ownership recorded by existing events.
+    conn.execute("DELETE FROM rig_feed", []).unwrap();
+    assert!(matches!(
+        store.store_receipts(&[receipt(b, 2, "saved", "c2")], 7),
+        Err(Error::Conflict)
+    ));
+    store
+        .store_receipts(&[receipt(a, 2, "saved", "c1")], 8)
+        .unwrap();
+    // A cursor alone is also sufficient to retain ownership.
+    conn.execute("DELETE FROM rig_event", []).unwrap();
+    assert!(matches!(
+        store.store_receipts(&[receipt(b, 3, "saved", "c2")], 9),
+        Err(Error::Conflict)
+    ));
+    // Defend against legacy mixed-rig data instead of acknowledging it.
+    store
+        .store_receipts(&[receipt(a, 1, "reserved", "c1")], 10)
+        .unwrap();
+    conn.execute("UPDATE rig_event SET rig_id=?1", [b.to_string()])
+        .unwrap();
+    assert!(matches!(
+        store.store_receipts(&[receipt(a, 2, "saved", "c1")], 11),
+        Err(Error::Conflict)
+    ));
+}

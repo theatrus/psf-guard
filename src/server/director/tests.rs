@@ -14,6 +14,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 mod adoption;
 mod configuration;
+mod pairing;
 mod sky_image;
 
 fn state(dir: &TempDir, enable: bool) -> AppState {
