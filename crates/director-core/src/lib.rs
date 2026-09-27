@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 pub mod dispatch;
+pub mod framing;
 pub mod geometry;
 pub mod optics;
 pub mod preparation;

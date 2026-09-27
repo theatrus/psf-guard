@@ -27,7 +27,7 @@ fn write_fits(path: &std::path::Path, cards: &[&str]) {
     std::fs::write(path, contents).unwrap();
 }
 
-async fn bound_fixture() -> (Fixture, Uuid) {
+pub(super) async fn bound_fixture() -> (Fixture, Uuid) {
     let f = Fixture::new();
     f.source
         .execute_batch(
