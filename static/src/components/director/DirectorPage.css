@@ -1,0 +1,30 @@
+.director-page { flex: 1; overflow: auto; padding: 24px; min-height: 0; }
+.director-page > * { max-width: 1000px; margin-left: auto; margin-right: auto; }
+.director-heading, .director-toolbar, .director-actions, .director-edit-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.director-heading h1 { font-size: 24px; margin: 0; }
+.director-preview { color: var(--color-warning-light); font-size: 13px; }
+.director-muted { color: var(--color-text-secondary); }
+.director-page button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 7px 10px; border: 1px solid var(--color-border-tertiary); border-radius: 4px; color: var(--color-text-primary); background: var(--color-bg-tertiary); cursor: pointer; }
+.director-page button:hover:not(:disabled) { background: var(--color-bg-quaternary); }
+.director-page button:disabled { opacity: 0.5; cursor: default; }
+.director-page button:focus-visible, .director-page input:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.director-tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--color-border-secondary); margin-top: 24px; padding-bottom: 12px; }
+.director-tabs button[aria-current] { color: var(--color-primary); border-color: var(--color-primary); }
+.director-toolbar { justify-content: space-between; margin: 20px 0; }
+.director-toolbar h2 { margin: 0; font-size: 18px; }
+.director-list { padding: 0; list-style: none; }
+.director-list li { border-bottom: 1px solid var(--color-border-secondary); }
+.director-record { display: grid; grid-template-columns: minmax(0, 1fr) auto 38px; align-items: center; gap: 16px; padding: 16px 0; }
+.director-record-name { display: flex; flex-direction: column; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.director-record-name code { font-size: 12px; color: var(--color-text-secondary); }
+.director-edit { border-left: 3px solid var(--color-primary); padding: 12px 16px; margin: 12px 0; }
+.director-edit label { display: block; margin-bottom: 8px; }
+.director-edit input { flex: 1; min-width: 120px; max-width: 100%; box-sizing: border-box; background: var(--color-bg-secondary); color: var(--color-text-primary); border: 1px solid var(--color-border-tertiary); border-radius: 4px; padding: 9px; font: inherit; }
+.director-error { color: var(--color-error-light); overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .director-page { padding: 16px; }
+  .director-record { grid-template-columns: minmax(0, 1fr) 38px; gap: 10px; }
+  .director-record > .director-muted { grid-column: 1; grid-row: 2; font-size: 12px; }
+  .director-record > button { grid-column: 2; grid-row: 1; }
+  .director-edit-controls input { flex-basis: 100%; }
+}
