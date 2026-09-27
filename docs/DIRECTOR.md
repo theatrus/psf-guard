@@ -246,6 +246,27 @@ server folds both back to the sensor before offering them. Typed models:
 [optics](../crates/director-core/src/optics.rs) and
 [profile](../crates/director-meta/src/profile.rs).
 
+## Framing drafts
+
+A global project can carry one framing draft: the target center, the camera
+angle, the mosaic grid, which rig's field defines a panel, which other rigs to
+overlay, and the survey and zoom the operator was looking at. Drafts are
+editable and versioned; activation later freezes intent from them. The shared
+core computes every footprint, so the browser only draws.
+
+| Method | Route | Body or query |
+| --- | --- | --- |
+| POST | `/framing/preview` | Stateless. `center`, `position_angle_degrees`, `panel` (`width_degrees`, `height_degrees`), `mosaic` (`rows`, `columns`, `overlap_percent`), optional `overlays` (other fields to place on the center) and `view` (`center`, `rotation_degrees`). Returns each panel's sky corners and, with a view, its corners as offsets from the view center with the view's up as `+eta`. `400` for a grid above 16 by 16, more than 256 panels, an extent past 30 degrees, or a view that cannot see the center. |
+| GET | `/projects/{id}/framing` | The project and its draft, or `draft: null`. |
+| PUT | `/projects/{id}/framing` | The whole draft with `revision` set to the one read (0 when none existed). `409` when it moved; `400` when `project_id` disagrees with the URL; `404` for an unknown project or `panel_rig_id`. |
+| GET | `/rigs/profiles` | Every registered database bound to a rig: `rig`, `catalog_slug`, `catalog_name`, the rig `profile` (or `null`) and its `field_of_view`. Unbound or unreadable databases are left out. |
+
+Offsets are gnomonic (tangent-plane) degrees with east positive, exact for any
+field a camera sees. Panel rows count from the top of the mosaic as the camera
+sees it and columns from the east. Typed models:
+[framing](../crates/director-core/src/framing.rs) and
+[draft](../crates/director-meta/src/framing.rs).
+
 ## Sky survey cutouts
 
 The framing view draws on survey imagery fetched by the server from the CDS

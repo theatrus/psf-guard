@@ -19,6 +19,7 @@ use tokio::sync::Semaphore;
 mod catalog_adoption;
 mod catalog_discovery;
 mod catalog_rig;
+mod framing;
 mod rig_profile;
 mod sky_image;
 
@@ -280,6 +281,21 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
                 psf_guard_director_core::MAX_REQUEST_BYTES,
             )),
         )
+        .route(
+            "/framing/preview",
+            axum::routing::post(framing::preview).layer(DefaultBodyLimit::max(
+                psf_guard_director_core::MAX_REQUEST_BYTES,
+            )),
+        )
+        .route(
+            "/projects/{id}/framing",
+            get(framing::get_draft)
+                .put(framing::put_draft)
+                .layer(DefaultBodyLimit::max(
+                    psf_guard_director_core::MAX_REQUEST_BYTES,
+                )),
+        )
+        .route("/rigs/profiles", get(framing::rig_profiles))
         .route("/sky/surveys", get(sky_image::surveys))
         .route("/sky/cutout", get(sky_image::cutout))
         .route("/projects/{id}", get(project).patch(rename_project))
