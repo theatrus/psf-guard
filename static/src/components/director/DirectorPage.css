@@ -58,3 +58,17 @@
   .director-mapping-table td:first-child, .director-mapping-table td:nth-child(2) { grid-row: 1; }
   .director-cell-label { display: block; margin-bottom: 4px; font-size: 12px; color: var(--color-text-secondary); }
 }
+
+/* Rig profile: three short fieldsets, each a wrapping grid of labeled numbers. */
+.rig-profile { margin-bottom: 1rem; }
+.rig-profile-form fieldset { border: 1px solid var(--border-color, #444); border-radius: 6px; padding: 0.5rem 0.75rem 0.75rem; margin: 0 0 0.75rem; min-width: 0; }
+.rig-profile-form legend { padding: 0 0.35rem; font-weight: 600; }
+.rig-profile-source { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; align-items: center; margin: 0 0 0.5rem; }
+.rig-profile-source .link-button { display: inline-flex; align-items: center; gap: 0.25rem; }
+.rig-profile-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: 0.5rem 1rem; }
+.rig-profile-field { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.rig-profile-field > span:first-child { font-size: 0.85rem; opacity: 0.85; }
+.rig-profile-input { display: flex; align-items: center; gap: 0.35rem; min-width: 0; }
+.rig-profile-input input, .rig-profile-input select { flex: 1 1 5rem; min-width: 0; width: 100%; }
+.rig-profile-input small { white-space: nowrap; opacity: 0.7; }
+.rig-profile-source .link-button { background: none; border: none; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; }

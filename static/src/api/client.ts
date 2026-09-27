@@ -2,7 +2,7 @@ import axios from 'axios';
 import type { AxiosInstance } from 'axios';
 import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
-import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorDiscovery, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorStatus, DirectorRigPlan, DirectorRigReport } from './directorTypes';
+import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorDiscovery, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport } from './directorTypes';
 import type {
   ProjectProcessingSettings,
   StackColorInputSources,
@@ -273,6 +273,20 @@ export const apiClient = {
     if (!data.data) throw new Error(data.error || 'Failed to enable database planning');
     return data.data;
   },
+  getDirectorRigProfile: async (slug: string): Promise<DirectorRigProfileView> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorRigProfileView>>(`/director/v1/catalogs/${encodeURIComponent(slug)}/rig/profile`);
+    if (!data.data) throw new Error(data.error || 'Failed to load rig profile');
+    return data.data;
+  },
+
+  saveDirectorRigProfile: async (slug: string, edit: DirectorRigProfileEdit): Promise<DirectorRigProfileView> => {
+    const api = await getApi();
+    const { data } = await api.put<ApiResponse<DirectorRigProfileView>>(`/director/v1/catalogs/${encodeURIComponent(slug)}/rig/profile`, edit);
+    if (!data.data) throw new Error(data.error || 'Failed to save rig profile');
+    return data.data;
+  },
+
   applyDirectorAdoption: async (slug: string, plan: DirectorAdoptionPlan, preview_digest: string): Promise<DirectorAdoptionReport> => {
     const api = await getApi();
     const { data } = await api.post<ApiResponse<DirectorAdoptionReport>>(`/director/v1/catalogs/${encodeURIComponent(slug)}/adoption/apply`, { plan, preview_digest });

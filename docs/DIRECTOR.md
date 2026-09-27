@@ -216,6 +216,36 @@ pairing, scoped check-in credentials, assignment issuance and snapshot editing r
 separate work. Do not put an operator API token in a plugin profile as a substitute
 for pairing.
 
+## Rig profile
+
+Each database bound to a rig carries one mutable rig profile in the meta
+store: optics, site, horizon, sky quality, altitude and meridian limits, and
+the camera configuration the N.I.N.A. plugin last reported. Planning reads it;
+activation later freezes an immutable setup revision from it. A profile grants
+nothing.
+
+Open **Settings**, choose the database, then **Project planning links**. Once
+planning is enabled, the **Rig profile** card sits above the mapping table.
+**Use frame headers** copies the sensor size, pixel size, focal length,
+aperture and site from the newest frame whose file the server can find; the
+card names the file so a stale header is never mistaken for a measurement.
+Every section shows where its values came from: frame headers, set by hand, or
+reported by the plugin. The field of view and pixel scale update as you type.
+
+| Method | Route | Body or query |
+| --- | --- | --- |
+| GET | `/catalogs/{slug}/rig/profile` | The rig, its profile (revision 0 when nothing is saved), the computed `field_of_view`, and header-derived `defaults`. `404` until planning is enabled on the database. |
+| PUT | `/catalogs/{slug}/rig/profile` | `expected_revision` plus `optics`, `site`, `horizon`, `sky_quality` (each `{value, source}` or `null`) and `limits`. Sources may be `manual` or `frame_headers`; `409` when the revision moved. The plugin's configuration is kept as stored. |
+| PUT | `/rigs/{rig}/equipment` | Plugin report: `coordinator_instance_id`, `catalog_id`, core `configuration`, `optics`, optional `site`, `horizon` and `limits`, and `reported_at_ms`. All three identities must match this server's binding or the call returns `403`. An identical report does not bump the revision. |
+
+Optics hold the unbinned sensor size in pixels, pixel pitch in micrometres,
+effective focal length and clear aperture in millimetres, and how the camera
+angle can change: a rotator, turned by hand between sessions, or fixed. Frame
+headers written by N.I.N.A. record the binned pixel size and image size, so the
+server folds both back to the sensor before offering them. Typed models:
+[optics](../crates/director-core/src/optics.rs) and
+[profile](../crates/director-meta/src/profile.rs).
+
 ## Contention and recovery
 
 Storage runs off the asynchronous HTTP worker. Only one operation is admitted

@@ -2,6 +2,7 @@ use super::*;
 use psf_guard_director_meta::CatalogIdentity;
 use rusqlite::{Connection, TransactionBehavior};
 mod database_rig;
+mod rig_profile;
 
 const PREVIEW: &str = "/catalogs/catalog/adoption/preview";
 const APPLY: &str = "/catalogs/catalog/adoption/apply";

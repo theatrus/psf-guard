@@ -55,3 +55,55 @@ export interface DirectorAdoptionReport {
   applied: boolean;
   mappings: Array<{ mapping: DirectorMapping; source_name: string; project: DirectorIdentity; rig: DirectorIdentity }>;
 }
+
+export type DirectorSource = { kind: 'manual' } | { kind: 'frame_headers'; file_name: string } | { kind: 'plugin' };
+export interface DirectorReported<T> { value: T; source: DirectorSource; reported_at_ms: number }
+export type DirectorRotation = { mode: 'fixed'; angle_degrees: number } | { mode: 'manual'; angle_degrees: number } | { mode: 'rotator' };
+export interface DirectorOptics {
+  sensor_width_px: number;
+  sensor_height_px: number;
+  pixel_size_um: number;
+  focal_length_mm: number;
+  aperture_mm: number | null;
+  rotation: DirectorRotation;
+}
+export interface DirectorFieldOfView { width_degrees: number; height_degrees: number; pixel_scale_arcsec: number; focal_ratio: number | null }
+export interface DirectorSite { latitude_degrees: number; longitude_degrees: number; elevation_meters: number }
+export type DirectorHorizon = { mode: 'fixed_minimum' } | { mode: 'custom'; points: Array<{ azimuth_degrees: number; altitude_degrees: number }> };
+export interface DirectorSkyQuality { bortle_class: number; sqm_mag_per_arcsec2: number | null }
+export interface DirectorLimits {
+  minimum_altitude_degrees: number;
+  maximum_altitude_degrees: number;
+  meridian_exclusion: { before_ms: number; after_ms: number };
+}
+export interface DirectorRigProfile {
+  rig_id: string;
+  revision: number;
+  optics: DirectorReported<DirectorOptics> | null;
+  site: DirectorReported<DirectorSite> | null;
+  horizon: DirectorReported<DirectorHorizon> | null;
+  sky_quality: DirectorReported<DirectorSkyQuality> | null;
+  limits: DirectorReported<DirectorLimits>;
+  /** Only the N.I.N.A. plugin reports this; the form never edits it. */
+  configuration: DirectorReported<unknown> | null;
+  updated_at_ms: number;
+}
+export interface DirectorRigProfileView {
+  rig: DirectorIdentity;
+  profile: DirectorRigProfile;
+  field_of_view: DirectorFieldOfView | null;
+  defaults: {
+    optics: DirectorReported<DirectorOptics> | null;
+    site: DirectorReported<DirectorSite> | null;
+    field_of_view: DirectorFieldOfView | null;
+  };
+}
+export interface DirectorEdited<T> { value: T; source: DirectorSource }
+export interface DirectorRigProfileEdit {
+  expected_revision: number;
+  optics: DirectorEdited<DirectorOptics> | null;
+  site: DirectorEdited<DirectorSite> | null;
+  horizon: DirectorEdited<DirectorHorizon> | null;
+  sky_quality: DirectorEdited<DirectorSkyQuality> | null;
+  limits: DirectorEdited<DirectorLimits>;
+}
