@@ -82,7 +82,7 @@ untested integration requirements unchecked.
 | Sidecar and local recovery | Merged `crates/director-ledger` and `crates/director-runtime`: schema-4 journal, capture/preparation outboxes, IPC 8/runtime 0.7.0, one-shot dispatch checks with exact latest-start deadlines, process crash/reopen tests; PSF Guard #464-487 and [#518](https://github.com/theatrus/psf-guard/pull/518). | Remote inbox/acknowledgements, pruning, grade feedback, assignment replacement and complete operator recovery. No network batch check-in yet. |
 | NINA native execution | Plugin [#18](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/18), [#19](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/19), [#22](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/22), [#23](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/23), [#24](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/24) and [#26](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/26) merged: transient native items, target context, complete horizon export, post-hook geometry checks and tested internal TS-style instruction slots with a compatibility matrix. Real nightly OmniSim probes captured three filtered FITS frames with correlated evidence. | Public TS-compatible session container and UI, all trigger/condition/hook contexts, native defaults, full autofocus/guiding/flip/calibration/safety recovery and continuous ownership integration. Probe uses fixture allocations and synthetic orientation evidence, not a server session. |
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
-| Meta storage | Separate schema-8 store on by default beside the registry, mutable rig profiles with optics/site/limits and plugin equipment reports, per-project framing and plan drafts, UUIDs, reviewed one-to-one database/rig binding, confirmed source project links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. Unambiguous prototype links retain rig IDs. | Conflict-resolution UI for ambiguous prototype rigs, permissions/enrollment, active revisions, allocation authority and progress projections. |
+| Meta storage | Separate schema-9 store on by default beside the registry, mutable rig profiles with optics/site/limits and plugin equipment reports, per-project framing and plan drafts, activation records, UUIDs, reviewed one-to-one database/rig binding, confirmed source project links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. Unambiguous prototype links retain rig IDs. | Conflict-resolution UI for ambiguous prototype rigs, permissions/enrollment, active revisions, allocation authority and progress projections. |
 | Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492): shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493): schema-3 intent persistence with validated immutable setup references. Plan drafts with an objective editor, per-rig template binding and core exposure defaults. | Depth/FOV/sampling compatibility, per-night feasibility and authoritative allocation remain open. |
 | Project framing wizard | Framing view under Rig planning: survey backgrounds from N.I.N.A.'s HiPS list, interactive center, angle and zoom, mosaic rows/columns/overlap, per-rig footprints from rig profiles, draft editing with compare-and-set. | Reference images with WCS, layer comparison, offline region cache, rotation feasibility per rig, objectives and contributions, per-night preview, reviewed activation. |
 | Catalog discovery | [#498](https://github.com/theatrus/psf-guard/pull/498) merged: operator-scoped read-only project/profile evidence from registered TS-compatible catalogs, with bounded results and invalid/duplicate identity reports. | Discovery does not infer rig ownership or read image history. |
@@ -273,9 +273,9 @@ and they never carry credentials or authority.
 
 | Table | Key | Holds |
 | --- | --- | --- |
-| `psfguard_director_project` | `project_guid` | global project UUID, intent revision UUID, coordinator instance UUID, applied-at |
-| `psfguard_director_target` | `target_guid` | objective ID, contribution ID, panel ID, framing revision, intent revision |
-| `psfguard_director_plan` | `exposureplan_id`, `target_guid` | recipe ID, bandpass ID, exposure purpose, required accepted frames at activation |
+| `psf_guard_director_project` | `project_guid` | global project UUID, coordinator instance UUID, activation revision, applied-at |
+| `psf_guard_director_target` | `target_guid` | project GUID, panel ID, framing revision |
+| `psf_guard_director_plan` | `exposureplan_guid` | target GUID, contribution ID, objective ID, bandpass ID, exposure purpose, required accepted frames, plan revision |
 
 Preview/apply writes these in the same transaction as the TS rows they
 describe. A later activation with a new intent revision updates them in place;
@@ -324,8 +324,12 @@ input and must not call an endpoint before its row above says it exists.
    sky quality and band kind, and the Plan editor under Rig planning. Open:
    the per-night feasibility preview (darkness, Moon, horizon and meridian
    from the shared core) and panel subsets per contribution.
-6. Activation: preview/apply into each local rig database with side tables,
-   `GET /rigs/{rig}/program`, and planning push to remote rigs through Sync.
+6. Activation. Done for local rigs: `POST /projects/{id}/activation/preview`
+   and `/apply` write the TS project, per-panel targets and per-objective
+   exposure plans with the side tables above, record the activation in meta
+   schema 9, and link new projects. Open: `GET /rigs/{rig}/program` (needs
+   the plugin's configuration report to build a core `Program`) and the
+   planning push to remote rigs through Sync.
 7. Check-in and live status, with the plugin.
 
 The Director page changes as these land: the identity lists give way to a

@@ -6,6 +6,12 @@
 
 ## Added
 
+- Rig planning can now activate a project: after a preview, PSF Guard writes
+  one Target Scheduler project per participating rig, a target per mosaic
+  panel and an exposure plan per objective into that rig's database, and
+  updates the same rows on later activations without touching captured
+  frames or grades.
+
 - Rig planning gains a plan below the framing: objectives per bandpass in
   accepted hours or frames, and per rig the exposure template and exposure
   length that meet them, with frames worked out per rig and defaults that

@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 8;
+const SCHEMA_VERSION: i32 = 9;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -36,6 +36,7 @@ impl MetaStore {
         create_rig_profile_table(&tx)?;
         create_framing_draft_table(&tx)?;
         create_plan_draft_table(&tx)?;
+        create_activation_table(&tx)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         conn.close().map_err(|(_, error)| Error::Sqlite(error))?;
@@ -72,7 +73,10 @@ impl MetaStore {
             if version < 7 {
                 create_framing_draft_table(&tx)?;
             }
-            create_plan_draft_table(&tx)?;
+            if version < 8 {
+                create_plan_draft_table(&tx)?;
+            }
+            create_activation_table(&tx)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;
@@ -175,6 +179,10 @@ fn validate(conn: &Connection) -> Result<Uuid, Error> {
         conn.prepare("SELECT project_id,revision,payload FROM plan_draft LIMIT 0")
             .map_err(|_| Error::CorruptDatabase)?;
     }
+    if version >= 9 {
+        conn.prepare("SELECT project_id,revision,payload FROM activation LIMIT 0")
+            .map_err(|_| Error::CorruptDatabase)?;
+    }
     let id: String = conn.query_row(
         "SELECT instance_id FROM meta WHERE singleton=1",
         [],
@@ -254,6 +262,16 @@ fn create_framing_draft_table(conn: &Connection) -> Result<(), Error> {
 fn create_plan_draft_table(conn: &Connection) -> Result<(), Error> {
     conn.execute_batch(
         "CREATE TABLE plan_draft(
+            project_id TEXT PRIMARY KEY NOT NULL REFERENCES global_project(id),
+            revision INTEGER NOT NULL CHECK(revision>0),
+            payload TEXT NOT NULL);",
+    )?;
+    Ok(())
+}
+
+fn create_activation_table(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch(
+        "CREATE TABLE activation(
             project_id TEXT PRIMARY KEY NOT NULL REFERENCES global_project(id),
             revision INTEGER NOT NULL CHECK(revision>0),
             payload TEXT NOT NULL);",

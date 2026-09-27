@@ -292,6 +292,45 @@ for slower optics and darker skies, shorter under bright skies, rounded to a
 common length. Typed models: [bandpass](../crates/director-core/src/bandpass.rs)
 and [plan](../crates/director-meta/src/plan.rs).
 
+## Activation
+
+**Activation**, below Plan, pushes the framing and plan into each participating
+rig's database, the same rows Target Scheduler and the Director plugin read:
+
+- one Target Scheduler project per rig, named after the global project, in
+  the Active state, marked as a mosaic when there is more than one panel, under
+  the profile that owns the database's existing projects;
+- one target per panel, named after the target with the panel id appended for
+  mosaics, at the panel center with the plan's camera angle;
+- one exposure plan per rig objective and panel, bound to the chosen template
+  (or one matching its settings, created if needed), with `desired` set to the
+  frames that objective needs at that rig's exposure length.
+
+A second activation updates the same rows in place: coordinates, angle,
+exposure and desired counts change, names the operator edited stay, and
+`acquired`, `accepted`, captured frames and grades are never touched. Panels
+removed from the framing leave their targets behind rather than deleting data.
+PSF Guard remembers which rows it owns in three tables it adds to the rig
+database, `psf_guard_director_project`, `psf_guard_director_target` and
+`psf_guard_director_plan`, keyed by the rows' GUIDs; Target Scheduler and Sync
+ignore them. A newly created project is linked to the global project in the
+meta store, so it appears under Project planning links at once.
+
+**Preview activation** shows, per rig database, what would be created,
+updated or left alone and any reason a rig is skipped: no registered database
+on this server (a Sync push will cover it later), a Target Scheduler schema
+older than 22, or a database with no N.I.N.A. profile yet. **Apply** carries
+the preview digest and is refused when the framing, plan or database changed
+in between. A rig whose plugin has not yet reported its camera still gets its
+rows; the Target Scheduler plugin can run them until Director acquisition
+arrives.
+
+| Method | Route | Body or query |
+| --- | --- | --- |
+| GET | `/projects/{id}/activation` | `{ activation }`: the last applied activation (revision, framing and plan revisions, and per rig the project, target and plan GUIDs) or `null`. |
+| POST | `/projects/{id}/activation/preview` | Empty body. Computes and rolls back; returns the per-rig report and `preview_digest`. `422` until the project has a framing with a panel size and a plan with a ticked rig. |
+| POST | `/projects/{id}/activation/apply` | `{ preview_digest }`. Commits each rig database in turn, records the activation, links new projects; `409` when the digest no longer matches. |
+
 ## Framing drafts
 
 A global project can carry one framing draft: the target center, the camera

@@ -224,3 +224,35 @@ export interface DirectorPlanDraft {
   updated_at_ms: number;
 }
 export interface DirectorPlanView { project: DirectorIdentity; plan: DirectorPlanDraft | null }
+
+export type DirectorActivationAction = 'create' | 'update' | 'unchanged';
+export interface DirectorActivationChange { kind: 'project' | 'target' | 'plan'; action: DirectorActivationAction; name: string; detail: string }
+export interface DirectorActivationRig {
+  rig: DirectorIdentity;
+  catalog_slug: string | null;
+  catalog_name: string;
+  profile_id: string | null;
+  changes: DirectorActivationChange[];
+  warnings: string[];
+  applied: boolean;
+}
+export interface DirectorActivationReport {
+  project: DirectorIdentity;
+  framing_revision: number;
+  plan_revision: number;
+  panels: number;
+  rigs: DirectorActivationRig[];
+  warnings: string[];
+  preview_digest: string;
+  applied: boolean;
+  activation_revision: number | null;
+}
+export interface DirectorActivation {
+  project_id: string;
+  revision: number;
+  framing_revision: number;
+  plan_revision: number;
+  coordinator_instance_id: string;
+  applied_at_ms: number;
+  rigs: Array<{ rig_id: string; catalog_id: string; project_guid: string; profile_id: string; targets: Array<{ panel_id: string; target_guid: string }>; plans: Array<{ contribution_id: string; objective_id: string; target_guid: string; exposureplan_guid: string; required_frames: number }> }>;
+}
