@@ -78,7 +78,7 @@ pub(super) struct Envelope {
     catalog_id: Uuid,
     rig_id: Uuid,
     /// Changes whenever any input changed; also the `ETag`.
-    revision: String,
+    pub(super) revision: String,
     issued_at_ms: u64,
     program: Program,
     links: Vec<Link>,
@@ -158,158 +158,20 @@ pub(super) async fn pull(
     let envelope = tokio::task::spawn_blocking(move || {
         let _permits = (metadata_permit, catalog_permit);
         let store = service.store.lock().map_err(|_| Error::Internal)?;
-        let binding = store
-            .catalog_rig(query.catalog_id)?
-            .filter(|binding| binding.rig.id == rig)
-            .ok_or(Error::WrongRig)?;
-        let profile = store.rig_profile(rig)?;
-        let configuration = profile
-            .as_ref()
-            .and_then(|p| p.configuration.as_ref())
-            .map(|c| c.value.clone())
-            .ok_or_else(|| {
-                PullError::NotReady(
-                    "This rig has not reported its equipment yet; call PUT /rigs/{rig}/equipment first."
-                        .into(),
-                )
-            })?;
-        if configuration.rig_id != rig.to_string() {
-            return Err(Error::Internal.into());
-        }
-        let activations = store.activations_for_rig(rig)?;
-        let context = catalogs
-            .iter()
-            .find(|catalog| read_identity(&catalog.database_path).is_some_and(|id| id.id == query.catalog_id))
-            .cloned()
-            .ok_or(Error::Missing)?;
-        let connection = super::super::database_context::open_scheduler_connection_with_flags(
-            FilePath::new(&context.database_path),
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(StoreError::from)?;
-        connection.busy_timeout(Duration::from_secs(2))?;
-        let mut projects = BTreeMap::new();
-        for activation in &activations {
-            projects.insert(
-                activation.project_id,
-                store.project(activation.project_id)?.ok_or(Error::Missing)?,
-            );
-        }
-        let plans: BTreeMap<Uuid, psf_guard_director_meta::plan::PlanDraft> = activations
-            .iter()
-            .filter_map(|a| store.plan_draft(a.project_id).transpose().map(|p| (a.project_id, p)))
-            .map(|(id, p)| Ok((id, p?)))
-            .collect::<Result<_, StoreError>>()?;
-        let built = build(
-            &connection,
+        let assembled = assemble(
+            &store,
+            &catalogs,
+            service.instance_id,
             rig,
-            binding.catalog,
-            &configuration,
-            profile.as_ref(),
-            &activations,
-            &projects,
-            &plans,
+            query.catalog_id,
         )?;
-        let now = now_ms();
-        // The revision fingerprints every input; the clock is deliberately left
-        // out so an unchanged program answers 304 on the next pull.
-        let revision = catalog_discovery::digest(
-            &serde_json::to_vec(&(
-                "program-v1",
-                &built.goals,
-                &built.targets,
-                &built.recipes,
-                &built.links,
-                &configuration,
-                profile.as_ref().map(|p| p.revision),
-            ))
-            .map_err(|_| Error::Internal)?,
-        );
-        if if_none_match.as_deref() == Some(revision.as_str()) {
-            return Err(PullError::NotModified(format!("\"{revision}\"")));
+        if if_none_match.as_deref() == Some(assembled.revision.as_str()) {
+            return Err(PullError::NotModified(format!(
+                "\"{}\"",
+                assembled.revision
+            )));
         }
-        let span = Interval {
-            start_ms: now,
-            end_ms: now + VALIDITY.as_millis() as u64,
-        };
-        let goals: Vec<Goal> = built
-            .goals
-            .into_iter()
-            .map(|goal| Goal {
-                eligible_windows: vec![span],
-                ..goal
-            })
-            .collect();
-        if goals.is_empty() {
-            return Err(PullError::NotReady(
-                "No activated plan gives this rig work yet.".into(),
-            ));
-        }
-        let program = Program {
-            schema_version: PROGRAM_VERSION,
-            assignment: Assignment {
-                id: format!("assignment-{}", &revision[..16]),
-                revision: activations.iter().map(|a| a.revision).max().unwrap_or(1),
-                rig_id: rig.to_string(),
-                configuration_id: configuration.id.clone(),
-                valid_from_ms: span.start_ms,
-                expires_at_ms: span.end_ms,
-                goals,
-            },
-            configuration: configuration.clone(),
-            targets: built.targets,
-            recipes: built.recipes,
-            bindings: built.bindings,
-        };
-        // Prove the program binds before handing it out. The synthetic state
-        // only supplies the identity and time the validator needs.
-        let limits = profile
-            .as_ref()
-            .map(|p| p.limits.value)
-            .unwrap_or_default();
-        BoundProgram::new(
-            program.clone(),
-            &CoreState {
-                rig_id: rig.to_string(),
-                configuration_id: configuration.id.clone(),
-                now_ms: now,
-                conditions_valid_until_ms: span.end_ms,
-                safety: Safety::Unknown,
-                at_boundary: true,
-                operator_stop: false,
-                meridian_exclusion: limits.meridian_exclusion,
-            },
-        )
-        .map_err(|error| {
-            tracing::warn!(?error, "Program from activation did not bind");
-            PullError::NotReady(format!(
-                "The activated plan does not form a valid program for this rig ({error:?}); review the plan and the rig's templates."
-            ))
-        })?;
-        Ok::<_, PullError>(Envelope {
-            coordinator_instance_id: service.instance_id,
-            catalog_id: query.catalog_id,
-            rig_id: rig,
-            revision,
-            issued_at_ms: now,
-            program,
-            links: built.links,
-            rig: RigContext {
-                profile_revision: profile.as_ref().map_or(0, |p| p.revision),
-                site: profile.as_ref().and_then(|p| p.site.as_ref()).map(|s| s.value),
-                horizon: profile
-                    .as_ref()
-                    .and_then(|p| p.horizon.as_ref())
-                    .map(|h| h.value.clone())
-                    .unwrap_or(Horizon::FixedMinimum {}),
-                limits,
-                rotation: profile
-                    .as_ref()
-                    .and_then(|p| p.optics.as_ref())
-                    .map(|o| o.value.rotation),
-            },
-            omitted: built.omitted,
-        })
+        Ok::<_, PullError>(assembled)
     })
     .await
     .map_err(|error| {
@@ -327,6 +189,191 @@ pub(super) async fn pull(
 }
 
 use crate::server::database_context::DatabaseContext;
+
+/// Build the rig's current program under the caller's store lock. Shared by
+/// the pull and by check-in, which only needs the revision to say whether the
+/// plugin should pull again.
+pub(super) fn assemble(
+    store: &MetaStore,
+    catalogs: &[Arc<DatabaseContext>],
+    instance: Uuid,
+    rig: Uuid,
+    catalog_id: Uuid,
+) -> Result<Envelope, PullError> {
+    let binding = store
+        .catalog_rig(catalog_id)?
+        .filter(|binding| binding.rig.id == rig)
+        .ok_or(Error::WrongRig)?;
+    let profile = store.rig_profile(rig)?;
+    let configuration = profile
+        .as_ref()
+        .and_then(|p| p.configuration.as_ref())
+        .map(|c| c.value.clone())
+        .ok_or_else(|| {
+            PullError::NotReady(
+                "This rig has not reported its equipment yet; call PUT /rigs/{rig}/equipment first."
+                    .into(),
+            )
+        })?;
+    if configuration.rig_id != rig.to_string() {
+        return Err(Error::Internal.into());
+    }
+    let activations = store.activations_for_rig(rig)?;
+    let context = catalogs
+        .iter()
+        .find(|catalog| read_identity(&catalog.database_path).is_some_and(|id| id.id == catalog_id))
+        .cloned()
+        .ok_or(Error::Missing)?;
+    let connection = super::super::database_context::open_scheduler_connection_with_flags(
+        FilePath::new(&context.database_path),
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(StoreError::from)?;
+    connection.busy_timeout(Duration::from_secs(2))?;
+    let mut projects = BTreeMap::new();
+    for activation in &activations {
+        projects.insert(
+            activation.project_id,
+            store
+                .project(activation.project_id)?
+                .ok_or(Error::Missing)?,
+        );
+    }
+    let plans: BTreeMap<Uuid, psf_guard_director_meta::plan::PlanDraft> = activations
+        .iter()
+        .filter_map(|a| {
+            store
+                .plan_draft(a.project_id)
+                .transpose()
+                .map(|p| (a.project_id, p))
+        })
+        .map(|(id, p)| Ok((id, p?)))
+        .collect::<Result<_, StoreError>>()?;
+    let saved: BTreeMap<String, u32> = store.saved_captures_by_goal(rig)?.into_iter().collect();
+    let built = build(
+        &connection,
+        rig,
+        binding.catalog,
+        &configuration,
+        profile.as_ref(),
+        &activations,
+        &projects,
+        &plans,
+        &saved,
+    )?;
+    let now = now_ms();
+    // The revision fingerprints every input; the clock is deliberately left
+    // out so an unchanged program answers 304 on the next pull.
+    let revision = catalog_discovery::digest(
+        &serde_json::to_vec(&(
+            "program-v1",
+            &built.goals,
+            &built.targets,
+            &built.recipes,
+            &built.links,
+            &configuration,
+            profile.as_ref().map(|p| p.revision),
+        ))
+        .map_err(|_| Error::Internal)?,
+    );
+    let span = Interval {
+        start_ms: now,
+        end_ms: now + VALIDITY.as_millis() as u64,
+    };
+    let goals: Vec<Goal> = built
+        .goals
+        .into_iter()
+        .map(|goal| Goal {
+            eligible_windows: vec![span],
+            ..goal
+        })
+        .collect();
+    if goals.is_empty() {
+        return Err(PullError::NotReady(
+            "No activated plan gives this rig work yet.".into(),
+        ));
+    }
+    let program = Program {
+        schema_version: PROGRAM_VERSION,
+        assignment: Assignment {
+            id: format!("assignment-{}", &revision[..16]),
+            revision: activations.iter().map(|a| a.revision).max().unwrap_or(1),
+            rig_id: rig.to_string(),
+            configuration_id: configuration.id.clone(),
+            valid_from_ms: span.start_ms,
+            expires_at_ms: span.end_ms,
+            goals,
+        },
+        configuration: configuration.clone(),
+        targets: built.targets,
+        recipes: built.recipes,
+        bindings: built.bindings,
+    };
+    // Prove the program binds before handing it out. The synthetic state
+    // only supplies the identity and time the validator needs.
+    let limits = profile.as_ref().map(|p| p.limits.value).unwrap_or_default();
+    BoundProgram::new(
+        program.clone(),
+        &CoreState {
+            rig_id: rig.to_string(),
+            configuration_id: configuration.id.clone(),
+            now_ms: now,
+            conditions_valid_until_ms: span.end_ms,
+            safety: Safety::Unknown,
+            at_boundary: true,
+            operator_stop: false,
+            meridian_exclusion: limits.meridian_exclusion,
+        },
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "Program from activation did not bind");
+        PullError::NotReady(format!(
+            "The activated plan does not form a valid program for this rig ({error:?}); review the plan and the rig's templates."
+        ))
+    })?;
+    Ok(Envelope {
+        coordinator_instance_id: instance,
+        catalog_id,
+        rig_id: rig,
+        revision,
+        issued_at_ms: now,
+        program,
+        links: built.links,
+        rig: RigContext {
+            profile_revision: profile.as_ref().map_or(0, |p| p.revision),
+            site: profile
+                .as_ref()
+                .and_then(|p| p.site.as_ref())
+                .map(|s| s.value),
+            horizon: profile
+                .as_ref()
+                .and_then(|p| p.horizon.as_ref())
+                .map(|h| h.value.clone())
+                .unwrap_or(Horizon::FixedMinimum {}),
+            limits,
+            rotation: profile
+                .as_ref()
+                .and_then(|p| p.optics.as_ref())
+                .map(|o| o.value.rotation),
+        },
+        omitted: built.omitted,
+    })
+}
+
+/// The current revision only, or `None` when no program can be built yet.
+pub(super) fn current_revision(
+    store: &MetaStore,
+    catalogs: &[Arc<DatabaseContext>],
+    instance: Uuid,
+    rig: Uuid,
+    catalog_id: Uuid,
+) -> Result<Option<String>, PullError> {
+    match assemble(store, catalogs, instance, rig, catalog_id) {
+        Ok(envelope) => Ok(Some(envelope.revision)),
+        Err(PullError::NotReady(_)) => Ok(None),
+        Err(other) => Err(other),
+    }
+}
 
 fn read_identity(path: &str) -> Option<CatalogIdentity> {
     let connection = super::super::database_context::open_scheduler_connection_with_flags(
@@ -370,6 +417,7 @@ fn build(
     activations: &[Activation],
     projects: &BTreeMap<Uuid, NamedIdentity>,
     plans: &BTreeMap<Uuid, psf_guard_director_meta::plan::PlanDraft>,
+    saved: &BTreeMap<String, u32>,
 ) -> Result<Built, PullError> {
     let rotator = matches!(
         profile
@@ -531,12 +579,20 @@ fn build(
             let remaining = requested.saturating_sub(accepted);
             let attempts_remaining = ((f64::from(remaining) * ATTEMPT_MARGIN).ceil() as u32)
                 .max(if remaining > 0 { 1 } else { 0 });
+            // Saved captures the rig has reported that grading has not yet
+            // accepted: projected credit, capped at what is still owed.
+            let pending = saved
+                .get(&goal_id)
+                .copied()
+                .unwrap_or(0)
+                .saturating_sub(accepted)
+                .min(remaining);
             built.goals.push(Goal {
                 id: goal_id.clone(),
                 priority: objective.map_or(1, |o| o.priority),
                 requested,
                 accepted,
-                pending: 0,
+                pending,
                 attempts_remaining,
                 exposure_ms,
                 overhead_ms: OVERHEAD_MS,

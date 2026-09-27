@@ -358,6 +358,26 @@ constraints, and `omitted` names any plan row the program could not express
 and why. The server binds the program through the core before answering; a
 program that does not bind is a `422` with the reason, never a partial pull.
 
+## Check-in and live status
+
+| Method | Route | Body or query |
+| --- | --- | --- |
+| POST | `/rigs/{rig}/checkin` | `coordinator_instance_id`, `catalog_id`, `ledger_id`, optional `program_revision` (the revision the plugin runs), and `events`: up to 256 ledger `ExecutionEvent`s from that one ledger in ascending sequence, sent verbatim. Returns `acknowledged_through` (every sequence up to it is stored), `highest_seen`, per-event `outcomes` (`applied`, `duplicate`, `conflict`), the sequences in `conflicts`, and `program_revision` with `program_changed`. `400` for a page that mixes ledgers or rigs, runs backwards or is empty; `403` on a tuple mismatch. |
+| POST | `/rigs/{rig}/status` | `coordinator_instance_id`, `catalog_id`, `session_id`, `reported_at_ms`, optional `program_revision`, and `status`: the plugin's coalesced live report (phase, goal and target IDs, elapsed time, wait reason, safety, connectivity, queue depth), stored verbatim. `accepted: false` means a newer report was already held for that session, or a newer session exists. |
+| GET | `/rigs/status` | Operator view: every rig's newest status with its check-in cursors per ledger. |
+
+A receipt is stored once by ledger and sequence and never rewritten: a replay
+is acknowledged again, a replay with different content is reported as a
+conflict and left out, and a gap holds the acknowledged cursor back while the
+later events are kept. Acknowledgements name one ledger and one contiguous
+cursor, never a range across feeds. Saved captures the rig reported appear as
+`pending` credit in the next program pull, capped at the frames still owed,
+until grading turns them into `accepted` counts in the rig database. Check-in
+and status both answer `program_changed` so the plugin knows to pull again;
+neither of them alters a plan, a rig database or the program. Grades still
+come from PSF Guard grading the images; a receipt is evidence that a frame
+was taken, not that it passed.
+
 ## Framing drafts
 
 A global project can carry one framing draft: the target center, the camera
