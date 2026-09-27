@@ -88,9 +88,9 @@ untested integration requirements unchecked.
 | Catalog discovery | [#498](https://github.com/theatrus/psf-guard/pull/498) merged: operator-scoped read-only project/profile evidence from registered TS-compatible catalogs, with bounded results and invalid/duplicate identity reports. | Discovery does not infer rig ownership or read image history. |
 | Catalog adoption | [#502](https://github.com/theatrus/psf-guard/pull/502) merged explicit durable lineage; [#503](https://github.com/theatrus/psf-guard/pull/503) merged operator preview/apply, exact identity matching, stale-review refusal and interrupted-write recovery. [#506](https://github.com/theatrus/psf-guard/pull/506) merged the reviewed mapping UI and read-only inventory, with real-server browser tests. | Independent forks, historical-image attribution, contribution accounting and acquisition authorization remain separate work. |
 | Operator API and UI | Director page is a plan list (`GET /plans`: links, framing/plan/activation stage, Rig planning entry) over a rig list (planning state, optics, last plugin status); reviewed planning links and rig profiles in database settings; Rig planning holds framing, plan and activation over Overview's existing target/exposure editor. The identity lists and Catalogs tab are retired; old links redirect. Desktop/mobile real-server tests cover two databases contributing to one project and return navigation. | Rig pairing, acquisition control and a live dashboard with connectivity. UI tests are not equipment tests. |
-| Program delivery | #528 adds `GET /rigs/{rig}/program`, compiling activated rig rows and reported configuration into core Program plus identity links and rig context. | Immutable issued allocations, explicit filter mapping, progress-preserving refresh and plugin HTTP intake. The current compiler response must not yet arm acquisition; see the program-intake audit below. |
+| Program delivery | #528 adds `GET /rigs/{rig}/program`, compiling activated rig rows and reported configuration into core Program plus identity links and rig context. Plugin #28 adds bounded, read-only HTTP preview intake with exact scope/configuration/link checks and immutable-identity drift detection. | Immutable issued allocations, explicit filter mapping, progress-preserving refresh, commissioning UI and durable plugin cache. The current compiler response must not yet arm acquisition; see the program-intake audit below. |
 | Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
-| Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. | Central telemetry ingestion/dashboard, scoped pairing, remote acknowledgements, offline authorization lifecycle, manual/sequence batch reconcile and reconnect activation are not implemented. |
+| Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. #530 adds server receipt ingestion/contiguous acknowledgements and coalesced status routes; #531 shows reported rig status in Director. | Plugin sender and acknowledgement retention, scoped pairing, grade feedback, offline authorization lifecycle, manual/sequence batch reconcile and replacement activation remain missing. |
 | End-to-end lifecycle | Core, process, native simulator and isolated management HTTP/UI tests exist separately. | No PSF Guard allocation -> real NINA simulator acquisition -> central telemetry/grade -> batch reconciliation/replan test. TS/Sync/Chatstronomy coexistence gates remain open. |
 
 ## Domain model
@@ -1130,7 +1130,7 @@ treat TS tables as the planner's internal schema.
 | Boundary | Required information and behavior | Current state |
 | --- | --- | --- |
 | Commissioning | Coordinator instance UUID, durable catalog UUID, bound rig UUID, local N.I.N.A. profile binding, permitted projects and scoped credentials. The database slug is a locator, not identity. | Database/rig binding exists; Director pairing/enrollment does not. Sync credentials are not Director authority. |
-| Assignment check-in | Versioned immutable program, assignment ID/revision/validity, project/contribution/source-project identities, configuration/site/rig revisions, effective policy provenance, and offline authorization/budgets. Validate engine and contract compatibility before activation. | The server now compiles a program from database activation; immutable issuance, refresh/reconciliation and plugin intake remain missing. |
+| Assignment check-in | Versioned immutable program, assignment ID/revision/validity, project/contribution/source-project identities, configuration/site/rig revisions, effective policy provenance, and offline authorization/budgets. Validate engine and contract compatibility before activation. | The server compiles a program from database activation; plugin #28 can inspect it. Immutable issuance, durable cache, refresh/reconciliation and activation remain missing. |
 | Native execution | Rust selects and issues work. N.I.N.A. runs native items in target context with inherited triggers/conditions and the TS-compatible instruction slots. Each newly issued command/reservation has one native invocation. | Internal adapters and simulator loop exist; production session loop, complete options UI and hook lifecycle remain unfinished. |
 | Local status | Session/ledger, database/rig/project/target/goal IDs, assignment revision, operation and monotonic elapsed time, wait reason, local safety, connectivity, last successful check-in and queue depth. | Runtime Start/Stop status exists; acquisition session status contract/stream remains to be implemented. |
 | Central reporting | Coalesced live status is separate from durable capture/preparation receipts. Network errors update connectivity only; they do not fail an otherwise authorized local exposure or erase evidence. `POST /rigs/{rig}/status` and `GET /rigs/status` exist. | Plugin sender, operator dashboard and connectivity display. |
@@ -1252,6 +1252,25 @@ operation ownership by themselves. Before enabling acquisition, test a real
 server program with the NINA simulators, then repeat through expiry, lost
 network, restart, saved-but-ungraded captures and batch reconnect. Existing
 separate server and simulator tests do not cover this combined gate.
+
+Implementation update after the audit: Director plugin
+[#28](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/28) adds
+`CoordinatorProgramClient.ReadPreviewAsync`. It binds the coordinator/catalog/
+rig/profile and current native configuration, validates schema 1 and exact goal
+links, bounds HTTP/body processing, and rejects changed content under the same
+ETag or assignment identity. It sends unconditional GETs and rejects `304`
+because it has no durable cache yet. Credentials come from an in-memory provider;
+there is no API-key setting or credential file. The result is explicitly a
+preview, not a ledger activation or equipment permit. Engine-version negotiation
+is absent from the current server envelope and is not claimed by this client.
+
+The plugin passed 539 tests, including 45 intake cases and a real loopback
+redirect test, plus a separate NINA nightly #59/ASCOM regression run with three
+FITS captures. The HTTP tests use controlled responses, and the NINA fixture
+does not consume HTTP programs. The combined acceptance gate remains open.
+Server #530 adds receipt/status endpoints and saved-receipt pending credit,
+superseding the audit's statement that those server endpoints are missing; it
+does not supply the plugin sender or a reviewed allocation-replacement protocol.
 
 ## Quality, calibration, and processing loop
 
