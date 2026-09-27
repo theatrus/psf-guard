@@ -16,7 +16,7 @@ internal static class GeometryChecks
         goal["eligible_windows"] = new JsonArray(new JsonObject { ["start_ms"] = start, ["end_ms"] = start + 60000 });
         goal["exposure_ms"] = 5000;
         goal["overhead_ms"] = 1000;
-        program["recipes"]![0]!["exposure_ms"] = 5000;
+        program["recipes"]![0]!["exposure_ms"] = 5000UL;
         JsonNode issued;
         await TestDirectory.RunAsync("psf-guard-director-geometry-", async directory =>
         {
