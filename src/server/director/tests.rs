@@ -14,6 +14,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 mod adoption;
 mod configuration;
+mod sky_image;
 
 fn state(dir: &TempDir, enable: bool) -> AppState {
     let mut state = AppState::from_databases(
