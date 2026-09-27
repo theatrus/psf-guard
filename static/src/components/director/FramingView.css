@@ -21,7 +21,8 @@
 .framing-controls legend { padding: 0 4px; font-weight: 600; }
 .framing-controls label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--color-text-secondary); min-width: 0; }
 .framing-controls label > small:last-child { color: var(--color-text-secondary); }
-.framing-controls input, .framing-controls select { width: 100%; min-width: 0; color: var(--color-text-primary); }
+.framing-controls input:not([type="checkbox"]), .framing-controls select { width: 100%; min-width: 0; box-sizing: border-box; background: var(--color-bg-secondary); color: var(--color-text-primary); border: 1px solid var(--color-border-tertiary); border-radius: 4px; padding: 7px 9px; font: inherit; }
+.framing-controls input:disabled, .framing-controls select:disabled { opacity: 0.6; }
 .framing-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: 8px 12px; margin-top: 8px; }
 .framing-input { display: flex; align-items: center; gap: 6px; }
 .framing-input input { flex: 1 1 4rem; }

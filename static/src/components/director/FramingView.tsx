@@ -12,6 +12,10 @@ import {
 import './FramingView.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Framing request failed';
+/** Director admits one metadata request at a time and answers 503 with Retry-After while busy. */
+const httpStatus = (error: unknown) => isAxiosError(error) ? error.response?.status
+  : error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined;
+const retryWhenBusy = (count: number, error: unknown) => httpStatus(error) === 503 && count < 5;
 const DEFAULT_SURVEY = 'dss2_color';
 const IMAGE_POLL_MS = 1000;
 const IMAGE_POLL_LIMIT = 90;
@@ -70,9 +74,9 @@ export default function FramingView({ projectId, seed }: FramingViewProps) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const draftKey = ['directorFraming', projectId];
-  const draft = useQuery({ queryKey: draftKey, queryFn: () => apiClient.getDirectorFramingDraft(projectId), retry: false, refetchOnWindowFocus: false });
-  const surveys = useQuery({ queryKey: ['directorSurveys'], queryFn: apiClient.getDirectorSurveys, staleTime: Infinity, retry: false });
-  const rigs = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: false, refetchOnWindowFocus: false });
+  const draft = useQuery({ queryKey: draftKey, queryFn: () => apiClient.getDirectorFramingDraft(projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
+  const surveys = useQuery({ queryKey: ['directorSurveys'], queryFn: apiClient.getDirectorSurveys, staleTime: Infinity, retry: retryWhenBusy, retryDelay: 700 });
+  const rigs = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
   const [state, setState] = useState<FramingState | null>(null);
   const [notice, setNotice] = useState('');
   const [problem, setProblem] = useState('');
@@ -186,6 +190,7 @@ export default function FramingView({ projectId, seed }: FramingViewProps) {
         <label>Panel rig
           <select aria-label="Panel rig" value={state.panelRigId ?? ''} onChange={event => chooseRig(event.target.value)}>
             <option value="">Enter a size by hand</option>
+            {state.panelRigId && !panelRig && <option value={state.panelRigId} disabled>{rigs.isPending ? 'Loading rig...' : rigs.isError ? 'Saved rig (list unavailable)' : 'Saved rig is no longer listed'}</option>}
             {rigList.map(entry => <option key={entry.rig.id} value={entry.rig.id} disabled={!entry.field_of_view}>{entry.catalog_name}{entry.field_of_view ? ` (${formatDegrees(entry.field_of_view.width_degrees)} × ${formatDegrees(entry.field_of_view.height_degrees)})` : ' (no optics yet)'}</option>)}
           </select>
         </label>
@@ -202,7 +207,8 @@ export default function FramingView({ projectId, seed }: FramingViewProps) {
       </fieldset>
       <fieldset>
         <legend>Compare rigs</legend>
-        {rigList.length === 0 && <p className="director-muted">{rigs.isPending ? 'Loading rigs...' : 'No rig has planning enabled yet.'}</p>}
+        {rigs.isError && <p className="director-error" role="alert">Rigs could not be loaded: {message(rigs.error)} <button type="button" onClick={() => void rigs.refetch()}>Retry</button></p>}
+        {!rigs.isError && rigList.length === 0 && <p className="director-muted">{rigs.isPending ? 'Loading rigs...' : 'No rig has planning enabled yet.'}</p>}
         {rigList.map(entry => <label key={entry.rig.id} className="framing-check">
           <input type="checkbox" disabled={!entry.field_of_view} checked={state.shownRigIds.includes(entry.rig.id)} onChange={event => update(current => ({ shownRigIds: event.target.checked ? [...current.shownRigIds, entry.rig.id] : current.shownRigIds.filter(id => id !== entry.rig.id) }))} />
           {entry.catalog_name}{entry.field_of_view ? <small> {formatDegrees(entry.field_of_view.width_degrees)} × {formatDegrees(entry.field_of_view.height_degrees)}, {entry.field_of_view.pixel_scale_arcsec.toFixed(2)}″/px</small> : <small> no optics in its rig profile</small>}

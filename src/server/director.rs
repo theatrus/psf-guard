@@ -303,6 +303,19 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .layer(DefaultBodyLimit::max(4096))
 }
 
+/// Wait briefly for an admission permit instead of failing at once. Reads
+/// that merely list state should not lose to a neighbouring request; a write
+/// still uses `try_acquire_owned` so a dropped request cannot queue work.
+async fn admit(semaphore: &Arc<Semaphore>) -> Result<tokio::sync::OwnedSemaphorePermit, Error> {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        semaphore.clone().acquire_owned(),
+    )
+    .await
+    .map_err(|_| Error::Busy)?
+    .map_err(|_| Error::Internal)
+}
+
 fn enabled(state: &AppState) -> Result<Arc<Service>, Error> {
     if !state.database_management_allowed() {
         return Err(Error::Forbidden);

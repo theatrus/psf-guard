@@ -89,16 +89,8 @@ pub(super) async fn rig_profiles(
         .values()
         .cloned()
         .collect();
-    let metadata_permit = service
-        .admission
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| Error::Busy)?;
-    let catalog_permit = service
-        .discovery_admission
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| Error::Busy)?;
+    let metadata_permit = admit(&service.admission).await?;
+    let catalog_permit = admit(&service.discovery_admission).await?;
     let summaries = tokio::task::spawn_blocking(move || {
         let _permits = (metadata_permit, catalog_permit);
         let store = service.store.lock().map_err(|_| Error::Internal)?;

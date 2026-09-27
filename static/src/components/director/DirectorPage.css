@@ -69,7 +69,7 @@
 .rig-profile-field { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
 .rig-profile-field > span:first-child { font-size: 0.85rem; opacity: 0.85; }
 .rig-profile-input { display: flex; align-items: center; gap: 0.35rem; min-width: 0; }
-.rig-profile-input input, .rig-profile-input select { flex: 1 1 5rem; min-width: 0; width: 100%; }
+.rig-profile-input input, .rig-profile-input select { flex: 1 1 5rem; min-width: 0; width: 100%; box-sizing: border-box; background: var(--color-bg-secondary); color: var(--color-text-primary); border: 1px solid var(--color-border-tertiary); border-radius: 4px; padding: 7px 9px; font: inherit; }
 .rig-profile-input small { white-space: nowrap; opacity: 0.7; }
 .rig-profile-source .link-button { background: none; border: none; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; }
 
