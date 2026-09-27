@@ -1,4 +1,4 @@
-import type { DirectorFramingDraft, DirectorFramingRequest, DirectorMosaic, DirectorOffset, DirectorPanelSize, DirectorRigProfileSummary, DirectorSkyPosition } from '../../api/directorTypes';
+import type { DirectorFramingDraft, DirectorFramingRequest, DirectorMosaic, DirectorOffset, DirectorPanelSize, DirectorRigProfileSummary, DirectorSkyPosition, DirectorSurvey } from '../../api/directorTypes';
 import type { SkyPreview } from '../../api/types';
 import { tanPixelToSky } from '../../utils/skyProjection';
 
@@ -136,6 +136,16 @@ export function stackMatrix(preview: SkyPreview, view: DirectorSkyPosition, view
   return `matrix(${a} ${b} ${c} ${d} ${p0[0]} ${p0[1]})`;
 }
 
+export const THUMB_WIDTH = 320;
+export const THUMB_HEIGHT = 240;
+
+/** The width of sky a plan thumbnail shows: the whole mosaic with room around it. */
+export function thumbnailFov(framing: { extent: DirectorPanelSize | null; panel: DirectorPanelSize | null }): number {
+  const extent = framing.extent ?? framing.panel;
+  const needed = extent ? Math.max(extent.width_degrees, (extent.height_degrees * THUMB_WIDTH) / THUMB_HEIGHT) : 1;
+  return clampFov(Math.max(0.3, needed * 1.6));
+}
+
 export function clampFov(fov: number): number {
   return Math.min(MAX_VIEW_FOV, Math.max(MIN_VIEW_FOV, fov));
 }
@@ -194,4 +204,17 @@ export function handleOffset(positionAngle: number, halfHeightDegrees: number, m
   const r = halfHeightDegrees + marginDegrees;
   const rad = (positionAngle * Math.PI) / 180;
   return [r * Math.sin(rad), r * Math.cos(rad)];
+}
+
+/** The layers worth a chip on the sky: the DSS2 colour plates N.I.N.A. starts
+ *  from and every narrowband layer, under short names. The View select
+ *  still offers the whole list. */
+const CHIP_LABELS: Record<string, string> = {
+  dss2_color: 'DSS2', finkbeiner_halpha: 'Hα Finkbeiner', nsns_halpha: 'Hα NSNS', nsns_oiii: 'O III NSNS',
+  nsns_ohs: 'SHO NSNS', nsns_halpha_continuum: 'Hα + continuum', nsns_dr01_color: 'NSNS colour',
+};
+export function chipSurveys(surveys: DirectorSurvey[]): Array<{ survey: DirectorSurvey; label: string }> {
+  return surveys
+    .filter(survey => survey.id === 'dss2_color' || survey.kind === 'narrowband')
+    .map(survey => ({ survey, label: CHIP_LABELS[survey.id] ?? survey.name.replace(/^Northern Sky Narrowband Survey /, 'NSNS ').replace(/ composite$/i, '') }));
 }

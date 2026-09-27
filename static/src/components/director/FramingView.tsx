@@ -7,9 +7,10 @@ import { useAccess } from '../../auth/access';
 import type { DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigProfileSummary } from '../../api/directorTypes';
 import {
   MAX_VIEW_FOV, MIN_VIEW_FOV, STAGE_HEIGHT, STAGE_WIDTH, angleFromStage, clampFov, draftFromState, formatDec, formatDegrees, formatRaHours, handleOffset,
-  insidePolygon, moveBy, panelForRig, pixelScale, polygonPoints, previewRequest, stackMatrix, stateFromDraft, stateFromSeed, toStage, type FramingSeed, type FramingState,
+  insidePolygon, moveBy, panelForRig, pixelScale, polygonPoints, previewRequest, stackMatrix, stateFromDraft, stateFromSeed, toStage, type FramingSeed, type FramingState, chipSurveys,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
+import { useDebounced, useSurveyCutout } from './useSurveyCutout';
 import './FramingView.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Framing request failed';
@@ -18,53 +19,6 @@ const httpStatus = (error: unknown) => isAxiosError(error) ? error.response?.sta
   : error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined;
 const retryWhenBusy = (count: number, error: unknown) => httpStatus(error) === 503 && count < 5;
 const DEFAULT_SURVEY = 'dss2_color';
-const IMAGE_POLL_MS = 1000;
-const IMAGE_POLL_LIMIT = 90;
-
-function useDebounced<T>(value: T, delay: number): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => { const timer = setTimeout(() => setDebounced(value), delay); return () => clearTimeout(timer); }, [value, delay]);
-  return debounced;
-}
-
-/** The survey image behind the footprints. Keeps the last image up while the
- *  next one loads, polls a 202, and names a failure instead of hiding it. */
-function useCutout(state: FramingState | null) {
-  const request = useMemo(() => state ? {
-    survey: state.surveyId, ra: Number(state.viewCenter.ra_degrees.toFixed(5)), dec: Number(state.viewCenter.dec_degrees.toFixed(5)),
-    fov: Number(state.viewFov.toFixed(5)), width: STAGE_WIDTH, height: STAGE_HEIGHT, rotation: 0,
-  } : null, [state]);
-  const debounced = useDebounced(request, 400);
-  const [image, setImage] = useState<{ url: string; key: string } | null>(null);
-  const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle');
-  const [error, setError] = useState('');
-  useEffect(() => {
-    if (!debounced) return;
-    const key = JSON.stringify(debounced);
-    let cancelled = false;
-    let attempts = 0;
-    setStatus('loading'); setError('');
-    const poll = async () => {
-      try {
-        const result = await apiClient.fetchDirectorCutout(debounced);
-        if (cancelled) return;
-        if (result.state === 'ready') {
-          const url = URL.createObjectURL(result.blob);
-          setImage(previous => { if (previous) URL.revokeObjectURL(previous.url); return { url, key }; });
-          setStatus('ready');
-        } else if (result.state === 'generating') {
-          if (++attempts >= IMAGE_POLL_LIMIT) { setStatus('failed'); setError('Survey image is taking too long; the last one stays up.'); return; }
-          setTimeout(poll, IMAGE_POLL_MS);
-        } else { setStatus('failed'); setError(result.error); }
-      } catch (cause) { if (!cancelled) { setStatus('failed'); setError(message(cause)); } }
-    };
-    void poll();
-    return () => { cancelled = true; };
-  }, [debounced]);
-  useEffect(() => () => { setImage(previous => { if (previous) URL.revokeObjectURL(previous.url); return null; }); }, []);
-  return { image, status, error, stale: image !== null && image.key !== JSON.stringify(debounced) };
-}
-
 /** The rotation handle: past the top edge of the whole mosaic, along its up direction. */
 function rotationHandle(geometry: DirectorFramingPreview, state: FramingState) {
   const [cx, cy] = geometry.view_center_offset ?? [0, 0];
@@ -165,7 +119,10 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     queryFn: () => apiClient.previewDirectorFraming(debouncedRequest!),
     enabled: !!debouncedRequest, retry: false, placeholderData: previous => previous, staleTime: 60_000,
   });
-  const cutout = useCutout(state);
+  const cutout = useSurveyCutout(state ? {
+    survey: state.surveyId, ra: Number(state.viewCenter.ra_degrees.toFixed(5)), dec: Number(state.viewCenter.dec_degrees.toFixed(5)),
+    fov: Number(state.viewFov.toFixed(5)), width: STAGE_WIDTH, height: STAGE_HEIGHT, rotation: 0,
+  } : null);
   // Finished per-panel stacks, drawn where their plate solves put them: a
   // review of coverage and seams over the plan, never a processed image.
   const [showStacks, setShowStacks] = useState(true);
@@ -282,6 +239,9 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
           {preview.isError && <span role="alert">{message(preview.error)}</span>}
         </div>
         <div className="framing-stage-scale">{formatDegrees(state.viewFov)} across · N up, E left</div>
+        <div className="framing-stage-surveys" role="group" aria-label="Survey layers" onPointerDown={event => event.stopPropagation()}>
+          {chipSurveys(surveys.data ?? []).map(({ survey: entry, label }) => <button key={entry.id} type="button" aria-pressed={entry.id === state.surveyId} title={`${entry.name}: ${entry.bandpass}`} onClick={() => update({ surveyId: entry.id })}>{label}</button>)}
+        </div>
       </div>
       <p className="framing-readout" data-testid="framing-readout">
         <span>{state.targetName || 'Target'}</span>

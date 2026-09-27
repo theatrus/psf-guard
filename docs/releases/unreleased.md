@@ -150,6 +150,11 @@
 
 ## Changed
 
+- The planning workspace is a wide screen: the framing sky fills the window
+  up to the screen's height, with survey chips on it for the DSS2 colour and
+  narrowband layers; plan and activation sit beside each other under it. The
+  plan list shows each framed plan as a survey thumbnail with its panels.
+
 ## Fixed
 
 - The catalog identity and Director tables PSF Guard adds to a rig database

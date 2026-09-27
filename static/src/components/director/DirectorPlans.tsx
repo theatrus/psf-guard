@@ -6,6 +6,7 @@ import { apiClient } from '../../api/client';
 import type { DirectorIdentity, DirectorPlanRow } from '../../api/directorTypes';
 import { useAccess } from '../../auth/access';
 import { identityId } from './identityId';
+import PlanThumbnail from './PlanThumbnail';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
@@ -101,7 +102,8 @@ export default function DirectorPlans({ instanceId }: { instanceId: string }) {
     <ul className="director-list">
       {rows.map(row => {
         return <li key={row.project.id}>
-          <div className="director-plan director-record-wide">
+          <div className={`director-plan director-record-wide${row.framing?.center ? ' has-thumb' : ''}`}>
+            {row.framing?.center && <PlanThumbnail framing={row.framing} name={row.project.name} />}
             <div className="director-record-name">
               <strong>{row.project.name}</strong>
               <span className="director-muted">{stage(row)}</span>

@@ -283,6 +283,17 @@ async fn listing_counts_frames_per_target_across_linked_databases() {
         json!({"desired": 144, "acquired": 10, "accepted": 8, "targets": 2}),
         "{row}"
     );
+    // The list carries what a thumbnail needs: where to look and what to draw.
+    assert_eq!(row["framing"]["center"]["ra_degrees"], 38.2);
+    assert_eq!(row["framing"]["position_angle_degrees"], 15.0);
+    assert_eq!(row["framing"]["survey_id"], "dss2_color");
+    assert_eq!(row["framing"]["mosaic"]["rows"], 2);
+    assert_eq!(row["framing"]["panel"]["width_degrees"], 2.0);
+    assert!(
+        row["framing"]["extent"]["height_degrees"].as_f64().unwrap() > 2.0,
+        "{}",
+        row["framing"]
+    );
     let targets = row["links"][0]["targets"].as_array().unwrap();
     assert_eq!(targets.len(), 2);
     assert_eq!(targets[0]["name"], "IC 1805 r1c1");

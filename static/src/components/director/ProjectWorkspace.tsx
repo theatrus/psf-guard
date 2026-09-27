@@ -44,6 +44,12 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
   return <section aria-label="Project planning" className="director-workspace">
     <div className="director-toolbar"><Link to={`/director?${back}`}><ArrowLeft size={16} />Plans</Link></div>
     <h2>{row.project.name}</h2>
+    <h3 className="director-section-heading">Framing</h3>
+    {first && scheduler.isPending ? <p role="status">Loading targets...</p> : <FramingView projectId={projectId} seed={seed} preferredRigIds={row.links.map(link => link.rig.id)} />}
+    <div className="director-workspace-columns">
+      <div><h3 className="director-section-heading">Plan</h3><PlanEditor projectId={projectId} /></div>
+      <div><h3 className="director-section-heading">Activation</h3><ActivationPanel projectId={projectId} /></div>
+    </div>
     <section aria-label="Linked databases">
       <h3 className="director-section-heading">Databases</h3>
       {row.links.length === 0 && <p className="director-muted">No database holds this project yet. Activation creates it in each rig you tick in the plan.</p>}
@@ -64,11 +70,5 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
         })}
       </ul>
     </section>
-    <h3 className="director-section-heading">Framing</h3>
-    {first && scheduler.isPending ? <p role="status">Loading targets...</p> : <FramingView projectId={projectId} seed={seed} preferredRigIds={row.links.map(link => link.rig.id)} />}
-    <h3 className="director-section-heading">Plan</h3>
-    <PlanEditor projectId={projectId} />
-    <h3 className="director-section-heading">Activation</h3>
-    <ActivationPanel projectId={projectId} />
   </section>;
 }

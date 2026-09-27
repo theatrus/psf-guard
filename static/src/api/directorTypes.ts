@@ -310,12 +310,25 @@ export interface DirectorPlanLink {
   source_name: string | null;
   targets: DirectorTargetProgress[];
 }
+/** Enough of a saved framing for the plan list to draw its survey thumbnail. */
+export interface DirectorFramingSummary {
+  revision: number;
+  target_name: string;
+  panels: number;
+  panel_rig_id: string | null;
+  center: DirectorSkyPosition;
+  position_angle_degrees: number;
+  panel: DirectorPanelSize | null;
+  mosaic: DirectorMosaic;
+  survey_id: string;
+  extent: DirectorPanelSize | null;
+}
 export interface DirectorPlanRow {
   project: DirectorIdentity;
   links: DirectorPlanLink[];
   /** Frames across every linked database; null until some database holds a target. */
   progress: { desired: number; acquired: number; accepted: number; targets: number } | null;
-  framing: { revision: number; target_name: string; panels: number; panel_rig_id: string | null } | null;
+  framing: DirectorFramingSummary | null;
   plan: { revision: number; objectives: number; rigs: number } | null;
   activation: { revision: number; applied_at_ms: number; rigs: number } | null;
 }
