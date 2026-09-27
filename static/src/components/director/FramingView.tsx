@@ -4,10 +4,10 @@ import { isAxiosError } from 'axios';
 import { Check, Crosshair, LocateFixed, RefreshCw, Undo2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
-import type { DirectorFramingDraftView, DirectorFramingPreview } from '../../api/directorTypes';
+import type { DirectorFramingDraftView, DirectorFramingPreview, DirectorRigProfileSummary } from '../../api/directorTypes';
 import {
-  MAX_VIEW_FOV, MIN_VIEW_FOV, STAGE_HEIGHT, STAGE_WIDTH, clampFov, draftFromState, formatDec, formatDegrees, formatRaHours,
-  moveBy, panelForRig, pixelScale, polygonPoints, previewRequest, stateFromDraft, stateFromSeed, toStage, type FramingSeed, type FramingState,
+  MAX_VIEW_FOV, MIN_VIEW_FOV, STAGE_HEIGHT, STAGE_WIDTH, angleFromStage, clampFov, draftFromState, formatDec, formatDegrees, formatRaHours, handleOffset,
+  insidePolygon, moveBy, panelForRig, pixelScale, polygonPoints, previewRequest, stateFromDraft, stateFromSeed, toStage, type FramingSeed, type FramingState,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
 import './FramingView.css';
@@ -65,6 +65,13 @@ function useCutout(state: FramingState | null) {
   return { image, status, error, stale: image !== null && image.key !== JSON.stringify(debounced) };
 }
 
+/** The rotation handle: past the top edge of the whole mosaic, along its up direction. */
+function rotationHandle(geometry: DirectorFramingPreview, state: FramingState) {
+  const [cx, cy] = geometry.view_center_offset ?? [0, 0];
+  const [hx, hy] = handleOffset(state.positionAngle, geometry.extent.height_degrees / 2, Math.max(0.02, state.viewFov * 0.03));
+  return [cx + hx, cy + hy] as [number, number];
+}
+
 /** Where to point when the project has no catalog target yet: a name the
  *  catalogs know, or coordinates typed in. */
 function StartFraming({ canWrite, onStart }: { canWrite: boolean; onStart: (seed: FramingSeed) => void }) {
@@ -102,10 +109,12 @@ function StartFraming({ canWrite, onStart }: { canWrite: boolean; onStart: (seed
 export interface FramingViewProps {
   projectId: string;
   seed: FramingSeed | null;
+  /** Rigs already holding this project; the first with optics frames by default. */
+  preferredRigIds?: string[];
 }
 
 /** Frame one project on the sky: target, angle, mosaic and rig footprints over a survey. */
-export default function FramingView({ projectId, seed }: FramingViewProps) {
+export default function FramingView({ projectId, seed, preferredRigIds = [] }: FramingViewProps) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const draftKey = ['directorFraming', projectId];
@@ -124,6 +133,14 @@ export default function FramingView({ projectId, seed }: FramingViewProps) {
     else if (seed ?? started) setState(stateFromSeed((seed ?? started)!, DEFAULT_SURVEY));
   }, [draft.data, seed, started]);
   const rigList = useMemo(() => rigs.data ?? [], [rigs.data]);
+  // Like the framing assistant, start with a rectangle: the first rig that
+  // holds this project and knows its optics, else any rig that does.
+  useEffect(() => {
+    if (!state || state.panel || state.panelRigId || rigList.length === 0) return;
+    const candidates = [...preferredRigIds.map(id => rigList.find(r => r.rig.id === id)).filter((r): r is DirectorRigProfileSummary => !!r), ...rigList];
+    const first = candidates.find(r => r.field_of_view);
+    if (first) setState(current => current && !current.panel ? { ...current, panelRigId: first.rig.id, panel: panelForRig(rigList, first.rig.id) } : current);
+  }, [state, rigList, preferredRigIds]);
   const update = useCallback((patch: Partial<FramingState> | ((current: FramingState) => Partial<FramingState>)) => {
     setState(current => current ? { ...current, ...(typeof patch === 'function' ? patch(current) : patch) } : current);
   }, []);
@@ -136,6 +153,19 @@ export default function FramingView({ projectId, seed }: FramingViewProps) {
     enabled: !!debouncedRequest, retry: false, placeholderData: previous => previous, staleTime: 60_000,
   });
   const cutout = useCutout(state);
+  // A view narrower than the footprint hides its edges and handle; widen it
+  // once when the geometry first arrives, and on request.
+  const fitToFootprint = useCallback((extent: { width_degrees: number; height_degrees: number }) => {
+    const needed = Math.max(extent.width_degrees, (extent.height_degrees * STAGE_WIDTH) / STAGE_HEIGHT) * 1.35;
+    update(current => ({ viewFov: clampFov(Math.max(current.viewFov, needed)), viewCenter: current.center }));
+  }, [update]);
+  const fitted = useRef(false);
+  const firstExtent = preview.data?.extent;
+  useEffect(() => {
+    if (!firstExtent || fitted.current) return;
+    fitted.current = true;
+    fitToFootprint(firstExtent);
+  }, [firstExtent, fitToFootprint]);
 
   const save = useMutation({
     retry: false,
@@ -150,11 +180,25 @@ export default function FramingView({ projectId, seed }: FramingViewProps) {
 
   // Drag pans the view; the wheel zooms about the center.
   const stage = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ x: number; y: number; center: FramingState['viewCenter'] } | null>(null);
+  const drag = useRef<{ kind: 'pan' | 'target' | 'rotate'; x: number; y: number; center: FramingState['viewCenter']; target: FramingState['center'] } | null>(null);
   const stageScale = () => (stage.current ? STAGE_WIDTH / stage.current.clientWidth : 1);
+  const stagePoint = (event: ReactPointerEvent<HTMLDivElement>): [number, number] => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const k = STAGE_WIDTH / Math.max(1, rect.width);
+    return [(event.clientX - rect.left) * k, (event.clientY - rect.top) * k];
+  };
+  const geometryRef = useRef<DirectorFramingPreview | undefined>(undefined);
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!state || event.button !== 0) return;
-    drag.current = { x: event.clientX, y: event.clientY, center: state.viewCenter };
+    const point = stagePoint(event);
+    const geometry = geometryRef.current;
+    let kind: 'pan' | 'target' | 'rotate' = 'pan';
+    if (geometry?.view_center_offset && geometry.panels.length > 0) {
+      const handle = toStage(rotationHandle(geometry, state), state.viewFov);
+      if (Math.hypot(handle[0] - point[0], handle[1] - point[1]) <= 18) kind = 'rotate';
+      else if (geometry.panels.some(panel => panel.view_corners && insidePolygon(point, panel.view_corners, state.viewFov))) kind = 'target';
+    }
+    drag.current = { kind, x: event.clientX, y: event.clientY, center: state.viewCenter, target: state.center };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -162,9 +206,15 @@ export default function FramingView({ projectId, seed }: FramingViewProps) {
     const scale = pixelScale(state.viewFov) * stageScale();
     const dx = (event.clientX - drag.current.x) * scale;
     const dy = (event.clientY - drag.current.y) * scale;
-    update({ viewCenter: moveBy(drag.current.center, dx, dy) });
+    if (drag.current.kind === 'pan') update({ viewCenter: moveBy(drag.current.center, dx, dy) });
+    else if (drag.current.kind === 'target') update({ center: moveBy(drag.current.target, -dx, -dy) });
+    else if (geometryRef.current?.view_center_offset) {
+      const center = toStage(geometryRef.current.view_center_offset, state.viewFov);
+      update({ positionAngle: Math.round(angleFromStage(center, stagePoint(event)) * 10) / 10 });
+    }
   };
   const onPointerUp = () => { drag.current = null; };
+  const turn = (delta: number) => update(current => ({ positionAngle: ((current.positionAngle + delta) % 360 + 360) % 360 }));
   const hasState = state !== null;
   useEffect(() => {
     const element = stage.current;
@@ -186,6 +236,9 @@ export default function FramingView({ projectId, seed }: FramingViewProps) {
   if (draft.isError) return <p className="director-error" role="alert">{message(draft.error)}</p>;
   if (!state) return <StartFraming canWrite={canWrite} onStart={setStarted} />;
   const geometry: DirectorFramingPreview | undefined = preview.data;
+  geometryRef.current = geometry;
+  const handle = geometry?.view_center_offset && geometry.panels.length > 0 ? toStage(rotationHandle(geometry, state), state.viewFov) : null;
+  const centerOnStage = geometry?.view_center_offset ? toStage(geometry.view_center_offset, state.viewFov) : null;
   return <section className="framing" aria-label="Framing">
     <div className="framing-stage-wrap">
       <div ref={stage} className={`framing-stage${cutout.stale ? ' is-stale' : ''}`} role="img" aria-label="Sky view" data-testid="framing-stage"
@@ -197,7 +250,9 @@ export default function FramingView({ projectId, seed }: FramingViewProps) {
             <polygon points={polygonPoints(panel.view_corners, state.viewFov)} />
             {geometry.panels.length > 1 && <text x={toStage(panel.view_corners[0], state.viewFov)[0] + 8} y={toStage(panel.view_corners[0], state.viewFov)[1] + 20}>{panel.id}</text>}
           </g>)}
-          {geometry?.view_center_offset && (() => { const [x, y] = toStage(geometry.view_center_offset, state.viewFov); return <g className="framing-target"><line x1={x - 14} y1={y} x2={x + 14} y2={y} /><line x1={x} y1={y - 14} x2={x} y2={y + 14} /></g>; })()}
+          {centerOnStage && <g className="framing-target"><line x1={centerOnStage[0] - 14} y1={centerOnStage[1]} x2={centerOnStage[0] + 14} y2={centerOnStage[1]} /><line x1={centerOnStage[0]} y1={centerOnStage[1] - 14} x2={centerOnStage[0]} y2={centerOnStage[1] + 14} /></g>}
+          {handle && centerOnStage && <g className="framing-rotate" data-testid="framing-rotate-handle"><line x1={centerOnStage[0]} y1={centerOnStage[1]} x2={handle[0]} y2={handle[1]} /><circle cx={handle[0]} cy={handle[1]} r={9} /></g>}
+          <g className="framing-compass" transform={`translate(${STAGE_WIDTH - 44} 44)`}><line x1={0} y1={0} x2={0} y2={-28} /><text x={0} y={-32} textAnchor="middle">N</text><line x1={0} y1={0} x2={-28} y2={0} /><text x={-32} y={4} textAnchor="end">E</text></g>
         </svg>
         <div className="framing-stage-status">
           {cutout.status === 'loading' && <span role="status">Loading {survey?.name ?? 'survey'}...</span>}
@@ -206,6 +261,15 @@ export default function FramingView({ projectId, seed }: FramingViewProps) {
         </div>
         <div className="framing-stage-scale">{formatDegrees(state.viewFov)} across · N up, E left</div>
       </div>
+      <p className="framing-readout" data-testid="framing-readout">
+        <span>{state.targetName || 'Target'}</span>
+        <span>{formatRaHours(state.center.ra_degrees)}</span>
+        <span>{formatDec(state.center.dec_degrees)}</span>
+        <span>angle {state.positionAngle.toFixed(1)}°</span>
+        {state.panel && <span>panel {formatDegrees(state.panel.width_degrees)} × {formatDegrees(state.panel.height_degrees)}</span>}
+        {geometry && geometry.panels.length > 1 && <span>{geometry.panels.length} panels, {formatDegrees(geometry.extent.width_degrees)} × {formatDegrees(geometry.extent.height_degrees)}</span>}
+      </p>
+      <p className="director-muted framing-hint">Drag the rectangle to move the target, its handle to turn it, and the sky to look around.</p>
       <p className="director-muted framing-attribution">{survey ? `${survey.name}: ${survey.bandpass}. ${survey.attribution}.` : 'Choose a survey.'} Imagery is a composition aid, not pointing evidence.</p>
       <VisibilityPanel projectId={projectId} center={state.center} />
     </div>
@@ -216,7 +280,9 @@ export default function FramingView({ projectId, seed }: FramingViewProps) {
         <div className="framing-grid">
           <label>RA<span className="framing-input"><input aria-label="Right ascension degrees" type="number" step="any" min={0} max={359.99999} value={state.center.ra_degrees} onChange={event => update(current => ({ center: { ...current.center, ra_degrees: number(event.target.value, current.center.ra_degrees) } }))} /><small>°</small></span><small>{formatRaHours(state.center.ra_degrees)}</small></label>
           <label>Dec<span className="framing-input"><input aria-label="Declination degrees" type="number" step="any" min={-90} max={90} value={state.center.dec_degrees} onChange={event => update(current => ({ center: { ...current.center, dec_degrees: number(event.target.value, current.center.dec_degrees) } }))} /><small>°</small></span><small>{formatDec(state.center.dec_degrees)}</small></label>
-          <label>Camera angle<span className="framing-input"><input aria-label="Position angle degrees" type="number" step="any" min={0} max={359.99} value={state.positionAngle} onChange={event => update({ positionAngle: ((number(event.target.value, state.positionAngle) % 360) + 360) % 360 })} /><small>° E of N</small></span></label>
+          <label>Camera angle<span className="framing-input"><input aria-label="Position angle degrees" type="number" step="any" min={0} max={359.99} value={state.positionAngle} onChange={event => update({ positionAngle: ((number(event.target.value, state.positionAngle) % 360) + 360) % 360 })} /><small>° E of N</small></span>
+            <span className="framing-turns"><button type="button" aria-label="Turn 90 degrees counter-clockwise" onClick={() => turn(-90)}>−90°</button><button type="button" aria-label="Turn 90 degrees clockwise" onClick={() => turn(90)}>+90°</button>
+              {panelRig?.profile?.optics && panelRig.profile.optics.value.rotation.mode !== 'rotator' && <button type="button" onClick={() => update({ positionAngle: (panelRig.profile!.optics!.value.rotation as { angle_degrees: number }).angle_degrees })}>Rig's camera angle</button>}</span></label>
         </div>
         <div className="director-actions">
           <button type="button" onClick={() => update(current => ({ viewCenter: current.center }))}><Crosshair size={16} />Center view on target</button>
@@ -260,7 +326,8 @@ export default function FramingView({ projectId, seed }: FramingViewProps) {
             {(surveys.data ?? []).map(entry => <option key={entry.id} value={entry.id}>{entry.name}{entry.kind === 'narrowband' ? ' (narrowband)' : ''}</option>)}
           </select>
         </label>
-        <label>Width of view<span className="framing-input"><input aria-label="View width degrees" type="number" step="any" min={MIN_VIEW_FOV} max={MAX_VIEW_FOV} value={Number(state.viewFov.toFixed(3))} onChange={event => update({ viewFov: clampFov(number(event.target.value, state.viewFov)) })} /><small>°</small></span></label>
+        <label>Width of view<span className="framing-input"><input aria-label="View width degrees" type="number" step="any" min={MIN_VIEW_FOV} max={MAX_VIEW_FOV} value={Number(state.viewFov.toFixed(3))} onChange={event => update({ viewFov: clampFov(number(event.target.value, state.viewFov)) })} /><small>°</small>
+          {geometry && <button type="button" onClick={() => { update({ viewFov: 0.01 }); fitToFootprint(geometry.extent); }}>Fit</button>}</span></label>
         <p className="director-muted">Drag the image to pan, scroll to zoom. The view center is {formatRaHours(state.viewCenter.ra_degrees)}, {formatDec(state.viewCenter.dec_degrees)}.</p>
       </fieldset>
       {notice && <p role="status">{notice}</p>}

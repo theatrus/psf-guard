@@ -6,6 +6,12 @@
 
 ## Added
 
+- Framing now behaves like N.I.N.A.'s framing assistant: a rectangle for the
+  rig's field appears at once (rigs take their optics from their own frames
+  when they are adopted), you drag it to move the target and its handle to
+  turn it, quarter turns and the rig's fixed camera angle are one click, a
+  compass and a readout show orientation, coordinates, angle and extent.
+
 - Mosaic plans can give each rig its own panels: a wide rig takes the whole
   field while a long-focus rig takes a corner. Activation writes only the
   panels a rig owns, and both the plan and the activation preview name any

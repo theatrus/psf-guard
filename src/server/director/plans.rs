@@ -1,11 +1,12 @@
 //! The Director page's plan list: every global project with where it is
 //! linked, and how far its framing, plan and activation have come. Read only.
 
+use super::rig_profile;
 use super::*;
 use crate::catalog_identity;
 use crate::server::database_context::DatabaseContext;
 use psf_guard_director_core::framing::FramingRequest;
-use psf_guard_director_meta::{catalog::ProjectMapping, CatalogIdentity};
+use psf_guard_director_meta::{catalog::ProjectMapping, profile::RigProfile, CatalogIdentity};
 use rusqlite::{OpenFlags, TransactionBehavior};
 use std::{collections::BTreeMap, time::Duration};
 
@@ -107,6 +108,33 @@ fn ensure_adopted(
             .map_err(|error| format!("{}: could not be bound to a rig ({error})", catalog.name))?,
         Err(error) => return Err(format!("{}: {error}", catalog.name)),
     };
+    // A rig with no optics yet takes them from its own frames, so the framing
+    // view can draw its rectangle at once. The source says where they came from.
+    match store.rig_profile(binding.rig.id) {
+        Ok(profile) if profile.as_ref().is_none_or(|p| p.optics.is_none()) => {
+            let defaults = rig_profile::header_defaults(catalog, &tx);
+            if defaults.optics.is_some() || defaults.site.is_some() {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                let revision = profile.as_ref().map_or(0, |p| p.revision);
+                let mut next = profile.unwrap_or_else(|| RigProfile::empty(binding.rig.id, now));
+                if next.optics.is_none() {
+                    next.optics = defaults.optics;
+                }
+                if next.site.is_none() {
+                    next.site = defaults.site;
+                }
+                next.updated_at_ms = now;
+                if let Err(error) = store.save_rig_profile(&next, revision) {
+                    tracing::warn!(?error, catalog = %catalog.name, "Header optics were not saved to the rig profile");
+                }
+            }
+        }
+        Ok(_) => {}
+        Err(error) => return Err(format!("{}: {error}", catalog.name)),
+    }
     // Which source projects still need a plan.
     let mut mappings = Vec::new();
     for (guid, _row, name) in evidence.identified_rows() {

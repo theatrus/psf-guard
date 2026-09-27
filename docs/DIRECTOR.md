@@ -269,19 +269,31 @@ server folds both back to the sensor before offering them. Typed models:
 
 ## Framing view
 
-Open a project's plan dialog from the Overview and choose **Rig planning**.
-Below the project editor, **Framing** shows the sky around the project's first
-target on a survey image, with the target's catalog coordinates and rotation
-already filled in. Drag to pan and scroll to zoom; the view stays on the last
-image while the next one loads. Choose the **panel rig** whose field defines
-one panel, or type a panel size, then set rows, columns and overlap; every
-panel is drawn and named. **Compare rigs** overlays other rigs' fields on the
-center. **Move target to view center** and **Center view on target** keep the
-two apart on purpose: panning the sky never moves the plan. **Save framing**
-keeps a draft on the global project; a draft saved elsewhere since you loaded
-is refused until you reload. Rigs without optics in their profile are listed
-but cannot be chosen. Survey imagery is attributed below the view and is a
-composition aid, not pointing evidence.
+Open a plan from the Director page. **Framing** shows the sky around the
+project's first target on a survey image, with the target's catalog
+coordinates and rotation already filled in, the way N.I.N.A.'s framing
+assistant does. The rectangle is the field of the **panel rig**: the first rig
+holding the project that knows its optics is chosen for you (rigs take their
+optics from their own frames when they are adopted), and you can pick another
+or type a panel size. Drag the rectangle to move the target, drag its handle
+to turn it, and drag the sky to look around; scroll to zoom. The camera angle
+also takes a number, quarter turns, or the rig's fixed camera angle. Rows,
+columns and overlap lay out a mosaic; every panel is drawn and named, and the
+readout under the image gives the target, its coordinates, the angle, the
+panel size and the whole extent. **Compare rigs** overlays other rigs' fields
+on the center. **Move target to view center** and **Center view on target**
+keep the two apart on purpose: panning the sky never moves the plan. **Save
+framing** keeps a draft on the project; a draft saved elsewhere since you
+loaded is refused until you reload. Survey imagery is attributed below the
+view and is a composition aid, not pointing evidence.
+
+The imagery comes from the same HiPS surveys N.I.N.A.'s framing assistant
+downloads, including the narrowband layers, fetched by the PSF Guard server
+and cached under its cache directory. N.I.N.A.'s own framing cache lives on
+the rig's Windows machine in `%LOCALAPPDATA%\NINA\FramingAssistantCache`
+(`CacheInfo.xml` with `RA`, `Dec`, `FoVW`, `FoVH`, `Rotation`, `Source` and a
+JPEG per entry); reusing it is planned through the Director plugin, which is
+the process that can read that folder.
 
 ## Acquisition plan
 

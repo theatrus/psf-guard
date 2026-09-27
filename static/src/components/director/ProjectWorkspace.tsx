@@ -65,7 +65,7 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
       </ul>
     </section>
     <h3 className="director-section-heading">Framing</h3>
-    {first && scheduler.isPending ? <p role="status">Loading targets...</p> : <FramingView projectId={projectId} seed={seed} />}
+    {first && scheduler.isPending ? <p role="status">Loading targets...</p> : <FramingView projectId={projectId} seed={seed} preferredRigIds={row.links.map(link => link.rig.id)} />}
     <h3 className="director-section-heading">Plan</h3>
     <PlanEditor projectId={projectId} />
     <h3 className="director-section-heading">Activation</h3>

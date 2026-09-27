@@ -32,3 +32,12 @@
 .framing-start { border: 1px solid var(--color-border-secondary); border-radius: 6px; padding: 8px 12px 12px; margin-top: 16px; }
 .framing-start label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--color-text-secondary); }
 .framing-start input { min-width: 0; box-sizing: border-box; background: var(--color-bg-secondary); color: var(--color-text-primary); border: 1px solid var(--color-border-tertiary); border-radius: 4px; padding: 7px 9px; font: inherit; width: 100%; }
+.framing-rotate line { stroke: #ffd166; stroke-width: 1.5; stroke-dasharray: 4 4; vector-effect: non-scaling-stroke; }
+.framing-rotate circle { fill: rgba(255, 209, 102, 0.35); stroke: #ffd166; stroke-width: 2.5; vector-effect: non-scaling-stroke; }
+.framing-compass line { stroke: #d8ecff; stroke-width: 2; }
+.framing-compass text { fill: #d8ecff; font-size: 16px; font-weight: 600; paint-order: stroke; stroke: rgba(0, 0, 0, 0.7); stroke-width: 3px; }
+.framing-readout { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 8px 0 0; font-variant-numeric: tabular-nums; }
+.framing-readout span:first-child { font-weight: 600; }
+.framing-hint { margin: 4px 0 0; font-size: 12px; }
+.framing-turns { display: flex; gap: 6px; margin-top: 4px; }
+.framing-turns button { padding: 4px 8px; min-height: 28px; }
