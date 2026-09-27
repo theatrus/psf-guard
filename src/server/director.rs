@@ -20,6 +20,7 @@ mod activation;
 mod catalog_adoption;
 mod catalog_discovery;
 mod catalog_rig;
+mod checkin;
 mod framing;
 mod plan;
 mod program;
@@ -301,6 +302,19 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .route("/rigs/profiles", get(framing::rig_profiles))
         .route("/catalogs/{slug}/templates", get(plan::templates))
         .route("/rigs/{rig}/program", get(program::pull))
+        .route(
+            "/rigs/{rig}/checkin",
+            axum::routing::post(checkin::check_in).layer(DefaultBodyLimit::max(
+                psf_guard_director_core::MAX_REQUEST_BYTES * 4,
+            )),
+        )
+        .route(
+            "/rigs/{rig}/status",
+            axum::routing::post(checkin::report_status).layer(DefaultBodyLimit::max(
+                psf_guard_director_core::MAX_REQUEST_BYTES,
+            )),
+        )
+        .route("/rigs/status", get(checkin::statuses))
         .route("/projects/{id}/activation", get(activation::last))
         .route(
             "/projects/{id}/activation/preview",

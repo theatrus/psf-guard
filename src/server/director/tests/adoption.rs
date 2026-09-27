@@ -2,6 +2,7 @@ use super::*;
 use psf_guard_director_meta::CatalogIdentity;
 use rusqlite::{Connection, TransactionBehavior};
 mod activation;
+mod checkin;
 mod database_rig;
 mod framing;
 mod plan;

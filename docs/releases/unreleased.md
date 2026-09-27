@@ -6,6 +6,11 @@
 
 ## Added
 
+- The Director plugin can check in its capture receipts and report live
+  status over the API. Receipts are stored once and acknowledged by cursor,
+  saved frames count as pending credit until grading accepts them, and both
+  calls tell the plugin when to pull a new program.
+
 - The Director plugin can now pull a rig's program over the API: one goal per
   activated exposure plan with the frames still owed, the panel targets and
   the recipes bound to the filters the rig reported, valid for 36 hours per

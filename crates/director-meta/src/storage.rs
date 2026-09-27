@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 9;
+const SCHEMA_VERSION: i32 = 10;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -37,6 +37,7 @@ impl MetaStore {
         create_framing_draft_table(&tx)?;
         create_plan_draft_table(&tx)?;
         create_activation_table(&tx)?;
+        create_inbox_tables(&tx)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         conn.close().map_err(|(_, error)| Error::Sqlite(error))?;
@@ -76,7 +77,10 @@ impl MetaStore {
             if version < 8 {
                 create_plan_draft_table(&tx)?;
             }
-            create_activation_table(&tx)?;
+            if version < 9 {
+                create_activation_table(&tx)?;
+            }
+            create_inbox_tables(&tx)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;
@@ -183,6 +187,15 @@ fn validate(conn: &Connection) -> Result<Uuid, Error> {
         conn.prepare("SELECT project_id,revision,payload FROM activation LIMIT 0")
             .map_err(|_| Error::CorruptDatabase)?;
     }
+    if version >= 10 {
+        for sql in [
+            "SELECT ledger_id,sequence,rig_id,goal_id,capture_id,state,payload,received_at_ms FROM rig_event LIMIT 0",
+            "SELECT ledger_id,rig_id,highest_contiguous,highest_seen,last_checkin_ms FROM rig_feed LIMIT 0",
+            "SELECT rig_id,session_id,reported_at_ms,payload,received_at_ms FROM rig_status LIMIT 0",
+        ] {
+            conn.prepare(sql).map_err(|_| Error::CorruptDatabase)?;
+        }
+    }
     let id: String = conn.query_row(
         "SELECT instance_id FROM meta WHERE singleton=1",
         [],
@@ -275,6 +288,35 @@ fn create_activation_table(conn: &Connection) -> Result<(), Error> {
             project_id TEXT PRIMARY KEY NOT NULL REFERENCES global_project(id),
             revision INTEGER NOT NULL CHECK(revision>0),
             payload TEXT NOT NULL);",
+    )?;
+    Ok(())
+}
+
+fn create_inbox_tables(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch(
+        "CREATE TABLE rig_event(
+            ledger_id TEXT NOT NULL,
+            sequence INTEGER NOT NULL CHECK(sequence>0),
+            rig_id TEXT NOT NULL REFERENCES rig(id),
+            goal_id TEXT NOT NULL,
+            capture_id TEXT NOT NULL,
+            state TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            received_at_ms INTEGER NOT NULL,
+            PRIMARY KEY(ledger_id, sequence));
+         CREATE INDEX rig_event_goal ON rig_event(rig_id, goal_id, state);
+         CREATE TABLE rig_feed(
+            ledger_id TEXT PRIMARY KEY NOT NULL,
+            rig_id TEXT NOT NULL REFERENCES rig(id),
+            highest_contiguous INTEGER NOT NULL,
+            highest_seen INTEGER NOT NULL,
+            last_checkin_ms INTEGER NOT NULL);
+         CREATE TABLE rig_status(
+            rig_id TEXT PRIMARY KEY NOT NULL REFERENCES rig(id),
+            session_id TEXT NOT NULL,
+            reported_at_ms INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            received_at_ms INTEGER NOT NULL);",
     )?;
     Ok(())
 }
