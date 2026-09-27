@@ -123,3 +123,36 @@ export function formatDegrees(value: number): string {
   const minutes = value * 60;
   return minutes >= 1 ? `${minutes.toFixed(1)}′` : `${(minutes * 60).toFixed(0)}″`;
 }
+
+/** Stage pixels back to view offsets (east positive, up positive). */
+export function fromStage(x: number, y: number, viewFov: number): DirectorOffset {
+  const scale = pixelScale(viewFov);
+  return [(STAGE_WIDTH / 2 - x) * scale, (STAGE_HEIGHT / 2 - y) * scale];
+}
+
+/** Whether a stage point lies inside a footprint given by its view corners. */
+export function insidePolygon(point: [number, number], corners: DirectorOffset[], viewFov: number): boolean {
+  const pts = corners.map(c => toStage(c, viewFov));
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i]; const [xj, yj] = pts[j];
+    if ((yi > point[1]) !== (yj > point[1]) && point[0] < ((xj - xi) * (point[1] - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** Position angle east of north of the direction from a center to a stage point. */
+export function angleFromStage(center: [number, number], point: [number, number]): number {
+  // Stage x grows west, stage y grows south; east of north is atan2(east, north).
+  const east = center[0] - point[0];
+  const north = center[1] - point[1];
+  const angle = (Math.atan2(east, north) * 180) / Math.PI;
+  return ((angle % 360) + 360) % 360;
+}
+
+/** Where the rotation handle sits: just past the top edge of the footprint along its up direction. */
+export function handleOffset(positionAngle: number, halfHeightDegrees: number, marginDegrees: number): DirectorOffset {
+  const r = halfHeightDegrees + marginDegrees;
+  const rad = (positionAngle * Math.PI) / 180;
+  return [r * Math.sin(rad), r * Math.cos(rad)];
+}

@@ -299,6 +299,7 @@ mismatched tuple even when the slug exists.
 | `GET /rigs/{rig}/program` | backend, merged | The current program for the rig, built from its activated plans and its reported equipment: core `Assignment` (36 h validity, one goal per activated exposure plan with live `accepted`) and `Program`, `links` joining each goal to its project, objective, contribution, panel, source project GUID, target GUID and exposure plan GUID, `rig` context (site, horizon, limits, rotation) for the plugin's constraints, and `omitted` reasons. `If-None-Match` gives `304`; `422` until equipment is reported or a plan is activated. |
 | `PUT /rigs/{rig}/equipment` | backend, merged | The plugin reports its core `Configuration`, optics, site, horizon and limits into the rig profile with `source: plugin`. The tuple must match the server's `catalog_rig` binding (`403` otherwise); an identical report is a no-op. Activation will later freeze setup revisions from the profile and mark active plans stale when it changes. |
 | `POST /rigs/{rig}/checkin` | backend merged; plugin next | One ledger's `ExecutionEvent` page (≤256, ascending, verbatim) with the held `program_revision`; the reply acknowledges `acknowledged_through` for that ledger, names duplicates and conflicts per sequence, and says `program_changed`. Saved receipts feed `pending` in the next pull. Grade application and replacement-assignment proposals are still open. |
+| `POST /rigs/{rig}/framing-cache` | planned | The plugin uploads entries of N.I.N.A.'s framing cache (index fields plus the JPEG) so the framing view can show them for an offline rig. Bounded size, one entry per call, keyed by source, center, field and rotation like the server's own cutout cache. |
 | `POST /rigs/{rig}/status` | backend merged; plugin next | Coalesced live status per session, newest wins, late reports refused; `GET /rigs/status` is the operator view. Loss of it changes connectivity only. |
 
 The plugin must not read TS tables from the rig database as its planning
@@ -595,7 +596,15 @@ Implemented 2026-09-27: the server fetches HiPS2FITS tangent-plane cutouts for
 N.I.N.A.'s survey list through `GET /api/director/v1/sky/cutout`, off the
 request path with a `202` poll contract, and caches them under the cache root.
 Aladin Lite was not adopted; the browser draws footprints over the cutout with
-PSF Guard's own projection code. Provider terms: CDS asks for attribution,
+PSF Guard's own projection code. The view follows N.I.N.A.'s framing assistant
+in its handling: the rectangle is dragged to move the target, its handle turns
+it, quarter turns and the rig's fixed camera angle are one click, the sky pans
+separately, and a readout gives coordinates, angle and extent. N.I.N.A.'s
+framing cache (`%LOCALAPPDATA%\NINA\FramingAssistantCache`, `CacheInfo.xml`
+with `RA`, `Dec`, `FoVW`, `FoVH`, `Rotation`, `Source`, `FileName`) is only
+readable on the rig machine; the plugin can offer its entries through a
+`POST /rigs/{rig}/framing-cache` upload so an offline site's imagery appears
+here without a second download. That endpoint is planned, not built. Provider terms: CDS asks for attribution,
 which the survey list carries; persistent caching for the operator's own
 framing is within ordinary use.
 

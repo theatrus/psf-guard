@@ -55,13 +55,17 @@ function fixture(existing: DirectorFramingDraft | null = null) {
   );
   return { previews, saves, cutouts };
 }
-function mount(canWrite = true, withSeed = true) {
+function mount(canWrite = true, withSeed = true, preferredRigIds: string[] = []) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   function Wrapper({ children }: { children: ReactNode }) {
     const access = useAccess();
     return <QueryClientProvider client={client}><AccessContext.Provider value={{ ...access, canWrite }}>{children}</AccessContext.Provider></QueryClientProvider>;
   }
-  return render(<FramingView projectId="project" seed={withSeed ? seed : null} />, { wrapper: Wrapper });
+  return render(<FramingView projectId="project" seed={withSeed ? seed : null} preferredRigIds={preferredRigIds} />, { wrapper: Wrapper });
+}
+/** Point the stage at a stage-pixel position; the stage is laid out at its natural width. */
+function pointer(x: number, y: number) {
+  return { button: 0, pointerId: 1, clientX: x, clientY: y };
 }
 
 describe('Framing view', () => {
@@ -100,7 +104,9 @@ describe('Framing view', () => {
     expect(await screen.findByText('Saved framing revision 1.')).toBeInTheDocument();
     expect(saves).toHaveLength(1);
     expect(saves[0]).toMatchObject({ project_id: 'project', revision: 0, target_name: 'M31', panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 },
-      mosaic: { rows: 2, columns: 1, overlap_percent: 15 }, shown_rig_ids: [rigA.rig.id], survey_id: 'dss2_color', view_fov_degrees: 4 });
+      mosaic: { rows: 2, columns: 1, overlap_percent: 15 }, shown_rig_ids: [rigA.rig.id], survey_id: 'dss2_color' });
+    // The view widened on its own to show the whole footprint.
+    expect(saves[0].view_fov_degrees).toBeGreaterThan(5.38);
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
     await waitFor(() => expect(saves).toHaveLength(2));
     expect(saves[1].revision).toBe(1);
@@ -130,6 +136,41 @@ describe('Framing view', () => {
     await waitFor(() => expect(saves).toHaveLength(1));
     expect(saves[0].revision).toBe(3);
     expect(saves[0].center).toEqual({ ra_degrees: 38.2, dec_degrees: 61.5 });
+  });
+
+  it('frames with the first rig that holds the project, moves the target by dragging the rectangle, and turns it by its handle', async () => {
+    const { previews, saves } = fixture(); mount(true, true, [rigB.rig.id, rigA.rig.id]);
+    // rigB has no optics, so rigA frames by default; no click needed.
+    await waitFor(() => expect(screen.getByLabelText('Panel rig')).toHaveValue(rigA.rig.id));
+    await waitFor(() => expect(previews).toHaveLength(1));
+    expect(screen.getByTestId('framing-readout')).toHaveTextContent('M31');
+    expect(screen.getByTestId('framing-readout')).toHaveTextContent('angle 35.0°');
+    const stage = screen.getByTestId('framing-stage');
+    stage.setPointerCapture = vi.fn();
+    stage.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1024, height: 768, right: 1024, bottom: 768, x: 0, y: 0, toJSON: () => ({}) });
+    Object.defineProperty(stage, 'clientWidth', { value: 1024, configurable: true });
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
+    // Inside the rectangle (the mock puts its corners at ±2.69° × ±1.8° around the center): drag 100 px east.
+    fireEvent.pointerDown(stage, pointer(512, 384));
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 412, clientY: 384 });
+    fireEvent.pointerUp(stage, { pointerId: 1 });
+    const ra = Number((screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value);
+    expect(ra).toBeGreaterThan(seed.center.ra_degrees);
+    expect(screen.getByText(/The view center is/)).toHaveTextContent('00h 42m 44.3s');
+    // The handle sits past the top edge along the camera's up direction; dragging it due east of the center turns the camera to 90°.
+    fireEvent.click(screen.getByRole('button', { name: 'Turn 90 degrees clockwise' }));
+    expect(screen.getByLabelText('Position angle degrees')).toHaveValue(125);
+    expect(screen.getByTestId('framing-rotate-handle')).toBeInTheDocument();
+    const handle = document.querySelector('.framing-rotate circle')!;
+    const hx = Number(handle.getAttribute('cx')); const hy = Number(handle.getAttribute('cy'));
+    fireEvent.pointerDown(stage, pointer(hx, hy));
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 300, clientY: 384 });
+    fireEvent.pointerUp(stage, { pointerId: 1 });
+    await waitFor(() => expect(Number((screen.getByLabelText('Position angle degrees') as HTMLInputElement).value)).toBeCloseTo(90, 0));
+    fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].panel_rig_id).toBe(rigA.rig.id);
+    expect(saves[0].position_angle_degrees).toBeCloseTo(90, 0);
   });
 
   it('is read only without write access and explains a missing seed', async () => {

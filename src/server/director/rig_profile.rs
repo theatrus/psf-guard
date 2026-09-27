@@ -26,9 +26,9 @@ pub(super) struct ProfileView {
 
 #[derive(Default, Serialize)]
 pub(super) struct Defaults {
-    optics: Option<Reported<Optics>>,
-    site: Option<Reported<Site>>,
-    field_of_view: Option<FieldOfView>,
+    pub(super) optics: Option<Reported<Optics>>,
+    pub(super) site: Option<Reported<Site>>,
+    pub(super) field_of_view: Option<FieldOfView>,
 }
 
 /// An operator's edit. Timestamps are stamped by the server.
@@ -263,7 +263,7 @@ async fn run_bound<T: Send + 'static>(
 
 /// Optics and site from the newest frames whose files can be found. One
 /// header read per candidate, first usable file wins.
-fn header_defaults(catalog: &DatabaseContext, connection: &Connection) -> Defaults {
+pub(super) fn header_defaults(catalog: &DatabaseContext, connection: &Connection) -> Defaults {
     let Some(names) = recent_file_names(connection) else {
         return Defaults::default();
     };

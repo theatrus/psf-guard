@@ -135,6 +135,66 @@ async fn every_database_project_becomes_a_plan_and_shared_guids_become_one_plan(
 }
 
 #[tokio::test]
+async fn listing_fills_a_rig_without_optics_from_its_own_frames() {
+    let (f, rig) = super::rig_profile::bound_fixture().await;
+    let (_, before) = call(
+        &f.app,
+        "GET",
+        "/catalogs/catalog/rig/profile",
+        Value::Null,
+        None,
+    )
+    .await;
+    assert_eq!(before["data"]["profile"]["optics"], Value::Null);
+    let (status, listed) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let (_, after) = call(
+        &f.app,
+        "GET",
+        "/catalogs/catalog/rig/profile",
+        Value::Null,
+        None,
+    )
+    .await;
+    let optics = &after["data"]["profile"]["optics"];
+    assert_eq!(optics["source"]["file_name"], "newest.fits");
+    assert_eq!(optics["value"]["focal_length_mm"], 250.0);
+    assert_eq!(
+        after["data"]["profile"]["site"]["value"]["latitude_degrees"],
+        34.2
+    );
+    assert_eq!(after["data"]["profile"]["revision"], 1);
+    // A second listing leaves an operator's later edits alone.
+    let edit = json!({
+        "expected_revision": 1,
+        "optics": {"value": {"sensor_width_px": 100, "sensor_height_px": 80, "pixel_size_um": 5.0, "focal_length_mm": 400.0, "aperture_mm": null, "rotation": {"mode":"rotator"}}, "source": {"kind":"manual"}},
+        "site": null, "horizon": null, "sky_quality": null,
+        "limits": {"value": after["data"]["profile"]["limits"]["value"], "source": {"kind":"manual"}},
+    });
+    assert_eq!(
+        call(&f.app, "PUT", "/catalogs/catalog/rig/profile", edit, None)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    call(&f.app, "GET", "/plans", Value::Null, None).await;
+    let (_, again) = call(
+        &f.app,
+        "GET",
+        "/catalogs/catalog/rig/profile",
+        Value::Null,
+        None,
+    )
+    .await;
+    assert_eq!(
+        again["data"]["profile"]["optics"]["value"]["focal_length_mm"],
+        400.0
+    );
+    assert_eq!(again["data"]["profile"]["revision"], 2);
+    let _ = rig;
+}
+
+#[tokio::test]
 async fn the_plan_list_joins_framing_plan_and_activation_per_project() {
     let a = activated().await;
     let (status, before) = call(&a.f.app, "GET", "/plans", Value::Null, None).await;
