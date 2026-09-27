@@ -14,6 +14,9 @@ use std::{
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://alasky.cds.unistra.fr/hips-image-services/hips2fits";
+/// CDS Sesame, the same name resolver N.I.N.A.'s framing assistant uses.
+pub const DEFAULT_RESOLVER_URL: &str = "https://cds.unistra.fr/cgi-bin/nph-sesame/-oI/A";
+const MAX_RESOLVE_BYTES: usize = 64 * 1024;
 const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(45);
 const FAILURE_MEMORY: Duration = Duration::from_secs(60);
@@ -286,13 +289,28 @@ enum Job {
 pub struct SkyImageService {
     client: reqwest::Client,
     base_url: String,
+    resolver_url: String,
     cache_dir: PathBuf,
     jobs: Mutex<HashMap<String, Job>>,
     admission: Arc<Semaphore>,
 }
 
+/// A resolved name: where the catalog puts it, never a pointing solution.
+#[derive(Serialize)]
+pub(super) struct Resolved {
+    query: String,
+    name: String,
+    ra_degrees: f64,
+    dec_degrees: f64,
+    source: &'static str,
+}
+
 impl SkyImageService {
     pub fn new(cache_root: &FilePath, base_url: &str) -> Self {
+        Self::with_resolver(cache_root, base_url, DEFAULT_RESOLVER_URL)
+    }
+
+    pub fn with_resolver(cache_root: &FilePath, base_url: &str, resolver_url: &str) -> Self {
         let client = reqwest::Client::builder()
             .timeout(FETCH_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
@@ -302,6 +320,7 @@ impl SkyImageService {
         Self {
             client,
             base_url: base_url.to_owned(),
+            resolver_url: resolver_url.to_owned(),
             cache_dir: cache_root.join("director").join("sky"),
             jobs: Mutex::new(HashMap::new()),
             admission: Arc::new(Semaphore::new(CONCURRENT_FETCHES)),
@@ -361,6 +380,40 @@ impl SkyImageService {
             }
         });
         generating()
+    }
+
+    /// Ask Sesame for a name. The reply is plain text; the `%J` line carries
+    /// ICRS degrees. Anything else is a miss, reported as one.
+    async fn resolve(&self, query: &str) -> Result<Option<Resolved>, String> {
+        let _permit = self
+            .admission
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| "Sky image service is shutting down".to_owned())?;
+        let url = format!("{}?{}", self.resolver_url, percent_encode(query));
+        let response = self.client.get(url).send().await.map_err(|error| {
+            if error.is_timeout() {
+                "Name resolver timed out".to_owned()
+            } else {
+                "Name resolver could not be reached".to_owned()
+            }
+        })?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "Name resolver answered {}",
+                response.status().as_u16()
+            ));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|_| "Name resolver transfer failed".to_owned())?;
+        if bytes.len() > MAX_RESOLVE_BYTES {
+            return Err("Name resolver answer is larger than allowed".to_owned());
+        }
+        let text = String::from_utf8_lossy(&bytes);
+        Ok(parse_sesame(query, &text))
     }
 
     async fn fetch(&self, cutout: &Cutout, path: &FilePath) -> Result<(), String> {
@@ -430,6 +483,75 @@ impl SkyImageService {
             }
         }
         Ok(())
+    }
+}
+
+/// Query-string encoding for a catalog name; Sesame takes the raw query.
+fn percent_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() * 3);
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            b' ' => out.push('+'),
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
+fn parse_sesame(query: &str, text: &str) -> Option<Resolved> {
+    let mut name = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("%I.0 ") {
+            name = Some(rest.trim().to_owned());
+        }
+        if let Some(rest) = line.strip_prefix("%J ") {
+            let mut parts = rest.split_whitespace();
+            let ra: f64 = parts.next()?.parse().ok()?;
+            let dec: f64 = parts.next()?.parse().ok()?;
+            if !(0.0..360.0).contains(&ra) || !(-90.0..=90.0).contains(&dec) {
+                return None;
+            }
+            return Some(Resolved {
+                query: query.to_owned(),
+                name: name.unwrap_or_else(|| query.to_owned()),
+                ra_degrees: ra,
+                dec_degrees: dec,
+                source: "CDS Sesame (Simbad, NED, VizieR)",
+            });
+        }
+    }
+    None
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ResolveQuery {
+    name: String,
+}
+
+pub(super) async fn resolve(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ResolveQuery>,
+) -> Result<Response, Error> {
+    enabled(&state)?;
+    let name = query.name.trim();
+    if name.is_empty() || name.len() > 128 || name.chars().any(char::is_control) {
+        return Err(Error::Invalid);
+    }
+    match service(&state).resolve(name).await {
+        Ok(Some(resolved)) => Ok(Json(ApiResponse::success(resolved)).into_response()),
+        Ok(None) => Ok((
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<()>::error(format!(
+                "No object named '{name}' in the catalogs"
+            ))),
+        )
+            .into_response()),
+        Err(message) => Ok(failed(&message)),
     }
 }
 
@@ -563,6 +685,24 @@ mod tests {
         assert_eq!(get("coordsys"), Some("icrs"));
         assert_eq!(get("format"), Some("jpg"));
         assert_eq!(get("rotation_angle"), Some("12.000"));
+    }
+
+    #[test]
+    fn sesame_text_yields_icrs_degrees_or_nothing() {
+        let text = "# M31\t#Q8306215\n%@ @1575544\n%I.0 M  31\n%C.0 AGN\n%J 10.68470833 +41.26875000 = 00 42 44.330  +41 16 07.50\n%V v -300.0\n";
+        let hit = parse_sesame("m31", text).unwrap();
+        assert_eq!(hit.name, "M  31");
+        assert!(
+            (hit.ra_degrees - 10.6847).abs() < 1e-4 && (hit.dec_degrees - 41.26875).abs() < 1e-6
+        );
+        assert!(parse_sesame(
+            "nothing",
+            "# nothing\n#!SIMBAD: No known catalog could be found\n"
+        )
+        .is_none());
+        assert!(parse_sesame("bad", "%J 400 12\n").is_none());
+        assert_eq!(percent_encode("NGC 7000"), "NGC+7000");
+        assert_eq!(percent_encode("Sh2-155/é"), "Sh2-155%2F%C3%A9");
     }
 
     #[test]

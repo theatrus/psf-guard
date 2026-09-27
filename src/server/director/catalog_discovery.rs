@@ -58,6 +58,13 @@ impl Evidence {
         })
     }
 
+    pub(super) fn profile_of(&self, guid: Uuid) -> Option<String> {
+        self.projects
+            .iter()
+            .find(|project| project.source_project_guid == Some(guid) && project.issues.is_empty())
+            .and_then(|project| project.source_profile_id.clone())
+    }
+
     pub(super) fn mapping_names(
         &self,
         mappings: &[psf_guard_director_meta::catalog::ProjectMapping],

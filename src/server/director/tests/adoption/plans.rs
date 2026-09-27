@@ -1,13 +1,145 @@
 use super::activation::activated;
 use super::*;
 
+/// Register a schema-23 database with the given projects, returning its path.
+fn register(
+    f: &Fixture,
+    slug: &str,
+    name: &str,
+    projects: &[(i64, &str, Option<Uuid>)],
+) -> std::path::PathBuf {
+    let path = f._dir.path().join(format!("{slug}.sqlite"));
+    let db = crate::ts_schema::create_fresh_db(&path).unwrap();
+    for (id, label, guid) in projects {
+        db.execute(
+            "INSERT INTO project (Id, profileId, name, description, state, priority, isMosaic, flatsHandling, guid) VALUES (?1, 'profile-x', ?2, '', 1, 1, 0, 0, ?3)",
+            rusqlite::params![id, label, guid.map(|g| g.to_string())],
+        )
+        .unwrap();
+    }
+    let context = crate::server::database_context::DatabaseContext::new(
+        slug.into(),
+        name.into(),
+        path.to_string_lossy().into(),
+        vec![f._dir.path().to_string_lossy().into()],
+        None,
+        None,
+        None,
+        f._dir.path().join("cache").to_string_lossy().into(),
+    )
+    .unwrap();
+    f.state
+        .databases
+        .write()
+        .unwrap()
+        .insert(slug.into(), Arc::new(context));
+    path
+}
+
 #[tokio::test]
-async fn the_plan_list_joins_links_framing_plan_and_activation_per_project() {
+async fn every_database_project_becomes_a_plan_and_shared_guids_become_one_plan() {
+    let f = Fixture::new();
+    let shared = Uuid::new_v4();
+    let only_here = Uuid::new_v4();
+    register(
+        &f,
+        "c925",
+        "C925 data",
+        &[
+            (1, "Andromeda", Some(shared)),
+            (2, "Only here", Some(only_here)),
+            (3, "No GUID", None),
+        ],
+    );
+    register(
+        &f,
+        "redcat",
+        "Redcat data",
+        &[(1, "Andromeda", Some(shared))],
+    );
+    // A registered file with no project table is reported, not fatal.
+    let odd = f._dir.path().join("odd.sqlite");
+    rusqlite::Connection::open(&odd)
+        .unwrap()
+        .execute_batch("CREATE TABLE t(x)")
+        .unwrap();
+    let context = crate::server::database_context::DatabaseContext::new(
+        "odd".into(),
+        "Odd file".into(),
+        odd.to_string_lossy().into(),
+        vec![f._dir.path().to_string_lossy().into()],
+        None,
+        None,
+        None,
+        f._dir.path().join("cache").to_string_lossy().into(),
+    )
+    .unwrap();
+    f.state
+        .databases
+        .write()
+        .unwrap()
+        .insert("odd".into(), Arc::new(context));
+
+    let (status, listed) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let data = &listed["data"];
+    let warnings = data["warnings"].as_array().unwrap();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.as_str().unwrap().starts_with("Odd file")),
+        "{warnings:?}"
+    );
+    let rows = data["rows"].as_array().unwrap();
+    let by_name = |name: &str| {
+        rows.iter()
+            .filter(|r| r["project"]["name"] == name)
+            .collect::<Vec<_>>()
+    };
+    // Same GUID in two databases: one plan, two rigs.
+    let andromeda = by_name("Andromeda");
+    assert_eq!(andromeda.len(), 1, "{rows:?}");
+    let links = andromeda[0]["links"].as_array().unwrap();
+    assert_eq!(links.len(), 2);
+    assert_eq!(links[0]["catalog_name"], "C925 data");
+    assert_eq!(links[1]["catalog_name"], "Redcat data");
+    assert_ne!(links[0]["rig"]["id"], links[1]["rig"]["id"]);
+    assert_eq!(by_name("Only here").len(), 1);
+    assert_eq!(by_name("No GUID").len(), 0);
+    // The fixture's own hand-made catalog (M31 with a GUID) is adopted too.
+    assert_eq!(by_name("M31").len(), 1);
+    // Every database is now a rig with planning enabled.
+    let (_, rigs) = call(&f.app, "GET", "/rigs/profiles", Value::Null, None).await;
+    let slugs: Vec<&str> = rigs["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["catalog_slug"].as_str().unwrap())
+        .collect();
+    assert!(
+        slugs.contains(&"c925") && slugs.contains(&"redcat") && slugs.contains(&"catalog"),
+        "{slugs:?}"
+    );
+    // A second listing changes nothing.
+    let (_, again) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(again["data"]["rows"].as_array().unwrap().len(), rows.len());
+    assert_eq!(
+        by_name("Andromeda")[0]["project"]["id"],
+        again["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["project"]["name"] == "Andromeda")
+            .unwrap()["project"]["id"]
+    );
+}
+
+#[tokio::test]
+async fn the_plan_list_joins_framing_plan_and_activation_per_project() {
     let a = activated().await;
     let (status, before) = call(&a.f.app, "GET", "/plans", Value::Null, None).await;
     assert_eq!(status, StatusCode::OK, "{before}");
-    let rows = before["data"].as_array().unwrap();
-    // The fixture's "Global project" (from adoption) and the activated "Heart Nebula".
+    let rows = before["data"]["rows"].as_array().unwrap();
     let heart = rows
         .iter()
         .find(|r| r["project"]["name"] == "Heart Nebula")
@@ -38,7 +170,7 @@ async fn the_plan_list_joins_links_framing_plan_and_activation_per_project() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let (_, after) = call(&a.f.app, "GET", "/plans", Value::Null, None).await;
-    let heart = after["data"]
+    let heart = after["data"]["rows"]
         .as_array()
         .unwrap()
         .iter()
@@ -46,12 +178,9 @@ async fn the_plan_list_joins_links_framing_plan_and_activation_per_project() {
         .unwrap();
     assert_eq!(heart["activation"]["revision"], 1);
     assert_eq!(heart["activation"]["rigs"], 1);
-    // Activation linked the new Target Scheduler project, so the row now
-    // points at the database row Rig planning opens.
     assert_eq!(heart["links"].as_array().unwrap().len(), 1);
     assert_eq!(heart["links"][0]["catalog_slug"], "rig");
     assert_eq!(heart["links"][0]["rig"]["id"], a.rig.to_string());
     assert_eq!(heart["links"][0]["source_name"], "Heart Nebula");
-    assert!(heart["links"][0]["source_row_id"].as_i64().unwrap() >= 1);
     let _ = a.objective;
 }

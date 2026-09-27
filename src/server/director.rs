@@ -336,6 +336,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         )
         .route("/sky/surveys", get(sky_image::surveys))
         .route("/sky/cutout", get(sky_image::cutout))
+        .route("/sky/resolve", get(sky_image::resolve))
         .route("/projects/{id}", get(project).patch(rename_project))
         .merge(configuration_api::routes())
         .layer(DefaultBodyLimit::max(4096))

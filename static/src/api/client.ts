@@ -2,7 +2,7 @@ import axios from 'axios';
 import type { AxiosInstance } from 'axios';
 import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
-import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorActivation, DirectorActivationReport, DirectorPlanDraft, DirectorPlanRow, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey } from './directorTypes';
+import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorResolvedName, DirectorActivation, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey } from './directorTypes';
 import type {
   ProjectProcessingSettings,
   StackColorInputSources,
@@ -380,9 +380,9 @@ export const apiClient = {
     return data.data;
   },
 
-  getDirectorPlans: async (): Promise<DirectorPlanRow[]> => {
+  getDirectorPlans: async (): Promise<DirectorPlanList> => {
     const api = await getApi();
-    const { data } = await api.get<ApiResponse<DirectorPlanRow[]>>('/director/v1/plans');
+    const { data } = await api.get<ApiResponse<DirectorPlanList>>('/director/v1/plans');
     if (!data.data) throw new Error(data.error || 'Failed to load plans');
     return data.data;
   },
@@ -391,6 +391,13 @@ export const apiClient = {
     const api = await getApi();
     const { data } = await api.get<ApiResponse<DirectorRigStatusView[]>>('/director/v1/rigs/status');
     if (!data.data) throw new Error(data.error || 'Failed to load rig status');
+    return data.data;
+  },
+
+  resolveDirectorName: async (name: string): Promise<DirectorResolvedName> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorResolvedName>>('/director/v1/sky/resolve', { params: { name } });
+    if (!data.data) throw new Error(data.error || 'Name could not be resolved');
     return data.data;
   },
 

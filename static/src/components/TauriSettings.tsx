@@ -38,8 +38,6 @@ import CalibrationLibrarySummary from './CalibrationLibrarySummary';
 import AstroBinFilterSummary from './AstroBinFilterSummary';
 import UserManagement from './UserManagement';
 import ApiTokenManagement from './ApiTokenManagement';
-import { useDirectorStatus } from '../hooks/useDirectorStatus';
-import { DatabaseProjectLinks } from './director/DirectorCatalogs';
 import './TauriSettings.css';
 
 /**
@@ -93,9 +91,6 @@ export default function TauriSettings({
 }: TauriSettingsProps) {
   const isTauri = isTauriApp();
   const access = useAccess();
-  const director = useDirectorStatus();
-  const [planningDb, setPlanningDb] = useState<string | null>(() =>
-    typeof initialIntent === 'object' && initialIntent?.kind === 'director-links' ? initialIntent.dbId : null);
   const queryClient = useQueryClient();
   const { data: serverInfo } = useQuery({
     queryKey: ['serverInfo'],
@@ -1720,9 +1715,6 @@ export default function TauriSettings({
 
           <div className="settings-section">
             <h3>Configured Databases {hasDatabases && <span className="muted">({databases.length})</span>}</h3>
-            {!isLoading && registry && planningDb && !databases.some(entry => entry.id === planningDb) && (
-              <p role="alert">Database is no longer configured: {planningDb}</p>
-            )}
 
             {isLoading && <div className="detecting-database">Loading…</div>}
 
@@ -1779,12 +1771,6 @@ export default function TauriSettings({
                       />
                       <QualityBackfillControls dbId={entry.id} />
                       <AutoImportSummary dbId={entry.id} settings={entry.autoimport} />
-                      {director.data?.enabled && director.data.protocol_version === 1 && director.data.instance_id && (
-                        <button type="button" className="browse-button" aria-expanded={planningDb === entry.id}
-                          onClick={() => setPlanningDb(current => current === entry.id ? null : entry.id)}>
-                          Project planning links
-                        </button>
-                      )}
                     </div>
                     {managementAllowed && (
                       <div className="db-row-actions">
@@ -1818,9 +1804,6 @@ export default function TauriSettings({
                     )}
                   </div>
                   {isEditing && <div id={editorId}>{renderDatabaseForm(entry)}</div>}
-                  {planningDb === entry.id && director.data?.enabled && director.data.protocol_version === 1 && director.data.instance_id && (
-                    <DatabaseProjectLinks key={entry.id} instanceId={director.data.instance_id} slug={entry.id} />
-                  )}
                   {importDbId === entry.id && importPreviewPanel && (
                     <div ref={importPreviewRef}>{importPreviewPanel}</div>
                   )}

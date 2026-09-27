@@ -1,23 +1,16 @@
 import { useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Check, Pencil, Plus, RefreshCw, Telescope, X } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import type { DirectorIdentity, DirectorPlanRow } from '../../api/directorTypes';
 import { useAccess } from '../../auth/access';
 import { identityId } from './identityId';
-import { openSettings } from '../../utils/settingsIntent';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
 interface Edit { record: DirectorIdentity; creating: boolean }
 
-/** Where Rig planning opens for a row: its first linked database project. */
-function planningHref(row: DirectorPlanRow): string | null {
-  const link = row.links.find(entry => entry.source_row_id !== null);
-  if (!link) return null;
-  return `/director?${new URLSearchParams({ db: link.catalog_slug, project: String(link.source_row_id), dbfilter: link.catalog_slug, directorSource: link.catalog_slug, directorView: 'projects' })}`;
-}
 
 function stage(row: DirectorPlanRow): string {
   if (row.activation) return `Activated rev ${row.activation.revision} on ${new Date(row.activation.applied_at_ms).toLocaleDateString()}, ${row.activation.rigs} rig${row.activation.rigs === 1 ? '' : 's'}`;
@@ -30,7 +23,15 @@ function stage(row: DirectorPlanRow): string {
 export default function DirectorPlans({ instanceId }: { instanceId: string }) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
+  const [params] = useSearchParams();
   const queryKey = ['directorPlans', instanceId];
+  // The workspace keeps the page's catalog scope so Overview returns where it was.
+  const workspaceHref = (projectId: string) => {
+    const next = new URLSearchParams(params);
+    next.delete('directorSource'); next.delete('directorView'); next.delete('directorCatalog');
+    next.set('directorProject', projectId);
+    return `/director?${next}`;
+  };
   const plans = useQuery({ queryKey, queryFn: apiClient.getDirectorPlans, retry: false, refetchOnWindowFocus: false, refetchOnMount: 'always' });
   const [edit, setEdit] = useState<Edit | null>(null);
   const [name, setName] = useState('');
@@ -75,7 +76,7 @@ export default function DirectorPlans({ instanceId }: { instanceId: string }) {
       {(validation || save.isError) && <p className="director-error" role="alert">{validation || message(save.error)}</p>}
     </form>
   );
-  const rows = plans.data ?? [];
+  const rows = plans.data?.rows ?? [];
   return <section className="director-records director-plans" aria-label="Plans">
     <div className="director-toolbar">
       <h2>Plans</h2>
@@ -84,7 +85,8 @@ export default function DirectorPlans({ instanceId }: { instanceId: string }) {
         {canWrite && <button type="button" disabled={!!edit} onClick={() => begin({ creating: true, record: { id: identityId(), name: '', revision: 1 } })}><Plus size={16} />New project</button>}
       </div>
     </div>
-    <p className="director-muted">A plan is one project across every rig that shoots it. Frame, plan and activate it from Rig planning; link a database's projects to it under that database's project planning links.</p>
+    <p className="director-muted">Every project in every registered database is a plan; projects that share a Target Scheduler GUID across databases are one plan. Open a plan to frame it, choose the rigs that shoot it, and activate.</p>
+    {plans.data?.warnings.map(warning => <p key={warning} className="director-error" role="alert">{warning}</p>)}
     {notice && <p role="status">{notice}</p>}
     {!canWrite && <p className="director-muted">Read only</p>}
     {edit?.creating && form}
@@ -93,17 +95,15 @@ export default function DirectorPlans({ instanceId }: { instanceId: string }) {
     {plans.isSuccess && rows.length === 0 && <p className="director-muted">No projects yet.</p>}
     <ul className="director-list">
       {rows.map(row => {
-        const href = planningHref(row);
         return <li key={row.project.id}>
-          <div className="director-plan">
+          <div className="director-plan director-record-wide">
             <div className="director-record-name">
               <strong>{row.project.name}</strong>
               <span className="director-muted">{stage(row)}</span>
               {row.links.length > 0 && <span className="director-plan-links">{row.links.map(link => <span key={`${link.catalog_slug}:${link.source_project_guid}`}>{link.catalog_name}{link.source_name ? `: ${link.source_name}` : ''}</span>)}</span>}
             </div>
             <div className="director-actions">
-              {href ? <Link to={href}><Telescope size={16} />Rig planning</Link>
-                : <button type="button" onClick={() => openSettings()}>Link a database</button>}
+              <Link to={workspaceHref(row.project.id)} aria-label={`Open ${row.project.name}`}><Telescope size={16} />Open plan</Link>
               {canWrite && <button type="button" disabled={!!edit} title={`Rename ${row.project.name}`} aria-label={`Rename ${row.project.name}`} onClick={() => begin({ creating: false, record: row.project })}><Pencil size={16} /></button>}
             </div>
           </div>

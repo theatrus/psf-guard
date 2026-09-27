@@ -272,8 +272,11 @@ export interface DirectorPlanRow {
   plan: { revision: number; objectives: number; rigs: number } | null;
   activation: { revision: number; applied_at_ms: number; rigs: number } | null;
 }
+export interface DirectorPlanList { rows: DirectorPlanRow[]; warnings: string[] }
 export interface DirectorRigStatusView {
   rig: DirectorIdentity;
   status: { rig_id: string; session_id: string; reported_at_ms: number; payload: Record<string, unknown>; received_at_ms: number };
   checkins: Array<{ rig_id: string; ledger_id: string; highest_contiguous: number; highest_seen: number; last_checkin_ms: number }>;
 }
+
+export interface DirectorResolvedName { query: string; name: string; ra_degrees: number; dec_degrees: number; source: string }

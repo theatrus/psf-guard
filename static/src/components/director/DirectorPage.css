@@ -19,7 +19,7 @@
 .director-toolbar h2 { margin: 0; font-size: 18px; }
 .director-list { padding: 0; list-style: none; }
 .director-list li { border-bottom: 1px solid var(--color-border-secondary); }
-.director-record { display: grid; grid-template-columns: minmax(0, 1fr) auto 38px; align-items: center; gap: 16px; padding: 16px 0; }
+.director-record { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 16px; padding: 16px 0; }
 .director-record-name { display: flex; flex-direction: column; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
 .director-record-name code { font-size: 12px; color: var(--color-text-secondary); }
 .director-edit { border-left: 3px solid var(--color-primary); padding: 12px 16px; margin: 12px 0; }
@@ -78,3 +78,13 @@
 .director-plan { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 16px 0; }
 .director-plan-links { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 13px; color: var(--color-text-secondary); }
 @media (max-width: 600px) { .director-plan { grid-template-columns: minmax(0, 1fr); } }
+
+.director-workspace h2 { margin: 16px 0 0; font-size: 22px; }
+.director-workspace .director-list li > .director-database-links { border-top: none; padding-top: 0; }
+
+/* Rows whose actions carry text: stack them on a phone instead of squeezing
+   them into the icon column the identity rows reserved. */
+@media (max-width: 600px) {
+  .director-record-wide { grid-template-columns: minmax(0, 1fr); }
+  .director-record-wide > button, .director-record-wide > a { grid-column: 1; grid-row: auto; justify-self: start; }
+}

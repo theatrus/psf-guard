@@ -182,6 +182,21 @@ impl MetaStore {
         Ok(())
     }
 
+    /// The global project a source GUID is linked to in any catalog. Sync
+    /// copies keep GUIDs, so the same project on two rigs meets here.
+    pub fn project_for_source_guid(&self, source_project: Uuid) -> Result<Option<Uuid>, Error> {
+        valid_id(source_project)?;
+        let id: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT project_id FROM project_catalog WHERE source_project_guid=?1 ORDER BY catalog_id LIMIT 1",
+                [source_project.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        id.map(|value| parse_id(&value)).transpose()
+    }
+
     pub fn linked_project(
         &self,
         catalog: Uuid,

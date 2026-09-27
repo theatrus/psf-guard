@@ -6,6 +6,14 @@
 
 ## Added
 
+- Director now takes every registered database in as a rig and every project
+  in it as a plan on its own; projects that share a Target Scheduler GUID
+  across databases are one plan with several rigs. The project planning
+  links panel is gone from Settings. Each plan opens a workspace with its
+  databases, framing, the rigs that shoot it, and activation; a project with
+  no database yet starts its framing from a name looked up in the CDS
+  catalogs or typed coordinates. Rig setup expands in place from the rig list.
+
 - The Director page is now a plan list: every project with the databases it
   is linked to, how far its framing, plan and activation have come, and a
   Rig planning link, above a rig list with each database's planning state,

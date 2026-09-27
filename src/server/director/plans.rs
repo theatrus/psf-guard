@@ -2,8 +2,11 @@
 //! linked, and how far its framing, plan and activation have come. Read only.
 
 use super::*;
+use crate::catalog_identity;
+use crate::server::database_context::DatabaseContext;
 use psf_guard_director_core::framing::FramingRequest;
-use rusqlite::OpenFlags;
+use psf_guard_director_meta::{catalog::ProjectMapping, CatalogIdentity};
+use rusqlite::{OpenFlags, TransactionBehavior};
 use std::{collections::BTreeMap, time::Duration};
 
 #[derive(Serialize)]
@@ -50,9 +53,115 @@ pub(super) struct PlanRow {
 
 const MAX_PROJECTS: usize = 1024;
 
+#[derive(Serialize)]
+pub(super) struct PlanList {
+    rows: Vec<PlanRow>,
+    /// Databases the automatic adoption could not take in, and why.
+    warnings: Vec<String>,
+}
+
+/// Every registered database is a rig and every Target Scheduler project in
+/// it is a plan, without an operator step. Projects that share a GUID across
+/// databases, as Sync copies do, become one plan with several rigs; projects
+/// that merely share a name stay apart. A database that cannot be written
+/// or has no usable GUIDs is reported, not failed.
+fn ensure_adopted(
+    store: &mut MetaStore,
+    instance: Uuid,
+    catalog: &DatabaseContext,
+) -> Result<(), String> {
+    let mut connection = super::super::database_context::open_scheduler_connection_with_flags(
+        FilePath::new(&catalog.database_path),
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|_| format!("{}: could not be opened for planning", catalog.name))?;
+    connection
+        .busy_timeout(Duration::from_secs(2))
+        .map_err(|_| format!("{}: busy", catalog.name))?;
+    let mut tx = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|_| format!("{}: busy", catalog.name))?;
+    let evidence = match catalog_discovery::read_evidence(&tx) {
+        Ok(evidence) => evidence,
+        Err(_) => {
+            return Err(format!(
+                "{}: has no Target Scheduler project table",
+                catalog.name
+            ))
+        }
+    };
+    let saved = catalog_identity::read(&tx)
+        .map_err(|_| format!("{}: identity unreadable", catalog.name))?;
+    let require_new = saved.is_none();
+    let identity = saved.unwrap_or(CatalogIdentity {
+        id: Uuid::new_v4(),
+        origin_instance_id: instance,
+    });
+    let binding = match store.catalog_rig(identity.id) {
+        Ok(Some(binding)) => binding,
+        Ok(None) => store
+            .bind_catalog_rig_after(identity, &catalog.name, require_new, || {
+                catalog_identity::adopt(&mut tx, identity).map_err(|_| StoreError::Conflict)?;
+                Ok(())
+            })
+            .map_err(|error| format!("{}: could not be bound to a rig ({error})", catalog.name))?,
+        Err(error) => return Err(format!("{}: {error}", catalog.name)),
+    };
+    // Which source projects still need a plan.
+    let mut mappings = Vec::new();
+    for (guid, _row, name) in evidence.identified_rows() {
+        if store
+            .linked_project(identity.id, guid)
+            .map_err(|error| format!("{}: {error}", catalog.name))?
+            .is_some()
+        {
+            continue;
+        }
+        let profile = evidence
+            .profile_of(guid)
+            .ok_or_else(|| format!("{}: project {guid} has no profile", catalog.name))?;
+        let project_id = match store
+            .project_for_source_guid(guid)
+            .map_err(|error| format!("{}: {error}", catalog.name))?
+        {
+            Some(existing) => existing,
+            None => {
+                let label = name.unwrap_or("Project").trim();
+                let label = if label.is_empty() { "Project" } else { label };
+                store
+                    .create_project(Uuid::new_v4(), label)
+                    .map_err(|error| {
+                        format!(
+                            "{}: could not create plan for {label} ({error})",
+                            catalog.name
+                        )
+                    })?
+                    .id
+            }
+        };
+        mappings.push(ProjectMapping {
+            catalog_id: identity.id,
+            source_project_guid: guid,
+            source_profile_id: profile,
+            project_id,
+            rig_id: binding.rig.id,
+        });
+    }
+    if !mappings.is_empty() {
+        for chunk in mappings.chunks(256) {
+            store.link_catalog_projects(chunk).map_err(|error| {
+                format!("{}: could not link its projects ({error})", catalog.name)
+            })?;
+        }
+    }
+    tx.commit()
+        .map_err(|_| format!("{}: identity could not be saved", catalog.name))?;
+    Ok(())
+}
+
 pub(super) async fn list(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<ApiResponse<Vec<PlanRow>>>, Error> {
+) -> Result<Json<ApiResponse<PlanList>>, Error> {
     let service = enabled(&state)?;
     let catalogs: Vec<_> = state
         .databases
@@ -63,9 +172,15 @@ pub(super) async fn list(
         .collect();
     let metadata_permit = admit(&service.admission).await?;
     let catalog_permit = admit(&service.discovery_admission).await?;
-    let rows = tokio::task::spawn_blocking(move || {
+    let list = tokio::task::spawn_blocking(move || {
         let _permits = (metadata_permit, catalog_permit);
-        let store = service.store.lock().map_err(|_| Error::Internal)?;
+        let mut store = service.store.lock().map_err(|_| Error::Internal)?;
+        let mut warnings = Vec::new();
+        for catalog in &catalogs {
+            if let Err(warning) = ensure_adopted(&mut store, service.instance_id, catalog) {
+                warnings.push(warning);
+            }
+        }
         // Links first: each bound database's mappings, joined to its rows.
         let mut links: BTreeMap<Uuid, Vec<PlanLink>> = BTreeMap::new();
         for catalog in &catalogs {
@@ -184,12 +299,12 @@ pub(super) async fn list(
                 activation,
             });
         }
-        Ok::<_, Error>(rows)
+        Ok::<_, Error>(PlanList { rows, warnings })
     })
     .await
     .map_err(|error| {
         tracing::error!(%error, "Director plan listing failed");
         Error::Internal
     })??;
-    Ok(Json(ApiResponse::success(rows)))
+    Ok(Json(ApiResponse::success(list)))
 }

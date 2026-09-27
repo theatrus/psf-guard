@@ -33,6 +33,7 @@ test('global Director identities survive reload, conflicts, and narrow viewports
   await page.reload();
   await expect(page.getByText('Andromeda survey', { exact: true })).toBeVisible();
   await expect(page.locator('.director-plan', { hasText: 'Andromeda survey' }).getByText('Not linked to any database')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open Andromeda survey' })).toBeVisible();
   expect(new URL(page.url().split('#')[1], 'http://test').searchParams.get('db')).toBe('parked-catalog');
   await page.screenshot({ path: testInfo.outputPath('director-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 375, height: 812 });
