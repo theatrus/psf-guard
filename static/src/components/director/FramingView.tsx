@@ -7,7 +7,7 @@ import { useAccess } from '../../auth/access';
 import type { DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigProfileSummary } from '../../api/directorTypes';
 import {
   MAX_VIEW_FOV, MIN_VIEW_FOV, STAGE_HEIGHT, STAGE_WIDTH, angleFromStage, clampFov, draftFromState, formatDec, formatDegrees, formatRaHours, handleOffset,
-  insidePolygon, moveBy, panelForRig, pixelScale, polygonPoints, previewRequest, stackMatrix, stateFromDraft, stateFromSeed, toStage, type FramingSeed, type FramingState, chipSurveys, framingGeometry, TILE_HEIGHT, TILE_WIDTH, offsetFrom, tileFor, tileTransform, viewLeftTile, type SkyTile,
+  insidePolygon, moveBy, panelForRig, pixelScale, polygonPoints, previewRequest, stackMatrix, stateFromDraft, stateFromSeed, toStage, type FramingSeed, type FramingState, chipSurveys, framingGeometry, TILE_HEIGHT, TILE_WIDTH, offsetFrom, tileFor, tileTransform, viewLeftTile, type SkyTile, defaultSurveyId,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
 import { useDebounced, useSurveyCutout } from './useSurveyCutout';
@@ -99,6 +99,14 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     if (draft.data.draft) setState(stateFromDraft(draft.data.draft));
     else if (seed ?? started) setState(stateFromSeed((seed ?? started)!, DEFAULT_SURVEY));
   }, [draft.data, seed, started]);
+  // A fresh framing starts on the offline DSS map when the server has one.
+  // The list may land after the seed did; only an untouched choice moves.
+  const surveyChosen = useRef(false);
+  useEffect(() => {
+    const preferred = defaultSurveyId(surveys.data, DEFAULT_SURVEY);
+    if (preferred === DEFAULT_SURVEY || surveyChosen.current || draft.data?.draft) return;
+    setState(current => current && current.surveyId === DEFAULT_SURVEY ? { ...current, surveyId: preferred } : current);
+  }, [surveys.data, draft.data]);
   const rigList = useMemo(() => rigs.data ?? [], [rigs.data]);
   // Like the framing assistant, start with a rectangle: the first rig that
   // holds this project and knows its optics, else any rig that does.
@@ -273,7 +281,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
         </div>
         <div className="framing-stage-scale">{formatDegrees(state.viewFov)} across · N up, E left</div>
         <div className="framing-stage-surveys" role="group" aria-label="Survey layers" onPointerDown={event => event.stopPropagation()}>
-          {chipSurveys(surveys.data ?? []).map(({ survey: entry, label }) => <button key={entry.id} type="button" aria-pressed={entry.id === state.surveyId} title={`${entry.name}: ${entry.bandpass}`} onClick={() => update({ surveyId: entry.id })}>{label}</button>)}
+          {chipSurveys(surveys.data ?? []).map(({ survey: entry, label }) => <button key={entry.id} type="button" aria-pressed={entry.id === state.surveyId} title={`${entry.name}: ${entry.bandpass}`} onClick={() => { surveyChosen.current = true; update({ surveyId: entry.id }); }}>{label}</button>)}
         </div>
       </div>
       <p className="framing-readout" data-testid="framing-readout">
@@ -349,7 +357,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
       <fieldset>
         <legend>View</legend>
         <label>Survey
-          <select aria-label="Survey" value={state.surveyId} onChange={event => update({ surveyId: event.target.value })}>
+          <select aria-label="Survey" value={state.surveyId} onChange={event => { surveyChosen.current = true; update({ surveyId: event.target.value }); }}>
             {(surveys.data ?? []).map(entry => <option key={entry.id} value={entry.id}>{entry.name}{entry.kind === 'narrowband' ? ' (narrowband)' : ''}</option>)}
           </select>
         </label>

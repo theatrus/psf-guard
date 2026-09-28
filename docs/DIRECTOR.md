@@ -311,7 +311,10 @@ the height of the screen, with the controls beside it; the plan and
 activation sit under it side by side, and the linked databases last.
 **Framing** shows the sky around the project's first target on a survey
 image, with the target's catalog coordinates and rotation already filled in,
-the way N.I.N.A.'s framing assistant does. **Find a target** looks a name up
+the way N.I.N.A.'s framing assistant does. When the server holds N.I.N.A.'s
+offline sky maps (below), a new framing starts on the offline DSS map and the
+narrowband maps lead the chips, so framing works with no network at all.
+**Find a target** looks a name up
 in the CDS catalogs (Messier, NGC, IC, Sharpless and common names) and moves
 the target and the view there without saving anything; **Undo** beside the
 notice puts the previous target back, and **Back to saved framing** drops
@@ -564,6 +567,32 @@ field a camera sees. Panel rows count from the top of the mosaic as the camera
 sees it and columns from the east. Typed models:
 [framing](../crates/director-core/src/framing.rs) and
 [draft](../crates/director-meta/src/framing.rs).
+
+## Offline sky maps
+
+N.I.N.A. publishes its framing assistant's whole-sky caches for download:
+the DSS plates (3.3 GB), and the Northern Sky Narrowband Survey in SHO
+colour with stars (1.4 GB) and starless (0.5 GB). Each is a folder of 5°
+tiles with a `CacheInfo.xml` index, the same format N.I.N.A. keeps under
+`%LOCALAPPDATA%\NINA\FramingAssistantCache`. PSF Guard reads such folders
+from `<cache>/director/sky-maps/` and offers each as a survey layer, named
+`nina:<folder>`, rendered on the server from the tiles that cover the view
+(the 75, 150 or 500 px versions for wide views, the full tiles when zoomed
+in) and cached like a fetched cutout. Nothing leaves the machine.
+
+Install one with the server's cache root:
+
+```bash
+psf-guard sky-maps install full --cache-dir /path/to/cache
+psf-guard sky-maps install nsns-ohs --cache-dir /path/to/cache
+psf-guard sky-maps install nsns-ohs-starless --cache-dir /path/to/cache
+psf-guard sky-maps list --cache-dir /path/to/cache
+```
+
+`install` takes a zip URL too, and a folder copied from a rig's own framing
+cache works as well: drop it under `sky-maps/`. A running server offers a new
+folder within half a minute. The maps carry their own licences (the NSNS
+sets are CC BY-NC-SA); the attribution line under the framing view shows it.
 
 ## Sky survey cutouts
 

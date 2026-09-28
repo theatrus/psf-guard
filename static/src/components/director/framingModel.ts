@@ -326,7 +326,16 @@ const CHIP_LABELS: Record<string, string> = {
   nsns_ohs: 'SHO NSNS', nsns_halpha_continuum: 'Hα + continuum', nsns_dr01_color: 'NSNS colour',
 };
 export function chipSurveys(surveys: DirectorSurvey[]): Array<{ survey: DirectorSurvey; label: string }> {
-  return surveys
-    .filter(survey => survey.id === 'dss2_color' || survey.kind === 'narrowband')
+  // Offline maps first: they answer at once and need no network.
+  const offline = surveys.filter(survey => survey.offline).map(survey => ({ survey, label: survey.name }));
+  const online = surveys
+    .filter(survey => !survey.offline && (survey.id === 'dss2_color' || survey.kind === 'narrowband'))
     .map(survey => ({ survey, label: CHIP_LABELS[survey.id] ?? survey.name.replace(/^Northern Sky Narrowband Survey /, 'NSNS ').replace(/ composite$/i, '') }));
+  return [...offline, ...online];
+}
+
+/** The layer a new framing starts on: the offline DSS map when the server
+ *  has one, else the online DSS2 colour plates. */
+export function defaultSurveyId(surveys: DirectorSurvey[] | undefined, fallback: string): string {
+  return surveys?.find(survey => survey.offline && survey.kind === 'broadband')?.id ?? fallback;
 }

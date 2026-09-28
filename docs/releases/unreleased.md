@@ -159,6 +159,10 @@
   a round trip on every change. **Find a target** in the framing controls
   looks a name up and moves the target there, with **Undo** and **Back to
   saved framing** as the ways back.
+- N.I.N.A.'s offline sky maps work as framing layers. `psf-guard sky-maps
+  install full|nsns-ohs|nsns-ohs-starless` downloads a whole-sky set into the
+  server's cache, and the framing view renders any view from its tiles with
+  no network; a new framing starts on the offline DSS map when one exists.
 
 ## Fixed
 
