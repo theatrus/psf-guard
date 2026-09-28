@@ -316,19 +316,30 @@ export function framingGeometry(request: DirectorFramingRequest): DirectorFramin
   };
 }
 
-/** The survey tile behind the stage: twice the view, at the stage's pixel
- *  scale, so a pan or a zoom step shows sky that is already loaded. */
+/** The survey tile behind the stage follows the viewport: a little wider
+ *  than the view, at the viewport's own pixel density, so the picture is
+ *  sharp across the whole stage. The tiles fetched before, and the wider
+ *  ones fetched quietly, cover a pan or a zoom step until its tile lands. */
+export const TILE_MARGIN = 1.3;
+/** The most pixels the server renders along a side. */
+export const TILE_MAX_PIXELS = 2048;
 export const TILE_WIDTH = 2048;
 export const TILE_HEIGHT = 1536;
 export interface SkyTile { center: DirectorSkyPosition; fov: number }
 
-/** The tile's pixels: twice the stage, within what the server renders. */
-export function tileSize(stage: Stage = DEFAULT_STAGE): { width: number; height: number } {
-  return { width: Math.min(2048, stage.width * 2), height: Math.min(2048, stage.height * 2) };
+/** The tile's pixels: the stage's device pixels across, times the margin,
+ *  at the stage's shape, within what the server renders. Without a measured
+ *  width the stage's logical size at two pixels per unit is assumed. */
+export function tileSize(stage: Stage = DEFAULT_STAGE, devicePixelsAcross = stage.width * 2): { width: number; height: number } {
+  const aspect = stage.height / stage.width;
+  let width = Math.min(TILE_MAX_PIXELS, Math.max(64, Math.round(devicePixelsAcross * TILE_MARGIN)));
+  let height = Math.round(width * aspect);
+  if (height > TILE_MAX_PIXELS) { height = TILE_MAX_PIXELS; width = Math.round(height / aspect); }
+  return { width, height: Math.max(64, height) };
 }
 
 export function tileFor(view: DirectorSkyPosition, viewFov: number): SkyTile {
-  return { center: view, fov: Math.min(TILE_MAX_FOV, viewFov * 2) };
+  return { center: view, fov: Math.min(TILE_MAX_FOV, viewFov * TILE_MARGIN) };
 }
 
 /** Whether the view has left the tile's useful area: near an edge, or
@@ -338,7 +349,7 @@ export function viewLeftTile(tile: SkyTile, view: DirectorSkyPosition, viewFov: 
   const offset = stageProject(tile.center, view);
   if (!offset) return true;
   const reach = tile.fov / 2 - viewFov / 2;
-  return Math.abs(offset[0]) > reach * 0.9 || Math.abs(offset[1]) > reach * 0.9 * (stage.height / stage.width) || viewFov > tile.fov * 0.95 || viewFov < tile.fov / 4;
+  return Math.abs(offset[0]) > reach * 0.9 || Math.abs(offset[1]) > reach * 0.9 * (stage.height / stage.width) || viewFov > tile.fov * 0.95 || viewFov < tile.fov / 1.8;
 }
 
 /** The sky under a pixel of a survey tile: the server renders tiles

@@ -95,12 +95,13 @@ describe('Framing view', () => {
     // waits a second by design, so give a loaded test runner room.
     await waitFor(() => expect(cutouts.length).toBeGreaterThanOrEqual(2), { timeout: 8000 });
     await waitFor(() => expect(document.querySelector('.framing-stage [data-testid="framing-sky"]')).toHaveAttribute('href', 'blob:stage'), { timeout: 4000 });
-    // The sky is fetched as a tile twice the view, at the stage's pixel scale.
+    // The sky is fetched as a tile a little wider than the view, at the stage's pixel density.
     const first = cutouts.find(query => query.includes('survey=dss2_color'))!;
     expect(first).toContain('width=2048');
     expect(first).toContain('height=1536');
-    // A seeded view starts 4° wide, so its first tile is 8°.
-    expect(first).toContain('fov=8&');
+    const askedFov = Number(first.match(/fov=([0-9.]+)/)![1]);
+    const viewFov = Number((screen.getByLabelText('View width degrees') as HTMLInputElement).value);
+    expect(askedFov).toBeCloseTo(viewFov * 1.3, 1);
 
     fireEvent.change(screen.getByLabelText('Mosaic rows'), { target: { value: '2' } });
     fireEvent.change(screen.getByLabelText('Panel overlap percent'), { target: { value: '15' } });
@@ -148,8 +149,8 @@ describe('Framing view', () => {
     const moved = screen.getByTestId('framing-sky').getAttribute('transform')!;
     expect(moved).toMatch(/^matrix\(/);
     expect(moved).not.toBe(resting);
-    // The tile spans twice the view: one tile pixel per stage pixel.
-    expect(Number(moved.slice(7, -1).split(' ')[0])).toBeCloseTo(1, 2);
+    // The tile spans 1.3 views at 2048 px over a 1024-unit stage: 0.65 stage units per tile pixel.
+    expect(Number(moved.slice(7, -1).split(' ')[0])).toBeCloseTo(0.65, 2);
     expect(cutouts.length).toBe(before);
     fireEvent.pointerUp(stage, { pointerId: 1 });
     expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(38.2);
@@ -326,7 +327,8 @@ describe('Framing view', () => {
     expect(cutouts.some(query => query.includes('survey=nsns_ohs'))).toBe(false);
     // Once the view's own tile is up, wider views of the same place are fetched quietly, out to a hemisphere.
     await waitFor(() => expect(cutouts.some(query => query.includes('fov=180'))).toBe(true), { timeout: 8000 });
-    expect(cutouts.some(query => query.includes('fov=48'))).toBe(true);
+    // The settled 6° view's tile is 7.8° across; the prefetch steps up by four from there.
+    expect(cutouts.some(query => query.includes('fov=31.2'))).toBe(true);
     // The online layer stays a click away.
     fireEvent.click(screen.getByRole('button', { name: 'SHO NSNS' }));
     expect(screen.getByLabelText('Survey')).toHaveValue('nsns_ohs');
