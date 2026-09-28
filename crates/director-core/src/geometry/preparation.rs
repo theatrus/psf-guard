@@ -86,6 +86,34 @@ impl GeometryPreparation<'_> {
             .map_err(Error::Preparation)
     }
 
+    /// Latest start for this issued command within the complete bound geometry.
+    pub fn check_pending_dispatch_deadline(
+        &mut self,
+        request: &Request,
+        current: &Constraints,
+        command: &Command,
+    ) -> Result<crate::dispatch::DispatchCheck, Error> {
+        let narrowed = self.geometry.narrow(request)?;
+        let changed = self.geometry.check_current(request, current).is_err();
+        self.inner
+            .check_pending_dispatch_deadline_with_constraint_change(&narrowed, command, changed)
+            .map_err(Error::Preparation)
+    }
+
+    /// Uses only this preparation's bound geometry and remaining capture overhead.
+    /// The caller must still own a correlated, newly reserved capture.
+    pub fn check_capture_dispatch_deadline(
+        &mut self,
+        request: &Request,
+        current: &Constraints,
+    ) -> Result<crate::dispatch::DispatchCheck, Error> {
+        let narrowed = self.geometry.narrow(request)?;
+        let changed = self.geometry.check_current(request, current).is_err();
+        self.inner
+            .check_capture_dispatch_deadline_with_constraint_change(&narrowed, changed)
+            .map_err(Error::Preparation)
+    }
+
     /// Receipts remain admissible after a constraint change or safety stop.
     pub fn complete(&mut self, completion: Completion) -> Result<(), Error> {
         self.inner.complete(completion).map_err(Error::Preparation)

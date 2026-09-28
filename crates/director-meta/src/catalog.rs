@@ -121,6 +121,7 @@ impl MetaStore {
             validate_mapping(mapping)?;
         }
         for mapping in mappings {
+            super::catalog_rig::check_mapping(tx, mapping.catalog_id, mapping.rig_id)?;
             if read_catalog(tx, mapping.catalog_id)?.is_none()
                 || read_named(tx, Kind::Project, mapping.project_id)?.is_none()
                 || read_named(tx, Kind::Rig, mapping.rig_id)?.is_none()
@@ -247,7 +248,7 @@ impl MetaStore {
     }
 }
 
-fn read_catalog(conn: &Connection, id: Uuid) -> Result<Option<CatalogIdentity>, Error> {
+pub(crate) fn read_catalog(conn: &Connection, id: Uuid) -> Result<Option<CatalogIdentity>, Error> {
     valid_id(id)?;
     let origin: Option<String> = conn
         .query_row(

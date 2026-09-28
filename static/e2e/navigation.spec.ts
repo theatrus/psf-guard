@@ -195,13 +195,13 @@ test('direct deep link to the grid loads when ?db= matches a configured DB', asy
   });
 });
 
-test('the Overview keeps the project scope and points back at it', async ({
+test('the Library keeps the project scope and points back at it', async ({
   page,
 }) => {
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
   await expect(page.locator('.image-card').first()).toBeVisible({ timeout: 15_000 });
 
-  await page.getByRole('button', { name: 'Overview', exact: true }).click();
+  await page.getByRole('button', { name: 'Library', exact: true }).click();
 
   // The project the user left is marked, and the scope stays in the URL.
   const current = page.locator('[data-current-project="true"]');

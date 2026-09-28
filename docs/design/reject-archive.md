@@ -351,7 +351,7 @@ mergeable commit.
   check whether TS backfills on migration or only on INSERT going
   forward.
 - **UI trigger**: not in v1, but eventually a "Move rejected files
-  out-of-tree" button on each DB section in the merged Overview would
+  out-of-tree" button on each DB section in the merged Library would
   close the workflow loop. Gated behind `--allow-database-management`
   (same gate as the existing CRUD endpoints).
 
@@ -391,5 +391,5 @@ mergeable commit.
       but a regression there could affect anyone else who is)
 
 ### Deferred
-- [ ] UI trigger (button on Overview DB section)
+- [ ] UI trigger (button on Library DB section)
 - [ ] Cross-DB archive lookup helper

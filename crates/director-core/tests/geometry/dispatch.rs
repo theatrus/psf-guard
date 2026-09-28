@@ -1,6 +1,64 @@
 use super::*;
 
 #[test]
+fn geometry_deadline_uses_first_horizon_window_and_remaining_work() {
+    let (program, request, constraints) = preparation_fixture();
+    let local = local(&program);
+    let bound = compile(program, &request, constraints.clone()).unwrap();
+    assert!(bound.windows("goal").unwrap().len() > 1);
+    let mut prep = bound
+        .preparation(
+            "prep".into(),
+            &request,
+            &constraints,
+            "goal",
+            local,
+            Estimates {
+                capture_overhead_ms: 1_000,
+                ..Estimates::default()
+            },
+        )
+        .unwrap();
+    let Next::Run(command) = prep.next(&request, &constraints).unwrap() else {
+        panic!()
+    };
+    let checked = prep
+        .check_pending_dispatch_deadline(&request, &constraints, &command)
+        .unwrap();
+    assert_eq!(
+        checked.latest_start_ms,
+        Some(bound.windows("goal").unwrap()[0].end_ms - 6_000)
+    );
+    prep.complete(receipt(&command, request.state.now_ms))
+        .unwrap();
+    while let Next::Run(command) = prep.next(&request, &constraints).unwrap() {
+        prep.complete(receipt(&command, request.state.now_ms))
+            .unwrap();
+    }
+    let checked = prep
+        .check_capture_dispatch_deadline(&request, &constraints)
+        .unwrap();
+    assert_eq!(
+        checked.latest_start_ms,
+        Some(bound.windows("goal").unwrap()[0].end_ms - 6_000)
+    );
+    let mut changed = constraints.clone();
+    changed.rig.revision += 1;
+    assert_eq!(
+        prep.check_capture_dispatch_deadline(&request, &changed)
+            .unwrap()
+            .latest_start_ms,
+        None
+    );
+    assert_eq!(
+        prep.check_capture_dispatch_deadline(&request, &constraints)
+            .unwrap()
+            .latest_start_ms,
+        None
+    );
+}
+
+#[test]
 fn pending_dispatch_rechecks_independent_meridian_windows() {
     let (mut program, mut request, mut constraints) = fixture();
     let transit = START + 30_000;

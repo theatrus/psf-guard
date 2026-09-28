@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
-import ProjectSchedulerDialog from '../ProjectSchedulerDialog';
+import { ProjectPlanEditor } from '../ProjectSchedulerDialog';
 
 const project = {
   id: 7,
@@ -82,19 +82,12 @@ function renderDialog(canEdit = true) {
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <ProjectSchedulerDialog
-        open
-        dbId="db-test"
-        projectId={7}
-        projectName="M31 season"
-        canEdit={canEdit}
-        onClose={() => undefined}
-      />
+      <ProjectPlanEditor dbId="db-test" projectId={7} canEdit={canEdit} />
     </QueryClientProvider>
   );
 }
 
-describe('ProjectSchedulerDialog', () => {
+describe('ProjectPlanEditor', () => {
   it('shows Target Scheduler coordinates and exposure counts', async () => {
     server.use(
       http.get('/api/db/db-test/projects/7/scheduler', () =>

@@ -283,7 +283,7 @@ async fn url_scope_unknown_parents_and_local_paths_cannot_change_snapshot_owners
 }
 
 #[tokio::test]
-async fn configuration_routes_bound_input_sizes_and_keep_management_gate() {
+async fn configuration_routes_bound_input_sizes_and_stay_open_without_management() {
     let dir = TempDir::new().unwrap();
     let app_state = Arc::new(state(&dir, true));
     let app = router(app_state.clone());
@@ -326,14 +326,16 @@ async fn configuration_routes_bound_input_sizes_and_keep_management_gate() {
             StatusCode::PAYLOAD_TOO_LARGE
         );
     }
+    // Configuration lives in the meta store, so it stays open without
+    // database management: reads and writes alike.
     app_state.set_allow_database_management(false);
     for path in ["/sites", "/rigs"] {
         assert_eq!(
             call(&app, "GET", path, Value::Null, None).await.0,
-            StatusCode::FORBIDDEN
+            StatusCode::OK
         );
     }
-    assert_eq!(
+    assert_ne!(
         call(
             &app,
             "POST",
@@ -345,7 +347,7 @@ async fn configuration_routes_bound_input_sizes_and_keep_management_gate() {
         .0,
         StatusCode::FORBIDDEN
     );
-    assert_eq!(
+    assert_ne!(
         call(
             &app,
             "POST",

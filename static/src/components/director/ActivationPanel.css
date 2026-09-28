@@ -1,0 +1,7 @@
+.activation { margin-top: 16px; }
+.activation-report { border: 1px solid var(--color-border-secondary); border-radius: 6px; padding: 8px 12px; margin: 8px 0 12px; }
+.activation-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.activation-table th { text-align: left; font-weight: 500; color: var(--color-text-secondary); padding: 4px 6px; }
+.activation-table td { padding: 6px; vertical-align: top; border-top: 1px solid var(--color-border-secondary); }
+.activation-table .director-cell-label { display: none; }
+@media (max-width: 700px) { .activation-table thead { display: none; } .activation-table tr { display: grid; gap: 4px; padding: 8px 0; border-top: 1px solid var(--color-border-secondary); } .activation-table td { border: none; padding: 0; } .activation-table .director-cell-label { display: inline; color: var(--color-text-secondary); margin-right: 6px; } }

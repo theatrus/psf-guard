@@ -1,0 +1,27 @@
+.visibility { margin-top: 16px; }
+.visibility h3 { margin: 0; font-size: 16px; }
+.visibility-verdict { margin: 0 0 8px; font-weight: 600; }
+.visibility-verdict.is-down { color: var(--color-warning-light); }
+.visibility-chart { width: 100%; height: auto; display: block; background: #0b0f16; border: 1px solid var(--color-border-secondary); border-radius: 6px; }
+.visibility-chart .band-dark { fill: rgba(60, 90, 140, 0.25); }
+.visibility-chart .band-deep { fill: rgba(30, 50, 100, 0.45); }
+.visibility-chart .grid { stroke: rgba(255, 255, 255, 0.12); stroke-width: 1; }
+.visibility-chart .frame { stroke: rgba(255, 255, 255, 0.4); stroke-width: 1; }
+.visibility-chart .axis { fill: #a9b4c4; font-size: 11px; }
+.visibility-chart .target { fill: none; stroke: #5ab4ff; stroke-width: 2.5; }
+.visibility-chart .horizon { fill: none; stroke: #ff8a5b; stroke-width: 2; }
+.visibility-chart .moon { fill: none; stroke: #e8e2b0; stroke-width: 1.5; stroke-dasharray: 6 5; }
+.visibility-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; font-size: 12px; margin: 6px 0; }
+.visibility-legend .key { display: inline-block; width: 14px; height: 3px; margin-right: 4px; vertical-align: middle; }
+.visibility-legend .key.target { background: #5ab4ff; }
+.visibility-legend .key.horizon { background: #ff8a5b; }
+.visibility-legend .key.moon { background: #e8e2b0; }
+.visibility-legend .key.dark { background: rgba(60, 90, 140, 0.6); height: 10px; }
+.visibility-legend .key.deep { background: rgba(30, 50, 100, 0.9); height: 10px; }
+.visibility-nights { width: 100%; border-collapse: collapse; font-size: 13px; }
+.visibility-nights th { text-align: left; font-weight: 500; color: var(--color-text-secondary); padding: 4px 6px; }
+.visibility-nights td { padding: 4px 6px; border-top: 1px solid var(--color-border-secondary); }
+.visibility-chart .paused { fill: none; stroke: #ff6b6b; stroke-width: 2.5; stroke-dasharray: 3 5; }
+.visibility-chart .transit line { stroke: rgba(255, 255, 255, 0.5); stroke-width: 1; stroke-dasharray: 2 4; }
+.visibility-chart .transit text { fill: #a9b4c4; font-size: 10px; }
+.visibility-legend .key.paused { background: #ff6b6b; }

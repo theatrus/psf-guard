@@ -883,7 +883,7 @@ test('keeps a running stack visible in the header and re-attaches the panel', as
   await expect(headerStacking).toContainText('Alpha M44 · B · 1/3 frames');
   await page.getByRole('button', { name: 'Sequence' }).click();
   await expect(headerStacking).toContainText('Stacking');
-  await page.getByRole('button', { name: 'Overview' }).click();
+  await page.getByRole('button', { name: 'Library' }).click();
   await expect(headerStacking).toContainText('Stacking');
 });
 

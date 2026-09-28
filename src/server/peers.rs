@@ -302,6 +302,22 @@ fn find_peer(state: &AppState, peer_id: &str) -> Result<PeerEntry, AppError> {
         .ok_or(AppError::NotFound)
 }
 
+/// Every registered peer, or none when this server keeps no registry. Director
+/// activation reads this to know which rig databases live on another PSF Guard.
+pub(crate) fn registered_peers(state: &AppState) -> Vec<PeerEntry> {
+    let Some(path) = state
+        .registry_path
+        .read()
+        .ok()
+        .and_then(|path| path.clone())
+    else {
+        return vec![];
+    };
+    DbRegistry::load_or_init(&path)
+        .map(|registry| registry.peers)
+        .unwrap_or_default()
+}
+
 fn load_registry(state: &AppState) -> Result<DbRegistry, AppError> {
     let path = require_registry_path(state)?;
     DbRegistry::load_or_init(&path)

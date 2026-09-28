@@ -4,6 +4,7 @@ import type {
   NavigationProject,
   NavigationTarget,
 } from '../../utils/projectTargetNavigation';
+import ProjectTargetRows from './ProjectTargetRows';
 
 interface ProjectTreeOptionProps {
   project: NavigationProject;
@@ -15,6 +16,9 @@ interface ProjectTreeOptionProps {
   selectedProjectId: number | null;
   selectedTargetId: number | null;
   relativeNow: number;
+  /** Other databases that hold this same project, when the list keeps each
+   *  rig on its own row. */
+  alsoOn?: string[];
   onToggle: () => void;
   onChooseProject: () => void;
   onChooseTarget: (target: NavigationTarget) => void;
@@ -30,15 +34,12 @@ export default function ProjectTreeOption({
   selectedProjectId,
   selectedTargetId,
   relativeNow,
+  alsoOn = [],
   onToggle,
   onChooseProject,
   onChooseTarget,
 }: ProjectTreeOptionProps) {
   const latest = projectLastWorkedAt(project);
-  const projectSelected =
-    selectedDbId === project.db_id &&
-    selectedProjectId === project.id &&
-    selectedTargetId === null;
 
   return (
     <div className="selector-project-tree">
@@ -58,49 +59,23 @@ export default function ProjectTreeOption({
           {project.db_name}
           {latest !== null ? ` · ${formatRelativeTime(latest, relativeNow)}` : ''}
           {!project.has_files ? ' · no files' : ''}
+          {alsoOn.length > 0 ? ` · also on ${alsoOn.join(', ')}` : ''}
         </small>
       </button>
 
       {expanded && (
         <div className="selector-project-targets">
-          <button
-            type="button"
-            className={`selector-option selector-target-option ${projectSelected ? 'is-selected' : ''}`}
-            aria-current={projectSelected ? 'true' : undefined}
-            disabled={!project.has_files}
-            onClick={onChooseProject}
-          >
-            <span>All images</span>
-            <small>{project.display_name}</small>
-          </button>
-
-          {targets.map((target) => {
-            const selected =
-              selectedDbId === target.db_id &&
-              selectedProjectId === target.project_id &&
-              selectedTargetId === target.id;
-            return (
-              <button
-                key={`${target.db_id}:${target.id}`}
-                type="button"
-                className={`selector-option selector-target-option ${selected ? 'is-selected' : ''}`}
-                aria-current={selected ? 'true' : undefined}
-                disabled={!target.has_files}
-                onClick={() => onChooseTarget(target)}
-              >
-                <span>{target.name}</span>
-                <small>
-                  {target.active ? 'Active target' : 'Inactive target'}
-                  {!target.has_files ? ' · no files' : ''}
-                </small>
-              </button>
-            );
-          })}
-
-          {targetsLoading && <p className="selector-empty">Loading targets…</p>}
-          {!targetsLoading && !targetsError && targets.length === 0 && (
-            <p className="selector-empty">No matching targets.</p>
-          )}
+          <ProjectTargetRows
+            project={project}
+            targets={targets}
+            targetsLoading={targetsLoading}
+            targetsError={targetsError}
+            selectedDbId={selectedDbId}
+            selectedProjectId={selectedProjectId}
+            selectedTargetId={selectedTargetId}
+            onChooseProject={onChooseProject}
+            onChooseTarget={onChooseTarget}
+          />
         </div>
       )}
     </div>

@@ -342,7 +342,7 @@ between runs forces a clean rebuild instead of mixing calibrations.
 
 ## Project coverage report
 
-Each project card on the Overview has a **Calibration** action that reports
+Each project card on the Library has a **Calibration** action that reports
 how the library covers that project's lights: per kind, how many frames
 match and which capture sessions they span; and per imaging night and
 filter, the flat session a master would build from, its distance from the
@@ -445,7 +445,7 @@ which is server-wide and shared by the desktop and browser apps. With the WBPP
 layout the dialog also asks for WBPP's settings (quality preset, Fast
 Integration, drizzle, autocrop, light rejection), which the runner script
 passes; see [Stacking with PixInsight's WBPP](WBPP.md), which also covers
-running WBPP on the server from the Overview.
+running WBPP on the server from the Library.
 
 The dialog also asks whether to include ungraded lights (on by default, as
 the stack previews do; rejects are never exported) and how the files land:
@@ -551,7 +551,7 @@ running likewise waits for the next start. Until then queries still work; they
 just scan. Target Scheduler ships it without any, so looking up one
 target's images meant reading every row of the table — seconds per query on a
 catalog of a few thousand images, and repeated often enough to hold up the
-Overview page. The indexes are named `idx_psf_guard_acquiredimage_target` and
+Library page. The indexes are named `idx_psf_guard_acquiredimage_target` and
 `idx_psf_guard_acquiredimage_project`, so it is clear who added them and they
 are safe to drop. Adding an index changes no data and no table: Target
 Scheduler and N.I.N.A. keep working exactly as before, and simply run faster.

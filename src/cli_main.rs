@@ -1228,6 +1228,9 @@ pub fn main() -> Result<()> {
         Commands::Users { action } => {
             crate::commands::users::manage_users(action)?;
         }
+        Commands::SkyMaps { action } => {
+            crate::commands::sky_maps::run(action)?;
+        }
         Commands::Server {
             config,
             registry,

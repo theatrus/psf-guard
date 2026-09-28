@@ -139,6 +139,11 @@ Download the release into a new temporary directory. Check:
   exist and are non-empty;
 - every URL and signature in `updater.json` matches its public release asset;
 - the GitHub `releases/latest/download/updater.json` fallback works;
+- `ghcr.io/theatrus/psf-guard:latest` resolves to the same image index as the
+  version tag (`docker buildx imagetools inspect` both, or compare the
+  manifest digests through the registry API); `latest` moves only on a
+  `vX.Y.Z` tag, `edge` follows main, and a wrong `latest` is repaired by
+  running the Docker workflow by hand with `retag_latest` set to the version;
 - the CLI reports the new version on each platform available to you; and
 - package and app metadata carry the new version.
 
@@ -160,7 +165,7 @@ codesign --verify --deep --strict --verbose=2 /path/to/PSF\ Guard.app
 Keep the downloaded files until the release record and update feeds have both
 been checked.
 
-## 7. Check the website feeds
+## 7. Check the website feeds and the demo
 
 `updates.psf-guard.com` picks up `updater.json` and `notice.json` from the
 published GitHub release through a webhook; nothing is copied by hand. After
@@ -178,6 +183,15 @@ Then start or refresh a PSF Guard server. The server checks the notice feed
 at startup and caches it for 24 hours. A desktop app on the previous version
 should offer the signed update. A browser should show the notice but must not
 offer an install action.
+
+`demo.psf-guard.com` rebuilds itself from the newest `vX.Y.Z` tag on the
+same release webhook (flotswarm action `deploy-psf-guard`, host
+`psf-guard-demo`), so it always runs what users download and never the main
+tip. Give it a quarter of an hour, then confirm its version:
+
+```bash
+curl -s https://demo.psf-guard.com/api/update-notice
+```
 
 Record the tag SHA, workflow run, release URL, downloaded checks, and website
 feed checks in the release issue or operator notes.

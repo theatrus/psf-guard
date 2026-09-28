@@ -1,5 +1,10 @@
 .director-page { flex: 1; overflow: auto; padding: 24px; min-height: 0; }
-.director-page > * { max-width: 1000px; margin-left: auto; margin-right: auto; }
+.director-page > * { max-width: 1400px; margin-left: auto; margin-right: auto; }
+.director-database-links { padding: 16px 0; border-top: 1px solid var(--color-border-secondary); }
+.director-page a { display: inline-flex; gap: 6px; align-items: center; color: var(--color-primary); }
+.director-project-context { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; }
+.director-project-context dt { color: var(--color-text-secondary); }
+.director-project-context dd { margin: 0; overflow-wrap: anywhere; }
 .director-heading, .director-toolbar, .director-actions, .director-edit-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .director-heading h1 { font-size: 24px; margin: 0; }
 .director-preview { color: var(--color-warning-light); font-size: 13px; }
@@ -14,7 +19,7 @@
 .director-toolbar h2 { margin: 0; font-size: 18px; }
 .director-list { padding: 0; list-style: none; }
 .director-list li { border-bottom: 1px solid var(--color-border-secondary); }
-.director-record { display: grid; grid-template-columns: minmax(0, 1fr) auto 38px; align-items: center; gap: 16px; padding: 16px 0; }
+.director-record { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 16px; padding: 16px 0; }
 .director-record-name { display: flex; flex-direction: column; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
 .director-record-name code { font-size: 12px; color: var(--color-text-secondary); }
 .director-edit { border-left: 3px solid var(--color-primary); padding: 12px 16px; margin: 12px 0; }
@@ -53,3 +58,66 @@
   .director-mapping-table td:first-child, .director-mapping-table td:nth-child(2) { grid-row: 1; }
   .director-cell-label { display: block; margin-bottom: 4px; font-size: 12px; color: var(--color-text-secondary); }
 }
+
+/* Rig profile: three short fieldsets, each a wrapping grid of labeled numbers. */
+.rig-profile { margin-bottom: 1rem; }
+.rig-profile-form fieldset { border: 1px solid var(--border-color, #444); border-radius: 6px; padding: 0.5rem 0.75rem 0.75rem; margin: 0 0 0.75rem; min-width: 0; }
+.rig-profile-form legend { padding: 0 0.35rem; font-weight: 600; }
+.rig-profile-source { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; align-items: center; margin: 0 0 0.5rem; }
+.rig-profile-source .link-button { display: inline-flex; align-items: center; gap: 0.25rem; }
+.rig-profile-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: 0.5rem 1rem; }
+.rig-profile-field { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.rig-profile-field > span:first-child { font-size: 0.85rem; opacity: 0.85; }
+.rig-profile-input { display: flex; align-items: center; gap: 0.35rem; min-width: 0; }
+.rig-profile-input input, .rig-profile-input select { flex: 1 1 5rem; min-width: 0; width: 100%; box-sizing: border-box; background: var(--color-bg-secondary); color: var(--color-text-primary); border: 1px solid var(--color-border-tertiary); border-radius: 4px; padding: 7px 9px; font: inherit; }
+.rig-profile-input small { white-space: nowrap; opacity: 0.7; }
+.rig-profile-source .link-button { background: none; border: none; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; }
+
+.director-section-heading { margin: 28px 0 0; font-size: 18px; }
+
+/* Plans are Overview project cards (projectCard.css): the header link opens
+   the workspace, the rig chips replace the single database name, and the
+   Rigs list stands where Overview lists targets. */
+.director-plan-list { display: flex; flex-direction: column; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.director-plan-list > li { border-bottom: none; }
+.director-page .project-open-main { display: flex; color: inherit; text-decoration: none; }
+.director-page .project-open-main:hover { color: inherit; }
+.director-plan-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; }
+.director-plan-body.has-thumb { grid-template-columns: auto minmax(0, 1fr); }
+.director-plan-summary { min-width: 0; }
+.director-stage-badge { flex: none; padding: 2px 7px; border: 1px solid var(--color-success); border-radius: 999px; background: var(--color-success-alpha-20); color: var(--color-success); font-size: 0.72rem; font-weight: 700; }
+.director-rig-card .target-compact-main { cursor: default; }
+.director-rig-card .target-compact-main:hover { background: transparent; }
+.director-rig-bar { margin-top: 3px; height: 6px; }
+.director-plan .project-targets-list { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+@media (max-width: 600px) { .director-plan-body.has-thumb { grid-template-columns: minmax(0, 1fr); } }
+
+.director-workspace h2 { margin: 16px 0 0; font-size: 22px; }
+/* Planning is a wide screen: the sky takes the width the window has. */
+.director-page > .director-workspace { max-width: 1760px; }
+.director-workspace-columns { display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr); gap: 24px; align-items: start; }
+@media (max-width: 1100px) { .director-workspace-columns { grid-template-columns: minmax(0, 1fr); } }
+.plan-thumb { position: relative; width: 200px; aspect-ratio: 4 / 3; background: #05070c; border: 1px solid var(--color-border-secondary); border-radius: 6px; overflow: hidden; }
+.plan-thumb img, .plan-thumb svg, .plan-thumb-empty { position: absolute; inset: 0; width: 100%; height: 100%; }
+.plan-thumb img { object-fit: fill; }
+.plan-thumb-empty { display: flex; align-items: center; justify-content: center; color: var(--color-text-secondary); font-size: 12px; }
+.plan-thumb-panel { fill: rgba(80, 180, 255, 0.14); stroke: #5ab4ff; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+@media (max-width: 600px) { .plan-thumb { width: 100%; } }
+.director-workspace .director-list li > .director-database-links { border-top: none; padding-top: 0; }
+
+/* Rows whose actions carry text: stack them on a phone instead of squeezing
+   them into the icon column the identity rows reserved. */
+@media (max-width: 600px) {
+  .director-record-wide { grid-template-columns: minmax(0, 1fr); }
+  .director-record-wide > button, .director-record-wide > a { grid-column: 1; grid-row: auto; justify-self: start; }
+}
+.director-plan-panels { display: block; font-size: 12px; color: var(--color-text-secondary); }
+.director-dashboard-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.director-dashboard-table th { text-align: left; font-weight: 500; color: var(--color-text-secondary); padding: 4px 6px; }
+.director-dashboard-table td { padding: 6px; vertical-align: top; border-top: 1px solid var(--color-border-secondary); }
+.director-dashboard-table .director-cell-label { display: none; }
+.director-connectivity { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; background: var(--color-bg-secondary); color: var(--color-text-secondary); }
+.director-connectivity.is-online { background: rgba(60, 170, 90, 0.18); color: #2f8f4e; }
+.director-connectivity.is-stale { background: rgba(230, 170, 40, 0.18); color: #a8720d; }
+.director-connectivity.is-offline { background: rgba(200, 60, 60, 0.15); color: #b93a3a; }
+@media (max-width: 800px) { .director-dashboard-table thead { display: none; } .director-dashboard-table tr { display: grid; gap: 4px; padding: 8px 0; border-top: 1px solid var(--color-border-secondary); } .director-dashboard-table td { border: none; padding: 0; } .director-dashboard-table .director-cell-label { display: inline; color: var(--color-text-secondary); margin-right: 6px; } }

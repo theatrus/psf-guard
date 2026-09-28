@@ -28,6 +28,7 @@ pub mod psf_fitting;
 pub mod satellites;
 pub mod sequence_analysis;
 pub mod server;
+pub mod sky_maps;
 pub mod spatial_analysis;
 pub mod star_contours;
 pub mod sync_client;
