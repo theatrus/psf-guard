@@ -4,10 +4,10 @@ import { isAxiosError } from 'axios';
 import { Check, Crosshair, LocateFixed, RefreshCw, Search, Undo2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
-import type { DirectorCutoutRequest, DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigProfileSummary, DirectorSkyPosition } from '../../api/directorTypes';
+import type { DirectorCutoutRequest, DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigProfileSummary, DirectorSkyMarks, DirectorSkyPosition } from '../../api/directorTypes';
 import {
   DEFAULT_STAGE, MAX_VIEW_FOV, MIN_VIEW_FOV, TILE_MAX_FOV, angleAt, clampFov, deprojectOn, draftFromState, formatDec, formatDegrees, formatRaHours, framingBackdrop, framingGraticule, fromStage, handleSky,
-  compassDirections, insidePolygon, panelForRig, pixelScale, polygonPoints, preferredSurveyId, previewRequest, projectOn, stackMatrix, stageCorners, stageFor, stageProject, stateFromDraft, stateFromSeed, tileMatrix, tileSize, toStage, trueWidth, viewAt, type FramingSeed, type FramingState, type Stage, type StageView, chipSurveys, framingGeometry, tileFor, viewLeftTile, type SkyTile, defaultSurveyId,
+  compassDirections, insidePolygon, markLabelBudget, panelForRig, pixelScale, polygonPoints, preferredSurveyId, previewRequest, projectOn, stackMatrix, stageAngleAt, stageCorners, stageFor, stageProject, stateFromDraft, stateFromSeed, tileMatrix, tileSize, toStage, trueWidth, viewAt, type FramingSeed, type FramingState, type Stage, type StageView, chipSurveys, framingGeometry, tileFor, viewLeftTile, type SkyTile, defaultSurveyId,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
 import SkyCanvas, { type SkyTileImage } from './SkyCanvas';
@@ -26,6 +26,11 @@ const DEFAULT_SURVEY = 'dss2_color';
 type DragMode = 'rectangle' | 'sky';
 const DRAG_MODE_KEY = 'psf-guard.framing.dragMode';
 const ROTATE_SKY_KEY = 'psf-guard.framing.rotateSky';
+const MARK_KEYS = { objects: 'psf-guard.framing.marks.objects', bodies: 'psf-guard.framing.marks.bodies', solar: 'psf-guard.framing.marks.solar' } as const;
+/** Marks are asked for at a time rounded to ten minutes, so a view that
+ *  moves a little reuses the answer; comets do not move far in that. */
+const MARKS_TIME_BUCKET_MS = 10 * 60 * 1000;
+const SOLAR_SYSTEM_LABEL: Record<string, string> = { sun: 'Sun', moon: 'Moon' };
 function remembered<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
   try { const value = window.localStorage.getItem(key); return allowed.includes(value as T) ? (value as T) : fallback; } catch { return fallback; }
 }
@@ -170,6 +175,13 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   const [rotateSky, setRotateSky] = useState(() => remembered(ROTATE_SKY_KEY, ['true', 'false'] as const, 'false') === 'true');
   const chooseDragMode = (mode: DragMode) => { setDragMode(mode); remember(DRAG_MODE_KEY, mode); };
   const chooseRotateSky = (on: boolean) => { setRotateSky(on); remember(ROTATE_SKY_KEY, String(on)); };
+  const [showObjects, setShowObjects] = useState(() => remembered(MARK_KEYS.objects, ['true', 'false'] as const, 'true') === 'true');
+  const [showBodies, setShowBodies] = useState(() => remembered(MARK_KEYS.bodies, ['true', 'false'] as const, 'true') === 'true');
+  const [showSolar, setShowSolar] = useState(() => remembered(MARK_KEYS.solar, ['true', 'false'] as const, 'true') === 'true');
+  const chooseMarks = (key: keyof typeof MARK_KEYS, on: boolean) => {
+    ({ objects: setShowObjects, bodies: setShowBodies, solar: setShowSolar })[key](on);
+    remember(MARK_KEYS[key], String(on));
+  };
   const skyRotation = rotateSky && state ? state.positionAngle : 0;
   const stageView: StageView | null = useMemo(() => state ? viewAt(state.viewCenter, state.viewCenter, skyRotation) : null, [state, skyRotation]);
   const [stageSize, setStageSize] = useState<Stage>(DEFAULT_STAGE);
@@ -223,6 +235,19 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     return steps.map(fov => tileRequest(settledView.center, fov, state.surveyId));
   }, [state?.surveyId, settledView?.center.ra_degrees, settledView?.center.dec_degrees, settledView?.fov, tilePixels.width, tilePixels.height]); // eslint-disable-line react-hooks/exhaustive-deps
   const cutout = useSurveyCutout(state && tile && viewNow ? tileRequest(tile.center, tile.fov, state.surveyId) : null, 150, prefetch);
+  // Marks for the settled view: what the catalogs know is in the field, and
+  // where the Sun, Moon, planets, comets and asteroids are at this moment.
+  const marksWanted = showObjects || showBodies || showSolar;
+  const marksQuery = settledView ? {
+    ra: Number(settledView.center.ra_degrees.toFixed(2)), dec: Number(settledView.center.dec_degrees.toFixed(2)),
+    fov: Number(settledView.fov.toFixed(2)), aspect: Number((stageSize.width / stageSize.height).toFixed(3)),
+    at: Math.floor(Date.now() / MARKS_TIME_BUCKET_MS) * MARKS_TIME_BUCKET_MS,
+  } : null;
+  const marks = useQuery({
+    queryKey: ['directorSkyMarks', marksQuery],
+    queryFn: () => apiClient.getDirectorSkyMarks(marksQuery!),
+    enabled: marksWanted && !!marksQuery, staleTime: 5 * 60_000, retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false, placeholderData: previous => previous,
+  });
   // The picture is re-projected on the GPU for every frame from the tiles
   // fetched so far. Without WebGL the newest tile is laid in through one
   // fitted matrix instead, which is right at the center and drifts toward
@@ -380,6 +405,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
           {backdrop && backdrop.figures.length > 0 && <g className="framing-figures">{backdrop.figures.map((d, i) => <path key={i} d={d} />)}</g>}
           {backdrop && !pictureUp && backdrop.stars.length > 0 && <g className="framing-stars" data-testid="framing-stars">{backdrop.stars.map((star, i) => <circle key={i} cx={star.x} cy={star.y} r={star.r} />)}</g>}
           {backdrop && backdrop.names.length > 0 && <g className="framing-names" data-testid="framing-names">{backdrop.names.map(name => <text key={name.text} x={name.x} y={name.y}>{name.text}</text>)}</g>}
+          {marks.data && marksWanted && <SkyMarks marks={marks.data} view={view} viewFov={state.viewFov} stage={stageSize} objects={showObjects} bodies={showBodies} solar={showSolar} />}
           {placedStacks.map(({ panel, preview, matrix }) => <image key={`${panel.rig.id}-${panel.panel_id}`} className="framing-stack" data-testid="framing-stack" href={preview.url} x={0} y={0} width={preview.width} height={preview.height} preserveAspectRatio="none" transform={matrix} />)}
           {geometry?.overlays.map(overlay => { const corners = stageCorners(overlay.corners, view); return corners && <polygon key={overlay.id} className="framing-overlay" points={polygonPoints(corners, state.viewFov, stageSize)} />; })}
           {panelPolygons.map(({ panel, corners }) => corners && <g key={panel.id} className="framing-panel">
@@ -495,6 +521,12 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
         <label className="framing-check"><input type="checkbox" checked={rotateSky} onChange={event => chooseRotateSky(event.target.checked)} />Turn the sky with the camera, rectangle upright</label>
         <label className="framing-check"><input type="checkbox" checked={showGrid} onChange={event => setShowGrid(event.target.checked)} />Equatorial grid</label>
         <label className="framing-check"><input type="checkbox" checked={showChart} onChange={event => setShowChart(event.target.checked)} />Constellations when zoomed out</label>
+        <label className="framing-check"><input type="checkbox" checked={showObjects} onChange={event => chooseMarks('objects', event.target.checked)} />Deep-sky marks</label>
+        <label className="framing-check"><input type="checkbox" checked={showBodies} onChange={event => chooseMarks('bodies', event.target.checked)} />Comets and asteroids</label>
+        <label className="framing-check"><input type="checkbox" checked={showSolar} onChange={event => chooseMarks('solar', event.target.checked)} />Sun, Moon and planets</label>
+        {marks.data && showObjects && !marks.data.objects.available && <p className="director-muted framing-mark-note" role="note">Deep-sky marks need the Seiza object catalog on this server{marks.data.objects.note ? ` (${marks.data.objects.note})` : ''}.</p>}
+        {marks.data && showBodies && !marks.data.minor_bodies.available && <p className="director-muted framing-mark-note" role="note">Comets and asteroids need the Seiza minor-body catalog on this server{marks.data.minor_bodies.note ? ` (${marks.data.minor_bodies.note})` : ''}.</p>}
+        {marks.isError && marksWanted && <p className="director-error framing-mark-note" role="alert">Marks could not be loaded: {message(marks.error)}</p>}
         <p className="director-muted">Drag the sky to turn it, scroll to zoom out to a hemisphere; the survey follows at every zoom. The view center is {formatRaHours(state.viewCenter.ra_degrees)}, {formatDec(state.viewCenter.dec_degrees)}.</p>
       </fieldset>
       {notice && <p role="status">{notice}{undo && <> <button type="button" className="link-button" onClick={() => { setState(undo); setUndo(null); setNotice('Put the target back where it was.'); }}>Undo</button></>}</p>}
@@ -507,4 +539,55 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
       </div>
     </form>
   </section>;
+}
+
+/** Catalog marks over the sky: deep-sky objects at their size and angle,
+ *  comets with their tail, asteroids with their motion, and the Sun, Moon
+ *  and planets. Positions are catalog places at the asked time, drawn
+ *  through the same projection as everything else on the stage. */
+function SkyMarks({ marks, view, viewFov, stage, objects, bodies, solar }: { marks: DirectorSkyMarks; view: StageView; viewFov: number; stage: Stage; objects: boolean; bodies: boolean; solar: boolean }) {
+  const scale = pixelScale(viewFov, stage);
+  const place = (position: DirectorSkyPosition): [number, number] | null => {
+    const offset = projectOn(view, position);
+    if (!offset) return null;
+    const at = toStage(offset, viewFov, stage);
+    return at[0] < -40 || at[0] > stage.width + 40 || at[1] < -40 || at[1] > stage.height + 40 ? null : at;
+  };
+  const labels = markLabelBudget(viewFov);
+  return <g className="framing-marks" data-testid="framing-marks">
+    {objects && marks.objects.items.map((object, index) => {
+      const position = { ra_degrees: object.ra_degrees, dec_degrees: object.dec_degrees };
+      const at = place(position);
+      if (!at) return null;
+      const rx = Math.max(4, ((object.major_arcmin ?? 0) / 60 / 2) / scale);
+      const ry = Math.max(4, ((object.minor_arcmin ?? object.major_arcmin ?? 0) / 60 / 2) / scale);
+      const angle = object.position_angle_degrees !== null ? stageAngleAt(view, position, object.position_angle_degrees, viewFov, stage) ?? 0 : 0;
+      const label = object.common_name || object.name;
+      return <g key={object.id} className={`framing-mark framing-mark-${object.kind}`} data-testid="framing-mark-object">
+        <ellipse cx={0} cy={0} rx={rx} ry={ry} transform={`translate(${at[0].toFixed(1)} ${at[1].toFixed(1)}) rotate(${angle.toFixed(1)})`} />
+        {index < labels && <text x={at[0] + rx + 6} y={at[1] + 4}>{label}</text>}
+      </g>;
+    })}
+    {bodies && marks.minor_bodies.items.map(body => {
+      const at = place({ ra_degrees: body.ra_degrees, dec_degrees: body.dec_degrees });
+      if (!at) return null;
+      const angle = body.direction_pa_degrees !== null ? stageAngleAt(view, { ra_degrees: body.ra_degrees, dec_degrees: body.dec_degrees }, body.direction_pa_degrees, viewFov, stage) : null;
+      const reach = body.kind === 'comet' ? 22 : 10;
+      return <g key={`${body.kind}:${body.name}`} className={`framing-mark framing-mark-${body.kind}`} data-testid="framing-mark-body">
+        <polygon points={`${at[0]},${at[1] - 6} ${at[0] + 6},${at[1]} ${at[0]},${at[1] + 6} ${at[0] - 6},${at[1]}`} />
+        {angle !== null && <line x1={at[0]} y1={at[1]} x2={at[0] + reach * Math.cos((angle * Math.PI) / 180)} y2={at[1] + reach * Math.sin((angle * Math.PI) / 180)} />}
+        <text x={at[0] + 9} y={at[1] + 4}>{body.name}{Number.isFinite(body.mag) ? ` ${body.mag.toFixed(1)}` : ''}</text>
+      </g>;
+    })}
+    {solar && marks.solar_system.map(body => {
+      const at = place({ ra_degrees: body.ra_degrees, dec_degrees: body.dec_degrees });
+      if (!at) return null;
+      // The Moon and Sun are half a degree across; the planets get a fixed mark.
+      const r = body.kind === 'planet' ? 6 : Math.max(7, (0.26 / scale));
+      return <g key={body.name} className={`framing-mark framing-mark-${body.kind}`} data-testid="framing-mark-solar">
+        <circle cx={at[0]} cy={at[1]} r={r} />
+        <text x={at[0] + r + 6} y={at[1] + 4}>{SOLAR_SYSTEM_LABEL[body.kind] ?? body.name}</text>
+      </g>;
+    })}
+  </g>;
 }

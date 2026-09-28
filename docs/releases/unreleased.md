@@ -170,6 +170,11 @@
   choices are remembered in the browser. The stage is a globe about the
   center of the view, as in N.I.N.A., so a drag turns the sky under the
   pointer and the survey picture turns with it.
+- The framing view marks what is in the field: deep-sky objects from the
+  Seiza object catalog at their size and angle, comets and asteroids from
+  its minor-body catalog placed for the moment you look, and the Sun, Moon
+  and planets from a built-in ephemeris. Each layer has its own switch and
+  says when its catalog is not on the server.
 - Offline sky maps are preferred wherever one stands in for an online
   survey: a framing saved on the DSS2 plates or the online NSNS SHO layer
   opens on the offline set when the server has it, and plan thumbnails draw

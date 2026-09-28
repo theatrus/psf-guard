@@ -63,6 +63,20 @@
 .framing-stars circle { fill: rgba(235, 240, 255, 0.9); }
 .framing-figures path { fill: none; stroke: rgba(150, 175, 235, 0.4); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .framing-names text { fill: rgba(170, 185, 230, 0.55); font-size: 14px; letter-spacing: 0.08em; text-transform: uppercase; text-anchor: middle; }
+/* Catalog marks: places, not pixels. */
+.framing-marks text { font-size: 13px; fill: #e8eefc; paint-order: stroke; stroke: rgba(0, 0, 0, 0.75); stroke-width: 3px; }
+.framing-mark ellipse { fill: none; stroke: rgba(255, 214, 120, 0.85); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.framing-mark-galaxy ellipse { stroke: rgba(255, 170, 120, 0.9); }
+.framing-mark-nebula ellipse, .framing-mark-hii_region ellipse, .framing-mark-supernova_remnant ellipse, .framing-mark-planetary_nebula ellipse { stroke: rgba(150, 230, 180, 0.9); }
+.framing-mark-open_cluster ellipse, .framing-mark-globular_cluster ellipse, .framing-mark-cluster_with_nebula ellipse { stroke: rgba(200, 200, 255, 0.9); }
+.framing-mark polygon { fill: rgba(255, 120, 200, 0.4); stroke: #ff7ac8; stroke-width: 1.5; }
+.framing-mark-asteroid polygon { fill: rgba(200, 200, 200, 0.4); stroke: #d0d0d0; }
+.framing-mark line { stroke: #ff7ac8; stroke-width: 1.5; stroke-dasharray: 3 3; }
+.framing-mark-asteroid line { stroke: #d0d0d0; }
+.framing-mark circle { fill: rgba(255, 230, 120, 0.25); stroke: #ffe678; stroke-width: 1.5; }
+.framing-mark-moon circle { fill: rgba(230, 230, 240, 0.3); stroke: #e6e6f0; }
+.framing-mark-sun circle { fill: rgba(255, 200, 60, 0.5); stroke: #ffc83c; stroke-width: 2; }
+.framing-mark-note { font-size: 12px; margin: 2px 0 6px; }
 .framing-stage-zoom { position: absolute; right: 10px; bottom: 34px; display: flex; flex-direction: column; gap: 4px; }
 .framing-stage-zoom button { width: 30px; min-height: 30px; padding: 0; background: rgba(0, 0, 0, 0.65); color: #fff; border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 4px; }
 .framing-stage-zoom button:hover:not(:disabled) { background: rgba(40, 40, 40, 0.85); }
