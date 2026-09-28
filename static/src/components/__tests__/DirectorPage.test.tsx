@@ -174,13 +174,25 @@ describe('Director management', () => {
   it('recovers a failed initial listing without leaving a false empty state', async () => {
     let fail = true;
     server.use(http.get('/api/director/v1/plans', () => fail
-      ? HttpResponse.json({ error: 'Director metadata is busy; retry shortly' }, { status: 503 })
+      ? HttpResponse.json({ error: 'Director metadata operation failed; see server logs' }, { status: 500 })
       : HttpResponse.json(ok(list([row()])))));
     mount();
-    expect(await screen.findByRole('alert')).toHaveTextContent('busy');
+    expect(await screen.findByRole('alert')).toHaveTextContent('failed');
     expect(screen.queryByText('No projects yet.')).not.toBeInTheDocument();
     fail = false;
     fireEvent.click(screen.getByRole('button', { name: 'Refresh records' }));
     await waitFor(() => expect(screen.getByText('M31')).toBeInTheDocument());
+  });
+
+  it('waits through a busy answer instead of showing it as an error', async () => {
+    let calls = 0;
+    server.use(http.get('/api/director/v1/plans', () => ++calls === 1
+      ? HttpResponse.json({ error: 'Director metadata is busy; retry shortly' }, { status: 503 })
+      : HttpResponse.json(ok(list([row()])))));
+    mount();
+    expect(await screen.findByText('M31', {}, { timeout: 6000 })).toBeInTheDocument();
+    expect(calls).toBe(2);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText('No projects yet.')).not.toBeInTheDocument();
   });
 });

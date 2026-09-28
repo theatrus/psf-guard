@@ -433,14 +433,23 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
 /// Wait briefly for an admission permit instead of failing at once. Reads
 /// that merely list state should not lose to a neighbouring request; a write
 /// still uses `try_acquire_owned` so a dropped request cannot queue work.
+/// How long a request waits for its turn at the metadata store before it
+/// answers 503. A workspace opens with a handful of requests at once and
+/// some of them (adoption of every database, feasibility) take seconds, so
+/// the wait must cover a queue of them; the browser retries a 503 anyway.
+const ADMISSION_WAIT: std::time::Duration = if cfg!(test) {
+    // Tests hold the gate on purpose to see the busy answer; they should not
+    // sit through the production wait for it.
+    std::time::Duration::from_secs(1)
+} else {
+    std::time::Duration::from_secs(20)
+};
+
 async fn admit(semaphore: &Arc<Semaphore>) -> Result<tokio::sync::OwnedSemaphorePermit, Error> {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        semaphore.clone().acquire_owned(),
-    )
-    .await
-    .map_err(|_| Error::Busy)?
-    .map_err(|_| Error::Internal)
+    tokio::time::timeout(ADMISSION_WAIT, semaphore.clone().acquire_owned())
+        .await
+        .map_err(|_| Error::Busy)?
+        .map_err(|_| Error::Internal)
 }
 
 fn enabled(state: &AppState) -> Result<Arc<Service>, Error> {

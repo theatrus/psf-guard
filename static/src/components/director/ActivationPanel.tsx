@@ -5,6 +5,7 @@ import { Check, Eye, Send } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorActivationPush, DirectorActivationPushReport, DirectorActivationReport } from '../../api/directorTypes';
+import { retryWhenBusy } from './retry';
 import './ActivationPanel.css';
 
 const message = (error: unknown) => isAxiosError(error) ? error.response?.data?.error || error.message
@@ -31,7 +32,7 @@ function describePush(push: DirectorActivationPush | null, applied: boolean): st
 export default function ActivationPanel({ projectId }: { projectId: string }) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
-  const last = useQuery({ queryKey: ['directorActivation', projectId], queryFn: () => apiClient.getDirectorActivation(projectId), retry: false, refetchOnWindowFocus: false });
+  const last = useQuery({ queryKey: ['directorActivation', projectId], queryFn: () => apiClient.getDirectorActivation(projectId), retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false });
   const [report, setReport] = useState<DirectorActivationReport | null>(null);
   const busy = useRef(false);
   const preview = useMutation({ retry: false, mutationFn: () => apiClient.previewDirectorActivation(projectId), onSuccess: setReport });

@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import type { DirectorFeasibility, DirectorRigFeasibility, DirectorSkyPosition } from '../../api/directorTypes';
 import { formatHours } from './visibilityFormat';
+import { retryWhenBusy } from './retry';
 import './VisibilityPanel.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Feasibility request failed';
@@ -79,7 +80,7 @@ export default function VisibilityPanel({ projectId, center, enabled = true }: {
   const query = useQuery({
     queryKey: ['directorFeasibility', projectId, debounced],
     queryFn: () => apiClient.getDirectorFeasibility(projectId, { center: debounced }),
-    enabled, retry: false, staleTime: 60_000, placeholderData: previous => previous,
+    enabled, retry: retryWhenBusy, retryDelay: 1200, staleTime: 60_000, placeholderData: previous => previous,
   });
   const [chosen, setChosen] = useState<string | null>(null);
   const data: DirectorFeasibility | undefined = query.data;
