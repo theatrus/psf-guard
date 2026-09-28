@@ -137,7 +137,12 @@ async fn execute(
     plan: Plan,
     expected: Option<String>,
 ) -> Result<Json<ApiResponse<Report>>, AdoptionError> {
-    let service = enabled(&state)?;
+    // A preview reads the file; applying writes its identity table.
+    let service = if expected.is_some() {
+        writable(&state)?
+    } else {
+        enabled(&state)?
+    };
     let mut projects = std::collections::HashSet::new();
     if plan.catalog_id.is_nil()
         || !(1..=256).contains(&plan.mappings.len())

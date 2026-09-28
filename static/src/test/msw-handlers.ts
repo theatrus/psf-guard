@@ -69,7 +69,7 @@ const idleWbppRun = {
 
 export const handlers = [
   http.get('/api/director/v1/status', () => HttpResponse.json({ success: true, data: {
-    protocol_version: 1, enabled: false, instance_id: null, acquisition_available: false,
+    protocol_version: 1, enabled: false, instance_id: null, acquisition_available: false, database_management: true,
   }, error: null })),
   http.get('/api/db/:dbId/wbpp/runs/current', () => HttpResponse.json(idleWbppRun)),
   http.get('/api/db/:dbId/projects/:projectId/processing-settings', () => HttpResponse.json({

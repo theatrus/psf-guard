@@ -263,7 +263,9 @@ async fn run_bound<T: Send + 'static>(
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(StoreError::from)
             .map_err(Error::from)?;
-        let identity = crate::catalog_identity::read(&tx)?.ok_or(Error::Missing)?;
+        let identity = crate::catalog_identity::read(&tx)?.unwrap_or_else(|| {
+            super::derived_identity(service.instance_id, &catalog.database_path)
+        });
         let mut store = service.store.lock().map_err(|_| Error::Internal)?;
         let binding = store.catalog_rig(identity.id)?.ok_or(Error::Missing)?;
         operation(&mut store, &catalog, &tx, binding.rig)

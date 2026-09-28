@@ -55,7 +55,12 @@ async fn execute(
     plan: Plan,
     expected: Option<String>,
 ) -> Result<Json<ApiResponse<Report>>, AdoptionError> {
-    let service = enabled(&state)?;
+    // A preview reads the file; applying writes its identity table.
+    let service = if expected.is_some() {
+        writable(&state)?
+    } else {
+        enabled(&state)?
+    };
     if plan.catalog_id.is_nil() {
         return Err(Error::Invalid.into());
     }

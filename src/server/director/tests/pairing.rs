@@ -396,12 +396,17 @@ async fn client_scope_profile_rig_and_token_class_are_exact_even_on_loopback() {
             StatusCode::UNAUTHORIZED
         );
     }
+    // A paired rig reads its program whatever the server's management flag;
+    // the answer is the same either way.
+    let open = client_call(&app, "GET", &path, Value::Null, token, Some(profile))
+        .await
+        .0;
     state.set_allow_database_management(false);
     assert_eq!(
         client_call(&app, "GET", &path, Value::Null, token, Some(profile))
             .await
             .0,
-        StatusCode::FORBIDDEN
+        open
     );
 }
 

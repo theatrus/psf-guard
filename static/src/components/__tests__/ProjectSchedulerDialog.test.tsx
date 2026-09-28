@@ -2,9 +2,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
-import ProjectSchedulerDialog from '../ProjectSchedulerDialog';
+import { ProjectPlanEditor } from '../ProjectSchedulerDialog';
 
 const project = {
   id: 7,
@@ -76,44 +76,18 @@ const project = {
   }],
 };
 
-function renderDialog(canEdit = true, onPlan?: () => void) {
+function renderDialog(canEdit = true) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <ProjectSchedulerDialog
-        open
-        dbId="db-test"
-        projectId={7}
-        projectName="M31 season"
-        canEdit={canEdit}
-        onPlan={onPlan}
-        onClose={() => undefined}
-      />
+      <ProjectPlanEditor dbId="db-test" projectId={7} canEdit={canEdit} />
     </QueryClientProvider>
   );
 }
 
-describe('ProjectSchedulerDialog', () => {
-  it('confirms before leaving edited source metadata for rig planning', async () => {
-    server.use(http.get('/api/db/db-test/projects/7/scheduler', () =>
-      HttpResponse.json({ success: true, data: project, error: null })));
-    const onPlan = vi.fn();
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    try {
-      renderDialog(true, onPlan);
-      const user = userEvent.setup();
-      await user.clear(await screen.findByLabelText('RA (decimal hours)'));
-      await user.type(screen.getByLabelText('RA (decimal hours)'), '1.5');
-      await user.click(screen.getByRole('button', { name: 'Open in Planning' }));
-      expect(onPlan).not.toHaveBeenCalled();
-      expect(screen.getByLabelText('RA (decimal hours)')).toHaveValue(1.5);
-      confirm.mockReturnValue(true);
-      await user.click(screen.getByRole('button', { name: 'Open in Planning' }));
-      expect(onPlan).toHaveBeenCalledTimes(1);
-    } finally { confirm.mockRestore(); }
-  });
+describe('ProjectPlanEditor', () => {
   it('shows Target Scheduler coordinates and exposure counts', async () => {
     server.use(
       http.get('/api/db/db-test/projects/7/scheduler', () =>

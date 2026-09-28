@@ -126,8 +126,9 @@ Ctrl/Cmd+Click toggles one frame.
 
 </details>
 
-Each Library project has a **Plan & coordinates** view. It shows the project
-settings and every target's catalog coordinates and exposure plans. The
+Each Library project has a **Planning** button that opens the project in
+Planning, where the workspace shows the project settings and every target's
+catalog coordinates and exposure plans under **Databases**. The
 inherited Target Scheduler mapping stores RA as decimal hours and Dec as
 degrees. New plans reuse an exact matching profile template or create one with
 Target Scheduler-compatible defaults. The plan table keeps the schema's `-1`
@@ -226,8 +227,8 @@ guess why every request comes back 403. Neither block needs
 `--allow-database-management`: accepting a sync must not require the grant
 that lets a network caller name server filesystem paths.
 
-The Library's **Plan & coordinates** dialog lets you correct imported names,
-coordinates, limits, and desired counts. See the
+The project's **Databases** section in Planning lets you correct imported
+names, coordinates, limits, and desired counts. See the
 **[import and planning guide](docs/IMPORTING.md)** for database paths, grouping
 rules, backfill behavior, and CLI commands.
 

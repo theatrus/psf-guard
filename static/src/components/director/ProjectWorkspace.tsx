@@ -4,6 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ChevronDown, ChevronRight } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
+import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import { ProjectPlanEditor } from '../ProjectSchedulerDialog';
 import FramingView from './FramingView';
 import PlanEditor from './PlanEditor';
@@ -18,6 +19,8 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
   const [params] = useSearchParams();
   const { canWrite } = useAccess();
   const info = useQuery({ queryKey: ['serverInfo'], queryFn: apiClient.getServerInfo, staleTime: 300_000 });
+  const status = useDirectorStatus();
+  const manageable = status.data?.database_management ?? true;
   const plans = useQuery({ queryKey: ['directorPlans', instanceId], queryFn: apiClient.getDirectorPlans, retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false, refetchOnMount: 'always' });
   const row = plans.data?.rows.find(entry => entry.project.id === projectId);
   const first = row?.links.find(link => link.source_row_id !== null);
@@ -36,7 +39,14 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
       position_angle_degrees: Number.isFinite(target.rotation) ? ((target.rotation % 360) + 360) % 360 : 0,
     };
   }, [scheduler.data]);
-  const [openSource, setOpenSource] = useState<string | null>(null);
+  // The Library's Planning button names the database it came from; that
+  // database's targets and exposures open at once.
+  const cameFrom = params.get('db');
+  const [openSource, setOpenSource] = useState<string | null | undefined>(undefined);
+  const arrival = row?.links.find(link => link.catalog_slug === cameFrom && link.source_row_id !== null);
+  const openKey = openSource === undefined
+    ? arrival ? `${arrival.catalog_slug}:${arrival.source_project_guid}` : null
+    : openSource;
   const back = new URLSearchParams(params);
   back.delete('directorProject');
   if (plans.isPending) return <p role="status">Loading project...</p>;
@@ -53,11 +63,12 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
     </div>
     <section aria-label="Linked databases">
       <h3 className="director-section-heading">Databases</h3>
+      {!manageable && <p className="director-muted">This server cannot change rig databases, so the targets and exposures below are view only.</p>}
       {row.links.length === 0 && <p className="director-muted">No database holds this project yet. Activation creates it in each rig you tick in the plan.</p>}
       <ul className="director-list">
         {row.links.map(link => {
           const key = `${link.catalog_slug}:${link.source_project_guid}`;
-          const open = openSource === key;
+          const open = openKey === key;
           return <li key={key}>
             <div className="director-record director-record-wide">
               <div className="director-record-name">

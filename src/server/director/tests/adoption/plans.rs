@@ -507,3 +507,67 @@ async fn a_target_scheduler_project_is_imported_as_framing_and_plan_drafts_once(
     assert_eq!(row2["framing"]["revision"], 1);
     assert_eq!(row2["plan"]["revision"], 1);
 }
+
+/// A server without database management still plans over its catalogs. The
+/// file is only read and gets a derived identity; the first managing server
+/// to list it writes that same identity into the file, so the rig is stable.
+#[tokio::test]
+async fn planning_reads_catalogs_without_database_management_and_keeps_the_rig_when_it_is_granted()
+{
+    let f = Fixture::new();
+    let guid = Uuid::new_v4();
+    let path = register(&f, "shed", "Shed data", &[(1, "Pelican", Some(guid))]);
+    f.state.set_allow_database_management(false);
+    let (status, listed) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let rows = listed["data"]["rows"].as_array().unwrap();
+    let row = rows
+        .iter()
+        .find(|r| r["links"][0]["catalog_slug"] == "shed")
+        .unwrap_or_else(|| panic!("no plan for the read-only catalog: {listed}"));
+    assert_eq!(row["project"]["name"], "Pelican");
+    let rig = row["links"][0]["rig"]["id"].as_str().unwrap().to_owned();
+    let has_identity = || {
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'psf_guard_catalog_identity'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            == 1
+    };
+    assert!(
+        !has_identity(),
+        "a read-only server must not write the file"
+    );
+    // Listing again keeps the same rig without touching the file.
+    let (_, again) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    let same = again["data"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["links"][0]["catalog_slug"] == "shed")
+        .unwrap();
+    assert_eq!(same["links"][0]["rig"]["id"], rig);
+    assert!(!has_identity());
+
+    f.state.set_allow_database_management(true);
+    let (status, managed) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{managed}");
+    let kept = managed["data"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["links"][0]["catalog_slug"] == "shed")
+        .unwrap();
+    assert_eq!(
+        kept["links"][0]["rig"]["id"], rig,
+        "the rig survives adoption"
+    );
+    assert!(
+        has_identity(),
+        "a managing server writes the identity it planned under"
+    );
+}

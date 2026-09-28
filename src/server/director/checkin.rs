@@ -345,13 +345,15 @@ pub(super) async fn statuses(
         .values()
         .cloned()
         .collect();
-    let views = enabled(&state)?
+    let service = enabled(&state)?;
+    let instance = service.instance_id;
+    let views = service
         .run(move |store| {
             let now = now_ms();
             // Every bound database is a rig; name the database beside it.
             let mut rigs: std::collections::BTreeMap<Uuid, (Option<String>, Option<String>)> =
                 std::collections::BTreeMap::new();
-            for (identity, catalog) in identified_catalogs(&catalogs).iter() {
+            for (identity, catalog) in identified_catalogs(&catalogs, instance).iter() {
                 if let Some(binding) = store.catalog_rig(identity.id)? {
                     rigs.insert(
                         binding.rig.id,

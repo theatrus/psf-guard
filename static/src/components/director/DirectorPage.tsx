@@ -33,9 +33,10 @@ export default function DirectorPage() {
       <header className="director-heading"><h1>Planning</h1><span className="director-preview">Experimental</span></header>
       {status.isPending && <p role="status">Loading Planning...</p>}
       {status.isError && <div role="alert"><p>{message(status.error)}</p><button type="button" onClick={() => void status.refetch()}>Retry</button></div>}
-      {status.data && !available && <p>Planning is unavailable on this server; Director management is off.</p>}
+      {status.data && !available && <p>Planning is unavailable on this server.</p>}
       {available && status.data && <>
         {!status.data.acquisition_available && <p className="director-muted">Acquisition is not yet available.</p>}
+        {!status.data.database_management && <p className="director-muted" role="note">Read only over the catalogs: this server was started without database management, so plans and framing can be drafted but activation and Target Scheduler edits are off.</p>}
         {workspaceProject
           ? <ProjectWorkspace key={`${status.data.instance_id}:${workspaceProject}`} instanceId={status.data.instance_id!} projectId={workspaceProject} />
           : sourceSlug

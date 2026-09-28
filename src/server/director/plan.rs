@@ -53,12 +53,12 @@ pub(super) async fn templates(
             .busy_timeout(Duration::from_secs(2))
             .map_err(StoreError::from)
             .map_err(Error::from)?;
-        let rig = match crate::catalog_identity::read(&connection)? {
-            Some(identity) => {
-                let store = service.store.lock().map_err(|_| Error::Internal)?;
-                store.catalog_rig(identity.id)?.map(|binding| binding.rig)
-            }
-            None => None,
+        let identity = crate::catalog_identity::read(&connection)?.unwrap_or_else(|| {
+            super::derived_identity(service.instance_id, &catalog.database_path)
+        });
+        let rig = {
+            let store = service.store.lock().map_err(|_| Error::Internal)?;
+            store.catalog_rig(identity.id)?.map(|binding| binding.rig)
         };
         let templates = read_templates(&connection)?;
         Ok::<_, Error>(TemplateList {

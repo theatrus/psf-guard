@@ -9,13 +9,18 @@ runtime preview and PSF Guard Sync remain separate.
 
 ## Where the store lives
 
-Director is on whenever the server may manage its databases. The meta store is
-a separate SQLite file beside the database registry: `director-meta.sqlite`
-next to `config.json`, or `<registry>.director-meta.sqlite` for a registry
-with another name, so `--registry /tmp/psf-guard-test.json` gets its own
-store. The desktop app uses the same default. A server without
-`--allow-database-management` leaves Director off, because activating a plan
-writes into rig databases.
+Director is on for every server. The meta store is a separate SQLite file
+beside the database registry: `director-meta.sqlite` next to `config.json`,
+or `<registry>.director-meta.sqlite` for a registry with another name, so
+`--registry /tmp/psf-guard-test.json` gets its own store. The desktop app uses
+the same default. A server without `--allow-database-management` runs Planning
+read-only over its catalogs: plans, framing and rig profiles can be drafted in
+the meta store, but activation, pushes and Target Scheduler edits are refused
+with `403`, and no table is written into a rig database. Such a catalog is
+planned under a derived identity (fixed by this instance and the file's path);
+the first managing server to list it writes that same identity into the file,
+so the rig does not change. `GET /status` reports `database_management` so the
+page can say which kind of server it is on.
 
 ```text
 psf-guard server --host 127.0.0.1 --registry test-registry.json --allow-database-management
@@ -79,7 +84,7 @@ familiar targets and exposures editor a click away, then **Framing**, **Plan**
 and **Activation**. A project with no linked database yet starts its framing
 by looking a name up in the CDS catalogs or by typing a center; activation
 then creates and links the Target Scheduler project in each rig database.
-The Library's plan dialog still offers **Open in Planning**; for a linked project it
+The Library's project card offers **Planning**; for a linked project it
 lands in the same workspace.
 
 Older links that named the Catalogs, Sites or Rigs tabs still work: the

@@ -450,10 +450,14 @@ async fn gates_bounds_and_missing_preview_protect_the_adoption_routes() {
         } else {
             json!({"plan":plan,"preview_digest":"0".repeat(64)})
         };
-        assert_eq!(
-            call(&fixture.app, "POST", endpoint, body, None).await.0,
-            StatusCode::FORBIDDEN
-        );
+        // Without database management a preview still reads the file;
+        // applying, which writes its identity table, is refused.
+        let status = call(&fixture.app, "POST", endpoint, body, None).await.0;
+        if endpoint.ends_with("/preview") {
+            assert_ne!(status, StatusCode::FORBIDDEN, "{endpoint}");
+        } else {
+            assert_eq!(status, StatusCode::FORBIDDEN, "{endpoint}");
+        }
     }
     assert_eq!(
         crate::catalog_identity::read(&fixture.source).unwrap(),
@@ -680,12 +684,13 @@ async fn mapping_inventory_allows_authenticated_readers_but_keeps_management_gat
             .0,
         StatusCode::OK
     );
+    // The inventory only reads, so it stays open without database management.
     fixture.state.set_allow_database_management(false);
     assert_eq!(
         call(&fixture.app, "GET", path, Value::Null, Some(&reader))
             .await
             .0,
-        StatusCode::FORBIDDEN
+        StatusCode::OK
     );
     assert_eq!(
         crate::catalog_identity::read(&fixture.source).unwrap(),

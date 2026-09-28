@@ -26,7 +26,7 @@ fn state(dir: &TempDir, enable: bool) -> AppState {
     .unwrap();
     state.set_allow_database_management(true);
     if enable {
-        state.director = Service::configured(Some(&dir.path().join("meta.sqlite")), true).unwrap();
+        state.director = Service::configured(Some(&dir.path().join("meta.sqlite"))).unwrap();
     }
     state
 }
@@ -113,10 +113,11 @@ async fn discovery_is_scoped_read_only_and_does_not_block_metadata() {
         .0,
         StatusCode::NOT_FOUND
     );
+    // Discovery only reads, so it stays open without database management.
     state.set_allow_database_management(false);
     assert_eq!(
         call(&app, "GET", endpoint, Value::Null, None).await.0,
-        StatusCode::FORBIDDEN
+        StatusCode::OK
     );
 }
 
@@ -203,15 +204,16 @@ fn the_store_defaults_beside_the_registry_only_when_management_is_on() {
     let registry = Path::new("/tmp/registry.json");
     let explicit = Path::new("/var/lib/meta.sqlite");
     assert_eq!(
-        resolve_meta_path(Some(explicit), Some(registry), true).as_deref(),
+        resolve_meta_path(Some(explicit), Some(registry)).as_deref(),
         Some(explicit)
     );
+    // Planning runs without database management, so the store is placed
+    // beside the registry either way.
     assert_eq!(
-        resolve_meta_path(None, Some(registry), true),
+        resolve_meta_path(None, Some(registry)),
         Some(default_meta_path(registry))
     );
-    assert_eq!(resolve_meta_path(None, Some(registry), false), None);
-    assert_eq!(resolve_meta_path(None, None, true), None);
+    assert_eq!(resolve_meta_path(None, None), None);
     for path in [
         default_meta_path(registry),
         default_meta_path(Path::new("/tmp/config.json")),
@@ -224,11 +226,10 @@ fn the_store_defaults_beside_the_registry_only_when_management_is_on() {
 fn startup_is_explicit_and_never_adopts_a_foreign_file() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("meta.sqlite");
-    assert!(Service::configured(None, true).unwrap().is_none());
-    assert!(Service::configured(Some(&path), false).is_err());
+    assert!(Service::configured(None).unwrap().is_none());
     assert!(!path.exists());
     std::fs::write(&path, b"foreign data").unwrap();
-    assert!(Service::configured(Some(&path), true).is_err());
+    assert!(Service::configured(Some(&path)).is_err());
     assert_eq!(std::fs::read(path).unwrap(), b"foreign data");
 }
 
@@ -319,16 +320,64 @@ async fn disabled_and_management_gates_apply_without_exposing_paths() {
     assert_eq!(status["data"]["enabled"], false);
     assert_eq!(status["data"]["acquisition_available"], false);
     assert_eq!(status["data"]["instance_id"], Value::Null);
+    assert_eq!(status["data"]["database_management"], true);
     assert_eq!(
         call(&app, "GET", "/projects", Value::Null, None).await.0,
         StatusCode::NOT_FOUND
     );
+    // Without a store nothing is served, whatever the management flag.
     state.set_allow_database_management(false);
     assert_eq!(
         call(&app, "GET", "/projects", Value::Null, None).await.0,
-        StatusCode::FORBIDDEN
+        StatusCode::NOT_FOUND
     );
     assert!(!dir.path().join("meta.sqlite").exists());
+
+    // With a store, reads stay open without management and writes into rig
+    // databases are refused; the status says which server this is.
+    let state = Arc::new(self::state(&dir, true));
+    let app = router(state.clone());
+    state.set_allow_database_management(false);
+    let (_, status) = call(&app, "GET", "/status", Value::Null, None).await;
+    assert_eq!(status["data"]["enabled"], true);
+    assert_eq!(status["data"]["database_management"], false);
+    assert_eq!(
+        call(&app, "GET", "/projects", Value::Null, None).await.0,
+        StatusCode::OK
+    );
+    let (_, created) = call(
+        &app,
+        "POST",
+        "/projects",
+        json!({"id": "11111111-1111-4111-8111-111111111111", "name": "Read-only plan"}),
+        None,
+    )
+    .await;
+    assert_eq!(created["data"]["name"], "Read-only plan");
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/projects/11111111-1111-4111-8111-111111111111/activation/apply",
+            json!({"preview_digest": "0".repeat(64)}),
+            None
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/projects/11111111-1111-4111-8111-111111111111/activation/push",
+            json!({}),
+            None
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
 }
 
 #[tokio::test]

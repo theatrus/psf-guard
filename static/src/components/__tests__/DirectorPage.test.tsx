@@ -13,7 +13,7 @@ import type { DirectorPlanRow } from '../../api/directorTypes';
 const ok = (data: unknown) => ({ success: true, data, error: null });
 const record = { id: '11111111-1111-4111-8111-111111111111', name: 'M31', revision: 1 };
 const rig = { id: '22222222-2222-4222-8222-222222222222', name: 'C925', revision: 1 };
-const enabled = { protocol_version: 1, enabled: true, instance_id: record.id, acquisition_available: false };
+const enabled = { protocol_version: 1, enabled: true, instance_id: record.id, acquisition_available: false, database_management: true };
 const row = (project = record, extra: Partial<DirectorPlanRow> = {}): DirectorPlanRow => ({ project, links: [], progress: null, framing: null, plan: null, activation: null, ...extra });
 const list = (rows: DirectorPlanRow[], warnings: string[] = []) => ({ rows, warnings });
 function Location() {
@@ -160,7 +160,7 @@ describe('Director management', () => {
     const plansCall = vi.fn(() => HttpResponse.json(ok(list([]))));
     mount();
     server.use(http.get('/api/director/v1/status', () => HttpResponse.json(ok(status))), http.get('/api/director/v1/plans', plansCall));
-    expect(await screen.findByText('Planning is unavailable on this server; Director management is off.')).toBeInTheDocument();
+    expect(await screen.findByText('Planning is unavailable on this server.')).toBeInTheDocument();
     expect(plansCall).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: 'New project' })).not.toBeInTheDocument();
   });

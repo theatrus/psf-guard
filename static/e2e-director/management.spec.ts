@@ -55,10 +55,10 @@ test('global Director identities survive reload, conflicts, and narrow viewports
 
 test('a disabled Director has no navigation entry or editable records', async ({ page }) => {
   await page.route('**/api/director/v1/status', route => route.fulfill({ json: {
-    success: true, data: { protocol_version: 1, enabled: false, instance_id: null, acquisition_available: false }, error: null,
+    success: true, data: { protocol_version: 1, enabled: false, instance_id: null, acquisition_available: false, database_management: true }, error: null,
   } }));
   await page.goto('/#/director');
-  await expect(page.getByText('Planning is unavailable on this server; Director management is off.')).toBeVisible();
+  await expect(page.getByText('Planning is unavailable on this server.')).toBeVisible();
   await expect(page.getByRole('navigation', { name: 'Views' }).getByRole('button', { name: 'Planning' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /New project|New site|New rig/ })).toHaveCount(0);
 });
