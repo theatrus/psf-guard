@@ -2,6 +2,7 @@
 //! independent cursors; their shared ledger ID and capture link preserve identity.
 
 use super::*;
+use psf_guard_director_core::dispatch::DispatchCheck;
 use psf_guard_director_core::preparation::{
     Command, Completion, Context, Estimates, Next, Observation, Outcome, Preparation,
 };
@@ -379,6 +380,7 @@ impl Ledger {
             return Err(Error::ConflictingEvidence);
         }
         self.check_pending_dispatch_inner(command, state, None)
+            .map(|check| check.decision)
     }
 
     pub(super) fn check_pending_dispatch_inner(
@@ -386,7 +388,7 @@ impl Ledger {
         command: &Command,
         state: State,
         current: Option<&Constraints>,
-    ) -> Result<Decision, Error> {
+    ) -> Result<DispatchCheck, Error> {
         self.check_geometry_mode(current.is_some())?;
         let tx = self
             .connection
@@ -397,7 +399,7 @@ impl Ledger {
             return Err(Error::ConflictingEvidence);
         }
         let old_halt = stored.preparation.halted().cloned();
-        let decision = stored.preparation.check_pending_dispatch(
+        let check = stored.preparation.check_pending_dispatch(
             &snapshot(&tx, &self.assignment, state)?,
             command,
             current,
@@ -417,7 +419,7 @@ impl Ledger {
             )?;
         }
         tx.commit()?;
-        Ok(decision)
+        Ok(check)
     }
 
     pub fn complete_preparation(&mut self, completion: Completion) -> Result<Record, Error> {

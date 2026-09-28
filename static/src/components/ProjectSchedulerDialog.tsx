@@ -8,17 +8,7 @@ import type {
   ProjectSchedulerDetails,
   SchedulerTargetDetails,
 } from '../api/types';
-import Dialog from './Dialog';
 import './ProjectSchedulerDialog.css';
-
-interface Props {
-  open: boolean;
-  dbId: string;
-  projectId: number;
-  projectName: string;
-  canEdit: boolean;
-  onClose: () => void;
-}
 
 const PROJECT_STATES = ['Draft', 'Active', 'Inactive', 'Closed'];
 const PROJECT_PRIORITIES = ['Low', 'Normal', 'High'];
@@ -341,7 +331,9 @@ function TargetSection({ target, templates, dbId, canEdit, reload }: { target: S
   );
 }
 
-export default function ProjectSchedulerDialog({ open, dbId, projectId, projectName, canEdit, onClose }: Props) {
+export function ProjectPlanEditor({ open = true, dbId, projectId, canEdit }: {
+  open?: boolean; dbId: string; projectId: number; canEdit: boolean;
+}) {
   const queryClient = useQueryClient();
   const queryKey = ['db', dbId, 'project-scheduler', projectId] as const;
   const query = useQuery({
@@ -354,7 +346,7 @@ export default function ProjectSchedulerDialog({ open, dbId, projectId, projectN
     await queryClient.invalidateQueries({ queryKey: ['db', dbId] });
   };
   return (
-    <Dialog open={open} title={`Project plan · ${projectName}`} onClose={onClose} className="scheduler-dialog">
+    <>
       {!canEdit && <p className="scheduler-readonly">View only. Start the server with database management enabled to change scheduler data.</p>}
       {query.isLoading && <p>Loading project plan…</p>}
       {query.error && <p className="scheduler-error">{query.error instanceof Error ? query.error.message : String(query.error)}</p>}
@@ -367,6 +359,6 @@ export default function ProjectSchedulerDialog({ open, dbId, projectId, projectN
           {query.data.targets.length === 0 && <p className="scheduler-empty">This project has no targets.</p>}
         </div>
       )}
-    </Dialog>
+    </>
   );
 }

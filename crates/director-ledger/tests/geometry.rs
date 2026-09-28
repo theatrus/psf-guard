@@ -18,6 +18,8 @@ const START: u64 = 1_790_409_600_000;
 
 #[path = "geometry/capture_dispatch.rs"]
 mod capture_dispatch;
+#[path = "geometry/deadlines.rs"]
+mod deadlines;
 #[path = "geometry/dispatch.rs"]
 mod dispatch;
 

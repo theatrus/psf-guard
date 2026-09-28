@@ -83,6 +83,9 @@ pub struct ProjectResponse {
     pub has_files: bool,
     pub state: i32,
     pub latest_image_date: Option<i64>,
+    /// Target Scheduler's project GUID. Sync copies share it, so the same
+    /// value in two databases is one project shot by two rigs.
+    pub guid: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

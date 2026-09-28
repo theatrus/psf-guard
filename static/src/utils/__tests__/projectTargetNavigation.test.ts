@@ -125,6 +125,47 @@ describe('buildProjectTargetNavigation', () => {
     expect(model.projectGroups[1].projects.map((project) => project.id)).toEqual([7]);
   });
 
+  describe('a project shot by several rigs', () => {
+    const shed: DatabaseSummary = { ...database, id: 'shed', name: 'Shed catalog' };
+    const guid = '9A1D4C2E-0000-4000-8000-000000000001';
+    const rigHeart: WithDb<Project> = { ...projects[0], id: 5, name: 'Heart', display_name: 'Heart', guid, latest_image_date: 300 };
+    const shedHeart: WithDb<Project> = { ...rigHeart, id: 8, guid: guid.toLowerCase(), latest_image_date: 250, db_id: shed.id, db_name: shed.name };
+    const shedTarget: WithDb<TargetNavigation> = { id: 80, project_id: 8, name: 'Heart r1c2', active: true, has_files: true, db_id: shed.id, db_name: shed.name };
+    const input = { projects: [...projects, rigHeart, shedHeart], targets: [...targets, shedTarget], databases: [database, shed], relativeNow: 1_000_000 };
+
+    it('is one row by activity, led by the rig with the newest work', () => {
+      const model = buildProjectTargetNavigation({ ...input, search: '' });
+      const shown = model.projectGroups.flatMap((group) => group.projects);
+      expect(shown.map((project) => `${project.db_id}:${project.id}`)).toEqual(['rig:5', 'rig:2', 'rig:1']);
+      const family = model.familyOf(rigHeart);
+      expect(family?.key).toBe(`guid:${guid.toLowerCase()}`);
+      expect(family?.members.map((member) => member.db_id)).toEqual(['rig', 'shed']);
+      expect(model.familyOf(shedHeart)).toBe(family);
+      expect(model.familyOf(projects[0])).toBeNull();
+    });
+
+    it('keeps one row per rig when grouped by database', () => {
+      const model = buildProjectTargetNavigation({ ...input, search: '', grouping: 'database' });
+      expect(model.projectGroups.map((group) => group.projects.map((project) => project.id))).toEqual([[5, 2, 1], [8]]);
+    });
+
+    it('is found by any rig, its database or its targets, and opens to the matching rig', () => {
+      const byOtherRig = buildProjectTargetNavigation({ ...input, search: 'shed' });
+      expect(byOtherRig.projectGroups.flatMap((group) => group.projects).map((project) => project.id)).toEqual([5]);
+      const byTarget = buildProjectTargetNavigation({ ...input, search: 'r1c2' });
+      expect(byTarget.projectGroups.flatMap((group) => group.projects).map((project) => project.id)).toEqual([5]);
+      expect([...byTarget.matchingTargetProjectKeys]).toEqual(['shed:8', `guid:${guid.toLowerCase()}`]);
+      expect(byTarget.targetsForProject(shedHeart).map((target) => target.id)).toEqual([80]);
+    });
+
+    it('is one project only when the GUID spans databases', () => {
+      const twin: WithDb<Project> = { ...rigHeart, id: 6 };
+      const model = buildProjectTargetNavigation({ ...input, projects: [...projects, rigHeart, twin], search: '' });
+      expect(model.familyOf(rigHeart)).toBeNull();
+      expect(model.projectGroups.flatMap((group) => group.projects).map((project) => project.id)).toEqual([5, 6, 2, 1]);
+    });
+  });
+
   it('drops a database section that has nothing to show', () => {
     const empty: DatabaseSummary = { ...database, id: 'empty', name: 'Empty catalog' };
     const model = buildProjectTargetNavigation({

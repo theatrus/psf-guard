@@ -1,7 +1,8 @@
-//! Opt-in coordinator management, not a rig pairing or acquisition protocol.
+//! Opt-in coordinator management and scoped rig reporting, not acquisition authority.
 //! The outer API middleware owns browser authentication and write-role checks.
 
 use super::{api::ApiResponse, state::AppState};
+use crate::server::database_context::DatabaseContext;
 use axum::{
     extract::{DefaultBodyLimit, Path, Query, State},
     http::{header::RETRY_AFTER, StatusCode},
@@ -9,15 +10,59 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use psf_guard_director_meta::{Error as StoreError, IdentityPage, MetaStore, NamedIdentity, Uuid};
+use psf_guard_director_meta::{
+    CatalogIdentity, Error as StoreError, IdentityPage, MetaStore, NamedIdentity, Uuid,
+};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::{
     path::Path as FilePath,
     sync::{Arc, Mutex},
 };
 use tokio::sync::Semaphore;
+mod activation;
 mod catalog_adoption;
 mod catalog_discovery;
+mod catalog_rig;
+mod checkin;
+mod feasibility;
+mod framing;
+mod import_drafts;
+mod mosaic;
+pub(super) mod pairing;
+mod plan;
+mod plans;
+mod program;
+mod rig_profile;
+mod sky_image;
+
+/// The default store sits beside the registry, like `auth.json`, so a test
+/// registry gets its own meta store and nothing lands in the real config dir.
+pub(crate) fn default_meta_path(registry: &FilePath) -> std::path::PathBuf {
+    if registry.file_name().and_then(|name| name.to_str()) == Some("config.json") {
+        return registry.with_file_name("director-meta.sqlite");
+    }
+    let stem = registry
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("config");
+    registry.with_file_name(format!("{stem}.director-meta.sqlite"))
+}
+
+/// An explicit path always wins. Without one, a server that may manage its
+/// databases opens the default store; a read-only server leaves Director off,
+/// because planning writes into rig databases at activation.
+/// The meta store sits beside the registry unless a path is given. Planning
+/// runs on every server; only writes into rig databases need management.
+pub(crate) fn resolve_meta_path(
+    explicit: Option<&FilePath>,
+    registry: Option<&FilePath>,
+) -> Option<std::path::PathBuf> {
+    match explicit {
+        Some(path) => Some(path.to_path_buf()),
+        None => registry.map(default_meta_path),
+    }
+}
 
 pub(super) fn validate_registry_separation(
     meta: Option<&FilePath>,
@@ -73,15 +118,8 @@ pub struct Service {
 
 impl Service {
     /// Call during startup, never with a client-supplied filesystem path.
-    pub(crate) fn configured(
-        path: Option<&FilePath>,
-        management: bool,
-    ) -> anyhow::Result<Option<Arc<Self>>> {
+    pub(crate) fn configured(path: Option<&FilePath>) -> anyhow::Result<Option<Arc<Self>>> {
         let Some(path) = path else { return Ok(None) };
-        anyhow::ensure!(
-            management,
-            "Director metadata requires database management to be enabled"
-        );
         let store = if path.try_exists()? {
             MetaStore::open(path)?
         } else {
@@ -126,6 +164,8 @@ enum Error {
     Invalid,
     Missing,
     Conflict,
+    /// The coordinator, catalog and rig identities in a report do not agree.
+    WrongRig,
     Busy,
     Internal,
 }
@@ -181,6 +221,10 @@ impl IntoResponse for Error {
                 StatusCode::CONFLICT,
                 "Director record conflicts with stored content; reload before retrying",
             ),
+            Self::WrongRig => (
+                StatusCode::FORBIDDEN,
+                "Coordinator, catalog and rig identities do not match this server's binding",
+            ),
             Self::Busy => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Director metadata is busy; retry shortly",
@@ -200,8 +244,101 @@ impl IntoResponse for Error {
     }
 }
 
+/// Every registered database that carries a catalog identity, one per
+/// identity. Two files with the same identity are one catalog copied by hand;
+/// the first by slug stands for it and the rest are named, never merged, so a
+/// copy can not receive a plan meant for the original.
+pub(super) struct IdentifiedCatalogs {
+    by_id: BTreeMap<Uuid, (CatalogIdentity, Arc<DatabaseContext>)>,
+    /// One line per file left out, for the operator.
+    pub(super) duplicates: Vec<String>,
+    /// Slugs of the files left out.
+    pub(super) duplicate_slugs: Vec<String>,
+}
+
+impl IdentifiedCatalogs {
+    pub(super) fn get(&self, id: Uuid) -> Option<&Arc<DatabaseContext>> {
+        self.by_id.get(&id).map(|(_, context)| context)
+    }
+
+    pub(super) fn iter(&self) -> impl Iterator<Item = (&CatalogIdentity, &Arc<DatabaseContext>)> {
+        self.by_id
+            .values()
+            .map(|(identity, context)| (identity, context))
+    }
+
+    pub(super) fn is_duplicate(&self, slug: &str) -> bool {
+        self.duplicate_slugs.iter().any(|s| s == slug)
+    }
+}
+
+/// The identity an unadopted file gets until one is written into it: fixed
+/// by this instance and the file's path, so a read-only server sees the same
+/// rig across restarts and the same id is written once management allows.
+pub(super) fn derived_identity(instance: Uuid, path: &str) -> CatalogIdentity {
+    let canonical = dunce::canonicalize(path)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_owned());
+    CatalogIdentity {
+        id: Uuid::new_v5(&instance, canonical.as_bytes()),
+        origin_instance_id: instance,
+    }
+}
+
+/// The identity a file carries, or the one it would be given.
+pub(super) fn identity_of(instance: Uuid, path: &str) -> CatalogIdentity {
+    read_identity(path).unwrap_or_else(|| derived_identity(instance, path))
+}
+
+/// Read each file's identity once, in slug order so the choice is stable. An
+/// unadopted file counts under its derived identity, so a read-only server
+/// still plans over it.
+pub(super) fn identified_catalogs(
+    catalogs: &[Arc<DatabaseContext>],
+    instance: Uuid,
+) -> IdentifiedCatalogs {
+    let mut sorted: Vec<&Arc<DatabaseContext>> = catalogs.iter().collect();
+    sorted.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut found = IdentifiedCatalogs {
+        by_id: BTreeMap::new(),
+        duplicates: Vec::new(),
+        duplicate_slugs: Vec::new(),
+    };
+    for context in sorted {
+        let identity = identity_of(instance, &context.database_path);
+        match found.by_id.get(&identity.id) {
+            Some((_, first)) => {
+                found.duplicates.push(format!(
+                    "{}: carries the same catalog identity as {}, so it is a copy of that file; it is left out of planning. Remove it from the registry, or drop its psf_guard_catalog_identity table to make it a database of its own.",
+                    context.name, first.name
+                ));
+                found.duplicate_slugs.push(context.id.clone());
+            }
+            None => {
+                found.by_id.insert(identity.id, (identity, context.clone()));
+            }
+        }
+    }
+    found
+}
+
+/// The identity a database file carries, or `None` for an unadopted or
+/// unreadable file. Never writes.
+pub(super) fn read_identity(path: &str) -> Option<CatalogIdentity> {
+    let connection = super::database_context::open_scheduler_connection_with_flags(
+        FilePath::new(path),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    connection
+        .busy_timeout(std::time::Duration::from_secs(1))
+        .ok()?;
+    crate::catalog_identity::read(&connection).ok().flatten()
+}
+
 pub(super) fn routes() -> Router<Arc<AppState>> {
     Router::new()
+        .merge(pairing::routes())
         .route("/status", get(status))
         .route(
             "/catalogs/{slug}/discovery",
@@ -209,6 +346,28 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         )
         .route("/projects", get(list_projects).post(create_project))
         .route("/catalogs/{slug}/mappings", get(catalog_adoption::mappings))
+        .route(
+            "/catalogs/{slug}/rig/preview",
+            axum::routing::post(catalog_rig::preview),
+        )
+        .route(
+            "/catalogs/{slug}/rig/apply",
+            axum::routing::post(catalog_rig::apply),
+        )
+        .route(
+            "/catalogs/{slug}/rig/profile",
+            get(rig_profile::get)
+                .put(rig_profile::put)
+                .layer(DefaultBodyLimit::max(
+                    psf_guard_director_core::MAX_REQUEST_BYTES,
+                )),
+        )
+        .route(
+            "/rigs/{rig}/equipment",
+            axum::routing::put(rig_profile::report_equipment).layer(DefaultBodyLimit::max(
+                psf_guard_director_core::MAX_REQUEST_BYTES,
+            )),
+        )
         .route(
             "/catalogs/{slug}/adoption/preview",
             axum::routing::post(catalog_adoption::preview).layer(DefaultBodyLimit::max(
@@ -221,16 +380,106 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
                 psf_guard_director_core::MAX_REQUEST_BYTES,
             )),
         )
+        .route(
+            "/framing/preview",
+            axum::routing::post(framing::preview).layer(DefaultBodyLimit::max(
+                psf_guard_director_core::MAX_REQUEST_BYTES,
+            )),
+        )
+        .route(
+            "/projects/{id}/framing",
+            get(framing::get_draft)
+                .put(framing::put_draft)
+                .layer(DefaultBodyLimit::max(
+                    psf_guard_director_core::MAX_REQUEST_BYTES,
+                )),
+        )
+        .route("/rigs/profiles", get(framing::rig_profiles))
+        .route("/catalogs/{slug}/templates", get(plan::templates))
+        .route("/rigs/{rig}/program", get(program::pull))
+        .route(
+            "/rigs/{rig}/checkin",
+            axum::routing::post(checkin::check_in).layer(DefaultBodyLimit::max(
+                psf_guard_director_core::MAX_REQUEST_BYTES * 4,
+            )),
+        )
+        .route(
+            "/rigs/{rig}/status",
+            axum::routing::post(checkin::report_status).layer(DefaultBodyLimit::max(
+                psf_guard_director_core::MAX_REQUEST_BYTES,
+            )),
+        )
+        .route("/rigs/status", get(checkin::statuses))
+        .route("/plans", get(plans::list))
+        .route(
+            "/projects/{id}/feasibility",
+            axum::routing::post(feasibility::evaluate),
+        )
+        .route("/projects/{id}/activation", get(activation::last))
+        .route("/projects/{id}/mosaic", get(mosaic::get))
+        .route(
+            "/projects/{id}/activation/preview",
+            axum::routing::post(activation::preview),
+        )
+        .route(
+            "/projects/{id}/activation/apply",
+            axum::routing::post(activation::apply),
+        )
+        .route(
+            "/projects/{id}/activation/push",
+            axum::routing::post(activation::push),
+        )
+        .route(
+            "/projects/{id}/plan",
+            get(plan::get_plan)
+                .put(plan::put_plan)
+                .layer(DefaultBodyLimit::max(
+                    psf_guard_director_core::MAX_REQUEST_BYTES,
+                )),
+        )
+        .route("/sky/surveys", get(sky_image::surveys))
+        .route("/sky/cutout", get(sky_image::cutout))
+        .route("/sky/resolve", get(sky_image::resolve))
         .route("/projects/{id}", get(project).patch(rename_project))
         .merge(configuration_api::routes())
         .layer(DefaultBodyLimit::max(4096))
 }
 
+/// Wait briefly for an admission permit instead of failing at once. Reads
+/// that merely list state should not lose to a neighbouring request; a write
+/// still uses `try_acquire_owned` so a dropped request cannot queue work.
+/// How long a request waits for its turn at the metadata store before it
+/// answers 503. A workspace opens with a handful of requests at once and
+/// some of them (adoption of every database, feasibility) take seconds, so
+/// the wait must cover a queue of them; the browser retries a 503 anyway.
+const ADMISSION_WAIT: std::time::Duration = if cfg!(test) {
+    // Tests hold the gate on purpose to see the busy answer; they should not
+    // sit through the production wait for it.
+    std::time::Duration::from_secs(1)
+} else {
+    std::time::Duration::from_secs(20)
+};
+
+async fn admit(semaphore: &Arc<Semaphore>) -> Result<tokio::sync::OwnedSemaphorePermit, Error> {
+    tokio::time::timeout(ADMISSION_WAIT, semaphore.clone().acquire_owned())
+        .await
+        .map_err(|_| Error::Busy)?
+        .map_err(|_| Error::Internal)
+}
+
+/// Planning reads and the meta store are open to every server.
 fn enabled(state: &AppState) -> Result<Arc<Service>, Error> {
+    state.director.clone().ok_or(Error::Disabled)
+}
+
+/// Writes into rig databases (activation, adoption tables, pushes) need the
+/// server's database-management permission on top.
+fn writable(state: &AppState) -> Result<Arc<Service>, Error> {
+    let service = enabled(state)?;
     if !state.database_management_allowed() {
         return Err(Error::Forbidden);
     }
-    state.director.clone().ok_or(Error::Disabled)
+    Ok(service)
 }
 
 #[derive(Serialize)]
@@ -239,6 +488,10 @@ struct Status {
     enabled: bool,
     instance_id: Option<Uuid>,
     acquisition_available: bool,
+    /// Whether this server may write into rig databases: activate plans,
+    /// adopt catalogs in place, and edit Target Scheduler rows. Without it,
+    /// Planning is read-only over the catalogs.
+    database_management: bool,
 }
 
 async fn status(State(state): State<Arc<AppState>>) -> Json<ApiResponse<Status>> {
@@ -248,6 +501,7 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<ApiResponse<Status>>
         enabled: service.is_some(),
         instance_id: service.map(|s| s.instance_id),
         acquisition_available: false,
+        database_management: state.database_management_allowed(),
     }))
 }
 

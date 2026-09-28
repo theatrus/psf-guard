@@ -1,0 +1,196 @@
+import { useEffect, useMemo, useState } from 'react';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { isAxiosError } from 'axios';
+import { Check, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { apiClient } from '../../api/client';
+import { useAccess } from '../../auth/access';
+import type { DirectorContribution, DirectorObjective, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplate } from '../../api/directorTypes';
+import { PURPOSES, bandpassKind, bandpassOptions, coverageGaps, defaultExposure, emptyPlan, formatHours, framesFor, hoursFor, newContribution, newObjective, panelIds, planProblem, rigPanels, rigTotals, templatesFor } from './planModel';
+import './PlanEditor.css';
+
+const message = (error: unknown) => error instanceof Error ? error.message : 'Plan request failed';
+const httpStatus = (error: unknown) => isAxiosError(error) ? error.response?.status
+  : error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined;
+const retryWhenBusy = (count: number, error: unknown) => httpStatus(error) === 503 && count < 5;
+
+/** Objectives per bandpass and depth, and each rig's template and exposure for them. */
+export default function PlanEditor({ projectId }: { projectId: string }) {
+  const { canWrite } = useAccess();
+  const client = useQueryClient();
+  const planKey = ['directorPlan', projectId];
+  const loaded = useQuery({ queryKey: planKey, queryFn: () => apiClient.getDirectorPlan(projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
+  const rigs = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
+  // The framing's grid names the panels a rig can own.
+  const framing = useQuery({ queryKey: ['directorFraming', projectId], queryFn: () => apiClient.getDirectorFramingDraft(projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
+  const panels = useMemo(() => panelIds(framing.data?.draft?.mosaic), [framing.data]);
+  const rigList = useMemo(() => rigs.data ?? [], [rigs.data]);
+  const templateQueries = useQueries({ queries: rigList.map(rig => ({
+    queryKey: ['directorTemplates', rig.catalog_slug], queryFn: () => apiClient.getDirectorTemplates(rig.catalog_slug), retry: retryWhenBusy, retryDelay: 700, staleTime: 60_000,
+  })) });
+  const templatesByRig = useMemo(() => {
+    const map: Record<string, DirectorTemplate[]> = {};
+    rigList.forEach((rig, index) => { map[rig.rig.id] = templateQueries[index]?.data?.templates ?? []; });
+    return map;
+  }, [rigList, templateQueries]);
+  const [plan, setPlan] = useState<DirectorPlanDraft | null>(null);
+  // Which rigs the operator has ticked. A rig can take part with no matching
+  // template yet, so this is not the same as "has a contribution".
+  const [joined, setJoined] = useState<string[]>([]);
+  const [notice, setNotice] = useState('');
+  const [problem, setProblem] = useState('');
+  useEffect(() => {
+    if (!loaded.data) return;
+    const next = loaded.data.plan ?? emptyPlan(projectId);
+    setPlan(next);
+    // Keep rigs the operator ticked even when a save left them without a contribution.
+    setJoined(ids => [...new Set([...ids, ...next.contributions.map(c => c.rig_id)])]);
+  }, [loaded.data, projectId]);
+  const save = useMutation({
+    retry: false,
+    mutationFn: () => {
+      if (!plan || !loaded.data) throw new Error('Nothing to save');
+      return apiClient.saveDirectorPlan({ ...plan, revision: loaded.data.plan?.revision ?? 0 });
+    },
+    onSuccess: saved => { setNotice(`Saved plan revision ${saved.plan?.revision ?? 0}.`); client.setQueryData<DirectorPlanView>(planKey, saved); },
+  });
+  const stale = httpStatus(save.error) === 409;
+  const options = useMemo(() => bandpassOptions(templatesByRig), [templatesByRig]);
+  const update = (change: (current: DirectorPlanDraft) => DirectorPlanDraft) => setPlan(current => current ? change(current) : current);
+  const number = (value: string, fallback: number) => { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : fallback; };
+
+  const addObjective = () => update(current => {
+    const used = new Set(current.objectives.map(o => o.bandpass_id));
+    const next = options.find(o => !used.has(o.id)) ?? options[0];
+    return { ...current, objectives: [...current.objectives, newObjective(next?.id ?? 'luminance')] };
+  });
+  const changeObjective = (id: string, patch: Partial<DirectorObjective>) => update(current => {
+    const objectives = current.objectives.map(o => o.id === id ? { ...o, ...patch } : o);
+    // A new bandpass invalidates templates picked for the old one.
+    const contributions = patch.bandpass_id
+      ? current.contributions.filter(c => c.objective_id !== id)
+      : current.contributions;
+    return { ...current, objectives, contributions };
+  });
+  const removeObjective = (id: string) => update(current => ({ ...current, objectives: current.objectives.filter(o => o.id !== id), contributions: current.contributions.filter(c => c.objective_id !== id) }));
+  const participating = (rig: DirectorRigProfileSummary) => joined.includes(rig.rig.id);
+  const toggleRig = (rig: DirectorRigProfileSummary, on: boolean) => update(current => {
+    setJoined(ids => on ? [...new Set([...ids, rig.rig.id])] : ids.filter(id => id !== rig.rig.id));
+    if (!on) return { ...current, contributions: current.contributions.filter(c => c.rig_id !== rig.rig.id) };
+    const added = current.objectives.flatMap(objective => {
+      const matching = templatesFor(objective.bandpass_id, templatesByRig[rig.rig.id] ?? []);
+      const template = matching[0];
+      if (!template) return [];
+      return [newContribution(objective, rig, template, defaultExposure(rig, bandpassKind(objective.bandpass_id, templatesByRig), template))];
+    });
+    return { ...current, contributions: [...current.contributions, ...added] };
+  });
+  const setRigPanels = (rig: DirectorRigProfileSummary, chosen: string[]) => update(current => ({
+    ...current,
+    // Every panel chosen is the same as no list at all.
+    contributions: current.contributions.map(c => c.rig_id === rig.rig.id ? { ...c, panel_ids: chosen.length >= panels.length ? [] : chosen } : c),
+  }));
+  const setContribution = (rig: DirectorRigProfileSummary, objective: DirectorObjective, change: (current: DirectorContribution | null) => DirectorContribution | null) => update(current => {
+    const existing = current.contributions.find(c => c.rig_id === rig.rig.id && c.objective_id === objective.id) ?? null;
+    const next = change(existing);
+    const others = current.contributions.filter(c => !(c.rig_id === rig.rig.id && c.objective_id === objective.id));
+    return { ...current, contributions: next ? [...others, next] : others };
+  });
+
+  if (loaded.isPending) return <p role="status">Loading plan...</p>;
+  if (loaded.isError) return <p className="director-error" role="alert">{message(loaded.error)}</p>;
+  if (!plan) return null;
+  const totals = rigTotals(plan, panels);
+  const gaps = panels.length > 1 ? coverageGaps(plan, panels) : [];
+  return <section className="plan-editor" aria-label="Acquisition plan">
+    <form onSubmit={event => { event.preventDefault(); if (!canWrite || save.isPending || stale) return; setNotice(''); const trouble = planProblem(plan); setProblem(trouble ?? ''); if (!trouble) save.mutate(); }}>
+      <fieldset disabled={!canWrite || stale}>
+        <legend>Objectives</legend>
+        <p className="director-muted">What the project wants, by bandpass: accepted hours or frames. Hours become frames per rig through its exposure length.</p>
+        {plan.objectives.length === 0 && <p className="director-muted">No objectives yet.</p>}
+        <ul className="plan-objectives">
+          {plan.objectives.map(objective => <li key={objective.id} className="plan-objective">
+            <label>Bandpass<select aria-label="Objective bandpass" value={objective.bandpass_id} onChange={event => changeObjective(objective.id, { bandpass_id: event.target.value })}>
+              {options.map(option => <option key={option.id} value={option.id}>{option.name}{option.kind === 'narrowband' ? ' (narrowband)' : ''}</option>)}
+              {!options.some(o => o.id === objective.bandpass_id) && <option value={objective.bandpass_id}>{objective.bandpass_id}</option>}
+            </select></label>
+            <label>Purpose<select aria-label="Objective purpose" value={objective.purpose} onChange={event => changeObjective(objective.id, { purpose: event.target.value })}>
+              {PURPOSES.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              {!PURPOSES.some(p => p.id === objective.purpose) && <option value={objective.purpose}>{objective.purpose}</option>}
+            </select></label>
+            <label>Goal<span className="plan-goal">
+              <input aria-label="Objective goal" type="number" min={0} step="any" value={objective.goal.value} onChange={event => changeObjective(objective.id, { goal: { ...objective.goal, value: number(event.target.value, 0) } as DirectorObjective['goal'] })} />
+              <select aria-label="Objective goal unit" value={objective.goal.kind} onChange={event => changeObjective(objective.id, { goal: { kind: event.target.value as 'hours' | 'frames', value: objective.goal.value } as DirectorObjective['goal'] })}>
+                <option value="hours">hours</option><option value="frames">frames per rig</option>
+              </select></span></label>
+            <label>Priority<input aria-label="Objective priority" type="number" min={0} max={1000} step={1} value={objective.priority} onChange={event => changeObjective(objective.id, { priority: Math.max(0, Math.min(1000, Math.round(number(event.target.value, 1)))) })} /></label>
+            {canWrite && <button type="button" aria-label={`Remove ${objective.bandpass_id} objective`} title="Remove objective" onClick={() => removeObjective(objective.id)}><Trash2 size={16} /></button>}
+          </li>)}
+        </ul>
+        {canWrite && <button type="button" onClick={addObjective}><Plus size={16} />Add objective</button>}
+      </fieldset>
+      <fieldset disabled={!canWrite || stale}>
+        <legend>Rigs</legend>
+        <p className="director-muted">Tick a rig to have it shoot the objectives with its own templates and exposure lengths. A rig with no template for a bandpass sits that one out.</p>
+        {rigs.isError && <p className="director-error" role="alert">Rigs could not be loaded: {message(rigs.error)} <button type="button" onClick={() => void rigs.refetch()}>Retry</button></p>}
+        {!rigs.isError && rigList.length === 0 && <p className="director-muted">{rigs.isPending ? 'Loading rigs...' : 'No rig has planning enabled yet.'}</p>}
+        {rigList.map((rig, index) => {
+          const templates = templatesByRig[rig.rig.id] ?? [];
+          const loadingTemplates = templateQueries[index]?.isPending;
+          const on = participating(rig);
+          const total = totals.find(t => t.rigId === rig.rig.id);
+          return <div key={rig.rig.id} className="plan-rig">
+            <label className="plan-rig-head"><input type="checkbox" checked={on} onChange={event => toggleRig(rig, event.target.checked)} disabled={plan.objectives.length === 0} />
+              <strong>{rig.catalog_name}</strong>
+              <small>{rig.field_of_view ? `${rig.field_of_view.pixel_scale_arcsec.toFixed(2)}″/px${rig.field_of_view.focal_ratio ? `, f/${rig.field_of_view.focal_ratio.toFixed(1)}` : ''}` : 'no optics in its rig profile'}{loadingTemplates ? ', loading templates' : `, ${templates.length} template${templates.length === 1 ? '' : 's'}`}</small>
+              {total && <span className="plan-rig-total">{total.frames} frames, {formatHours(total.hours)}</span>}
+            </label>
+            {on && panels.length > 1 && (() => {
+              const owned = rigPanels(plan, rig.rig.id, panels);
+              return <div className="plan-panels" role="group" aria-label={`${rig.catalog_name} panels`}>
+                <span className="director-muted">Panels:</span>
+                <label className="plan-panel"><input type="checkbox" aria-label={`${rig.catalog_name} shoots every panel`} checked={owned.length === panels.length} onChange={event => setRigPanels(rig, event.target.checked ? panels : [])} />All</label>
+                {panels.map(id => <label key={id} className="plan-panel"><input type="checkbox" aria-label={`${rig.catalog_name} shoots panel ${id}`} checked={owned.includes(id)} onChange={event => setRigPanels(rig, event.target.checked ? [...owned, id] : owned.filter(p => p !== id))} />{id}</label>)}
+                {owned.length === 0 && <span className="director-error">No panel chosen; this rig shoots nothing.</span>}
+              </div>;
+            })()}
+            {on && <table className="plan-contributions"><thead><tr><th>Objective</th><th>Template</th><th>Exposure</th><th>Frames</th><th>On</th></tr></thead><tbody>
+              {plan.objectives.map(objective => {
+                const contribution = plan.contributions.find(c => c.rig_id === rig.rig.id && c.objective_id === objective.id) ?? null;
+                const matching = templatesFor(objective.bandpass_id, templates);
+                const label = options.find(o => o.id === objective.bandpass_id)?.name ?? objective.bandpass_id;
+                const frames = contribution ? framesFor(objective.goal, contribution.exposure_seconds) : null;
+                return <tr key={objective.id}>
+                  <td>{label}<br /><small className="director-muted">{PURPOSES.find(p => p.id === objective.purpose)?.name ?? objective.purpose}</small></td>
+                  <td>{matching.length === 0 ? <span className="director-muted">No {label} template in this database</span>
+                    : <select aria-label={`${rig.catalog_name} template for ${label}`} value={contribution?.template.template_id ?? ''} onChange={event => {
+                      const template = matching.find(t => String(t.id) === event.target.value);
+                      setContribution(rig, objective, current => template ? { ...(current ?? newContribution(objective, rig, template, defaultExposure(rig, bandpassKind(objective.bandpass_id, templatesByRig), template))), template: { template_guid: template.guid, template_id: template.id, name: template.name, filter_name: template.filter_name, gain: template.gain, offset: template.offset, bin: template.bin, readout_mode: template.readout_mode } } : null);
+                    }}>
+                      <option value="">Skip on this rig</option>
+                      {matching.map(t => <option key={t.id} value={t.id}>{t.name} ({t.filter_name}{t.bin && t.bin > 1 ? `, ${t.bin}×${t.bin}` : ''})</option>)}
+                    </select>}</td>
+                  <td>{contribution && <span className="plan-goal"><input aria-label={`${rig.catalog_name} exposure for ${label}`} type="number" min={1} step="any" value={contribution.exposure_seconds} onChange={event => setContribution(rig, objective, current => current ? { ...current, exposure_seconds: number(event.target.value, current.exposure_seconds) } : current)} /><small>s</small></span>}</td>
+                  <td>{contribution && frames !== null && <span data-testid={`frames-${rig.catalog_slug}-${objective.bandpass_id}`}>{frames}{panels.length > 1 && <small className="director-muted"> per panel</small>}<br /><small className="director-muted">{formatHours(hoursFor(frames, contribution.exposure_seconds))}{panels.length > 1 ? ' each' : ''}</small></span>}</td>
+                  <td>{contribution && <input type="checkbox" aria-label={`${rig.catalog_name} shoots ${label}`} checked={contribution.enabled} onChange={event => setContribution(rig, objective, current => current ? { ...current, enabled: event.target.checked } : current)} />}</td>
+                </tr>;
+              })}
+            </tbody></table>}
+          </div>;
+        })}
+      </fieldset>
+      {panels.length > 1 && <fieldset><legend>Coverage</legend>
+        {gaps.length === 0
+          ? <p className="director-muted" data-testid="plan-coverage">{plan.objectives.length === 0 ? `${panels.length} panels, no objectives yet.` : `Every objective has a rig on all ${panels.length} panels.`}</p>
+          : <ul className="plan-gaps" data-testid="plan-coverage">{gaps.map(gap => <li key={gap.objective.id} className="director-error">{options.find(o => o.id === gap.objective.bandpass_id)?.name ?? gap.objective.bandpass_id}: no rig on {gap.panels.length === panels.length ? 'any panel' : `panel${gap.panels.length === 1 ? '' : 's'} ${gap.panels.join(', ')}`}.</li>)}</ul>}
+      </fieldset>}
+      {notice && <p role="status">{notice}</p>}
+      {stale && <p className="director-error" role="alert">This plan changed since you loaded it. Reload to see the saved plan before editing again.</p>}
+      {(problem || (save.isError && !stale)) && <p className="director-error" role="alert">{problem || message(save.error)}</p>}
+      <div className="director-actions">
+        {canWrite && <button type="submit" disabled={save.isPending || stale}><Check size={16} />{save.isPending ? 'Saving...' : 'Save plan'}</button>}
+        <button type="button" aria-label="Reload plan" title="Reload plan" onClick={() => { setNotice(''); setProblem(''); save.reset(); void loaded.refetch(); }}><RefreshCw size={16} /></button>
+        {!canWrite && <span className="director-muted">Read only</span>}
+      </div>
+    </form>
+  </section>;
+}

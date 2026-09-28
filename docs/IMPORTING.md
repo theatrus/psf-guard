@@ -223,7 +223,7 @@ entry in the registry as `autoimport`.
 
 ## Organize projects and targets
 
-Overview's **Edit** actions rename projects and targets, move a whole target
+Library's **Edit** actions rename projects and targets, move a whole target
 to another project, or merge projects. **Merge target** combines alternate
 names for the same target: choose the destination project and target, then
 review **Preview merge** before choosing **Apply merge**. The destination
@@ -231,7 +231,7 @@ keeps its name and framing. Its exposures and the source target's exposures
 share one target after the merge. The emptied source target is removed; its
 project remains.
 
-![Target merge preview in Overview](target-merge.png)
+![Target merge preview in Library](target-merge.png)
 
 To split a target, select exposures from that target in Grid and choose
 **Move exposures**. The destination can be an existing target, a new target in
@@ -302,9 +302,10 @@ request to opt out per call.
 
 ## Review and correct the imported plan
 
-Open **Overview**, then choose **Plan & coordinates** on a project. You can see
-project state and limits, target coordinates, rotation and ROI, shared exposure
-templates, and each filter plan. With database management enabled, you can edit
+Open **Library**, then choose **Planning** on a project. The planning
+workspace opens with that database's **Targets and exposures** expanded under
+**Databases**: project state and limits, target coordinates, rotation and ROI,
+shared exposure templates, and each filter plan. With database management enabled, you can edit
 these fields, add plans, or merge and move imported projects and targets when a
 header name grouped them poorly.
 

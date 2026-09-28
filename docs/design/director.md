@@ -27,6 +27,12 @@ simulate opportunities, acquire, evaluate quality and calibration, request
 replacement data, process, and assess completion. A project can span different
 telescopes, sites, catalogs, and eventually collaborating PSF Guard instances.
 
+Director covers acquisition planning and acquisition within that lifecycle; it
+does not replace PSF Guard's Library or take ownership of catalog review,
+grading, calibration inspection or processing. Library remains a key project
+and collected-data view, including the per-rig catalogs already represented
+under its projects. Both surfaces refer to the same projects.
+
 The existing PSF Guard Sync plugin remains a separate supported product.
 Director must not require users to migrate away from Sync or change existing
 sync semantics.
@@ -35,6 +41,10 @@ sync semantics.
 
 - Introduce a PSF Guard meta database for coordination above per-rig databases.
 - Make global projects independent of rigs, database files, and local TS IDs.
+- Present one PSF Guard project with rig-specific contributions, not a second
+  Director project/catalog application alongside existing PSF Guard projects.
+- Use each existing registered per-rig project database as the rig in Director.
+  Do not require another independently maintained rig record or catalog list.
 - Exchange goals, constraints, and bounded assignments, not fixed timetables.
 - Run the same planning core in PSF Guard and Director.
 - Own scheduling and feedback policy in the shared Rust core; use a thin
@@ -59,7 +69,7 @@ sync semantics.
 
 ## Implementation audit
 
-Audited 2026-09-26 against PSF Guard main `31b02d4` and Director plugin main
+Audited 2026-09-26 against PSF Guard main `dfd6a66` and Director plugin main
 `8f6d8c2`, plus the open PR heads listed below. **Merged building block** does
 not mean a production workflow or phase gate passed. Open PR work is not in
 main. Update this table and the relevant checklist when a PR lands; keep
@@ -69,17 +79,18 @@ untested integration requirements unchecked.
 | --- | --- | --- |
 | Shared engine | Merged `crates/director-core`: deterministic selection, program/recipe binding, preparation reducer, conservative altitude/horizon and meridian geometry; shared Rust/.NET fixtures. | Complete observing criteria, production Earth-orientation source, full operation inventory, duration learning and server simulation. |
 | Planning policy inheritance | Prototype engine inputs carry concrete priorities and preparation preferences. | Versioned global defaults, optional site/rig/project overrides, shared-core resolution and provenance UI are not implemented. Concrete input fields are not an inheritance model. |
-| Sidecar and local recovery | Merged `crates/director-ledger` and `crates/director-runtime`: schema-4 journal, capture/preparation outboxes, IPC 7, one-shot dispatch checks, process crash/reopen tests; PSF Guard #464-487. | Remote inbox/acknowledgements, pruning, grade feedback, assignment replacement and complete operator recovery. No network batch check-in yet. |
-| NINA native execution | Plugin [#18](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/18), [#19](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/19), [#22](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/22), [#23](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/23), [#24](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/24) merged: transient native items, target context, complete horizon export and post-hook geometry checks. Real nightly #58 OmniSim probe captured three filtered FITS frames with correlated evidence. | Public production session container, all trigger/condition/hook contexts, plugin compatibility matrix, native defaults, full autofocus/guiding/flip/calibration/safety recovery and continuous ownership integration. Probe uses fixture allocations and synthetic orientation evidence, not a server session. |
+| Sidecar and local recovery | Merged `crates/director-ledger` and `crates/director-runtime`: schema-4 journal, capture/preparation outboxes, IPC 8/runtime 0.7.0, one-shot dispatch checks with exact latest-start deadlines, process crash/reopen tests; PSF Guard #464-487 and [#518](https://github.com/theatrus/psf-guard/pull/518). The current commissioning increment delivers capture receipts after restart and retains exact acknowledgements. | Preparation-feed delivery, pruning, grade feedback, assignment replacement and complete operator recovery. |
+| NINA native execution | Plugin [#18](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/18), [#19](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/19), [#22](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/22), [#23](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/23), [#24](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/24) and [#26](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/26) merged: transient native items, target context, complete horizon export, post-hook geometry checks and tested internal TS-style instruction slots with a compatibility matrix. Real nightly OmniSim probes captured three filtered FITS frames with correlated evidence. | Public TS-compatible session container and UI, all trigger/condition/hook contexts, native defaults, full autofocus/guiding/flip/calibration/safety recovery and continuous ownership integration. Probe uses fixture allocations and synthetic orientation evidence, not a server session. |
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
-| Meta storage | [#488](https://github.com/theatrus/psf-guard/pull/488), [#489](https://github.com/theatrus/psf-guard/pull/489) and [#499](https://github.com/theatrus/psf-guard/pull/499) merged: separate schema-4 store, UUIDs, confirmed catalog/profile/project/rig links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. | Permissions/enrollment, active revisions, allocation authority and progress projections. |
-| Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492): shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493): schema-3 intent persistence with validated immutable setup references. | Objective editor, depth/FOV/sampling compatibility and authoritative allocation remain open. |
-| Project framing wizard | Project intent retains target coordinates and rig-specific framing/recipes as building blocks only. | Survey-map backgrounds, target/reference selection, interactive FOV and rotation, mosaics, versioned optical geometry, multi-rig/site preview, draft editing and reviewed activation are not implemented. |
+| Meta storage | Separate schema-12 store on by default beside the registry; separate hashed Director pairing/client records; rig inbox with receipts, cursors and live status; mutable rig profiles with optics/site/limits and plugin equipment reports; per-project framing and plan drafts; activation records, UUIDs, reviewed one-to-one database/rig binding, confirmed source project links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. Unambiguous prototype links retain rig IDs. | Conflict-resolution UI for ambiguous prototype rigs, project-level permissions, active revisions, allocation authority and progress projections. |
+| Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492): shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493): schema-3 intent persistence with validated immutable setup references. Plan drafts with an objective editor, per-rig template binding and core exposure defaults. | Depth/FOV/sampling compatibility, per-night feasibility and authoritative allocation remain open. |
+| Project framing wizard | Framing view in the project workspace: survey backgrounds from N.I.N.A.'s HiPS list, name resolution through CDS Sesame, interactive center, angle and zoom, mosaic rows/columns/overlap, per-rig footprints from rig profiles, draft editing with compare-and-set, and a visibility panel with tonight's altitude chart, custom horizon, Moon and darkness like N.I.N.A.'s framing assistant, plus a week of nights per rig. | Reference images with WCS, layer comparison, offline region cache, rotation feasibility per rig. |
 | Catalog discovery | [#498](https://github.com/theatrus/psf-guard/pull/498) merged: operator-scoped read-only project/profile evidence from registered TS-compatible catalogs, with bounded results and invalid/duplicate identity reports. | Discovery does not infer rig ownership or read image history. |
-| Catalog adoption | [#502](https://github.com/theatrus/psf-guard/pull/502) merged explicit durable lineage; [#503](https://github.com/theatrus/psf-guard/pull/503) merged operator preview/apply, exact identity matching, stale-review refusal and interrupted-write recovery. [#506](https://github.com/theatrus/psf-guard/pull/506) adds the reviewed mapping UI and read-only inventory, with real-server browser tests. | Independent forks, historical-image attribution, contribution accounting and acquisition authorization remain separate work. |
-| Operator API and UI | [#490](https://github.com/theatrus/psf-guard/pull/490) and [#494](https://github.com/theatrus/psf-guard/pull/494) merged: opt-in project/site/rig identity and site/rig snapshot APIs. [#495](https://github.com/theatrus/psf-guard/pull/495) merged the identity management screen; [#506](https://github.com/theatrus/psf-guard/pull/506) adds the explicit catalog mapping workflow. Both have real-server browser tests. | No project planning editor, rig pairing, acquisition control or live rig dashboard. UI tests are not equipment tests. |
+| Catalog adoption | [#502](https://github.com/theatrus/psf-guard/pull/502) merged explicit durable lineage; [#503](https://github.com/theatrus/psf-guard/pull/503) merged operator preview/apply, exact identity matching, stale-review refusal and interrupted-write recovery. [#506](https://github.com/theatrus/psf-guard/pull/506) merged the reviewed mapping UI and read-only inventory, with real-server browser tests. | Independent forks, historical-image attribution, contribution accounting and acquisition authorization remain separate work. |
+| Operator API and UI | Planning page is a plan list (`GET /plans`: links, framing/plan/activation stage, Open in Planning entry) over a rig list (planning state, optics, last plugin status); reviewed planning links and rig profiles in database settings; the planning workspace holds framing, plan and activation over the Library's existing target/exposure editor. The identity lists and Catalogs tab are retired; old links redirect. Desktop/mobile real-server tests cover two databases contributing to one project and return navigation. | Pairing-code management UI and acquisition control. The Live table shows connectivity, last report, contact ages and assignments per rig. UI tests are not equipment tests. |
+| Program delivery | #528 adds `GET /rigs/{rig}/program`, compiling activated rig rows and reported configuration into core Program plus identity links and rig context. Plugin #28 adds bounded, read-only HTTP preview intake with exact scope/configuration/link checks and immutable-identity drift detection. The current commissioning increment adds an atomic, identity-bound durable preview cache; expired history is not renewed authorization. | Immutable issued allocations, explicit filter mapping, progress-preserving refresh and acquisition commissioning. The current compiler response must not yet arm acquisition; see the program-intake audit below. |
 | Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
-| Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. | Central telemetry ingestion/dashboard, scoped pairing, remote acknowledgements, offline authorization lifecycle, manual/sequence batch reconcile and reconnect activation are not implemented. |
+| Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. #530 adds server receipt ingestion/contiguous acknowledgements and coalesced status routes; #531 shows reported rig status in Director. The current commissioning increment adds separate scoped pairing and a bounded capture sender with durable, identity-bound cursors, tested against a real local server after a native simulator run. | Preparation feed, production background/status delivery, grade feedback, offline authorization lifecycle, manual/sequence batch reconcile and replacement activation remain missing. |
 | End-to-end lifecycle | Core, process, native simulator and isolated management HTTP/UI tests exist separately. | No PSF Guard allocation -> real NINA simulator acquisition -> central telemetry/grade -> batch reconciliation/replan test. TS/Sync/Chatstronomy coexistence gates remain open. |
 
 ## Domain model
@@ -89,7 +100,7 @@ untested integration requirements unchecked.
 | Global project | Desired result, targets, objectives, participants, lifecycle, and outputs. |
 | Observation objective | Required coverage, bandpass, exposure purpose, quality, depth, resolution, or cadence. |
 | Site | Latitude/longitude/elevation, time context, and weather inputs for planning and acquisition. |
-| Rig | Stable equipment identity, capabilities, and versioned configurations. |
+| Rig | An existing registered per-rig project database, with site association and versioned equipment/configuration evidence. |
 | Contribution plan | How a particular rig can satisfy an objective, including framing, panels, recipes, and quality requirements. |
 | Assignment | Versioned, bounded authorization for an executor to pursue specified contributions. |
 | Contribution | Captured data, provenance, assessment state, and its relationship to objectives. |
@@ -101,10 +112,276 @@ to acquire. Persist mappings by stable identifiers. Do not join by project name,
 telescope name, nearby coordinates, or database-local integer IDs. Existing TS GUIDs remain
 intact. Database slugs remain URL scope, not federation identity.
 
-A rig identity outlives a catalog file. Record equipment and site configuration
-revisions so a changed camera, telescope, or location does not rewrite history.
-Historical catalogs may contain several configurations; do not require a
-destructive split to adopt Director.
+A rig follows the durable identity of its registered project database, not its
+current file path, display name or URL slug. Record equipment and site
+configuration revisions so a changed camera, telescope, or location does not
+rewrite history. A database may contain multiple projects and historical
+configurations; neither creates another rig by itself.
+
+### Rigs are registered project databases
+
+The per-rig databases already visible through Library are Director's rig
+inventory. This is why another "New rig" workflow and manually assigning each
+TS profile to an unrelated rig identity is the wrong default: it asks users to
+reconstruct information PSF Guard already has and lets the two inventories
+disagree. Selecting a participating rig means selecting one of those existing
+database contexts. One database can hold many downstream projects; this does
+not mean one new database per target or per shared project.
+
+PSF Guard's own tables in a rig database (`psf_guard_catalog_identity` and
+the `psf_guard_director_*` side tables) are plain SQL with type CHECKs, never
+`STRICT`: the file is shared with N.I.N.A. and Target Scheduler, and a keyword
+their SQLite does not know would make the whole schema unreadable to them.
+Sync moves Target Scheduler tables only, so identity spreads by file copy
+alone; the Director treats two registered files with one identity as one
+catalog, names the copy and plans with the first by slug.
+
+Keep stable catalog lineage for moves, renames and synchronized copies. A copy
+of a database does not become a second telescope or earn extra project credit.
+A genuinely independent database/fork needs an explicit distinct identity. An
+internal rig surrogate key may remain for references, but it must bind to the
+canonical database identity rather than become another user-managed inventory.
+Do not derive identity from names, paths, source-profile strings or integer IDs.
+
+The Director plugin pairs/checks in against its selected database context and
+combines its associated site information with the local N.I.N.A. setup and
+current conditions. Sites supply position, time and weather; camera, optics,
+filters, horizon, meridian limits and safety evidence describe the database's
+current rig setup. A TS/N.I.N.A. profile is configuration provenance within that
+rig, not automatically another rig. Preserve and report ambiguous historical
+equipment provenance rather than pretending all frames used today's setup.
+
+The meta database coordinates project intent and contributions across those
+database-backed rigs. Each downstream project belongs to a participating rig
+database and links back to the same shared project. Library still owns catalog
+review and combined progress; Director plans and acquires contributions. Reuse
+TS project metadata to seed that planning flow, not to create parallel catalogs.
+
+This supersedes the independent rig-identity/profile-assignment model in the
+early metadata API and mapping UI. Schema 5 now binds registered database
+lineage to a rig after review and uses the registry as the normal rig inventory.
+Prototype links are migration history, not a second inventory. Migration
+must preview existing links, flag conflicts such as two independent catalogs
+sharing one prototype rig, retain source GUIDs/history, and be transactional and
+retryable. Do not silently rewrite a user's mappings or invent rigs at check-in.
+
+### One project, multiple rigs
+
+The user owns one PSF Guard project. Adding a rig gives that rig a contribution
+plan for the same project; it does not require the user to create another
+independent project and roll it up manually later. "Global project" names the
+coordinator's stable identity in the implementation, not a separate product
+concept or a second list of projects users must maintain.
+
+The project owns targets, desired coverage, objectives and completion criteria.
+Each participating rig owns the capture details needed to contribute: its
+versioned optical setup, framing and rotation, mosaic panels, sampling, filters,
+exposure lengths and acquisition recipes. A short-focal-length rig may cover a
+target in one frame while a longer-focal-length rig needs a mosaic. They still
+work on the same project. Shared-core compatibility and coverage checks decide
+which objective each contribution can satisfy; assigning a rig does not make
+its data interchangeable with every other rig's data.
+
+Accepted, quality-assessed contributions roll up to the project's objectives
+with their rig, setup, panel, bandpass and exposure-purpose provenance intact.
+Pending captures remain pending, rejected or invalidated data can reopen work,
+and mirrored catalog records never earn duplicate credit. Show combined project
+progress with a per-rig breakdown. Combining a project does not force a single
+image stack, equal raw exposure counts, or equivalent depth across instruments.
+
+Catalogs remain PSF Guard's existing database infrastructure, not Director-owned
+duplicates. Native rig-local storage holds capture history and projections of
+the shared project identity. Imported TS projects retain their source GUIDs and
+explicit adapter links, but those rows are not a requirement to create another
+user-facing project. An existing project can gain planning and rig participation
+through a reviewed adoption workflow that reuses its data and identity links.
+Never silently combine same-named projects or infer rig ownership from a name.
+Shared GUIDs are identity: the same project synced to two rig databases is one
+plan with two rigs, taken in without an operator step.
+
+Keep Library and Director as complementary views of the same project, not one
+replacement workspace. Library retains project browsing, per-rig catalog
+contributions, collected-data summaries and entry points to review, grading and
+processing. Director provides framing, objectives, rig participation, planning
+and acquisition status. A project can exist in Library without using Director;
+planning can also begin before a project has any captured data.
+
+Provide contextual navigation between an Library project and its Director
+plan, preserving project identity and any applicable rig/database scope on the
+return path. Shared progress projections can appear in both views; neither view
+creates a second project or independently editable copy of acquisition history.
+Adding planning to an existing project must not move or recreate its catalog.
+
+Reuse existing database settings for source/import/sync connections and expose
+source links in project context when needed. The current experimental Director
+identity lists and Catalogs mapping tab are implementation scaffolding, not the
+intended catalog navigation. Retire that parallel catalog workflow without
+removing Library's projects or per-rig catalog access.
+
+### Planner entry and source metadata
+
+Extend the existing Library project/target dialog ("Plan & coordinates") into
+the planner workflow. Its TS-backed project description, target coordinates and
+rotation, exposure plans, template capture settings and desired counts provide
+the starting data; do not ask users to enter these again in an identity form.
+Reuse the existing editor and read APIs before introducing additional forms.
+
+The next steps are framing against survey backgrounds, choosing participating
+rigs and their optical setups, reviewing rig-specific downstream projects, then
+activating the shared intent and bounded assignments for Director. Downstream
+projects are contributions to the originating project, not independent top-level
+campaigns. Library retains their collected data and the combined project rollup.
+
+Seed a reviewed draft, not immediate acquisition authority. Preserve source GUIDs
+and metadata revisions; convert RA hours at the planning boundary and handle the
+declared coordinate epoch explicitly. Resolve template defaults before producing
+capture recipes. Rig constraints and inherited policy still come from their
+proper owners; importing TS project settings must not silently override them.
+Generating or updating downstream projects requires preview/apply and must not
+overwrite existing acquisition history. The shared core validates the resulting
+intent before the plugin may receive an assignment.
+
+### Planning flow implementation plan
+
+Decisions taken on 2026-09-26 for the PSF Guard side of the plugin/backend
+split. They narrow the sections above for this stage; they do not replace them.
+
+- **Store on by default.** The meta store opens beside the database registry
+  whenever database management is on, in the server and the desktop app.
+  `--director-meta` only moves it. A read-only server leaves Director off.
+- **Rig databases keep TS-shaped tables** as the execution projection: one
+  `project` row per downstream project, one `target` row per mosaic panel, and
+  `exposureplan` rows per recipe, all with stable GUIDs. Director provenance
+  lives in PSF Guard-owned side tables in the same file, keyed by those GUIDs
+  (see below). Import, export, Sync and other PSF Guard instances keep working
+  unchanged. The native catalog schema stays planned work.
+- **Own sky map.** The framing view draws on PSF Guard's existing sky
+  projection code with server-fetched HiPS2FITS cutouts from the surveys
+  N.I.N.A.'s framing assistant uses (DSS2 color, Finkbeiner H-alpha first).
+  Cutouts are cached under the cache root. No Aladin Lite and no dependency on
+  a running N.I.N.A. or its framing cache directory.
+- **The plugin pulls, like Sync.** PSF Guard never pushes into a rig. The
+  Director plugin fetches its program over HTTP, runs semi-offline within that
+  program's validity, and checks in later with journaled receipts. Live status
+  while connected is welcome but never required for execution.
+- **A remote rig is a pulled copy plus a peer.** A rig at another site is
+  represented here by the database pulled from that site's PSF Guard, a
+  registered Sync peer. Its rig profile names the peer; activation writes the
+  copy, then hands the planning tables to the peer through Sync's planning
+  push, so the same GUIDs exist in both files and the remote Target Scheduler
+  runs them. The remote PSF Guard stores those rows; it does not plan them.
+  The plugin at that site still pulls its program from the coordinator.
+- **Optics and site come from N.I.N.A.** Sensor size, pixel size, focal length,
+  aperture, rotator presence and camera angle offset, plus site location and
+  horizon, are defined in N.I.N.A. profiles. The plugin syncs them into a rig
+  setup revision; the same fields are editable per rig database in Settings
+  for rigs that have not checked in yet, with the source shown.
+- **Exposure templates stay.** Plans bind to each rig database's exposure
+  templates, as Target Scheduler does. The project owner enters desired
+  accepted integration as hours or frames per bandpass and purpose. A rig's
+  contribution converts between the two through its template exposure length.
+  Default exposure lengths come from the rig (focal ratio, aperture) and the
+  site's sky quality; darker sites and slower optics default longer.
+
+#### Rig database side tables
+
+PSF Guard owns these tables inside each rig database. Target Scheduler ignores
+them, Sync copies them as opaque planning data once its adapter learns them,
+and they never carry credentials or authority.
+
+| Table | Key | Holds |
+| --- | --- | --- |
+| `psf_guard_director_project` | `project_guid` | global project UUID, coordinator instance UUID, activation revision, applied-at |
+| `psf_guard_director_target` | `target_guid` | project GUID, panel ID, framing revision |
+| `psf_guard_director_plan` | `exposureplan_guid` | target GUID, contribution ID, objective ID, bandpass ID, exposure purpose, required accepted frames, plan revision |
+
+Preview/apply writes these in the same transaction as the TS rows they
+describe. A later activation with a new intent revision updates them in place;
+it never rewrites `acquiredimage` or existing grades.
+
+#### Plugin-facing endpoints
+
+All under `/api/director/v1`. The commissioning increment adds Director-specific
+pairing for program inspection and capture/status reporting; see the exact
+[pairing contract](../DIRECTOR.md#pair-a-director-client). Equipment registration
+remains operator-managed. Sync keys and operator tokens are not plugin enrollment.
+Every request
+names the coordinator instance, catalog and rig UUIDs and is refused on a
+mismatched tuple even when the slug exists.
+
+| Endpoint | Owner | Purpose |
+| --- | --- | --- |
+| `GET /rigs/{rig}/program` | backend, merged | The current program for the rig, built from its activated plans and its reported equipment: core `Assignment` (36 h validity, one goal per activated exposure plan with live `accepted`) and `Program`, `links` joining each goal to its project, objective, contribution, panel, source project GUID, target GUID and exposure plan GUID, `rig` context (site, horizon, limits, rotation) for the plugin's constraints, and `omitted` reasons. `If-None-Match` gives `304`; `422` until equipment is reported or a plan is activated. |
+| `PUT /rigs/{rig}/equipment` | backend, merged | The plugin reports its core `Configuration`, optics, site, horizon and limits into the rig profile with `source: plugin`. The tuple must match the server's `catalog_rig` binding (`403` otherwise); an identical report is a no-op. Activation will later freeze setup revisions from the profile and mark active plans stale when it changes. |
+| `POST /rigs/{rig}/checkin` | backend merged; plugin next | One ledger's `ExecutionEvent` page (≤256, ascending, verbatim) with the held `program_revision`; the reply acknowledges `acknowledged_through` for that ledger, names duplicates and conflicts per sequence, and says `program_changed`. Saved receipts feed `pending` in the next pull. Grade application and replacement-assignment proposals are still open. |
+| `POST /rigs/{rig}/framing-cache` | planned, lower priority | The plugin uploads entries of a rig's own framing cache. Whole-sky imagery no longer needs it: the server reads N.I.N.A.'s downloadable `FramingAssistantCache` sets from `<cache>/director/sky-maps` (`psf-guard sky-maps install`) and renders any view from their tiles (`src/sky_maps.rs`). What remains for the upload is a rig's plate-solved captures. |
+| `POST /rigs/{rig}/status` | backend merged; plugin next | Coalesced live status per session, newest wins, late reports refused; `GET /rigs/status` is the operator view. Loss of it changes connectivity only. The Live table reads these payload fields when present: `phase` (or `state`), `target_name` (or `target`), `operation` with `operation_started_ms`, `wait_reason`, `safety`, `queue_depth`, `errors` (or `error`); send them under those names. |
+
+The plugin must not read TS tables from the rig database as its planning
+input and must not call an endpoint before its row above says it exists.
+
+#### Delivery order
+
+1. Store on by default; this plan. Done in the PR that added this section.
+2. Rig optics, site, horizon, sky quality and limits in a mutable rig profile
+   (meta schema 6), edited per database with header-derived defaults and
+   accepted from `PUT /rigs/{rig}/equipment`. Done. Activation freezes a setup
+   revision from it later.
+3. Survey cutout service with cache and provider allowlist: `GET /sky/surveys`
+   and `GET /sky/cutout`, N.I.N.A.'s HiPS list, tangent-plane JPEGs from
+   HiPS2FITS fetched off the request path. Done.
+4. Framing view. Done: `director-core::framing` (gnomonic plane, mosaic
+   layout, view-relative corners), framing drafts in meta schema 7 with
+   compare-and-set, `POST /framing/preview`, `GET/PUT /projects/{id}/framing`,
+   `GET /rigs/profiles`, and the browser view under Open in Planning: survey
+   image with pan and zoom, panel rig or typed panel size, mosaic grid and
+   overlap, rig overlays, and draft save. Still open from the wizard section:
+   reference images with WCS, blink or opacity comparison of layers, a
+   prepared offline cache for a region, and per-rig rotation feasibility.
+5. Objectives and contributions. Done: plan drafts in meta schema 8
+   (objectives per bandpass and purpose with hours or frames goals; per-rig
+   contributions bound to a Target Scheduler template with an exposure
+   length), `GET /catalogs/{slug}/templates` with core bandpass resolution,
+   `GET/PUT /projects/{id}/plan`, core default exposures from focal ratio,
+   sky quality and band kind, and the Plan editor in the project workspace.
+   Per-night feasibility done: core Sun/Moon ephemeris and `night_preview`
+   and `night_curve`, `POST /projects/{id}/feasibility`, and the Visibility
+   panel under the framing view with the altitude chart, custom horizon,
+   Moon and darkness bands, a visible-tonight verdict and nights-to-complete
+   per rig, with the rig's meridian pause taken out of the hours and drawn on
+   the chart with the transit. Per-rig panel ownership is done (see "Mosaic
+   projects across rigs").
+6. Activation. Done for local rigs: `POST /projects/{id}/activation/preview`
+   and `/apply` write the TS project, per-panel targets and per-objective
+   exposure plans with the side tables above, record the activation in meta
+   schema 9, and link new projects. `GET /rigs/{rig}/program` serves the
+   core program from those rows and the plugin's equipment report. Remote
+   rigs done: a rig profile names a registered Sync peer (`peer_id`), Apply
+   pushes the rig database's planning tables to that peer with Sync's
+   planning push after the local commit, `POST
+   /projects/{id}/activation/push` resends the last activation, and every
+   report row says whether the peer took it.
+7. Check-in and live status. Backend done: meta schema 10 inbox
+   (`rig_event`, `rig_feed`, `rig_status`), `POST /rigs/{rig}/checkin`,
+   `POST /rigs/{rig}/status`, `GET /rigs/status`. Operator dashboard done:
+   schema 12 notes every program pull, check-in and status report as a
+   contact by server receipt time; `GET /rigs/status` lists every bound rig
+   with connectivity (`online` within 3 min, `stale` within 30, `offline`,
+   `never`), the newest report flagged stale past 10 min, contact ages,
+   assignments and pending receipts; the Planning page opens with the Live
+   table. The plugin's sender for status and check-in is the other side.
+
+The Planning page changed with these: the identity lists gave way to a plan
+list across databases (`GET /plans`) over a rig list with live status. Listing
+adopts automatically: every registered database becomes a rig and every
+project row with a GUID becomes a plan, same-GUID rows across databases one
+plan (Sync keeps GUIDs), same-name rows separate plans; the reviewed adoption
+endpoints stay for tools. A plan row opens the project workspace (its
+databases with their target and exposure editors, framing, plan with rig
+checkboxes, activation); a project with no database yet starts its framing
+from a resolved name or typed coordinates (`GET /sky/resolve`). Rig setup
+(optics, site, limits) expands inline from the rig list; the settings panel
+no longer carries planning links; sites are edited inside the rig profile.
 
 ### Site and rig responsibilities
 
@@ -250,6 +527,43 @@ must use explicit compatibility rules and capture identity, not summed hours or
 overlapping rectangles alone. Calibration, quality and processing provenance
 remain attached to the originating rig/setup and contribution.
 
+### Mosaic projects across rigs
+
+A mosaic is one project whose framing has more than one panel. Two things
+follow from the rig split above and from how rigs differ in field size:
+
+- **Panels are owned per rig.** A contribution names the panels its rig
+  shoots (`panel_ids` in the plan draft; empty means every panel). A wide
+  rig may cover the whole target as one panel while a long-focus rig takes
+  a subset, or two similar rigs split the grid. The plan editor gives each
+  participating rig its own section: which panels it takes, its template
+  and exposure per objective, and its own frames-and-hours totals. Coverage
+  rolls up per panel and objective across rigs; a panel nobody shoots is a
+  visible gap, never silently assigned. Activation writes only the targets a
+  rig owns into that rig's database.
+- **Panels stack apart and are joined afterwards.** Each panel target has
+  its own captures, calibration and stack previews in its rig's catalog, as
+  today. A later stage registers the finished per-panel stacks by the plan's
+  panel geometry into one mosaic preview for the project: the framing's
+  tangent plane gives each panel's expected placement, a fresh solve of each
+  stack corrects it, and overlap regions show seams and depth differences.
+  Panels from different rigs keep their provenance and are never blended
+  into one stack; the mosaic preview is a review aid for coverage and a
+  starting point for processing, not a processed image.
+
+Done: per-rig panel selection in the plan editor (a panel chooser per rig,
+every panel by default), activation writing only the targets and plans a rig
+owns and naming uncovered panels, and per-rig totals scaled by panels. The
+mosaic preview is done as a framing-view layer: `GET /projects/{id}/mosaic`
+finds each activated panel's latest stack preview in its rig's cache through
+the Sky page's placement code (reference-frame solve composed with the
+stack's orientation), and the browser lays solved stacks on the view plane by
+their TAN solutions, next to the plan's rectangles, with per-panel accepted
+and desired frame counts. Unsolved stacks are listed, not drawn. The plan
+list carries per-target accepted and desired frames from every linked
+database (`targets` on each link, `progress` on the row), which for a mosaic
+is per-panel progress.
+
 ### Survey backgrounds for framing
 
 The framing wizard requires an image-backed sky map, not only catalog markers
@@ -309,6 +623,22 @@ and [HiPS2FITS adapter](https://github.com/isbeorn/nina/blob/fdf546fc2bea0de1eef
 and the CDS [HiPS survey registry](https://aladin.cds.unistra.fr/hips/list).
 Verify provider availability and terms again when implementing; these references
 do not promise service uptime or uniform all-sky coverage.
+
+Implemented 2026-09-27: the server fetches HiPS2FITS tangent-plane cutouts for
+N.I.N.A.'s survey list through `GET /api/director/v1/sky/cutout`, off the
+request path with a `202` poll contract, and caches them under the cache root.
+Aladin Lite was not adopted; the browser draws footprints over the cutout with
+PSF Guard's own projection code. The view follows N.I.N.A.'s framing assistant
+in its handling: the rectangle is dragged to move the target, its handle turns
+it, quarter turns and the rig's fixed camera angle are one click, the sky pans
+separately, and a readout gives coordinates, angle and extent. N.I.N.A.'s
+framing cache (`%LOCALAPPDATA%\NINA\FramingAssistantCache`, `CacheInfo.xml`
+with `RA`, `Dec`, `FoVW`, `FoVH`, `Rotation`, `Source`, `FileName`) is only
+readable on the rig machine; the plugin can offer its entries through a
+`POST /rigs/{rig}/framing-cache` upload so an offline site's imagery appears
+here without a second download. That endpoint is planned, not built. Provider terms: CDS asks for attribution,
+which the survey list carries; persistent caching for the operator's own
+framing is within ordinary use.
 
 ## Rig constraints and local horizons
 
@@ -414,7 +744,7 @@ the public container and the combined server session remain unverified.
 
 Start with a separate coordination SQLite database, provisionally named
 `psf-guard-meta.sqlite`, alongside existing registered catalogs. This is a new
-domain, not a repurposing of the catalog registry or the current merged Overview.
+domain, not a repurposing of the catalog registry or the current merged Library.
 Keep PSF-owned coordination tables out of TS-owned schema. Decide the precise
 sidecar layout for Director state during the execution spike.
 
@@ -635,6 +965,18 @@ may extend the container and options, but must not require TS's private containe
 types or TS installation. This is behavioral compatibility, not reuse of TS's
 runtime identity or a promise that saved TS sequences deserialize unchanged.
 
+The TS target container **and its UI** are the compatibility baseline, not just
+inspiration for a smaller set of callbacks. Preserve familiar slot names,
+ordering, enablement, container options, nested instructions, and the native
+trigger/condition editing experience wherever the behavior applies. The seven
+instruction slots are **Before Wait**, **After Wait**, **Before New Target**,
+**After Each Exposure**, **After New Target**, **After Each Target**, and
+**After Target Complete**. These are distinct from ordinary N.I.N.A. Triggers
+and Conditions; supporting one does not establish compatibility with the other.
+Document any intentional difference next to the compatibility matrix before
+changing the public UI. Director defaults extend this surface with explicit
+policy ownership, not duplicate automatic actions or a separate hook scheduler.
+
 N.I.N.A. retains continuous local safety and operator control. Director's own
 session container coordinates operation boundaries and reports actual results
 and durations to the shared core. Native triggers may insert local operations,
@@ -701,6 +1043,16 @@ limits but cannot override native safety, flip handling or operator settings.
 This is a phase-2 requirement. Merged internal sequence items currently cover
 only a subset; the runtime preview does not expose this production container or
 the default-policy UI.
+
+Director plugin [#26](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/26)
+adds internal seven-slot configuration and one-use native invocations. Cloning,
+JSON persistence, nested target context, inherited triggers/conditions,
+cancellation and failed/skipped child reporting have native tests. See the
+[TS compatibility matrix](https://github.com/theatrus/psf-guard-director-nina-plugin/blob/main/docs/native-capture.md#target-scheduler-compatible-instruction-slots).
+This is not the public container or its UI. The production coordinator still
+owns slot cadence, policy ownership, exposure-in-hook admission and safe cleanup.
+In particular, TS's internal `AfterAllTargetsContainer` is labeled **After Each
+Target Instructions**; its name must not be interpreted as a session-end hook.
 
 Director has a distinct plugin identity, configuration, credentials, queues,
 and release flow from Sync. Detect competing acquisition controllers. Define
@@ -809,8 +1161,10 @@ receipt time distinct from rig event time and clock uncertainty. Old events
 backfilled after an outage must not replace fresher live status. Retention may
 compact disposable samples, but not unacknowledged capture/operation evidence.
 Expose storage pressure before exhaustion and stop new work if required durable
-evidence cannot be recorded. Live telemetry and event-delivery APIs are not yet
-implemented; the current sidecar outbox is a local building block only.
+evidence cannot be recorded. The server side of this exists: status and
+check-in intake, contact records by receipt time, and the Live table with
+connectivity and stale labelling. The plugin's sender and the browser push
+channel are still to come; the sidecar outbox remains a local building block.
 
 ### Offline and batch check-in
 
@@ -852,6 +1206,209 @@ another rig. Release acknowledgement or conservative expiry/clock-skew rules
 must fence that handoff. This protocol must also work when the central instance
 restarts during a batch. Telemetry reconnect and manual batch reconcile use the
 same durable evidence and admission rules.
+
+### Executor and coordinator interface handoff
+
+This is the required interface for the plugin/backend work split, not a claim
+that the endpoints or production container exist. Frontend/setup work must not
+invent a second rig or project identity to satisfy the plugin. The plugin uses
+the registered database's reviewed `catalog_rig` binding and the shared Rust
+program/geometry contracts. It does not read arbitrary remote SQLite files or
+treat TS tables as the planner's internal schema.
+
+| Boundary | Required information and behavior | Current state |
+| --- | --- | --- |
+| Commissioning | Coordinator instance UUID, durable catalog UUID, bound rig UUID, local N.I.N.A. profile binding, permitted projects and scoped credentials. The database slug is a locator, not identity. | Current increment pairs exact coordinator/catalog/rig/profile/client identities with a separate credential store. Only program-read/checkin-write/status-write scopes; no project allocation or acquisition authority. |
+| Assignment check-in | Versioned immutable program, assignment ID/revision/validity, project/contribution/source-project identities, configuration/site/rig revisions, effective policy provenance, and offline authorization/budgets. Validate engine and contract compatibility before activation. | The server compiles a program from database activation; plugin #28 can inspect it and the current increment retains durable preview history. Immutable issuance, refresh/reconciliation and activation remain missing. |
+| Native execution | Rust selects and issues work. N.I.N.A. runs native items in target context with inherited triggers/conditions and the TS-compatible instruction slots. Each newly issued command/reservation has one native invocation. | Internal adapters and simulator loop exist; production session loop, complete options UI and hook lifecycle remain unfinished. |
+| Local status | Session/ledger, database/rig/project/target/goal IDs, assignment revision, operation and monotonic elapsed time, wait reason, local safety, connectivity, last successful check-in and queue depth. | Runtime Start/Stop status exists; acquisition session status contract/stream remains to be implemented. |
+| Central reporting | Coalesced live status is separate from durable capture/preparation receipts. Network errors update connectivity only; they do not fail an otherwise authorized local exposure or erase evidence. `POST /rigs/{rig}/status` and `GET /rigs/status` exist, with contact records and the Live table. | Plugin sender. |
+| Batch reconciliation | Bounded independent event pages, exact feed cursors, idempotent acknowledgements, grading/configuration revisions and replacement assignment proposal. Manual, sequencer and automatic check-ins use the same implementation. `POST /rigs/{rig}/checkin` stores pages once and acknowledges contiguous cursors. | Current increment delivers capture pages and persists scoped cursors without deleting journal evidence. Preparation-feed delivery, production entry points, grade application and replacement assignment proposal remain open. |
+
+The planning-flow endpoint table names the intended `/api/director/v1`
+interfaces and records which are still planned. Finalize their wire contracts
+with implementation; the plugin must not silently call an unimplemented endpoint or
+reuse the operator-only metadata API for rig credentials. Keep browser/operator
+management and rig execution authority separate. Enrollment binds the caller to
+one coordinator/catalog/rig tuple; every check-in must reject a mismatched tuple
+even when the supplied slug exists. A database rename or move preserves that
+tuple. A cloned independent rig requires explicit new lineage and enrollment.
+
+The assignment envelope must carry stable links from shared project/objective
+to rig contribution, source project GUID, target and recipe. Multiple projects
+within the selected rig database remain candidates; the local core decides
+what to acquire. A local integer row ID, display name or profile ID cannot
+substitute for source identity. Downstream projects with different framing or
+exposure purpose retain their own contribution identity and are not equivalent
+accepted-progress credit merely because they roll up to the same project.
+
+Commissioning selects the database-backed rig and local profile once; saved
+sequence configuration retains those identities and hook/default options, never
+credentials, live callbacks or a serialized dispatch permit. Session startup
+validates the cached assignment, current profile/equipment, local horizon,
+site/time evidence, safety policy and exclusive acquisition ownership. An
+offline start is permitted only within the cached authorization and evidence
+validity. No connection, startup hook or status subscriber may fabricate a safe
+state, extend expiry, reset attempt budgets or revive an uncertain operation.
+
+Preparation/capture receipts are journaled before delivery. A page acknowledgement
+must name its coordinator, catalog, rig, ledger, feed and highest contiguous
+committed cursor. Never acknowledge beyond the page, across feeds or across
+ledgers. A lost reply is retried with identical event IDs; late old-session
+status cannot overwrite current live state. The local queue retains evidence
+until exact acknowledgement; no image bytes or thumbnails are required for
+status or execution reconciliation. Deferred image upload is a separate policy.
+
+The public container needs one production coordinator that owns target entry/
+exit, wait transitions, preparation and capture boundaries, safe stop/cleanup,
+and checkpoint scheduling. Slot helpers alone do not decide when **After Each
+Target** or **After Target Complete** is due. Distinguish completed objective,
+temporary target switch, failed operation and interrupted session in receipts.
+Slow hooks invalidate the previous decision and require fresh core dispatch
+validation. Do not turn a native container's apparently successful return into
+success when a child failed, was skipped, or never completed.
+
+Core dispatch deadline transport and the internal TS-style slot primitives are
+implemented. Next, define the database-bound assignment and acknowledgement
+APIs with backend work, complete the native option contracts, and replace
+the simulator-only loop with the guarded session coordinator; then expose the
+familiar public container/UI and live/batch status. Each increment must state
+its missing gates. The full gate remains a real N.I.N.A. simulator sequence
+against an isolated PSF Guard instance, including an outage, restart, slow hook,
+unsafe transition and idempotent batch reconnect.
+
+### Program-intake audit after #528
+
+Reviewed against PSF Guard `5258e4b` and Director plugin `5715e16` on
+2026-09-27. The planning and database-activation path is now present. The
+remaining gap is not a missing URL: its response must become a stable,
+accounted-for allocation before it can feed the durable native executor.
+Keep the public acquisition gate closed while these contracts are incomplete.
+
+- **Immutable issuance and expiry.** `src/server/director/program.rs` hashes
+  content without time, then rebuilds assignment validity and goal windows
+  from each pull's clock. Unconditional pulls can change the program under the
+  same assignment ID and ETag; conditional pulls can keep returning `304`
+  after its cached validity expires. The ledger correctly rejects changed
+  allocation/program bytes. Persist the exact issued snapshot, including its
+  original validity. Expiry needs an explicit successor-allocation decision,
+  never a new span under the same identity or an unconditional-pull workaround.
+- **Refresh must retain progress.** The compiler currently sets `pending` to
+  zero and derives a fresh attempt budget from accepted counts. Saved/ungraded
+  captures and outstanding attempts are not accounted for. A changed progress
+  baseline changes the assignment identity, but there is no ledger replacement
+  or acknowledged handoff yet. Never open another ledger to bypass a mismatch.
+  Check-in must reconcile stable capture IDs and outstanding allocations before
+  installing a successor; until then, do not replace active work automatically.
+- **Activated content, not drafts.** Program compilation reads the current
+  plan draft for objective priority and link metadata, not an immutable snapshot
+  matching the activation's plan revision. Editing an unactivated draft can
+  therefore change pulled scheduling behavior. Freeze that metadata at activation
+  and keep draft edits inert until reviewed Apply.
+- **Filter identity and recipe fidelity.** The native exporter sends opaque
+  filter IDs and slots; labels remain local. The server currently guesses a
+  bandpass from those IDs, which cannot resolve the real probe's `filter-0`
+  against a `Red` template. Define an explicit mapping from template GUID and
+  bandpass to the reported stable filter ID, with display names as evidence,
+  and refuse ambiguous matches. Unsupported requested gain, offset, binning or
+  readout must require review, not silent clamping or first-mode substitution.
+- **Catalog eligibility and ancestry.** The pull currently checks only the
+  exposure plan's enabled flag, not its target's `active` flag or project's
+  `state`. Preserve those operator controls when compiling candidates. Verify
+  the exposure plan still belongs to the activated target and source project;
+  independently finding each GUID does not prove the live parent links agree.
+- **Commissioning and reporting.** The audit found only operator authentication,
+  not rig enrollment. The commissioning increment below adds separate scoped
+  pairing and capture acknowledgements; equipment reporting remains operator-only.
+  Production background delivery, preparation events and live plugin status still
+  need integration. Do not expose an operator token in plugin settings or silently
+  reuse Sync credentials. Disconnection must preserve local evidence and must not
+  erase or expand already authorized work.
+
+Plugin work can proceed on typed, bounded intake and validation without arming
+equipment. Bind the coordinator/catalog/rig tuple and local NINA profile,
+validate schema/engine compatibility and identity links, then persist a complete
+validated snapshot atomically. Handle `304` only with that exact unexpired
+snapshot; never treat it as renewed validity. An unknown or malformed response,
+configuration mismatch or unreadable cache must fail closed with useful status.
+Keep this separate from the immutable-program selection policy in Rust.
+
+Delivery order from this audit: fix immutable issuance and activated inputs;
+settle explicit equipment/template mapping; connect read-only plugin intake;
+add acknowledged checkpoint/replacement accounting; then connect the guarded
+production session and familiar TS-compatible container/UI. The seven slot
+helpers are already tested, but do not provide session cadence or automatic
+operation ownership by themselves. Before enabling acquisition, test a real
+server program with the NINA simulators, then repeat through expiry, lost
+network, restart, saved-but-ungraded captures and batch reconnect. Existing
+separate server and simulator tests do not cover this combined gate.
+
+Implementation update after the audit: Director plugin
+[#28](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/28) adds
+`CoordinatorProgramClient.ReadPreviewAsync`. It binds the coordinator/catalog/
+rig/profile and current native configuration, validates schema 1 and exact goal
+links, bounds HTTP/body processing, and rejects changed content under the same
+ETag or assignment identity. It sends unconditional GETs and rejects `304`
+because it has no durable cache yet. Credentials come from an in-memory provider;
+there is no API-key setting or credential file. The result is explicitly a
+preview, not a ledger activation or equipment permit. Engine-version negotiation
+is absent from the current server envelope and is not claimed by this client.
+
+### Pairing, preview cache and capture checkpoint increment
+
+Implementation and local evidence, 2026-09-27; this is not a published acquisition
+workflow. Backend [#535](https://github.com/theatrus/psf-guard/pull/535) and plugin
+[#29](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/29) carry this
+increment; plugin validation includes 574 passing tests and 12 nonblank WPF renders.
+Director-specific `psfdpt_` one-use codes mint `psfdrc_` credentials
+bound to the coordinator/catalog/rig and NINA profile, with a separate client ID.
+Schema 11 stores only secret hashes; issue/consume/revoke are independent of Sync.
+The three scopes permit only GET program and POST checkin/status. Operator APIs
+issue codes and list/revoke clients; a pairing-code management UI and scoped
+equipment registration remain open. The plugin keeps secrets in Windows Credential
+Manager and nonsecret enrollment with the profile; no operator-token setting.
+
+The plugin's durable preview cache validates origin, tuple, native configuration,
+schema and immutable fingerprints and publishes complete snapshots atomically.
+Expired snapshots remain historical evidence to detect revision drift, not offline
+permission. Conditional `304` remains refused by intake; the cache does not renew
+validity, replace a ledger, reset budgets, or resolve the compiler blockers above.
+
+The capture checkpoint client reads bounded ledger event pages after its stored
+cursor, validates exact acknowledgement identity and page outcomes, and persists
+the acknowledged cursor atomically under a cross-process lock. Lost replies can
+replay identical events. It retains all journal evidence and never uploads images,
+applies grades, handles preparation-feed events, or dispatches equipment. The server
+also rejects an entire page if the globally keyed ledger already belongs to another
+rig, checking both stored events and its cursor before writing.
+
+Real local smoke evidence: NINA nightly `3.3.0.1059` with ASCOM OmniSim and the
+shared-core sidecar captured three FITS frames, completed seven preparation
+operations and six inherited hooks. The actual plugin credential vault stored and
+retrieved the scoped token. After sidecar restart, the client delivered six
+reservation/saved events to an isolated PSF Guard server. A fresh checkpoint client
+resumed at cursor 6 with zero new events; an independent fresh cursor replayed all
+six as server-acknowledged duplicates. The test credential was revoked and removed
+from the vault, and NINA closed normally. Local plugin evidence is
+`artifacts/nina-smoke-e60b4c8bf97d4fa6922cb47a360cb037/probe/8707ef9c7d6644599f3e1846693cb785/result.json`.
+That native run used the isolated pairing/ledger-isolation server build from
+before the #533/#534 rebase and final malformed-JSON error sanitization. Those
+final changes were validated separately by local HTTP/storage tests and clippy;
+the native run does not claim to exercise the later frontend or parsing changes.
+
+This run used fixture allocations, not a server-issued acquisition authorization.
+Production automatic/status delivery, preparation feed, manual/sequencer controls,
+offline allocation lifecycle, grade reconciliation, replacement accounting and the
+full outage/safety/session lifecycle gate remain unfinished. Pairing and a cached
+preview must not open the public acquisition gate.
+
+The plugin passed 539 tests, including 45 intake cases and a real loopback
+redirect test, plus a separate NINA nightly #59/ASCOM regression run with three
+FITS captures. The HTTP tests use controlled responses, and the NINA fixture
+does not consume HTTP programs. The combined acceptance gate remains open.
+Server #530 adds receipt/status endpoints and saved-receipt pending credit,
+superseding the audit's statement that those server endpoints are missing; it
+does not supply the plugin sender or a reviewed allocation-replacement protocol.
 
 ## Quality, calibration, and processing loop
 
@@ -1671,6 +2228,48 @@ evidence. The durable journal commits these checks through the entry points
 below, exposed in IPC 7. The merged internal adapter calls them after native
 before-hooks; the preview gains no acquisition authority.
 
+The internal `director-core::dispatch` API also computes an inclusive latest
+start for the selected work in its current safe window. Its result includes the
+evaluated timestamp and no deadline for non-acquisition decisions. Preparation
+checks include the pending operation, remaining steps and capture overhead;
+completed steps are not charged again. Geometry checks use the compiled horizon
+and meridian windows, never a later window beyond a gap. Assignment expiry and
+exclusive condition freshness further constrain the bound.
+
+The ledger's geometry deadline checks preserve that result through the same
+transaction that validates the exact issued command or linked capture and
+persists any refusal. A capture check temporarily restores only its already-spent
+attempt for feasibility; it never changes stored credit or reserves another
+exposure. Successful checks add no issuance or capture events. Existing
+decision-only APIs project the same result for compatibility. Deadlines are not
+persisted as replay authority, and recovered work still requires explicit
+reconciliation rather than redispatch.
+
+PSF Guard [#518](https://github.com/theatrus/psf-guard/pull/518) exposes both
+timestamps in IPC 8/runtime 0.7.0. `dispatch_checked` includes required
+`evaluated_at_ms` equal to the submitted state timestamp, and required
+`latest_start_ms` (inclusive for Acquire, explicit null for other decisions).
+Director plugin [#27](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/27)
+strictly decodes these integer fields and rejects mismatched evaluation time,
+wrong goals or deadlines outside assignment/condition validity. The native
+adapter measures monotonic elapsed time, rounded up to milliseconds, from
+before sampling the check request through a final one-use synchronous guard.
+That guard runs after native setting checks, progress callbacks and durable
+pre-capture journal writes, immediately before entering the native operation.
+It also checks the freshly sampled wall clock and rejects regression or expiry.
+A late successful reply cannot dispatch. The one-use/session fences remain in force.
+This bound is feasibility for already issued work, never a reservation, replay
+grant, real-time safety interlock or promise of highest priority until dispatch.
+
+The combined plugin passed 494 tests and the official N.I.N.A. nightly #59
+ASCOM simulator sequence on 2026-09-27: three verified FITS captures, seven
+preparation receipts, six inherited exposure hooks, ledger reopen retaining
+pending credit, same-path horizon-change detection and successful cleanup.
+The plugin retains the #58 API minimum; the smoke launcher explicitly permits
+the reviewed #58/#59 hosts. This fixture uses synthetic safe/Earth-orientation
+evidence and a local program, not a server allocation. It does not exercise all
+seven configured slots or satisfy the full coordinator/offline acceptance gate.
+
 Geometry preparation has an opaque, versioned checkpoint for local persistence.
 Restore requires a separately compiled binding from the original trusted program
 and constraints. It compares the complete inputs, reconstructs the initial
@@ -1803,10 +2402,12 @@ and rig setups under their explicit owners. Snapshot bodies retain the full
 shared-core size bound instead of the smaller identity-form limit. It grants no rig or acquisition
 authority. Other hosts must explicitly create a new file or open a recognized
 existing file. Schema 1 stores the
-coordinator instance UUID, global project and rig identities, originating catalog
-identities, and explicit catalog/source-project-GUID links. Names and URL slugs
-never establish identity; rigs outlive catalogs, and one global project may link
-to several catalogs. Project and rig listings use bounded, stable-ID cursor pages;
+coordinator instance UUID, global project and independent rig identities,
+originating catalog identities, and explicit catalog/source-project-GUID links.
+This prototype separation is superseded by the database-backed rig model above;
+its migration is not implemented. Names and URL slugs never establish identity,
+and one global project may link to several catalogs. Project and rig listings
+use bounded, stable-ID cursor pages;
 renaming an entity does not move it across a page boundary. Catalog IDs must be
 explicitly registered and retained by the operator adoption workflow, not
 regenerated on every import or inferred from
@@ -1968,7 +2569,34 @@ allocation accounting and native assignment delivery are not implemented here.
   history or merging names (#503, #506).
 - [x] Discover registered catalog project/profile evidence read-only, without
   inventing rig identities or changing source schemas (#498).
-- [ ] Add scoped project views that distinguish global and rig-local projects.
+- [x] Derive the Director rig inventory from registered per-rig project databases
+  using durable catalog identities. Retire standalone rig creation/profile-to-rig
+  selection from the normal flow; retain profiles as setup provenance.
+- [x] Preview and migrate unambiguous prototype rig links to database-backed
+  rigs, reporting conflicts without changing source GUIDs or capture history.
+- [ ] Add explicit resolution for conflicting prototype links (several rigs in
+  one database or one rig shared by independent databases). Preserve immutable
+  setup/intent references; current adoption refuses these cases without writes.
+- [ ] Bind plugin enrollment/check-in and site/setup resolution to that selected
+  database context, including offline cached evidence and reconnect validation.
+- [ ] Connect Library projects to Director planning using the same project
+  identity. Preserve Library's project/per-rig catalog navigation and existing
+  review workflows; Director covers planning and acquisition, not their
+  replacement. Add rigs as contribution plans without duplicate projects.
+  The current UI reuses the existing project/target editor and reviewed mapping
+  APIs with the database-backed rig model. Library -> Open in Planning -> Library
+  preserves source scope. It is not a framing wizard,
+  intent export, downstream-project generator or combined progress implementation.
+- [x] Browser-test navigation from an existing Library project to its Director
+  plan and back with project/rig/database scope intact, and two database-backed
+  rigs linked to one project. Check desktop/mobile layouts and stale reviews.
+- [ ] Extend browser coverage to the full planned-project workflow without
+  captured images once downstream plan creation exists.
+- [x] Move current source/project linking into existing database settings and
+  contextual project views; retire the standalone Director Catalogs workflow.
+  Full TS import/sync connection management remains separate work below.
+- [ ] Show objective-level project rollup and per-rig progress without treating
+  incompatible footprints, sampling, bands or exposure purposes as equivalent.
 - [ ] Define PSF Guard-owned per-rig catalog schemas and versioned access
   interfaces; remove TS-table assumptions from new Director code.
 - [ ] Implement explicit TS import/sync connections in Settings/UI, with a
@@ -1993,7 +2621,14 @@ is not satisfied by the separate meta database alone.
 
 #### Confirmed catalog mappings
 
-The meta crate's schema 4 adds explicit source-profile-to-rig links and binds
+Schema 5 adds a one-to-one `catalog_rig` binding. The migration creates the table
+but does not assign historical records. Operator preview/apply binds a registered
+database, retaining one unambiguous prototype rig or creating a rig keyed by the
+durable catalog UUID. It rejects ambiguous links without rewriting history.
+Bound mappings must use that database's rig, and another independent catalog
+cannot claim it. Copied/moved catalogs retain the same lineage and binding.
+
+The earlier schema 4 added explicit source-profile-to-rig links and binds
 each confirmed source project to that profile and a global project. A caller
 first registers the stable catalog identity and creates or selects the global
 project and rig. `link_catalog_project` then records both links in one writer
@@ -2003,7 +2638,7 @@ project name, and never changes a source catalog.
 or storage failure rolls back the entire batch, including any earlier entries.
 
 Profiles are scoped by catalog identity and retained as exact opaque source
-IDs. Several profiles/catalogs may link to one rig, and several rig-local
+IDs. Several profiles within the bound database share its rig, and several rig-local
 projects may contribute to one global project. A profile within one catalog
 cannot silently change rigs; a source project cannot silently change its
 profile or global project. Identical retries succeed; changed mappings conflict.
@@ -2015,8 +2650,8 @@ GUID, with at most 256 entries per page. They describe explicit associations,
 not equipment compatibility, image attribution or acquisition permission. A
 project's current profile does not prove every historical image came from that
 rig. The adoption API verifies fresh source evidence, retains durable catalog
-identity across relocation/copies, and previews the proposed links. The Catalogs
-view uses a read-only, paged mapping inventory and requires explicit Apply.
+identity across relocation/copies, and previews the proposed links. Database
+settings use a read-only, paged mapping inventory and require explicit Apply.
 Ambiguous historical frame ownership and contribution accounting still need a
 separate workflow; these mappings alone do not resolve them.
 
@@ -2028,6 +2663,10 @@ separate workflow; these mappings alone do not resolve them.
 - [ ] Implement versioned allocation, acknowledgements, checkpoints, and limits.
 - [x] Implement the local ledger's durable reservation/preparation/outbox
   primitives and crash/reopen tests; these do not include remote acknowledgement.
+- [x] Implement separate scoped Director pairing, durable inspection history and
+  capture-only checkpoint delivery with exact persisted cursors; validate real
+  NINA simulator capture/restart/replay against an isolated server. This increment
+  does not grant offline acquisition or integrate production background delivery.
 - [ ] Add rig pairing, bounded cached offline authorization, remote inbox/outbox
   acknowledgement, retry/backpressure and safe revision activation.
 - [ ] Add central rig telemetry ingestion and a permission-scoped live dashboard

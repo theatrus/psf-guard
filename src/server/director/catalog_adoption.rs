@@ -38,6 +38,7 @@ pub(super) struct Report {
 #[derive(Serialize)]
 pub(super) struct MappingInventory {
     catalog_identity: Option<CatalogIdentity>,
+    rig: Option<NamedIdentity>,
     items: Vec<ProjectMapping>,
     next_after: Option<Uuid>,
 }
@@ -52,11 +53,7 @@ pub(super) async fn mappings(
         return Err(Error::Invalid.into());
     }
     let catalog = state.get_database(&slug).ok_or(Error::Missing)?;
-    let permit = service
-        .discovery_admission
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| Error::Busy)?;
+    let permit = admit(&service.discovery_admission).await?;
     let identity = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         let connection = super::super::database_context::open_scheduler_connection_with_flags(
@@ -81,6 +78,7 @@ pub(super) async fn mappings(
             let Some(identity) = identity else {
                 return Ok(MappingInventory {
                     catalog_identity: None,
+                    rig: None,
                     items: vec![],
                     next_after: None,
                 });
@@ -90,6 +88,7 @@ pub(super) async fn mappings(
                 None => {
                     return Ok(MappingInventory {
                         catalog_identity: Some(identity),
+                        rig: None,
                         items: vec![],
                         next_after: None,
                     })
@@ -99,6 +98,7 @@ pub(super) async fn mappings(
             let mappings = store.catalog_project_mappings(identity.id, page.after, page.limit)?;
             Ok(MappingInventory {
                 catalog_identity: Some(identity),
+                rig: store.catalog_rig(identity.id)?.map(|binding| binding.rig),
                 items: mappings.items,
                 next_after: mappings.next_after,
             })
@@ -137,7 +137,12 @@ async fn execute(
     plan: Plan,
     expected: Option<String>,
 ) -> Result<Json<ApiResponse<Report>>, AdoptionError> {
-    let service = enabled(&state)?;
+    // A preview reads the file; applying writes its identity table.
+    let service = if expected.is_some() {
+        writable(&state)?
+    } else {
+        enabled(&state)?
+    };
     let mut projects = std::collections::HashSet::new();
     if plan.catalog_id.is_nil()
         || !(1..=256).contains(&plan.mappings.len())
@@ -285,6 +290,7 @@ async fn execute(
 pub(super) enum AdoptionError {
     Api(Error),
     Discovery(catalog_discovery::DiscoveryError),
+    RigConflict,
 }
 
 impl From<Error> for AdoptionError {
@@ -307,6 +313,9 @@ impl IntoResponse for AdoptionError {
         match self {
             Self::Api(error) => error.into_response(),
             Self::Discovery(error) => error.into_response(),
+            Self::RigConflict => (StatusCode::CONFLICT, Json(ApiResponse::<()>::error(
+                "Database has conflicting prototype rig associations; review its existing links before enabling planning".into()
+            ))).into_response(),
         }
     }
 }

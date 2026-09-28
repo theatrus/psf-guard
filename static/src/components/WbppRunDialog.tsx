@@ -273,7 +273,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
           <strong>{describeQueuedRun(queuedEntry)}.</strong>
           <p className="wbpp-run-muted">
             It starts on its own when PixInsight is free, with the settings it was queued with.
-            Leave this window; the Overview shows it either way.
+            Leave this window; the Library shows it either way.
           </p>
         </div>
       )}

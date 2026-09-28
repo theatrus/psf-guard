@@ -5,8 +5,15 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBeha
 use serde::{Deserialize, Serialize};
 use std::{fmt, path::Path, time::Duration};
 pub use uuid::Uuid;
+pub mod activation;
 pub mod catalog;
+pub mod catalog_rig;
+pub mod client;
 pub mod configuration;
+pub mod framing;
+pub mod inbox;
+pub mod plan;
+pub mod profile;
 pub mod project;
 mod storage;
 
@@ -83,7 +90,7 @@ pub struct ProjectLink {
 }
 
 /// Local blocking storage. Hosts must not hold this across network operations.
-/// A rig is independent of a catalog; neither is inferred from display names.
+/// Database-backed rig bindings are explicit; names never establish identity.
 pub struct MetaStore {
     connection: Connection,
     instance_id: Uuid,
@@ -174,6 +181,21 @@ impl MetaStore {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// The global project a source GUID is linked to in any catalog. Sync
+    /// copies keep GUIDs, so the same project on two rigs meets here.
+    pub fn project_for_source_guid(&self, source_project: Uuid) -> Result<Option<Uuid>, Error> {
+        valid_id(source_project)?;
+        let id: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT project_id FROM project_catalog WHERE source_project_guid=?1 ORDER BY catalog_id LIMIT 1",
+                [source_project.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        id.map(|value| parse_id(&value)).transpose()
     }
 
     pub fn linked_project(

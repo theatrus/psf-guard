@@ -13,6 +13,7 @@ impl Ledger {
             return Err(Error::ConflictingEvidence);
         }
         self.check_capture_dispatch_inner(preparation_id, capture_id, state, None)
+            .map(|check| check.decision)
     }
 
     pub(crate) fn check_capture_dispatch_inner(
@@ -21,7 +22,7 @@ impl Ledger {
         capture_id: &str,
         state: State,
         current: Option<&Constraints>,
-    ) -> Result<Decision, Error> {
+    ) -> Result<DispatchCheck, Error> {
         self.check_geometry_mode(current.is_some())?;
         if !valid_id(capture_id) {
             return Err(Error::InvalidInput);
@@ -58,15 +59,15 @@ impl Ledger {
             .checked_add(1)
             .ok_or(Error::CorruptLedger)?;
         let old_halt = stored.preparation.halted().cloned();
-        let decision = match stored.preparation.next(&request, current)? {
-            Next::ReadyToReserve { goal_id } if goal_id == attempt.goal_id => Decision::Acquire {
-                goal_id,
-                reason: "reserved_capture_ready".into(),
-            },
-            Next::Decision(decision) => decision,
-            // A captured preparation must never issue another native operation.
-            _ => return Err(Error::CorruptLedger),
-        };
+        let mut check = stored
+            .preparation
+            .check_capture_dispatch(&request, current)?;
+        if let Decision::Acquire { goal_id, reason } = &mut check.decision {
+            if *goal_id != attempt.goal_id {
+                return Err(Error::CorruptLedger);
+            }
+            *reason = "reserved_capture_ready".into();
+        }
         persist(&tx, &stored.preparation)?;
         if old_halt.as_ref() != stored.preparation.halted()
             && let Some(halted) = stored.preparation.halted()
@@ -82,6 +83,6 @@ impl Ledger {
             )?;
         }
         tx.commit()?;
-        Ok(decision)
+        Ok(check)
     }
 }

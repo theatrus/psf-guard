@@ -53,7 +53,7 @@ export default function PixInsightSettings() {
     <div className="pixinsight-settings">
       <h3>PixInsight</h3>
       <p className="review-preferences-note">
-        Where PixInsight is on this server, for stacking a project with WBPP from the Overview,
+        Where PixInsight is on this server, for stacking a project with WBPP from the Library,
         and where its runs write.
       </p>
       <p

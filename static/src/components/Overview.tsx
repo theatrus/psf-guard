@@ -40,7 +40,6 @@ import {
   sortProjects,
   type ProjectSort,
 } from '../utils/projectNavigation';
-import ProjectSchedulerDialog from './ProjectSchedulerDialog';
 import CalibrationReportDialog from './CalibrationReportDialog';
 import ExportDialog, { type ExportRequest } from './ExportDialog';
 import AstroBinExportDialog, { type AstroBinExportRequest } from './AstroBinExportDialog';
@@ -60,6 +59,7 @@ import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog
 import { useAccess } from '../auth/access';
 import PreviewImage from './PreviewImage';
 import { useColorPreview } from '../hooks/useColorPreview';
+import './projectCard.css';
 import './Overview.css';
 
 /// Inline edit state for correcting imported groupings.
@@ -94,11 +94,6 @@ export default function Overview() {
   const [organizeError, setOrganizeError] = useState('');
   const [seenProjects, setSeenProjects] = useState(loadProjectSeenState);
   const [relativeNow, setRelativeNow] = useState(Date.now);
-  const [schedulerProject, setSchedulerProject] = useState<{
-    dbId: string;
-    id: number;
-    name: string;
-  } | null>(null);
   const [calibrationReportProject, setCalibrationReportProject] = useState<{
     dbId: string;
     id: number;
@@ -863,16 +858,21 @@ export default function Overview() {
                       <button
                         type="button"
                         className="project-settings-button"
-                        onClick={() => {
-                          setSchedulerProject({
-                            dbId: project.db_id,
-                            id: project.id,
-                            name: project.display_name,
+                        title="Open this project in Planning: framing, plan, activation, and its Target Scheduler targets and exposures"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const params = new URLSearchParams({
+                            db: project.db_id,
+                            project: String(project.id),
+                            directorSource: project.db_id,
+                            directorView: 'projects',
                           });
+                          if (dbFilter) params.set('dbfilter', dbFilter);
+                          navigate(`/director?${params}`);
                         }}
                       >
                         <span aria-hidden="true">⚙</span>
-                        Plan &amp; coordinates
+                        Planning
                       </button>
                       <button
                         type="button"
@@ -1484,17 +1484,6 @@ export default function Overview() {
               handleServerExport(request.dbId, request.scope, request.label, choice);
             }
           }}
-        />
-      )}
-
-      {schedulerProject && (
-        <ProjectSchedulerDialog
-          open
-          dbId={schedulerProject.dbId}
-          projectId={schedulerProject.id}
-          projectName={schedulerProject.name}
-          canEdit={organizeAllowed}
-          onClose={() => setSchedulerProject(null)}
         />
       )}
 

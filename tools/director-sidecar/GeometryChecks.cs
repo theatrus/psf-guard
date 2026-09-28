@@ -16,10 +16,9 @@ internal static class GeometryChecks
         goal["eligible_windows"] = new JsonArray(new JsonObject { ["start_ms"] = start, ["end_ms"] = start + 60000 });
         goal["exposure_ms"] = 5000;
         goal["overhead_ms"] = 1000;
-        program["recipes"]![0]!["exposure_ms"] = 5000;
-        var directory = Directory.CreateTempSubdirectory("psf-guard-director-geometry-");
+        program["recipes"]![0]!["exposure_ms"] = 5000UL;
         JsonNode issued;
-        try
+        await TestDirectory.RunAsync("psf-guard-director-geometry-", async directory =>
         {
             await using (var session = await RuntimeSession.StartAsync(executable, "rig-1", started, storageDirectory: directory.FullName))
             {
@@ -111,12 +110,7 @@ internal static class GeometryChecks
                 await session.SendAsync(new JsonObject { ["type"] = "shutdown" });
                 Assert(await session.WaitForExitAsync() == 0, "geometry recovery shuts down cleanly");
             }
-        }
-        finally
-        {
-            // Only this test-owned temporary directory is removed.
-            directory.Delete(recursive: true);
-        }
+        });
     }
 
     private static async Task CheckDispatch(RuntimeSession session, JsonNode program, JsonNode constraints, JsonNode state,
@@ -132,6 +126,19 @@ internal static class GeometryChecks
         var response = await Send(session, operation);
         Assert(response["status"]!.GetValue<string>() == "dispatch_checked" && response["decision"]!["action"]!.GetValue<string>() == expected,
             $"geometry {(command is null ? "capture" : "preparation")} dispatch check: {expected}");
+        Assert(response["evaluated_at_ms"]!.GetValue<ulong>() == state["now_ms"]!.GetValue<ulong>(),
+            "dispatch deadline uses exact evaluated state time");
+        Assert(response.ContainsKey("latest_start_ms"), "dispatch deadline field is explicit");
+        if (expected == "acquire")
+        {
+            var expiry = program["assignment"]!["expires_at_ms"]!.GetValue<ulong>();
+            var exposure = program["recipes"]![0]!["exposure_ms"]!.GetValue<ulong>();
+            var conditions = state["conditions_valid_until_ms"]!.GetValue<ulong>();
+            var latest = Math.Min(expiry - exposure, conditions - 1);
+            Assert(response["latest_start_ms"]!.GetValue<ulong>() == latest,
+                "dispatch carries exact inclusive latest start across IPC");
+        }
+        else Assert(response["latest_start_ms"] is null, "refusal carries no dispatch deadline");
     }
 
     private static JsonObject Open(JsonNode program, JsonNode constraints, JsonNode state) => new()

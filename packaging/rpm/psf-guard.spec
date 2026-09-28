@@ -8,7 +8,7 @@
 %global rustflags_debuginfo 0
 
 Name:           psf-guard
-Version:        0.10.1
+Version:        0.11.0
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -93,6 +93,9 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Sun Sep 27 2026 Yann Ramin <github@theatr.us> - 0.11.0-1
+- Interim development version on main: Director planning preview; released builds come from release/* branches
+
 * Thu Sep 24 2026 Yann Ramin <github@theatr.us> - 0.10.1-1
 - Empty catalogs and projects show zero grading counts instead of a database error
 

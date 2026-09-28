@@ -1309,7 +1309,7 @@ export default function TauriSettings({
               type="text"
               className="file-path-input"
               placeholder="Absolute server path; empty disables server export"
-              title="Exports triggered from the Overview land here (reflinked where the filesystem supports it). Leave empty to offer the archive download instead."
+              title="Exports triggered from the Library land here (reflinked where the filesystem supports it). Leave empty to offer the archive download instead."
               value={formExportDir}
               onChange={(event) => setFormExportDir(event.target.value)}
             />

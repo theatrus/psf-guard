@@ -124,6 +124,7 @@ impl Ledger {
     ) -> Result<Decision, Error> {
         self.check_program_configuration(configuration)?;
         self.check_capture_dispatch_inner(preparation_id, capture_id, state, None)
+            .map(|check| check.decision)
     }
 
     /// Fresh feasibility only; never issues a command or authorizes recovery replay.
@@ -135,6 +136,7 @@ impl Ledger {
     ) -> Result<Decision, Error> {
         self.check_program_configuration(configuration)?;
         self.check_pending_dispatch_inner(command, state, None)
+            .map(|check| check.decision)
     }
 
     pub fn reserve_program_prepared(
