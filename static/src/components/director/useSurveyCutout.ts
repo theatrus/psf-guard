@@ -13,7 +13,9 @@ export function useDebounced<T>(value: T, delay: number): T {
 }
 
 export interface SurveyCutout {
-  image: { url: string; key: string } | null;
+  /** The image on screen and the request it answers, so a caller can place
+   *  it under a view that has moved on since. */
+  image: { url: string; key: string; request: DirectorCutoutRequest } | null;
   status: 'idle' | 'loading' | 'ready' | 'failed';
   error: string;
   /** The image on screen is for an earlier request; the next one is on its way. */
@@ -29,7 +31,7 @@ export function useSurveyCutout(request: DirectorCutoutRequest | null, delayMs =
   const key = request ? JSON.stringify(request) : null;
   const debouncedKey = useDebounced(key, delayMs);
   const debounced = useMemo<DirectorCutoutRequest | null>(() => debouncedKey ? JSON.parse(debouncedKey) as DirectorCutoutRequest : null, [debouncedKey]);
-  const [image, setImage] = useState<{ url: string; key: string } | null>(null);
+  const [image, setImage] = useState<SurveyCutout['image']>(null);
   const [status, setStatus] = useState<SurveyCutout['status']>('idle');
   const [error, setError] = useState('');
   useEffect(() => {
@@ -37,23 +39,26 @@ export function useSurveyCutout(request: DirectorCutoutRequest | null, delayMs =
     const key = JSON.stringify(debounced);
     let cancelled = false;
     let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     setStatus('loading'); setError('');
     const poll = async () => {
+      if (cancelled) return;
       try {
         const result = await apiClient.fetchDirectorCutout(debounced);
         if (cancelled) return;
         if (result.state === 'ready') {
           const url = URL.createObjectURL(result.blob);
-          setImage(previous => { if (previous) URL.revokeObjectURL(previous.url); return { url, key }; });
+          setImage(previous => { if (previous) URL.revokeObjectURL(previous.url); return { url, key, request: debounced }; });
           setStatus('ready');
         } else if (result.state === 'generating') {
           if (++attempts >= IMAGE_POLL_LIMIT) { setStatus('failed'); setError('Survey image is taking too long; the last one stays up.'); return; }
-          setTimeout(poll, IMAGE_POLL_MS);
+          timer = setTimeout(poll, IMAGE_POLL_MS);
         } else { setStatus('failed'); setError(result.error); }
       } catch (cause) { if (!cancelled) { setStatus('failed'); setError(message(cause)); } }
     };
     void poll();
-    return () => { cancelled = true; };
+    // A view that moved on, or a page that went away, must not keep asking.
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [debounced]);
   useEffect(() => () => { setImage(previous => { if (previous) URL.revokeObjectURL(previous.url); return null; }); }, []);
   return { image, status, error, stale: image !== null && image.key !== debouncedKey };

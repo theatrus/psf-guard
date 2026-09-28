@@ -93,8 +93,12 @@ describe('Framing view', () => {
     // waits a second by design, so give a loaded test runner room.
     await waitFor(() => expect(cutouts.length).toBeGreaterThanOrEqual(2), { timeout: 8000 });
     await waitFor(() => expect(document.querySelector('.framing-stage img')).toHaveAttribute('src', 'blob:stage'), { timeout: 4000 });
-    expect(cutouts[0]).toContain('survey=dss2_color');
-    expect(cutouts[0]).toContain('width=1024');
+    // The sky is fetched as a tile twice the view, at the stage's pixel scale.
+    const first = cutouts.find(query => query.includes('survey=dss2_color'))!;
+    expect(first).toContain('width=2048');
+    expect(first).toContain('height=1536');
+    // A seeded view starts 4° wide, so its first tile is 8°.
+    expect(first).toContain('fov=8&');
 
     fireEvent.change(screen.getByLabelText('Mosaic rows'), { target: { value: '2' } });
     fireEvent.change(screen.getByLabelText('Panel overlap percent'), { target: { value: '15' } });
@@ -123,7 +127,7 @@ describe('Framing view', () => {
     expect(await screen.findByLabelText('Target name')).toHaveValue('Heart');
     expect(screen.getByLabelText('Survey')).toHaveValue('finkbeiner_halpha');
     expect(screen.getByLabelText('Panel width degrees')).toHaveValue(2);
-    await waitFor(() => expect(cutouts[0]).toContain('survey=finkbeiner_halpha'));
+    await waitFor(() => expect(cutouts.some(query => query.includes('survey=finkbeiner_halpha'))).toBe(true));
     expect(screen.getByText(/Finkbeiner H-alpha composite: H-alpha/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Survey'), { target: { value: 'dss2_color' } });
     await waitFor(() => expect(cutouts.some(c => c.includes('survey=dss2_color'))).toBeTruthy(), { timeout: 3000 });
@@ -131,8 +135,16 @@ describe('Framing view', () => {
     const stage = screen.getByTestId('framing-stage');
     stage.setPointerCapture = vi.fn();
     Object.defineProperty(stage, 'clientWidth', { value: 1024, configurable: true });
+    // While the pointer moves, the loaded tile slides under the view at once:
+    // no new request, just a transform on the image already on screen.
+    await waitFor(() => expect(screen.getByTestId('framing-sky')).toBeInTheDocument());
+    const before = cutouts.length;
     fireEvent.pointerDown(stage, { button: 0, clientX: 500, clientY: 400, pointerId: 1 });
     fireEvent.pointerMove(stage, { clientX: 400, clientY: 400, pointerId: 1 });
+    const transform = (screen.getByTestId('framing-sky') as HTMLElement).style.transform;
+    expect(transform).toMatch(/^translate\(-?\d/);
+    expect(transform).toContain('scale(2.000000)');
+    expect(cutouts.length).toBe(before);
     fireEvent.pointerUp(stage, { pointerId: 1 });
     expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(38.2);
     await waitFor(() => expect(screen.getByText(/The view center is/)).not.toHaveTextContent('02h 32m 48.0s'));
