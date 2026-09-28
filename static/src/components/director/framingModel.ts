@@ -211,6 +211,43 @@ export function framingGeometry(request: DirectorFramingRequest): DirectorFramin
   };
 }
 
+/** The survey tile behind the stage: twice the view, at the stage's pixel
+ *  scale, so a pan or a zoom step shows sky that is already loaded. */
+export const TILE_WIDTH = 2048;
+export const TILE_HEIGHT = 1536;
+export interface SkyTile { center: DirectorSkyPosition; fov: number }
+
+export function tileFor(view: DirectorSkyPosition, viewFov: number): SkyTile {
+  return { center: view, fov: Math.min(MAX_VIEW_FOV, viewFov * 2) };
+}
+
+/** Whether the view has left the tile's useful area: near an edge, or
+ *  zoomed so far in that the tile's pixels would show. Then a new tile is
+ *  needed at once, not after the pointer rests. */
+export function viewLeftTile(tile: SkyTile, view: DirectorSkyPosition, viewFov: number): boolean {
+  const offset = offsetFrom(tile.center, view);
+  if (!offset) return true;
+  const reach = tile.fov / 2 - viewFov / 2;
+  return Math.abs(offset[0]) > reach * 0.9 || Math.abs(offset[1]) > reach * 0.9 * (STAGE_HEIGHT / STAGE_WIDTH) || viewFov > tile.fov * 0.95 || viewFov < tile.fov / 4;
+}
+
+/** The CSS transform that lays a loaded tile under the current view: the
+ *  tile fills the stage at its own field, so it is scaled by the ratio of
+ *  fields about the stage center and shifted by where its center falls in
+ *  the view. Exact at the tile's center; away from it the two tangent
+ *  planes differ by less than a pixel at framing fields, and the settled
+ *  view gets a tile of its own. */
+export function tileTransform(tile: SkyTile, view: DirectorSkyPosition, viewFov: number): string | null {
+  const offset = offsetFrom(view, tile.center);
+  if (!offset) return null;
+  const scale = tile.fov / viewFov;
+  const [x, y] = toStage(offset, viewFov);
+  const tx = ((x - STAGE_WIDTH / 2) / STAGE_WIDTH) * 100;
+  const ty = ((y - STAGE_HEIGHT / 2) / STAGE_HEIGHT) * 100;
+  if (Math.abs(scale - 1) < 1e-9 && Math.abs(tx) < 1e-9 && Math.abs(ty) < 1e-9) return 'none';
+  return `translate(${tx.toFixed(4)}%, ${ty.toFixed(4)}%) scale(${scale.toFixed(6)})`;
+}
+
 export const THUMB_WIDTH = 320;
 export const THUMB_HEIGHT = 240;
 

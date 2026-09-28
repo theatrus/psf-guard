@@ -7,10 +7,10 @@ import { useAccess } from '../../auth/access';
 import type { DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigProfileSummary } from '../../api/directorTypes';
 import {
   MAX_VIEW_FOV, MIN_VIEW_FOV, STAGE_HEIGHT, STAGE_WIDTH, angleFromStage, clampFov, draftFromState, formatDec, formatDegrees, formatRaHours, handleOffset,
-  insidePolygon, moveBy, panelForRig, pixelScale, polygonPoints, previewRequest, stackMatrix, stateFromDraft, stateFromSeed, toStage, type FramingSeed, type FramingState, chipSurveys, framingGeometry,
+  insidePolygon, moveBy, panelForRig, pixelScale, polygonPoints, previewRequest, stackMatrix, stateFromDraft, stateFromSeed, toStage, type FramingSeed, type FramingState, chipSurveys, framingGeometry, TILE_HEIGHT, TILE_WIDTH, offsetFrom, tileFor, tileTransform, viewLeftTile, type SkyTile,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
-import { useSurveyCutout } from './useSurveyCutout';
+import { useDebounced, useSurveyCutout } from './useSurveyCutout';
 import './FramingView.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Framing request failed';
@@ -134,10 +134,30 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   const savedState = draft.data?.draft ? stateFromDraft(draft.data.draft) : null;
   const planFields = (s: FramingState) => JSON.stringify([s.targetName, s.center, s.positionAngle, s.mosaic, s.panelRigId, s.panel, s.shownRigIds, s.surveyId]);
   const differsFromSaved = !!state && !!savedState && planFields(state) !== planFields(savedState);
-  const cutout = useSurveyCutout(state ? {
-    survey: state.surveyId, ra: Number(state.viewCenter.ra_degrees.toFixed(5)), dec: Number(state.viewCenter.dec_degrees.toFixed(5)),
-    fov: Number(state.viewFov.toFixed(5)), width: STAGE_WIDTH, height: STAGE_HEIGHT, rotation: 0,
-  } : null);
+  // The sky behind the rectangle is a tile twice the view. While the pointer
+  // moves, the loaded tile slides and scales under the view at once; a new
+  // tile is asked for when the view leaves it, and once the pointer rests
+  // the settled view gets a tile of its own so the rectangle sits exactly.
+  const [tile, setTile] = useState<SkyTile | null>(null);
+  const viewNow = state ? { center: state.viewCenter, fov: state.viewFov } : null;
+  const settledView = useDebounced(viewNow, 700);
+  useEffect(() => {
+    if (!viewNow) return;
+    if (!tile || viewLeftTile(tile, viewNow.center, viewNow.fov)) setTile(tileFor(viewNow.center, viewNow.fov));
+  }, [viewNow?.center.ra_degrees, viewNow?.center.dec_degrees, viewNow?.fov]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!settledView || !tile) return;
+    const rested = tileFor(settledView.center, settledView.fov);
+    const moved = offsetFrom(tile.center, rested.center);
+    if (!moved || Math.hypot(moved[0], moved[1]) > settledView.fov * 0.01 || Math.abs(rested.fov - tile.fov) > tile.fov * 0.05) setTile(rested);
+  }, [settledView?.center.ra_degrees, settledView?.center.dec_degrees, settledView?.fov]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cutout = useSurveyCutout(state && tile ? {
+    survey: state.surveyId, ra: Number(tile.center.ra_degrees.toFixed(5)), dec: Number(tile.center.dec_degrees.toFixed(5)),
+    fov: Number(tile.fov.toFixed(5)), width: TILE_WIDTH, height: TILE_HEIGHT, rotation: 0,
+  } : null, 150);
+  const skyTransform = cutout.image && state
+    ? tileTransform({ center: { ra_degrees: cutout.image.request.ra, dec_degrees: cutout.image.request.dec }, fov: cutout.image.request.fov }, state.viewCenter, state.viewFov)
+    : null;
   // Finished per-panel stacks, drawn where their plate solves put them: a
   // review of coverage and seams over the plan, never a processed image.
   const [showStacks, setShowStacks] = useState(true);
@@ -235,7 +255,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     <div className="framing-stage-wrap">
       <div ref={stage} className={`framing-stage${cutout.stale ? ' is-stale' : ''}`} role="img" aria-label="Sky view" data-testid="framing-stage"
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
-        {cutout.image ? <img src={cutout.image.url} alt="" draggable={false} /> : <div className="framing-stage-empty" />}
+        {cutout.image && skyTransform ? <img src={cutout.image.url} alt="" draggable={false} data-testid="framing-sky" style={{ transform: skyTransform }} /> : <div className="framing-stage-empty" />}
         <svg viewBox={`0 0 ${STAGE_WIDTH} ${STAGE_HEIGHT}`} aria-hidden="true">
           {placedStacks.map(({ panel, preview, matrix }) => <image key={`${panel.rig.id}-${panel.panel_id}`} className="framing-stack" data-testid="framing-stack" href={preview.url} x={0} y={0} width={preview.width} height={preview.height} preserveAspectRatio="none" transform={matrix} />)}
           {geometry?.overlays.map(overlay => overlay.view_corners && <polygon key={overlay.id} className="framing-overlay" points={polygonPoints(overlay.view_corners, state.viewFov)} />)}
