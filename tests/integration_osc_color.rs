@@ -93,18 +93,26 @@ fn colour_render_is_actually_coloured() {
     write_fits(&fits, Some("RGGB"));
     let out = dir.path().join("osc.png");
 
-    let rendered = psf_guard::commands::stretch_to_png::render_color_preview(
+    psf_guard::commands::stretch_to_png::render_preview(
         &fits.to_string_lossy(),
         Some(out.to_string_lossy().into_owned()),
         0.2,
         -2.8,
+        false,
+        false,
         None,
+        true,
         psf_guard::preview_format::PreviewEncoding::png(),
     )
     .unwrap();
-    assert!(rendered, "a BAYERPAT frame should render in colour");
 
-    let img = image::open(&out).unwrap().to_rgb8();
+    let img = image::open(&out).unwrap();
+    assert_eq!(
+        img.color(),
+        image::ColorType::Rgb8,
+        "a BAYERPAT frame should render in colour"
+    );
+    let img = img.to_rgb8();
     let mid = img.get_pixel(img.width() / 2, img.height() / 2);
     println!("centre pixel = {:?}", mid);
     // The mosaic is R > G > B, and one shared transfer preserves that order.
@@ -121,24 +129,28 @@ fn colour_render_is_actually_coloured() {
 }
 
 #[test]
-fn a_mono_frame_reports_that_it_has_no_colour() {
+fn a_mono_frame_falls_back_to_greyscale() {
     let dir = tempfile::TempDir::new().unwrap();
     let fits = dir.path().join("mono.fits");
     write_fits(&fits, None);
+    let out = dir.path().join("mono.png");
 
-    let rendered = psf_guard::commands::stretch_to_png::render_color_preview(
+    psf_guard::commands::stretch_to_png::render_preview(
         &fits.to_string_lossy(),
-        Some(dir.path().join("mono.png").to_string_lossy().into_owned()),
+        Some(out.to_string_lossy().into_owned()),
         0.2,
         -2.8,
+        false,
+        false,
         None,
+        true,
         psf_guard::preview_format::PreviewEncoding::png(),
     )
     .unwrap();
-    assert!(
-        !rendered,
-        "a frame with no BAYERPAT has no colour to render, and the caller \
-         must be told so it can fall back to greyscale"
+    assert_eq!(
+        image::open(&out).unwrap().color(),
+        image::ColorType::L8,
+        "a frame with no BAYERPAT has no colour to render"
     );
 }
 

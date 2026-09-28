@@ -49,9 +49,10 @@ pub struct FitsImage {
     pub bzero: f64,
 }
 
-/// A debayered one-shot-color frame, kept in colour.
+/// A colour frame: a debayered one-shot-color mosaic or planar RGB, such as
+/// an integrated master.
 ///
-/// [`FitsImage::from_file`] deliberately collapses a mosaic to luminance,
+/// [`FitsImage::from_file`] deliberately collapses colour to luminance,
 /// because that is what the measurements want. Display wants the opposite, so
 /// this is the other half of the same decision rather than a replacement for
 /// it: nothing that grades an image goes through here.
@@ -60,23 +61,36 @@ pub struct ColorFrame {
     pub height: usize,
     /// `width * height * 3` samples, RGB interleaved, row-major.
     pub data: Vec<u16>,
+    /// Whether the channels share one stretch. True for a debayered mosaic,
+    /// false for planar RGB (see [`Self::from_decoded`]).
+    pub linked: bool,
 }
 
 impl ColorFrame {
-    /// Load a frame as colour, or `None` when it is not a mosaic.
+    /// View a decoded frame as colour, or `None` when it has none to show.
     ///
-    /// A camera without a `BAYERPAT` header — a mono camera behind a filter
-    /// wheel — has no colour to recover, and answering `None` lets the caller
-    /// fall back to the ordinary greyscale rendition rather than inventing
-    /// one.
-    pub fn from_file(path: &Path) -> Result<Option<Self>> {
-        let fits = crate::image_io::open(path)
-            .map_err(|e| anyhow::anyhow!("Failed to open image file {}: {e:?}", path.display()))?;
-        Ok(fits.debayer().map(|rgb| Self {
+    /// Planar RGB is already colour and always comes back as such. A mosaic
+    /// is debayered only when `debayer` asks for it, since whether a raw
+    /// sub is shown in colour is a preference. A camera without a
+    /// `BAYERPAT` header — a mono camera behind a filter wheel — has no
+    /// colour to recover, and answering `None` lets the caller fall back to
+    /// the ordinary greyscale rendition rather than inventing one.
+    ///
+    /// Planar RGB is stretched unlinked, as the seiza desktop apps do: an
+    /// integrated master has not been colour calibrated, and a stretch per
+    /// channel neutralizes its background. A raw mosaic stays linked, so the
+    /// preview keeps the sub's own channel ratios.
+    pub fn from_decoded(fits: &seiza_fits::FitsImage, debayer: bool) -> Option<Self> {
+        let (rgb, linked) = match fits.rgb_planes() {
+            Some(rgb) => (rgb, false),
+            None => (debayer.then(|| fits.debayer()).flatten()?, true),
+        };
+        Some(Self {
             width: rgb.width,
             height: rgb.height,
             data: rgb.data,
-        }))
+            linked,
+        })
     }
 
     /// The luminance the stretch is measured on.
@@ -139,34 +153,39 @@ impl FitsImage {
     /// collapsed to luminance before any measurement: star metrics (HFR,
     /// FWHM, eccentricity) on a bare color filter array are distorted by
     /// the per-channel sampling, and N.I.N.A. itself measures the
-    /// debayered image, so this keeps numbers comparable.
+    /// debayered image, so this keeps numbers comparable. Planar RGB, such as
+    /// an integrated master, is averaged to one plane for the same reason.
     pub fn from_file(path: &Path) -> Result<Self> {
         let fits = crate::image_io::open(path)
             .map_err(|e| anyhow::anyhow!("Failed to open image file {}: {e:?}", path.display()))?;
+        Ok(Self::from_decoded(fits))
+    }
 
+    /// As [`Self::from_file`], for a frame already decoded.
+    pub fn from_decoded(fits: seiza_fits::FitsImage) -> Self {
         if let Some(rgb) = fits.debayer() {
             // Luminance of the debayered mosaic, already in physical ADU
-            return Ok(FitsImage {
+            return FitsImage {
                 width: rgb.width,
                 height: rgb.height,
                 data: rgb.to_luma_u16(),
                 raw_min: 0.0,
                 raw_scale: 1.0,
                 bzero: 0.0,
-            });
+            };
         }
 
         let (width, height) = (fits.width, fits.height);
         match &fits.pixels {
             // Integer camera data arrives BZERO-folded as physical ADU
-            seiza_fits::Pixels::U16(_) | seiza_fits::Pixels::U8(_) => Ok(FitsImage {
+            seiza_fits::Pixels::U16(_) | seiza_fits::Pixels::U8(_) => FitsImage {
                 width,
                 height,
                 data: fits.to_u16().into_owned(),
                 raw_min: 0.0,
                 raw_scale: 1.0,
                 bzero: 0.0,
-            }),
+            },
             // Float and wide-integer data: min-max rescale into u16 and
             // keep the mapping so values can go back to physical units
             _ => {
@@ -176,6 +195,10 @@ impl FitsImage {
                     seiza_fits::Pixels::F64(data) => data.clone(),
                     _ => unreachable!(),
                 };
+                // Planar RGB averages to one plane, as `to_u16` does for
+                // integer data; otherwise all three planes would land in one
+                // buffer three times the size of the image.
+                let data_f64 = average_planes(data_f64, width * height, fits.planes);
                 let min = data_f64.iter().copied().fold(f64::INFINITY, f64::min);
                 let max = data_f64.iter().copied().fold(f64::NEG_INFINITY, f64::max);
                 let scale = if max > min {
@@ -191,14 +214,14 @@ impl FitsImage {
                 } else {
                     vec![0u16; width * height]
                 };
-                Ok(FitsImage {
+                FitsImage {
                     width,
                     height,
                     data,
                     raw_min: min,
                     raw_scale: scale,
                     bzero: 0.0,
-                })
+                }
             }
         }
     }
@@ -255,4 +278,20 @@ impl FitsImage {
             mad: stats.mad,
         }
     }
+}
+
+/// Average planar samples into one plane of `pixels` values. Single-plane
+/// data passes through untouched.
+fn average_planes(samples: Vec<f64>, pixels: usize, planes: usize) -> Vec<f64> {
+    if planes <= 1 {
+        return samples;
+    }
+    (0..pixels)
+        .map(|pixel| {
+            (0..planes)
+                .map(|plane| samples[plane * pixels + pixel])
+                .sum::<f64>()
+                / planes as f64
+        })
+        .collect()
 }

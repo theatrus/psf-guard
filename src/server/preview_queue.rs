@@ -404,7 +404,8 @@ fn generate_with_fingerprint(
     }
 }
 
-/// Render one preview, in colour when asked for it and the frame is a mosaic.
+/// Render one preview: planar RGB in colour, and a mosaic in colour when
+/// asked for it.
 #[allow(clippy::too_many_arguments)]
 fn generate_preview(
     fits_path: &Path,
@@ -417,30 +418,15 @@ fn generate_preview(
     invert: bool,
     encoding: crate::preview_format::PreviewEncoding,
 ) -> anyhow::Result<()> {
-    let source = fits_path.to_string_lossy();
-    let destination = output.to_string_lossy().into_owned();
-    if color
-        && !logarithmic
-        && !invert
-        && crate::commands::stretch_to_png::render_color_preview(
-            &source,
-            Some(destination.clone()),
-            midtone,
-            shadow,
-            max_dimensions,
-            encoding,
-        )?
-    {
-        return Ok(());
-    }
     crate::commands::stretch_to_png::render_preview(
-        &source,
-        Some(destination),
+        &fits_path.to_string_lossy(),
+        Some(output.to_string_lossy().into_owned()),
         midtone,
         shadow,
         logarithmic,
         invert,
         max_dimensions,
+        color,
         encoding,
     )
 }
