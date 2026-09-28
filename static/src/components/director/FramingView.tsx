@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { Check, Crosshair, LocateFixed, RefreshCw, Undo2 } from 'lucide-react';
+import { Check, Crosshair, LocateFixed, RefreshCw, Search, Undo2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigProfileSummary } from '../../api/directorTypes';
 import {
   MAX_VIEW_FOV, MIN_VIEW_FOV, STAGE_HEIGHT, STAGE_WIDTH, angleFromStage, clampFov, draftFromState, formatDec, formatDegrees, formatRaHours, handleOffset,
-  insidePolygon, moveBy, panelForRig, pixelScale, polygonPoints, previewRequest, stackMatrix, stateFromDraft, stateFromSeed, toStage, type FramingSeed, type FramingState, chipSurveys,
+  insidePolygon, moveBy, panelForRig, pixelScale, polygonPoints, previewRequest, stackMatrix, stateFromDraft, stateFromSeed, toStage, type FramingSeed, type FramingState, chipSurveys, framingGeometry,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
-import { useDebounced, useSurveyCutout } from './useSurveyCutout';
+import { useSurveyCutout } from './useSurveyCutout';
 import './FramingView.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Framing request failed';
@@ -112,12 +112,19 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     setState(current => current ? { ...current, ...(typeof patch === 'function' ? patch(current) : patch) } : current);
   }, []);
 
+  // The rectangle is drawn here, with the same tangent-plane math the server
+  // uses when it activates, so it follows the pointer without a round trip.
   const request = useMemo(() => state ? previewRequest(state, rigList) : null, [state, rigList]);
-  const debouncedRequest = useDebounced(request, 250);
-  const preview = useQuery({
-    queryKey: ['directorFramingPreview', debouncedRequest],
-    queryFn: () => apiClient.previewDirectorFraming(debouncedRequest!),
-    enabled: !!debouncedRequest, retry: false, placeholderData: previous => previous, staleTime: 60_000,
+  const geometry = useMemo(() => request ? framingGeometry(request) : undefined, [request]);
+  const [search, setSearch] = useState('');
+  const lookup = useMutation({
+    retry: false,
+    mutationFn: (query: string) => apiClient.resolveDirectorName(query),
+    onSuccess: hit => {
+      const center = { ra_degrees: hit.ra_degrees, dec_degrees: hit.dec_degrees };
+      update({ targetName: hit.name, center, viewCenter: center });
+      setNotice(`Moved the target to ${hit.name}.`);
+    },
   });
   const cutout = useSurveyCutout(state ? {
     survey: state.surveyId, ra: Number(state.viewCenter.ra_degrees.toFixed(5)), dec: Number(state.viewCenter.dec_degrees.toFixed(5)),
@@ -138,7 +145,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     update(current => ({ viewFov: clampFov(Math.max(current.viewFov, needed)), viewCenter: current.center }));
   }, [update]);
   const fitted = useRef(false);
-  const firstExtent = preview.data?.extent;
+  const firstExtent = geometry?.extent;
   useEffect(() => {
     if (!firstExtent || fitted.current) return;
     fitted.current = true;
@@ -213,7 +220,6 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   if (draft.isPending) return <p role="status">Loading framing...</p>;
   if (draft.isError) return <p className="director-error" role="alert">{message(draft.error)}</p>;
   if (!state) return <StartFraming canWrite={canWrite} onStart={setStarted} />;
-  const geometry: DirectorFramingPreview | undefined = preview.data;
   geometryRef.current = geometry;
   const handle = geometry?.view_center_offset && geometry.panels.length > 0 ? toStage(rotationHandle(geometry, state), state.viewFov) : null;
   const centerOnStage = geometry?.view_center_offset ? toStage(geometry.view_center_offset, state.viewFov) : null;
@@ -236,7 +242,6 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
         <div className="framing-stage-status">
           {cutout.status === 'loading' && <span role="status">Loading {survey?.name ?? 'survey'}...</span>}
           {cutout.status === 'failed' && <span role="alert">{cutout.error}</span>}
-          {preview.isError && <span role="alert">{message(preview.error)}</span>}
         </div>
         <div className="framing-stage-scale">{formatDegrees(state.viewFov)} across · N up, E left</div>
         <div className="framing-stage-surveys" role="group" aria-label="Survey layers" onPointerDown={event => event.stopPropagation()}>
@@ -264,6 +269,11 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     <form className="framing-controls" onSubmit={event => { event.preventDefault(); if (canWrite && !save.isPending && !stale) { setNotice(''); setProblem(''); save.mutate(); } }}>
       <fieldset>
         <legend>Target</legend>
+        <label>Find a target<span className="framing-input">
+          <input aria-label="Find a target" value={search} maxLength={128} placeholder="M 31, NGC 7000, Heart Nebula" disabled={!canWrite || lookup.isPending} onChange={event => setSearch(event.target.value)}
+            onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (search.trim() && canWrite) lookup.mutate(search.trim()); } }} />
+          <button type="button" disabled={!canWrite || !search.trim() || lookup.isPending} onClick={() => lookup.mutate(search.trim())}><Search size={16} />{lookup.isPending ? 'Looking up...' : 'Go'}</button>
+        </span><small>{lookup.isError ? message(lookup.error) : lookup.data ? `${lookup.data.name} from ${lookup.data.source}; the target and view moved there.` : 'Names the CDS catalogs know: Messier, NGC, IC, Sharpless, common names.'}</small></label>
         <label>Name<input aria-label="Target name" value={state.targetName} maxLength={256} onChange={event => update({ targetName: event.target.value })} /></label>
         <div className="framing-grid">
           <label>RA<span className="framing-input"><input aria-label="Right ascension degrees" type="number" step="any" min={0} max={359.99999} value={state.center.ra_degrees} onChange={event => update(current => ({ center: { ...current.center, ra_degrees: number(event.target.value, current.center.ra_degrees) } }))} /><small>°</small></span><small>{formatRaHours(state.center.ra_degrees)}</small></label>

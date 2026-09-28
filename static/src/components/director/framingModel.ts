@@ -1,4 +1,4 @@
-import type { DirectorFramingDraft, DirectorFramingRequest, DirectorMosaic, DirectorOffset, DirectorPanelSize, DirectorRigProfileSummary, DirectorSkyPosition, DirectorSurvey } from '../../api/directorTypes';
+import type { DirectorFootprint, DirectorFramingDraft, DirectorFramingPreview, DirectorFramingRequest, DirectorMosaic, DirectorOffset, DirectorPanelSize, DirectorRigProfileSummary, DirectorSkyPosition, DirectorSurvey } from '../../api/directorTypes';
 import type { SkyPreview } from '../../api/types';
 import { tanPixelToSky } from '../../utils/skyProjection';
 
@@ -134,6 +134,81 @@ export function stackMatrix(preview: SkyPreview, view: DirectorSkyPosition, view
   const d = (p2[1] - p0[1]) / height;
   if (![a, b, c, d, p0[0], p0[1]].every(Number.isFinite)) return null;
   return `matrix(${a} ${b} ${c} ${d} ${p0[0]} ${p0[1]})`;
+}
+
+/** The sky position at a tangent-plane offset from `center`, in degrees east
+ *  and north: the exact inverse of `offsetFrom`, as the server's core does it. */
+export function deprojectFrom(center: DirectorSkyPosition, offset: DirectorOffset): DirectorSkyPosition {
+  const rad = Math.PI / 180;
+  const xi = offset[0] * rad;
+  const eta = offset[1] * rad;
+  const dec0 = center.dec_degrees * rad;
+  const denominator = Math.cos(dec0) - eta * Math.sin(dec0);
+  const ra = center.ra_degrees * rad + Math.atan2(xi, denominator);
+  const dec = Math.asin(Math.max(-1, Math.min(1, (Math.sin(dec0) + eta * Math.cos(dec0)) / Math.sqrt(1 + xi * xi + eta * eta))));
+  return { ra_degrees: (((ra / rad) % 360) + 360) % 360, dec_degrees: dec / rad };
+}
+
+/** Rectangle corners on the plane, counter-clockwise from the top left, with
+ *  "up" at `angleDegrees` east of north. Mirrors the core's `rectangle`. */
+function rectangle(center: DirectorOffset, size: DirectorPanelSize, angleDegrees: number): [DirectorOffset, DirectorOffset, DirectorOffset, DirectorOffset] {
+  const rad = (angleDegrees * Math.PI) / 180;
+  const up = [Math.sin(rad), Math.cos(rad)];
+  const right = [-Math.cos(rad), Math.sin(rad)];
+  const hw = size.width_degrees / 2;
+  const hh = size.height_degrees / 2;
+  const corner = (sx: number, sy: number): DirectorOffset => [center[0] + sx * hw * right[0] + sy * hh * up[0], center[1] + sx * hw * right[1] + sy * hh * up[1]];
+  return [corner(-1, 1), corner(-1, -1), corner(1, -1), corner(1, 1)];
+}
+
+/** The mosaic's step between panel centers along the camera axes. */
+function mosaicStep(panel: DirectorPanelSize, mosaic: DirectorMosaic): [number, number] {
+  const keep = 1 - mosaic.overlap_percent / 100;
+  return [panel.width_degrees * keep, panel.height_degrees * keep];
+}
+
+/** The same geometry `POST /framing/preview` returns, computed here so the
+ *  rectangle follows the pointer: panels laid out on the tangent plane at the
+ *  target, corners taken to the sky, then onto the view's plane. A footprint
+ *  past the view plane's horizon has no view corners. The server recomputes
+ *  this from the saved draft when it activates, so nothing depends on the
+ *  browser's copy being kept. */
+export function framingGeometry(request: DirectorFramingRequest): DirectorFramingPreview {
+  const { center, panel, mosaic } = request;
+  const view = request.view;
+  const toView = (position: DirectorSkyPosition): DirectorOffset | null => {
+    if (!view) return null;
+    const offset = offsetFrom(view.center, position);
+    if (!offset) return null;
+    const rad = (view.rotation_degrees * Math.PI) / 180;
+    return [offset[0] * Math.cos(rad) - offset[1] * Math.sin(rad), offset[0] * Math.sin(rad) + offset[1] * Math.cos(rad)];
+  };
+  const footprint = (id: string, at: DirectorOffset, size: DirectorPanelSize, angle: number): DirectorFootprint => {
+    const corners = rectangle(at, size, angle).map(corner => deprojectFrom(center, corner)) as DirectorFootprint['corners'];
+    const mapped = view ? corners.map(toView) : null;
+    return { id, center: deprojectFrom(center, at), corners, view_corners: mapped && mapped.every(Boolean) ? mapped as DirectorFootprint['view_corners'] : null };
+  };
+  const [stepX, stepY] = mosaicStep(panel, mosaic);
+  const rad = (request.position_angle_degrees * Math.PI) / 180;
+  const up = [Math.sin(rad), Math.cos(rad)];
+  const right = [-Math.cos(rad), Math.sin(rad)];
+  const panels: DirectorFramingPreview['panels'] = [];
+  for (let row = 0; row < mosaic.rows; row += 1) {
+    // Row one is the top of the mosaic as the camera sees it.
+    const dy = ((mosaic.rows - 1) / 2 - row) * stepY;
+    for (let column = 0; column < mosaic.columns; column += 1) {
+      const dx = (column - (mosaic.columns - 1) / 2) * stepX;
+      const at: DirectorOffset = [dx * right[0] + dy * up[0], dx * right[1] + dy * up[1]];
+      panels.push({ row: row + 1, column: column + 1, ...footprint(`r${row + 1}c${column + 1}`, at, panel, request.position_angle_degrees) });
+    }
+  }
+  return {
+    schema_version: 1,
+    panels,
+    overlays: request.overlays.map(overlay => footprint(overlay.id, [0, 0], overlay.size, overlay.position_angle_degrees)),
+    extent: { width_degrees: panel.width_degrees + stepX * (mosaic.columns - 1), height_degrees: panel.height_degrees + stepY * (mosaic.rows - 1) },
+    view_center_offset: view ? toView(center) : null,
+  };
 }
 
 export const THUMB_WIDTH = 320;
