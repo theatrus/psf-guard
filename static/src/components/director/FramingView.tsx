@@ -4,10 +4,10 @@ import { isAxiosError } from 'axios';
 import { Check, Crosshair, LocateFixed, RefreshCw, Search, Undo2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
-import type { DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigProfileSummary, DirectorSkyPosition } from '../../api/directorTypes';
+import type { DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigProfileSummary } from '../../api/directorTypes';
 import {
-  DEFAULT_STAGE, MAX_VIEW_FOV, MIN_VIEW_FOV, SURVEY_MAX_FOV, angleAt, clampFov, deprojectOn, draftFromState, formatDec, formatDegrees, formatRaHours, framingBackdrop, framingGraticule, fromStage, handleSky,
-  compassDirections, insidePolygon, panelForRig, pixelScale, polygonPoints, previewRequest, projectOn, reanchoredViewCenter, stackMatrix, stageCorners, stageFor, stageProject, stateFromDraft, stateFromSeed, tileMatrix, tileSize, toStage, trueWidth, viewAt, type FramingSeed, type FramingState, type Stage, type StageView, chipSurveys, framingGeometry, tileFor, viewLeftTile, type SkyTile, defaultSurveyId,
+  DEFAULT_STAGE, MAX_VIEW_FOV, MIN_VIEW_FOV, angleAt, clampFov, deprojectOn, draftFromState, formatDec, formatDegrees, formatRaHours, framingBackdrop, framingGraticule, fromStage, handleSky,
+  compassDirections, insidePolygon, panelForRig, pixelScale, polygonPoints, previewRequest, projectOn, stackMatrix, stageCorners, stageFor, stageProject, stateFromDraft, stateFromSeed, tileMatrix, tileSize, toStage, trueWidth, viewAt, type FramingSeed, type FramingState, type Stage, type StageView, chipSurveys, framingGeometry, tileFor, viewLeftTile, type SkyTile, defaultSurveyId,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
 import { useDebounced, useSurveyCutout } from './useSurveyCutout';
@@ -156,25 +156,16 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   // The stage takes the shape of its element, so the sky fills whatever
   // width and height the window gives it.
   const stage = useRef<HTMLDivElement>(null);
-  // The plane the stage draws on is anchored at the target, so panning slides
-  // the window and turns nothing. The anchor follows the target once a move
-  // has finished: mid-drag the plane holds still under the hand.
+  // The stage projects about the view center, as N.I.N.A.'s framing
+  // assistant does: a drag turns the globe under the pointer, and a
+  // rectangle away from the center leans with its local north.
   const drag = useRef<{ kind: 'look' | 'sky' | 'target' | 'rotate'; x: number; y: number; center: FramingState['viewCenter']; target: FramingState['center']; grab: [number, number] } | null>(null);
-  const [anchor, setAnchor] = useState<DirectorSkyPosition | null>(null);
   const [dragMode, setDragMode] = useState<DragMode>(() => remembered(DRAG_MODE_KEY, ['rectangle', 'sky'] as const, 'rectangle'));
   const [rotateSky, setRotateSky] = useState(() => remembered(ROTATE_SKY_KEY, ['true', 'false'] as const, 'false') === 'true');
   const chooseDragMode = (mode: DragMode) => { setDragMode(mode); remember(DRAG_MODE_KEY, mode); };
   const chooseRotateSky = (on: boolean) => { setRotateSky(on); remember(ROTATE_SKY_KEY, String(on)); };
-  const stateRef = useRef<FramingState | null>(null);
-  stateRef.current = state;
-  const centerRa = state?.center.ra_degrees;
-  const centerDec = state?.center.dec_degrees;
-  useEffect(() => {
-    if (centerRa === undefined || centerDec === undefined || drag.current?.kind === 'target') return;
-    setAnchor({ ra_degrees: centerRa, dec_degrees: centerDec });
-  }, [centerRa, centerDec]);
   const skyRotation = rotateSky && state ? state.positionAngle : 0;
-  const stageView: StageView | null = useMemo(() => state ? viewAt(anchor ?? state.center, state.viewCenter, skyRotation) : null, [state, anchor, skyRotation]);
+  const stageView: StageView | null = useMemo(() => state ? viewAt(state.viewCenter, state.viewCenter, skyRotation) : null, [state, skyRotation]);
   const [stageSize, setStageSize] = useState<Stage>(DEFAULT_STAGE);
   const hasState = state !== null;
   useEffect(() => {
@@ -190,9 +181,9 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   // moves, the loaded tile slides and scales under the view at once; a new
   // tile is asked for when the view leaves it, and once the pointer rests
   // the settled view gets a tile of its own so the rectangle sits exactly.
-  // Past SURVEY_MAX_FOV no image is asked for: the chart stands alone.
+  // A picture is asked for at every zoom, out to a hemisphere.
   const [tile, setTile] = useState<SkyTile | null>(null);
-  const viewNow = state && state.viewFov <= SURVEY_MAX_FOV ? { center: state.viewCenter, fov: state.viewFov } : null;
+  const viewNow = state ? { center: state.viewCenter, fov: state.viewFov } : null;
   const settledView = useDebounced(viewNow, 700);
   useEffect(() => {
     if (!viewNow) return;
@@ -209,8 +200,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     survey: state.surveyId, ra: Number(tile.center.ra_degrees.toFixed(5)), dec: Number(tile.center.dec_degrees.toFixed(5)),
     fov: Number(tile.fov.toFixed(5)), width: tilePixels.width, height: tilePixels.height, rotation: 0,
   } : null, 150);
-  const showSurvey = !!state && state.viewFov <= SURVEY_MAX_FOV;
-  const skyMatrix = cutout.image && state && stageView && showSurvey
+  const skyMatrix = cutout.image && state && stageView
     ? tileMatrix({ center: { ra_degrees: cutout.image.request.ra, dec_degrees: cutout.image.request.dec }, fov: cutout.image.request.fov }, { width: cutout.image.request.width, height: cutout.image.request.height }, stageView, state.viewFov, stageSize)
     : null;
   // The chart under the sky: grid, stars, figures and names, each once the view is wide enough.
@@ -218,6 +208,8 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   const [showChart, setShowChart] = useState(true);
   const graticule = useMemo(() => state && stageView && showGrid ? framingGraticule(stageView, state.viewFov, stageSize) : null, [stageView, state?.viewFov, stageSize, showGrid]); // eslint-disable-line react-hooks/exhaustive-deps
   const backdrop = useMemo(() => state && stageView && showChart ? framingBackdrop(stageView, state.viewFov, stageSize) : null, [stageView, state?.viewFov, stageSize, showChart]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The survey shows the real stars and the Milky Way; the drawn ones stand in only until a picture is up.
+  const pictureUp = !!(cutout.image && skyMatrix);
   // Finished per-panel stacks, drawn where their plate solves put them: a
   // review of coverage and seams over the plan, never a processed image.
   const [showStacks, setShowStacks] = useState(true);
@@ -290,15 +282,14 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
       const dy = (event.clientY - drag.current.y) * scale;
       if (drag.current.kind === 'look') {
         // Slide the window over the plane from where the drag began; the target stays.
-        update({ viewCenter: deprojectOn(viewAt(stageView.anchor, drag.current.center, stageView.rotation), [dx, dy]) });
+        update({ viewCenter: deprojectOn(viewAt(drag.current.center, drag.current.center, stageView.rotation), [dx, dy]) });
       } else {
-        // Move the sky: the target goes with it and keeps its place on the
-        // stage, as N.I.N.A. does with a pinned rectangle. The plane follows
-        // the target, so the sky is re-projected about it as it moves.
-        const from = viewAt(drag.current.target, drag.current.target, stageView.rotation);
-        const center = deprojectOn(from, [dx, dy]);
-        const windowOffset = turnedOffset(stageProject(drag.current.target, drag.current.center) ?? [0, 0]);
-        update({ center, viewCenter: deprojectOn(viewAt(center, center, stageView.rotation), windowOffset) });
+        // Move the sky: the view turns and the target goes with it, keeping
+        // its place on the stage, as N.I.N.A. does with a pinned rectangle.
+        const from = viewAt(drag.current.center, drag.current.center, stageView.rotation);
+        const targetAt = projectOn(from, drag.current.target) ?? [0, 0];
+        const viewCenter = deprojectOn(from, [dx, dy]);
+        update({ viewCenter, center: deprojectOn(viewAt(viewCenter, viewCenter, stageView.rotation), targetAt) });
       }
       return;
     }
@@ -314,23 +305,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
       update({ positionAngle: Math.round(angleAt(state.center, at) * 10) / 10 });
     }
   };
-  // The window's offset from the target, in the stage's turned frame.
-  const turnedOffset = (offset: [number, number]): [number, number] => {
-    if (skyRotation === 0) return offset;
-    const rad = (skyRotation * Math.PI) / 180;
-    return [offset[0] * Math.cos(rad) - offset[1] * Math.sin(rad), offset[0] * Math.sin(rad) + offset[1] * Math.cos(rad)];
-  };
-  const onPointerUp = () => {
-    const wasTarget = drag.current?.kind === 'target';
-    drag.current = null;
-    // Re-anchor the plane on the moved target, and move the window with it
-    // so the rectangle stays where the hand left it.
-    const current = stateRef.current;
-    if (wasTarget && current && stageView) {
-      update({ viewCenter: reanchoredViewCenter(stageView, current.center) });
-      setAnchor(current.center);
-    }
-  };
+  const onPointerUp = () => { drag.current = null; };
   const turn = (delta: number) => update(current => ({ positionAngle: ((current.positionAngle + delta) % 360 + 360) % 360 }));
   const zoomBy = (factor: number) => update(current => ({ viewFov: clampFov(current.viewFov * factor) }));
   useEffect(() => {
@@ -365,13 +340,13 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
         {!(cutout.image && skyMatrix) && <div className="framing-stage-empty" />}
         <svg viewBox={`0 0 ${stageSize.width} ${stageSize.height}`} aria-hidden="true">
           {cutout.image && skyMatrix && <image className="framing-sky" data-testid="framing-sky" href={cutout.image.url} x={0} y={0} width={cutout.image.request.width} height={cutout.image.request.height} preserveAspectRatio="none" transform={skyMatrix} />}
-          {backdrop && backdrop.milkyWay.length > 0 && <g className="framing-milky-way">{backdrop.milkyWay.map((d, i) => <path key={i} d={d} />)}</g>}
+          {backdrop && !pictureUp && backdrop.milkyWay.length > 0 && <g className="framing-milky-way">{backdrop.milkyWay.map((d, i) => <path key={i} d={d} />)}</g>}
           {graticule && <g className="framing-graticule" data-testid="framing-graticule">
             {graticule.paths.map((line, i) => <path key={i} d={line.d} />)}
             {graticule.labels.map((label, i) => <text key={i} x={label.x} y={label.y}>{label.text}</text>)}
           </g>}
           {backdrop && backdrop.figures.length > 0 && <g className="framing-figures">{backdrop.figures.map((d, i) => <path key={i} d={d} />)}</g>}
-          {backdrop && backdrop.stars.length > 0 && <g className="framing-stars" data-testid="framing-stars">{backdrop.stars.map((star, i) => <circle key={i} cx={star.x} cy={star.y} r={star.r} />)}</g>}
+          {backdrop && !pictureUp && backdrop.stars.length > 0 && <g className="framing-stars" data-testid="framing-stars">{backdrop.stars.map((star, i) => <circle key={i} cx={star.x} cy={star.y} r={star.r} />)}</g>}
           {backdrop && backdrop.names.length > 0 && <g className="framing-names" data-testid="framing-names">{backdrop.names.map(name => <text key={name.text} x={name.x} y={name.y}>{name.text}</text>)}</g>}
           {placedStacks.map(({ panel, preview, matrix }) => <image key={`${panel.rig.id}-${panel.panel_id}`} className="framing-stack" data-testid="framing-stack" href={preview.url} x={0} y={0} width={preview.width} height={preview.height} preserveAspectRatio="none" transform={matrix} />)}
           {geometry?.overlays.map(overlay => { const corners = stageCorners(overlay.corners, view); return corners && <polygon key={overlay.id} className="framing-overlay" points={polygonPoints(corners, state.viewFov, stageSize)} />; })}
@@ -387,9 +362,8 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
           </g>; })()}
         </svg>
         <div className="framing-stage-status">
-          {showSurvey && cutout.status === 'loading' && <span role="status">Loading {survey?.name ?? 'survey'}...</span>}
-          {showSurvey && cutout.status === 'failed' && <span role="alert">{cutout.error}</span>}
-          {!showSurvey && <span role="status">Chart view; survey imagery returns below {SURVEY_MAX_FOV}° across</span>}
+          {cutout.status === 'loading' && <span role="status">Loading {survey?.name ?? 'survey'}...</span>}
+          {cutout.status === 'failed' && <span role="alert">{cutout.error}</span>}
         </div>
         <div className="framing-stage-zoom" onPointerDown={event => event.stopPropagation()}>
           <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => zoomBy(1 / 1.5)}>+</button>
@@ -488,8 +462,8 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
         </fieldset>
         <label className="framing-check"><input type="checkbox" checked={rotateSky} onChange={event => chooseRotateSky(event.target.checked)} />Turn the sky with the camera, rectangle upright</label>
         <label className="framing-check"><input type="checkbox" checked={showGrid} onChange={event => setShowGrid(event.target.checked)} />Equatorial grid</label>
-        <label className="framing-check"><input type="checkbox" checked={showChart} onChange={event => setShowChart(event.target.checked)} />Stars and constellations when zoomed out</label>
-        <p className="director-muted">Drag the sky to pan, scroll to zoom out to a hemisphere. Survey imagery shows below {SURVEY_MAX_FOV}° across; wider views are a chart. The view center is {formatRaHours(state.viewCenter.ra_degrees)}, {formatDec(state.viewCenter.dec_degrees)}.</p>
+        <label className="framing-check"><input type="checkbox" checked={showChart} onChange={event => setShowChart(event.target.checked)} />Constellations when zoomed out</label>
+        <p className="director-muted">Drag the sky to turn it, scroll to zoom out to a hemisphere; the survey follows at every zoom. The view center is {formatRaHours(state.viewCenter.ra_degrees)}, {formatDec(state.viewCenter.dec_degrees)}.</p>
       </fieldset>
       {notice && <p role="status">{notice}{undo && <> <button type="button" className="link-button" onClick={() => { setState(undo); setUndo(null); setNotice('Put the target back where it was.'); }}>Undo</button></>}</p>}
       {stale && <p className="director-error" role="alert">This framing changed since you loaded it. Reload to see the saved draft before editing again.</p>}

@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { apiClient } from '../../api/client';
 import type { DirectorCutoutRequest } from '../../api/directorTypes';
 
-const IMAGE_POLL_MS = 1000;
+/** A 202 is polled quickly at first, since an offline map renders in well
+ *  under a second, then settles to once a second for a slow provider. */
+const IMAGE_POLL_STEPS_MS = [150, 250, 400, 600, 1000];
 const IMAGE_POLL_LIMIT = 90;
 const message = (error: unknown) => error instanceof Error ? error.message : 'Survey image request failed';
 
@@ -52,7 +54,7 @@ export function useSurveyCutout(request: DirectorCutoutRequest | null, delayMs =
           setStatus('ready');
         } else if (result.state === 'generating') {
           if (++attempts >= IMAGE_POLL_LIMIT) { setStatus('failed'); setError('Survey image is taking too long; the last one stays up.'); return; }
-          timer = setTimeout(poll, IMAGE_POLL_MS);
+          timer = setTimeout(poll, IMAGE_POLL_STEPS_MS[Math.min(attempts - 1, IMAGE_POLL_STEPS_MS.length - 1)]);
         } else { setStatus('failed'); setError(result.error); }
       } catch (cause) { if (!cancelled) { setStatus('failed'); setError(message(cause)); } }
     };

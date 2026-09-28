@@ -18,11 +18,9 @@ export const MIN_VIEW_FOV = 0.05;
 /** Width of view in stage degrees. The stage is stereographic, so 150 stage
  *  degrees is a hemisphere and a bit less across on the sky. */
 export const MAX_VIEW_FOV = 150;
-/** Survey imagery is asked for up to this width; a wider view is a chart of
- *  stars, constellations and the grid, which draws at once. */
-export const SURVEY_MAX_FOV = 30;
-/** The widest survey image the server renders. */
-export const TILE_MAX_FOV = 40;
+/** The widest survey image the server renders: a hemisphere and a bit,
+ *  so the sky has a picture behind it at every zoom. */
+export const TILE_MAX_FOV = 180;
 
 /** A catalog target the draft starts from when no draft exists yet. */
 export interface FramingSeed { name: string; center: DirectorSkyPosition; position_angle_degrees: number }
@@ -134,11 +132,11 @@ export function stageDeproject(view: DirectorSkyPosition, offset: DirectorOffset
   return { ra_degrees: (((ra / rad) % 360) + 360) % 360, dec_degrees: dec / rad };
 }
 
-/** What the stage looks at: a stereographic plane anchored on the target,
- *  and where the window's center sits on that plane. Panning moves the
- *  offset and leaves the plane alone, so nothing on the stage turns as the
- *  view slides; the rectangle keeps its bearing and the grid its shape, the
- *  way a map scrolls. The anchor follows the target once a move is done. */
+/** What the stage looks at: a stereographic plane about the view center,
+ *  as N.I.N.A.'s framing assistant and the Sky view have it, so a drag
+ *  turns the globe under the pointer and a footprint away from the center
+ *  leans with its local north. `offset` lets a window sit off the plane's
+ *  center; the framing view keeps it at zero. */
 export interface StageView {
   anchor: DirectorSkyPosition;
   offset: DirectorOffset;
@@ -157,15 +155,6 @@ function turned(offset: DirectorOffset, degrees: number): DirectorOffset {
   if (degrees === 0) return offset;
   const rad = (degrees * Math.PI) / 180;
   return [offset[0] * Math.cos(rad) - offset[1] * Math.sin(rad), offset[0] * Math.sin(rad) + offset[1] * Math.cos(rad)];
-}
-
-/** The window center that keeps `target` at the same place on the stage
- *  once the plane is re-anchored on it. Moving the anchor changes every
- *  point's place a little, since north turns between the planes; this
- *  moves the window so the target itself does not jump. */
-export function reanchoredViewCenter(view: StageView, target: DirectorSkyPosition): DirectorSkyPosition {
-  const at = turned(projectOn(view, target) ?? [0, 0], -view.rotation);
-  return stageDeproject(target, [-at[0], -at[1]]);
 }
 
 /** A sky position in window coordinates: degrees right and up of the window's
@@ -553,6 +542,9 @@ export function framingGraticule(view: StageView, viewFov: number, stage: Stage 
     if (at && at[1] > 14 && at[1] < stage.height - 6) labels.push({ kind: 'dec', x: 8, y: at[1] - 4, text: formatDecShort(dec) });
   }
   const meridians = Math.min(Math.round(360 / raStep), Math.ceil((raEnd - raStart) / raStep) + 1);
+  // Meridians crowd toward a pole; a label is skipped when the last one is
+  // still under it.
+  const raLabelsAt: number[] = [];
   for (let i = 0; i < meridians; i += 1) {
     const ra = (Math.ceil(raStart / raStep) + i) * raStep;
     if (ra > raEnd + 1e-9 && !overPole) break;
@@ -561,7 +553,10 @@ export function framingGraticule(view: StageView, viewFov: number, stage: Stage 
     if (!d) continue;
     paths.push({ kind: 'ra', d });
     const at = crossing(points, 1, 6);
-    if (at && at[0] > 6 && at[0] < stage.width - 70) labels.push({ kind: 'ra', x: at[0] + 4, y: 18, text: formatRaLabel(ra, raStep) });
+    if (at && at[0] > 6 && at[0] < stage.width - 70 && raLabelsAt.every(x => Math.abs(x - at[0]) >= 70)) {
+      raLabelsAt.push(at[0]);
+      labels.push({ kind: 'ra', x: at[0] + 4, y: 18, text: formatRaLabel(ra, raStep) });
+    }
   }
   return { paths, labels };
 }

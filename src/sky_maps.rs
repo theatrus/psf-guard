@@ -6,11 +6,13 @@
 //! from its tiles, so the framing view works with no network at all.
 
 use image::{codecs::jpeg::JpegEncoder, ColorType, ImageEncoder, RgbImage};
+use rayon::prelude::*;
 use serde::Serialize;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fmt::Write as _,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 /// Survey layer id prefix; the rest is the folder name.
@@ -21,7 +23,13 @@ pub fn root_for(cache_root: &Path) -> PathBuf {
     cache_root.join("director").join("sky-maps")
 }
 const VARIANTS: [u32; 3] = [75, 150, 500];
-const MAX_TILES_PER_RENDER: usize = 48;
+/// A hemisphere composites every tile of a set; the sets hold about two thousand.
+const MAX_TILES_PER_RENDER: usize = 4096;
+/// Decoded tiles kept between renders, so a pan or a zoom step reads no file twice.
+const TILE_CACHE_BYTES: usize = 256 * 1024 * 1024;
+/// Decoded tiles one render may hold; a wide view steps down to smaller
+/// variants to stay under it. A framing view holds about twenty full tiles.
+const RENDER_BUDGET_BYTES: usize = 320 * 1024 * 1024;
 const JPEG_QUALITY: u8 = 88;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -54,6 +62,53 @@ pub struct SkyMap {
     pub tiles: Vec<Tile>,
     /// Unit vectors per tile: center, east, north.
     frames: Vec<[[f64; 3]; 3]>,
+    /// Decoded tile images from earlier renders, bounded by bytes.
+    cache: Mutex<TileCache>,
+}
+
+/// A file's size and modification time: a tile that changed on disk is
+/// read again rather than served from memory.
+type Stamp = (u64, Option<std::time::SystemTime>);
+
+fn stamp(path: &Path) -> Option<Stamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()))
+}
+
+/// Recently decoded tiles, oldest out first once the budget is spent.
+#[derive(Debug, Default)]
+struct TileCache {
+    images: HashMap<PathBuf, (Stamp, Arc<RgbImage>)>,
+    order: VecDeque<PathBuf>,
+    bytes: usize,
+}
+
+impl TileCache {
+    fn get(&self, path: &Path, current: &Stamp) -> Option<Arc<RgbImage>> {
+        self.images
+            .get(path)
+            .filter(|(saved, _)| saved == current)
+            .map(|(_, image)| image.clone())
+    }
+
+    fn insert(&mut self, path: PathBuf, current: Stamp, image: Arc<RgbImage>) {
+        if let Some((_, gone)) = self.images.remove(&path) {
+            self.bytes -= gone.as_raw().len();
+            self.order.retain(|p| *p != path);
+        }
+        let size = image.as_raw().len();
+        while self.bytes + size > TILE_CACHE_BYTES {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            if let Some((_, gone)) = self.images.remove(&oldest) {
+                self.bytes -= gone.as_raw().len();
+            }
+        }
+        self.bytes += size;
+        self.order.push_back(path.clone());
+        self.images.insert(path, (current, image));
+    }
 }
 
 /// One requested view, the same shape as a survey cutout.
@@ -199,12 +254,15 @@ impl SkyMap {
             dir: dir.to_path_buf(),
             tiles,
             frames,
+            cache: Mutex::new(TileCache::default()),
         })
     }
 
     /// Render the view from the tiles around it. Black where no tile
-    /// reaches. Runs on a blocking thread; a 2048 × 1536 view takes a few
-    /// hundred milliseconds and reads a handful of tiles.
+    /// reaches. Runs on a blocking thread. Each tile is composited through
+    /// its projected bounding box, rows in parallel, and decoded tiles are
+    /// kept between renders, so a framing view takes a fraction of a second
+    /// and a hemisphere composites the whole set.
     pub fn render(&self, view: &View) -> Result<Vec<u8>, String> {
         let (w, h) = (view.width_px as usize, view.height_px as usize);
         if w == 0 || h == 0 {
@@ -214,6 +272,7 @@ impl SkyMap {
                                                  // The plane radius bounds the sky radius, so this reaches every tile.
         let view_radius = (view.fov_degrees.hypot(scale * h as f64) / 2.0).to_radians();
         let frame = unit(view.ra_degrees, view.dec_degrees);
+        let (sin_r, cos_r) = view.rotation_degrees.to_radians().sin_cos();
         // Tiles that can reach the view, nearest first.
         let mut candidates: Vec<(usize, f64)> = self
             .frames
@@ -231,50 +290,166 @@ impl SkyMap {
             .collect();
         candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
         candidates.truncate(MAX_TILES_PER_RENDER);
-        // Pick each tile's size: the smallest whose pixels are at least as
-        // fine as the view's. N.I.N.A.'s sets mix formats behind the `.jpg`
-        // name (some small versions are PNGs), so decode by content, and
-        // step up to the next size when a file is unreadable.
-        let mut images: HashMap<usize, RgbImage> = HashMap::new();
+        // Where each tile lands on the output: its corners, edge middles and
+        // center through the view's projection, with a margin for the bow of
+        // its edges. A tile that reaches behind the view takes the whole
+        // output as its box.
+        let project = |v: &[f64; 3]| -> Option<(f64, f64)> {
+            let d = dot(v, &frame[0]);
+            if d <= -1.0 + 1e-9 {
+                return None;
+            }
+            let k = 2.0 / (1.0 + d);
+            let xi = k * dot(v, &frame[1]);
+            let eta = k * dot(v, &frame[2]);
+            let xi0 = (xi * cos_r - eta * sin_r).to_degrees();
+            let eta0 = (xi * sin_r + eta * cos_r).to_degrees();
+            Some((
+                w as f64 / 2.0 - xi0 / scale - 0.5,
+                h as f64 / 2.0 - eta0 / scale - 0.5,
+            ))
+        };
+        struct Placed {
+            index: usize,
+            x0: usize,
+            x1: usize,
+            y0: usize,
+            y1: usize,
+            image: Arc<RgbImage>,
+        }
+        let mut boxes: Vec<(usize, usize, usize, usize, usize)> =
+            Vec::with_capacity(candidates.len());
         for (index, _) in &candidates {
+            let t = &self.frames[*index];
             let tile = &self.tiles[*index];
-            let needed = (tile.fov_w_degrees / scale).ceil() as u32;
-            let stem = tile.file_name.trim_end_matches(".jpg");
-            let mut paths: Vec<PathBuf> = VARIANTS
-                .iter()
-                .filter(|v| **v >= needed)
-                .map(|v| self.dir.join(format!("{stem}_{v}px.jpg")))
-                .collect();
-            paths.push(self.dir.join(&tile.file_name));
-            let mut decoded = None;
-            let mut last_error = String::new();
-            for path in &paths {
-                match std::fs::read(path) {
-                    Ok(bytes) => match image::load_from_memory(&bytes) {
-                        Ok(img) => {
-                            decoded = Some(img.to_rgb8());
-                            break;
+            let hw = tile.fov_w_degrees.to_radians() / 2.0;
+            let hh = tile.fov_h_degrees.to_radians() / 2.0;
+            let mut lo = (f64::INFINITY, f64::INFINITY);
+            let mut hi = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+            let mut whole = false;
+            for sy in -1..=1 {
+                for sx in -1..=1 {
+                    let mut v = [0.0; 3];
+                    for (axis, slot) in v.iter_mut().enumerate() {
+                        *slot =
+                            t[0][axis] + sx as f64 * hw * t[1][axis] + sy as f64 * hh * t[2][axis];
+                    }
+                    let norm = dot(&v, &v).sqrt();
+                    v.iter_mut().for_each(|c| *c /= norm);
+                    match project(&v) {
+                        Some((x, y)) => {
+                            lo = (lo.0.min(x), lo.1.min(y));
+                            hi = (hi.0.max(x), hi.1.max(y));
                         }
-                        Err(error) => last_error = format!("{}: {error}", path.display()),
-                    },
-                    Err(error) => {
-                        if last_error.is_empty() {
-                            last_error = format!("{}: {error}", path.display());
-                        }
+                        None => whole = true,
                     }
                 }
             }
-            match decoded {
-                Some(img) => {
-                    images.insert(*index, img);
-                }
-                None => return Err(last_error),
+            let (x0, x1, y0, y1) = if whole {
+                (0, w, 0, h)
+            } else {
+                let margin_x = 3.0 + (hi.0 - lo.0) * 0.04;
+                let margin_y = 3.0 + (hi.1 - lo.1) * 0.04;
+                (
+                    (lo.0 - margin_x).floor().max(0.0) as usize,
+                    ((hi.0 + margin_x).ceil().max(0.0) as usize).min(w),
+                    (lo.1 - margin_y).floor().max(0.0) as usize,
+                    ((hi.1 + margin_y).ceil().max(0.0) as usize).min(h),
+                )
+            };
+            if x0 < x1 && y0 < y1 {
+                boxes.push((*index, x0, x1, y0, y1));
             }
         }
-        let (sin_r, cos_r) = view.rotation_degrees.to_radians().sin_cos();
-        let mut out = vec![0u8; w * h * 3];
-        for y in 0..h {
-            for x in 0..w {
+        // Pick each tile's size: the smallest whose pixels are at least as
+        // fine as the view's, stepped down together when the render would
+        // otherwise hold too much. N.I.N.A.'s sets mix formats behind the
+        // `.jpg` name (some small versions are PNGs), so decode by content,
+        // and step up to the next size when a file is unreadable.
+        let mut choice: Vec<usize> = boxes
+            .iter()
+            .map(|(index, ..)| {
+                let needed = (self.tiles[*index].fov_w_degrees / scale).ceil() as u32;
+                VARIANTS
+                    .iter()
+                    .position(|v| *v >= needed)
+                    .unwrap_or(VARIANTS.len())
+            })
+            .collect();
+        let bytes_of = |variant: usize| -> usize {
+            let side = VARIANTS.get(variant).copied().unwrap_or(2000) as usize;
+            side * side * 3
+        };
+        loop {
+            let total: usize = choice.iter().map(|v| bytes_of(*v)).sum();
+            if total <= RENDER_BUDGET_BYTES || choice.iter().all(|v| *v == 0) {
+                break;
+            }
+            for v in &mut choice {
+                *v = v.saturating_sub(1);
+            }
+        }
+        let decoded: Vec<Result<Arc<RgbImage>, String>> = boxes
+            .par_iter()
+            .zip(choice.par_iter())
+            .map(|((index, ..), variant)| {
+                let tile = &self.tiles[*index];
+                let stem = tile.file_name.trim_end_matches(".jpg");
+                let mut paths: Vec<PathBuf> = VARIANTS
+                    .iter()
+                    .skip(*variant)
+                    .map(|v| self.dir.join(format!("{stem}_{v}px.jpg")))
+                    .collect();
+                paths.push(self.dir.join(&tile.file_name));
+                let mut last_error = String::new();
+                for path in &paths {
+                    let current = stamp(path);
+                    if let Some(image) = current.as_ref().and_then(|current| {
+                        self.cache
+                            .lock()
+                            .ok()
+                            .and_then(|cache| cache.get(path, current))
+                    }) {
+                        return Ok(image);
+                    }
+                    match std::fs::read(path) {
+                        Ok(bytes) => match image::load_from_memory(&bytes) {
+                            Ok(img) => {
+                                let image = Arc::new(img.to_rgb8());
+                                if let (Some(current), Ok(mut cache)) = (current, self.cache.lock())
+                                {
+                                    cache.insert(path.clone(), current, image.clone());
+                                }
+                                return Ok(image);
+                            }
+                            Err(error) => last_error = format!("{}: {error}", path.display()),
+                        },
+                        Err(error) => {
+                            if last_error.is_empty() {
+                                last_error = format!("{}: {error}", path.display());
+                            }
+                        }
+                    }
+                }
+                Err(last_error)
+            })
+            .collect();
+        let mut placed = Vec::with_capacity(boxes.len());
+        for ((index, x0, x1, y0, y1), image) in boxes.into_iter().zip(decoded) {
+            placed.push(Placed {
+                index,
+                x0,
+                x1,
+                y0,
+                y1,
+                image: image?,
+            });
+        }
+        // Where each output pixel looks on the sky, once.
+        let dirs: Vec<[f32; 3]> = (0..w * h)
+            .into_par_iter()
+            .map(|at| {
+                let (x, y) = (at % w, at / w);
                 // Stage convention: east to the left, north up; then the view's turn.
                 let xi0 = (w as f64 / 2.0 - (x as f64 + 0.5)) * scale;
                 let eta0 = (h as f64 / 2.0 - (y as f64 + 0.5)) * scale;
@@ -295,34 +470,42 @@ impl SkyMap {
                         cos_c * frame[0][2] + sin_c * (ux * frame[1][2] + uy * frame[2][2]),
                     ]
                 };
-                let mut best: Option<(usize, f64, f64, f64)> = None;
-                for (index, _) in &candidates {
-                    let t = &self.frames[*index];
-                    let d = dot(&v, &t[0]);
-                    if d <= 1e-9 {
+                [v[0] as f32, v[1] as f32, v[2] as f32]
+            })
+            .collect();
+        // Rows in parallel: each pixel takes the tile whose center is nearest
+        // among those that hold it.
+        let mut out = vec![0u8; w * h * 3];
+        out.par_chunks_mut(w * 3).enumerate().for_each(|(y, row)| {
+            let mut best = vec![-1.0f32; w];
+            for tile in placed.iter().filter(|p| p.y0 <= y && y < p.y1) {
+                let t = &self.frames[tile.index];
+                let t0 = [t[0][0] as f32, t[0][1] as f32, t[0][2] as f32];
+                let t1 = [t[1][0] as f32, t[1][1] as f32, t[1][2] as f32];
+                let t2 = [t[2][0] as f32, t[2][1] as f32, t[2][2] as f32];
+                let info = &self.tiles[tile.index];
+                let img = &tile.image;
+                let (tw, th) = (img.width() as f64, img.height() as f64);
+                let (sx, sy) = (info.fov_w_degrees / tw, info.fov_h_degrees / th);
+                for x in tile.x0..tile.x1 {
+                    let v = &dirs[y * w + x];
+                    let d = v[0] * t0[0] + v[1] * t0[1] + v[2] * t0[2];
+                    if d <= 1e-9 || d <= best[x] {
                         continue;
                     }
-                    let tile = &self.tiles[*index];
-                    let img = &images[index];
-                    let (tw, th) = (img.width() as f64, img.height() as f64);
-                    let xt = (dot(&v, &t[1]) / d).to_degrees();
-                    let yt = (dot(&v, &t[2]) / d).to_degrees();
-                    let px = tw / 2.0 - xt / (tile.fov_w_degrees / tw) - 0.5;
-                    let py = th / 2.0 - yt / (tile.fov_h_degrees / th) - 0.5;
+                    let xt = ((v[0] * t1[0] + v[1] * t1[1] + v[2] * t1[2]) / d) as f64;
+                    let yt = ((v[0] * t2[0] + v[1] * t2[1] + v[2] * t2[2]) / d) as f64;
+                    let px = tw / 2.0 - xt.to_degrees() / sx - 0.5;
+                    let py = th / 2.0 - yt.to_degrees() / sy - 0.5;
                     if px < -0.5 || py < -0.5 || px > tw - 0.5 || py > th - 0.5 {
                         continue;
                     }
-                    if best.is_none_or(|(_, bd, _, _)| d > bd) {
-                        best = Some((*index, d, px, py));
-                    }
-                }
-                if let Some((index, _, px, py)) = best {
-                    let rgb = sample(&images[&index], px, py);
-                    let at = (y * w + x) * 3;
-                    out[at..at + 3].copy_from_slice(&rgb);
+                    best[x] = d;
+                    let rgb = sample(img, px, py);
+                    row[x * 3..x * 3 + 3].copy_from_slice(&rgb);
                 }
             }
-        }
+        });
         let mut bytes = Vec::with_capacity(w * h / 4);
         JpegEncoder::new_with_quality(&mut bytes, JPEG_QUALITY)
             .write_image(&out, w as u32, h as u32, ColorType::Rgb8.into())
@@ -407,6 +590,41 @@ fn describe(folder: &str, source: &str) -> (String, Kind, String) {
 
 #[cfg(test)]
 mod tests {
+    /// Timing over a real N.I.N.A. set: `PSF_GUARD_SKY_MAPS_BENCH=<dir holding the
+    /// map folder> cargo test --lib sky_maps::tests::render_timing -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn render_timing() {
+        let Some(root) = std::env::var_os("PSF_GUARD_SKY_MAPS_BENCH") else {
+            return;
+        };
+        let maps = super::discover(std::path::Path::new(&root));
+        let map = maps.first().expect("a map under the bench root");
+        for (label, fov, w, h) in [
+            ("framing 12°", 12.0, 2048, 1536),
+            ("wide 60°", 60.0, 2048, 1536),
+            ("hemisphere 180°", 180.0, 2048, 1536),
+            ("framing 12° again", 12.0, 2048, 1536),
+        ] {
+            let view = super::View {
+                ra_degrees: 38.2,
+                dec_degrees: 61.45,
+                fov_degrees: fov,
+                width_px: w,
+                height_px: h,
+                rotation_degrees: 0.0,
+            };
+            let started = std::time::Instant::now();
+            let bytes = map.render(&view).expect("render");
+            println!(
+                "{label}: {:?} ({} KB, {} tiles in set)",
+                started.elapsed(),
+                bytes.len() / 1024,
+                map.tile_count()
+            );
+        }
+    }
+
     use super::*;
 
     fn solid(dir: &Path, name: &str, rgb: [u8; 3], size: u32) {
