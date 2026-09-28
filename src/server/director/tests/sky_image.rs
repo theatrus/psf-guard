@@ -188,6 +188,8 @@ async fn an_offline_sky_map_is_listed_and_rendered_from_its_tiles() {
         .expect("listed");
     assert_eq!(offline.name, "DSS (offline)");
     assert!(offline.offline);
+    // The framing view prefers this map over the online DSS2 plates.
+    assert_eq!(offline.stands_in_for.as_deref(), Some("dss2_color"));
     assert_eq!(
         offline.kind,
         crate::server::director::sky_image::SurveyKind::Broadband

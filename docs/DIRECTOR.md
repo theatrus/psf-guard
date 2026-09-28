@@ -673,6 +673,19 @@ cache works as well: drop it under `sky-maps/`. A running server offers a new
 folder within half a minute. The maps carry their own licences (the NSNS
 sets are CC BY-NC-SA); the attribution line under the framing view shows it.
 
+An offline map is preferred wherever it can stand in for an online survey:
+the DSS set for the DSS2 colour plates and the SHO set with stars for the
+online NSNS SHO layer (`stands_in_for` on the survey listing names the
+pair). A plan whose framing was saved on the online layer opens on the
+offline map, and its thumbnail on the plan list draws from it; the online
+layer stays a click away on its chip, and a layer picked by hand is kept.
+When the server first lists a set it decodes the smallest version of every
+tile into memory in the background, a few tens of megabytes, so the first
+wide view renders at once; and once a framing view has its own tile, the
+browser quietly fetches wider views of the same place out to a hemisphere,
+which the server keeps, so zooming out and the next visit have a picture
+already.
+
 ## Sky survey cutouts
 
 The framing view draws on survey imagery fetched by the server from the CDS

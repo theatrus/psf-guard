@@ -628,3 +628,15 @@ export function chipSurveys(surveys: DirectorSurvey[]): Array<{ survey: Director
 export function defaultSurveyId(surveys: DirectorSurvey[] | undefined, fallback: string): string {
   return surveys?.find(survey => survey.offline && survey.kind === 'broadband')?.id ?? fallback;
 }
+
+/** The layer to draw for a saved or chosen survey: the offline map that
+ *  stands in for it when the server has one (it answers at once and needs
+ *  no network), the survey itself when it is listed, and otherwise the
+ *  default, for a draft saved against a map this server no longer holds. */
+export function preferredSurveyId(surveyId: string, surveys: DirectorSurvey[] | undefined, fallback: string): string {
+  if (!surveys) return surveyId;
+  const offline = surveys.find(survey => survey.offline && survey.stands_in_for === surveyId);
+  if (offline) return offline.id;
+  if (surveys.some(survey => survey.id === surveyId)) return surveyId;
+  return defaultSurveyId(surveys, fallback);
+}

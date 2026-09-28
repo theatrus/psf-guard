@@ -124,6 +124,8 @@ export interface DirectorSurvey {
   attribution: string;
   /** Rendered from N.I.N.A. offline sky map tiles on the server; no network. */
   offline?: boolean;
+  /** For an offline map, the online survey it is a local copy of; the framing view prefers it. */
+  stands_in_for?: string | null;
 }
 export interface DirectorSkyPosition { ra_degrees: number; dec_degrees: number }
 export interface DirectorPanelSize { width_degrees: number; height_degrees: number }

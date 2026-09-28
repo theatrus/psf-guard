@@ -170,6 +170,14 @@
   choices are remembered in the browser. The stage is a globe about the
   center of the view, as in N.I.N.A., so a drag turns the sky under the
   pointer and the survey picture turns with it.
+- Offline sky maps are preferred wherever one stands in for an online
+  survey: a framing saved on the DSS2 plates or the online NSNS SHO layer
+  opens on the offline set when the server has it, and plan thumbnails draw
+  from it too; the online layer stays a click away. A newly listed set has
+  its small tiles warmed in the background so the first wide view renders
+  at once, and once a framing view has its tile the browser fetches wider
+  views of the same place out to a hemisphere, so zooming out already has a
+  picture.
 - The survey picture now follows the framing view at every zoom, out to a
   hemisphere, instead of giving way to a bare chart past 30°. Offline
   N.I.N.A. maps render a view in a fraction of a second rather than a second

@@ -308,13 +308,33 @@ describe('Framing view', () => {
     expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
   });
 
+  const offlineSurveys = [
+    { id: 'dss2_color', name: 'DSS2 color', hips: 'CDS/P/DSS2/color', kind: 'broadband', bandpass: 'Plates', attribution: 'DSS2 via CDS' },
+    { id: 'nsns_ohs', name: 'NSNS SHO', hips: 'CDS/P/NSNS/OHS', kind: 'narrowband', bandpass: 'SHO', attribution: 'NSNS via CDS' },
+    { id: 'nina:FramingAssistantCache', name: 'DSS (offline)', hips: '', kind: 'broadband', bandpass: 'Plates, offline', attribution: 'N.I.N.A. offline sky map', offline: true, stands_in_for: 'dss2_color' },
+    { id: 'nina:FramingAssistantCache_NorthernSkyNarrowbandSurvey_OHS_withStars', name: 'NSNS SHO (offline)', hips: '', kind: 'narrowband', bandpass: 'SHO, offline', attribution: 'NSNS', offline: true, stands_in_for: 'nsns_ohs' },
+  ];
+
+  it('opens a draft saved on an online survey on the offline map that stands in for it', async () => {
+    const stored: DirectorFramingDraft = { project_id: 'project', revision: 2, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.5 }, position_angle_degrees: 0,
+      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'nsns_ohs', view_fov_degrees: 6, updated_at_ms: 1 };
+    const { cutouts } = fixture(stored);
+    server.use(http.get('/api/director/v1/sky/surveys', () => HttpResponse.json(ok(offlineSurveys))));
+    mount();
+    await waitFor(() => expect(screen.getByLabelText('Survey')).toHaveValue('nina:FramingAssistantCache_NorthernSkyNarrowbandSurvey_OHS_withStars'));
+    await waitFor(() => expect(cutouts.some(query => decodeURIComponent(query).includes('survey=nina:FramingAssistantCache_NorthernSkyNarrowbandSurvey_OHS_withStars&'))).toBe(true));
+    expect(cutouts.some(query => query.includes('survey=nsns_ohs'))).toBe(false);
+    // Once the view's own tile is up, wider views of the same place are fetched quietly, out to a hemisphere.
+    await waitFor(() => expect(cutouts.some(query => query.includes('fov=180'))).toBe(true), { timeout: 8000 });
+    expect(cutouts.some(query => query.includes('fov=48'))).toBe(true);
+    // The online layer stays a click away.
+    fireEvent.click(screen.getByRole('button', { name: 'SHO NSNS' }));
+    expect(screen.getByLabelText('Survey')).toHaveValue('nsns_ohs');
+  });
+
   it('starts a new framing on the offline DSS map when the server has one, and lists it first', async () => {
     const { cutouts } = fixture();
-    server.use(http.get('/api/director/v1/sky/surveys', () => HttpResponse.json(ok([
-      { id: 'dss2_color', name: 'DSS2 color', hips: 'CDS/P/DSS2/color', kind: 'broadband', bandpass: 'Plates', attribution: 'DSS2 via CDS' },
-      { id: 'nina:FramingAssistantCache', name: 'DSS (offline)', hips: '', kind: 'broadband', bandpass: 'Plates, offline', attribution: 'N.I.N.A. offline sky map', offline: true },
-      { id: 'nina:FramingAssistantCache_NorthernSkyNarrowbandSurvey_OHS_withStars', name: 'NSNS SHO (offline)', hips: '', kind: 'narrowband', bandpass: 'SHO, offline', attribution: 'NSNS', offline: true },
-    ]))));
+    server.use(http.get('/api/director/v1/sky/surveys', () => HttpResponse.json(ok(offlineSurveys.filter(s => s.id !== 'nsns_ohs')))));
     mount();
     await screen.findByLabelText('Target name');
     await waitFor(() => expect(screen.getByLabelText('Survey')).toHaveValue('nina:FramingAssistantCache'));
