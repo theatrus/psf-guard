@@ -93,7 +93,14 @@ link: the database keeps a small identity table so a moved or renamed file
 stays the same rig, and each project row with a GUID gets a plan named after
 it. Projects that share a GUID across databases, as Sync copies do, become
 one plan with several rigs; projects that merely share a name stay separate
-plans. A project row without a GUID (an old catalog that Target Scheduler has
+plans. The first time a project is listed, what Target Scheduler already
+holds for it becomes Director's own drafts: its targets become the framing
+(center and rotation from the rows, a grid of panels when the targets form
+one, the rig's field as the panel size when its optics are known) and its
+exposure plans become the plan (one objective per bandpass with the frames
+a panel wants, bound to the template each plan uses at its exposure). From
+then on the drafts are the operator's; nothing is imported twice. A project
+row without a GUID (an old catalog that Target Scheduler has
 not touched since its GUID migration) is skipped until it gets one. A file
 that cannot be written, or has no project table, is reported at the top of
 the plan list and left out.

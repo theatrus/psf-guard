@@ -381,11 +381,34 @@ pub(super) async fn list(
                     Err(_) => BTreeMap::new(),
                 };
             let progress = target_progress(&connection);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
             let mut after = None;
             loop {
                 let page = store.catalog_project_mappings(identity.id, after, 256)?;
                 for mapping in &page.items {
                     let row = rows.get(&mapping.source_project_guid);
+                    // What Target Scheduler already holds for the project is
+                    // its plan: take it in as drafts the first time, once.
+                    if let Some((row_id, name)) = row {
+                        let label = name.as_deref().unwrap_or("Project");
+                        if let Err(error) = super::import_drafts::import_from_catalog(
+                            &mut store,
+                            &connection,
+                            binding.rig.id,
+                            mapping.project_id,
+                            *row_id,
+                            label,
+                            now,
+                        ) {
+                            warnings.push(format!(
+                                "{}: {label} could not be imported into Director ({error})",
+                                catalog.name
+                            ));
+                        }
+                    }
                     links.entry(mapping.project_id).or_default().push(PlanLink {
                         catalog_slug: catalog.id.clone(),
                         catalog_name: catalog.name.clone(),

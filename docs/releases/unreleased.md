@@ -175,10 +175,11 @@
   night curves are computed after the store is released, and the browser
   waits through a busy answer instead of showing it as an error.
 
-- Plans whose Target Scheduler project already has a target no longer read
-  "Linked, not framed yet": the list says they are framed in Target
-  Scheduler, shows the target's sky as the thumbnail, and opening the plan
-  starts Director's framing from it.
+- Plans whose Target Scheduler project already has targets and exposure
+  plans no longer read "Linked, not framed yet": Director imports them as
+  its framing (with the mosaic grid the targets form) and plan drafts the
+  first time it lists the project, so the workspace opens with them filled
+  in and the list shows the framed sky.
 
 - The catalog identity and Director tables PSF Guard adds to a rig database
   are plain SQL again, so N.I.N.A., Target Scheduler and older SQLite tools

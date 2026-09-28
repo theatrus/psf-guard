@@ -112,9 +112,10 @@ async fn every_database_project_becomes_a_plan_and_shared_guids_become_one_plan(
     assert_eq!(links[0]["catalog_name"], "C925 data");
     assert_eq!(links[1]["catalog_name"], "Redcat data");
     assert_ne!(links[0]["rig"]["id"], links[1]["rig"]["id"]);
-    // No Director draft, but the catalog target frames the plan: hours become degrees.
+    // The catalog target became Director's framing draft on first sight: hours to degrees.
     let framing = &andromeda[0]["framing"];
-    assert_eq!(framing["source"], "catalog", "{framing}");
+    assert_eq!(framing["source"], "draft", "{framing}");
+    assert_eq!(framing["revision"], 1);
     assert_eq!(framing["target_name"], "M 31");
     assert!(
         (framing["center"]["ra_degrees"].as_f64().unwrap() - 10.6845).abs() < 1e-6,
@@ -125,6 +126,8 @@ async fn every_database_project_becomes_a_plan_and_shared_guids_become_one_plan(
     // No optics on that rig yet, so no panel size and no panel rig.
     assert_eq!(framing["panel"], Value::Null);
     assert_eq!(framing["panel_rig_id"], Value::Null);
+    // No exposure plans there, so no plan draft was made up.
+    assert_eq!(andromeda[0]["plan"], Value::Null);
     assert_eq!(links[1]["targets"][0]["center"]["dec_degrees"], 41.269);
     // A project whose databases hold no target has nothing to frame from.
     assert_eq!(by_name("Only here")[0]["framing"], Value::Null);
@@ -408,4 +411,89 @@ async fn a_copied_database_file_is_named_and_left_out_of_planning() {
         "{preview}"
     );
     let _ = (a.rig, a.objective);
+}
+
+#[tokio::test]
+async fn a_target_scheduler_project_is_imported_as_framing_and_plan_drafts_once() {
+    let f = Fixture::new();
+    let guid = Uuid::new_v4();
+    let path = register(&f, "heart", "Heart rig", &[(1, "Heart Nebula", Some(guid))]);
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch(
+        "INSERT INTO exposuretemplate (Id, profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel, moonavoidanceenabled,
+            moonavoidanceseparation, moonavoidancewidth, maximumhumidity, defaultexposure, moonrelaxscale, moonrelaxmaxaltitude,
+            moonrelaxminaltitude, moondownenabled, ditherevery, minutesOffset, guid)
+         VALUES (1, 'profile-x', 'Ha 300', 'Ha', 100, 30, 1, -1, 0, 0, 60, 7, 0, 300, 0, 5, -15, 0, -1, 0, 'tmpl-ha'),
+                (2, 'profile-x', 'OIII 180', 'OIII', 100, 30, 1, -1, 0, 0, 60, 7, 0, 180, 0, 5, -15, 0, -1, 0, 'tmpl-o3');
+         INSERT INTO target (Id, name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+         VALUES (1, 'Heart r1c1', 1, 2.5333, 0.0, 2, 0.0, 100, 1, 'tgt-1'),
+                (2, 'Heart r1c2', 1, 2.4267, 0.0, 2, 0.0, 100, 1, 'tgt-2');
+         INSERT INTO exposureplan (profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, enabled, guid)
+         VALUES ('profile-x', 300, 30, 4, 3, 1, 1, 1, 'ep-1'), ('profile-x', 300, 30, 0, 0, 2, 1, 1, 'ep-2'),
+                ('profile-x', 180, 20, 0, 0, 1, 2, 1, 'ep-3'), ('profile-x', 180, 20, 0, 0, 2, 2, 1, 'ep-4');",
+    )
+    .unwrap();
+    let (status, listed) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let row = listed["data"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["project"]["name"] == "Heart Nebula")
+        .unwrap();
+    let framing = &row["framing"];
+    assert_eq!(framing["source"], "draft", "{framing}");
+    assert_eq!(framing["target_name"], "Heart");
+    assert_eq!(framing["mosaic"]["rows"], 1);
+    assert_eq!(framing["mosaic"]["columns"], 2);
+    assert_eq!(framing["panels"], 2);
+    // The center is the midpoint of the two targets, in degrees.
+    assert!(
+        (framing["center"]["ra_degrees"].as_f64().unwrap() - 37.2).abs() < 1e-2,
+        "{framing}"
+    );
+    assert_eq!(row["plan"]["objectives"], 2);
+    assert_eq!(row["plan"]["rigs"], 1);
+    assert_eq!(row["progress"]["accepted"], 3);
+    let project = row["project"]["id"].as_str().unwrap();
+    let (_, plan) = call(
+        &f.app,
+        "GET",
+        &format!("/projects/{project}/plan"),
+        Value::Null,
+        None,
+    )
+    .await;
+    let objectives = plan["data"]["plan"]["objectives"].as_array().unwrap();
+    let ha = objectives
+        .iter()
+        .find(|o| o["bandpass_id"] == "h_alpha")
+        .expect("H-alpha objective");
+    assert_eq!(ha["goal"]["kind"], "frames", "{ha}");
+    assert_eq!(ha["goal"]["value"], 30);
+    let o3 = objectives
+        .iter()
+        .find(|o| o["bandpass_id"] == "oiii")
+        .unwrap();
+    assert_eq!(o3["goal"]["value"], 20);
+    let contributions = plan["data"]["plan"]["contributions"].as_array().unwrap();
+    assert_eq!(contributions.len(), 2);
+    let ha_c = contributions
+        .iter()
+        .find(|c| c["objective_id"] == ha["id"])
+        .unwrap();
+    assert_eq!(ha_c["template"]["template_id"], 1);
+    assert_eq!(ha_c["template"]["filter_name"], "Ha");
+    assert_eq!(ha_c["exposure_seconds"], 300.0);
+    assert_eq!(ha_c["enabled"], true);
+    // A second listing changes nothing: the drafts are the operator's now.
+    let (_, again) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    let row2 = again["data"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["project"]["name"] == "Heart Nebula")
+        .unwrap();
+    assert_eq!(row2["framing"]["revision"], 1);
+    assert_eq!(row2["plan"]["revision"], 1);
 }
