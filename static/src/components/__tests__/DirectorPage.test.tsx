@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -102,12 +102,12 @@ describe('Director management', () => {
     mount(false, undefined, [
       http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list([
         row(record, { links: [{ catalog_slug: 'c925', catalog_name: 'C925', rig, source_project_guid: 'g', source_row_id: 7, source_name: 'Andromeda subs',
-          targets: [{ name: 'M31 r1c1', desired: 72, acquired: 40, accepted: 36, center: { ra_degrees: 10.68, dec_degrees: 41.27 }, rotation_degrees: 35 }, { name: 'M31 r2c1', desired: 72, acquired: 0, accepted: 0, center: null, rotation_degrees: null }] }],
-          progress: { desired: 144, acquired: 40, accepted: 36, targets: 2 },
+          targets: [{ name: 'M31 r1c1', desired: 72, acquired: 40, accepted: 36, rejected: 3, center: { ra_degrees: 10.68, dec_degrees: 41.27 }, rotation_degrees: 35 }, { name: 'M31 r2c1', desired: 72, acquired: 0, accepted: 0, rejected: 0, center: null, rotation_degrees: null }] }],
+          progress: { desired: 144, acquired: 40, accepted: 36, rejected: 3, targets: 2 },
           framing: { source: 'draft', revision: 2, target_name: 'M31', panels: 4, panel_rig_id: rig.id, center: { ra_degrees: 10.68, dec_degrees: 41.27 }, position_angle_degrees: 35, panel: { width_degrees: 1, height_degrees: 0.75 }, mosaic: { rows: 2, columns: 2, overlap_percent: 20 }, survey_id: 'dss2_color', extent: { width_degrees: 1.8, height_degrees: 1.35 } }, plan: { revision: 1, objectives: 2, rigs: 1 }, activation: null }),
         row({ ...record, id: '33333333-3333-4333-8333-333333333333', name: 'Bare' }),
-        row({ ...record, id: '44444444-4444-4444-8444-444444444444', name: 'Pelican' }, { links: [{ catalog_slug: 'c925', catalog_name: 'C925', rig, source_project_guid: 'p', source_row_id: 9, source_name: 'Pelican', targets: [{ name: 'IC 5070', desired: 40, acquired: 12, accepted: 10, center: { ra_degrees: 312.75, dec_degrees: 44.37 }, rotation_degrees: 90 }] }],
-          progress: { desired: 40, acquired: 12, accepted: 10, targets: 1 },
+        row({ ...record, id: '44444444-4444-4444-8444-444444444444', name: 'Pelican' }, { links: [{ catalog_slug: 'c925', catalog_name: 'C925', rig, source_project_guid: 'p', source_row_id: 9, source_name: 'Pelican', targets: [{ name: 'IC 5070', desired: 40, acquired: 12, accepted: 10, rejected: 0, center: { ra_degrees: 312.75, dec_degrees: 44.37 }, rotation_degrees: 90 }] }],
+          progress: { desired: 40, acquired: 12, accepted: 10, rejected: 0, targets: 1 },
           framing: { source: 'catalog', revision: 0, target_name: 'IC 5070', panels: 1, panel_rig_id: rig.id, center: { ra_degrees: 312.75, dec_degrees: 44.37 }, position_angle_degrees: 90, panel: { width_degrees: 0.7, height_degrees: 0.5 }, mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, survey_id: 'dss2_color', extent: { width_degrees: 0.7, height_degrees: 0.5 } } }),
       ], ['Odd file: has no Target Scheduler project table'])))),
       http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([{ rig, catalog_slug: 'c925', catalog_name: 'C925', profile: null,
@@ -117,9 +117,14 @@ describe('Director management', () => {
     ]);
     expect(await screen.findByText('M31')).toBeInTheDocument();
     expect(screen.getByText('Planned: 2 objectives, 1 rig, not activated')).toBeInTheDocument();
-    expect(screen.getByText(/C925: Andromeda subs/)).toBeInTheDocument();
-    expect(screen.getByText('M31 r1c1 36/72 frames · M31 r2c1 0/72 frames')).toBeInTheDocument();
-    expect(screen.getByText('36/144 frames accepted so far')).toBeInTheDocument();
+    // The card reads like an Overview project: counts, bars, then one row per rig.
+    expect(screen.getByText('36 / 144 desired')).toBeInTheDocument();
+    expect(screen.getAllByText('25% complete')).toHaveLength(2);
+    expect(screen.getByRole('img', { name: 'Grading status: 36 accepted, 3 rejected, 1 pending' })).toBeInTheDocument();
+    const rigs = screen.getByRole('region', { name: 'Rigs shooting M31' });
+    expect(within(rigs).getByText('Andromeda subs')).toBeInTheDocument();
+    expect(within(rigs).getByText('36/144 frames · 2 targets · 25%')).toBeInTheDocument();
+    expect(within(rigs).getByText('M31 r1c1 36/72 frames · M31 r2c1 0/72 frames')).toBeInTheDocument();
     // A framed plan shows its survey thumbnail with the panels drawn on it.
     const thumb = screen.getByRole('img', { name: 'Framing of M31 on dss2 color' });
     await waitFor(() => expect(thumb.querySelector('img')).toBeInTheDocument());

@@ -12,6 +12,7 @@ import {
 import { useAccess } from '../auth/access';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import ProjectTreeOption from './projectSelector/ProjectTreeOption';
+import ProjectFamilyOption from './projectSelector/ProjectFamilyOption';
 
 export default function ProjectTargetSelector() {
   const {
@@ -161,8 +162,7 @@ export default function ProjectTargetSelector() {
     setSearch('');
   };
 
-  const toggleProject = (project: NavigationProject) => {
-    const key = projectNavigationKey(project);
+  const toggleKey = (key: string) => {
     setExpandedProjects((current) => {
       const next = new Set(current);
       if (next.has(key)) next.delete(key);
@@ -175,9 +175,13 @@ export default function ProjectTargetSelector() {
     setPickerOpen((open) => {
       const next = !open;
       if (next && selectedProject) {
-        setExpandedProjects((current) =>
-          new Set(current).add(projectNavigationKey(selectedProject))
-        );
+        // A project shot by several rigs opens as its family row.
+        const family = navigation.familyOf(selectedProject);
+        setExpandedProjects((current) => {
+          const expanded = new Set(current).add(projectNavigationKey(selectedProject));
+          if (family) expanded.add(family.key);
+          return expanded;
+        });
       }
       return next;
     });
@@ -204,23 +208,49 @@ export default function ProjectTargetSelector() {
     : selectedProject?.db_name ?? selectedDatabase?.name ?? null;
   const refreshPending = refreshCacheMutation.isPending || refreshBothCachesMutation.isPending;
 
-  const renderProject = (project: NavigationProject) => (
-    <ProjectTreeOption
-      key={projectNavigationKey(project)}
-      project={project}
-      targets={navigation.targetsForProject(project)}
-      targetsLoading={targetsLoading}
-      targetsError={targetsError}
-      expanded={expandedProjects.has(projectNavigationKey(project))}
-      selectedDbId={dbId}
-      selectedProjectId={selectedProjectId}
-      selectedTargetId={selectedTargetId}
-      relativeNow={relativeNow}
-      onToggle={() => toggleProject(project)}
-      onChooseProject={() => chooseProject(project.db_id, project.id)}
-      onChooseTarget={chooseTarget}
-    />
-  );
+  const renderProject = (project: NavigationProject) => {
+    const family = navigation.familyOf(project);
+    // Grouped by activity the model hands over one member per family, and
+    // that member stands for every rig. Grouped by database each rig keeps
+    // its own row and only names the others.
+    if (family && projectPickerGrouping !== 'database') {
+      return (
+        <ProjectFamilyOption
+          key={family.key}
+          family={family}
+          targetsFor={navigation.targetsForProject}
+          targetsLoading={targetsLoading}
+          targetsError={targetsError}
+          expanded={expandedProjects.has(family.key)}
+          selectedDbId={dbId}
+          selectedProjectId={selectedProjectId}
+          selectedTargetId={selectedTargetId}
+          relativeNow={relativeNow}
+          onToggle={() => toggleKey(family.key)}
+          onChooseProject={(member) => chooseProject(member.db_id, member.id)}
+          onChooseTarget={chooseTarget}
+        />
+      );
+    }
+    return (
+      <ProjectTreeOption
+        key={projectNavigationKey(project)}
+        project={project}
+        targets={navigation.targetsForProject(project)}
+        targetsLoading={targetsLoading}
+        targetsError={targetsError}
+        expanded={expandedProjects.has(projectNavigationKey(project))}
+        selectedDbId={dbId}
+        selectedProjectId={selectedProjectId}
+        selectedTargetId={selectedTargetId}
+        relativeNow={relativeNow}
+        alsoOn={family ? family.members.filter((member) => member !== project).map((member) => member.db_name) : []}
+        onToggle={() => toggleKey(projectNavigationKey(project))}
+        onChooseProject={() => chooseProject(project.db_id, project.id)}
+        onChooseTarget={chooseTarget}
+      />
+    );
+  };
 
   return (
     <div ref={rootRef} className="project-target-selector compact combined-selector">

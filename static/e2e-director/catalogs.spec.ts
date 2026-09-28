@@ -39,13 +39,18 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     await page.goto('/#/director?db=parked-catalog');
     const andromeda = page.locator('.director-plan', { hasText: 'Andromeda exposures' });
     await expect(andromeda).toHaveCount(1);
-    await expect(andromeda.getByText('C925 data: Andromeda exposures')).toBeVisible();
-    await expect(andromeda.getByText('Redcat data: Andromeda exposures')).toBeVisible();
+    // One card for both rigs: the counts add up, and each rig has its own row.
+    await expect(andromeda.getByText('2 / 80 desired')).toBeVisible();
+    const rigRows = andromeda.getByRole('region', { name: 'Rigs shooting Andromeda exposures' });
+    await expect(rigRows.getByText('C925 data')).toBeVisible();
+    await expect(rigRows.getByText('Redcat data')).toBeVisible();
+    await expect(rigRows.getByText('1/40 frames · 3%')).toHaveCount(2);
     await expect(page.locator('.director-plan', { hasText: 'Andromeda older setup' })).toHaveCount(1);
     await expect(page.getByText('Legacy project without GUID')).toHaveCount(0);
-    await expect(page.getByText('C925 data', { exact: true })).toBeVisible();
-    await expect(page.getByText('Redcat data', { exact: true })).toBeVisible();
+    await expect(page.getByText('C925 data', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('Redcat data', { exact: true }).first()).toBeVisible();
     await expect(page.getByRole('button', { name: 'New rig' })).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath('plans-desktop.png'), fullPage: true });
     const mappings = await Promise.all(slugs.map(async slug => (await (await request.get(`/api/director/v1/catalogs/${slug}/mappings`)).json()).data));
     expect(mappings[0].items).toHaveLength(2);
     expect(mappings[1].items).toHaveLength(1);
@@ -82,6 +87,21 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     expect(new URL(page.url().split('#')[1], 'http://test').searchParams.get('directorProject')).toBe(mappings[1].items[0].project_id);
     await page.getByRole('link', { name: 'Plans' }).click();
     await expect(page.getByRole('heading', { name: 'Plans' })).toBeVisible();
+
+    // The header picker shows the shared project once, opening to each rig.
+    await page.goto(`/#/grid?db=${slugs[0]}&project=1`);
+    const trigger = page.locator('#scope-select');
+    await expect(trigger).toBeEnabled();
+    await trigger.click();
+    const family = page.getByRole('button', { name: /Andromeda exposures.*2 rigs/ });
+    await expect(family).toHaveCount(1);
+    await expect(page.locator('.selector-project-toggle', { hasText: 'Andromeda exposures' })).toHaveCount(1);
+    await expect(page.getByRole('region', { name: 'Andromeda exposures on Redcat data' })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('picker-family.png') });
+    // Each rig's block offers that rig's images; these catalogs hold no files,
+    // so the rows are present but disabled.
+    await expect(page.getByRole('region', { name: 'Andromeda exposures on Redcat data' }).getByRole('button', { name: /All images/ })).toBeDisabled();
+    await expect(page.getByRole('region', { name: 'Andromeda exposures on C925 data' }).getByRole('button', { name: /All images/ })).toBeDisabled();
     expect(errors).toEqual([]);
   } finally {
     for (const slug of slugs) await request.delete(`/api/databases/${slug}`);

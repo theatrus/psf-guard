@@ -302,7 +302,8 @@ export interface DirectorMosaicPreview {
 }
 
 /** One target of a linked project, with the frames its exposure plans ask for, have and have accepted. */
-export interface DirectorTargetProgress { name: string; desired: number; acquired: number; accepted: number; center: DirectorSkyPosition | null; rotation_degrees: number | null }
+/** Frames graded rejected are counted apart; acquired minus accepted minus rejected is still pending. */
+export interface DirectorTargetProgress { name: string; desired: number; acquired: number; accepted: number; rejected: number; center: DirectorSkyPosition | null; rotation_degrees: number | null }
 export interface DirectorPlanLink {
   catalog_slug: string;
   catalog_name: string;
@@ -331,7 +332,7 @@ export interface DirectorPlanRow {
   project: DirectorIdentity;
   links: DirectorPlanLink[];
   /** Frames across every linked database; null until some database holds a target. */
-  progress: { desired: number; acquired: number; accepted: number; targets: number } | null;
+  progress: { desired: number; acquired: number; accepted: number; rejected: number; targets: number } | null;
   framing: DirectorFramingSummary | null;
   plan: { revision: number; objectives: number; rigs: number } | null;
   activation: { revision: number; applied_at_ms: number; rigs: number } | null;
