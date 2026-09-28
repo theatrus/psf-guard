@@ -1,12 +1,28 @@
 import type { DirectorFootprint, DirectorFramingDraft, DirectorFramingPreview, DirectorFramingRequest, DirectorMosaic, DirectorOffset, DirectorPanelSize, DirectorRigProfileSummary, DirectorSkyPosition, DirectorSurvey } from '../../api/directorTypes';
 import type { SkyPreview } from '../../api/types';
-import { tanPixelToSky } from '../../utils/skyProjection';
+import { formatDecShort, formatRaShort, galacticBandQuads, tanPixelToSky } from '../../utils/skyProjection';
+import { BRIGHT_STARS, CONSTELLATION_LINES, CONSTELLATION_NAMES } from '../../data/skyBackdrop';
 
-/** The image the view asks the server for, in pixels; CSS scales it down. */
+/** The stage's logical pixels; CSS scales the drawing to the element. The
+ *  longer side is always 1024, so a 4:3 stage is 1024 × 768. */
+export interface Stage { width: number; height: number }
 export const STAGE_WIDTH = 1024;
 export const STAGE_HEIGHT = 768;
+export const DEFAULT_STAGE: Stage = { width: STAGE_WIDTH, height: STAGE_HEIGHT };
+/** The stage for an element of this width-to-height ratio. */
+export function stageFor(aspect: number): Stage {
+  const a = Number.isFinite(aspect) && aspect > 0 ? aspect : 4 / 3;
+  return a >= 1 ? { width: STAGE_WIDTH, height: Math.round(STAGE_WIDTH / a) } : { width: Math.round(STAGE_WIDTH * a), height: STAGE_WIDTH };
+}
 export const MIN_VIEW_FOV = 0.05;
-export const MAX_VIEW_FOV = 40;
+/** Width of view in stage degrees. The stage is stereographic, so 150 stage
+ *  degrees is a hemisphere and a bit less across on the sky. */
+export const MAX_VIEW_FOV = 150;
+/** Survey imagery is asked for up to this width; a wider view is a chart of
+ *  stars, constellations and the grid, which draws at once. */
+export const SURVEY_MAX_FOV = 30;
+/** The widest survey image the server renders. */
+export const TILE_MAX_FOV = 40;
 
 /** A catalog target the draft starts from when no draft exists yet. */
 export interface FramingSeed { name: string; center: DirectorSkyPosition; position_angle_degrees: number }
@@ -68,28 +84,66 @@ export function previewRequest(state: FramingState, rigs: DirectorRigProfileSumm
   };
 }
 
-/** Degrees per stage pixel. */
-export function pixelScale(viewFov: number): number {
-  return viewFov / STAGE_WIDTH;
+/** Degrees per stage pixel at the center of the view. */
+export function pixelScale(viewFov: number, stage: Stage = DEFAULT_STAGE): number {
+  return viewFov / stage.width;
 }
 
 /** North up, east left: a positive east offset moves left on the stage. */
-export function toStage(offset: DirectorOffset, viewFov: number): [number, number] {
-  const scale = pixelScale(viewFov);
-  return [STAGE_WIDTH / 2 - offset[0] / scale, STAGE_HEIGHT / 2 - offset[1] / scale];
+export function toStage(offset: DirectorOffset, viewFov: number, stage: Stage = DEFAULT_STAGE): [number, number] {
+  const scale = pixelScale(viewFov, stage);
+  return [stage.width / 2 - offset[0] / scale, stage.height / 2 - offset[1] / scale];
 }
 
-export function polygonPoints(corners: DirectorOffset[], viewFov: number): string {
-  return corners.map(corner => toStage(corner, viewFov).map(v => v.toFixed(1)).join(',')).join(' ');
+export function polygonPoints(corners: DirectorOffset[], viewFov: number, stage: Stage = DEFAULT_STAGE): string {
+  return corners.map(corner => toStage(corner, viewFov, stage).map(v => v.toFixed(1)).join(',')).join(' ');
 }
 
-/** Where the mouse points on the sky, from stage pixels. Small-angle, which is
- *  what a hand needs; the server's preview keeps the exact geometry. */
-export function skyAtStage(view: DirectorSkyPosition, viewFov: number, x: number, y: number): DirectorSkyPosition {
-  const scale = pixelScale(viewFov);
-  const xi = (STAGE_WIDTH / 2 - x) * scale;
-  const eta = (STAGE_HEIGHT / 2 - y) * scale;
-  return moveBy(view, xi, eta);
+/** The stage's own projection: stereographic about the view center, in
+ *  degrees east and north as the tangent plane counts them at the center.
+ *  It matches the tangent plane to second order, so at framing widths the
+ *  two agree to a pixel, and it stays bounded out to a hemisphere, so one
+ *  projection serves the chart at every zoom. The server's survey images
+ *  and offline maps are rendered in it too. `null` at the antipode only. */
+export function stageProject(view: DirectorSkyPosition, position: DirectorSkyPosition): DirectorOffset | null {
+  const rad = Math.PI / 180;
+  const dec0 = view.dec_degrees * rad;
+  const dec = position.dec_degrees * rad;
+  const dra = (position.ra_degrees - view.ra_degrees) * rad;
+  const cosC = Math.sin(dec0) * Math.sin(dec) + Math.cos(dec0) * Math.cos(dec) * Math.cos(dra);
+  if (!(cosC > -1 + 1e-9)) return null;
+  const k = 2 / (1 + cosC);
+  const xi = k * Math.cos(dec) * Math.sin(dra);
+  const eta = k * (Math.cos(dec0) * Math.sin(dec) - Math.sin(dec0) * Math.cos(dec) * Math.cos(dra));
+  return [xi / rad, eta / rad];
+}
+
+/** The sky position at a stage offset from the view center: the exact inverse of `stageProject`. */
+export function stageDeproject(view: DirectorSkyPosition, offset: DirectorOffset): DirectorSkyPosition {
+  const rad = Math.PI / 180;
+  const xi = offset[0] * rad;
+  const eta = offset[1] * rad;
+  const rho = Math.hypot(xi, eta);
+  if (rho < 1e-12) return { ...view };
+  const c = 2 * Math.atan(rho / 2);
+  const sinC = Math.sin(c);
+  const cosC = Math.cos(c);
+  const dec0 = view.dec_degrees * rad;
+  const dec = Math.asin(Math.max(-1, Math.min(1, cosC * Math.sin(dec0) + (eta * sinC * Math.cos(dec0)) / rho)));
+  const ra = view.ra_degrees * rad + Math.atan2(xi * sinC, rho * Math.cos(dec0) * cosC - eta * Math.sin(dec0) * sinC);
+  return { ra_degrees: (((ra / rad) % 360) + 360) % 360, dec_degrees: dec / rad };
+}
+
+/** How much sky the stage really spans across: less than the stage degrees
+ *  once the view is wide, since the projection stretches toward the rim. */
+export function trueWidth(viewFov: number): number {
+  const rho = (viewFov / 2) * (Math.PI / 180);
+  return (4 * Math.atan(rho / 2) * 180) / Math.PI;
+}
+
+/** Where the mouse points on the sky, from stage pixels. */
+export function skyAtStage(view: DirectorSkyPosition, viewFov: number, x: number, y: number, stage: Stage = DEFAULT_STAGE): DirectorSkyPosition {
+  return stageDeproject(view, fromStage(x, y, viewFov, stage));
 }
 
 export function moveBy(position: DirectorSkyPosition, xiDegrees: number, etaDegrees: number): DirectorSkyPosition {
@@ -115,16 +169,16 @@ export function offsetFrom(view: DirectorSkyPosition, position: DirectorSkyPosit
 }
 
 /** SVG matrix that lays a solved stack preview on the stage: its pixel
- *  corners go through its TAN solution to the sky, then onto the view plane.
+ *  corners go through its TAN solution to the sky, then onto the stage.
  *  Fitted to three corners, which is exact for the affine a preview needs at
- *  framing scales. `null` when any corner leaves the plane. */
-export function stackMatrix(preview: SkyPreview, view: DirectorSkyPosition, viewFov: number): string | null {
+ *  framing scales. `null` when any corner leaves the view. */
+export function stackMatrix(preview: SkyPreview, view: DirectorSkyPosition, viewFov: number, stage: Stage = DEFAULT_STAGE): string | null {
   if (!preview.wcs || preview.width <= 0 || preview.height <= 0) return null;
   const { width, height, wcs } = preview;
   const points = ([[0, 0], [width, 0], [0, height]] as const).map(([x, y]) => {
     const [ra, dec] = tanPixelToSky(wcs, x, y);
-    const offset = offsetFrom(view, { ra_degrees: ra, dec_degrees: dec });
-    return offset ? toStage(offset, viewFov) : null;
+    const offset = stageProject(view, { ra_degrees: ra, dec_degrees: dec });
+    return offset ? toStage(offset, viewFov, stage) : null;
   });
   if (points.some(point => point === null)) return null;
   const [p0, p1, p2] = points as [number, number][];
@@ -217,33 +271,38 @@ export const TILE_WIDTH = 2048;
 export const TILE_HEIGHT = 1536;
 export interface SkyTile { center: DirectorSkyPosition; fov: number }
 
+/** The tile's pixels: twice the stage, within what the server renders. */
+export function tileSize(stage: Stage = DEFAULT_STAGE): { width: number; height: number } {
+  return { width: Math.min(2048, stage.width * 2), height: Math.min(2048, stage.height * 2) };
+}
+
 export function tileFor(view: DirectorSkyPosition, viewFov: number): SkyTile {
-  return { center: view, fov: Math.min(MAX_VIEW_FOV, viewFov * 2) };
+  return { center: view, fov: Math.min(TILE_MAX_FOV, viewFov * 2) };
 }
 
 /** Whether the view has left the tile's useful area: near an edge, or
  *  zoomed so far in that the tile's pixels would show. Then a new tile is
  *  needed at once, not after the pointer rests. */
-export function viewLeftTile(tile: SkyTile, view: DirectorSkyPosition, viewFov: number): boolean {
-  const offset = offsetFrom(tile.center, view);
+export function viewLeftTile(tile: SkyTile, view: DirectorSkyPosition, viewFov: number, stage: Stage = DEFAULT_STAGE): boolean {
+  const offset = stageProject(tile.center, view);
   if (!offset) return true;
   const reach = tile.fov / 2 - viewFov / 2;
-  return Math.abs(offset[0]) > reach * 0.9 || Math.abs(offset[1]) > reach * 0.9 * (STAGE_HEIGHT / STAGE_WIDTH) || viewFov > tile.fov * 0.95 || viewFov < tile.fov / 4;
+  return Math.abs(offset[0]) > reach * 0.9 || Math.abs(offset[1]) > reach * 0.9 * (stage.height / stage.width) || viewFov > tile.fov * 0.95 || viewFov < tile.fov / 4;
 }
 
 /** The CSS transform that lays a loaded tile under the current view: the
  *  tile fills the stage at its own field, so it is scaled by the ratio of
  *  fields about the stage center and shifted by where its center falls in
- *  the view. Exact at the tile's center; away from it the two tangent
- *  planes differ by less than a pixel at framing fields, and the settled
- *  view gets a tile of its own. */
-export function tileTransform(tile: SkyTile, view: DirectorSkyPosition, viewFov: number): string | null {
-  const offset = offsetFrom(view, tile.center);
+ *  the view. Exact at the tile's center; away from it the two projections
+ *  differ by less than a pixel at framing fields, and the settled view
+ *  gets a tile of its own. */
+export function tileTransform(tile: SkyTile, view: DirectorSkyPosition, viewFov: number, stage: Stage = DEFAULT_STAGE): string | null {
+  const offset = stageProject(view, tile.center);
   if (!offset) return null;
   const scale = tile.fov / viewFov;
-  const [x, y] = toStage(offset, viewFov);
-  const tx = ((x - STAGE_WIDTH / 2) / STAGE_WIDTH) * 100;
-  const ty = ((y - STAGE_HEIGHT / 2) / STAGE_HEIGHT) * 100;
+  const [x, y] = toStage(offset, viewFov, stage);
+  const tx = ((x - stage.width / 2) / stage.width) * 100;
+  const ty = ((y - stage.height / 2) / stage.height) * 100;
   if (Math.abs(scale - 1) < 1e-9 && Math.abs(tx) < 1e-9 && Math.abs(ty) < 1e-9) return 'none';
   return `translate(${tx.toFixed(4)}%, ${ty.toFixed(4)}%) scale(${scale.toFixed(6)})`;
 }
@@ -286,14 +345,20 @@ export function formatDegrees(value: number): string {
 }
 
 /** Stage pixels back to view offsets (east positive, up positive). */
-export function fromStage(x: number, y: number, viewFov: number): DirectorOffset {
-  const scale = pixelScale(viewFov);
-  return [(STAGE_WIDTH / 2 - x) * scale, (STAGE_HEIGHT / 2 - y) * scale];
+export function fromStage(x: number, y: number, viewFov: number, stage: Stage = DEFAULT_STAGE): DirectorOffset {
+  const scale = pixelScale(viewFov, stage);
+  return [(stage.width / 2 - x) * scale, (stage.height / 2 - y) * scale];
 }
 
-/** Whether a stage point lies inside a footprint given by its view corners. */
-export function insidePolygon(point: [number, number], corners: DirectorOffset[], viewFov: number): boolean {
-  const pts = corners.map(c => toStage(c, viewFov));
+/** A footprint's sky corners on the stage, or `null` when one is out of view. */
+export function stageCorners(corners: DirectorSkyPosition[], view: DirectorSkyPosition): DirectorOffset[] | null {
+  const mapped = corners.map(corner => stageProject(view, corner));
+  return mapped.every(Boolean) ? mapped as DirectorOffset[] : null;
+}
+
+/** Whether a stage point lies inside a footprint given by its stage corners. */
+export function insidePolygon(point: [number, number], corners: DirectorOffset[], viewFov: number, stage: Stage = DEFAULT_STAGE): boolean {
+  const pts = corners.map(c => toStage(c, viewFov, stage));
   let inside = false;
   for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
     const [xi, yi] = pts[i]; const [xj, yj] = pts[j];
@@ -316,6 +381,171 @@ export function handleOffset(positionAngle: number, halfHeightDegrees: number, m
   const r = halfHeightDegrees + marginDegrees;
   const rad = (positionAngle * Math.PI) / 180;
   return [r * Math.sin(rad), r * Math.cos(rad)];
+}
+
+/** The handle on the sky: laid out on the target's own tangent plane, where
+ *  the camera angle is measured, then taken to the sky. Drawn through the
+ *  stage projection like the rectangle, it stays on the rectangle's up
+ *  direction wherever the view is looking; a handle placed in the view's
+ *  plane would drift as the view panned away, since north tilts across a
+ *  plane away from its center. */
+export function handleSky(center: DirectorSkyPosition, positionAngle: number, halfHeightDegrees: number, marginDegrees: number): DirectorSkyPosition {
+  return deprojectFrom(center, handleOffset(positionAngle, halfHeightDegrees, marginDegrees));
+}
+
+/** The camera angle that points a footprint's up direction from its center
+ *  at a sky position: east of north on the target's tangent plane. */
+export function angleAt(center: DirectorSkyPosition, position: DirectorSkyPosition): number {
+  const offset = offsetFrom(center, position);
+  if (!offset) return 0;
+  const angle = (Math.atan2(offset[0], offset[1]) * 180) / Math.PI;
+  return ((angle % 360) + 360) % 360;
+}
+
+/** An SVG path through stage points, broken where a point leaves the sky
+ *  or jumps across the stage; points far outside the stage are dropped. */
+function stagePath(points: Array<DirectorOffset | null>, viewFov: number, stage: Stage, close = false): string {
+  const w = stage.width;
+  const h = stage.height;
+  const inside = (p: [number, number]) => p[0] > -w && p[0] < 2 * w && p[1] > -h && p[1] < 2 * h;
+  let d = '';
+  let drawn = 0;
+  let previous: [number, number] | null = null;
+  for (const point of points) {
+    const at = point ? toStage(point, viewFov, stage) : null;
+    if (!at || !inside(at) || (previous && Math.hypot(at[0] - previous[0], at[1] - previous[1]) > w)) { previous = null; if (at && inside(at)) { d += `M${at[0].toFixed(1)} ${at[1].toFixed(1)}`; previous = at; drawn += 1; } continue; }
+    d += previous ? `L${at[0].toFixed(1)} ${at[1].toFixed(1)}` : `M${at[0].toFixed(1)} ${at[1].toFixed(1)}`;
+    previous = at;
+    drawn += 1;
+  }
+  if (drawn < 2) return '';
+  return close ? `${d}Z` : d;
+}
+
+const DEC_STEPS = [45, 30, 20, 10, 5, 2, 1, 0.5, 1 / 3, 1 / 6, 1 / 12, 1 / 30, 1 / 60];
+const RA_STEP_HOURS = [6, 3, 2, 1, 0.5, 1 / 3, 1 / 6, 1 / 12, 1 / 30, 1 / 60, 1 / 120, 1 / 360];
+
+/** Grid spacing for a view: about five lines across, right ascension
+ *  spaced to look like declination at the view's latitude. */
+export function gridSteps(viewFov: number, decDegrees: number): { raDegrees: number; decDegrees: number } {
+  const want = trueWidth(viewFov) / 5;
+  const dec = DEC_STEPS.find(step => step <= want) ?? DEC_STEPS[DEC_STEPS.length - 1];
+  const cos = Math.max(0.1, Math.cos((decDegrees * Math.PI) / 180));
+  const wantRa = dec / cos / 15;
+  const raHours = RA_STEP_HOURS.find(step => step <= wantRa) ?? RA_STEP_HOURS[RA_STEP_HOURS.length - 1];
+  return { raDegrees: raHours * 15, decDegrees: dec };
+}
+
+function formatRaLabel(raDegrees: number, stepDegrees: number): string {
+  if (stepDegrees >= 0.25) return formatRaShort(raDegrees);
+  const seconds = Math.round((((raDegrees % 360) + 360) % 360) / 15 * 3600);
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  return `${h}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`;
+}
+
+export interface Graticule {
+  paths: Array<{ kind: 'ra' | 'dec'; d: string }>;
+  labels: Array<{ kind: 'ra' | 'dec'; x: number; y: number; text: string }>;
+}
+
+/** The equatorial grid over the view, with labels down the left edge for
+ *  declination and along the top for right ascension, clear of the survey
+ *  chips and the scale readout at the bottom. */
+export function framingGraticule(view: DirectorSkyPosition, viewFov: number, stage: Stage = DEFAULT_STAGE): Graticule {
+  const { raDegrees: raStep, decDegrees: decStep } = gridSteps(viewFov, view.dec_degrees);
+  const reach = (trueWidth(viewFov) / 2) * Math.hypot(1, stage.height / stage.width) * 1.1;
+  const decMin = Math.max(-90, view.dec_degrees - reach);
+  const decMax = Math.min(90, view.dec_degrees + reach);
+  const overPole = Math.abs(view.dec_degrees) + reach >= 88;
+  const cos = Math.cos((view.dec_degrees * Math.PI) / 180);
+  const halfRa = overPole ? 180 : Math.min(180, reach / Math.max(cos, 1e-3));
+  const raStart = view.ra_degrees - halfRa;
+  const raEnd = view.ra_degrees + halfRa;
+  const paths: Graticule['paths'] = [];
+  const labels: Graticule['labels'] = [];
+  const samples = (from: number, to: number, n: number) => Array.from({ length: n + 1 }, (_, i) => from + ((to - from) * i) / n);
+  const crossing = (points: Array<DirectorOffset | null>, axis: 0 | 1, edge: number) => {
+    const pts = points.map(p => (p ? toStage(p, viewFov, stage) : null));
+    for (let i = 1; i < pts.length; i += 1) {
+      const a = pts[i - 1]; const b = pts[i];
+      if (!a || !b) continue;
+      if ((a[axis] - edge) * (b[axis] - edge) <= 0 && a[axis] !== b[axis]) {
+        const t = (edge - a[axis]) / (b[axis] - a[axis]);
+        const other = a[1 - axis] + t * (b[1 - axis] - a[1 - axis]);
+        return axis === 0 ? [edge, other] as [number, number] : [other, edge] as [number, number];
+      }
+    }
+    return null;
+  };
+  for (let dec = Math.ceil(decMin / decStep) * decStep; dec <= decMax + 1e-9; dec += decStep) {
+    if (Math.abs(dec) >= 90 - 1e-9) continue;
+    const points = samples(raStart, raEnd, 120).map(ra => stageProject(view, { ra_degrees: ra, dec_degrees: dec }));
+    const d = stagePath(points, viewFov, stage);
+    if (!d) continue;
+    paths.push({ kind: 'dec', d });
+    const at = crossing(points, 0, 6);
+    if (at && at[1] > 14 && at[1] < stage.height - 6) labels.push({ kind: 'dec', x: 8, y: at[1] - 4, text: formatDecShort(dec) });
+  }
+  const meridians = Math.min(Math.round(360 / raStep), Math.ceil((raEnd - raStart) / raStep) + 1);
+  for (let i = 0; i < meridians; i += 1) {
+    const ra = (Math.ceil(raStart / raStep) + i) * raStep;
+    if (ra > raEnd + 1e-9 && !overPole) break;
+    const points = samples(decMin, decMax, 96).map(dec => stageProject(view, { ra_degrees: ra, dec_degrees: dec }));
+    const d = stagePath(points, viewFov, stage);
+    if (!d) continue;
+    paths.push({ kind: 'ra', d });
+    const at = crossing(points, 1, 6);
+    if (at && at[0] > 6 && at[0] < stage.width - 70) labels.push({ kind: 'ra', x: at[0] + 4, y: 18, text: formatRaLabel(ra, raStep) });
+  }
+  return { paths, labels };
+}
+
+/** Where each backdrop layer starts to make sense: stars and figures are
+ *  worth drawing once the survey image is no longer showing them better. */
+export const STARS_FROM_FOV = 8;
+export const FIGURES_FROM_FOV = 12;
+export const NAMES_FROM_FOV = 20;
+export const MILKY_WAY_FROM_FOV = 45;
+
+export interface Backdrop {
+  stars: Array<{ x: number; y: number; r: number }>;
+  figures: string[];
+  names: Array<{ x: number; y: number; text: string }>;
+  milkyWay: string[];
+}
+
+/** The Sky view's chart under the framing: bright stars, constellation
+ *  figures and names, and the Milky Way band, each once the view is wide
+ *  enough for it. */
+export function framingBackdrop(view: DirectorSkyPosition, viewFov: number, stage: Stage = DEFAULT_STAGE): Backdrop {
+  const onStage = (p: [number, number]) => p[0] >= -20 && p[0] <= stage.width + 20 && p[1] >= -20 && p[1] <= stage.height + 20;
+  const stars: Backdrop['stars'] = [];
+  if (viewFov >= STARS_FROM_FOV) {
+    for (const [ra, dec, mag] of BRIGHT_STARS) {
+      const offset = stageProject(view, { ra_degrees: ra, dec_degrees: dec });
+      if (!offset) continue;
+      const at = toStage(offset, viewFov, stage);
+      if (onStage(at)) stars.push({ x: at[0], y: at[1], r: Math.max(0.9, 5.5 - mag) * 0.85 + 0.8 });
+    }
+  }
+  const figures = viewFov >= FIGURES_FROM_FOV
+    ? Object.values(CONSTELLATION_LINES).map(figure => figure.map(polyline => stagePath(polyline.map(([ra, dec]) => stageProject(view, { ra_degrees: ra, dec_degrees: dec })), viewFov, stage)).join('')).filter(Boolean)
+    : [];
+  const names: Backdrop['names'] = [];
+  if (viewFov >= NAMES_FROM_FOV) {
+    for (const [name, ra, dec] of Object.values(CONSTELLATION_NAMES)) {
+      const offset = stageProject(view, { ra_degrees: ra, dec_degrees: dec });
+      if (!offset) continue;
+      const at = toStage(offset, viewFov, stage);
+      if (onStage(at)) names.push({ x: at[0], y: at[1], text: name });
+    }
+  }
+  const milkyWay = viewFov >= MILKY_WAY_FROM_FOV
+    ? galacticBandQuads(12).map(quad => stagePath(quad.map(([ra, dec]) => stageProject(view, { ra_degrees: ra, dec_degrees: dec })), viewFov, stage, true)).filter(d => d && !d.includes('M', 1))
+    : [];
+  return { stars, figures, names, milkyWay };
 }
 
 /** The layers worth a chip on the sky: the DSS2 colour plates N.I.N.A. starts
