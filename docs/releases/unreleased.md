@@ -157,6 +157,11 @@
 
 ## Changed
 
+- The Linux AppImage and .deb carry AppStream metadata: a summary, a
+  description, links and four screenshots, so software centres and the
+  AppImage catalog show PSF Guard properly instead of a first-run capture
+  and the desktop file's one-line comment.
+
 - Framing drags work both of N.I.N.A.'s ways: move the rectangle over a
   still sky (the default) or pin the rectangle and move the sky, and the
   target, under it; Shift-drag looks around without moving the target in

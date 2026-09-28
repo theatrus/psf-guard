@@ -49,6 +49,18 @@
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
       "timestampUrl": ""
+    },
+    "linux": {
+      "appimage": {
+        "files": {
+          "/usr/share/metainfo/com.theatrus.psf-guard.metainfo.xml": "packaging/linux/com.theatrus.psf-guard.metainfo.xml"
+        }
+      },
+      "deb": {
+        "files": {
+          "/usr/share/metainfo/com.theatrus.psf-guard.metainfo.xml": "packaging/linux/com.theatrus.psf-guard.metainfo.xml"
+        }
+      }
     }
   },
   "app": {

@@ -57,7 +57,8 @@ jobs:
           libappindicator3-dev \
           librsvg2-dev \
           libpng-dev \
-          patchelf
+          patchelf \
+          appstream
 
 
     - name: Import Apple Developer Certificate (macOS)
@@ -176,6 +177,26 @@ jobs:
       # asset. The installer's bundled copy comes from Tauri auto-bundling the
       # psf-guard-cli bin target, so no sidecar staging is needed here.
       run: cargo build --release --locked --bin psf-guard-cli
+
+    - name: Stamp and validate the AppStream metadata (Linux)
+      # The AppImage and .deb carry packaging/linux/*.metainfo.xml so software
+      # centres and the AppImage catalog show our description and screenshots.
+      # The release's version and date go in here; the file in the repository
+      # carries no <releases> so it stays valid between releases.
+      if: matrix.os == 'ubuntu-22.04'
+      shell: bash
+      run: |
+        meta=packaging/linux/com.theatrus.psf-guard.metainfo.xml
+        released=$(date -u +%Y-%m-%d)
+        python3 - "$meta" "$APP_VERSION" "$released" <<'PY'
+        import sys, pathlib
+        path, version, date = sys.argv[1:4]
+        text = pathlib.Path(path).read_text()
+        block = f'  <releases>\n    <release version="{version}" date="{date}"/>\n  </releases>\n</component>'
+        assert text.count('</component>') == 1
+        pathlib.Path(path).write_text(text.replace('</component>', block))
+        PY
+        appstreamcli validate --no-net "$meta"
 
     - name: Build Tauri desktop app (Linux)
       if: matrix.os == 'ubuntu-22.04'
