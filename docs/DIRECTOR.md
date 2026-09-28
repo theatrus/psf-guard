@@ -345,24 +345,28 @@ server folds both back to the sensor before offering them. Typed models:
 ## Framing view
 
 Open a plan from the Planning page. The workspace is a wide screen:
-**Framing** comes first and the sky takes the width the window has and most
-of its height, with the controls beside it; the plan and activation sit under
-it side by side, and the linked databases last.
+**Framing** comes first. The sky takes the width the window has and the
+height left once tonight's visibility strip fits under it, and that column
+stays put while the form beside it scrolls, so the horizon chart is always
+on screen; the plan and activation sit under it side by side, and the linked
+databases last.
 
 The sky is drawn the way N.I.N.A.'s framing assistant and the Sky view draw
 it: a stereographic globe about the center of the view, so a drag turns the
 sky under the pointer and a rectangle away from the center leans with its
-local north. A drag works one of two ways, as in N.I.N.A. **The rectangle
-over a still sky** (the default, like N.I.N.A. with a survey image): drag
-the rectangle to move the target, and drag the sky to look around without
-moving it. **The sky under a pinned rectangle** (like N.I.N.A.'s sky atlas):
-the rectangle stays where it is and dragging anywhere turns the sky, and the
-target with it; Shift-drag looks around without moving the target. **Turn
-the sky with the camera** keeps the rectangle upright and turns the sky by
-the camera angle instead, N.I.N.A.'s "rotate sky"; the compass shows where
-north has gone. Both choices are remembered in the browser. Scroll or use
-the corner buttons to zoom, from three arcminutes across out to a
-hemisphere.
+local north. A drag works one of two ways, as in N.I.N.A., chosen by the
+**Rectangle** and **Sky** buttons at the top of the stage. **Rectangle**
+(the default, like N.I.N.A. with a survey image): drag the rectangle to move
+the target, and drag the sky to look around without moving it. **Sky** (like
+N.I.N.A.'s sky atlas): the rectangle stays where it is and dragging anywhere
+turns the sky, and the target with it; Shift-drag looks around without
+moving the target. The turn button beside them keeps the rectangle upright
+and turns the sky by the camera angle instead, N.I.N.A.'s "rotate sky"; the
+compass shows where north has gone. The buttons after it switch the layers:
+the equatorial grid, the constellations, deep-sky marks, comets and
+asteroids, and the Sun, Moon and planets. Every choice is remembered in the
+browser. Scroll or use the corner buttons to zoom, from three arcminutes
+across out to a hemisphere.
 
 The survey picture follows at every zoom, out to a hemisphere: the server
 renders it at the width asked for, and the offline maps composite every tile
@@ -371,16 +375,21 @@ memory between renders, and a wide view takes the small versions of each
 tile). Over it sit constellation figures and names once the view is wide
 enough, and an equatorial grid whose spacing follows the zoom, with
 declination labelled down the left edge and right ascension along the top;
-drawn stars and the Milky Way band stand in only until a picture is up. The
-grid and the constellation layer each have a switch under **View**. Marks name what is in the field. When the server holds the Seiza object
+drawn stars and the Milky Way band stand in only until a picture is up.
+Marks name what is in the field. When the server holds the Seiza object
 catalog (the same one the astrometry uses, see `astrometry.objects` in the
 registry), deep-sky objects are drawn at their catalog size and angle,
 brightest and largest first, with a label for the most prominent; when it
 holds the minor-body catalog, comets and asteroids are placed for the moment
 the view is looked at (comets with their tail direction, asteroids with
 their motion); and the Sun, Moon and planets come from a built-in ephemeris
-good to a few arcminutes. Each layer has a switch under **View**, remembered
-in the browser, and says when its catalog is not on this server. A mark is a
+good to a few arcminutes. Each layer has a button at the top of the stage,
+and says on the stage when its catalog is not on this server. **Catalogs
+marked** under **View** picks the catalog families that get marks; PGC and
+HD start hidden, since PGC lists hundreds of faint galaxies in any field and
+HD every star the survey already shows, and with them in, the limit of 300
+marks left no room for the nebulae and clusters an imager frames around.
+The choice is remembered in the browser and sent as `hide`. A mark is a
 catalog place, not pointing evidence; the survey picture and the plate solve
 say where things really are. The
 projection is stereographic, in the browser, on the server's survey images
@@ -613,9 +622,11 @@ stored and shown nowhere yet.
 
 ## Visibility
 
-Under the framing view, **Visibility** times the target from each rig that has
-a site in its rig profile, the way N.I.N.A.'s framing assistant does it for
-one site. A verdict line says whether the target is visible tonight and for
+Under the framing stage, **Visibility** times the target from each rig that
+has a site in its rig profile, the way N.I.N.A.'s framing assistant does it
+for one site. It is a strip there, sized to stay on screen with the sky: the
+verdict, the chart and the estimate, with the nights table folded under
+**Next nights**. A verdict line says whether the target is visible tonight and for
 how long: dark hours (Sun below −12°), hours the target sits above the rig's
 minimum altitude and its custom horizon when it has one, the peak altitude,
 the Moon's phase, separation and hours up. Below it an altitude chart draws
@@ -712,7 +723,7 @@ layers are marked as such and never stand in for one another.
 | --- | --- | --- |
 | GET | `/sky/surveys` | The allowed surveys: `id`, `name`, `hips`, `kind` (`broadband`, `narrowband`, `panorama`), `bandpass`, `attribution`. |
 | GET | `/sky/resolve` | `name`: an object name for CDS Sesame (Simbad, NED, VizieR). Returns the resolved `name`, ICRS `ra_degrees` and `dec_degrees` and the `source`; `404` when no catalog knows the name. A catalog position, not a pointing solution. |
-| GET | `/sky/objects` | `ra` and `dec` in ICRS degrees, `fov` (stage width in degrees), optional `aspect` (width over height, 4:3 by default), `at` (Unix milliseconds, now by default), `limit` (300 by default, at most 1000) and `limit_mag` (16 by default). Answers the marks within the stage's reach: `objects` from the Seiza object catalog by prominence, `minor_bodies` (comets and asteroids from its minor-body catalog at `at`, brightest first, with motion and a tail or motion direction), and `solar_system` (Sun, Moon and planets from the built-in ephemeris). Each catalog layer says whether it is `available` on the server and, if not, why. |
+| GET | `/sky/objects` | `ra` and `dec` in ICRS degrees, `fov` (stage width in degrees), optional `aspect` (width over height, 4:3 by default), `at` (Unix milliseconds, now by default), `limit` (300 by default, at most 1000), `limit_mag` (16 by default) and `hide` (comma-separated catalog prefixes to leave out of `objects`, matched against the letters a designation starts with; `PGC,HD` when absent, empty to hide nothing). Answers the marks within the stage's reach: `hidden` (the prefixes applied), `objects` from the Seiza object catalog by prominence after the hidden catalogs are dropped, `minor_bodies` (comets and asteroids from its minor-body catalog at `at`, brightest first, with motion and a tail or motion direction), and `solar_system` (Sun, Moon and planets from the built-in ephemeris). Each catalog layer says whether it is `available` on the server and, if not, why. |
 | GET | `/sky/cutout` | `survey` (an `id` from the list), `ra` and `dec` in ICRS degrees, `fov` (image width in degrees, 0.02 to 180), optional `width` and `height` in pixels (64 to 2048, default 1024) and `rotation` in degrees east of north. A cached image answers `200 image/jpeg`. A miss starts one fetch and answers `202` with `Retry-After: 1`; poll the same URL. A failed fetch answers `502` with the reason for about a minute. |
 
 Cutouts are tangent-plane JPEGs cached under `<cache>/director/sky/` by

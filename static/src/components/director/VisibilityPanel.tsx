@@ -8,7 +8,9 @@ import './VisibilityPanel.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Feasibility request failed';
 const W = 720;
-const H = 240;
+const FULL_H = 240;
+/** The compact chart is a strip: the same width, tonight's shape at a glance. */
+const H_COMPACT = 132;
 const PAD = { left: 34, right: 12, top: 10, bottom: 26 };
 
 function useDebounced<T>(value: T, delay: number): T {
@@ -24,7 +26,8 @@ function clock(ms: number): string {
 /** Tonight's altitude chart for one rig: target, its horizon at each
  *  azimuth, the Moon, and darkness bands. Time runs from an hour before
  *  dusk to an hour after dawn; a night without darkness shows noon to noon. */
-export function AltitudeChart({ rig }: { rig: DirectorRigFeasibility }) {
+export function AltitudeChart({ rig, compact = false }: { rig: DirectorRigFeasibility; compact?: boolean }) {
+  const H = compact ? H_COMPACT : FULL_H;
   const samples = rig.curve.samples;
   const night = rig.curve.night;
   const start = night.dusk_ms !== null ? night.dusk_ms - 3_600_000 : night.noon_ms;
@@ -60,10 +63,10 @@ export function AltitudeChart({ rig }: { rig: DirectorRigFeasibility }) {
   const moon = line(s => s.moon_altitude_degrees);
   const ticks: number[] = [];
   for (let t = Math.ceil(start / 3_600_000) * 3_600_000; t <= end; t += 2 * 3_600_000) ticks.push(t);
-  return <svg className="visibility-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Altitude of the target tonight at ${rig.catalog_name}`}>
+  return <svg className="visibility-chart" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMinYMid meet" role="img" aria-label={`Altitude of the target tonight at ${rig.catalog_name}`}>
     {bands.map(band => <rect key={band.from} className={band.deep ? 'band-deep' : 'band-dark'} x={x(band.from)} y={PAD.top} width={Math.max(0, x(band.to) - x(band.from))} height={H - PAD.top - PAD.bottom} />)}
     {[30, 60].map(alt => <line key={alt} className="grid" x1={PAD.left} x2={W - PAD.right} y1={y(alt)} y2={y(alt)} />)}
-    {[0, 30, 60, 90].map(alt => <text key={alt} className="axis" x={PAD.left - 4} y={y(alt) + 4} textAnchor="end">{alt}°</text>)}
+    {(compact ? [0, 30, 60] : [0, 30, 60, 90]).map(alt => <text key={alt} className="axis" x={PAD.left - 4} y={y(alt) + 4} textAnchor="end">{alt}°</text>)}
     {ticks.map(t => <text key={t} className="axis" x={x(t)} y={H - 8} textAnchor="middle">{clock(t)}</text>)}
     <path className="horizon" d={horizon} />
     <path className="moon" d={moon} />
@@ -74,7 +77,10 @@ export function AltitudeChart({ rig }: { rig: DirectorRigFeasibility }) {
   </svg>;
 }
 
-export default function VisibilityPanel({ projectId, center, enabled = true }: { projectId: string; center: DirectorSkyPosition; enabled?: boolean }) {
+/** `compact` keeps the panel to the verdict, the chart and one line of
+ *  estimate, with the nights table folded away, so it fits under the
+ *  framing stage and stays on screen. */
+export default function VisibilityPanel({ projectId, center, enabled = true, compact = false }: { projectId: string; center: DirectorSkyPosition; enabled?: boolean; compact?: boolean }) {
   const rounded = useMemo(() => ({ ra_degrees: Number(center.ra_degrees.toFixed(3)), dec_degrees: Number(center.dec_degrees.toFixed(3)) }), [center.ra_degrees, center.dec_degrees]);
   const debounced = useDebounced(rounded, 600);
   const query = useQuery({
@@ -86,33 +92,40 @@ export default function VisibilityPanel({ projectId, center, enabled = true }: {
   const data: DirectorFeasibility | undefined = query.data;
   const rig = data?.rigs.find(r => r.rig.id === chosen) ?? data?.rigs[0];
   if (!enabled) return null;
-  return <section className="visibility" aria-label="Visibility">
+  const verdict = rig && (() => {
+    const tonight = rig.nights[0];
+    const up = tonight?.targets[0]?.hours_up ?? 0;
+    const text = !tonight || tonight.dark_hours === 0 ? `No darkness tonight at ${rig.catalog_name}.`
+      : up <= 0 ? `Not visible tonight from ${rig.catalog_name}: never above ${rig.limits.minimum_altitude_degrees}°${rig.custom_horizon ? ' and its horizon' : ''} while dark.`
+      : `Visible ${formatHours(up)} tonight from ${rig.catalog_name} (${formatHours(tonight.dark_hours)} dark, peak ${tonight.targets[0].max_altitude_degrees.toFixed(0)}°${tonight.targets[0].hours_lost_to_meridian > 0 ? `, ${formatHours(tonight.targets[0].hours_lost_to_meridian)} lost to the meridian pause` : ''}). Moon ${Math.round(tonight.moon_illumination * 100)}% lit, ${tonight.targets[0].min_moon_separation_degrees.toFixed(0)}° away, up ${formatHours(tonight.moon_hours_up_in_dark)} of the dark.`;
+    return <p className={up > 0 ? 'visibility-verdict' : 'visibility-verdict is-down'} data-testid="visibility-verdict">{text}</p>;
+  })();
+  const legend = rig && <p className="director-muted visibility-legend"><span className="key target" />target <span className="key horizon" />{rig.custom_horizon ? 'custom horizon and limit' : `minimum altitude ${rig.limits.minimum_altitude_degrees}°`} <span className="key moon" />Moon <span className="key paused" />meridian pause <span className="key dark" />dark (Sun below −12°) <span className="key deep" />astronomical night</p>;
+  return <section className={compact ? 'visibility is-compact' : 'visibility'} aria-label="Visibility">
     <div className="director-toolbar"><h3>Visibility</h3>
       {data && data.rigs.length > 1 && <select aria-label="Visibility rig" value={rig?.rig.id ?? ''} onChange={event => setChosen(event.target.value)}>
         {data.rigs.map(r => <option key={r.rig.id} value={r.rig.id}>{r.catalog_name}{r.in_plan ? '' : ' (not in plan)'}</option>)}
       </select>}
+      {compact && verdict}
     </div>
     {query.isPending && <p role="status">Timing the target...</p>}
     {query.isError && <p className="director-error" role="alert">{message(query.error)}</p>}
     {data?.warnings.map(w => <p key={w} className="director-muted">{w}</p>)}
     {rig && <>
-      {(() => {
-        const tonight = rig.nights[0];
-        const up = tonight?.targets[0]?.hours_up ?? 0;
-        const verdict = !tonight || tonight.dark_hours === 0 ? `No darkness tonight at ${rig.catalog_name}.`
-          : up <= 0 ? `Not visible tonight from ${rig.catalog_name}: never above ${rig.limits.minimum_altitude_degrees}°${rig.custom_horizon ? ' and its horizon' : ''} while dark.`
-          : `Visible ${formatHours(up)} tonight from ${rig.catalog_name} (${formatHours(tonight.dark_hours)} dark, peak ${tonight.targets[0].max_altitude_degrees.toFixed(0)}°${tonight.targets[0].hours_lost_to_meridian > 0 ? `, ${formatHours(tonight.targets[0].hours_lost_to_meridian)} lost to the meridian pause` : ''}). Moon ${Math.round(tonight.moon_illumination * 100)}% lit, ${tonight.targets[0].min_moon_separation_degrees.toFixed(0)}° away, up ${formatHours(tonight.moon_hours_up_in_dark)} of the dark.`;
-        return <p className={up > 0 ? 'visibility-verdict' : 'visibility-verdict is-down'} data-testid="visibility-verdict">{verdict}</p>;
-      })()}
-      <AltitudeChart rig={rig} />
-      <p className="director-muted visibility-legend"><span className="key target" />target <span className="key horizon" />{rig.custom_horizon ? 'custom horizon and limit' : `minimum altitude ${rig.limits.minimum_altitude_degrees}°`} <span className="key moon" />Moon <span className="key paused" />meridian pause <span className="key dark" />dark (Sun below −12°) <span className="key deep" />astronomical night</p>
-      <div className="director-table-scroll"><table className="visibility-nights"><thead><tr><th>Night</th><th>Dark</th><th>Target up</th><th>Moon down too</th><th>Moon</th></tr></thead><tbody>
+      {!compact && verdict}
+      <AltitudeChart rig={rig} compact={compact} />
+      {!compact && legend}
+      {rig.hours_needed !== null && <p className="director-muted" data-testid="visibility-estimate">{rig.hours_needed > 0 ? `This rig owes the plan ${formatHours(rig.hours_needed)}${rig.nights_to_complete !== null ? `; at this week's rate that is about ${rig.nights_to_complete} night${rig.nights_to_complete === 1 ? '' : 's'}.` : ', but the target is not up this week.'}` : 'This rig has nothing to shoot in the plan yet.'}</p>}
+      {compact ? <details className="visibility-more"><summary>Legend and the next {rig.nights.length} nights</summary>{legend}{nights(rig)}</details> : nights(rig)}
+    </>}
+  </section>;
+}
+
+function nights(rig: DirectorRigFeasibility) {
+  return <div className="director-table-scroll"><table className="visibility-nights"><thead><tr><th>Night</th><th>Dark</th><th>Target up</th><th>Moon down too</th><th>Moon</th></tr></thead><tbody>
         {rig.nights.map(night => <tr key={night.date}>
           <td>{night.date}</td><td>{formatHours(night.dark_hours)}</td><td>{formatHours(night.targets[0]?.hours_up ?? 0)}</td><td>{formatHours(night.targets[0]?.hours_up_moon_down ?? 0)}</td>
           <td>{Math.round(night.moon_illumination * 100)}%{night.targets[0] && night.targets[0].hours_up > 0 ? `, ${night.targets[0].min_moon_separation_degrees.toFixed(0)}° away` : ''}</td>
         </tr>)}
-      </tbody></table></div>
-      {rig.hours_needed !== null && <p className="director-muted" data-testid="visibility-estimate">{rig.hours_needed > 0 ? `This rig owes the plan ${formatHours(rig.hours_needed)}${rig.nights_to_complete !== null ? `; at this week's rate that is about ${rig.nights_to_complete} night${rig.nights_to_complete === 1 ? '' : 's'}.` : ', but the target is not up this week.'}` : 'This rig has nothing to shoot in the plan yet.'}</p>}
-    </>}
-  </section>;
+      </tbody></table></div>;
 }

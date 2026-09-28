@@ -154,7 +154,7 @@ describe('Framing view', () => {
     expect(cutouts.length).toBe(before);
     fireEvent.pointerUp(stage, { pointerId: 1 });
     expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(38.2);
-    await waitFor(() => expect(screen.getByText(/The view center is/)).not.toHaveTextContent('02h 32m 48.0s'));
+    await waitFor(() => expect(screen.getByTestId('framing-view-center')).not.toHaveTextContent('02h 32m 48.0s'));
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
     await waitFor(() => expect(saves).toHaveLength(1));
     expect(saves[0].revision).toBe(3);
@@ -178,7 +178,7 @@ describe('Framing view', () => {
     fireEvent.pointerUp(stage, { pointerId: 1 });
     const ra = Number((screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value);
     expect(ra).toBeGreaterThan(seed.center.ra_degrees);
-    expect(screen.getByText(/The view center is/)).toHaveTextContent('00h 42m 44.3s');
+    expect(screen.getByTestId('framing-view-center')).toHaveTextContent('00h 42m 44.3s');
     // The handle sits past the top edge along the camera's up direction; dragging it due east of the center turns the camera to 90°.
     fireEvent.click(screen.getByRole('button', { name: 'Turn 90 degrees clockwise' }));
     expect(screen.getByLabelText('Position angle degrees')).toHaveValue(125);
@@ -275,14 +275,14 @@ describe('Framing view', () => {
     expect(await screen.findByText('Moved the target to NGC 7000.')).toBeInTheDocument();
     expect(screen.getByLabelText('Target name')).toHaveValue('NGC 7000');
     expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(314.75);
-    expect(screen.getByText(/The view center is/)).toHaveTextContent('20h 59m 00.0s');
+    expect(screen.getByTestId('framing-view-center')).toHaveTextContent('20h 59m 00.0s');
     // Enter in the search box looked the name up; it did not save the draft.
     expect(saves).toHaveLength(0);
     // One click puts the previous target back, view included.
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
     expect(screen.getByLabelText('Target name')).toHaveValue('M31');
     expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(seed.center.ra_degrees);
-    expect(screen.getByText(/The view center is/)).toHaveTextContent('00h 42m 44.3s');
+    expect(screen.getByTestId('framing-view-center')).toHaveTextContent('00h 42m 44.3s');
     expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
     // With nothing saved yet there is no saved framing to go back to.
     expect(screen.queryByRole('button', { name: 'Back to saved framing' })).not.toBeInTheDocument();
@@ -372,10 +372,11 @@ describe('Framing view', () => {
     stage.setPointerCapture = vi.fn();
     stage.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1024, height: 768, right: 1024, bottom: 768, x: 0, y: 0, toJSON: () => ({}) });
     Object.defineProperty(stage, 'clientWidth', { value: 1024, configurable: true });
-    fireEvent.click(screen.getByLabelText('The sky under a pinned rectangle'));
+    fireEvent.click(screen.getByLabelText('Drag moves the sky'));
+    expect(screen.getByLabelText('Drag moves the sky')).toHaveAttribute('aria-pressed', 'true');
     expect(window.localStorage.getItem('psf-guard.framing.dragMode')).toBe('sky');
     const ra = () => Number((screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value);
-    const viewLine = () => screen.getByText(/The view center is/).textContent!;
+    const viewLine = () => screen.getByTestId('framing-view-center').textContent!;
     const before = { ra: ra(), view: viewLine() };
     // Far from the rectangle: the sky moves, and the target with it, so the
     // rectangle stays put on the stage. Dragging the sky to the right brings
@@ -406,7 +407,7 @@ describe('Framing view', () => {
     const cx = (Number(cross.getAttribute('x1')) + Number(cross.getAttribute('x2'))) / 2;
     // At 35° the handle leans east of straight up over a north-up sky.
     expect(Number(handleBefore.getAttribute('cx'))).toBeLessThan(cx - 10);
-    fireEvent.click(screen.getByLabelText('Turn the sky with the camera, rectangle upright'));
+    fireEvent.click(screen.getByLabelText('Turn the sky with the camera'));
     expect(compass()).toBe('35.0');
     expect(window.localStorage.getItem('psf-guard.framing.rotateSky')).toBe('true');
     // Now the rectangle stands upright: the handle sits straight above the target.
@@ -444,6 +445,14 @@ describe('Framing view', () => {
     // The request names the settled view and a time rounded to ten minutes.
     expect(asked[0]).toMatch(/ra=10\.68&dec=41\.27&fov=/);
     expect(Number(asked[0].match(/at=(\d+)/)![1]) % 600_000).toBe(0);
+    // PGC and HD start hidden; a chip brings a family back and the choice is kept.
+    expect(asked[0]).toContain('hide=PGC,HD');
+    expect(screen.getByRole('button', { name: 'PGC' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'NGC' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'PGC' }));
+    await waitFor(() => expect(asked.at(-1)).toContain('hide=HD'), { timeout: 8000 });
+    expect(asked.at(-1)).not.toContain('PGC');
+    expect(window.localStorage.getItem('psf-guard.framing.marks.hide')).toBe('HD');
     fireEvent.click(screen.getByLabelText('Deep-sky marks'));
     expect(screen.queryByTestId('framing-mark-object')).not.toBeInTheDocument();
     expect(window.localStorage.getItem('psf-guard.framing.marks.objects')).toBe('false');

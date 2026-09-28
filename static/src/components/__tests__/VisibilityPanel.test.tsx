@@ -24,11 +24,11 @@ function rig(name: string, id: string, hoursUp: number, custom: boolean, inPlan:
     limits: { minimum_altitude_degrees: 25, maximum_altitude_degrees: 90, meridian_exclusion: { before_ms: 0, after_ms: 0 } },
     nights: [night, { ...night, date: '2026-09-26', moon_illumination: 0.9 }], curve: { night, samples }, hours_needed: inPlan ? 12 : null, nights_to_complete: inPlan && hoursUp > 0 ? 2 : null, in_plan: inPlan };
 }
-function mount(view: DirectorFeasibility) {
+function mount(view: DirectorFeasibility, compact = false) {
   const bodies: unknown[] = [];
   server.use(http.post('/api/director/v1/projects/project/feasibility', async ({ request }) => { bodies.push(await request.json()); return ok(view); }));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  render(<QueryClientProvider client={client}><VisibilityPanel projectId="project" center={{ ra_degrees: 38.2, dec_degrees: 61.45 }} /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><VisibilityPanel projectId="project" center={{ ra_degrees: 38.2, dec_degrees: 61.45 }} compact={compact} /></QueryClientProvider>);
   return bodies;
 }
 
@@ -51,6 +51,19 @@ describe('visibility panel', () => {
     expect(await screen.findByTestId('visibility-verdict')).toHaveTextContent('Not visible tonight from C925 data: never above 25° while dark.');
     expect(screen.getByText(/minimum altitude 25°/)).toBeInTheDocument();
     expect(screen.queryByTestId('visibility-estimate')).not.toBeInTheDocument();
+  });
+
+  it('folds the nights table away under the framing stage and keeps the verdict, chart and estimate', async () => {
+    mount({ center: { ra_degrees: 38.2, dec_degrees: 61.45 }, target_name: 'IC 1805', nights: 7, warnings: [], rigs: [rig('RedCat 61', 'a', 6.2, true, true)] }, true);
+    expect(await screen.findByTestId('visibility-verdict')).toHaveTextContent('Visible 6.2 h tonight');
+    expect(document.querySelector('.visibility.is-compact')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Altitude of the target tonight at RedCat 61' }).getAttribute('viewBox')).toBe('0 0 720 132');
+    expect(screen.getByTestId('visibility-estimate')).toBeInTheDocument();
+    const more = document.querySelector('details.visibility-more')!;
+    expect(more).not.toHaveAttribute('open');
+    expect(more.querySelector('summary')).toHaveTextContent('Legend and the next 2 nights');
+    expect(more.querySelector('.visibility-legend')).toBeInTheDocument();
+    expect(more.querySelectorAll('tbody tr')).toHaveLength(2);
   });
 
   it('shows the server warnings when no rig has a site', async () => {

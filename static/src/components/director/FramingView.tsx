@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { Check, Crosshair, LocateFixed, RefreshCw, Search, Undo2 } from 'lucide-react';
+import { Check, Crosshair, Globe, Grid3x3, LocateFixed, Orbit, RefreshCw, RotateCw, Search, Sparkles, SquareDashedMousePointer, Sun, Telescope, Undo2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorCutoutRequest, DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigProfileSummary, DirectorSkyMarks, DirectorSkyPosition } from '../../api/directorTypes';
@@ -27,6 +27,33 @@ type DragMode = 'rectangle' | 'sky';
 const DRAG_MODE_KEY = 'psf-guard.framing.dragMode';
 const ROTATE_SKY_KEY = 'psf-guard.framing.rotateSky';
 const MARK_KEYS = { objects: 'psf-guard.framing.marks.objects', bodies: 'psf-guard.framing.marks.bodies', solar: 'psf-guard.framing.marks.solar' } as const;
+const HIDDEN_CATALOGS_KEY = 'psf-guard.framing.marks.hide';
+/** The catalog families a mark can come from, by the letters a designation
+ *  starts with. PGC and HD start hidden: they swamp a field with faint
+ *  galaxies and every star. The choice is remembered in this browser. */
+const CATALOG_FAMILIES: ReadonlyArray<{ prefix: string; label: string; title: string }> = [
+  { prefix: 'M', label: 'Messier', title: 'Messier objects' },
+  { prefix: 'NGC', label: 'NGC', title: 'New General Catalogue' },
+  { prefix: 'IC', label: 'IC', title: 'Index Catalogue' },
+  { prefix: 'Sh', label: 'Sh2', title: 'Sharpless H II regions' },
+  { prefix: 'LDN', label: 'LDN', title: 'Lynds dark nebulae' },
+  { prefix: 'B', label: 'Barnard', title: 'Barnard dark nebulae' },
+  { prefix: 'vdB', label: 'vdB', title: 'van den Bergh reflection nebulae' },
+  { prefix: 'SNR', label: 'SNR', title: 'Supernova remnants' },
+  { prefix: 'UGC', label: 'UGC', title: 'Uppsala galaxies' },
+  { prefix: 'PGC', label: 'PGC', title: 'Principal Galaxies Catalogue: faint galaxies, hundreds per field' },
+  { prefix: 'HD', label: 'HD', title: 'Henry Draper stars: every star the survey already shows' },
+  { prefix: 'WR', label: 'WR', title: 'Wolf-Rayet stars' },
+];
+const DEFAULT_HIDDEN_CATALOGS = ['PGC', 'HD'];
+function rememberedHidden(): string[] {
+  try {
+    const value = window.localStorage.getItem(HIDDEN_CATALOGS_KEY);
+    if (value === null) return DEFAULT_HIDDEN_CATALOGS;
+    const known = new Set(CATALOG_FAMILIES.map(family => family.prefix.toLowerCase()));
+    return value.split(',').map(entry => entry.trim()).filter(entry => known.has(entry.toLowerCase()));
+  } catch { return DEFAULT_HIDDEN_CATALOGS; }
+}
 /** Marks are asked for at a time rounded to ten minutes, so a view that
  *  moves a little reuses the answer; comets do not move far in that. */
 const MARKS_TIME_BUCKET_MS = 10 * 60 * 1000;
@@ -178,6 +205,12 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   const [showObjects, setShowObjects] = useState(() => remembered(MARK_KEYS.objects, ['true', 'false'] as const, 'true') === 'true');
   const [showBodies, setShowBodies] = useState(() => remembered(MARK_KEYS.bodies, ['true', 'false'] as const, 'true') === 'true');
   const [showSolar, setShowSolar] = useState(() => remembered(MARK_KEYS.solar, ['true', 'false'] as const, 'true') === 'true');
+  const [hiddenCatalogs, setHiddenCatalogs] = useState<string[]>(rememberedHidden);
+  const toggleCatalog = (prefix: string) => setHiddenCatalogs(current => {
+    const next = current.some(entry => entry.toLowerCase() === prefix.toLowerCase()) ? current.filter(entry => entry.toLowerCase() !== prefix.toLowerCase()) : [...current, prefix];
+    remember(HIDDEN_CATALOGS_KEY, next.join(','));
+    return next;
+  });
   const chooseMarks = (key: keyof typeof MARK_KEYS, on: boolean) => {
     ({ objects: setShowObjects, bodies: setShowBodies, solar: setShowSolar })[key](on);
     remember(MARK_KEYS[key], String(on));
@@ -207,8 +240,14 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   // the settled view gets a tile of its own so the rectangle sits exactly.
   // A picture is asked for at every zoom, out to a hemisphere.
   const [tile, setTile] = useState<SkyTile | null>(null);
-  const viewNow = state ? { center: state.viewCenter, fov: state.viewFov } : null;
+  // One object per distinct view, so the settle timers below count from the
+  // last move and not from the last render (a tile arriving must not push
+  // the settled view back).
+  const viewNow = useMemo(() => state ? { center: state.viewCenter, fov: state.viewFov } : null,
+    [state?.viewCenter.ra_degrees, state?.viewCenter.dec_degrees, state?.viewFov]); // eslint-disable-line react-hooks/exhaustive-deps
   const settledView = useDebounced(viewNow, 700);
+  // Marks are cheap to ask for, so they follow the view sooner than the tile.
+  const marksView = useDebounced(viewNow, 250);
   useEffect(() => {
     if (!viewNow) return;
     if (!tile || viewLeftTile(tile, viewNow.center, viewNow.fov, stageSize)) setTile(tileFor(viewNow.center, viewNow.fov));
@@ -238,10 +277,11 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   // Marks for the settled view: what the catalogs know is in the field, and
   // where the Sun, Moon, planets, comets and asteroids are at this moment.
   const marksWanted = showObjects || showBodies || showSolar;
-  const marksQuery = settledView ? {
-    ra: Number(settledView.center.ra_degrees.toFixed(2)), dec: Number(settledView.center.dec_degrees.toFixed(2)),
-    fov: Number(settledView.fov.toFixed(2)), aspect: Number((stageSize.width / stageSize.height).toFixed(3)),
+  const marksQuery = marksView ? {
+    ra: Number(marksView.center.ra_degrees.toFixed(2)), dec: Number(marksView.center.dec_degrees.toFixed(2)),
+    fov: Number(marksView.fov.toFixed(2)), aspect: Number((stageSize.width / stageSize.height).toFixed(3)),
     at: Math.floor(Date.now() / MARKS_TIME_BUCKET_MS) * MARKS_TIME_BUCKET_MS,
+    hide: hiddenCatalogs.join(','),
   } : null;
   const marks = useQuery({
     queryKey: ['directorSkyMarks', marksQuery],
@@ -419,9 +459,26 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
             <line x1={0} y1={0} x2={east[0] * 28} y2={east[1] * 28} /><text x={east[0] * 36} y={east[1] * 36 + 5} textAnchor="middle">E</text>
           </g>; })()}
         </svg>
+        <div className="framing-stage-tools" onPointerDown={event => event.stopPropagation()}>
+          <div className="framing-seg" role="group" aria-label="A drag moves">
+            <button type="button" aria-pressed={dragMode === 'rectangle'} aria-label="Drag moves the rectangle" title="A drag moves the rectangle over a still sky. Drag its handle to turn the camera; drag the sky to look around." onClick={() => chooseDragMode('rectangle')}><SquareDashedMousePointer size={15} /><span>Rectangle</span></button>
+            <button type="button" aria-pressed={dragMode === 'sky'} aria-label="Drag moves the sky" title="A drag moves the sky under a pinned rectangle, and the target with it. Drag the handle to turn the camera; Shift-drag to look around without moving the target." onClick={() => chooseDragMode('sky')}><Globe size={15} /><span>Sky</span></button>
+          </div>
+          <div className="framing-seg framing-seg-icons" role="group" aria-label="Sky layers">
+            <button type="button" aria-pressed={rotateSky} aria-label="Turn the sky with the camera" title="Turn the sky with the camera, so the rectangle stands upright" onClick={() => chooseRotateSky(!rotateSky)}><RotateCw size={15} /></button>
+            <button type="button" aria-pressed={showGrid} aria-label="Equatorial grid" title="Equatorial grid" onClick={() => setShowGrid(!showGrid)}><Grid3x3 size={15} /></button>
+            <button type="button" aria-pressed={showChart} aria-label="Constellations" title="Constellation figures and names when zoomed out" onClick={() => setShowChart(!showChart)}><Sparkles size={15} /></button>
+            <button type="button" aria-pressed={showObjects} aria-label="Deep-sky marks" title="Deep-sky marks from the object catalog" onClick={() => chooseMarks('objects', !showObjects)}><Telescope size={15} /></button>
+            <button type="button" aria-pressed={showBodies} aria-label="Comets and asteroids" title="Comets and asteroids where they are now" onClick={() => chooseMarks('bodies', !showBodies)}><Orbit size={15} /></button>
+            <button type="button" aria-pressed={showSolar} aria-label="Sun, Moon and planets" title="Sun, Moon and planets where they are now" onClick={() => chooseMarks('solar', !showSolar)}><Sun size={15} /></button>
+          </div>
+        </div>
         <div className="framing-stage-status">
           {cutout.status === 'loading' && <span role="status">Loading {survey?.name ?? 'survey'}...</span>}
           {cutout.status === 'failed' && <span role="alert">{cutout.error}</span>}
+          {marks.data && showObjects && !marks.data.objects.available && <span role="note">Deep-sky marks need the Seiza object catalog on this server{marks.data.objects.note ? ` (${marks.data.objects.note})` : ''}.</span>}
+          {marks.data && showBodies && !marks.data.minor_bodies.available && <span role="note">Comets and asteroids need the Seiza minor-body catalog on this server{marks.data.minor_bodies.note ? ` (${marks.data.minor_bodies.note})` : ''}.</span>}
+          {marks.isError && marksWanted && <span role="alert">Marks could not be loaded: {message(marks.error)}</span>}
         </div>
         <div className="framing-stage-zoom" onPointerDown={event => event.stopPropagation()}>
           <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => zoomBy(1 / 1.5)}>+</button>
@@ -440,10 +497,8 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
         <span>angle {state.positionAngle.toFixed(1)}°</span>
         {state.panel && <span>panel {formatDegrees(state.panel.width_degrees)} × {formatDegrees(state.panel.height_degrees)}</span>}
         {geometry && geometry.panels.length > 1 && <span>{geometry.panels.length} panels, {formatDegrees(geometry.extent.width_degrees)} × {formatDegrees(geometry.extent.height_degrees)}</span>}
+        <span className="director-muted" data-testid="framing-view-center">view {formatRaHours(state.viewCenter.ra_degrees)}, {formatDec(state.viewCenter.dec_degrees)}</span>
       </p>
-      <p className="director-muted framing-hint">{dragMode === 'rectangle'
-        ? 'Drag the rectangle to move the target, its handle to turn it, and the sky to look around.'
-        : 'Drag the sky to move it under the rectangle; the target goes with it. Drag the handle to turn the camera; Shift-drag to look around without moving the target.'}</p>
       {mosaic.data && mosaic.data.activation_revision !== null && <div className="framing-stacks" data-testid="framing-stacks">
         <label className="framing-check"><input type="checkbox" checked={showStacks} onChange={event => setShowStacks(event.target.checked)} />Show finished stacks on the sky</label>
         {mosaic.data.framing_stale && <p className="director-muted">The framing changed since the last activation. Stacks sit where their solves put them; the rectangles are the new plan.</p>}
@@ -451,7 +506,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
         <ul>{mosaic.data.panels.map(panel => <li key={`${panel.rig.id}-${panel.panel_id}`}>{describeStack(panel)}</li>)}</ul>
       </div>}
       <p className="director-muted framing-attribution">{survey ? `${survey.name}: ${survey.bandpass}. ${survey.attribution}.` : 'Choose a survey.'} Imagery is a composition aid, not pointing evidence.</p>
-      <VisibilityPanel projectId={projectId} center={state.center} />
+      <VisibilityPanel projectId={projectId} center={state.center} compact />
     </div>
     <form className="framing-controls" onSubmit={event => { event.preventDefault(); if (canWrite && !save.isPending && !stale) { setNotice(''); setProblem(''); save.mutate(); } }}>
       <fieldset>
@@ -507,27 +562,19 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
       </fieldset>
       <fieldset>
         <legend>View</legend>
-        <label>Survey
-          <select aria-label="Survey" value={state.surveyId} onChange={event => { surveyChosen.current = true; update({ surveyId: event.target.value }); }}>
-            {(surveys.data ?? []).map(entry => <option key={entry.id} value={entry.id}>{entry.name}{entry.kind === 'narrowband' ? ' (narrowband)' : ''}</option>)}
-          </select>
-        </label>
-        <label>Width of view<span className="framing-input"><input aria-label="View width degrees" type="number" step="any" min={MIN_VIEW_FOV} max={MAX_VIEW_FOV} value={Number(state.viewFov.toFixed(3))} onChange={event => update({ viewFov: clampFov(number(event.target.value, state.viewFov)) })} /><small>°</small>
-          {geometry && <button type="button" onClick={() => { update({ viewFov: MIN_VIEW_FOV }); fitToFootprint(geometry.extent); }}>Fit</button>}</span></label>
-        <fieldset className="framing-modes"><legend>A drag moves</legend>
-          <label className="framing-check"><input type="radio" name="framing-drag-mode" value="rectangle" checked={dragMode === 'rectangle'} onChange={() => chooseDragMode('rectangle')} />The rectangle over a still sky</label>
-          <label className="framing-check"><input type="radio" name="framing-drag-mode" value="sky" checked={dragMode === 'sky'} onChange={() => chooseDragMode('sky')} />The sky under a pinned rectangle</label>
-        </fieldset>
-        <label className="framing-check"><input type="checkbox" checked={rotateSky} onChange={event => chooseRotateSky(event.target.checked)} />Turn the sky with the camera, rectangle upright</label>
-        <label className="framing-check"><input type="checkbox" checked={showGrid} onChange={event => setShowGrid(event.target.checked)} />Equatorial grid</label>
-        <label className="framing-check"><input type="checkbox" checked={showChart} onChange={event => setShowChart(event.target.checked)} />Constellations when zoomed out</label>
-        <label className="framing-check"><input type="checkbox" checked={showObjects} onChange={event => chooseMarks('objects', event.target.checked)} />Deep-sky marks</label>
-        <label className="framing-check"><input type="checkbox" checked={showBodies} onChange={event => chooseMarks('bodies', event.target.checked)} />Comets and asteroids</label>
-        <label className="framing-check"><input type="checkbox" checked={showSolar} onChange={event => chooseMarks('solar', event.target.checked)} />Sun, Moon and planets</label>
-        {marks.data && showObjects && !marks.data.objects.available && <p className="director-muted framing-mark-note" role="note">Deep-sky marks need the Seiza object catalog on this server{marks.data.objects.note ? ` (${marks.data.objects.note})` : ''}.</p>}
-        {marks.data && showBodies && !marks.data.minor_bodies.available && <p className="director-muted framing-mark-note" role="note">Comets and asteroids need the Seiza minor-body catalog on this server{marks.data.minor_bodies.note ? ` (${marks.data.minor_bodies.note})` : ''}.</p>}
-        {marks.isError && marksWanted && <p className="director-error framing-mark-note" role="alert">Marks could not be loaded: {message(marks.error)}</p>}
-        <p className="director-muted">Drag the sky to turn it, scroll to zoom out to a hemisphere; the survey follows at every zoom. The view center is {formatRaHours(state.viewCenter.ra_degrees)}, {formatDec(state.viewCenter.dec_degrees)}.</p>
+        <div className="framing-grid">
+          <label>Survey
+            <select aria-label="Survey" value={state.surveyId} onChange={event => { surveyChosen.current = true; update({ surveyId: event.target.value }); }}>
+              {(surveys.data ?? []).map(entry => <option key={entry.id} value={entry.id}>{entry.name}{entry.kind === 'narrowband' ? ' (narrowband)' : ''}</option>)}
+            </select>
+          </label>
+          <label>Width of view<span className="framing-input"><input aria-label="View width degrees" type="number" step="any" min={MIN_VIEW_FOV} max={MAX_VIEW_FOV} value={Number(state.viewFov.toFixed(3))} onChange={event => update({ viewFov: clampFov(number(event.target.value, state.viewFov)) })} /><small>°</small>
+            {geometry && <button type="button" onClick={() => { update({ viewFov: MIN_VIEW_FOV }); fitToFootprint(geometry.extent); }}>Fit</button>}</span></label>
+        </div>
+        <div className="framing-catalogs" role="group" aria-label="Catalogs marked">
+          <span className="framing-catalogs-title">Catalogs marked</span>
+          {CATALOG_FAMILIES.map(family => { const shown = !hiddenCatalogs.some(entry => entry.toLowerCase() === family.prefix.toLowerCase()); return <button key={family.prefix} type="button" aria-pressed={shown} title={family.title} onClick={() => toggleCatalog(family.prefix)}>{family.label}</button>; })}
+        </div>
       </fieldset>
       {notice && <p role="status">{notice}{undo && <> <button type="button" className="link-button" onClick={() => { setState(undo); setUndo(null); setNotice('Put the target back where it was.'); }}>Undo</button></>}</p>}
       {stale && <p className="director-error" role="alert">This framing changed since you loaded it. Reload to see the saved draft before editing again.</p>}
@@ -563,7 +610,7 @@ function SkyMarks({ marks, view, viewFov, stage, objects, bodies, solar }: { mar
       const ry = Math.max(4, ((object.minor_arcmin ?? object.major_arcmin ?? 0) / 60 / 2) / scale);
       const angle = object.position_angle_degrees !== null ? stageAngleAt(view, position, object.position_angle_degrees, viewFov, stage) ?? 0 : 0;
       const label = object.common_name || object.name;
-      return <g key={object.id} className={`framing-mark framing-mark-${object.kind}`} data-testid="framing-mark-object">
+      return <g key={`${object.id || object.name}#${index}`} className={`framing-mark framing-mark-${object.kind}`} data-testid="framing-mark-object">
         <ellipse cx={0} cy={0} rx={rx} ry={ry} transform={`translate(${at[0].toFixed(1)} ${at[1].toFixed(1)}) rotate(${angle.toFixed(1)})`} />
         {index < labels && <text x={at[0] + rx + 6} y={at[1] + 4}>{label}</text>}
       </g>;
