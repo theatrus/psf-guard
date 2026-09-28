@@ -58,13 +58,54 @@ fn the_browser_geometry_fixture_matches_the_core() {
     }
     let saved: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(path).expect("fixture present")).unwrap();
-    assert_eq!(
-        saved, current,
-        "regenerate the fixture if this change is meant"
+    // Platform libm differs in the last bits of sin, cos and atan2, so the
+    // numbers agree to a tolerance, the same one the browser test applies.
+    let mut differences = Vec::new();
+    compare(&saved, &current, "$", &mut differences);
+    assert!(
+        differences.is_empty(),
+        "regenerate the fixture if this change is meant:\n{}",
+        differences.join("\n")
     );
     assert_eq!(preview.panels.len(), 4);
     assert!(preview
         .panels
         .iter()
         .all(|p| p.footprint.view_corners.is_some()));
+}
+
+/// Structural equality with numbers within 1e-9; every mismatch is named.
+fn compare(
+    saved: &serde_json::Value,
+    current: &serde_json::Value,
+    at: &str,
+    out: &mut Vec<String>,
+) {
+    use serde_json::Value;
+    match (saved, current) {
+        (Value::Number(a), Value::Number(b)) => {
+            let (a, b) = (a.as_f64().unwrap(), b.as_f64().unwrap());
+            if (a - b).abs() > 1e-9 {
+                out.push(format!("{at}: fixture {a} vs core {b}"));
+            }
+        }
+        (Value::Array(a), Value::Array(b)) => {
+            if a.len() != b.len() {
+                out.push(format!("{at}: {} items vs {}", a.len(), b.len()));
+            }
+            for (i, (x, y)) in a.iter().zip(b).enumerate() {
+                compare(x, y, &format!("{at}[{i}]"), out);
+            }
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            for key in a.keys().chain(b.keys().filter(|k| !a.contains_key(*k))) {
+                match (a.get(key), b.get(key)) {
+                    (Some(x), Some(y)) => compare(x, y, &format!("{at}.{key}"), out),
+                    _ => out.push(format!("{at}.{key}: present on one side only")),
+                }
+            }
+        }
+        _ if saved == current => {}
+        _ => out.push(format!("{at}: {saved} vs {current}")),
+    }
 }

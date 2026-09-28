@@ -46,12 +46,21 @@ export async function checkReleaseVersion(repositoryRoot, expectedTag) {
   if (expectedTag && expectedTag !== tag) {
     throw new Error(`Release tag ${expectedTag} does not match ${tag}.`);
   }
+  // A tagged release must ship its own notes. Between releases, main is
+  // stamped with the next version while its notes still gather in
+  // unreleased.md, so a check without a tag accepts either file.
   const notesPath = path.join(repositoryRoot, 'docs/releases', `${tag}.md`);
-  const notes = await stat(notesPath);
-  if (!notes.isFile() || notes.size === 0) {
-    throw new Error(`Release notes are missing or empty: ${notesPath}`);
+  const unreleasedPath = path.join(repositoryRoot, 'docs/releases', 'unreleased.md');
+  const candidates = expectedTag ? [notesPath] : [notesPath, unreleasedPath];
+  for (const candidate of candidates) {
+    const notes = await stat(candidate).catch(() => null);
+    if (notes?.isFile() && notes.size > 0) return cargoVersion;
   }
-  return cargoVersion;
+  throw new Error(
+    expectedTag
+      ? `Release notes are missing or empty: ${notesPath}`
+      : `Release notes are missing or empty: ${notesPath} (or ${unreleasedPath} between releases)`,
+  );
 }
 
 async function main() {
