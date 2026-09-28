@@ -7,7 +7,7 @@ import { useAccess } from '../../auth/access';
 import type { DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigProfileSummary, DirectorSkyPosition } from '../../api/directorTypes';
 import {
   DEFAULT_STAGE, MAX_VIEW_FOV, MIN_VIEW_FOV, SURVEY_MAX_FOV, angleAt, clampFov, deprojectOn, draftFromState, formatDec, formatDegrees, formatRaHours, framingBackdrop, framingGraticule, fromStage, handleSky,
-  insidePolygon, panelForRig, pixelScale, polygonPoints, previewRequest, projectOn, reanchoredViewCenter, stackMatrix, stageCorners, stageFor, stageProject, stateFromDraft, stateFromSeed, tileMatrix, tileSize, toStage, trueWidth, viewAt, type FramingSeed, type FramingState, type Stage, type StageView, chipSurveys, framingGeometry, tileFor, viewLeftTile, type SkyTile, defaultSurveyId,
+  compassDirections, insidePolygon, panelForRig, pixelScale, polygonPoints, previewRequest, projectOn, reanchoredViewCenter, stackMatrix, stageCorners, stageFor, stageProject, stateFromDraft, stateFromSeed, tileMatrix, tileSize, toStage, trueWidth, viewAt, type FramingSeed, type FramingState, type Stage, type StageView, chipSurveys, framingGeometry, tileFor, viewLeftTile, type SkyTile, defaultSurveyId,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
 import { useDebounced, useSurveyCutout } from './useSurveyCutout';
@@ -19,6 +19,18 @@ const httpStatus = (error: unknown) => isAxiosError(error) ? error.response?.sta
   : error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined;
 const retryWhenBusy = (count: number, error: unknown) => httpStatus(error) === 503 && count < 5;
 const DEFAULT_SURVEY = 'dss2_color';
+/** How a drag on the stage behaves, as N.I.N.A. offers it: move the
+ *  rectangle over a still sky, or keep the rectangle where it is and move
+ *  the sky (and the target with it) under it. Remembered in this browser. */
+type DragMode = 'rectangle' | 'sky';
+const DRAG_MODE_KEY = 'psf-guard.framing.dragMode';
+const ROTATE_SKY_KEY = 'psf-guard.framing.rotateSky';
+function remembered<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
+  try { const value = window.localStorage.getItem(key); return allowed.includes(value as T) ? (value as T) : fallback; } catch { return fallback; }
+}
+function remember(key: string, value: string) {
+  try { window.localStorage.setItem(key, value); } catch { /* a private window or blocked storage keeps the default */ }
+}
 /** The rotation handle on the sky: past the top edge of the whole mosaic,
  *  along the camera's up direction on the target's own plane. */
 function rotationHandle(geometry: DirectorFramingPreview, state: FramingState) {
@@ -147,8 +159,12 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   // The plane the stage draws on is anchored at the target, so panning slides
   // the window and turns nothing. The anchor follows the target once a move
   // has finished: mid-drag the plane holds still under the hand.
-  const drag = useRef<{ kind: 'pan' | 'target' | 'rotate'; x: number; y: number; center: FramingState['viewCenter']; grab: [number, number] } | null>(null);
+  const drag = useRef<{ kind: 'look' | 'sky' | 'target' | 'rotate'; x: number; y: number; center: FramingState['viewCenter']; target: FramingState['center']; grab: [number, number] } | null>(null);
   const [anchor, setAnchor] = useState<DirectorSkyPosition | null>(null);
+  const [dragMode, setDragMode] = useState<DragMode>(() => remembered(DRAG_MODE_KEY, ['rectangle', 'sky'] as const, 'rectangle'));
+  const [rotateSky, setRotateSky] = useState(() => remembered(ROTATE_SKY_KEY, ['true', 'false'] as const, 'false') === 'true');
+  const chooseDragMode = (mode: DragMode) => { setDragMode(mode); remember(DRAG_MODE_KEY, mode); };
+  const chooseRotateSky = (on: boolean) => { setRotateSky(on); remember(ROTATE_SKY_KEY, String(on)); };
   const stateRef = useRef<FramingState | null>(null);
   stateRef.current = state;
   const centerRa = state?.center.ra_degrees;
@@ -157,7 +173,8 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     if (centerRa === undefined || centerDec === undefined || drag.current?.kind === 'target') return;
     setAnchor({ ra_degrees: centerRa, dec_degrees: centerDec });
   }, [centerRa, centerDec]);
-  const stageView: StageView | null = useMemo(() => state ? viewAt(anchor ?? state.center, state.viewCenter) : null, [state, anchor]);
+  const skyRotation = rotateSky && state ? state.positionAngle : 0;
+  const stageView: StageView | null = useMemo(() => state ? viewAt(anchor ?? state.center, state.viewCenter, skyRotation) : null, [state, anchor, skyRotation]);
   const [stageSize, setStageSize] = useState<Stage>(DEFAULT_STAGE);
   const hasState = state !== null;
   useEffect(() => {
@@ -248,28 +265,41 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     if (!state || !stageView || event.button !== 0) return;
     const point = stagePoint(event);
     const geometry = geometryRef.current;
-    let kind: 'pan' | 'target' | 'rotate' = 'pan';
+    // The handle turns the camera in either mode. Otherwise a drag moves the
+    // rectangle when it starts on it, or the sky under a pinned rectangle;
+    // Shift looks around without moving the target in both modes.
+    let kind: 'look' | 'sky' | 'target' | 'rotate' = event.shiftKey ? 'look' : dragMode === 'sky' ? 'sky' : 'look';
     if (geometry && geometry.panels.length > 0) {
       const handleAt = projectOn(stageView, rotationHandle(geometry, state));
       const handle = handleAt ? toStage(handleAt, state.viewFov, stageSize) : null;
       if (handle && Math.hypot(handle[0] - point[0], handle[1] - point[1]) <= 18) kind = 'rotate';
-      else if (geometry.panels.some(panel => { const corners = stageCorners(panel.corners, stageView); return corners && insidePolygon(point, corners, state.viewFov, stageSize); })) kind = 'target';
+      else if (kind === 'look' && !event.shiftKey && dragMode === 'rectangle' && geometry.panels.some(panel => { const corners = stageCorners(panel.corners, stageView); return corners && insidePolygon(point, corners, state.viewFov, stageSize); })) kind = 'target';
     }
     // Where the pointer took hold, relative to the target, so the target
     // follows the hand instead of jumping to it.
     const pointerOffset = fromStage(point[0], point[1], state.viewFov, stageSize);
     const targetOffset = projectOn(stageView, state.center) ?? [0, 0];
-    drag.current = { kind, x: event.clientX, y: event.clientY, center: state.viewCenter, grab: [pointerOffset[0] - targetOffset[0], pointerOffset[1] - targetOffset[1]] };
+    drag.current = { kind, x: event.clientX, y: event.clientY, center: state.viewCenter, target: state.center, grab: [pointerOffset[0] - targetOffset[0], pointerOffset[1] - targetOffset[1]] };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!drag.current || !state || !stageView) return;
-    if (drag.current.kind === 'pan') {
-      // Slide the window over the plane from where the drag began.
+    if (drag.current.kind === 'look' || drag.current.kind === 'sky') {
       const scale = pixelScale(state.viewFov, stageSize) * stageScale();
       const dx = (event.clientX - drag.current.x) * scale;
       const dy = (event.clientY - drag.current.y) * scale;
-      update({ viewCenter: deprojectOn(viewAt(stageView.anchor, drag.current.center), [dx, dy]) });
+      if (drag.current.kind === 'look') {
+        // Slide the window over the plane from where the drag began; the target stays.
+        update({ viewCenter: deprojectOn(viewAt(stageView.anchor, drag.current.center, stageView.rotation), [dx, dy]) });
+      } else {
+        // Move the sky: the target goes with it and keeps its place on the
+        // stage, as N.I.N.A. does with a pinned rectangle. The plane follows
+        // the target, so the sky is re-projected about it as it moves.
+        const from = viewAt(drag.current.target, drag.current.target, stageView.rotation);
+        const center = deprojectOn(from, [dx, dy]);
+        const windowOffset = turnedOffset(stageProject(drag.current.target, drag.current.center) ?? [0, 0]);
+        update({ center, viewCenter: deprojectOn(viewAt(center, center, stageView.rotation), windowOffset) });
+      }
       return;
     }
     const point = stagePoint(event);
@@ -283,6 +313,12 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
       const at = deprojectOn(stageView, pointerOffset);
       update({ positionAngle: Math.round(angleAt(state.center, at) * 10) / 10 });
     }
+  };
+  // The window's offset from the target, in the stage's turned frame.
+  const turnedOffset = (offset: [number, number]): [number, number] => {
+    if (skyRotation === 0) return offset;
+    const rad = (skyRotation * Math.PI) / 180;
+    return [offset[0] * Math.cos(rad) - offset[1] * Math.sin(rad), offset[0] * Math.sin(rad) + offset[1] * Math.cos(rad)];
   };
   const onPointerUp = () => {
     const wasTarget = drag.current?.kind === 'target';
@@ -345,7 +381,10 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
           </g>)}
           {centerOnStage && <g className="framing-target"><line x1={centerOnStage[0] - 14} y1={centerOnStage[1]} x2={centerOnStage[0] + 14} y2={centerOnStage[1]} /><line x1={centerOnStage[0]} y1={centerOnStage[1] - 14} x2={centerOnStage[0]} y2={centerOnStage[1] + 14} /></g>}
           {handle && centerOnStage && <g className="framing-rotate" data-testid="framing-rotate-handle"><line x1={centerOnStage[0]} y1={centerOnStage[1]} x2={handle[0]} y2={handle[1]} /><circle cx={handle[0]} cy={handle[1]} r={9} /></g>}
-          <g className="framing-compass" transform={`translate(${stageSize.width - 44} 44)`}><line x1={0} y1={0} x2={0} y2={-28} /><text x={0} y={-32} textAnchor="middle">N</text><line x1={0} y1={0} x2={-28} y2={0} /><text x={-32} y={4} textAnchor="end">E</text></g>
+          {(() => { const { north, east } = compassDirections(skyRotation); return <g className="framing-compass" data-testid="framing-compass" data-rotation={skyRotation.toFixed(1)} transform={`translate(${stageSize.width - 44} 44)`}>
+            <line x1={0} y1={0} x2={north[0] * 28} y2={north[1] * 28} /><text x={north[0] * 36} y={north[1] * 36 + 5} textAnchor="middle">N</text>
+            <line x1={0} y1={0} x2={east[0] * 28} y2={east[1] * 28} /><text x={east[0] * 36} y={east[1] * 36 + 5} textAnchor="middle">E</text>
+          </g>; })()}
         </svg>
         <div className="framing-stage-status">
           {showSurvey && cutout.status === 'loading' && <span role="status">Loading {survey?.name ?? 'survey'}...</span>}
@@ -357,7 +396,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
           <button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => zoomBy(1.5)}>−</button>
           {geometry && <button type="button" aria-label="Fit the footprint" title="Fit the footprint" onClick={() => { update({ viewFov: MIN_VIEW_FOV }); fitToFootprint(geometry.extent); }}>⌖</button>}
         </div>
-        <div className="framing-stage-scale">{formatDegrees(trueWidth(state.viewFov))} across · N up, E left</div>
+        <div className="framing-stage-scale">{formatDegrees(trueWidth(state.viewFov))} across · {skyRotation === 0 ? 'N up, E left' : `sky turned ${skyRotation.toFixed(1)}°`}</div>
         <div className="framing-stage-surveys" role="group" aria-label="Survey layers" onPointerDown={event => event.stopPropagation()}>
           {chipSurveys(surveys.data ?? []).map(({ survey: entry, label }) => <button key={entry.id} type="button" aria-pressed={entry.id === state.surveyId} title={`${entry.name}: ${entry.bandpass}`} onClick={() => { surveyChosen.current = true; update({ surveyId: entry.id }); }}>{label}</button>)}
         </div>
@@ -370,7 +409,9 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
         {state.panel && <span>panel {formatDegrees(state.panel.width_degrees)} × {formatDegrees(state.panel.height_degrees)}</span>}
         {geometry && geometry.panels.length > 1 && <span>{geometry.panels.length} panels, {formatDegrees(geometry.extent.width_degrees)} × {formatDegrees(geometry.extent.height_degrees)}</span>}
       </p>
-      <p className="director-muted framing-hint">Drag the rectangle to move the target, its handle to turn it, and the sky to look around.</p>
+      <p className="director-muted framing-hint">{dragMode === 'rectangle'
+        ? 'Drag the rectangle to move the target, its handle to turn it, and the sky to look around.'
+        : 'Drag the sky to move it under the rectangle; the target goes with it. Drag the handle to turn the camera; Shift-drag to look around without moving the target.'}</p>
       {mosaic.data && mosaic.data.activation_revision !== null && <div className="framing-stacks" data-testid="framing-stacks">
         <label className="framing-check"><input type="checkbox" checked={showStacks} onChange={event => setShowStacks(event.target.checked)} />Show finished stacks on the sky</label>
         {mosaic.data.framing_stale && <p className="director-muted">The framing changed since the last activation. Stacks sit where their solves put them; the rectangles are the new plan.</p>}
@@ -441,6 +482,11 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
         </label>
         <label>Width of view<span className="framing-input"><input aria-label="View width degrees" type="number" step="any" min={MIN_VIEW_FOV} max={MAX_VIEW_FOV} value={Number(state.viewFov.toFixed(3))} onChange={event => update({ viewFov: clampFov(number(event.target.value, state.viewFov)) })} /><small>°</small>
           {geometry && <button type="button" onClick={() => { update({ viewFov: MIN_VIEW_FOV }); fitToFootprint(geometry.extent); }}>Fit</button>}</span></label>
+        <fieldset className="framing-modes"><legend>A drag moves</legend>
+          <label className="framing-check"><input type="radio" name="framing-drag-mode" value="rectangle" checked={dragMode === 'rectangle'} onChange={() => chooseDragMode('rectangle')} />The rectangle over a still sky</label>
+          <label className="framing-check"><input type="radio" name="framing-drag-mode" value="sky" checked={dragMode === 'sky'} onChange={() => chooseDragMode('sky')} />The sky under a pinned rectangle</label>
+        </fieldset>
+        <label className="framing-check"><input type="checkbox" checked={rotateSky} onChange={event => chooseRotateSky(event.target.checked)} />Turn the sky with the camera, rectangle upright</label>
         <label className="framing-check"><input type="checkbox" checked={showGrid} onChange={event => setShowGrid(event.target.checked)} />Equatorial grid</label>
         <label className="framing-check"><input type="checkbox" checked={showChart} onChange={event => setShowChart(event.target.checked)} />Stars and constellations when zoomed out</label>
         <p className="director-muted">Drag the sky to pan, scroll to zoom out to a hemisphere. Survey imagery shows below {SURVEY_MAX_FOV}° across; wider views are a chart. The view center is {formatRaHours(state.viewCenter.ra_degrees)}, {formatDec(state.viewCenter.dec_degrees)}.</p>

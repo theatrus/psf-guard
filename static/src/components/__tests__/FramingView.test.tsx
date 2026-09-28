@@ -73,6 +73,8 @@ function pointer(x: number, y: number) {
 describe('Framing view', () => {
   beforeEach(() => {
     vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:stage'), revokeObjectURL: vi.fn() }));
+    // The drag mode and rotate-sky choices are remembered in the browser; each test starts from the defaults.
+    window.localStorage.clear();
   });
   afterEach(() => vi.unstubAllGlobals());
 
@@ -336,14 +338,65 @@ describe('Framing view', () => {
     expect(thumbnailFov({ extent: null, panel: null })).toBeCloseTo(1.6, 5);
   });
 
+  it('moves the sky and the target together under a pinned rectangle, and Shift looks around', async () => {
+    fixture(); mount(true, true, [rigA.rig.id]);
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
+    const stage = screen.getByTestId('framing-stage');
+    stage.setPointerCapture = vi.fn();
+    stage.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1024, height: 768, right: 1024, bottom: 768, x: 0, y: 0, toJSON: () => ({}) });
+    Object.defineProperty(stage, 'clientWidth', { value: 1024, configurable: true });
+    fireEvent.click(screen.getByLabelText('The sky under a pinned rectangle'));
+    expect(window.localStorage.getItem('psf-guard.framing.dragMode')).toBe('sky');
+    const ra = () => Number((screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value);
+    const viewLine = () => screen.getByText(/The view center is/).textContent!;
+    const before = { ra: ra(), view: viewLine() };
+    // Far from the rectangle: the sky moves, and the target with it, so the
+    // rectangle stays put on the stage. Dragging the sky to the right brings
+    // sky from the left, which is east, under the rectangle: RA grows.
+    const polygonBefore = document.querySelector('.framing-panel polygon')!.getAttribute('points');
+    fireEvent.pointerDown(stage, pointer(100, 700));
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 200, clientY: 700 });
+    fireEvent.pointerUp(stage, { pointerId: 1 });
+    expect(ra()).toBeGreaterThan(before.ra);
+    expect(viewLine()).not.toBe(before.view);
+    expect(document.querySelector('.framing-panel polygon')!.getAttribute('points')).toBe(polygonBefore);
+    // Shift-drag looks around: the view moves and the target stays.
+    const held = ra();
+    fireEvent.pointerDown(stage, { ...pointer(100, 700), shiftKey: true });
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 200, clientY: 700 });
+    fireEvent.pointerUp(stage, { pointerId: 1 });
+    expect(ra()).toBe(held);
+    expect(document.querySelector('.framing-panel polygon')!.getAttribute('points')).not.toBe(polygonBefore);
+  });
+
+  it('turns the sky with the camera when asked, keeping the rectangle upright', async () => {
+    fixture(); mount(true, true, [rigA.rig.id]);
+    await waitFor(() => expect(screen.getByTestId('framing-rotate-handle')).toBeInTheDocument());
+    const compass = () => screen.getByTestId('framing-compass').getAttribute('data-rotation');
+    expect(compass()).toBe('0.0');
+    const handleBefore = document.querySelector('.framing-rotate circle')!;
+    const cross = document.querySelector('.framing-target line')!;
+    const cx = (Number(cross.getAttribute('x1')) + Number(cross.getAttribute('x2'))) / 2;
+    // At 35° the handle leans east of straight up over a north-up sky.
+    expect(Number(handleBefore.getAttribute('cx'))).toBeLessThan(cx - 10);
+    fireEvent.click(screen.getByLabelText('Turn the sky with the camera, rectangle upright'));
+    expect(compass()).toBe('35.0');
+    expect(window.localStorage.getItem('psf-guard.framing.rotateSky')).toBe('true');
+    // Now the rectangle stands upright: the handle sits straight above the target.
+    const handle = document.querySelector('.framing-rotate circle')!;
+    expect(Number(handle.getAttribute('cx'))).toBeCloseTo(cx, 0);
+    expect(screen.getByText(/sky turned 35.0°/)).toBeInTheDocument();
+  });
+
   it('turns into a chart when zoomed out: no survey request, a grid, stars and names', async () => {
     const { cutouts } = fixture(); mount();
-    await waitFor(() => expect(screen.getByTestId('framing-sky')).toBeInTheDocument(), { timeout: 4000 });
+    // The first tile answers 202 once and then arrives; under a loaded suite that takes a while.
+    await waitFor(() => expect(screen.getByTestId('framing-sky')).toBeInTheDocument(), { timeout: 10_000 });
     expect(screen.getByTestId('framing-graticule').querySelectorAll('path').length).toBeGreaterThan(3);
     expect(screen.queryByTestId('framing-names')).not.toBeInTheDocument();
     const before = cutouts.length;
     fireEvent.change(screen.getByLabelText('View width degrees'), { target: { value: '120' } });
-    await waitFor(() => expect(screen.getByTestId('framing-names')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('framing-names')).toBeInTheDocument(), { timeout: 10_000 });
     expect(screen.getByTestId('framing-stars').querySelectorAll('circle').length).toBeGreaterThan(20);
     expect(screen.getByText(/Chart view; survey imagery returns below 30° across/)).toBeInTheDocument();
     expect(screen.queryByTestId('framing-sky')).not.toBeInTheDocument();

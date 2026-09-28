@@ -23,7 +23,7 @@ export default function PlanThumbnail({ framing, name }: { framing: DirectorFram
     {cutout.image ? <img src={cutout.image.url} alt="" draggable={false} /> : <div className="plan-thumb-empty">{cutout.status === 'failed' ? 'No survey image' : 'Loading sky...'}</div>}
     <svg viewBox={`0 0 ${STAGE_WIDTH * k} ${STAGE_HEIGHT * k}`} aria-hidden="true">
       <g transform={`scale(${k})`}>
-        {geometry?.panels.map(panel => { const corners = stageCorners(panel.corners, { anchor: framing.center, offset: [0, 0] }); return corners && <polygon key={panel.id} className="plan-thumb-panel" points={polygonPoints(corners, fov)} />; })}
+        {geometry?.panels.map(panel => { const corners = stageCorners(panel.corners, { anchor: framing.center, offset: [0, 0], rotation: 0 }); return corners && <polygon key={panel.id} className="plan-thumb-panel" points={polygonPoints(corners, fov)} />; })}
       </g>
     </svg>
   </div>;

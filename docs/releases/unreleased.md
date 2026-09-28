@@ -157,6 +157,12 @@
 
 ## Changed
 
+- Framing drags work both of N.I.N.A.'s ways: move the rectangle over a
+  still sky (the default) or pin the rectangle and move the sky, and the
+  target, under it; Shift-drag looks around without moving the target in
+  either. **Turn the sky with the camera** keeps the rectangle upright and
+  turns the sky by the camera angle, with the compass following. Both
+  choices are remembered in the browser.
 - The framing stage is drawn like the Sky view: it fills the column and most
   of the window, pans and zooms from three arcminutes out to a hemisphere,
   and carries an equatorial grid whose spacing follows the zoom, with
