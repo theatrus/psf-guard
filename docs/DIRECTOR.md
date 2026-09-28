@@ -313,7 +313,9 @@ activation sit under it side by side, and the linked databases last.
 image, with the target's catalog coordinates and rotation already filled in,
 the way N.I.N.A.'s framing assistant does. **Find a target** looks a name up
 in the CDS catalogs (Messier, NGC, IC, Sharpless and common names) and moves
-the target and the view there without saving anything. The rectangle and the
+the target and the view there without saving anything; **Undo** beside the
+notice puts the previous target back, and **Back to saved framing** drops
+every change since the last save. The rectangle and the
 mosaic grid are drawn in the browser with the same tangent-plane geometry the
 server applies when it activates, so they follow the pointer at once; a
 fixture shared between the core's tests and the browser's keeps the two in

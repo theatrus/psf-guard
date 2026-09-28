@@ -157,7 +157,8 @@
 - The framing rectangle and mosaic grid follow the pointer at once: they are
   drawn in the browser with the server's own geometry instead of waiting for
   a round trip on every change. **Find a target** in the framing controls
-  looks a name up and moves the target there.
+  looks a name up and moves the target there, with **Undo** and **Back to
+  saved framing** as the ways back.
 
 ## Fixed
 
