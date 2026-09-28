@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AppStream metadata for the Linux desktop bundles (AppImage and .deb).
+  Software centres and the AppImage catalog read the summary, description
+  and screenshots from here. The release workflow appends a <releases>
+  element with the tag's version and date before it builds.
+-->
+<component type="desktop-application">
+  <id>com.theatrus.psf-guard</id>
+  <name>PSF Guard</name>
+  <summary>Catalog, grade and plan N.I.N.A. astrophotography sessions</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <developer id="us.theatr">
+    <name>Yann Ramin</name>
+  </developer>
+  <description>
+    <p>
+      PSF Guard is a catalog, grader and quality-analysis tool for deep-sky
+      astrophotography. Point it at folders of FITS or XISF frames, or open the
+      Target Scheduler database that N.I.N.A. already keeps, and it lists every
+      project and target with what has been captured, accepted and rejected.
+    </p>
+    <p>
+      Review frames quickly with star detection, PSF fitting, cloud and
+      obstruction screening, and pixel-derived astrometry; compare frames side
+      by side; grade them and write the grades back to Target Scheduler; and
+      export the accepted lights, with their calibration frames, for stacking.
+    </p>
+    <p>
+      Plan the next session on the sky: frame a target or a mosaic over survey
+      imagery or N.I.N.A.'s offline sky maps, see when it is up, and push the
+      plan into each rig's database. Calibrated stacks and colour previews show
+      how a project is coming along.
+    </p>
+  </description>
+  <launchable type="desktop-id">PSF Guard.desktop</launchable>
+  <provides>
+    <binary>psf-guard</binary>
+  </provides>
+  <categories>
+    <category>Graphics</category>
+    <category>Photography</category>
+    <category>Science</category>
+    <category>Astronomy</category>
+  </categories>
+  <keywords>
+    <keyword>astrophotography</keyword>
+    <keyword>astronomy</keyword>
+    <keyword>FITS</keyword>
+    <keyword>XISF</keyword>
+    <keyword>N.I.N.A.</keyword>
+    <keyword>Target Scheduler</keyword>
+    <keyword>grading</keyword>
+    <keyword>framing</keyword>
+  </keywords>
+  <url type="homepage">https://psf-guard.com/</url>
+  <url type="help">https://psf-guard.com/docs/</url>
+  <url type="bugtracker">https://github.com/theatrus/psf-guard/issues</url>
+  <url type="vcs-browser">https://github.com/theatrus/psf-guard</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>The Library: every project and target across your catalogs, with capture and grading progress</caption>
+      <image type="source" width="1280" height="720">https://raw.githubusercontent.com/theatrus/psf-guard/main/docs/overview.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The image grid: frames with their star counts, HFR and quality scores, ready to grade</caption>
+      <image type="source" width="1600" height="1000">https://raw.githubusercontent.com/theatrus/psf-guard/main/docs/image_grid.jpg</image>
+    </screenshot>
+    <screenshot>
+      <caption>Side-by-side comparison of two frames</caption>
+      <image type="source" width="1600" height="1000">https://raw.githubusercontent.com/theatrus/psf-guard/main/docs/compare.jpg</image>
+    </screenshot>
+    <screenshot>
+      <caption>The Sky view: everything your catalogs have pointed at, on one map of the whole sky</caption>
+      <image type="source" width="1400" height="912">https://raw.githubusercontent.com/theatrus/psf-guard/main/docs/sky-coverage.jpg</image>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1" />
+</component>
