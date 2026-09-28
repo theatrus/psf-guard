@@ -572,6 +572,25 @@ export function framingGraticule(view: StageView, viewFov: number, stage: Stage 
   return { paths, labels };
 }
 
+/** The screen angle, degrees clockwise from the stage's x axis, of a
+ *  direction at a sky position given as a position angle east of north:
+ *  a short step that way, taken to the sky and back onto the stage. */
+export function stageAngleAt(view: StageView, at: DirectorSkyPosition, positionAngle: number, viewFov: number, stage: Stage = DEFAULT_STAGE): number | null {
+  const here = projectOn(view, at);
+  const rad = (positionAngle * Math.PI) / 180;
+  const there = projectOn(view, deprojectFrom(at, [0.05 * Math.sin(rad), 0.05 * Math.cos(rad)]));
+  if (!here || !there) return null;
+  const a = toStage(here, viewFov, stage);
+  const b = toStage(there, viewFov, stage);
+  return (Math.atan2(b[1] - a[1], b[0] - a[0]) * 180) / Math.PI;
+}
+
+/** How many deep-sky marks get a name at this width: every one when zoomed
+ *  in, a handful when the whole sky is up. */
+export function markLabelBudget(viewFov: number): number {
+  return viewFov <= 5 ? 400 : viewFov <= 15 ? 60 : viewFov <= 40 ? 30 : 12;
+}
+
 /** Where each backdrop layer starts to make sense: stars and figures are
  *  worth drawing once the survey image is no longer showing them better. */
 export const STARS_FROM_FOV = 8;

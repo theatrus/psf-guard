@@ -35,6 +35,7 @@ mod plans;
 mod program;
 mod rig_profile;
 mod sky_image;
+mod sky_objects;
 
 /// The default store sits beside the registry, like `auth.json`, so a test
 /// registry gets its own meta store and nothing lands in the real config dir.
@@ -440,6 +441,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .route("/sky/surveys", get(sky_image::surveys))
         .route("/sky/cutout", get(sky_image::cutout))
         .route("/sky/resolve", get(sky_image::resolve))
+        .route("/sky/objects", get(sky_objects::marks))
         .route("/projects/{id}", get(project).patch(rename_project))
         .merge(configuration_api::routes())
         .layer(DefaultBodyLimit::max(4096))

@@ -415,6 +415,42 @@ describe('Framing view', () => {
     expect(screen.getByText(/sky turned 35.0°/)).toBeInTheDocument();
   });
 
+  it('marks deep-sky objects, comets and planets from the catalogs, each layer with its own switch, and says what is missing', async () => {
+    const asked: string[] = [];
+    fixture();
+    server.use(http.get('/api/director/v1/sky/objects', ({ request }) => {
+      asked.push(new URL(request.url).search);
+      return HttpResponse.json(ok({
+        at_ms: 1_790_000_000_000, radius_degrees: 3,
+        objects: { available: true, items: [
+          { id: 'm31', name: 'M 31', common_name: 'Andromeda Galaxy', kind: 'galaxy', ra_degrees: seed.center.ra_degrees, dec_degrees: seed.center.dec_degrees, mag: 3.4, major_arcmin: 190, minor_arcmin: 60, position_angle_degrees: 35, prominence: 0.9 },
+          { id: 'm32', name: 'M 32', common_name: '', kind: 'galaxy', ra_degrees: seed.center.ra_degrees + 0.2, dec_degrees: seed.center.dec_degrees - 0.4, mag: 8.1, major_arcmin: 8, minor_arcmin: 6, position_angle_degrees: null, prominence: 0.3 },
+        ] },
+        minor_bodies: { available: false, note: 'minor-body catalog is not configured', items: [] },
+        solar_system: [{ name: 'Jupiter', kind: 'planet', ra_degrees: seed.center.ra_degrees - 0.5, dec_degrees: seed.center.dec_degrees + 0.3, distance_au: 4.2, elongation_degrees: 120 }],
+      }));
+    }));
+    mount();
+    await waitFor(() => expect(screen.getByTestId('framing-marks')).toBeInTheDocument(), { timeout: 8000 });
+    expect(screen.getAllByTestId('framing-mark-object')).toHaveLength(2);
+    expect(screen.getByText('Andromeda Galaxy')).toBeInTheDocument();
+    expect(screen.getByText('M 32')).toBeInTheDocument();
+    expect(screen.getByTestId('framing-mark-solar')).toHaveTextContent('Jupiter');
+    expect(screen.getByRole('note')).toHaveTextContent('Comets and asteroids need the Seiza minor-body catalog on this server (minor-body catalog is not configured).');
+    // The big galaxy is drawn at its catalog size and angle.
+    const ellipse = screen.getAllByTestId('framing-mark-object')[0].querySelector('ellipse')!;
+    expect(Number(ellipse.getAttribute('rx'))).toBeGreaterThan(Number(ellipse.getAttribute('ry')));
+    expect(ellipse.getAttribute('transform')).toMatch(/rotate\(/);
+    // The request names the settled view and a time rounded to ten minutes.
+    expect(asked[0]).toMatch(/ra=10\.68&dec=41\.27&fov=/);
+    expect(Number(asked[0].match(/at=(\d+)/)![1]) % 600_000).toBe(0);
+    fireEvent.click(screen.getByLabelText('Deep-sky marks'));
+    expect(screen.queryByTestId('framing-mark-object')).not.toBeInTheDocument();
+    expect(window.localStorage.getItem('psf-guard.framing.marks.objects')).toBe('false');
+    fireEvent.click(screen.getByLabelText('Sun, Moon and planets'));
+    expect(screen.queryByTestId('framing-mark-solar')).not.toBeInTheDocument();
+  });
+
   it('keeps a picture behind the sky out to a hemisphere, with the grid and constellation names over it', async () => {
     const { cutouts } = fixture(); mount();
     // The first tile answers 202 once and then arrives; under a loaded suite that takes a while.

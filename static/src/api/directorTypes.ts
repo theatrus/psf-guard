@@ -363,6 +363,26 @@ export interface DirectorRigStatusView {
 
 export interface DirectorResolvedName { query: string; name: string; ra_degrees: number; dec_degrees: number; source: string }
 
+/** One catalog layer of sky marks: whether its catalog is on the server, and what it found. */
+export interface DirectorMarkLayer<T> { available: boolean; note?: string; items: T[] }
+export interface DirectorObjectMark {
+  id: string; name: string; common_name: string; kind: string; ra_degrees: number; dec_degrees: number;
+  mag: number | null; major_arcmin: number | null; minor_arcmin: number | null; position_angle_degrees: number | null; prominence: number;
+}
+export interface DirectorMinorBodyMark {
+  name: string; kind: 'comet' | 'asteroid'; ra_degrees: number; dec_degrees: number; mag: number; distance_au: number;
+  motion_arcsec_per_hour: number | null; direction_pa_degrees: number | null;
+}
+export interface DirectorSolarSystemMark { name: string; kind: 'sun' | 'moon' | 'planet'; ra_degrees: number; dec_degrees: number; distance_au: number; elongation_degrees: number }
+export interface DirectorSkyMarks {
+  at_ms: number;
+  radius_degrees: number;
+  objects: DirectorMarkLayer<DirectorObjectMark>;
+  minor_bodies: DirectorMarkLayer<DirectorMinorBodyMark>;
+  solar_system: DirectorSolarSystemMark[];
+}
+export interface DirectorSkyMarksQuery { ra: number; dec: number; fov: number; aspect: number; at: number; limit?: number }
+
 export interface DirectorNightTarget { id: string; hours_up: number; hours_up_moon_down: number; hours_lost_to_meridian: number; transit_ms: number | null; max_altitude_degrees: number; min_moon_separation_degrees: number }
 export interface DirectorNight {
   date: string;

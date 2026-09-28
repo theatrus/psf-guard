@@ -14,6 +14,7 @@ pub mod db;
 pub mod db_registry;
 pub mod debug;
 pub mod directory_tree;
+pub mod ephemeris;
 pub mod grading;
 pub mod hocus_focus_star_detection;
 pub mod image_analysis;
