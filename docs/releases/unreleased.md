@@ -163,6 +163,9 @@
   install full|nsns-ohs|nsns-ohs-starless` downloads a whole-sky set into the
   server's cache, and the framing view renders any view from its tiles with
   no network; a new framing starts on the offline DSS map when one exists.
+  Tiles are decoded by content, since N.I.N.A.'s DSS set keeps some small
+  versions as PNG behind a `.jpg` name, and an unreadable file gives way to
+  the next size up instead of failing the view.
 
 ## Fixed
 

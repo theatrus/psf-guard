@@ -230,22 +230,45 @@ impl SkyMap {
             .collect();
         candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
         candidates.truncate(MAX_TILES_PER_RENDER);
-        // Pick each tile's size: the smallest whose pixels are at least as fine as the view's.
+        // Pick each tile's size: the smallest whose pixels are at least as
+        // fine as the view's. N.I.N.A.'s sets mix formats behind the `.jpg`
+        // name (some small versions are PNGs), so decode by content, and
+        // step up to the next size when a file is unreadable.
         let mut images: HashMap<usize, RgbImage> = HashMap::new();
         for (index, _) in &candidates {
             let tile = &self.tiles[*index];
             let needed = (tile.fov_w_degrees / scale).ceil() as u32;
             let stem = tile.file_name.trim_end_matches(".jpg");
-            let path = VARIANTS
+            let mut paths: Vec<PathBuf> = VARIANTS
                 .iter()
                 .filter(|v| **v >= needed)
                 .map(|v| self.dir.join(format!("{stem}_{v}px.jpg")))
-                .find(|p| p.exists())
-                .unwrap_or_else(|| self.dir.join(&tile.file_name));
-            let decoded = image::open(&path)
-                .map_err(|error| format!("{}: {error}", path.display()))?
-                .to_rgb8();
-            images.insert(*index, decoded);
+                .collect();
+            paths.push(self.dir.join(&tile.file_name));
+            let mut decoded = None;
+            let mut last_error = String::new();
+            for path in &paths {
+                match std::fs::read(path) {
+                    Ok(bytes) => match image::load_from_memory(&bytes) {
+                        Ok(img) => {
+                            decoded = Some(img.to_rgb8());
+                            break;
+                        }
+                        Err(error) => last_error = format!("{}: {error}", path.display()),
+                    },
+                    Err(error) => {
+                        if last_error.is_empty() {
+                            last_error = format!("{}: {error}", path.display());
+                        }
+                    }
+                }
+            }
+            match decoded {
+                Some(img) => {
+                    images.insert(*index, img);
+                }
+                None => return Err(last_error),
+            }
         }
         let (sin_r, cos_r) = view.rotation_degrees.to_radians().sin_cos();
         let mut out = vec![0u8; w * h * 3];
@@ -471,5 +494,43 @@ mod tests {
             .unwrap()
             .to_rgb8();
         assert!(detail.get_pixel(100, 50).0[2] > 200);
+    }
+
+    #[test]
+    fn a_png_behind_a_jpg_name_decodes_and_a_broken_file_falls_back_to_the_next_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let map = map(dir.path());
+        // N.I.N.A.'s DSS set has PNG bytes in some `_500px.jpg` files.
+        let mut png = RgbImage::new(64, 64);
+        for p in png.pixels_mut() {
+            p.0 = [0, 255, 0];
+        }
+        png.save_with_format(dir.path().join("west_75px.jpg"), image::ImageFormat::Png)
+            .unwrap();
+        // A wide view of the western tile wants the smallest version: the PNG.
+        let wide = View {
+            ra_degrees: 8.0,
+            dec_degrees: 0.0,
+            fov_degrees: 30.0,
+            width_px: 96,
+            height_px: 48,
+            rotation_degrees: 0.0,
+        };
+        let img = image::load_from_memory(&map.render(&wide).unwrap())
+            .unwrap()
+            .to_rgb8();
+        let at_west = img.get_pixel(48, 24).0;
+        assert!(at_west[1] > 200 && at_west[0] < 60, "{at_west:?}");
+        // Garbage in the small file: the next size up (the full tile) is used instead.
+        std::fs::write(dir.path().join("west_75px.jpg"), b"not an image").unwrap();
+        let img = image::load_from_memory(&map.render(&wide).unwrap())
+            .unwrap()
+            .to_rgb8();
+        let at_west = img.get_pixel(48, 24).0;
+        assert!(at_west[0] > 200 && at_west[2] < 60, "{at_west:?}");
+        // Every version unreadable names the file.
+        std::fs::write(dir.path().join("west.jpg"), b"still not an image").unwrap();
+        let error = map.render(&wide).unwrap_err();
+        assert!(error.contains("west.jpg"), "{error}");
     }
 }
