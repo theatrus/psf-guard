@@ -10,6 +10,7 @@ import {
   compassDirections, insidePolygon, panelForRig, pixelScale, polygonPoints, previewRequest, projectOn, stackMatrix, stageCorners, stageFor, stageProject, stateFromDraft, stateFromSeed, tileMatrix, tileSize, toStage, trueWidth, viewAt, type FramingSeed, type FramingState, type Stage, type StageView, chipSurveys, framingGeometry, tileFor, viewLeftTile, type SkyTile, defaultSurveyId,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
+import SkyCanvas, { type SkyTileImage } from './SkyCanvas';
 import { useDebounced, useSurveyCutout } from './useSurveyCutout';
 import './FramingView.css';
 
@@ -200,7 +201,15 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     survey: state.surveyId, ra: Number(tile.center.ra_degrees.toFixed(5)), dec: Number(tile.center.dec_degrees.toFixed(5)),
     fov: Number(tile.fov.toFixed(5)), width: tilePixels.width, height: tilePixels.height, rotation: 0,
   } : null, 150);
-  const skyMatrix = cutout.image && state && stageView
+  // The picture is re-projected on the GPU for every frame from the tiles
+  // fetched so far. Without WebGL the newest tile is laid in through one
+  // fitted matrix instead, which is right at the center and drifts toward
+  // the edges of a wide view.
+  const [webgl, setWebgl] = useState(true);
+  const skyTiles: SkyTileImage[] = useMemo(() => cutout.tiles.map(tile => ({
+    key: tile.key, url: tile.url, center: { ra_degrees: tile.request.ra, dec_degrees: tile.request.dec }, fov: tile.request.fov, width: tile.request.width, height: tile.request.height,
+  })), [cutout.tiles]);
+  const skyMatrix = !webgl && cutout.image && state && stageView
     ? tileMatrix({ center: { ra_degrees: cutout.image.request.ra, dec_degrees: cutout.image.request.dec }, fov: cutout.image.request.fov }, { width: cutout.image.request.width, height: cutout.image.request.height }, stageView, state.viewFov, stageSize)
     : null;
   // The chart under the sky: grid, stars, figures and names, each once the view is wide enough.
@@ -209,7 +218,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   const graticule = useMemo(() => state && stageView && showGrid ? framingGraticule(stageView, state.viewFov, stageSize) : null, [stageView, state?.viewFov, stageSize, showGrid]); // eslint-disable-line react-hooks/exhaustive-deps
   const backdrop = useMemo(() => state && stageView && showChart ? framingBackdrop(stageView, state.viewFov, stageSize) : null, [stageView, state?.viewFov, stageSize, showChart]); // eslint-disable-line react-hooks/exhaustive-deps
   // The survey shows the real stars and the Milky Way; the drawn ones stand in only until a picture is up.
-  const pictureUp = !!(cutout.image && skyMatrix);
+  const pictureUp = !!cutout.image && (webgl || !!skyMatrix);
   // Finished per-panel stacks, drawn where their plate solves put them: a
   // review of coverage and seams over the plan, never a processed image.
   const [showStacks, setShowStacks] = useState(true);
@@ -337,9 +346,10 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     <div className="framing-stage-wrap">
       <div ref={stage} className={`framing-stage${cutout.stale ? ' is-stale' : ''}`} role="img" aria-label="Sky view" data-testid="framing-stage"
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
-        {!(cutout.image && skyMatrix) && <div className="framing-stage-empty" />}
+        {!pictureUp && <div className="framing-stage-empty" />}
+        {webgl && view && <SkyCanvas className={`framing-sky${cutout.image ? '' : ' is-empty'}`} tiles={skyTiles} view={view} viewFov={state.viewFov} stage={stageSize} onUnsupported={() => setWebgl(false)} />}
         <svg viewBox={`0 0 ${stageSize.width} ${stageSize.height}`} aria-hidden="true">
-          {cutout.image && skyMatrix && <image className="framing-sky" data-testid="framing-sky" href={cutout.image.url} x={0} y={0} width={cutout.image.request.width} height={cutout.image.request.height} preserveAspectRatio="none" transform={skyMatrix} />}
+          {!webgl && cutout.image && skyMatrix && <image className="framing-sky" data-testid="framing-sky" href={cutout.image.url} x={0} y={0} width={cutout.image.request.width} height={cutout.image.request.height} preserveAspectRatio="none" transform={skyMatrix} />}
           {backdrop && !pictureUp && backdrop.milkyWay.length > 0 && <g className="framing-milky-way">{backdrop.milkyWay.map((d, i) => <path key={i} d={d} />)}</g>}
           {graticule && <g className="framing-graticule" data-testid="framing-graticule">
             {graticule.paths.map((line, i) => <path key={i} d={line.d} />)}
