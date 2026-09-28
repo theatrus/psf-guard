@@ -6,6 +6,7 @@ import { apiClient } from '../../api/client';
 import type { DirectorIdentity, DirectorPlanRow } from '../../api/directorTypes';
 import { useAccess } from '../../auth/access';
 import { identityId } from './identityId';
+import { retryWhenBusy } from './retry';
 import PlanThumbnail from './PlanThumbnail';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
@@ -39,7 +40,7 @@ export default function DirectorPlans({ instanceId }: { instanceId: string }) {
     next.set('directorProject', projectId);
     return `/director?${next}`;
   };
-  const plans = useQuery({ queryKey, queryFn: apiClient.getDirectorPlans, retry: false, refetchOnWindowFocus: false, refetchOnMount: 'always' });
+  const plans = useQuery({ queryKey, queryFn: apiClient.getDirectorPlans, retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false, refetchOnMount: 'always' });
   const [edit, setEdit] = useState<Edit | null>(null);
   const [name, setName] = useState('');
   const [notice, setNotice] = useState('');

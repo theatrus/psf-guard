@@ -256,16 +256,8 @@ async fn execute(
         .values()
         .cloned()
         .collect();
-    let metadata_permit = service
-        .admission
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| Error::Busy)?;
-    let catalog_permit = service
-        .discovery_admission
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| Error::Busy)?;
+    let metadata_permit = admit(&service.admission).await?;
+    let catalog_permit = admit(&service.discovery_admission).await?;
     let peers = registered_peers(&state);
     let known_peers = peers.clone();
     let mut report = tokio::task::spawn_blocking(move || {

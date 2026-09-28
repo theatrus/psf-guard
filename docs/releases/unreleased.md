@@ -169,6 +169,12 @@
 
 ## Fixed
 
+- Opening a plan no longer fails with "Director metadata is busy; retry
+  shortly" when several of its requests arrive at once: a request waits its
+  turn for up to twenty seconds instead of three, the visibility chart's
+  night curves are computed after the store is released, and the browser
+  waits through a busy answer instead of showing it as an error.
+
 - Plans whose Target Scheduler project already has a target no longer read
   "Linked, not framed yet": the list says they are framed in Target
   Scheduler, shows the target's sky as the thumbnail, and opening the plan

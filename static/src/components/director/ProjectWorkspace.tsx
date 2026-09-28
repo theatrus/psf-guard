@@ -9,6 +9,7 @@ import FramingView from './FramingView';
 import PlanEditor from './PlanEditor';
 import ActivationPanel from './ActivationPanel';
 import type { FramingSeed } from './framingModel';
+import { retryWhenBusy } from './retry';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
@@ -17,7 +18,7 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
   const [params] = useSearchParams();
   const { canWrite } = useAccess();
   const info = useQuery({ queryKey: ['serverInfo'], queryFn: apiClient.getServerInfo, staleTime: 300_000 });
-  const plans = useQuery({ queryKey: ['directorPlans', instanceId], queryFn: apiClient.getDirectorPlans, retry: false, refetchOnWindowFocus: false, refetchOnMount: 'always' });
+  const plans = useQuery({ queryKey: ['directorPlans', instanceId], queryFn: apiClient.getDirectorPlans, retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false, refetchOnMount: 'always' });
   const row = plans.data?.rows.find(entry => entry.project.id === projectId);
   const first = row?.links.find(link => link.source_row_id !== null);
   // The first linked catalog project seeds the framing; TS keeps RA in hours.

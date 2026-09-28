@@ -7,6 +7,7 @@ import { useAllDatabases } from '../../hooks/useDatabases';
 import { openSettings } from '../../utils/settingsIntent';
 import { formatDegrees } from './framingModel';
 import RigProfileCard from './RigProfileCard';
+import { retryWhenBusy } from './retry';
 
 function describeStatus(payload: Record<string, unknown>, at: number): string {
   const phase = typeof payload.phase === 'string' ? payload.phase : typeof payload.state === 'string' ? payload.state : 'reported';
@@ -18,8 +19,8 @@ function describeStatus(payload: Record<string, unknown>, at: number): string {
 export default function DirectorRigs() {
   const databases = useAllDatabases();
   const [openSetup, setOpenSetup] = useState<string | null>(null);
-  const profiles = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: false, refetchOnWindowFocus: false });
-  const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, retry: false, refetchInterval: 30_000 });
+  const profiles = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false });
+  const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 30_000 });
   // Only needed to name a peer; most servers have none.
   const peers = useQuery({ queryKey: ['peers'], queryFn: apiClient.getPeers, retry: false, refetchOnWindowFocus: false, enabled: profiles.data?.some(entry => entry.profile?.peer_id) ?? false });
   return <section aria-label="Rig databases" className="director-records">

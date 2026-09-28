@@ -100,7 +100,9 @@ pub(super) async fn evaluate(
         .collect();
     let permit = admit(&service.admission).await?;
     let view = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
+        // Reads happen under the store lock and the admission permit; the
+        // night curves, which take the time, run after both are released so
+        // the rest of the workspace is not kept waiting behind them.
         let store = service.store.lock().map_err(|_| Error::Internal)?;
         store.project(id)?.ok_or(Error::Missing)?;
         let framing = store.framing_draft(id)?;
@@ -140,11 +142,18 @@ pub(super) async fn evaluate(
                 names.insert(binding.rig.id, (binding.rig, catalog.name.clone()));
             }
         }
+        let mut inputs = Vec::new();
         for (rig_id, (rig, catalog_name)) in names {
-            let Some(profile) = store.rig_profile(rig_id)? else {
-                warnings.push(format!("{catalog_name}: no rig profile yet; set its site under Setup."));
-                continue;
-            };
+            match store.rig_profile(rig_id)? {
+                Some(profile) => inputs.push((rig_id, rig, catalog_name, profile)),
+                None => warnings.push(format!("{catalog_name}: no rig profile yet; set its site under Setup.")),
+            }
+        }
+        // Everything below is arithmetic on what was read: let the next
+        // request at the store go while the night curves are computed.
+        drop(store);
+        drop(permit);
+        for (rig_id, rig, catalog_name, profile) in inputs {
             let Some(site) = profile.site.as_ref().map(|s| s.value) else {
                 warnings.push(format!("{catalog_name}: no site in its rig profile; set it under Setup or let the plugin report it."));
                 continue;
