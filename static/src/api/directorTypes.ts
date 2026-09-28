@@ -120,6 +120,8 @@ export interface DirectorSurvey {
   kind: 'broadband' | 'narrowband' | 'panorama';
   bandpass: string;
   attribution: string;
+  /** Rendered from N.I.N.A. offline sky map tiles on the server; no network. */
+  offline?: boolean;
 }
 export interface DirectorSkyPosition { ra_degrees: number; dec_degrees: number }
 export interface DirectorPanelSize { width_degrees: number; height_degrees: number }

@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
@@ -291,6 +291,24 @@ describe('Framing view', () => {
     expect(screen.getByLabelText('Position angle degrees')).toHaveValue(15);
     expect(screen.getByRole('button', { name: 'Back to saved framing' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+  });
+
+  it('starts a new framing on the offline DSS map when the server has one, and lists it first', async () => {
+    const { cutouts } = fixture();
+    server.use(http.get('/api/director/v1/sky/surveys', () => HttpResponse.json(ok([
+      { id: 'dss2_color', name: 'DSS2 color', hips: 'CDS/P/DSS2/color', kind: 'broadband', bandpass: 'Plates', attribution: 'DSS2 via CDS' },
+      { id: 'nina:FramingAssistantCache', name: 'DSS (offline)', hips: '', kind: 'broadband', bandpass: 'Plates, offline', attribution: 'N.I.N.A. offline sky map', offline: true },
+      { id: 'nina:FramingAssistantCache_NorthernSkyNarrowbandSurvey_OHS_withStars', name: 'NSNS SHO (offline)', hips: '', kind: 'narrowband', bandpass: 'SHO, offline', attribution: 'NSNS', offline: true },
+    ]))));
+    mount();
+    await screen.findByLabelText('Target name');
+    await waitFor(() => expect(screen.getByLabelText('Survey')).toHaveValue('nina:FramingAssistantCache'));
+    const chips = within(screen.getByRole('group', { name: 'Survey layers' })).getAllByRole('button').map(button => button.textContent);
+    expect(chips.slice(0, 2)).toEqual(['DSS (offline)', 'NSNS SHO (offline)']);
+    await waitFor(() => expect(cutouts.some(query => decodeURIComponent(query).includes('survey=nina:FramingAssistantCache&'))).toBe(true));
+    // A layer picked by hand stays put when the list refreshes.
+    fireEvent.click(screen.getByRole('button', { name: 'DSS2' }));
+    expect(screen.getByLabelText('Survey')).toHaveValue('dss2_color');
   });
 
   it('switches the survey from the chips on the sky and remembers it in the draft', async () => {

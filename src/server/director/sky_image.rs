@@ -1,6 +1,8 @@
 //! Survey imagery behind the framing view: fixed-provider HiPS2FITS cutouts,
-//! fetched off the request path and cached under the cache root. A cutout is
-//! a composition aid; it proves nothing about pointing, grade or coverage.
+//! fetched off the request path and cached under the cache root, and
+//! N.I.N.A.'s offline sky maps rendered from their tiles under
+//! `<cache>/director/sky-maps`. A cutout is a composition aid; it proves
+//! nothing about pointing, grade or coverage.
 
 use super::*;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
@@ -21,8 +23,11 @@ const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(45);
 const FAILURE_MEMORY: Duration = Duration::from_secs(60);
 const CONCURRENT_FETCHES: usize = 2;
+/// How long a listing of the offline map folders is trusted before the
+/// folder is read again, so an install shows up without a restart.
+const SKY_MAPS_REFRESH: Duration = Duration::from_secs(30);
 
-#[derive(Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SurveyKind {
     Broadband,
@@ -181,16 +186,63 @@ pub const SURVEYS: &[Survey] = &[
     },
 ];
 
-pub fn survey(id: &str) -> Option<&'static Survey> {
-    SURVEYS.iter().find(|survey| survey.id == id)
+/// A layer the framing view can ask for: one of the HiPS surveys above or an
+/// offline sky map found on disk.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct SurveyInfo {
+    pub id: String,
+    pub name: String,
+    /// Empty for an offline map.
+    pub hips: String,
+    pub kind: SurveyKind,
+    pub bandpass: String,
+    pub attribution: String,
+    /// Rendered from tiles on this server; no network is used.
+    pub offline: bool,
+}
+
+impl From<&Survey> for SurveyInfo {
+    fn from(survey: &Survey) -> Self {
+        Self {
+            id: survey.id.to_owned(),
+            name: survey.name.to_owned(),
+            hips: survey.hips.to_owned(),
+            kind: survey.kind,
+            bandpass: survey.bandpass.to_owned(),
+            attribution: survey.attribution.to_owned(),
+            offline: false,
+        }
+    }
+}
+
+impl From<&crate::sky_maps::SkyMap> for SurveyInfo {
+    fn from(map: &crate::sky_maps::SkyMap) -> Self {
+        Self {
+            id: map.id.clone(),
+            name: map.name.clone(),
+            hips: String::new(),
+            kind: match map.kind {
+                crate::sky_maps::Kind::Broadband => SurveyKind::Broadband,
+                crate::sky_maps::Kind::Narrowband => SurveyKind::Narrowband,
+            },
+            bandpass: map.bandpass.clone(),
+            attribution: map.attribution.clone(),
+            offline: true,
+        }
+    }
+}
+
+pub fn builtin_surveys() -> Vec<SurveyInfo> {
+    SURVEYS.iter().map(SurveyInfo::from).collect()
 }
 
 /// One requested view. Bounds keep the provider request small and the cache
 /// finite; a framing view never needs more than a few megapixels.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Cutout {
-    pub survey: &'static str,
+    pub survey: String,
+    /// The provider's identifier; `None` for an offline map.
+    pub hips: Option<String>,
     pub ra_degrees: f64,
     pub dec_degrees: f64,
     /// Angular width of the image.
@@ -220,8 +272,11 @@ fn default_size() -> u32 {
 }
 
 impl Cutout {
-    pub(super) fn from_query(query: &CutoutQuery) -> Result<Self, Error> {
-        let survey = survey(&query.survey).ok_or(Error::Invalid)?;
+    pub(super) fn from_query(query: &CutoutQuery, known: &[SurveyInfo]) -> Result<Self, Error> {
+        let survey = known
+            .iter()
+            .find(|survey| survey.id == query.survey)
+            .ok_or(Error::Invalid)?;
         let finite = |v: f64, lo: f64, hi: f64| v.is_finite() && (lo..=hi).contains(&v);
         if !finite(query.ra, 0.0, 360.0)
             || query.ra >= 360.0
@@ -235,7 +290,8 @@ impl Cutout {
             return Err(Error::Invalid);
         }
         Ok(Self {
-            survey: survey.id,
+            survey: survey.id.clone(),
+            hips: (!survey.offline).then(|| survey.hips.clone()),
             ra_degrees: query.ra,
             dec_degrees: query.dec,
             fov_degrees: query.fov,
@@ -265,9 +321,8 @@ impl Cutout {
     }
 
     fn query_pairs(&self) -> Vec<(&'static str, String)> {
-        let hips = survey(self.survey).expect("validated survey").hips;
         vec![
-            ("hips", hips.to_owned()),
+            ("hips", self.hips.clone().unwrap_or_default()),
             ("width", self.width_px.to_string()),
             ("height", self.height_px.to_string()),
             ("fov", format!("{:.6}", self.fov_degrees)),
@@ -286,11 +341,17 @@ enum Job {
     Failed { message: String, at: Instant },
 }
 
+/// The offline maps as last read from disk, shared with render tasks.
+type MapList = Arc<Vec<Arc<crate::sky_maps::SkyMap>>>;
+
 pub struct SkyImageService {
     client: reqwest::Client,
     base_url: String,
     resolver_url: String,
     cache_dir: PathBuf,
+    /// Folders of N.I.N.A. offline sky maps, one per layer.
+    sky_maps_root: PathBuf,
+    maps: Mutex<Option<(Instant, MapList)>>,
     jobs: Mutex<HashMap<String, Job>>,
     admission: Arc<Semaphore>,
 }
@@ -322,9 +383,53 @@ impl SkyImageService {
             base_url: base_url.to_owned(),
             resolver_url: resolver_url.to_owned(),
             cache_dir: cache_root.join("director").join("sky"),
+            sky_maps_root: crate::sky_maps::root_for(cache_root),
+            maps: Mutex::new(None),
             jobs: Mutex::new(HashMap::new()),
             admission: Arc::new(Semaphore::new(CONCURRENT_FETCHES)),
         }
+    }
+
+    /// Look for offline maps somewhere else than under the cache root.
+    #[cfg(test)]
+    pub fn with_sky_maps_root(mut self, root: &FilePath) -> Self {
+        self.sky_maps_root = root.to_path_buf();
+        self
+    }
+
+    /// The offline maps on disk, reread every half minute so a fresh install
+    /// appears without a restart. Reading the indexes is quick; the tiles
+    /// are opened only when a view is rendered.
+    fn maps(&self) -> MapList {
+        let mut guard = self.maps.lock().expect("sky map list");
+        if let Some((at, maps)) = guard.as_ref()
+            && at.elapsed() < SKY_MAPS_REFRESH
+        {
+            return maps.clone();
+        }
+        let maps = Arc::new(
+            crate::sky_maps::discover(&self.sky_maps_root)
+                .into_iter()
+                .map(Arc::new)
+                .collect::<Vec<_>>(),
+        );
+        *guard = Some((Instant::now(), maps.clone()));
+        maps
+    }
+
+    /// Every layer on offer: the HiPS surveys, then the offline maps.
+    pub fn surveys(&self) -> Vec<SurveyInfo> {
+        let mut list = builtin_surveys();
+        list.extend(self.maps().iter().map(|map| SurveyInfo::from(map.as_ref())));
+        list
+    }
+
+    pub(super) fn cutout_from_query(&self, query: &CutoutQuery) -> Result<Cutout, Error> {
+        Cutout::from_query(query, &self.surveys())
+    }
+
+    fn map_for(&self, survey: &str) -> Option<Arc<crate::sky_maps::SkyMap>> {
+        self.maps().iter().find(|map| map.id == survey).cloned()
     }
 
     fn path_for(&self, digest: &str) -> PathBuf {
@@ -333,7 +438,7 @@ impl SkyImageService {
 
     /// Serve the cached image, or start one fetch and say so. Never fetches in
     /// the request; a failed fetch is remembered briefly so the view can say why.
-    async fn respond(self: Arc<Self>, cutout: Cutout) -> Response {
+    pub(super) async fn respond(self: Arc<Self>, cutout: Cutout) -> Response {
         let digest = cutout.digest();
         let path = self.path_for(&digest);
         if let Ok(bytes) = tokio::fs::read(&path).await {
@@ -361,7 +466,10 @@ impl SkyImageService {
         }
         let service = self.clone();
         tokio::spawn(async move {
-            let result = service.fetch(&cutout, &path).await;
+            let result = match service.map_for(&cutout.survey) {
+                Some(map) => service.render_offline(map, &cutout, &path).await,
+                None => service.fetch(&cutout, &path).await,
+            };
             let mut jobs = service.jobs.lock().expect("sky image job map");
             match result {
                 Ok(()) => {
@@ -462,6 +570,42 @@ impl SkyImageService {
         if bytes.is_empty() {
             return Err("Survey service returned an empty image".to_owned());
         }
+        publish(path, &bytes).await
+    }
+
+    /// Render a view from an offline map's tiles on a blocking thread and
+    /// cache it like a fetched cutout.
+    async fn render_offline(
+        &self,
+        map: Arc<crate::sky_maps::SkyMap>,
+        cutout: &Cutout,
+        path: &FilePath,
+    ) -> Result<(), String> {
+        let _permit = self
+            .admission
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| "Sky image service is shutting down".to_owned())?;
+        let view = crate::sky_maps::View {
+            ra_degrees: cutout.ra_degrees,
+            dec_degrees: cutout.dec_degrees,
+            fov_degrees: cutout.fov_degrees,
+            width_px: cutout.width_px,
+            height_px: cutout.height_px,
+            rotation_degrees: cutout.rotation_degrees,
+        };
+        let bytes = tokio::task::spawn_blocking(move || map.render(&view))
+            .await
+            .map_err(|_| "Offline sky map rendering was interrupted".to_owned())??;
+        publish(path, &bytes).await
+    }
+}
+
+/// Write a finished image beside the cache and move it into place, so a
+/// reader never sees a half-written file.
+async fn publish(path: &FilePath, bytes: &[u8]) -> Result<(), String> {
+    {
         let dir = path.parent().expect("cache file has a parent");
         tokio::fs::create_dir_all(dir)
             .await
@@ -605,9 +749,9 @@ pub(super) fn install_for_test(service: SkyImageService) -> Arc<SkyImageService>
 
 pub(super) async fn surveys(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<ApiResponse<&'static [Survey]>>, Error> {
+) -> Result<Json<ApiResponse<Vec<SurveyInfo>>>, Error> {
     enabled(&state)?;
-    Ok(Json(ApiResponse::success(SURVEYS)))
+    Ok(Json(ApiResponse::success(service(&state).surveys())))
 }
 
 pub(super) async fn cutout(
@@ -615,8 +759,9 @@ pub(super) async fn cutout(
     Query(query): Query<CutoutQuery>,
 ) -> Result<Response, Error> {
     enabled(&state)?;
-    let cutout = Cutout::from_query(&query)?;
-    Ok(service(&state).respond(cutout).await)
+    let service = service(&state);
+    let cutout = service.cutout_from_query(&query)?;
+    Ok(service.respond(cutout).await)
 }
 
 #[cfg(test)]
@@ -637,41 +782,56 @@ mod tests {
 
     #[test]
     fn only_listed_surveys_and_bounded_views_are_accepted() {
-        assert!(Cutout::from_query(&query("dss2_color")).is_ok());
-        assert!(Cutout::from_query(&query("CDS/P/DSS2/color")).is_err());
-        assert!(Cutout::from_query(&query("../etc")).is_err());
+        assert!(Cutout::from_query(&query("dss2_color"), &builtin_surveys()).is_ok());
+        assert!(Cutout::from_query(&query("CDS/P/DSS2/color"), &builtin_surveys()).is_err());
+        assert!(Cutout::from_query(&query("../etc"), &builtin_surveys()).is_err());
         let mut q = query("dss2_color");
         q.width = 4096;
-        assert!(Cutout::from_query(&q).is_err());
+        assert!(Cutout::from_query(&q, &builtin_surveys()).is_err());
         let mut q = query("dss2_color");
         q.fov = 0.0;
-        assert!(Cutout::from_query(&q).is_err());
+        assert!(Cutout::from_query(&q, &builtin_surveys()).is_err());
         let mut q = query("dss2_color");
         q.ra = 360.0;
-        assert!(Cutout::from_query(&q).is_err());
+        assert!(Cutout::from_query(&q, &builtin_surveys()).is_err());
         let mut q = query("dss2_color");
         q.dec = f64::NAN;
-        assert!(Cutout::from_query(&q).is_err());
+        assert!(Cutout::from_query(&q, &builtin_surveys()).is_err());
     }
 
     #[test]
     fn the_cache_key_ignores_sub_display_nudges_but_not_the_survey_or_size() {
-        let base = Cutout::from_query(&query("dss2_color")).unwrap();
+        let base = Cutout::from_query(&query("dss2_color"), &builtin_surveys()).unwrap();
         let mut nudged = query("dss2_color");
         nudged.ra += 0.000_001;
-        assert_eq!(base.digest(), Cutout::from_query(&nudged).unwrap().digest());
+        assert_eq!(
+            base.digest(),
+            Cutout::from_query(&nudged, &builtin_surveys())
+                .unwrap()
+                .digest()
+        );
         let mut other = query("finkbeiner_halpha");
         other.width = 800;
-        assert_ne!(base.digest(), Cutout::from_query(&other).unwrap().digest());
+        assert_ne!(
+            base.digest(),
+            Cutout::from_query(&other, &builtin_surveys())
+                .unwrap()
+                .digest()
+        );
         let mut sized = query("dss2_color");
         sized.height = 601;
-        assert_ne!(base.digest(), Cutout::from_query(&sized).unwrap().digest());
+        assert_ne!(
+            base.digest(),
+            Cutout::from_query(&sized, &builtin_surveys())
+                .unwrap()
+                .digest()
+        );
         assert_eq!(base.digest().len(), 64);
     }
 
     #[test]
     fn provider_requests_carry_the_hips_id_and_a_tangent_projection() {
-        let pairs = Cutout::from_query(&query("finkbeiner_halpha"))
+        let pairs = Cutout::from_query(&query("finkbeiner_halpha"), &builtin_surveys())
             .unwrap()
             .query_pairs();
         let get = |key: &str| {

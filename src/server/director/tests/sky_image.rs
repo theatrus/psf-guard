@@ -157,3 +157,67 @@ async fn cutouts_are_fetched_once_off_the_request_path_and_failures_are_named() 
     assert_eq!(raw(&off, good).await.0, StatusCode::NOT_FOUND);
     assert_eq!(raw(&off, "/sky/surveys").await.0, StatusCode::NOT_FOUND);
 }
+
+/// An offline map under the cache root is a survey like any other: listed
+/// with `offline: true`, rendered from its tiles off the request path, and
+/// cached like a fetched cutout.
+#[tokio::test]
+async fn an_offline_sky_map_is_listed_and_rendered_from_its_tiles() {
+    let dir = TempDir::new().unwrap();
+    let maps = dir.path().join("maps");
+    let folder = maps.join("FramingAssistantCache");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("CacheInfo.xml"),
+        r#"<ImageCacheInfo><Image Id="a" RA="0.6667" Dec="41.2500" Rotation="0" FoVW="300" FoVH="300" FileName="t.jpg" Source="DSS" Name="t" /></ImageCacheInfo>"#,
+    )
+    .unwrap();
+    let mut tile = image::RgbImage::new(64, 64);
+    for p in tile.pixels_mut() {
+        p.0 = [30, 200, 60];
+    }
+    tile.save(folder.join("t.jpg")).unwrap();
+    // No provider is ever asked: point the service at a closed port.
+    let service = Arc::new(
+        SkyImageService::new(dir.path(), "http://127.0.0.1:9/hips2fits").with_sky_maps_root(&maps),
+    );
+    let listed = service.surveys();
+    let offline = listed
+        .iter()
+        .find(|s| s.id == "nina:FramingAssistantCache")
+        .expect("listed");
+    assert_eq!(offline.name, "DSS (offline)");
+    assert!(offline.offline);
+    assert_eq!(
+        offline.kind,
+        crate::server::director::sky_image::SurveyKind::Broadband
+    );
+    assert!(listed.iter().any(|s| s.id == "dss2_color" && !s.offline));
+
+    let query = serde_json::from_str(r#"{"survey":"nina:FramingAssistantCache","ra":10.0,"dec":41.25,"fov":2.0,"width":128,"height":96,"rotation":0.0}"#).unwrap();
+    let cutout = service.cutout_from_query(&query).unwrap();
+    assert_eq!(cutout.hips, None);
+    let first = service.clone().respond(cutout.clone()).await;
+    assert_eq!(first.status(), StatusCode::ACCEPTED);
+    let mut bytes = Vec::new();
+    for _ in 0..200 {
+        let response = service.clone().respond(cutout.clone()).await;
+        if response.status() == StatusCode::OK {
+            bytes = to_bytes(response.into_body(), 10_000_000)
+                .await
+                .unwrap()
+                .to_vec();
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert!(!bytes.is_empty(), "offline render never settled");
+    let img = image::load_from_memory(&bytes).unwrap().to_rgb8();
+    assert_eq!((img.width(), img.height()), (128, 96));
+    let centre = img.get_pixel(64, 48).0;
+    assert!(centre[1] > 150 && centre[0] < 90, "{centre:?}");
+    // Unknown layer ids are refused before anything is read.
+    let bad = serde_json::from_str(r#"{"survey":"nina:nowhere","ra":10.0,"dec":41.25,"fov":2.0}"#)
+        .unwrap();
+    assert!(service.cutout_from_query(&bad).is_err());
+}

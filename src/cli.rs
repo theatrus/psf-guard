@@ -1056,6 +1056,14 @@ pub enum Commands {
         action: UserCommand,
     },
 
+    /// N.I.N.A.'s offline sky maps for the Director framing view: download a
+    /// whole-sky set from nighttime-imaging.eu, or point at one already on
+    /// disk, and the framing view offers it as a survey layer with no network.
+    SkyMaps {
+        #[command(subcommand)]
+        action: SkyMapsCommand,
+    },
+
     /// Start the web server for API access and static file serving
     Server {
         /// Path to TOML configuration file
@@ -1139,6 +1147,29 @@ pub enum Commands {
         /// `psf-guard users add`.
         #[arg(long)]
         allow_anonymous_access: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SkyMapsCommand {
+    /// Download and unpack a set into `<cache-dir>/director/sky-maps`.
+    /// `full` is the whole-sky DSS set (3.3 GB), `nsns-ohs` the Northern Sky
+    /// Narrowband Survey in SHO colour (1.4 GB), `nsns-ohs-starless` its
+    /// starless version (0.5 GB); any other value is taken as a zip URL.
+    Install {
+        /// `full`, `nsns-ohs`, `nsns-ohs-starless`, or a URL to a zip.
+        source: String,
+
+        /// The server's cache root (the `--cache-dir` the server runs with).
+        #[arg(long, default_value = "./cache")]
+        cache_dir: String,
+    },
+
+    /// Show the sets the server would offer from this cache root.
+    List {
+        /// The server's cache root (the `--cache-dir` the server runs with).
+        #[arg(long, default_value = "./cache")]
+        cache_dir: String,
     },
 }
 
