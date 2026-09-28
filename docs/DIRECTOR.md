@@ -374,12 +374,15 @@ declination labelled down the left edge and right ascension along the top;
 drawn stars and the Milky Way band stand in only until a picture is up. The
 grid and the constellation layer each have a switch under **View**. The
 projection is stereographic, in the browser, on the server's survey images
-and on the offline maps alike. A survey tile is fetched about where the view
-rested, so its north leans against the stage's once the view has turned on;
-while the pointer moves the tile is laid on the stage through a matrix
-fitted through the sky, which carries that turn along with the scale and
-shift, so the picture stays under the grid and the rectangle until the
-settled view's own tile lands. At framing widths the projection is the
+and on the offline maps alike. The picture is drawn on the GPU: for every
+frame, each pixel of the stage looks along its direction on the sky and
+samples whichever of the tiles fetched so far holds it, finest first, with
+the same arithmetic the server used to render the tile run in reverse. So
+the picture sits under the grid and the rectangle exactly at every zoom
+and turn while the pointer moves, a newly landed tile changes nothing but
+detail, and the tiles around and above the view stay on hand for a pan or
+a zoom step. A browser without WebGL gets the newest tile laid in through
+one fitted transform instead, which is right at the center of the view. At framing widths the projection is the
 tangent plane to within a pixel, and the readout under the stage gives the
 width of sky the stage really spans. The rotation handle lives on the
 target's own plane, so it stays on the rectangle's up direction wherever the

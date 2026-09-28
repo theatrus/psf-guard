@@ -14,10 +14,18 @@ export function useDebounced<T>(value: T, delay: number): T {
   return debounced;
 }
 
+export interface LoadedCutout { url: string; key: string; request: DirectorCutoutRequest }
+
+/** Images kept from earlier requests of the same survey, so the stage has a
+ *  picture around and above the view before its own tile lands. */
+export const CUTOUT_HISTORY = 8;
+
 export interface SurveyCutout {
   /** The image on screen and the request it answers, so a caller can place
    *  it under a view that has moved on since. */
-  image: { url: string; key: string; request: DirectorCutoutRequest } | null;
+  image: LoadedCutout | null;
+  /** The newest images of the current survey, oldest first; `image` is the last. */
+  tiles: LoadedCutout[];
   status: 'idle' | 'loading' | 'ready' | 'failed';
   error: string;
   /** The image on screen is for an earlier request; the next one is on its way. */
@@ -33,7 +41,8 @@ export function useSurveyCutout(request: DirectorCutoutRequest | null, delayMs =
   const key = request ? JSON.stringify(request) : null;
   const debouncedKey = useDebounced(key, delayMs);
   const debounced = useMemo<DirectorCutoutRequest | null>(() => debouncedKey ? JSON.parse(debouncedKey) as DirectorCutoutRequest : null, [debouncedKey]);
-  const [image, setImage] = useState<SurveyCutout['image']>(null);
+  const [tiles, setTiles] = useState<LoadedCutout[]>([]);
+  const image = tiles.length ? tiles[tiles.length - 1] : null;
   const [status, setStatus] = useState<SurveyCutout['status']>('idle');
   const [error, setError] = useState('');
   useEffect(() => {
@@ -50,7 +59,14 @@ export function useSurveyCutout(request: DirectorCutoutRequest | null, delayMs =
         if (cancelled) return;
         if (result.state === 'ready') {
           const url = URL.createObjectURL(result.blob);
-          setImage(previous => { if (previous) URL.revokeObjectURL(previous.url); return { url, key, request: debounced }; });
+          setTiles(previous => {
+            // A new survey starts a new set; within one, the oldest goes once the set is full.
+            const kept = previous.filter(tile => tile.request.survey === debounced.survey && tile.key !== key);
+            for (const gone of previous) if (!kept.includes(gone)) URL.revokeObjectURL(gone.url);
+            const next = [...kept, { url, key, request: debounced }];
+            while (next.length > CUTOUT_HISTORY) URL.revokeObjectURL(next.shift()!.url);
+            return next;
+          });
           setStatus('ready');
         } else if (result.state === 'generating') {
           if (++attempts >= IMAGE_POLL_LIMIT) { setStatus('failed'); setError('Survey image is taking too long; the last one stays up.'); return; }
@@ -62,6 +78,6 @@ export function useSurveyCutout(request: DirectorCutoutRequest | null, delayMs =
     // A view that moved on, or a page that went away, must not keep asking.
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [debounced]);
-  useEffect(() => () => { setImage(previous => { if (previous) URL.revokeObjectURL(previous.url); return null; }); }, []);
-  return { image, status, error, stale: image !== null && image.key !== debouncedKey };
+  useEffect(() => () => { setTiles(previous => { for (const tile of previous) URL.revokeObjectURL(tile.url); return []; }); }, []);
+  return { image, tiles, status, error, stale: image !== null && image.key !== debouncedKey };
 }

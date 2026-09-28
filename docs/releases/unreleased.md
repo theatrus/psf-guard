@@ -220,6 +220,11 @@
 
 ## Fixed
 
+- The survey picture under the framing view no longer stretches the wrong
+  way while you pan and then jumps when the settled tile arrives. It is
+  re-projected on the GPU for every frame from the tiles fetched so far,
+  finest on top, so it sits under the grid and the rectangle at every zoom
+  and turn, and a new tile only adds detail.
 - Panning the framing view no longer moves the rotation handle off the
   rectangle's up direction. The handle and the angle it sets now live on the
   target's own tangent plane, where the camera angle is measured, so turning
