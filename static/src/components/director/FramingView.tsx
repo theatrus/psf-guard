@@ -6,8 +6,8 @@ import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigProfileSummary } from '../../api/directorTypes';
 import {
-  MAX_VIEW_FOV, MIN_VIEW_FOV, STAGE_HEIGHT, STAGE_WIDTH, angleFromStage, clampFov, draftFromState, formatDec, formatDegrees, formatRaHours, handleOffset,
-  insidePolygon, moveBy, panelForRig, pixelScale, polygonPoints, previewRequest, stackMatrix, stateFromDraft, stateFromSeed, toStage, type FramingSeed, type FramingState, chipSurveys, framingGeometry, TILE_HEIGHT, TILE_WIDTH, offsetFrom, tileFor, tileTransform, viewLeftTile, type SkyTile, defaultSurveyId,
+  DEFAULT_STAGE, MAX_VIEW_FOV, MIN_VIEW_FOV, SURVEY_MAX_FOV, angleAt, clampFov, draftFromState, formatDec, formatDegrees, formatRaHours, framingBackdrop, framingGraticule, fromStage, handleSky,
+  insidePolygon, panelForRig, pixelScale, polygonPoints, previewRequest, stackMatrix, stageCorners, stageDeproject, stageFor, stageProject, stateFromDraft, stateFromSeed, tileSize, toStage, trueWidth, type FramingSeed, type FramingState, type Stage, chipSurveys, framingGeometry, tileFor, tileTransform, viewLeftTile, type SkyTile, defaultSurveyId,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
 import { useDebounced, useSurveyCutout } from './useSurveyCutout';
@@ -19,11 +19,10 @@ const httpStatus = (error: unknown) => isAxiosError(error) ? error.response?.sta
   : error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined;
 const retryWhenBusy = (count: number, error: unknown) => httpStatus(error) === 503 && count < 5;
 const DEFAULT_SURVEY = 'dss2_color';
-/** The rotation handle: past the top edge of the whole mosaic, along its up direction. */
+/** The rotation handle on the sky: past the top edge of the whole mosaic,
+ *  along the camera's up direction on the target's own plane. */
 function rotationHandle(geometry: DirectorFramingPreview, state: FramingState) {
-  const [cx, cy] = geometry.view_center_offset ?? [0, 0];
-  const [hx, hy] = handleOffset(state.positionAngle, geometry.extent.height_degrees / 2, Math.max(0.02, state.viewFov * 0.03));
-  return [cx + hx, cy + hy] as [number, number];
+  return handleSky(state.center, state.positionAngle, geometry.extent.height_degrees / 2, Math.max(0.02, state.viewFov * 0.03));
 }
 
 /** Where to point when the project has no catalog target yet: a name the
@@ -142,44 +141,66 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   const savedState = draft.data?.draft ? stateFromDraft(draft.data.draft) : null;
   const planFields = (s: FramingState) => JSON.stringify([s.targetName, s.center, s.positionAngle, s.mosaic, s.panelRigId, s.panel, s.shownRigIds, s.surveyId]);
   const differsFromSaved = !!state && !!savedState && planFields(state) !== planFields(savedState);
+  // The stage takes the shape of its element, so the sky fills whatever
+  // width and height the window gives it.
+  const stage = useRef<HTMLDivElement>(null);
+  const [stageSize, setStageSize] = useState<Stage>(DEFAULT_STAGE);
+  const hasState = state !== null;
+  useEffect(() => {
+    const element = stage.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const measure = () => { const { width, height } = element.getBoundingClientRect(); if (width > 0 && height > 0) setStageSize(stageFor(width / height)); };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [hasState]);
   // The sky behind the rectangle is a tile twice the view. While the pointer
   // moves, the loaded tile slides and scales under the view at once; a new
   // tile is asked for when the view leaves it, and once the pointer rests
   // the settled view gets a tile of its own so the rectangle sits exactly.
+  // Past SURVEY_MAX_FOV no image is asked for: the chart stands alone.
   const [tile, setTile] = useState<SkyTile | null>(null);
-  const viewNow = state ? { center: state.viewCenter, fov: state.viewFov } : null;
+  const viewNow = state && state.viewFov <= SURVEY_MAX_FOV ? { center: state.viewCenter, fov: state.viewFov } : null;
   const settledView = useDebounced(viewNow, 700);
   useEffect(() => {
     if (!viewNow) return;
-    if (!tile || viewLeftTile(tile, viewNow.center, viewNow.fov)) setTile(tileFor(viewNow.center, viewNow.fov));
-  }, [viewNow?.center.ra_degrees, viewNow?.center.dec_degrees, viewNow?.fov]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!tile || viewLeftTile(tile, viewNow.center, viewNow.fov, stageSize)) setTile(tileFor(viewNow.center, viewNow.fov));
+  }, [viewNow?.center.ra_degrees, viewNow?.center.dec_degrees, viewNow?.fov, stageSize]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!settledView || !tile) return;
     const rested = tileFor(settledView.center, settledView.fov);
-    const moved = offsetFrom(tile.center, rested.center);
+    const moved = stageProject(tile.center, rested.center);
     if (!moved || Math.hypot(moved[0], moved[1]) > settledView.fov * 0.01 || Math.abs(rested.fov - tile.fov) > tile.fov * 0.05) setTile(rested);
   }, [settledView?.center.ra_degrees, settledView?.center.dec_degrees, settledView?.fov]); // eslint-disable-line react-hooks/exhaustive-deps
-  const cutout = useSurveyCutout(state && tile ? {
+  const tilePixels = tileSize(stageSize);
+  const cutout = useSurveyCutout(state && tile && viewNow ? {
     survey: state.surveyId, ra: Number(tile.center.ra_degrees.toFixed(5)), dec: Number(tile.center.dec_degrees.toFixed(5)),
-    fov: Number(tile.fov.toFixed(5)), width: TILE_WIDTH, height: TILE_HEIGHT, rotation: 0,
+    fov: Number(tile.fov.toFixed(5)), width: tilePixels.width, height: tilePixels.height, rotation: 0,
   } : null, 150);
-  const skyTransform = cutout.image && state
-    ? tileTransform({ center: { ra_degrees: cutout.image.request.ra, dec_degrees: cutout.image.request.dec }, fov: cutout.image.request.fov }, state.viewCenter, state.viewFov)
+  const showSurvey = !!state && state.viewFov <= SURVEY_MAX_FOV;
+  const skyTransform = cutout.image && state && showSurvey
+    ? tileTransform({ center: { ra_degrees: cutout.image.request.ra, dec_degrees: cutout.image.request.dec }, fov: cutout.image.request.fov }, state.viewCenter, state.viewFov, stageSize)
     : null;
+  // The chart under the sky: grid, stars, figures and names, each once the view is wide enough.
+  const [showGrid, setShowGrid] = useState(true);
+  const [showChart, setShowChart] = useState(true);
+  const graticule = useMemo(() => state && showGrid ? framingGraticule(state.viewCenter, state.viewFov, stageSize) : null, [state?.viewCenter.ra_degrees, state?.viewCenter.dec_degrees, state?.viewFov, stageSize, showGrid]); // eslint-disable-line react-hooks/exhaustive-deps
+  const backdrop = useMemo(() => state && showChart ? framingBackdrop(state.viewCenter, state.viewFov, stageSize) : null, [state?.viewCenter.ra_degrees, state?.viewCenter.dec_degrees, state?.viewFov, stageSize, showChart]); // eslint-disable-line react-hooks/exhaustive-deps
   // Finished per-panel stacks, drawn where their plate solves put them: a
   // review of coverage and seams over the plan, never a processed image.
   const [showStacks, setShowStacks] = useState(true);
   const mosaic = useQuery({ queryKey: ['directorMosaic', projectId], queryFn: () => apiClient.getDirectorMosaic(projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false, staleTime: 60_000 });
   const placedStacks = useMemo(() => !showStacks || !state || !mosaic.data ? [] : mosaic.data.panels.flatMap(panel => {
-    const matrix = panel.preview ? stackMatrix(panel.preview, state.viewCenter, state.viewFov) : null;
+    const matrix = panel.preview ? stackMatrix(panel.preview, state.viewCenter, state.viewFov, stageSize) : null;
     return panel.preview && matrix ? [{ panel, preview: panel.preview, matrix }] : [];
-  }), [showStacks, state, mosaic.data]);
+  }), [showStacks, state, mosaic.data, stageSize]);
   // A view narrower than the footprint hides its edges and handle; widen it
   // once when the geometry first arrives, and on request.
   const fitToFootprint = useCallback((extent: { width_degrees: number; height_degrees: number }) => {
-    const needed = Math.max(extent.width_degrees, (extent.height_degrees * STAGE_WIDTH) / STAGE_HEIGHT) * 1.35;
+    const needed = Math.max(extent.width_degrees, (extent.height_degrees * stageSize.width) / stageSize.height) * 1.35;
     update(current => ({ viewFov: clampFov(Math.max(current.viewFov, needed)), viewCenter: current.center }));
-  }, [update]);
+  }, [update, stageSize]);
   const fitted = useRef(false);
   const firstExtent = geometry?.extent;
   useEffect(() => {
@@ -199,13 +220,14 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   const httpError = isAxiosError(save.error) ? save.error : save.error instanceof Error && isAxiosError(save.error.cause) ? save.error.cause : null;
   const stale = httpError?.response?.status === 409;
 
-  // Drag pans the view; the wheel zooms about the center.
-  const stage = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ kind: 'pan' | 'target' | 'rotate'; x: number; y: number; center: FramingState['viewCenter']; target: FramingState['center'] } | null>(null);
-  const stageScale = () => (stage.current ? STAGE_WIDTH / stage.current.clientWidth : 1);
+  // Drag pans the view; the wheel zooms about the center. Every drag works
+  // on the sky: the grabbed point is deprojected from the stage, so a pan
+  // near the pole or a wide view behaves like a narrow one at the equator.
+  const drag = useRef<{ kind: 'pan' | 'target' | 'rotate'; x: number; y: number; center: FramingState['viewCenter']; grab: [number, number] } | null>(null);
+  const stageScale = () => (stage.current ? stageSize.width / Math.max(1, stage.current.clientWidth) : 1);
   const stagePoint = (event: ReactPointerEvent<HTMLDivElement>): [number, number] => {
     const rect = event.currentTarget.getBoundingClientRect();
-    const k = STAGE_WIDTH / Math.max(1, rect.width);
+    const k = stageSize.width / Math.max(1, rect.width);
     return [(event.clientX - rect.left) * k, (event.clientY - rect.top) * k];
   };
   const geometryRef = useRef<DirectorFramingPreview | undefined>(undefined);
@@ -214,29 +236,43 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     const point = stagePoint(event);
     const geometry = geometryRef.current;
     let kind: 'pan' | 'target' | 'rotate' = 'pan';
-    if (geometry?.view_center_offset && geometry.panels.length > 0) {
-      const handle = toStage(rotationHandle(geometry, state), state.viewFov);
-      if (Math.hypot(handle[0] - point[0], handle[1] - point[1]) <= 18) kind = 'rotate';
-      else if (geometry.panels.some(panel => panel.view_corners && insidePolygon(point, panel.view_corners, state.viewFov))) kind = 'target';
+    if (geometry && geometry.panels.length > 0) {
+      const handleAt = stageProject(state.viewCenter, rotationHandle(geometry, state));
+      const handle = handleAt ? toStage(handleAt, state.viewFov, stageSize) : null;
+      if (handle && Math.hypot(handle[0] - point[0], handle[1] - point[1]) <= 18) kind = 'rotate';
+      else if (geometry.panels.some(panel => { const corners = stageCorners(panel.corners, state.viewCenter); return corners && insidePolygon(point, corners, state.viewFov, stageSize); })) kind = 'target';
     }
-    drag.current = { kind, x: event.clientX, y: event.clientY, center: state.viewCenter, target: state.center };
+    // Where the pointer took hold, relative to the target, so the target
+    // follows the hand instead of jumping to it.
+    const pointerOffset = fromStage(point[0], point[1], state.viewFov, stageSize);
+    const targetOffset = stageProject(state.viewCenter, state.center) ?? [0, 0];
+    drag.current = { kind, x: event.clientX, y: event.clientY, center: state.viewCenter, grab: [pointerOffset[0] - targetOffset[0], pointerOffset[1] - targetOffset[1]] };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!drag.current || !state) return;
-    const scale = pixelScale(state.viewFov) * stageScale();
-    const dx = (event.clientX - drag.current.x) * scale;
-    const dy = (event.clientY - drag.current.y) * scale;
-    if (drag.current.kind === 'pan') update({ viewCenter: moveBy(drag.current.center, dx, dy) });
-    else if (drag.current.kind === 'target') update({ center: moveBy(drag.current.target, -dx, -dy) });
-    else if (geometryRef.current?.view_center_offset) {
-      const center = toStage(geometryRef.current.view_center_offset, state.viewFov);
-      update({ positionAngle: Math.round(angleFromStage(center, stagePoint(event)) * 10) / 10 });
+    if (drag.current.kind === 'pan') {
+      const scale = pixelScale(state.viewFov, stageSize) * stageScale();
+      const dx = (event.clientX - drag.current.x) * scale;
+      const dy = (event.clientY - drag.current.y) * scale;
+      update({ viewCenter: stageDeproject(drag.current.center, [dx, dy]) });
+      return;
+    }
+    const point = stagePoint(event);
+    const pointerOffset = fromStage(point[0], point[1], state.viewFov, stageSize);
+    if (drag.current.kind === 'target') {
+      const { grab } = drag.current;
+      update({ center: stageDeproject(state.viewCenter, [pointerOffset[0] - grab[0], pointerOffset[1] - grab[1]]) });
+    } else {
+      // The angle is read on the target's plane, where the camera angle
+      // lives, so the handle and the rectangle agree wherever the view is.
+      const at = stageDeproject(state.viewCenter, pointerOffset);
+      update({ positionAngle: Math.round(angleAt(state.center, at) * 10) / 10 });
     }
   };
   const onPointerUp = () => { drag.current = null; };
   const turn = (delta: number) => update(current => ({ positionAngle: ((current.positionAngle + delta) % 360 + 360) % 360 }));
-  const hasState = state !== null;
+  const zoomBy = (factor: number) => update(current => ({ viewFov: clampFov(current.viewFov * factor) }));
   useEffect(() => {
     const element = stage.current;
     if (!element) return;
@@ -257,29 +293,46 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   if (draft.isError) return <p className="director-error" role="alert">{message(draft.error)}</p>;
   if (!state) return <StartFraming canWrite={canWrite} onStart={setStarted} />;
   geometryRef.current = geometry;
-  const handle = geometry?.view_center_offset && geometry.panels.length > 0 ? toStage(rotationHandle(geometry, state), state.viewFov) : null;
-  const centerOnStage = geometry?.view_center_offset ? toStage(geometry.view_center_offset, state.viewFov) : null;
+  const view = state.viewCenter;
+  const onStage = (position: { ra_degrees: number; dec_degrees: number }) => { const offset = stageProject(view, position); return offset ? toStage(offset, state.viewFov, stageSize) : null; };
+  const handle = geometry && geometry.panels.length > 0 ? onStage(rotationHandle(geometry, state)) : null;
+  const centerOnStage = geometry ? onStage(state.center) : null;
+  const panelPolygons = (geometry?.panels ?? []).map(panel => ({ panel, corners: stageCorners(panel.corners, view) }));
   return <section className="framing" aria-label="Framing">
     <div className="framing-stage-wrap">
       <div ref={stage} className={`framing-stage${cutout.stale ? ' is-stale' : ''}`} role="img" aria-label="Sky view" data-testid="framing-stage"
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
         {cutout.image && skyTransform ? <img src={cutout.image.url} alt="" draggable={false} data-testid="framing-sky" style={{ transform: skyTransform }} /> : <div className="framing-stage-empty" />}
-        <svg viewBox={`0 0 ${STAGE_WIDTH} ${STAGE_HEIGHT}`} aria-hidden="true">
+        <svg viewBox={`0 0 ${stageSize.width} ${stageSize.height}`} aria-hidden="true">
+          {backdrop && backdrop.milkyWay.length > 0 && <g className="framing-milky-way">{backdrop.milkyWay.map((d, i) => <path key={i} d={d} />)}</g>}
+          {graticule && <g className="framing-graticule" data-testid="framing-graticule">
+            {graticule.paths.map((line, i) => <path key={i} d={line.d} />)}
+            {graticule.labels.map((label, i) => <text key={i} x={label.x} y={label.y}>{label.text}</text>)}
+          </g>}
+          {backdrop && backdrop.figures.length > 0 && <g className="framing-figures">{backdrop.figures.map((d, i) => <path key={i} d={d} />)}</g>}
+          {backdrop && backdrop.stars.length > 0 && <g className="framing-stars" data-testid="framing-stars">{backdrop.stars.map((star, i) => <circle key={i} cx={star.x} cy={star.y} r={star.r} />)}</g>}
+          {backdrop && backdrop.names.length > 0 && <g className="framing-names" data-testid="framing-names">{backdrop.names.map(name => <text key={name.text} x={name.x} y={name.y}>{name.text}</text>)}</g>}
           {placedStacks.map(({ panel, preview, matrix }) => <image key={`${panel.rig.id}-${panel.panel_id}`} className="framing-stack" data-testid="framing-stack" href={preview.url} x={0} y={0} width={preview.width} height={preview.height} preserveAspectRatio="none" transform={matrix} />)}
-          {geometry?.overlays.map(overlay => overlay.view_corners && <polygon key={overlay.id} className="framing-overlay" points={polygonPoints(overlay.view_corners, state.viewFov)} />)}
-          {geometry?.panels.map(panel => panel.view_corners && <g key={panel.id} className="framing-panel">
-            <polygon points={polygonPoints(panel.view_corners, state.viewFov)} />
-            {geometry.panels.length > 1 && <text x={toStage(panel.view_corners[0], state.viewFov)[0] + 8} y={toStage(panel.view_corners[0], state.viewFov)[1] + 20}>{panel.id}</text>}
+          {geometry?.overlays.map(overlay => { const corners = stageCorners(overlay.corners, view); return corners && <polygon key={overlay.id} className="framing-overlay" points={polygonPoints(corners, state.viewFov, stageSize)} />; })}
+          {panelPolygons.map(({ panel, corners }) => corners && <g key={panel.id} className="framing-panel">
+            <polygon points={polygonPoints(corners, state.viewFov, stageSize)} />
+            {panelPolygons.length > 1 && <text x={toStage(corners[0], state.viewFov, stageSize)[0] + 8} y={toStage(corners[0], state.viewFov, stageSize)[1] + 20}>{panel.id}</text>}
           </g>)}
           {centerOnStage && <g className="framing-target"><line x1={centerOnStage[0] - 14} y1={centerOnStage[1]} x2={centerOnStage[0] + 14} y2={centerOnStage[1]} /><line x1={centerOnStage[0]} y1={centerOnStage[1] - 14} x2={centerOnStage[0]} y2={centerOnStage[1] + 14} /></g>}
           {handle && centerOnStage && <g className="framing-rotate" data-testid="framing-rotate-handle"><line x1={centerOnStage[0]} y1={centerOnStage[1]} x2={handle[0]} y2={handle[1]} /><circle cx={handle[0]} cy={handle[1]} r={9} /></g>}
-          <g className="framing-compass" transform={`translate(${STAGE_WIDTH - 44} 44)`}><line x1={0} y1={0} x2={0} y2={-28} /><text x={0} y={-32} textAnchor="middle">N</text><line x1={0} y1={0} x2={-28} y2={0} /><text x={-32} y={4} textAnchor="end">E</text></g>
+          <g className="framing-compass" transform={`translate(${stageSize.width - 44} 44)`}><line x1={0} y1={0} x2={0} y2={-28} /><text x={0} y={-32} textAnchor="middle">N</text><line x1={0} y1={0} x2={-28} y2={0} /><text x={-32} y={4} textAnchor="end">E</text></g>
         </svg>
         <div className="framing-stage-status">
-          {cutout.status === 'loading' && <span role="status">Loading {survey?.name ?? 'survey'}...</span>}
-          {cutout.status === 'failed' && <span role="alert">{cutout.error}</span>}
+          {showSurvey && cutout.status === 'loading' && <span role="status">Loading {survey?.name ?? 'survey'}...</span>}
+          {showSurvey && cutout.status === 'failed' && <span role="alert">{cutout.error}</span>}
+          {!showSurvey && <span role="status">Chart view; survey imagery returns below {SURVEY_MAX_FOV}° across</span>}
         </div>
-        <div className="framing-stage-scale">{formatDegrees(state.viewFov)} across · N up, E left</div>
+        <div className="framing-stage-zoom" onPointerDown={event => event.stopPropagation()}>
+          <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => zoomBy(1 / 1.5)}>+</button>
+          <button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => zoomBy(1.5)}>−</button>
+          {geometry && <button type="button" aria-label="Fit the footprint" title="Fit the footprint" onClick={() => { update({ viewFov: MIN_VIEW_FOV }); fitToFootprint(geometry.extent); }}>⌖</button>}
+        </div>
+        <div className="framing-stage-scale">{formatDegrees(trueWidth(state.viewFov))} across · N up, E left</div>
         <div className="framing-stage-surveys" role="group" aria-label="Survey layers" onPointerDown={event => event.stopPropagation()}>
           {chipSurveys(surveys.data ?? []).map(({ survey: entry, label }) => <button key={entry.id} type="button" aria-pressed={entry.id === state.surveyId} title={`${entry.name}: ${entry.bandpass}`} onClick={() => { surveyChosen.current = true; update({ surveyId: entry.id }); }}>{label}</button>)}
         </div>
@@ -362,8 +415,10 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
           </select>
         </label>
         <label>Width of view<span className="framing-input"><input aria-label="View width degrees" type="number" step="any" min={MIN_VIEW_FOV} max={MAX_VIEW_FOV} value={Number(state.viewFov.toFixed(3))} onChange={event => update({ viewFov: clampFov(number(event.target.value, state.viewFov)) })} /><small>°</small>
-          {geometry && <button type="button" onClick={() => { update({ viewFov: 0.01 }); fitToFootprint(geometry.extent); }}>Fit</button>}</span></label>
-        <p className="director-muted">Drag the image to pan, scroll to zoom. The view center is {formatRaHours(state.viewCenter.ra_degrees)}, {formatDec(state.viewCenter.dec_degrees)}.</p>
+          {geometry && <button type="button" onClick={() => { update({ viewFov: MIN_VIEW_FOV }); fitToFootprint(geometry.extent); }}>Fit</button>}</span></label>
+        <label className="framing-check"><input type="checkbox" checked={showGrid} onChange={event => setShowGrid(event.target.checked)} />Equatorial grid</label>
+        <label className="framing-check"><input type="checkbox" checked={showChart} onChange={event => setShowChart(event.target.checked)} />Stars and constellations when zoomed out</label>
+        <p className="director-muted">Drag the sky to pan, scroll to zoom out to a hemisphere. Survey imagery shows below {SURVEY_MAX_FOV}° across; wider views are a chart. The view center is {formatRaHours(state.viewCenter.ra_degrees)}, {formatDec(state.viewCenter.dec_degrees)}.</p>
       </fieldset>
       {notice && <p role="status">{notice}{undo && <> <button type="button" className="link-button" onClick={() => { setState(undo); setUndo(null); setNotice('Put the target back where it was.'); }}>Undo</button></>}</p>}
       {stale && <p className="director-error" role="alert">This framing changed since you loaded it. Reload to see the saved draft before editing again.</p>}

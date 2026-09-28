@@ -345,9 +345,25 @@ server folds both back to the sensor before offering them. Typed models:
 ## Framing view
 
 Open a plan from the Planning page. The workspace is a wide screen:
-**Framing** comes first and the sky takes the width the window has, up to
-the height of the screen, with the controls beside it; the plan and
-activation sit under it side by side, and the linked databases last.
+**Framing** comes first and the sky takes the width the window has and most
+of its height, with the controls beside it; the plan and activation sit under
+it side by side, and the linked databases last.
+
+The sky is drawn the way the Sky view draws it, centred on wherever you have
+panned. Drag the sky to pan, scroll or use the corner buttons to zoom, from
+three arcminutes across out to a hemisphere. Survey imagery shows up to 30°
+across; wider than that the stage is a chart, which draws at once: bright
+stars, constellation figures and names, the Milky Way band, and an
+equatorial grid whose spacing follows the zoom, with declination labelled
+down the left edge and right ascension along the top. The grid and the
+chart layers each have a switch under **View**. The projection is
+stereographic, in the browser, on the server's survey images and on the
+offline maps alike, so the rectangle, the grid and the picture agree at
+every zoom; at framing widths it is the tangent plane to within a pixel,
+and the readout under the stage gives the width of sky the stage really
+spans. The rotation handle lives on the target's own plane, so it stays on
+the rectangle's up direction however far the view has panned from the
+target.
 **Framing** shows the sky around the project's first target on a survey
 image, with the target's catalog coordinates and rotation already filled in,
 the way N.I.N.A.'s framing assistant does. When the server holds N.I.N.A.'s

@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { DirectorFramingSummary } from '../../api/directorTypes';
-import { STAGE_HEIGHT, STAGE_WIDTH, THUMB_HEIGHT, THUMB_WIDTH, framingGeometry, polygonPoints, thumbnailFov } from './framingModel';
+import { STAGE_HEIGHT, STAGE_WIDTH, THUMB_HEIGHT, THUMB_WIDTH, framingGeometry, polygonPoints, stageCorners, thumbnailFov } from './framingModel';
 import { useSurveyCutout } from './useSurveyCutout';
 
 /** The plan's framing at a glance: the survey it was framed on, with its
@@ -23,7 +23,7 @@ export default function PlanThumbnail({ framing, name }: { framing: DirectorFram
     {cutout.image ? <img src={cutout.image.url} alt="" draggable={false} /> : <div className="plan-thumb-empty">{cutout.status === 'failed' ? 'No survey image' : 'Loading sky...'}</div>}
     <svg viewBox={`0 0 ${STAGE_WIDTH * k} ${STAGE_HEIGHT * k}`} aria-hidden="true">
       <g transform={`scale(${k})`}>
-        {geometry?.panels.map(panel => panel.view_corners && <polygon key={panel.id} className="plan-thumb-panel" points={polygonPoints(panel.view_corners, fov)} />)}
+        {geometry?.panels.map(panel => { const corners = stageCorners(panel.corners, framing.center); return corners && <polygon key={panel.id} className="plan-thumb-panel" points={polygonPoints(corners, fov)} />; })}
       </g>
     </svg>
   </div>;

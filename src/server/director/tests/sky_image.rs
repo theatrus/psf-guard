@@ -7,7 +7,7 @@ const MOCK_JPEG: &[u8] = b"\xFF\xD8\xFFmock-jpeg";
 
 async fn mock_provider() -> String {
     async fn hips2fits(AxumQuery(params): AxumQuery<HashMap<String, String>>) -> Response {
-        assert_eq!(params.get("projection").map(String::as_str), Some("TAN"));
+        assert_eq!(params.get("projection").map(String::as_str), Some("STG"));
         if params.get("hips").map(String::as_str) == Some("CDS/P/Finkbeiner") {
             return StatusCode::NOT_FOUND.into_response();
         }

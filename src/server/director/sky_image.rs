@@ -302,9 +302,11 @@ impl Cutout {
     }
 
     /// Round so a nudge below display precision reuses the cached image.
+    /// The key names the projection: v2 images are stereographic, which the
+    /// framing stage draws in, so a v1 tangent-plane image is never reused.
     pub fn digest(&self) -> String {
         let key = format!(
-            "sky-cutout-v1|{}|{:.5}|{:.5}|{:.5}|{}|{}|{:.2}",
+            "sky-cutout-v2|STG|{}|{:.5}|{:.5}|{:.5}|{}|{}|{:.2}",
             self.survey,
             self.ra_degrees,
             self.dec_degrees,
@@ -326,7 +328,10 @@ impl Cutout {
             ("width", self.width_px.to_string()),
             ("height", self.height_px.to_string()),
             ("fov", format!("{:.6}", self.fov_degrees)),
-            ("projection", "TAN".to_owned()),
+            // Stereographic, like the framing stage and the offline renderer:
+            // it matches the tangent plane at the center and stays bounded
+            // out to a hemisphere, so one projection serves every zoom.
+            ("projection", "STG".to_owned()),
             ("coordsys", "icrs".to_owned()),
             ("ra", format!("{:.6}", self.ra_degrees)),
             ("dec", format!("{:.6}", self.dec_degrees)),
@@ -830,7 +835,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_requests_carry_the_hips_id_and_a_tangent_projection() {
+    fn provider_requests_carry_the_hips_id_and_a_stereographic_projection() {
         let pairs = Cutout::from_query(&query("finkbeiner_halpha"), &builtin_surveys())
             .unwrap()
             .query_pairs();
@@ -841,7 +846,7 @@ mod tests {
                 .map(|(_, v)| v.as_str())
         };
         assert_eq!(get("hips"), Some("CDS/P/Finkbeiner"));
-        assert_eq!(get("projection"), Some("TAN"));
+        assert_eq!(get("projection"), Some("STG"));
         assert_eq!(get("coordsys"), Some("icrs"));
         assert_eq!(get("format"), Some("jpg"));
         assert_eq!(get("rotation_angle"), Some("12.000"));

@@ -181,11 +181,16 @@ describe('Framing view', () => {
     fireEvent.pointerDown(stage, pointer(hx, hy));
     fireEvent.pointerMove(stage, { pointerId: 1, clientX: 300, clientY: 384 });
     fireEvent.pointerUp(stage, { pointerId: 1 });
-    await waitFor(() => expect(Number((screen.getByLabelText('Position angle degrees') as HTMLInputElement).value)).toBeCloseTo(90, 0));
+    // The angle is read on the target's own plane. The target sits east of the
+    // view center now, and at 41° north the stage's horizontal is a shade off
+    // the target's east, so "due east on the stage" reads a little past 90°.
+    const turned = () => Number((screen.getByLabelText('Position angle degrees') as HTMLInputElement).value);
+    await waitFor(() => expect(turned()).toBeGreaterThan(90));
+    expect(turned()).toBeLessThan(91.5);
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
     await waitFor(() => expect(saves).toHaveLength(1));
     expect(saves[0].panel_rig_id).toBe(rigA.rig.id);
-    expect(saves[0].position_angle_degrees).toBeCloseTo(90, 0);
+    expect(saves[0].position_angle_degrees).toBeCloseTo(turned(), 5);
   });
 
   it('is read only without write access and explains a missing seed', async () => {
@@ -328,6 +333,28 @@ describe('Framing view', () => {
     expect(thumbnailFov({ extent: null, panel: null })).toBeCloseTo(1.6, 5);
   });
 
+  it('turns into a chart when zoomed out: no survey request, a grid, stars and names', async () => {
+    const { cutouts } = fixture(); mount();
+    await waitFor(() => expect(screen.getByTestId('framing-sky')).toBeInTheDocument(), { timeout: 4000 });
+    expect(screen.getByTestId('framing-graticule').querySelectorAll('path').length).toBeGreaterThan(3);
+    expect(screen.queryByTestId('framing-names')).not.toBeInTheDocument();
+    const before = cutouts.length;
+    fireEvent.change(screen.getByLabelText('View width degrees'), { target: { value: '120' } });
+    await waitFor(() => expect(screen.getByTestId('framing-names')).toBeInTheDocument());
+    expect(screen.getByTestId('framing-stars').querySelectorAll('circle').length).toBeGreaterThan(20);
+    expect(screen.getByText(/Chart view; survey imagery returns below 30° across/)).toBeInTheDocument();
+    expect(screen.queryByTestId('framing-sky')).not.toBeInTheDocument();
+    await new Promise(resolve => setTimeout(resolve, 400));
+    expect(cutouts.length).toBe(before);
+    // The rectangle is still drawn, tiny, and the readout gives the sky width the stage really spans.
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1);
+    expect(screen.getByText(/across · N up, E left/).textContent).toMatch(/^1[0-3]\d\.\d+° across/);
+    fireEvent.click(screen.getByLabelText('Equatorial grid'));
+    expect(screen.queryByTestId('framing-graticule')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(screen.getByLabelText('View width degrees')).toHaveValue(80);
+  });
+
   it('projects sky positions onto the view plane the way the server does', () => {
     const view = { ra_degrees: 10, dec_degrees: 60 };
     expect(offsetFrom(view, view)).toEqual([0, 0]);
@@ -345,8 +372,9 @@ describe('Framing view', () => {
     const [x, y] = toStage([1, 0.5], 4);
     expect(x).toBeLessThan(512);
     expect(y).toBeLessThan(384);
+    // The stage is stereographic: a degree on the plane is a hair under a degree of sky.
     const east = skyAtStage({ ra_degrees: 10, dec_degrees: 0 }, 4, 256, 384);
-    expect(east.ra_degrees).toBeCloseTo(11, 5);
+    expect(east.ra_degrees).toBeCloseTo(11, 3);
     expect(moveBy({ ra_degrees: 359.5, dec_degrees: 89.9 }, 1, 1).dec_degrees).toBe(90);
   });
 });

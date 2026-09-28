@@ -157,6 +157,16 @@
 
 ## Changed
 
+- The framing stage is drawn like the Sky view: it fills the column and most
+  of the window, pans and zooms from three arcminutes out to a hemisphere,
+  and carries an equatorial grid whose spacing follows the zoom, with
+  declination labelled down the left edge and right ascension along the
+  top. Zoomed out past 30° it is a chart of bright stars, constellation
+  figures and names and the Milky Way that draws at once, instead of a
+  survey image that took long to arrive and did not fill the screen. Survey
+  images and offline maps are now rendered in the same stereographic
+  projection the stage draws in, so the rectangle, the grid and the picture
+  agree at every zoom; earlier cached images are regenerated on first use.
 - The Library's **Plan & coordinates** dialog is gone; its **Planning** button
   opens the project in Planning with that database's targets and exposures
   expanded under **Databases**. The same editor, with framing, plan and
@@ -190,6 +200,11 @@
   the next size up instead of failing the view.
 
 ## Fixed
+
+- Panning the framing view no longer moves the rotation handle off the
+  rectangle's up direction. The handle and the angle it sets now live on the
+  target's own tangent plane, where the camera angle is measured, so turning
+  the field behaves the same however far the view has panned.
 
 - Opening a plan no longer fails with "Director metadata is busy; retry
   shortly" when several of its requests arrive at once: a request waits its

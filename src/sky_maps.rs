@@ -211,6 +211,7 @@ impl SkyMap {
             return Err("empty view".to_owned());
         }
         let scale = view.fov_degrees / w as f64; // degrees per pixel
+                                                 // The plane radius bounds the sky radius, so this reaches every tile.
         let view_radius = (view.fov_degrees.hypot(scale * h as f64) / 2.0).to_radians();
         let frame = unit(view.ra_degrees, view.dec_degrees);
         // Tiles that can reach the view, nearest first.
@@ -279,11 +280,21 @@ impl SkyMap {
                 let eta0 = (h as f64 / 2.0 - (y as f64 + 0.5)) * scale;
                 let xi = (xi0 * cos_r + eta0 * sin_r).to_radians();
                 let eta = (-xi0 * sin_r + eta0 * cos_r).to_radians();
-                let v = [
-                    frame[0][0] + xi * frame[1][0] + eta * frame[2][0],
-                    frame[0][1] + xi * frame[1][1] + eta * frame[2][1],
-                    frame[0][2] + xi * frame[1][2] + eta * frame[2][2],
-                ];
+                // Stereographic view, as the framing stage draws and the
+                // online provider is asked for: a plane point at distance
+                // rho is the sky direction 2·atan(rho / 2) from the center.
+                let rho = xi.hypot(eta);
+                let v = if rho < 1e-12 {
+                    frame[0]
+                } else {
+                    let (sin_c, cos_c) = (2.0 * (rho / 2.0).atan()).sin_cos();
+                    let (ux, uy) = (xi / rho, eta / rho);
+                    [
+                        cos_c * frame[0][0] + sin_c * (ux * frame[1][0] + uy * frame[2][0]),
+                        cos_c * frame[0][1] + sin_c * (ux * frame[1][1] + uy * frame[2][1]),
+                        cos_c * frame[0][2] + sin_c * (ux * frame[1][2] + uy * frame[2][2]),
+                    ]
+                };
                 let mut best: Option<(usize, f64, f64, f64)> = None;
                 for (index, _) in &candidates {
                     let t = &self.frames[*index];
