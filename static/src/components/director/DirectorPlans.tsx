@@ -1,31 +1,18 @@
 import { useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useSearchParams } from 'react-router-dom';
-import { Check, Pencil, Plus, RefreshCw, Telescope, X } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { Check, Plus, RefreshCw, X } from 'lucide-react';
 import { apiClient } from '../../api/client';
-import type { DirectorIdentity, DirectorPlanRow } from '../../api/directorTypes';
+import type { DirectorIdentity } from '../../api/directorTypes';
 import { useAccess } from '../../auth/access';
 import { identityId } from './identityId';
 import { retryWhenBusy } from './retry';
-import PlanThumbnail from './PlanThumbnail';
+import PlanCard from './PlanCard';
+import '../projectCard.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
 interface Edit { record: DirectorIdentity; creating: boolean }
-
-
-/** Frames accepted against desired, for a plan or one of its targets. */
-function frames(progress: { desired: number; accepted: number }): string {
-  return `${progress.accepted}/${progress.desired} frames`;
-}
-
-function stage(row: DirectorPlanRow): string {
-  if (row.activation) return `Activated rev ${row.activation.revision} on ${new Date(row.activation.applied_at_ms).toLocaleDateString()}, ${row.activation.rigs} rig${row.activation.rigs === 1 ? '' : 's'}${row.progress ? `, ${frames(row.progress)} accepted` : ''}`;
-  if (row.plan && row.plan.objectives > 0) return `Planned: ${row.plan.objectives} objective${row.plan.objectives === 1 ? '' : 's'}, ${row.plan.rigs} rig${row.plan.rigs === 1 ? '' : 's'}, not activated`;
-  if (row.framing?.source === 'catalog') return `Framed in Target Scheduler: ${row.framing.target_name || 'target'}${row.framing.panels > 1 ? `, ${row.framing.panels} targets` : ''}; open to plan it in Director`;
-  if (row.framing) return `Framed: ${row.framing.target_name || 'target'}, ${row.framing.panels} panel${row.framing.panels === 1 ? '' : 's'}`;
-  return row.links.length ? 'Linked; its database has no target with coordinates yet' : 'Not linked to any database';
-}
 
 /** Every global project with its links and how far its planning has come. */
 export default function DirectorPlans({ instanceId }: { instanceId: string }) {
@@ -101,29 +88,13 @@ export default function DirectorPlans({ instanceId }: { instanceId: string }) {
     {plans.isPending && <p role="status">Loading plans...</p>}
     {plans.isError && <p className="director-error" role="alert">{message(plans.error)}</p>}
     {plans.isSuccess && rows.length === 0 && <p className="director-muted">No projects yet.</p>}
-    <ul className="director-list">
-      {rows.map(row => {
-        return <li key={row.project.id}>
-          <div className={`director-plan director-record-wide${row.framing?.center ? ' has-thumb' : ''}`}>
-            {row.framing?.center && <PlanThumbnail framing={row.framing} name={row.project.name} />}
-            <div className="director-record-name">
-              <strong>{row.project.name}</strong>
-              <span className="director-muted">{stage(row)}</span>
-              {row.links.length > 0 && <span className="director-plan-links">{row.links.map(link => <span key={`${link.catalog_slug}:${link.source_project_guid}`}>
-                {link.catalog_name}{link.source_name ? `: ${link.source_name}` : ''}
-                {link.targets.length === 1 && ` (${frames(link.targets[0])})`}
-                {link.targets.length > 1 && <span className="director-plan-panels">{link.targets.map(target => `${target.name} ${frames(target)}`).join(' · ')}</span>}
-              </span>)}</span>}
-              {!row.activation && row.progress && <span className="director-muted">{frames(row.progress)} accepted so far</span>}
-            </div>
-            <div className="director-actions">
-              <Link to={workspaceHref(row.project.id)} aria-label={`Open ${row.project.name}`}><Telescope size={16} />Open plan</Link>
-              {canWrite && <button type="button" disabled={!!edit} title={`Rename ${row.project.name}`} aria-label={`Rename ${row.project.name}`} onClick={() => begin({ creating: false, record: row.project })}><Pencil size={16} /></button>}
-            </div>
-          </div>
+    <ul className="director-plan-list">
+      {rows.map(row => (
+        <li key={row.project.id}>
+          <PlanCard row={row} href={workspaceHref(row.project.id)} canWrite={canWrite} editing={!!edit} onRename={() => begin({ creating: false, record: row.project })} />
           {edit?.record.id === row.project.id && !edit.creating && form}
-        </li>;
-      })}
+        </li>
+      ))}
     </ul>
   </section>;
 }

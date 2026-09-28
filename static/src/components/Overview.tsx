@@ -61,6 +61,7 @@ import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog
 import { useAccess } from '../auth/access';
 import PreviewImage from './PreviewImage';
 import { useColorPreview } from '../hooks/useColorPreview';
+import './projectCard.css';
 import './Overview.css';
 
 /// Inline edit state for correcting imported groupings.

@@ -21,6 +21,9 @@ struct TargetProgress {
     desired: i64,
     acquired: i64,
     accepted: i64,
+    /// Frames graded rejected in `acquiredimage`; the rest of `acquired`
+    /// minus `accepted` is still pending.
+    rejected: i64,
     /// Where Target Scheduler points this target, in ICRS degrees, when the
     /// row has coordinates.
     center: Option<IcrsPosition>,
@@ -47,6 +50,7 @@ struct Progress {
     desired: i64,
     acquired: i64,
     accepted: i64,
+    rejected: i64,
     targets: u32,
 }
 
@@ -111,9 +115,19 @@ fn target_progress(connection: &rusqlite::Connection) -> BTreeMap<i64, Vec<Targe
     } else {
         "NULL"
     };
+    // Rejected frames live in `acquiredimage`; a pre-TS5 file names the column
+    // `accepted` and then reports none.
+    let rejected: BTreeMap<i64, i64> = connection
+        .prepare("SELECT targetId, COUNT(*) FROM acquiredimage WHERE gradingStatus = 2 GROUP BY targetId")
+        .and_then(|mut statement| {
+            statement
+                .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+                .map(|rows| rows.flatten().collect())
+        })
+        .unwrap_or_default();
     let Ok(mut statement) = connection.prepare(&format!(
         "SELECT t.projectid, t.name, COALESCE(SUM(e.desired), 0), COALESCE(SUM(e.acquired), 0), COALESCE(SUM(e.accepted), 0),
-                t.ra, t.dec, {rotation}
+                t.ra, t.dec, {rotation}, t.Id
          FROM target t LEFT JOIN exposureplan e ON e.targetid = t.Id
          GROUP BY t.Id ORDER BY t.Id"
     )) else {
@@ -140,6 +154,7 @@ fn target_progress(connection: &rusqlite::Connection) -> BTreeMap<i64, Vec<Targe
                 desired: row.get(2)?,
                 acquired: row.get(3)?,
                 accepted: row.get(4)?,
+                rejected: rejected.get(&row.get::<_, i64>(8)?).copied().unwrap_or(0),
                 center,
                 rotation_degrees: row.get::<_, Option<f64>>(7)?.filter(|r| r.is_finite()),
             },
@@ -509,6 +524,7 @@ pub(super) async fn list(
                 desired: targets.iter().map(|t| t.desired).sum(),
                 acquired: targets.iter().map(|t| t.acquired).sum(),
                 accepted: targets.iter().map(|t| t.accepted).sum(),
+                rejected: targets.iter().map(|t| t.rejected).sum(),
                 targets: targets.len() as u32,
             });
             rows.push(PlanRow {

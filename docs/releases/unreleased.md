@@ -148,6 +148,13 @@
   how long since it pulled its program, checked in and reported; saved frames
   awaiting grading; and the plans it is assigned to.
 
+- Director plans read like Overview projects: the same card, frame counts,
+  desired-progress and grading bars, with one database chip per rig and a
+  Rigs list giving each rig its own progress and per-panel counts.
+- The header's project picker shows a project shot by several rigs as one
+  row, badged with its rig count, that opens to each rig's images and
+  targets; typing any rig's name, database or target finds it.
+
 ## Changed
 
 - The planning workspace is a wide screen: the framing sky fills the window

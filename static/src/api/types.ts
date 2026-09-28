@@ -10,6 +10,8 @@ export interface Project {
   has_files: boolean;
   state: number;
   latest_image_date: number | null;
+  /** Target Scheduler's project GUID; the same value in two databases is one project shot by two rigs. */
+  guid?: string | null;
 }
 
 export interface Target {

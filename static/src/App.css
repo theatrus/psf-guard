@@ -596,6 +596,46 @@
   margin: 7px 9px;
 }
 
+/* A project shot by several rigs: one row, a rig count, and inside it one
+   labelled block per database. */
+.selector-family-badge {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 1px 7px;
+  border: 1px solid var(--color-primary);
+  border-radius: 999px;
+  color: var(--color-primary);
+  font-size: 0.64rem;
+  font-weight: 700;
+}
+
+.selector-family-member + .selector-family-member {
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--color-border-secondary);
+}
+
+.selector-family-member-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 9px 2px;
+  color: var(--color-text-muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.selector-family-member-heading > span:last-child {
+  overflow: hidden;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
 .selector-load-error {
   display: flex;
   gap: 8px;

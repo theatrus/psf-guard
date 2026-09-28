@@ -297,6 +297,16 @@ async fn listing_counts_frames_per_target_across_linked_databases() {
         [],
     )
     .unwrap();
+    // Two of the ten were graded rejected; the list tells rejected from pending.
+    a.db.execute_batch(
+        "INSERT INTO acquiredimage (projectId, targetId, acquireddate, filtername, gradingStatus, metadata)
+         SELECT projectid, Id, 0, 'Ha', 2, '{}' FROM target WHERE name = 'IC 1805 r1c1';
+         INSERT INTO acquiredimage (projectId, targetId, acquireddate, filtername, gradingStatus, metadata)
+         SELECT projectid, Id, 0, 'Ha', 2, '{}' FROM target WHERE name = 'IC 1805 r1c1';
+         INSERT INTO acquiredimage (projectId, targetId, acquireddate, filtername, gradingStatus, metadata)
+         SELECT projectid, Id, 0, 'Ha', 1, '{}' FROM target WHERE name = 'IC 1805 r1c1';",
+    )
+    .unwrap();
     let (status, listed) = call(&a.f.app, "GET", "/plans", Value::Null, None).await;
     assert_eq!(status, StatusCode::OK, "{listed}");
     let row = listed["data"]["rows"]
@@ -307,7 +317,7 @@ async fn listing_counts_frames_per_target_across_linked_databases() {
         .unwrap();
     assert_eq!(
         row["progress"],
-        json!({"desired": 144, "acquired": 10, "accepted": 8, "targets": 2}),
+        json!({"desired": 144, "acquired": 10, "accepted": 8, "rejected": 2, "targets": 2}),
         "{row}"
     );
     // The list carries what a thumbnail needs: where to look and what to draw.

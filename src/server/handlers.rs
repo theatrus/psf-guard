@@ -3737,6 +3737,7 @@ pub async fn list_projects(
                     .unwrap_or(false),
                 state,
                 latest_image_date: latest_image_dates.get(&project.id).copied(),
+                guid: project.guid.clone(),
             }
         })
         .collect();

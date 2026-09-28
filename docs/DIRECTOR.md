@@ -117,6 +117,27 @@ catalog: the first by slug stands for it and the copy is named at the top of
 the plan list and left out of planning until it is removed from the registry
 or its identity table is dropped.
 
+### Plans read like Overview projects
+
+The plan list uses the Overview's project card: the name opens the workspace,
+one database chip per rig replaces the Overview's single database name, and
+under it sit the same frame counts, desired-progress bar and grading bar
+(accepted, rejected, pending), then a stage line (activated, planned, framed,
+linked). Every count on the card adds up all of the plan's rigs. A **Rigs**
+list stands where the Overview lists targets: one entry per rig with its own
+accepted-of-desired bar and, for a mosaic, the count per panel, because each
+rig holds its own targets and exposure plans in its own database and can be
+ahead of or behind the others. Overview stays the per-database view of what
+is on disk and how it graded; Director is the per-plan view across rigs.
+
+The header's project picker follows the same rule. A project that lives in
+several databases under one GUID is one row there, badged with its rig count
+and naming every database; it opens to one block per rig, each with that
+rig's images and targets, and typing any rig's name, database or target
+finds it. The grid still shows one database at a time, so choosing a block
+scopes the grid to that rig. Grouped by database in Settings, each rig keeps
+its own row and names the others.
+
 ## Protocol 1
 
 Routes below start with `/api/director/v1`. Responses use the normal
