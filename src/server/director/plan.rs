@@ -10,17 +10,17 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Serialize)]
 pub(super) struct Template {
-    id: i64,
-    guid: Option<Uuid>,
-    profile_id: String,
-    name: String,
-    filter_name: String,
-    gain: Option<i32>,
-    offset: Option<i32>,
-    bin: Option<i32>,
-    readout_mode: Option<i32>,
-    default_exposure: f64,
-    bandpass: Bandpass,
+    pub(super) id: i64,
+    pub(super) guid: Option<Uuid>,
+    pub(super) profile_id: String,
+    pub(super) name: String,
+    pub(super) filter_name: String,
+    pub(super) gain: Option<i32>,
+    pub(super) offset: Option<i32>,
+    pub(super) bin: Option<i32>,
+    pub(super) readout_mode: Option<i32>,
+    pub(super) default_exposure: f64,
+    pub(super) bandpass: Bandpass,
 }
 
 #[derive(Serialize)]
@@ -76,7 +76,7 @@ pub(super) async fn templates(
     Ok(Json(ApiResponse::success(list)))
 }
 
-fn read_templates(connection: &Connection) -> Result<Vec<Template>, Error> {
+pub(super) fn read_templates(connection: &Connection) -> Result<Vec<Template>, Error> {
     let has = |column: &str| {
         connection
             .prepare("PRAGMA table_info(exposuretemplate)")

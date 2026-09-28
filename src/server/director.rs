@@ -27,6 +27,7 @@ mod catalog_rig;
 mod checkin;
 mod feasibility;
 mod framing;
+mod import_drafts;
 mod mosaic;
 pub(super) mod pairing;
 mod plan;
