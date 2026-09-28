@@ -165,8 +165,11 @@
   figures and names and the Milky Way that draws at once, instead of a
   survey image that took long to arrive and did not fill the screen. Survey
   images and offline maps are now rendered in the same stereographic
-  projection the stage draws in, so the rectangle, the grid and the picture
-  agree at every zoom; earlier cached images are regenerated on first use.
+  projection the stage draws in, and the stage's plane is anchored at the
+  target, so panning slides the window without turning the rectangle or the
+  grid, and the survey picture is laid in with the turn between its own
+  plane and the stage's, staying under both while you pan. Earlier cached
+  images are regenerated on first use.
 - The Library's **Plan & coordinates** dialog is gone; its **Planning** button
   opens the project in Planning with that database's targets and exposures
   expanded under **Databases**. The same editor, with framing, plan and

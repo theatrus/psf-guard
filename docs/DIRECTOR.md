@@ -349,19 +349,25 @@ Open a plan from the Planning page. The workspace is a wide screen:
 of its height, with the controls beside it; the plan and activation sit under
 it side by side, and the linked databases last.
 
-The sky is drawn the way the Sky view draws it, centred on wherever you have
-panned. Drag the sky to pan, scroll or use the corner buttons to zoom, from
-three arcminutes across out to a hemisphere. Survey imagery shows up to 30°
+The sky is drawn the way the Sky view draws it, on a plane anchored at the
+target: dragging the sky slides the window over that plane and turns
+nothing, so the rectangle keeps its bearing and the grid its shape as you
+look around, the way a map scrolls. The anchor follows the target once a
+move is done. Scroll or use the corner buttons to zoom, from three
+arcminutes across out to a hemisphere. Survey imagery shows up to 30°
 across; wider than that the stage is a chart, which draws at once: bright
 stars, constellation figures and names, the Milky Way band, and an
 equatorial grid whose spacing follows the zoom, with declination labelled
 down the left edge and right ascension along the top. The grid and the
 chart layers each have a switch under **View**. The projection is
 stereographic, in the browser, on the server's survey images and on the
-offline maps alike, so the rectangle, the grid and the picture agree at
-every zoom; at framing widths it is the tangent plane to within a pixel,
-and the readout under the stage gives the width of sky the stage really
-spans. The rotation handle lives on the target's own plane, so it stays on
+offline maps alike. A survey tile is fetched about the window's center, so
+its north leans against the stage's once the view has panned; the tile is
+laid on the stage through a matrix fitted through the sky, which carries
+that turn along with the scale and shift, so the picture stays under the
+grid and the rectangle. At framing widths the projection is the tangent
+plane to within a pixel, and the readout under the stage gives the width of
+sky the stage really spans. The rotation handle lives on the target's own plane, so it stays on
 the rectangle's up direction however far the view has panned from the
 target.
 **Framing** shows the sky around the project's first target on a survey
