@@ -41,7 +41,7 @@ toml_edit = { version = "0.25", features = ["serde"] }
 anyhow = "1.0"
 argon2 = "0.6.0"
 chrono = "0.4"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v5"] }
 regex = "1.12"
 semver = "1"
 byteorder = "1.5"

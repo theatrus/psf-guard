@@ -116,7 +116,7 @@ pub(super) async fn get(
             BTreeMap::new();
         let mut panels = Vec::new();
         let mut warnings = Vec::new();
-        let found = identified_catalogs(&catalogs);
+        let found = identified_catalogs(&catalogs, service.instance_id);
         warnings.extend(found.duplicates.iter().cloned());
         for activated in &activation.rigs {
             let rig = store.rig(activated.rig_id)?.ok_or(Error::Missing)?;

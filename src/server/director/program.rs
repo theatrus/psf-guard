@@ -233,7 +233,7 @@ pub(super) fn assemble(
         return Err(Error::Internal.into());
     }
     let activations = store.activations_for_rig(rig)?;
-    let context = identified_catalogs(catalogs)
+    let context = identified_catalogs(catalogs, instance)
         .get(catalog_id)
         .cloned()
         .ok_or(Error::Missing)?;

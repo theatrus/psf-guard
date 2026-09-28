@@ -9,7 +9,7 @@ use psf_guard_director_core::{
     framing::{FramingRequest, Mosaic, PanelSize},
     visibility::IcrsPosition,
 };
-use psf_guard_director_meta::{catalog::ProjectMapping, profile::RigProfile, CatalogIdentity};
+use psf_guard_director_meta::{catalog::ProjectMapping, profile::RigProfile};
 use rusqlite::{OpenFlags, TransactionBehavior};
 use std::{collections::BTreeMap, time::Duration};
 
@@ -180,21 +180,35 @@ pub(super) struct PlanList {
 /// databases, as Sync copies do, become one plan with several rigs; projects
 /// that merely share a name stay apart. A database that cannot be written
 /// or has no usable GUIDs is reported, not failed.
+///
+/// Without database management the file is only read: it is planned under
+/// its derived identity, and the identity table is written the first time a
+/// managing server lists it, under the same id.
 fn ensure_adopted(
     store: &mut MetaStore,
     instance: Uuid,
     catalog: &DatabaseContext,
+    management: bool,
 ) -> Result<(), String> {
+    let flags = if management {
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+    } else {
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+    };
     let mut connection = super::super::database_context::open_scheduler_connection_with_flags(
         FilePath::new(&catalog.database_path),
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        flags | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(|_| format!("{}: could not be opened for planning", catalog.name))?;
     connection
         .busy_timeout(Duration::from_secs(2))
         .map_err(|_| format!("{}: busy", catalog.name))?;
     let mut tx = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .transaction_with_behavior(if management {
+            TransactionBehavior::Immediate
+        } else {
+            TransactionBehavior::Deferred
+        })
         .map_err(|_| format!("{}: busy", catalog.name))?;
     let evidence = match catalog_discovery::read_evidence(&tx) {
         Ok(evidence) => evidence,
@@ -207,16 +221,23 @@ fn ensure_adopted(
     };
     let saved = catalog_identity::read(&tx)
         .map_err(|_| format!("{}: identity unreadable", catalog.name))?;
-    let require_new = saved.is_none();
-    let identity = saved.unwrap_or(CatalogIdentity {
-        id: Uuid::new_v4(),
-        origin_instance_id: instance,
-    });
+    let unwritten = saved.is_none();
+    let identity =
+        saved.unwrap_or_else(|| super::derived_identity(instance, &catalog.database_path));
     let binding = match store.catalog_rig(identity.id) {
-        Ok(Some(binding)) => binding,
+        Ok(Some(binding)) => {
+            // Bound while read-only; the file takes its identity now.
+            if unwritten && management {
+                catalog_identity::adopt(&mut tx, identity)
+                    .map_err(|_| format!("{}: identity could not be written", catalog.name))?;
+            }
+            binding
+        }
         Ok(None) => store
-            .bind_catalog_rig_after(identity, &catalog.name, require_new, || {
-                catalog_identity::adopt(&mut tx, identity).map_err(|_| StoreError::Conflict)?;
+            .bind_catalog_rig_after(identity, &catalog.name, unwritten, || {
+                if management {
+                    catalog_identity::adopt(&mut tx, identity).map_err(|_| StoreError::Conflict)?;
+                }
                 Ok(())
             })
             .map_err(|error| format!("{}: could not be bound to a rig ({error})", catalog.name))?,
@@ -346,6 +367,7 @@ pub(super) async fn list(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<PlanList>>, Error> {
     let service = enabled(&state)?;
+    let management = state.database_management_allowed();
     let catalogs: Vec<_> = state
         .databases
         .read()
@@ -360,19 +382,21 @@ pub(super) async fn list(
         let mut store = service.store.lock().map_err(|_| Error::Internal)?;
         // A hand-copied file carries its original's identity: name it and
         // leave it alone, so it never gets plans or links of its own.
-        let before = identified_catalogs(&catalogs);
+        let before = identified_catalogs(&catalogs, service.instance_id);
         let mut warnings = before.duplicates.clone();
         for catalog in &catalogs {
             if before.is_duplicate(&catalog.id) {
                 continue;
             }
-            if let Err(warning) = ensure_adopted(&mut store, service.instance_id, catalog) {
+            if let Err(warning) =
+                ensure_adopted(&mut store, service.instance_id, catalog, management)
+            {
                 warnings.push(warning);
             }
         }
         // Links first: each bound database's mappings, joined to its rows.
         let mut links: BTreeMap<Uuid, Vec<PlanLink>> = BTreeMap::new();
-        for (identity, catalog) in identified_catalogs(&catalogs).iter() {
+        for (identity, catalog) in identified_catalogs(&catalogs, service.instance_id).iter() {
             let Ok(connection) =
                 super::super::database_context::open_scheduler_connection_with_flags(
                     FilePath::new(&catalog.database_path),

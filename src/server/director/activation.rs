@@ -248,7 +248,12 @@ async fn execute(
     id: Uuid,
     expected: Option<String>,
 ) -> Result<Json<ApiResponse<Report>>, ActivationError> {
-    let service = enabled(&state)?;
+    // A preview only reads; applying writes every participating rig database.
+    let service = if expected.is_some() {
+        writable(&state)?
+    } else {
+        enabled(&state)?
+    };
     let catalogs: Vec<Arc<DatabaseContext>> = state
         .databases
         .read()
@@ -323,7 +328,7 @@ async fn execute(
         }
         // Which registered database each participating rig is bound to. A
         // hand-copied file with the same identity is named and never written.
-        let found = identified_catalogs(&catalogs);
+        let found = identified_catalogs(&catalogs, service.instance_id);
         coverage_warnings.extend(found.duplicates.iter().cloned());
         let mut rig_catalogs: BTreeMap<Uuid, RigCatalog> = BTreeMap::new();
         for (identity, context) in found.iter() {
@@ -608,7 +613,7 @@ pub(super) async fn push(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<PushReport>>, ActivationError> {
-    let service = enabled(&state)?;
+    let service = writable(&state)?;
     let catalogs: Vec<Arc<DatabaseContext>> = state
         .databases
         .read()
@@ -627,7 +632,7 @@ pub(super) async fn push(
             .activation(id)?
             .ok_or(ActivationError::NotReady("Apply an activation first."))?;
         let mut targets: Vec<(NamedIdentity, Arc<DatabaseContext>, String)> = Vec::new();
-        let found = identified_catalogs(&catalogs);
+        let found = identified_catalogs(&catalogs, service.instance_id);
         let mut warnings = found.duplicates.clone();
         for activated in &activation.rigs {
             let rig = store.rig(activated.rig_id)?.ok_or(Error::Missing)?;

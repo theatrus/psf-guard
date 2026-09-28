@@ -5,6 +5,8 @@ export interface DirectorStatus {
   enabled: boolean;
   instance_id: string | null;
   acquisition_available: boolean;
+  /** Whether this server may write into rig databases; without it Planning is read-only over the catalogs. */
+  database_management: boolean;
 }
 
 export type DirectorCollection = 'projects' | 'sites' | 'rigs';

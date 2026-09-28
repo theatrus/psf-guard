@@ -120,7 +120,7 @@ pub(super) async fn rig_profiles(
         let _permits = (metadata_permit, catalog_permit);
         let store = service.store.lock().map_err(|_| Error::Internal)?;
         let mut summaries = Vec::new();
-        for (identity, catalog) in identified_catalogs(&catalogs).iter() {
+        for (identity, catalog) in identified_catalogs(&catalogs, service.instance_id).iter() {
             let Some(binding) = store.catalog_rig(identity.id)? else {
                 continue;
             };

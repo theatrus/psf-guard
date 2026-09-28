@@ -157,6 +157,15 @@
 
 ## Changed
 
+- The Library's **Plan & coordinates** dialog is gone; its **Planning** button
+  opens the project in Planning with that database's targets and exposures
+  expanded under **Databases**. The same editor, with framing, plan and
+  activation around it.
+- Planning is on for every server. Without database management it is
+  read-only over the catalogs: plans and framing can be drafted, and
+  activation, pushes and Target Scheduler edits are refused. No table is
+  written into a rig database until a managing server lists it, and the rig
+  keeps the same identity when that happens.
 - The header's views are now **Library** and **Planning**. Library is the
   page that was called Overview: every database's projects, images and
   grading. Planning is the Director operator page: plans across rigs, the

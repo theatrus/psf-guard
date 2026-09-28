@@ -4,6 +4,7 @@ import { isAxiosError } from 'axios';
 import { Check, Eye, Send } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
+import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import type { DirectorActivationPush, DirectorActivationPushReport, DirectorActivationReport } from '../../api/directorTypes';
 import { retryWhenBusy } from './retry';
 import './ActivationPanel.css';
@@ -31,6 +32,8 @@ function describePush(push: DirectorActivationPush | null, applied: boolean): st
 /** Push the framing and plan into each participating rig's database, with a preview first. */
 export default function ActivationPanel({ projectId }: { projectId: string }) {
   const { canWrite } = useAccess();
+  const status = useDirectorStatus();
+  const manageable = status.data?.database_management ?? true;
   const client = useQueryClient();
   const last = useQuery({ queryKey: ['directorActivation', projectId], queryFn: () => apiClient.getDirectorActivation(projectId), retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false });
   const [report, setReport] = useState<DirectorActivationReport | null>(null);
@@ -73,9 +76,10 @@ export default function ActivationPanel({ projectId }: { projectId: string }) {
     </div>}
     {canWrite && <div className="director-actions">
       <button type="button" disabled={pending} onClick={() => run(() => preview.mutate())}><Eye size={16} />{preview.isPending ? 'Previewing...' : report && !report.applied ? 'Preview again' : 'Preview activation'}</button>
-      {report && !report.applied && <button type="button" disabled={pending || report.rigs.every(r => r.warnings.length > 0 && r.changes.length === 0)} onClick={() => run(() => apply.mutate())}><Check size={16} />{apply.isPending ? 'Applying...' : 'Apply to rig databases'}</button>}
-      {last.data && <button type="button" disabled={pending} title="Send the last activation's rows to each remote rig's peer again" onClick={() => run(() => push.mutate())}><Send size={16} />{push.isPending ? 'Pushing...' : 'Push to remote sites again'}</button>}
+      {report && !report.applied && <button type="button" disabled={pending || !manageable || report.rigs.every(r => r.warnings.length > 0 && r.changes.length === 0)} title={manageable ? undefined : 'This server cannot change rig databases'} onClick={() => run(() => apply.mutate())}><Check size={16} />{apply.isPending ? 'Applying...' : 'Apply to rig databases'}</button>}
+      {last.data && <button type="button" disabled={pending || !manageable} title={manageable ? 'Send the last activation\'s rows to each remote rig\'s peer again' : 'This server cannot change rig databases'} onClick={() => run(() => push.mutate())}><Send size={16} />{push.isPending ? 'Pushing...' : 'Push to remote sites again'}</button>}
     </div>}
     {!canWrite && <p className="director-muted">Read only</p>}
+    {canWrite && !manageable && <p className="director-muted">Preview works here; applying and pushing need a server started with database management.</p>}
   </section>;
 }

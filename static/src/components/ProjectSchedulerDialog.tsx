@@ -8,19 +8,7 @@ import type {
   ProjectSchedulerDetails,
   SchedulerTargetDetails,
 } from '../api/types';
-import Dialog from './Dialog';
-import { Telescope } from 'lucide-react';
 import './ProjectSchedulerDialog.css';
-
-interface Props {
-  open: boolean;
-  dbId: string;
-  projectId: number;
-  projectName: string;
-  canEdit: boolean;
-  onClose: () => void;
-  onPlan?: () => void;
-}
 
 const PROJECT_STATES = ['Draft', 'Active', 'Inactive', 'Closed'];
 const PROJECT_PRIORITIES = ['Low', 'Normal', 'High'];
@@ -373,16 +361,4 @@ export function ProjectPlanEditor({ open = true, dbId, projectId, canEdit }: {
       )}
     </>
   );
-}
-
-export default function ProjectSchedulerDialog({ open, dbId, projectId, projectName, canEdit, onClose, onPlan }: Props) {
-  const [edited, setEdited] = useState(false);
-  const plan = () => {
-    if (edited && !window.confirm('Open rig planning with the saved project data? Any unsaved edits in this dialog will be discarded.')) return;
-    onPlan?.();
-  };
-  return <Dialog open={open} title={`Project plan · ${projectName}`} onClose={onClose} className="scheduler-dialog">
-    {onPlan && <div className="scheduler-actions"><button type="button" onClick={plan}><Telescope size={16} />Open in Planning</button></div>}
-    <div onChangeCapture={() => setEdited(true)}><ProjectPlanEditor open={open} dbId={dbId} projectId={projectId} canEdit={canEdit} /></div>
-  </Dialog>;
 }

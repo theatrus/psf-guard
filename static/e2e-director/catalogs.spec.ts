@@ -81,9 +81,10 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     // The Library's Open in Planning lands in the same workspace.
     await page.goto(`/#/?db=${slugs[0]}&project=1&dbfilter=${slugs[0]}`);
     const card = page.locator(`[data-project-key="${slugs[0]}:1"]`);
-    await card.getByRole('button', { name: 'Plan & coordinates' }).click();
-    await page.getByRole('button', { name: 'Open in Planning' }).click();
+    await card.getByRole('button', { name: 'Planning' }).click();
     await expect(page.getByRole('heading', { name: 'Andromeda exposures' })).toBeVisible();
+    // The database the card came from is already open to its targets.
+    await expect(page.getByLabel('RA (decimal hours)')).toHaveValue('0.712313');
     expect(new URL(page.url().split('#')[1], 'http://test').searchParams.get('directorProject')).toBe(mappings[1].items[0].project_id);
     await page.getByRole('link', { name: 'Plans' }).click();
     await expect(page.getByRole('heading', { name: 'Plans' })).toBeVisible();

@@ -52,15 +52,15 @@ pub(crate) fn default_meta_path(registry: &FilePath) -> std::path::PathBuf {
 /// An explicit path always wins. Without one, a server that may manage its
 /// databases opens the default store; a read-only server leaves Director off,
 /// because planning writes into rig databases at activation.
+/// The meta store sits beside the registry unless a path is given. Planning
+/// runs on every server; only writes into rig databases need management.
 pub(crate) fn resolve_meta_path(
     explicit: Option<&FilePath>,
     registry: Option<&FilePath>,
-    management: bool,
 ) -> Option<std::path::PathBuf> {
     match explicit {
         Some(path) => Some(path.to_path_buf()),
-        None if management => registry.map(default_meta_path),
-        None => None,
+        None => registry.map(default_meta_path),
     }
 }
 
@@ -118,15 +118,8 @@ pub struct Service {
 
 impl Service {
     /// Call during startup, never with a client-supplied filesystem path.
-    pub(crate) fn configured(
-        path: Option<&FilePath>,
-        management: bool,
-    ) -> anyhow::Result<Option<Arc<Self>>> {
+    pub(crate) fn configured(path: Option<&FilePath>) -> anyhow::Result<Option<Arc<Self>>> {
         let Some(path) = path else { return Ok(None) };
-        anyhow::ensure!(
-            management,
-            "Director metadata requires database management to be enabled"
-        );
         let store = if path.try_exists()? {
             MetaStore::open(path)?
         } else {
@@ -279,8 +272,31 @@ impl IdentifiedCatalogs {
     }
 }
 
-/// Read each file's identity once, in slug order so the choice is stable.
-pub(super) fn identified_catalogs(catalogs: &[Arc<DatabaseContext>]) -> IdentifiedCatalogs {
+/// The identity an unadopted file gets until one is written into it: fixed
+/// by this instance and the file's path, so a read-only server sees the same
+/// rig across restarts and the same id is written once management allows.
+pub(super) fn derived_identity(instance: Uuid, path: &str) -> CatalogIdentity {
+    let canonical = dunce::canonicalize(path)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_owned());
+    CatalogIdentity {
+        id: Uuid::new_v5(&instance, canonical.as_bytes()),
+        origin_instance_id: instance,
+    }
+}
+
+/// The identity a file carries, or the one it would be given.
+pub(super) fn identity_of(instance: Uuid, path: &str) -> CatalogIdentity {
+    read_identity(path).unwrap_or_else(|| derived_identity(instance, path))
+}
+
+/// Read each file's identity once, in slug order so the choice is stable. An
+/// unadopted file counts under its derived identity, so a read-only server
+/// still plans over it.
+pub(super) fn identified_catalogs(
+    catalogs: &[Arc<DatabaseContext>],
+    instance: Uuid,
+) -> IdentifiedCatalogs {
     let mut sorted: Vec<&Arc<DatabaseContext>> = catalogs.iter().collect();
     sorted.sort_by(|a, b| a.id.cmp(&b.id));
     let mut found = IdentifiedCatalogs {
@@ -289,9 +305,7 @@ pub(super) fn identified_catalogs(catalogs: &[Arc<DatabaseContext>]) -> Identifi
         duplicate_slugs: Vec::new(),
     };
     for context in sorted {
-        let Some(identity) = read_identity(&context.database_path) else {
-            continue;
-        };
+        let identity = identity_of(instance, &context.database_path);
         match found.by_id.get(&identity.id) {
             Some((_, first)) => {
                 found.duplicates.push(format!(
@@ -453,11 +467,19 @@ async fn admit(semaphore: &Arc<Semaphore>) -> Result<tokio::sync::OwnedSemaphore
         .map_err(|_| Error::Internal)
 }
 
+/// Planning reads and the meta store are open to every server.
 fn enabled(state: &AppState) -> Result<Arc<Service>, Error> {
+    state.director.clone().ok_or(Error::Disabled)
+}
+
+/// Writes into rig databases (activation, adoption tables, pushes) need the
+/// server's database-management permission on top.
+fn writable(state: &AppState) -> Result<Arc<Service>, Error> {
+    let service = enabled(state)?;
     if !state.database_management_allowed() {
         return Err(Error::Forbidden);
     }
-    state.director.clone().ok_or(Error::Disabled)
+    Ok(service)
 }
 
 #[derive(Serialize)]
@@ -466,6 +488,10 @@ struct Status {
     enabled: bool,
     instance_id: Option<Uuid>,
     acquisition_available: bool,
+    /// Whether this server may write into rig databases: activate plans,
+    /// adopt catalogs in place, and edit Target Scheduler rows. Without it,
+    /// Planning is read-only over the catalogs.
+    database_management: bool,
 }
 
 async fn status(State(state): State<Arc<AppState>>) -> Json<ApiResponse<Status>> {
@@ -475,6 +501,7 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<ApiResponse<Status>>
         enabled: service.is_some(),
         instance_id: service.map(|s| s.instance_id),
         acquisition_available: false,
+        database_management: state.database_management_allowed(),
     }))
 }
 

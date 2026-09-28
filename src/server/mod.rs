@@ -216,14 +216,12 @@ async fn run_server_internal(
     let director_meta = director::resolve_meta_path(
         config.director_meta.as_deref(),
         config.registry_path.as_deref(),
-        config.allow_database_management,
     );
     director::validate_registry_separation(
         director_meta.as_deref(),
         config.registry_path.as_deref(),
     )?;
-    let director =
-        director::Service::configured(director_meta.as_deref(), config.allow_database_management)?;
+    let director = director::Service::configured(director_meta.as_deref())?;
     if let Some(path) = &director_meta {
         tracing::info!("🧭 Director meta store: {}", path.display());
     }

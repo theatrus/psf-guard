@@ -135,7 +135,7 @@ pub(super) async fn evaluate(
         let mut warnings = Vec::new();
         let mut rigs = Vec::new();
         let mut names = std::collections::BTreeMap::new();
-        let found = identified_catalogs(&catalogs);
+        let found = identified_catalogs(&catalogs, service.instance_id);
         warnings.extend(found.duplicates.iter().cloned());
         for (identity, catalog) in found.iter() {
             if let Some(binding) = store.catalog_rig(identity.id)? {
