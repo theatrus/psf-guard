@@ -6,7 +6,7 @@ test('global Director identities survive reload, conflicts, and narrow viewports
   page.on('pageerror', error => browserErrors.push(error.message));
   page.on('request', req => { if (req.url().includes('/api/db/parked-catalog')) scopedRequests.push(req.url()); });
   await page.goto('/#/director?db=parked-catalog&project=123');
-  await expect(page.getByRole('heading', { name: 'Director', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Planning', exact: true })).toBeVisible();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByText('Acquisition is not yet available.')).toBeVisible();
   await page.getByRole('button', { name: 'New project' }).click();
@@ -58,7 +58,7 @@ test('a disabled Director has no navigation entry or editable records', async ({
     success: true, data: { protocol_version: 1, enabled: false, instance_id: null, acquisition_available: false }, error: null,
   } }));
   await page.goto('/#/director');
-  await expect(page.getByText('Director management is unavailable on this server.')).toBeVisible();
-  await expect(page.getByRole('navigation', { name: 'Views' }).getByRole('button', { name: 'Director' })).toHaveCount(0);
+  await expect(page.getByText('Planning is unavailable on this server; Director management is off.')).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Views' }).getByRole('button', { name: 'Planning' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /New project|New site|New rig/ })).toHaveCount(0);
 });

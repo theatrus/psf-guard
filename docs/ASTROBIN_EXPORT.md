@@ -10,7 +10,7 @@ many nights becomes a list of sessions in one click.
 
 ## Where to find it
 
-On the **Overview**, every project card and every target row with accepted
+On the **Library**, every project card and every target row with accepted
 or ungraded lights has an **AstroBin** action next to **Export**. It opens
 a dialog that previews the rows, offers a **Download CSV** link and a
 **Copy CSV** button, and asks for any filter id it still lacks.

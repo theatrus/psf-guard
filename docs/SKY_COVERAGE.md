@@ -2,7 +2,7 @@
 
 The **Sky** view draws everything your catalogs have pointed at on one map of
 the whole sky, and lets you replay the nights that built it. It reads every
-registered database at once, like the Overview.
+registered database at once, like the Library.
 
 ![The Sky view: stat band, filter chips, and the all-sky map with constellations and fields](sky-coverage.jpg)
 

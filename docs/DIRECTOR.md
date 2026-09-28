@@ -1,7 +1,9 @@
 # Director management
 
-Director is experimental. This API manages global project, site and rig identities in a
-separate meta database. Director clients can pair to inspect programs and report
+Director is experimental. In the header it is the **Planning** page, beside
+the **Library** (the per-database view of images and grading); Director stays
+the name of the plugin, the protocol and the API. This API manages global
+project, site and rig identities in a separate meta database. Director clients can pair to inspect programs and report
 receipts/status. Pairing does not allocate work or enable acquisition. The NINA
 runtime preview and PSF Guard Sync remain separate.
 
@@ -70,14 +72,14 @@ create one on the spot.
 enabled, its field of view and pixel scale from the rig profile, whether the
 plugin has reported its camera, and the plugin's last live status. **Setup**
 expands the database's planning setup in place: enable planning, the rig
-profile, and the project links. **Overview** opens its catalog.
+profile, and the project links. **Library** opens its catalog.
 
 The **workspace** for one project shows its linked databases, each with the
 familiar targets and exposures editor a click away, then **Framing**, **Plan**
 and **Activation**. A project with no linked database yet starts its framing
 by looking a name up in the CDS catalogs or by typing a center; activation
 then creates and links the Target Scheduler project in each rig database.
-Overview's plan dialog still offers **Rig planning**; for a linked project it
+The Library's plan dialog still offers **Open in Planning**; for a linked project it
 lands in the same workspace.
 
 Older links that named the Catalogs, Sites or Rigs tabs still work: the
@@ -87,7 +89,7 @@ rig profile. The identity API for sites remains for the plugin.
 
 ### Rigs and plans appear on their own
 
-Opening the Director page takes every registered database in as a rig and
+Opening the Planning page takes every registered database in as a rig and
 every Target Scheduler project in it as a plan. Nothing to enable, name or
 link: the database keeps a small identity table so a moved or renamed file
 stays the same rig, and each project row with a GUID gets a plan named after
@@ -117,17 +119,17 @@ catalog: the first by slug stands for it and the copy is named at the top of
 the plan list and left out of planning until it is removed from the registry
 or its identity table is dropped.
 
-### Plans read like Overview projects
+### Plans read like Library projects
 
-The plan list uses the Overview's project card: the name opens the workspace,
-one database chip per rig replaces the Overview's single database name, and
+The plan list uses the Library's project card: the name opens the workspace,
+one database chip per rig replaces the Library's single database name, and
 under it sit the same frame counts, desired-progress bar and grading bar
 (accepted, rejected, pending), then a stage line (activated, planned, framed,
 linked). Every count on the card adds up all of the plan's rigs. A **Rigs**
-list stands where the Overview lists targets: one entry per rig with its own
+list stands where the Library lists targets: one entry per rig with its own
 accepted-of-desired bar and, for a mosaic, the count per panel, because each
 rig holds its own targets and exposure plans in its own database and can be
-ahead of or behind the others. Overview stays the per-database view of what
+ahead of or behind the others. Library stays the per-database view of what
 is on disk and how it graded; Director is the per-plan view across rigs.
 
 The header's project picker follows the same rule. A project that lives in
@@ -337,7 +339,7 @@ server folds both back to the sensor before offering them. Typed models:
 
 ## Framing view
 
-Open a plan from the Director page. The workspace is a wide screen:
+Open a plan from the Planning page. The workspace is a wide screen:
 **Framing** comes first and the sky takes the width the window has, up to
 the height of the screen, with the controls beside it; the plan and
 activation sit under it side by side, and the linked databases last.
@@ -489,7 +491,7 @@ Apply. A peer removed from the registry is named in the rig's warnings and the
 plan stays on this server until Setup names another.
 
 The remote PSF Guard sees the pushed rows as ordinary Target Scheduler
-projects with the same GUIDs, so its own Overview and Sync work on them; it
+projects with the same GUIDs, so its own Library and Sync work on them; it
 does not become a second planner for them. The rig's Director plugin still
 pulls its program from this server, the coordinator, and reports here.
 

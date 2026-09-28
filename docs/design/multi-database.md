@@ -24,7 +24,7 @@ One-off CLI subcommands (`analyze`, batch operations, etc.) remain single-DB —
 
 ### Concrete user-visible outcomes
 - Settings panel lists N configured databases. Each has: a friendly name, a `.sqlite` path, and an ordered list of image directories.
-- **No "active database" mode.** The Overview merges projects and targets across all configured databases into one list, visually grouped/sectioned by DB. Users see all their telescope work at once, just labeled with which DB each item lives in.
+- **No "active database" mode.** The Library merges projects and targets across all configured databases into one list, visually grouped/sectioned by DB. Users see all their telescope work at once, just labeled with which DB each item lives in.
 - Scoped views (grid, detail, comparison) read `db` from the URL alongside `project`/`target`/`image`. There is no fallback — every scoped link is fully qualified.
 - Cache refresh is per-DB and shows per-DB progress.
 - Grading writes go to the DB the image came from. The frontend always has the `db_id` in scope (from URL or the project's row), so writes are unambiguous.

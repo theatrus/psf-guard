@@ -98,7 +98,7 @@ describe('Director management', () => {
     expect(updates).toEqual([{ name: 'Andromeda', expected_revision: 1 }, { name: 'Andromeda', expected_revision: 2 }]);
   });
 
-  it('shows each plan with its stage and opens Rig planning at its linked database row', async () => {
+  it('shows each plan with its stage and opens planning at its linked database row', async () => {
     mount(false, undefined, [
       http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list([
         row(record, { links: [{ catalog_slug: 'c925', catalog_name: 'C925', rig, source_project_guid: 'g', source_row_id: 7, source_name: 'Andromeda subs',
@@ -117,7 +117,7 @@ describe('Director management', () => {
     ]);
     expect(await screen.findByText('M31')).toBeInTheDocument();
     expect(screen.getByText('Planned: 2 objectives, 1 rig, not activated')).toBeInTheDocument();
-    // The card reads like an Overview project: counts, bars, then one row per rig.
+    // The card reads like a Library project: counts, bars, then one row per rig.
     expect(screen.getByText('36 / 144 desired')).toBeInTheDocument();
     expect(screen.getAllByText('25% complete')).toHaveLength(2);
     expect(screen.getByRole('img', { name: 'Grading status: 36 accepted, 3 rejected, 1 pending' })).toBeInTheDocument();
@@ -160,7 +160,7 @@ describe('Director management', () => {
     const plansCall = vi.fn(() => HttpResponse.json(ok(list([]))));
     mount();
     server.use(http.get('/api/director/v1/status', () => HttpResponse.json(ok(status))), http.get('/api/director/v1/plans', plansCall));
-    expect(await screen.findByText('Director management is unavailable on this server.')).toBeInTheDocument();
+    expect(await screen.findByText('Planning is unavailable on this server; Director management is off.')).toBeInTheDocument();
     expect(plansCall).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: 'New project' })).not.toBeInTheDocument();
   });

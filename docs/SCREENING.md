@@ -154,7 +154,7 @@ date. Use **Rescan All Quality** in Settings when you need to force a full
 rescan. The target scan runs spatial/photometric screening and fresh plate
 solves in the background, then
 refreshes the sequence scores. The fixed header status shows frame and solve
-progress while you move between views; Overview folds the work into its
+progress while you move between views; Library folds the work into its
 cross-database status. Results persist across restarts. The
 sequence analysis shows coverage badges, classifications, solved-center
 scatter, a session view, and an all-session stack comparison for each filter.

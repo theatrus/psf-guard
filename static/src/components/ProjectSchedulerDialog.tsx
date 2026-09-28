@@ -382,7 +382,7 @@ export default function ProjectSchedulerDialog({ open, dbId, projectId, projectN
     onPlan?.();
   };
   return <Dialog open={open} title={`Project plan · ${projectName}`} onClose={onClose} className="scheduler-dialog">
-    {onPlan && <div className="scheduler-actions"><button type="button" onClick={plan}><Telescope size={16} />Rig planning</button></div>}
+    {onPlan && <div className="scheduler-actions"><button type="button" onClick={plan}><Telescope size={16} />Open in Planning</button></div>}
     <div onChangeCapture={() => setEdited(true)}><ProjectPlanEditor open={open} dbId={dbId} projectId={projectId} canEdit={canEdit} /></div>
   </Dialog>;
 }

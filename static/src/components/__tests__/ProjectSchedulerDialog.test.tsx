@@ -106,11 +106,11 @@ describe('ProjectSchedulerDialog', () => {
       const user = userEvent.setup();
       await user.clear(await screen.findByLabelText('RA (decimal hours)'));
       await user.type(screen.getByLabelText('RA (decimal hours)'), '1.5');
-      await user.click(screen.getByRole('button', { name: 'Rig planning' }));
+      await user.click(screen.getByRole('button', { name: 'Open in Planning' }));
       expect(onPlan).not.toHaveBeenCalled();
       expect(screen.getByLabelText('RA (decimal hours)')).toHaveValue(1.5);
       confirm.mockReturnValue(true);
-      await user.click(screen.getByRole('button', { name: 'Rig planning' }));
+      await user.click(screen.getByRole('button', { name: 'Open in Planning' }));
       expect(onPlan).toHaveBeenCalledTimes(1);
     } finally { confirm.mockRestore(); }
   });

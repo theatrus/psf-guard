@@ -109,8 +109,8 @@ before the GitHub release fallback. See [docs/UPDATES.md](docs/UPDATES.md).
   identity.
 - Open a source database read-only during sync. Refuse the same source and
   destination path. Preview every UI transfer before Apply.
-- The Overview merges databases, but Grid, Detail, Comparison, and Sequence
-  routes must keep the `db` slug in URL state. The Overview carries the same
+- The Library merges databases, but Grid, Detail, Comparison, and Sequence
+  routes must keep the `db` slug in URL state. The Library carries the same
   scope so it can mark where the user was and hand it back, so anything that
   scopes to one database must read `useScopedDbId` and ignore the slug there.
 

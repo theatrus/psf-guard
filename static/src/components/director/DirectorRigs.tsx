@@ -42,7 +42,7 @@ export default function DirectorRigs() {
             {profile?.profile?.peer_id && <span className="director-muted">Plans push to {peers.data?.find(peer => peer.id === profile.profile?.peer_id)?.name ?? profile.profile.peer_id}</span>}
             {status?.status && <span className="director-muted">Plugin: {describeStatus(status.status.payload, status.status.reported_at_ms)}</span>}
           </div>
-          <Link to={`/?${new URLSearchParams({ db: db.id, dbfilter: db.id })}`}>Overview</Link>
+          <Link to={`/?${new URLSearchParams({ db: db.id, dbfilter: db.id })}`}>Library</Link>
           <button type="button" aria-expanded={openSetup === db.id} aria-label={`Setup ${db.name}`} title={`Setup ${db.name}`} onClick={() => setOpenSetup(openSetup === db.id ? null : db.id)}>{openSetup === db.id ? <ChevronDown size={16} /> : <ChevronRight size={16} />}Setup</button>
         </div>
         {openSetup === db.id && <RigProfileCard key={db.id} slug={db.id} />}

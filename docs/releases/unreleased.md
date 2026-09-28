@@ -39,9 +39,9 @@
   reporting. Operators can list and revoke clients; pairing does not authorize
   equipment control or acquisition.
 
-- The Director page is now a plan list: every project with the databases it
+- The Planning page (then labelled Director) is now a plan list: every project with the databases it
   is linked to, how far its framing, plan and activation have come, and a
-  Rig planning link, above a rig list with each database's planning state,
+  Open in Planning link, above a rig list with each database's planning state,
   optics and last plugin status. The old Projects, Sites and Rigs tabs are
   gone; their links land on the same page.
 
@@ -55,18 +55,18 @@
   the recipes bound to the filters the rig reported, valid for 36 hours per
   pull so a rig keeps working through a network outage.
 
-- Rig planning can now activate a project: after a preview, PSF Guard writes
+- Planning can now activate a project: after a preview, PSF Guard writes
   one Target Scheduler project per participating rig, a target per mosaic
   panel and an exposure plan per objective into that rig's database, and
   updates the same rows on later activations without touching captured
   frames or grades.
 
-- Rig planning gains a plan below the framing: objectives per bandpass in
+- Planning gains a plan below the framing: objectives per bandpass in
   accepted hours or frames, and per rig the exposure template and exposure
   length that meet them, with frames worked out per rig and defaults that
   follow each rig's optics and sky. Plans save as drafts on the project.
 
-- Rig planning now frames a project on the sky. Below the project editor, a
+- Planning now frames a project on the sky. Below the project editor, a
   survey image (DSS2, SDSS, DESI Legacy, 2MASS, the Finkbeiner H-alpha map
   and the Northern Sky Narrowband Survey layers, as in N.I.N.A.'s framing
   assistant) shows the target with its catalog coordinates and rotation; drag
@@ -91,7 +91,7 @@
   history. Separate databases can contribute to one shared project.
 
 - Database settings now hold project planning links with explicit preview and
-  Apply, instead of a separate Director Catalogs view. Overview's existing
+  Apply, instead of a separate Director Catalogs view. Library's existing
   project plan dialog opens rig planning with the same targets, coordinates and
   exposure templates, and returns to the original project and database scope.
   Framing, downstream plan generation and combined progress remain in development.
@@ -105,7 +105,7 @@
   profile IDs, reporting missing or duplicate identities without modifying the
   source database or reading image data.
 
-- An experimental Director page manages global projects, sites, and rigs on
+- An experimental Planning page (then labelled Director) manages global projects, sites, and rigs on
   servers with Director metadata enabled. It supports read-only accounts,
   paged listings, and revision-checked renames without requiring a catalog.
 
@@ -142,13 +142,13 @@
   databases hold targets, and per target under each database, so a mosaic
   shows each panel's progress without opening it.
 
-- The Director page opens with a **Live** table of rigs: whether each is
+- The Planning page opens with a **Live** table of rigs: whether each is
   online, quiet, offline or never seen, from the server's own record of the
   plugin's calls; what it last reported it was doing, marked stale when old;
   how long since it pulled its program, checked in and reported; saved frames
   awaiting grading; and the plans it is assigned to.
 
-- Director plans read like Overview projects: the same card, frame counts,
+- Director plans read like Library projects: the same card, frame counts,
   desired-progress and grading bars, with one database chip per rig and a
   Rigs list giving each rig its own progress and per-panel counts.
 - The header's project picker shows a project shot by several rigs as one
@@ -157,6 +157,12 @@
 
 ## Changed
 
+- The header's views are now **Library** and **Planning**. Library is the
+  page that was called Overview: every database's projects, images and
+  grading. Planning is the Director operator page: plans across rigs, the
+  framing workspace, activation and live rig status. The project dialog's
+  **Rig planning** button is now **Open in Planning**. Routes and links are
+  unchanged; Director remains the name of the plugin, protocol and API.
 - The planning workspace is a wide screen: the framing sky fills the window
   up to the screen's height, with survey chips on it for the DSS2 colour and
   narrowband layers; plan and activation sit beside each other under it. The

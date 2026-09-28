@@ -129,7 +129,7 @@ function AppContent() {
             type="button"
             className="brand-button"
             onClick={() => navigate(toScoped('/'))}
-            title="Go to Overview"
+            title="Go to Library"
           >
             <img
               className="brand-logo"
@@ -154,7 +154,7 @@ function AppContent() {
 
         <nav className="header-view-tabs" aria-label="Views">
           {director.data?.enabled && director.data.protocol_version === 1 && (
-            <button type="button" onClick={() => navigate(toScoped('/director'))} className="header-button" aria-current={isOnDirector ? 'page' : undefined}>Director</button>
+            <button type="button" onClick={() => navigate(toScoped('/director'))} className="header-button" aria-current={isOnDirector ? 'page' : undefined}>Planning</button>
           )}
           <button
             type="button"
@@ -162,7 +162,7 @@ function AppContent() {
             className="header-button"
             aria-current={isOnOverview ? 'page' : undefined}
           >
-            Overview
+            Library
           </button>
           <button
             type="button"
