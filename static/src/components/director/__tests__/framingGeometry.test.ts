@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { DirectorFramingPreview, DirectorFramingRequest } from '../../../api/directorTypes';
-import { DEFAULT_STAGE, angleAt, deprojectFrom, framingBackdrop, framingGeometry, framingGraticule, gridSteps, handleSky, compassDirections, deprojectOn, offsetFrom, preferredSurveyId, projectOn, stageDeproject, stageFor, stageProject, tileMatrix, toStage, trueWidth, viewAt } from '../framingModel';
+import { DEFAULT_STAGE, angleAt, deprojectFrom, framingBackdrop, framingGeometry, framingGraticule, gridSteps, handleSky, compassDirections, deprojectOn, offsetFrom, preferredSurveyId, projectOn, stageDeproject, tileFor, tileSize, viewLeftTile, stageFor, stageProject, tileMatrix, toStage, trueWidth, viewAt } from '../framingModel';
 
 /** Written by `crates/director-core/tests/framing_fixture.rs`; the core keeps
  *  reproducing it, so this test pins the browser port to the server. */
@@ -195,5 +195,24 @@ describe('the preferred survey', () => {
     expect(preferredSurveyId('nina:gone', surveys, 'dss2_color')).toBe('nina:dss');
     expect(preferredSurveyId('dss2_color', undefined, 'dss2_color')).toBe('dss2_color');
     expect(preferredSurveyId('nina:gone', surveys.slice(0, 2), 'dss2_color')).toBe('dss2_color');
+  });
+});
+
+describe('viewport-driven tiles', () => {
+  it('sizes a tile to the stage\'s device pixels with a margin, within the server\'s limit', () => {
+    expect(tileSize({ width: 1024, height: 768 }, 1066)).toEqual({ width: 1386, height: 1040 });
+    expect(tileSize({ width: 1024, height: 768 }, 2132)).toEqual({ width: 2048, height: 1536 });
+    expect(tileSize({ width: 512, height: 1024 }, 800)).toEqual({ width: 1024, height: 2048 });
+    expect(tileSize()).toEqual({ width: 2048, height: 1536 });
+  });
+  it('asks for a tile a little wider than the view and refreshes it after a modest zoom in', () => {
+    const at = { ra_degrees: 10, dec_degrees: 20 };
+    expect(tileFor(at, 6).fov).toBeCloseTo(7.8, 9);
+    expect(tileFor(at, 150).fov).toBe(180);
+    const tile = tileFor(at, 6);
+    expect(viewLeftTile(tile, at, 6)).toBe(false);
+    expect(viewLeftTile(tile, at, 4.5)).toBe(false);
+    expect(viewLeftTile(tile, at, 4)).toBe(true);
+    expect(viewLeftTile(tile, { ra_degrees: 11.5, dec_degrees: 20 }, 6)).toBe(true);
   });
 });

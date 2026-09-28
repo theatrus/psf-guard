@@ -173,11 +173,17 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   const skyRotation = rotateSky && state ? state.positionAngle : 0;
   const stageView: StageView | null = useMemo(() => state ? viewAt(state.viewCenter, state.viewCenter, skyRotation) : null, [state, skyRotation]);
   const [stageSize, setStageSize] = useState<Stage>(DEFAULT_STAGE);
+  // The stage's width in device pixels, so survey tiles are asked for at the
+  // density the screen shows; two pixels per logical unit until measured.
+  const [stagePixels, setStagePixels] = useState(DEFAULT_STAGE.width * 2);
   const hasState = state !== null;
   useEffect(() => {
     const element = stage.current;
     if (!element || typeof ResizeObserver === 'undefined') return;
-    const measure = () => { const { width, height } = element.getBoundingClientRect(); if (width > 0 && height > 0) setStageSize(stageFor(width / height)); };
+    const measure = () => {
+      const { width, height } = element.getBoundingClientRect();
+      if (width > 0 && height > 0) { setStageSize(stageFor(width / height)); setStagePixels(Math.round(width * Math.min(2, window.devicePixelRatio || 1))); }
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(element);
@@ -201,7 +207,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     const moved = stageProject(tile.center, rested.center);
     if (!moved || Math.hypot(moved[0], moved[1]) > settledView.fov * 0.01 || Math.abs(rested.fov - tile.fov) > tile.fov * 0.05) setTile(rested);
   }, [settledView?.center.ra_degrees, settledView?.center.dec_degrees, settledView?.fov]); // eslint-disable-line react-hooks/exhaustive-deps
-  const tilePixels = tileSize(stageSize);
+  const tilePixels = tileSize(stageSize, stagePixels);
   const tileRequest = (center: DirectorSkyPosition, fov: number, survey: string): DirectorCutoutRequest => ({
     survey, ra: Number(center.ra_degrees.toFixed(5)), dec: Number(center.dec_degrees.toFixed(5)),
     fov: Number(fov.toFixed(5)), width: tilePixels.width, height: tilePixels.height, rotation: 0,

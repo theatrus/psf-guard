@@ -177,7 +177,10 @@
   its small tiles warmed in the background so the first wide view renders
   at once, and once a framing view has its tile the browser fetches wider
   views of the same place out to a hemisphere, so zooming out already has a
-  picture.
+  picture. A view's own tile now follows the viewport: a little wider than
+  the view at the screen's own pixel density, so the picture is sharp across
+  the whole stage on a high-density display instead of only around the
+  centre.
 - The survey picture now follows the framing view at every zoom, out to a
   hemisphere, instead of giving way to a bare chart past 30°. Offline
   N.I.N.A. maps render a view in a fraction of a second rather than a second

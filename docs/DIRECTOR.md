@@ -684,7 +684,10 @@ tile into memory in the background, a few tens of megabytes, so the first
 wide view renders at once; and once a framing view has its own tile, the
 browser quietly fetches wider views of the same place out to a hemisphere,
 which the server keeps, so zooming out and the next visit have a picture
-already.
+already. A view's own tile is asked for a little wider than the view (three
+tenths more) at the stage's own pixel density, up to the server's 2048
+pixels a side, so the picture is sharp across the whole stage and not only
+where the last narrow tile happened to land.
 
 ## Sky survey cutouts
 
@@ -699,7 +702,7 @@ layers are marked as such and never stand in for one another.
 | --- | --- | --- |
 | GET | `/sky/surveys` | The allowed surveys: `id`, `name`, `hips`, `kind` (`broadband`, `narrowband`, `panorama`), `bandpass`, `attribution`. |
 | GET | `/sky/resolve` | `name`: an object name for CDS Sesame (Simbad, NED, VizieR). Returns the resolved `name`, ICRS `ra_degrees` and `dec_degrees` and the `source`; `404` when no catalog knows the name. A catalog position, not a pointing solution. |
-| GET | `/sky/cutout` | `survey` (an `id` from the list), `ra` and `dec` in ICRS degrees, `fov` (image width in degrees, 0.02 to 40), optional `width` and `height` in pixels (64 to 2048, default 1024) and `rotation` in degrees east of north. A cached image answers `200 image/jpeg`. A miss starts one fetch and answers `202` with `Retry-After: 1`; poll the same URL. A failed fetch answers `502` with the reason for about a minute. |
+| GET | `/sky/cutout` | `survey` (an `id` from the list), `ra` and `dec` in ICRS degrees, `fov` (image width in degrees, 0.02 to 180), optional `width` and `height` in pixels (64 to 2048, default 1024) and `rotation` in degrees east of north. A cached image answers `200 image/jpeg`. A miss starts one fetch and answers `202` with `Retry-After: 1`; poll the same URL. A failed fetch answers `502` with the reason for about a minute. |
 
 Cutouts are tangent-plane JPEGs cached under `<cache>/director/sky/` by
 survey, center, field, size and rotation, so a framing session that returns to
