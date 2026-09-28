@@ -311,7 +311,13 @@ the height of the screen, with the controls beside it; the plan and
 activation sit under it side by side, and the linked databases last.
 **Framing** shows the sky around the project's first target on a survey
 image, with the target's catalog coordinates and rotation already filled in,
-the way N.I.N.A.'s framing assistant does. Chips on the sky switch the layer:
+the way N.I.N.A.'s framing assistant does. **Find a target** looks a name up
+in the CDS catalogs (Messier, NGC, IC, Sharpless and common names) and moves
+the target and the view there without saving anything. The rectangle and the
+mosaic grid are drawn in the browser with the same tangent-plane geometry the
+server applies when it activates, so they follow the pointer at once; a
+fixture shared between the core's tests and the browser's keeps the two in
+step. Chips on the sky switch the layer:
 the DSS2 colour plates N.I.N.A. starts from, and the narrowband surveys
 (Finkbeiner H-alpha and the Northern Sky Narrowband Survey's H-alpha, O III,
 SHO and colour layers); the **Survey** list under View holds every layer. The rectangle is the field of the **panel rig**: the first rig

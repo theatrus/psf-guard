@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import { AccessContext, useAccess } from '../../auth/access';
 import FramingView from '../director/FramingView';
-import type { DirectorFramingDraft, DirectorFramingRequest, DirectorMosaicPreview } from '../../api/directorTypes';
+import type { DirectorFramingDraft, DirectorMosaicPreview } from '../../api/directorTypes';
 import type { SkyPreview } from '../../api/types';
 import { moveBy, offsetFrom, skyAtStage, stackMatrix, thumbnailFov, toStage } from '../director/framingModel';
 
@@ -25,7 +25,6 @@ const mosaic: DirectorMosaicPreview = { project: { id: 'project', name: 'Androme
 ] };
 
 function fixture(existing: DirectorFramingDraft | null = null) {
-  const previews: DirectorFramingRequest[] = [];
   const saves: DirectorFramingDraft[] = [];
   const cutouts: string[] = [];
   let draft = existing;
@@ -49,21 +48,14 @@ function fixture(existing: DirectorFramingDraft | null = null) {
       if (cutouts.length === 1) return HttpResponse.json(ok({ state: 'generating' }), { status: 202 });
       return HttpResponse.arrayBuffer(new Uint8Array([255, 216, 255]).buffer, { status: 200, headers: { 'content-type': 'image/jpeg' } });
     }),
-    http.post('/api/director/v1/framing/preview', async ({ request }) => {
-      const body = await request.json() as DirectorFramingRequest;
-      previews.push(body);
-      const half = [body.panel.width_degrees / 2, body.panel.height_degrees / 2];
-      const panels = [];
-      for (let r = 1; r <= body.mosaic.rows; r++) for (let c = 1; c <= body.mosaic.columns; c++) panels.push({
-        id: `r${r}c${c}`, row: r, column: c, center: body.center,
-        corners: [body.center, body.center, body.center, body.center],
-        view_corners: [[half[0], half[1]], [half[0], -half[1]], [-half[0], -half[1]], [-half[0], half[1]]],
-      });
-      return HttpResponse.json(ok({ schema_version: 1, panels, overlays: body.overlays.map(o => ({ id: o.id, center: body.center, corners: [], view_corners: [[1, 1], [1, -1], [-1, -1], [-1, 1]] })),
-        extent: { width_degrees: body.panel.width_degrees * body.mosaic.columns, height_degrees: body.panel.height_degrees * body.mosaic.rows }, view_center_offset: [0, 0] }));
+    http.get('/api/director/v1/sky/resolve', ({ request }) => {
+      const name = new URL(request.url).searchParams.get('name');
+      return name === 'NGC 7000'
+        ? HttpResponse.json(ok({ query: name, name: 'NGC 7000', ra_degrees: 314.75, dec_degrees: 44.37, source: 'Sesame' }))
+        : HttpResponse.json({ success: false, data: null, error: `No catalog knows "${name}"` }, { status: 404 });
     }),
   );
-  return { previews, saves, cutouts };
+  return { saves, cutouts };
 }
 function mount(canWrite = true, withSeed = true, preferredRigIds: string[] = []) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -85,18 +77,18 @@ describe('Framing view', () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it('seeds from the catalog target, frames with a rig, polls the survey, and saves a first draft', async () => {
-    const { previews, saves, cutouts } = fixture(); mount();
+    const { saves, cutouts } = fixture(); mount();
     expect(await screen.findByLabelText('Target name')).toHaveValue('M31');
     expect(screen.getByLabelText('Position angle degrees')).toHaveValue(35);
     // The first rig with optics frames on its own once rigs load; choosing it
-    // by hand before or after that leaves one preview either way.
+    // by hand before or after that draws the same one rectangle, at once.
     fireEvent.change(screen.getByLabelText('Panel rig'), { target: { value: rigA.rig.id } });
-    await waitFor(() => expect(previews).toHaveLength(1));
-    expect(previews[0].panel).toEqual({ width_degrees: 5.38, height_degrees: 3.6 });
-    expect(previews[0].position_angle_degrees).toBe(35);
-    expect(previews[0].view).toEqual({ center: seed.center, rotation_degrees: 0 });
-    await waitFor(() => expect(screen.getByTestId('framing-extent')).toHaveTextContent('1 panel, 5.38° × 3.60° in all.'), { timeout: 4000 });
+    expect(screen.getByTestId('framing-extent')).toHaveTextContent('1 panel, 5.38° × 3.60° in all.');
     expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1);
+    // The rectangle is the rig's field, turned 35°: its corners are not axis-aligned.
+    const points = document.querySelector('.framing-panel polygon')!.getAttribute('points')!.split(' ').map(pair => pair.split(',').map(Number));
+    expect(points).toHaveLength(4);
+    expect(new Set(points.map(([x]) => x.toFixed(0))).size).toBe(4);
     // The 202 was polled once and the image then took the stage. The poll
     // waits a second by design, so give a loaded test runner room.
     await waitFor(() => expect(cutouts.length).toBeGreaterThanOrEqual(2), { timeout: 8000 });
@@ -106,10 +98,10 @@ describe('Framing view', () => {
 
     fireEvent.change(screen.getByLabelText('Mosaic rows'), { target: { value: '2' } });
     fireEvent.change(screen.getByLabelText('Panel overlap percent'), { target: { value: '15' } });
-    await waitFor(() => expect(screen.getByTestId('framing-extent')).toHaveTextContent('2 panels'));
+    expect(screen.getByTestId('framing-extent')).toHaveTextContent('2 panels, 5.38° × 6.66° in all.');
     expect(document.querySelectorAll('.framing-panel text')).toHaveLength(2);
     fireEvent.click(screen.getByRole('checkbox', { name: /RedCat 61/ }));
-    await waitFor(() => expect(previews.at(-1)?.overlays).toEqual([{ id: rigA.rig.id, size: { width_degrees: 5.38, height_degrees: 3.6 }, position_angle_degrees: 35 }]));
+    expect(document.querySelectorAll('.framing-overlay')).toHaveLength(1);
     expect(screen.getByRole('checkbox', { name: /C925 data/ })).toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
@@ -151,10 +143,9 @@ describe('Framing view', () => {
   });
 
   it('frames with the first rig that holds the project, moves the target by dragging the rectangle, and turns it by its handle', async () => {
-    const { previews, saves } = fixture(); mount(true, true, [rigB.rig.id, rigA.rig.id]);
+    const { saves } = fixture(); mount(true, true, [rigB.rig.id, rigA.rig.id]);
     // rigB has no optics, so rigA frames by default; no click needed.
     await waitFor(() => expect(screen.getByLabelText('Panel rig')).toHaveValue(rigA.rig.id));
-    await waitFor(() => expect(previews).toHaveLength(1));
     expect(screen.getByTestId('framing-readout')).toHaveTextContent('M31');
     expect(screen.getByTestId('framing-readout')).toHaveTextContent('angle 35.0°');
     const stage = screen.getByTestId('framing-stage');
@@ -193,7 +184,7 @@ describe('Framing view', () => {
   });
 
   it('starts an unseeded project from a resolved name or typed coordinates', async () => {
-    const { previews } = fixture();
+    fixture();
     server.use(http.get('/api/director/v1/sky/resolve', ({ request }) => {
       const name = new URL(request.url).searchParams.get('name');
       return name === 'IC 1805'
@@ -209,8 +200,8 @@ describe('Framing view', () => {
     expect(await screen.findByLabelText('Target name')).toHaveValue('IC 1805');
     expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(38.2);
     fireEvent.change(screen.getByLabelText('Panel rig'), { target: { value: rigA.rig.id } });
-    await waitFor(() => expect(previews).toHaveLength(1));
-    expect(previews[0].center).toEqual({ ra_degrees: 38.2, dec_degrees: 61.45 });
+    await waitFor(() => expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(38.2));
+    expect(screen.getByLabelText('Declination degrees')).toHaveValue(61.45);
   });
 
   it('starts from typed coordinates when no catalog knows the name', async () => {
@@ -242,6 +233,23 @@ describe('Framing view', () => {
     expect(e + a * 100).toBeCloseTo(512, 0); expect(f + d * 50).toBeCloseTo(384, 0);
     fireEvent.click(screen.getByLabelText('Show finished stacks on the sky'));
     expect(screen.queryByTestId('framing-stack')).not.toBeInTheDocument();
+  });
+
+  it('finds a target by name and moves the framing and the view there', async () => {
+    const { saves } = fixture(); mount();
+    await screen.findByLabelText('Target name');
+    fireEvent.change(screen.getByLabelText('Find a target'), { target: { value: 'Nowhere Nebula' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }));
+    expect(await screen.findByText(/No catalog knows/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Target name')).toHaveValue('M31');
+    fireEvent.change(screen.getByLabelText('Find a target'), { target: { value: 'NGC 7000' } });
+    fireEvent.keyDown(screen.getByLabelText('Find a target'), { key: 'Enter' });
+    expect(await screen.findByText('Moved the target to NGC 7000.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Target name')).toHaveValue('NGC 7000');
+    expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(314.75);
+    expect(screen.getByText(/The view center is/)).toHaveTextContent('20h 59m 00.0s');
+    // Enter in the search box looked the name up; it did not save the draft.
+    expect(saves).toHaveLength(0);
   });
 
   it('switches the survey from the chips on the sky and remembers it in the draft', async () => {

@@ -34,10 +34,8 @@ function mount(canWrite = true, route = '/director?db=old-catalog&project=123', 
     http.get('/api/databases', () => HttpResponse.json(ok([{ id: 'c925', name: 'C925' }]))),
     http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([]))),
     http.get('/api/director/v1/rigs/status', () => HttpResponse.json(ok([]))),
-    // Plan thumbnails: a survey image and the panel geometry to draw on it.
+    // Plan thumbnails: a survey image; the panels are drawn from the framing itself.
     http.get('/api/director/v1/sky/cutout', () => HttpResponse.arrayBuffer(new Uint8Array([255, 216, 255]).buffer, { status: 200, headers: { 'content-type': 'image/jpeg' } })),
-    http.post('/api/director/v1/framing/preview', () => HttpResponse.json(ok({ schema_version: 1, overlays: [], extent: { width_degrees: 2, height_degrees: 1.5 }, view_center_offset: [0, 0],
-      panels: [{ id: 'r1c1', row: 1, column: 1, center: { ra_degrees: 10, dec_degrees: 41 }, corners: [], view_corners: [[1, 0.75], [1, -0.75], [-1, -0.75], [-1, 0.75]] }] }))),
   );
   render(<DirectorPage />, { wrapper: Wrapper });
 }
@@ -122,7 +120,7 @@ describe('Director management', () => {
     // A framed plan shows its survey thumbnail with the panels drawn on it.
     const thumb = screen.getByRole('img', { name: 'Framing of M31 on dss2 color' });
     await waitFor(() => expect(thumb.querySelector('img')).toBeInTheDocument());
-    await waitFor(() => expect(thumb.querySelectorAll('.plan-thumb-panel')).toHaveLength(1));
+    expect(thumb.querySelectorAll('.plan-thumb-panel')).toHaveLength(4);
     expect(screen.queryByRole('img', { name: /Framing of Bare/ })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open M31' })).toHaveAttribute('href', `/director?db=old-catalog&project=123&directorProject=${record.id}`);
     expect(screen.getByText('Not linked to any database')).toBeInTheDocument();
