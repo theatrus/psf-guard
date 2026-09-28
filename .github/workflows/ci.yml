@@ -1,19 +1,22 @@
 name: CI
 
 on:
+  # Release branches (`release/v0.10`) ship point releases, so they get the
+  # same checks as main without a hand-started run.
   push:
-    branches: [ main, master ]
+    branches: [ main, master, 'release/**' ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, master, 'release/**' ]
   # The macOS signing steps below are skipped for pull_request, so a PR cannot
   # exercise them and the only other trigger is a push to main. That makes a
   # release the first place a bad signing certificate shows up. A dispatch
   # reaches them without publishing anything.
   workflow_dispatch:
 
-# Supersede a PR's earlier run when it is pushed again. Pushes to main keep
-# running to completion — each one is a distinct commit whose result we want,
-# and main's runs are what populate the shared cargo cache.
+# Supersede a PR's earlier run when it is pushed again. Pushes to main and
+# release branches keep running to completion — each one is a distinct commit
+# whose result we want, and main's runs are what populate the shared cargo
+# cache.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
