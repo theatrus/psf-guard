@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { DirectorFramingPreview, DirectorFramingRequest } from '../../../api/directorTypes';
-import { DEFAULT_STAGE, angleAt, deprojectFrom, framingBackdrop, framingGeometry, framingGraticule, gridSteps, handleSky, compassDirections, deprojectOn, offsetFrom, projectOn, stageDeproject, stageFor, stageProject, tileMatrix, toStage, trueWidth, viewAt } from '../framingModel';
+import { DEFAULT_STAGE, angleAt, deprojectFrom, framingBackdrop, framingGeometry, framingGraticule, gridSteps, handleSky, compassDirections, deprojectOn, offsetFrom, preferredSurveyId, projectOn, stageDeproject, stageFor, stageProject, tileMatrix, toStage, trueWidth, viewAt } from '../framingModel';
 
 /** Written by `crates/director-core/tests/framing_fixture.rs`; the core keeps
  *  reproducing it, so this test pins the browser port to the server. */
@@ -180,5 +180,20 @@ describe('a turned sky', () => {
     const quarter = compassDirections(90);
     expect(quarter.north[0]).toBeCloseTo(1, 9); expect(quarter.north[1]).toBeCloseTo(0, 9);
     expect(quarter.east[0]).toBeCloseTo(0, 9); expect(quarter.east[1]).toBeCloseTo(-1, 9);
+  });
+});
+
+describe('the preferred survey', () => {
+  const surveys = [
+    { id: 'dss2_color', name: 'DSS2 color', hips: 'x', kind: 'broadband' as const, bandpass: '', attribution: '' },
+    { id: 'nsns_ohs', name: 'NSNS SHO', hips: 'x', kind: 'narrowband' as const, bandpass: '', attribution: '' },
+    { id: 'nina:dss', name: 'DSS (offline)', hips: '', kind: 'broadband' as const, bandpass: '', attribution: '', offline: true, stands_in_for: 'dss2_color' },
+  ];
+  it('takes the offline map that stands in for a survey, keeps a listed survey, and falls back for one gone missing', () => {
+    expect(preferredSurveyId('dss2_color', surveys, 'dss2_color')).toBe('nina:dss');
+    expect(preferredSurveyId('nsns_ohs', surveys, 'dss2_color')).toBe('nsns_ohs');
+    expect(preferredSurveyId('nina:gone', surveys, 'dss2_color')).toBe('nina:dss');
+    expect(preferredSurveyId('dss2_color', undefined, 'dss2_color')).toBe('dss2_color');
+    expect(preferredSurveyId('nina:gone', surveys.slice(0, 2), 'dss2_color')).toBe('dss2_color');
   });
 });

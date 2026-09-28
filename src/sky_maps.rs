@@ -58,6 +58,10 @@ pub struct SkyMap {
     pub kind: Kind,
     pub bandpass: String,
     pub attribution: String,
+    /// The online survey this map is a local copy of, when it is one:
+    /// `dss2_color` for N.I.N.A.'s DSS set, `nsns_ohs` for its Northern Sky
+    /// Narrowband Survey SHO set. The framing view then prefers this map.
+    pub stands_in_for: Option<String>,
     pub dir: PathBuf,
     pub tiles: Vec<Tile>,
     /// Unit vectors per tile: center, east, north.
@@ -232,6 +236,7 @@ impl SkyMap {
             .to_owned();
         let source = tiles[0].source.clone();
         let (name, kind, bandpass) = describe(&folder, &source);
+        let stands_in_for = stand_in(&folder, &source);
         let attribution = std::fs::read_to_string(dir.join("licence.txt"))
             .ok()
             .and_then(|text| {
@@ -251,6 +256,7 @@ impl SkyMap {
             kind,
             bandpass,
             attribution,
+            stands_in_for,
             dir: dir.to_path_buf(),
             tiles,
             frames,
@@ -516,6 +522,38 @@ impl SkyMap {
     pub fn tile_count(&self) -> usize {
         self.tiles.len()
     }
+
+    /// Decode the smallest version of every tile into memory, so the first
+    /// wide view renders at once instead of reading two thousand files. The
+    /// small versions of a whole set take a few tens of megabytes; framing
+    /// widths read their full tiles on demand as before.
+    pub fn warm(&self) {
+        for tile in &self.tiles {
+            let stem = tile.file_name.trim_end_matches(".jpg");
+            let path = self.dir.join(format!("{stem}_{}px.jpg", VARIANTS[0]));
+            let Some(current) = stamp(&path) else {
+                continue;
+            };
+            if self
+                .cache
+                .lock()
+                .ok()
+                .and_then(|cache| cache.get(&path, &current))
+                .is_some()
+            {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            let Ok(img) = image::load_from_memory(&bytes) else {
+                continue;
+            };
+            if let Ok(mut cache) = self.cache.lock() {
+                cache.insert(path, current, Arc::new(img.to_rgb8()));
+            }
+        }
+    }
 }
 
 fn sample(img: &RgbImage, px: f64, py: f64) -> [u8; 3] {
@@ -547,6 +585,17 @@ fn sample(img: &RgbImage, px: f64, py: f64) -> [u8; 3] {
 
 /// A readable name, band kind and bandpass for a map, from the folder N.I.N.A.
 /// ships and the tiles' `Source`.
+/// The online layer a map replaces. The starless narrowband set is a layer
+/// of its own, since the online survey has stars.
+fn stand_in(folder: &str, source: &str) -> Option<String> {
+    let (name, _, _) = describe(folder, source);
+    match name.as_str() {
+        "DSS (offline)" => Some("dss2_color".to_owned()),
+        "NSNS SHO (offline)" => Some("nsns_ohs".to_owned()),
+        _ => None,
+    }
+}
+
 fn describe(folder: &str, source: &str) -> (String, Kind, String) {
     let lower = folder.to_ascii_lowercase();
     let narrowband =
@@ -652,6 +701,58 @@ mod tests {
         solid(dir, "east_150px", [0, 0, 255], 150);
         solid(dir, "west", [255, 0, 0], 64);
         SkyMap::open(dir).unwrap()
+    }
+
+    #[test]
+    fn offline_sets_name_the_online_survey_they_stand_in_for() {
+        assert_eq!(
+            super::stand_in("FramingAssistantCache", "Hips2FitsSurvey").as_deref(),
+            Some("dss2_color")
+        );
+        assert_eq!(
+            super::stand_in(
+                "FramingAssistantCache_NorthernSkyNarrowbandSurvey_OHS_withStars",
+                "NSNBS"
+            )
+            .as_deref(),
+            Some("nsns_ohs")
+        );
+        // The starless set is a layer of its own: the online survey has stars.
+        assert_eq!(
+            super::stand_in(
+                "FramingAssistantCache_NorthernSkyNarrowbandSurvey_OHS_starless",
+                "NSNBS"
+            ),
+            None
+        );
+        assert_eq!(super::stand_in("SomethingElse", "Custom"), None);
+    }
+
+    #[test]
+    fn warming_fills_the_cache_with_small_tiles_and_a_render_then_reads_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let map = map(dir.path());
+        // The fixture has full tiles only; a real set has small versions.
+        let mut small = RgbImage::new(16, 16);
+        for p in small.pixels_mut() {
+            p.0 = [200, 30, 30];
+        }
+        small.save(dir.path().join("west_75px.jpg")).unwrap();
+        map.warm();
+        let cached = map.cache.lock().unwrap().images.len();
+        assert_eq!(
+            cached, 1,
+            "the one small tile is decoded, the missing one skipped"
+        );
+        let view = View {
+            ra_degrees: 8.0,
+            dec_degrees: 0.0,
+            fov_degrees: 30.0,
+            width_px: 96,
+            height_px: 48,
+            rotation_degrees: 0.0,
+        };
+        assert!(!map.render(&view).unwrap().is_empty());
     }
 
     #[test]

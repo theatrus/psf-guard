@@ -4,10 +4,10 @@ import { isAxiosError } from 'axios';
 import { Check, Crosshair, LocateFixed, RefreshCw, Search, Undo2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
-import type { DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigProfileSummary } from '../../api/directorTypes';
+import type { DirectorCutoutRequest, DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigProfileSummary, DirectorSkyPosition } from '../../api/directorTypes';
 import {
-  DEFAULT_STAGE, MAX_VIEW_FOV, MIN_VIEW_FOV, angleAt, clampFov, deprojectOn, draftFromState, formatDec, formatDegrees, formatRaHours, framingBackdrop, framingGraticule, fromStage, handleSky,
-  compassDirections, insidePolygon, panelForRig, pixelScale, polygonPoints, previewRequest, projectOn, stackMatrix, stageCorners, stageFor, stageProject, stateFromDraft, stateFromSeed, tileMatrix, tileSize, toStage, trueWidth, viewAt, type FramingSeed, type FramingState, type Stage, type StageView, chipSurveys, framingGeometry, tileFor, viewLeftTile, type SkyTile, defaultSurveyId,
+  DEFAULT_STAGE, MAX_VIEW_FOV, MIN_VIEW_FOV, TILE_MAX_FOV, angleAt, clampFov, deprojectOn, draftFromState, formatDec, formatDegrees, formatRaHours, framingBackdrop, framingGraticule, fromStage, handleSky,
+  compassDirections, insidePolygon, panelForRig, pixelScale, polygonPoints, preferredSurveyId, previewRequest, projectOn, stackMatrix, stageCorners, stageFor, stageProject, stateFromDraft, stateFromSeed, tileMatrix, tileSize, toStage, trueWidth, viewAt, type FramingSeed, type FramingState, type Stage, type StageView, chipSurveys, framingGeometry, tileFor, viewLeftTile, type SkyTile, defaultSurveyId,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
 import SkyCanvas, { type SkyTileImage } from './SkyCanvas';
@@ -111,14 +111,19 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     if (draft.data.draft) setState(stateFromDraft(draft.data.draft));
     else if (seed ?? started) setState(stateFromSeed((seed ?? started)!, DEFAULT_SURVEY));
   }, [draft.data, seed, started]);
-  // A fresh framing starts on the offline DSS map when the server has one.
-  // The list may land after the seed did; only an untouched choice moves.
+  // A fresh framing starts on the offline DSS map when the server has one,
+  // and a saved survey gives way to the offline map that stands in for it.
+  // The list may land after the draft did; a layer picked by hand stays.
   const surveyChosen = useRef(false);
   useEffect(() => {
-    const preferred = defaultSurveyId(surveys.data, DEFAULT_SURVEY);
-    if (preferred === DEFAULT_SURVEY || surveyChosen.current || draft.data?.draft) return;
-    setState(current => current && current.surveyId === DEFAULT_SURVEY ? { ...current, surveyId: preferred } : current);
-  }, [surveys.data, draft.data]);
+    if (!surveys.data || surveyChosen.current) return;
+    setState(current => {
+      if (!current) return current;
+      const wanted = current.surveyId === DEFAULT_SURVEY && !draft.data?.draft ? defaultSurveyId(surveys.data, DEFAULT_SURVEY) : current.surveyId;
+      const preferred = preferredSurveyId(wanted, surveys.data, DEFAULT_SURVEY);
+      return preferred === current.surveyId ? current : { ...current, surveyId: preferred };
+    });
+  }, [surveys.data, draft.data, state?.surveyId]);
   const rigList = useMemo(() => rigs.data ?? [], [rigs.data]);
   // Like the framing assistant, start with a rectangle: the first rig that
   // holds this project and knows its optics, else any rig that does.
@@ -197,10 +202,21 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     if (!moved || Math.hypot(moved[0], moved[1]) > settledView.fov * 0.01 || Math.abs(rested.fov - tile.fov) > tile.fov * 0.05) setTile(rested);
   }, [settledView?.center.ra_degrees, settledView?.center.dec_degrees, settledView?.fov]); // eslint-disable-line react-hooks/exhaustive-deps
   const tilePixels = tileSize(stageSize);
-  const cutout = useSurveyCutout(state && tile && viewNow ? {
-    survey: state.surveyId, ra: Number(tile.center.ra_degrees.toFixed(5)), dec: Number(tile.center.dec_degrees.toFixed(5)),
-    fov: Number(tile.fov.toFixed(5)), width: tilePixels.width, height: tilePixels.height, rotation: 0,
-  } : null, 150);
+  const tileRequest = (center: DirectorSkyPosition, fov: number, survey: string): DirectorCutoutRequest => ({
+    survey, ra: Number(center.ra_degrees.toFixed(5)), dec: Number(center.dec_degrees.toFixed(5)),
+    fov: Number(fov.toFixed(5)), width: tilePixels.width, height: tilePixels.height, rotation: 0,
+  });
+  // Once the settled view's tile is up, wider views of the same place are
+  // fetched quietly, out to a hemisphere, so a zoom out already has a
+  // picture; the server keeps them, so the next visit has them at once.
+  const prefetch = useMemo(() => {
+    if (!state || !settledView) return [];
+    const steps: number[] = [];
+    for (let fov = tileFor(settledView.center, settledView.fov).fov * 4; fov < TILE_MAX_FOV; fov *= 4) steps.push(fov);
+    steps.push(TILE_MAX_FOV);
+    return steps.map(fov => tileRequest(settledView.center, fov, state.surveyId));
+  }, [state?.surveyId, settledView?.center.ra_degrees, settledView?.center.dec_degrees, settledView?.fov, tilePixels.width, tilePixels.height]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cutout = useSurveyCutout(state && tile && viewNow ? tileRequest(tile.center, tile.fov, state.surveyId) : null, 150, prefetch);
   // The picture is re-projected on the GPU for every frame from the tiles
   // fetched so far. Without WebGL the newest tile is laid in through one
   // fitted matrix instead, which is right at the center and drifts toward

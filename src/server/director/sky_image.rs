@@ -199,6 +199,10 @@ pub struct SurveyInfo {
     pub attribution: String,
     /// Rendered from tiles on this server; no network is used.
     pub offline: bool,
+    /// For an offline map, the online survey it is a local copy of, so the
+    /// framing view can prefer it; `None` otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stands_in_for: Option<String>,
 }
 
 impl From<&Survey> for SurveyInfo {
@@ -211,6 +215,7 @@ impl From<&Survey> for SurveyInfo {
             bandpass: survey.bandpass.to_owned(),
             attribution: survey.attribution.to_owned(),
             offline: false,
+            stands_in_for: None,
         }
     }
 }
@@ -228,6 +233,7 @@ impl From<&crate::sky_maps::SkyMap> for SurveyInfo {
             bandpass: map.bandpass.clone(),
             attribution: map.attribution.clone(),
             offline: true,
+            stands_in_for: map.stands_in_for.clone(),
         }
     }
 }
@@ -359,6 +365,8 @@ pub struct SkyImageService {
     /// Folders of N.I.N.A. offline sky maps, one per layer.
     sky_maps_root: PathBuf,
     maps: Mutex<Option<(Instant, MapList)>>,
+    /// Offline maps whose small tiles have been warmed since start.
+    warmed: Mutex<std::collections::HashSet<String>>,
     jobs: Mutex<HashMap<String, Job>>,
     admission: Arc<Semaphore>,
 }
@@ -393,6 +401,7 @@ impl SkyImageService {
             sky_maps_root: crate::sky_maps::root_for(cache_root),
             maps: Mutex::new(None),
             jobs: Mutex::new(HashMap::new()),
+            warmed: Mutex::new(std::collections::HashSet::new()),
             admission: Arc::new(Semaphore::new(CONCURRENT_FETCHES)),
         }
     }
@@ -421,6 +430,17 @@ impl SkyImageService {
                 .collect::<Vec<_>>(),
         );
         *guard = Some((Instant::now(), maps.clone()));
+        // Warm each new set's small tiles off the request path, so the first
+        // wide view renders at once. A set already warmed is left alone.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let mut warmed = self.warmed.lock().expect("warmed sky maps");
+            for map in maps.iter() {
+                if warmed.insert(map.id.clone()) {
+                    let map = map.clone();
+                    handle.spawn_blocking(move || map.warm());
+                }
+            }
+        }
         maps
     }
 
