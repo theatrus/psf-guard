@@ -8,7 +8,7 @@ import { AccessContext, useAccess } from '../../auth/access';
 import FramingView from '../director/FramingView';
 import type { DirectorFramingDraft, DirectorMosaicPreview } from '../../api/directorTypes';
 import type { SkyPreview } from '../../api/types';
-import { moveBy, offsetFrom, skyAtStage, stackMatrix, thumbnailFov, toStage } from '../director/framingModel';
+import { moveBy, offsetFrom, skyAtStage, stackMatrix, thumbnailFov, toStage, viewAt } from '../director/framingModel';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
 const rigA = { rig: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'RedCat', revision: 1 }, catalog_slug: 'redcat', catalog_name: 'RedCat 61',
@@ -92,7 +92,7 @@ describe('Framing view', () => {
     // The 202 was polled once and the image then took the stage. The poll
     // waits a second by design, so give a loaded test runner room.
     await waitFor(() => expect(cutouts.length).toBeGreaterThanOrEqual(2), { timeout: 8000 });
-    await waitFor(() => expect(document.querySelector('.framing-stage img')).toHaveAttribute('src', 'blob:stage'), { timeout: 4000 });
+    await waitFor(() => expect(document.querySelector('.framing-stage [data-testid="framing-sky"]')).toHaveAttribute('href', 'blob:stage'), { timeout: 4000 });
     // The sky is fetched as a tile twice the view, at the stage's pixel scale.
     const first = cutouts.find(query => query.includes('survey=dss2_color'))!;
     expect(first).toContain('width=2048');
@@ -136,14 +136,18 @@ describe('Framing view', () => {
     stage.setPointerCapture = vi.fn();
     Object.defineProperty(stage, 'clientWidth', { value: 1024, configurable: true });
     // While the pointer moves, the loaded tile slides under the view at once:
-    // no new request, just a transform on the image already on screen.
+    // no new request, just a new matrix on the image already on screen.
     await waitFor(() => expect(screen.getByTestId('framing-sky')).toBeInTheDocument());
     const before = cutouts.length;
+    const resting = screen.getByTestId('framing-sky').getAttribute('transform')!;
+    expect(resting).toMatch(/^matrix\(/);
     fireEvent.pointerDown(stage, { button: 0, clientX: 500, clientY: 400, pointerId: 1 });
     fireEvent.pointerMove(stage, { clientX: 400, clientY: 400, pointerId: 1 });
-    const transform = (screen.getByTestId('framing-sky') as HTMLElement).style.transform;
-    expect(transform).toMatch(/^translate\(-?\d/);
-    expect(transform).toContain('scale(2.000000)');
+    const moved = screen.getByTestId('framing-sky').getAttribute('transform')!;
+    expect(moved).toMatch(/^matrix\(/);
+    expect(moved).not.toBe(resting);
+    // The tile spans twice the view: one tile pixel per stage pixel.
+    expect(Number(moved.slice(7, -1).split(' ')[0])).toBeCloseTo(1, 2);
     expect(cutouts.length).toBe(before);
     fireEvent.pointerUp(stage, { pointerId: 1 });
     expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(38.2);
@@ -181,12 +185,11 @@ describe('Framing view', () => {
     fireEvent.pointerDown(stage, pointer(hx, hy));
     fireEvent.pointerMove(stage, { pointerId: 1, clientX: 300, clientY: 384 });
     fireEvent.pointerUp(stage, { pointerId: 1 });
-    // The angle is read on the target's own plane. The target sits east of the
-    // view center now, and at 41° north the stage's horizontal is a shade off
-    // the target's east, so "due east on the stage" reads a little past 90°.
+    // Once the drag ends the plane is re-anchored on the moved target and the
+    // window moved so the rectangle stays put, so the target's row on the
+    // stage is its own east-west line: due east on the stage reads 90°.
     const turned = () => Number((screen.getByLabelText('Position angle degrees') as HTMLInputElement).value);
-    await waitFor(() => expect(turned()).toBeGreaterThan(90));
-    expect(turned()).toBeLessThan(91.5);
+    await waitFor(() => expect(turned()).toBeCloseTo(90, 1));
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
     await waitFor(() => expect(saves).toHaveLength(1));
     expect(saves[0].panel_rig_id).toBe(rigA.rig.id);
@@ -364,7 +367,7 @@ describe('Framing view', () => {
     const east = offsetFrom(view, { ra_degrees: 12, dec_degrees: 60 })!;
     expect(east[0]).toBeCloseTo(1, 2); expect(Math.abs(east[1])).toBeLessThan(0.02);
     expect(offsetFrom(view, { ra_degrees: 190, dec_degrees: -60 })).toBeNull();
-    expect(stackMatrix({ ...solvedStack, wcs: null }, view, 2)).toBeNull();
+    expect(stackMatrix({ ...solvedStack, wcs: null }, viewAt(view, view), 2)).toBeNull();
   });
 
   it('maps offsets to the stage with north up and east left', () => {
@@ -373,7 +376,7 @@ describe('Framing view', () => {
     expect(x).toBeLessThan(512);
     expect(y).toBeLessThan(384);
     // The stage is stereographic: a degree on the plane is a hair under a degree of sky.
-    const east = skyAtStage({ ra_degrees: 10, dec_degrees: 0 }, 4, 256, 384);
+    const east = skyAtStage(viewAt({ ra_degrees: 10, dec_degrees: 0 }, { ra_degrees: 10, dec_degrees: 0 }), 4, 256, 384);
     expect(east.ra_degrees).toBeCloseTo(11, 3);
     expect(moveBy({ ra_degrees: 359.5, dec_degrees: 89.9 }, 1, 1).dec_degrees).toBe(90);
   });

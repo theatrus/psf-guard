@@ -8,8 +8,8 @@
 @media (max-width: 1000px) { .framing-stage { height: clamp(300px, 60vh, 900px); } }
 .framing-stage:active { cursor: grabbing; }
 .framing-stage img, .framing-stage svg, .framing-stage-empty { position: absolute; inset: 0; width: 100%; height: 100%; }
-.framing-stage img { object-fit: fill; transition: opacity 150ms; transform-origin: center center; will-change: transform; }
-.framing-stage.is-stale img { opacity: 0.85; }
+.framing-stage .framing-sky { transition: opacity 150ms; }
+.framing-stage.is-stale .framing-sky { opacity: 0.85; }
 .framing-stage svg { pointer-events: none; }
 .framing-panel polygon { fill: rgba(80, 180, 255, 0.12); stroke: #5ab4ff; stroke-width: 2.5; vector-effect: non-scaling-stroke; }
 .framing-panel text { fill: #d8ecff; font-size: 22px; paint-order: stroke; stroke: rgba(0, 0, 0, 0.7); stroke-width: 4px; }

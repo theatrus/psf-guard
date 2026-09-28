@@ -4,10 +4,10 @@ import { isAxiosError } from 'axios';
 import { Check, Crosshair, LocateFixed, RefreshCw, Search, Undo2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
-import type { DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigProfileSummary } from '../../api/directorTypes';
+import type { DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigProfileSummary, DirectorSkyPosition } from '../../api/directorTypes';
 import {
-  DEFAULT_STAGE, MAX_VIEW_FOV, MIN_VIEW_FOV, SURVEY_MAX_FOV, angleAt, clampFov, draftFromState, formatDec, formatDegrees, formatRaHours, framingBackdrop, framingGraticule, fromStage, handleSky,
-  insidePolygon, panelForRig, pixelScale, polygonPoints, previewRequest, stackMatrix, stageCorners, stageDeproject, stageFor, stageProject, stateFromDraft, stateFromSeed, tileSize, toStage, trueWidth, type FramingSeed, type FramingState, type Stage, chipSurveys, framingGeometry, tileFor, tileTransform, viewLeftTile, type SkyTile, defaultSurveyId,
+  DEFAULT_STAGE, MAX_VIEW_FOV, MIN_VIEW_FOV, SURVEY_MAX_FOV, angleAt, clampFov, deprojectOn, draftFromState, formatDec, formatDegrees, formatRaHours, framingBackdrop, framingGraticule, fromStage, handleSky,
+  insidePolygon, panelForRig, pixelScale, polygonPoints, previewRequest, projectOn, reanchoredViewCenter, stackMatrix, stageCorners, stageFor, stageProject, stateFromDraft, stateFromSeed, tileMatrix, tileSize, toStage, trueWidth, viewAt, type FramingSeed, type FramingState, type Stage, type StageView, chipSurveys, framingGeometry, tileFor, viewLeftTile, type SkyTile, defaultSurveyId,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
 import { useDebounced, useSurveyCutout } from './useSurveyCutout';
@@ -144,6 +144,20 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   // The stage takes the shape of its element, so the sky fills whatever
   // width and height the window gives it.
   const stage = useRef<HTMLDivElement>(null);
+  // The plane the stage draws on is anchored at the target, so panning slides
+  // the window and turns nothing. The anchor follows the target once a move
+  // has finished: mid-drag the plane holds still under the hand.
+  const drag = useRef<{ kind: 'pan' | 'target' | 'rotate'; x: number; y: number; center: FramingState['viewCenter']; grab: [number, number] } | null>(null);
+  const [anchor, setAnchor] = useState<DirectorSkyPosition | null>(null);
+  const stateRef = useRef<FramingState | null>(null);
+  stateRef.current = state;
+  const centerRa = state?.center.ra_degrees;
+  const centerDec = state?.center.dec_degrees;
+  useEffect(() => {
+    if (centerRa === undefined || centerDec === undefined || drag.current?.kind === 'target') return;
+    setAnchor({ ra_degrees: centerRa, dec_degrees: centerDec });
+  }, [centerRa, centerDec]);
+  const stageView: StageView | null = useMemo(() => state ? viewAt(anchor ?? state.center, state.viewCenter) : null, [state, anchor]);
   const [stageSize, setStageSize] = useState<Stage>(DEFAULT_STAGE);
   const hasState = state !== null;
   useEffect(() => {
@@ -179,22 +193,22 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     fov: Number(tile.fov.toFixed(5)), width: tilePixels.width, height: tilePixels.height, rotation: 0,
   } : null, 150);
   const showSurvey = !!state && state.viewFov <= SURVEY_MAX_FOV;
-  const skyTransform = cutout.image && state && showSurvey
-    ? tileTransform({ center: { ra_degrees: cutout.image.request.ra, dec_degrees: cutout.image.request.dec }, fov: cutout.image.request.fov }, state.viewCenter, state.viewFov, stageSize)
+  const skyMatrix = cutout.image && state && stageView && showSurvey
+    ? tileMatrix({ center: { ra_degrees: cutout.image.request.ra, dec_degrees: cutout.image.request.dec }, fov: cutout.image.request.fov }, { width: cutout.image.request.width, height: cutout.image.request.height }, stageView, state.viewFov, stageSize)
     : null;
   // The chart under the sky: grid, stars, figures and names, each once the view is wide enough.
   const [showGrid, setShowGrid] = useState(true);
   const [showChart, setShowChart] = useState(true);
-  const graticule = useMemo(() => state && showGrid ? framingGraticule(state.viewCenter, state.viewFov, stageSize) : null, [state?.viewCenter.ra_degrees, state?.viewCenter.dec_degrees, state?.viewFov, stageSize, showGrid]); // eslint-disable-line react-hooks/exhaustive-deps
-  const backdrop = useMemo(() => state && showChart ? framingBackdrop(state.viewCenter, state.viewFov, stageSize) : null, [state?.viewCenter.ra_degrees, state?.viewCenter.dec_degrees, state?.viewFov, stageSize, showChart]); // eslint-disable-line react-hooks/exhaustive-deps
+  const graticule = useMemo(() => state && stageView && showGrid ? framingGraticule(stageView, state.viewFov, stageSize) : null, [stageView, state?.viewFov, stageSize, showGrid]); // eslint-disable-line react-hooks/exhaustive-deps
+  const backdrop = useMemo(() => state && stageView && showChart ? framingBackdrop(stageView, state.viewFov, stageSize) : null, [stageView, state?.viewFov, stageSize, showChart]); // eslint-disable-line react-hooks/exhaustive-deps
   // Finished per-panel stacks, drawn where their plate solves put them: a
   // review of coverage and seams over the plan, never a processed image.
   const [showStacks, setShowStacks] = useState(true);
   const mosaic = useQuery({ queryKey: ['directorMosaic', projectId], queryFn: () => apiClient.getDirectorMosaic(projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false, staleTime: 60_000 });
-  const placedStacks = useMemo(() => !showStacks || !state || !mosaic.data ? [] : mosaic.data.panels.flatMap(panel => {
-    const matrix = panel.preview ? stackMatrix(panel.preview, state.viewCenter, state.viewFov, stageSize) : null;
+  const placedStacks = useMemo(() => !showStacks || !state || !stageView || !mosaic.data ? [] : mosaic.data.panels.flatMap(panel => {
+    const matrix = panel.preview ? stackMatrix(panel.preview, stageView, state.viewFov, stageSize) : null;
     return panel.preview && matrix ? [{ panel, preview: panel.preview, matrix }] : [];
-  }), [showStacks, state, mosaic.data, stageSize]);
+  }), [showStacks, state, stageView, mosaic.data, stageSize]);
   // A view narrower than the footprint hides its edges and handle; widen it
   // once when the geometry first arrives, and on request.
   const fitToFootprint = useCallback((extent: { width_degrees: number; height_degrees: number }) => {
@@ -223,7 +237,6 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   // Drag pans the view; the wheel zooms about the center. Every drag works
   // on the sky: the grabbed point is deprojected from the stage, so a pan
   // near the pole or a wide view behaves like a narrow one at the equator.
-  const drag = useRef<{ kind: 'pan' | 'target' | 'rotate'; x: number; y: number; center: FramingState['viewCenter']; grab: [number, number] } | null>(null);
   const stageScale = () => (stage.current ? stageSize.width / Math.max(1, stage.current.clientWidth) : 1);
   const stagePoint = (event: ReactPointerEvent<HTMLDivElement>): [number, number] => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -232,45 +245,56 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   };
   const geometryRef = useRef<DirectorFramingPreview | undefined>(undefined);
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!state || event.button !== 0) return;
+    if (!state || !stageView || event.button !== 0) return;
     const point = stagePoint(event);
     const geometry = geometryRef.current;
     let kind: 'pan' | 'target' | 'rotate' = 'pan';
     if (geometry && geometry.panels.length > 0) {
-      const handleAt = stageProject(state.viewCenter, rotationHandle(geometry, state));
+      const handleAt = projectOn(stageView, rotationHandle(geometry, state));
       const handle = handleAt ? toStage(handleAt, state.viewFov, stageSize) : null;
       if (handle && Math.hypot(handle[0] - point[0], handle[1] - point[1]) <= 18) kind = 'rotate';
-      else if (geometry.panels.some(panel => { const corners = stageCorners(panel.corners, state.viewCenter); return corners && insidePolygon(point, corners, state.viewFov, stageSize); })) kind = 'target';
+      else if (geometry.panels.some(panel => { const corners = stageCorners(panel.corners, stageView); return corners && insidePolygon(point, corners, state.viewFov, stageSize); })) kind = 'target';
     }
     // Where the pointer took hold, relative to the target, so the target
     // follows the hand instead of jumping to it.
     const pointerOffset = fromStage(point[0], point[1], state.viewFov, stageSize);
-    const targetOffset = stageProject(state.viewCenter, state.center) ?? [0, 0];
+    const targetOffset = projectOn(stageView, state.center) ?? [0, 0];
     drag.current = { kind, x: event.clientX, y: event.clientY, center: state.viewCenter, grab: [pointerOffset[0] - targetOffset[0], pointerOffset[1] - targetOffset[1]] };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!drag.current || !state) return;
+    if (!drag.current || !state || !stageView) return;
     if (drag.current.kind === 'pan') {
+      // Slide the window over the plane from where the drag began.
       const scale = pixelScale(state.viewFov, stageSize) * stageScale();
       const dx = (event.clientX - drag.current.x) * scale;
       const dy = (event.clientY - drag.current.y) * scale;
-      update({ viewCenter: stageDeproject(drag.current.center, [dx, dy]) });
+      update({ viewCenter: deprojectOn(viewAt(stageView.anchor, drag.current.center), [dx, dy]) });
       return;
     }
     const point = stagePoint(event);
     const pointerOffset = fromStage(point[0], point[1], state.viewFov, stageSize);
     if (drag.current.kind === 'target') {
       const { grab } = drag.current;
-      update({ center: stageDeproject(state.viewCenter, [pointerOffset[0] - grab[0], pointerOffset[1] - grab[1]]) });
+      update({ center: deprojectOn(stageView, [pointerOffset[0] - grab[0], pointerOffset[1] - grab[1]]) });
     } else {
       // The angle is read on the target's plane, where the camera angle
       // lives, so the handle and the rectangle agree wherever the view is.
-      const at = stageDeproject(state.viewCenter, pointerOffset);
+      const at = deprojectOn(stageView, pointerOffset);
       update({ positionAngle: Math.round(angleAt(state.center, at) * 10) / 10 });
     }
   };
-  const onPointerUp = () => { drag.current = null; };
+  const onPointerUp = () => {
+    const wasTarget = drag.current?.kind === 'target';
+    drag.current = null;
+    // Re-anchor the plane on the moved target, and move the window with it
+    // so the rectangle stays where the hand left it.
+    const current = stateRef.current;
+    if (wasTarget && current && stageView) {
+      update({ viewCenter: reanchoredViewCenter(stageView, current.center) });
+      setAnchor(current.center);
+    }
+  };
   const turn = (delta: number) => update(current => ({ positionAngle: ((current.positionAngle + delta) % 360 + 360) % 360 }));
   const zoomBy = (factor: number) => update(current => ({ viewFov: clampFov(current.viewFov * factor) }));
   useEffect(() => {
@@ -293,8 +317,8 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   if (draft.isError) return <p className="director-error" role="alert">{message(draft.error)}</p>;
   if (!state) return <StartFraming canWrite={canWrite} onStart={setStarted} />;
   geometryRef.current = geometry;
-  const view = state.viewCenter;
-  const onStage = (position: { ra_degrees: number; dec_degrees: number }) => { const offset = stageProject(view, position); return offset ? toStage(offset, state.viewFov, stageSize) : null; };
+  const view = stageView ?? viewAt(state.center, state.viewCenter);
+  const onStage = (position: { ra_degrees: number; dec_degrees: number }) => { const offset = projectOn(view, position); return offset ? toStage(offset, state.viewFov, stageSize) : null; };
   const handle = geometry && geometry.panels.length > 0 ? onStage(rotationHandle(geometry, state)) : null;
   const centerOnStage = geometry ? onStage(state.center) : null;
   const panelPolygons = (geometry?.panels ?? []).map(panel => ({ panel, corners: stageCorners(panel.corners, view) }));
@@ -302,8 +326,9 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     <div className="framing-stage-wrap">
       <div ref={stage} className={`framing-stage${cutout.stale ? ' is-stale' : ''}`} role="img" aria-label="Sky view" data-testid="framing-stage"
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
-        {cutout.image && skyTransform ? <img src={cutout.image.url} alt="" draggable={false} data-testid="framing-sky" style={{ transform: skyTransform }} /> : <div className="framing-stage-empty" />}
+        {!(cutout.image && skyMatrix) && <div className="framing-stage-empty" />}
         <svg viewBox={`0 0 ${stageSize.width} ${stageSize.height}`} aria-hidden="true">
+          {cutout.image && skyMatrix && <image className="framing-sky" data-testid="framing-sky" href={cutout.image.url} x={0} y={0} width={cutout.image.request.width} height={cutout.image.request.height} preserveAspectRatio="none" transform={skyMatrix} />}
           {backdrop && backdrop.milkyWay.length > 0 && <g className="framing-milky-way">{backdrop.milkyWay.map((d, i) => <path key={i} d={d} />)}</g>}
           {graticule && <g className="framing-graticule" data-testid="framing-graticule">
             {graticule.paths.map((line, i) => <path key={i} d={line.d} />)}

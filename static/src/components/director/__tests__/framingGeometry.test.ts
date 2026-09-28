@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { DirectorFramingPreview, DirectorFramingRequest } from '../../../api/directorTypes';
-import { DEFAULT_STAGE, angleAt, deprojectFrom, framingBackdrop, framingGeometry, framingGraticule, gridSteps, handleSky, offsetFrom, stageDeproject, stageFor, stageProject, toStage, trueWidth } from '../framingModel';
+import { DEFAULT_STAGE, angleAt, deprojectFrom, framingBackdrop, framingGeometry, framingGraticule, gridSteps, handleSky, offsetFrom, projectOn, reanchoredViewCenter, stageDeproject, stageFor, stageProject, tileMatrix, toStage, trueWidth, viewAt } from '../framingModel';
 
 /** Written by `crates/director-core/tests/framing_fixture.rs`; the core keeps
  *  reproducing it, so this test pins the browser port to the server. */
@@ -99,17 +99,19 @@ describe('the chart under the framing', () => {
     expect(gridSteps(0.05, 0).decDegrees).toBe(1 / 60);
   });
   it('draws labelled meridians and parallels, and every meridian over the pole', () => {
-    const grid = framingGraticule({ ra_degrees: 38.2, dec_degrees: 61.45 }, 6);
+    const here = { ra_degrees: 38.2, dec_degrees: 61.45 };
+    const grid = framingGraticule(viewAt(here, here), 6);
     expect(grid.paths.filter(p => p.kind === 'dec').length).toBeGreaterThanOrEqual(4);
     expect(grid.paths.filter(p => p.kind === 'ra').length).toBeGreaterThanOrEqual(4);
     expect(grid.labels.some(l => l.kind === 'dec' && l.text.startsWith('+61°'))).toBe(true);
     expect(grid.labels.some(l => l.kind === 'ra' && /^2h/.test(l.text))).toBe(true);
-    const polar = framingGraticule({ ra_degrees: 0, dec_degrees: 89 }, 20);
+    const pole = { ra_degrees: 0, dec_degrees: 89 };
+    const polar = framingGraticule(viewAt(pole, pole), 20);
     expect(polar.paths.filter(p => p.kind === 'ra').length).toBeGreaterThanOrEqual(12);
   });
   it('brings in stars, figures, names and the Milky Way as the view widens', () => {
     // Looking at Orion's belt; the constellation's name sits 13° north of it.
-    const view = { ra_degrees: 84, dec_degrees: 0 };
+    const view = viewAt({ ra_degrees: 84, dec_degrees: 0 }, { ra_degrees: 84, dec_degrees: 0 });
     const narrow = framingBackdrop(view, 4);
     expect(narrow.stars).toHaveLength(0); expect(narrow.figures).toHaveLength(0); expect(narrow.names).toHaveLength(0);
     const wide = framingBackdrop(view, 60);
@@ -118,5 +120,47 @@ describe('the chart under the framing', () => {
     expect(wide.names.map(n => n.text)).toContain('Orion');
     expect(wide.milkyWay.length).toBeGreaterThan(0);
     expect(framingBackdrop(view, 40).milkyWay).toHaveLength(0);
+  });
+});
+
+describe('the anchored window', () => {
+  const target = { ra_degrees: 38.2, dec_degrees: 61.45 };
+  it('slides over the plane without turning it, so a footprint keeps its bearing as the view pans', () => {
+    const geometry = framingGeometry({ center: target, position_angle_degrees: 35, panel: { width_degrees: 2, height_degrees: 1.5 }, mosaic: { rows: 1, columns: 1, overlap_percent: 0 }, overlays: [], view: null });
+    const corners = geometry.panels[0].corners;
+    const bearing = (view: ReturnType<typeof viewAt>) => {
+      const [a, b] = corners.map(c => projectOn(view, c)!);
+      return Math.atan2(b[1] - a[1], b[0] - a[0]);
+    };
+    const home = viewAt(target, target);
+    const panned = viewAt(target, { ra_degrees: 46, dec_degrees: 63 });
+    expect(Math.abs(bearing(home) - bearing(panned))).toBeLessThan(1e-9);
+    // The window's own center is where the view was put.
+    const back = stageDeproject(panned.anchor, panned.offset);
+    expect(back.ra_degrees).toBeCloseTo(46, 6); expect(back.dec_degrees).toBeCloseTo(63, 6);
+  });
+  it('re-anchors on a moved target without moving it on the stage', () => {
+    const view = viewAt(target, target);
+    const moved = { ra_degrees: 41, dec_degrees: 61.2 };
+    const before = projectOn(view, moved)!;
+    const after = projectOn(viewAt(moved, reanchoredViewCenter(view, moved)), moved)!;
+    expect(after[0]).toBeCloseTo(before[0], 9); expect(after[1]).toBeCloseTo(before[1], 9);
+  });
+  it('lays a tile fetched away from the anchor with the turn between the two planes', () => {
+    // A tile centered 7.8° of right ascension east of the target: at this
+    // declination its north leans about 7° (Δα·sin δ) against the stage's.
+    const tile = { center: { ra_degrees: 46, dec_degrees: 61.45 }, fov: 12 };
+    const pixels = { width: 2048, height: 1536 };
+    const view = viewAt(target, tile.center);
+    const matrix = tileMatrix(tile, pixels, view, 6)!;
+    const [a, b, c, d] = matrix.slice(7, -1).split(' ').map(Number);
+    const turn = (Math.atan2(b, a) * 180) / Math.PI;
+    expect(Math.abs(turn)).toBeGreaterThan(6); expect(Math.abs(turn)).toBeLessThan(8);
+    // Uniform scale: the tile spans twice the view at 2048 px over a 1024 px stage.
+    expect(Math.hypot(a, b)).toBeCloseTo(1, 2); expect(Math.hypot(c, d)).toBeCloseTo(1, 2);
+    // A tile at the anchor lies flat: two-to-one with no turn.
+    const flat = tileMatrix({ center: target, fov: 12 }, pixels, viewAt(target, target), 6)!;
+    const [fa, fb] = flat.slice(7, -1).split(' ').map(Number);
+    expect(fb).toBeCloseTo(0, 9); expect(fa).toBeCloseTo(1, 9);
   });
 });
