@@ -350,11 +350,19 @@ of its height, with the controls beside it; the plan and activation sit under
 it side by side, and the linked databases last.
 
 The sky is drawn the way the Sky view draws it, on a plane anchored at the
-target: dragging the sky slides the window over that plane and turns
-nothing, so the rectangle keeps its bearing and the grid its shape as you
-look around, the way a map scrolls. The anchor follows the target once a
-move is done. Scroll or use the corner buttons to zoom, from three
-arcminutes across out to a hemisphere. Survey imagery shows up to 30°
+target, and a drag works one of two ways, as in N.I.N.A.'s framing
+assistant. **The rectangle over a still sky** (the default, like N.I.N.A.
+with a survey image): drag the rectangle to move the target, and drag the
+sky to look around without moving it. **The sky under a pinned rectangle**
+(like N.I.N.A.'s sky atlas): the rectangle stays where it is and dragging
+anywhere moves the sky, and the target with it; Shift-drag looks around
+without moving the target. Either way the plane slides rather than turns,
+so the rectangle keeps its bearing and the grid its shape, and the plane
+follows the target once a move is done. **Turn the sky with the camera**
+keeps the rectangle upright and turns the sky by the camera angle instead,
+N.I.N.A.'s "rotate sky"; the compass shows where north has gone. Both
+choices are remembered in the browser. Scroll or use the corner buttons to
+zoom, from three arcminutes across out to a hemisphere. Survey imagery shows up to 30°
 across; wider than that the stage is a chart, which draws at once: bright
 stars, constellation figures and names, the Milky Way band, and an
 equatorial grid whose spacing follows the zoom, with declination labelled

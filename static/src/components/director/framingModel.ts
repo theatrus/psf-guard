@@ -139,11 +139,24 @@ export function stageDeproject(view: DirectorSkyPosition, offset: DirectorOffset
  *  offset and leaves the plane alone, so nothing on the stage turns as the
  *  view slides; the rectangle keeps its bearing and the grid its shape, the
  *  way a map scrolls. The anchor follows the target once a move is done. */
-export interface StageView { anchor: DirectorSkyPosition; offset: DirectorOffset }
+export interface StageView {
+  anchor: DirectorSkyPosition;
+  offset: DirectorOffset;
+  /** How far the sky is turned on the stage, east of north: 0 keeps north
+   *  up; the camera angle keeps the rectangle upright and turns the sky,
+   *  as N.I.N.A.'s "rotate sky" does. */
+  rotation: number;
+}
 
 /** The view whose window is centered on `viewCenter` over the plane at `anchor`. */
-export function viewAt(anchor: DirectorSkyPosition, viewCenter: DirectorSkyPosition): StageView {
-  return { anchor, offset: stageProject(anchor, viewCenter) ?? [0, 0] };
+export function viewAt(anchor: DirectorSkyPosition, viewCenter: DirectorSkyPosition, rotation = 0): StageView {
+  return { anchor, offset: stageProject(anchor, viewCenter) ?? [0, 0], rotation };
+}
+
+function turned(offset: DirectorOffset, degrees: number): DirectorOffset {
+  if (degrees === 0) return offset;
+  const rad = (degrees * Math.PI) / 180;
+  return [offset[0] * Math.cos(rad) - offset[1] * Math.sin(rad), offset[0] * Math.sin(rad) + offset[1] * Math.cos(rad)];
 }
 
 /** The window center that keeps `target` at the same place on the stage
@@ -151,19 +164,28 @@ export function viewAt(anchor: DirectorSkyPosition, viewCenter: DirectorSkyPosit
  *  point's place a little, since north turns between the planes; this
  *  moves the window so the target itself does not jump. */
 export function reanchoredViewCenter(view: StageView, target: DirectorSkyPosition): DirectorSkyPosition {
-  const at = projectOn(view, target) ?? [0, 0];
+  const at = turned(projectOn(view, target) ?? [0, 0], -view.rotation);
   return stageDeproject(target, [-at[0], -at[1]]);
 }
 
-/** A sky position in window coordinates: degrees east and north of the window's center on the plane. */
+/** A sky position in window coordinates: degrees right and up of the window's
+ *  center, east to the left while the sky is not turned. */
 export function projectOn(view: StageView, position: DirectorSkyPosition): DirectorOffset | null {
   const at = stageProject(view.anchor, position);
-  return at ? [at[0] - view.offset[0], at[1] - view.offset[1]] : null;
+  return at ? turned([at[0] - view.offset[0], at[1] - view.offset[1]], view.rotation) : null;
 }
 
 /** The sky position at window coordinates: the inverse of `projectOn`. */
 export function deprojectOn(view: StageView, offset: DirectorOffset): DirectorSkyPosition {
-  return stageDeproject(view.anchor, [offset[0] + view.offset[0], offset[1] + view.offset[1]]);
+  const [x, y] = turned(offset, -view.rotation);
+  return stageDeproject(view.anchor, [x + view.offset[0], y + view.offset[1]]);
+}
+
+/** Where north and east point on the stage, as unit vectors in stage
+ *  pixels (x right, y down), for the compass. */
+export function compassDirections(rotation: number): { north: [number, number]; east: [number, number] } {
+  const rad = (rotation * Math.PI) / 180;
+  return { north: [Math.sin(rad), -Math.cos(rad)], east: [-Math.cos(rad), -Math.sin(rad)] };
 }
 
 /** How much sky the stage really spans across: less than the stage degrees

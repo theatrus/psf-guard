@@ -64,3 +64,5 @@
 .framing-stage-zoom { position: absolute; right: 10px; bottom: 34px; display: flex; flex-direction: column; gap: 4px; }
 .framing-stage-zoom button { width: 30px; min-height: 30px; padding: 0; background: rgba(0, 0, 0, 0.65); color: #fff; border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 4px; }
 .framing-stage-zoom button:hover:not(:disabled) { background: rgba(40, 40, 40, 0.85); }
+.framing-modes { margin: 8px 0 4px !important; padding: 4px 10px 6px !important; }
+.framing-modes legend { font-size: 13px; font-weight: 500; color: var(--color-text-secondary); }

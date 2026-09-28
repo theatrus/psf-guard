@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { DirectorFramingPreview, DirectorFramingRequest } from '../../../api/directorTypes';
-import { DEFAULT_STAGE, angleAt, deprojectFrom, framingBackdrop, framingGeometry, framingGraticule, gridSteps, handleSky, offsetFrom, projectOn, reanchoredViewCenter, stageDeproject, stageFor, stageProject, tileMatrix, toStage, trueWidth, viewAt } from '../framingModel';
+import { DEFAULT_STAGE, angleAt, deprojectFrom, framingBackdrop, framingGeometry, framingGraticule, gridSteps, handleSky, compassDirections, deprojectOn, offsetFrom, projectOn, reanchoredViewCenter, stageDeproject, stageFor, stageProject, tileMatrix, toStage, trueWidth, viewAt } from '../framingModel';
 
 /** Written by `crates/director-core/tests/framing_fixture.rs`; the core keeps
  *  reproducing it, so this test pins the browser port to the server. */
@@ -162,5 +162,31 @@ describe('the anchored window', () => {
     const flat = tileMatrix({ center: target, fov: 12 }, pixels, viewAt(target, target), 6)!;
     const [fa, fb] = flat.slice(7, -1).split(' ').map(Number);
     expect(fb).toBeCloseTo(0, 9); expect(fa).toBeCloseTo(1, 9);
+  });
+});
+
+describe('a turned sky', () => {
+  const target = { ra_degrees: 38.2, dec_degrees: 61.45 };
+  it('turns the window by the camera angle, round-trips, and keeps a moved target in place when re-anchored', () => {
+    const view = viewAt(target, target, 35);
+    const north = projectOn(view, { ra_degrees: 38.2, dec_degrees: 62.45 })!;
+    // North now leans 35° toward the right of the stage (window x runs left).
+    expect(Math.atan2(north[0], north[1]) * 180 / Math.PI).toBeCloseTo(-35, 1);
+    for (const p of [{ ra_degrees: 40, dec_degrees: 62 }, { ra_degrees: 30, dec_degrees: 58 }]) {
+      const back = deprojectOn(view, projectOn(view, p)!);
+      expect(back.ra_degrees).toBeCloseTo(p.ra_degrees, 9); expect(back.dec_degrees).toBeCloseTo(p.dec_degrees, 9);
+    }
+    const moved = { ra_degrees: 41, dec_degrees: 61.2 };
+    const before = projectOn(view, moved)!;
+    const after = projectOn(viewAt(moved, reanchoredViewCenter(view, moved), 35), moved)!;
+    expect(after[0]).toBeCloseTo(before[0], 9); expect(after[1]).toBeCloseTo(before[1], 9);
+  });
+  it('points the compass with the sky', () => {
+    const up = compassDirections(0);
+    expect(up.north[0]).toBeCloseTo(0, 9); expect(up.north[1]).toBeCloseTo(-1, 9);
+    expect(up.east[0]).toBeCloseTo(-1, 9); expect(up.east[1]).toBeCloseTo(0, 9);
+    const quarter = compassDirections(90);
+    expect(quarter.north[0]).toBeCloseTo(1, 9); expect(quarter.north[1]).toBeCloseTo(0, 9);
+    expect(quarter.east[0]).toBeCloseTo(0, 9); expect(quarter.east[1]).toBeCloseTo(-1, 9);
   });
 });
