@@ -117,15 +117,23 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   const request = useMemo(() => state ? previewRequest(state, rigList) : null, [state, rigList]);
   const geometry = useMemo(() => request ? framingGeometry(request) : undefined, [request]);
   const [search, setSearch] = useState('');
+  // A found target replaces what was on screen; keep that so one click
+  // puts it back, and offer the saved draft as the other way back.
+  const [undo, setUndo] = useState<FramingState | null>(null);
   const lookup = useMutation({
     retry: false,
-    mutationFn: (query: string) => apiClient.resolveDirectorName(query),
-    onSuccess: hit => {
+    mutationFn: ({ query }: { query: string; before: FramingState }) => apiClient.resolveDirectorName(query),
+    onSuccess: (hit, { before }) => {
       const center = { ra_degrees: hit.ra_degrees, dec_degrees: hit.dec_degrees };
+      setUndo(before);
       update({ targetName: hit.name, center, viewCenter: center });
       setNotice(`Moved the target to ${hit.name}.`);
     },
   });
+  const findTarget = () => { if (state && search.trim() && canWrite) lookup.mutate({ query: search.trim(), before: state }); };
+  const savedState = draft.data?.draft ? stateFromDraft(draft.data.draft) : null;
+  const planFields = (s: FramingState) => JSON.stringify([s.targetName, s.center, s.positionAngle, s.mosaic, s.panelRigId, s.panel, s.shownRigIds, s.surveyId]);
+  const differsFromSaved = !!state && !!savedState && planFields(state) !== planFields(savedState);
   const cutout = useSurveyCutout(state ? {
     survey: state.surveyId, ra: Number(state.viewCenter.ra_degrees.toFixed(5)), dec: Number(state.viewCenter.dec_degrees.toFixed(5)),
     fov: Number(state.viewFov.toFixed(5)), width: STAGE_WIDTH, height: STAGE_HEIGHT, rotation: 0,
@@ -158,7 +166,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
       if (!state || !draft.data) throw new Error('Nothing to save');
       return apiClient.saveDirectorFramingDraft(draftFromState(state, projectId, draft.data.draft?.revision ?? 0));
     },
-    onSuccess: saved => { setNotice(`Saved framing revision ${saved.draft?.revision ?? 0}.`); client.setQueryData<DirectorFramingDraftView>(draftKey, saved); },
+    onSuccess: saved => { setNotice(`Saved framing revision ${saved.draft?.revision ?? 0}.`); setUndo(null); client.setQueryData<DirectorFramingDraftView>(draftKey, saved); },
   });
   const httpError = isAxiosError(save.error) ? save.error : save.error instanceof Error && isAxiosError(save.error.cause) ? save.error.cause : null;
   const stale = httpError?.response?.status === 409;
@@ -271,8 +279,8 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
         <legend>Target</legend>
         <label>Find a target<span className="framing-input">
           <input aria-label="Find a target" value={search} maxLength={128} placeholder="M 31, NGC 7000, Heart Nebula" disabled={!canWrite || lookup.isPending} onChange={event => setSearch(event.target.value)}
-            onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (search.trim() && canWrite) lookup.mutate(search.trim()); } }} />
-          <button type="button" disabled={!canWrite || !search.trim() || lookup.isPending} onClick={() => lookup.mutate(search.trim())}><Search size={16} />{lookup.isPending ? 'Looking up...' : 'Go'}</button>
+            onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); findTarget(); } }} />
+          <button type="button" disabled={!canWrite || !search.trim() || lookup.isPending} onClick={findTarget}><Search size={16} />{lookup.isPending ? 'Looking up...' : 'Go'}</button>
         </span><small>{lookup.isError ? message(lookup.error) : lookup.data ? `${lookup.data.name} from ${lookup.data.source}; the target and view moved there.` : 'Names the CDS catalogs know: Messier, NGC, IC, Sharpless, common names.'}</small></label>
         <label>Name<input aria-label="Target name" value={state.targetName} maxLength={256} onChange={event => update({ targetName: event.target.value })} /></label>
         <div className="framing-grid">
@@ -286,6 +294,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
           <button type="button" onClick={() => update(current => ({ viewCenter: current.center }))}><Crosshair size={16} />Center view on target</button>
           <button type="button" disabled={!canWrite} onClick={() => update(current => ({ center: current.viewCenter }))}><LocateFixed size={16} />Move target to view center</button>
           {seed && <button type="button" disabled={!canWrite} onClick={() => update({ targetName: seed.name, center: seed.center, positionAngle: seed.position_angle_degrees, viewCenter: seed.center })}><Undo2 size={16} />Back to catalog target</button>}
+          {savedState && <button type="button" disabled={!differsFromSaved} title="Drop every change since the last save" onClick={() => { setState(savedState); setUndo(null); setNotice(`Back to saved framing revision ${draft.data?.draft?.revision ?? 0}.`); }}><Undo2 size={16} />Back to saved framing</button>}
         </div>
       </fieldset>
       <fieldset>
@@ -328,7 +337,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
           {geometry && <button type="button" onClick={() => { update({ viewFov: 0.01 }); fitToFootprint(geometry.extent); }}>Fit</button>}</span></label>
         <p className="director-muted">Drag the image to pan, scroll to zoom. The view center is {formatRaHours(state.viewCenter.ra_degrees)}, {formatDec(state.viewCenter.dec_degrees)}.</p>
       </fieldset>
-      {notice && <p role="status">{notice}</p>}
+      {notice && <p role="status">{notice}{undo && <> <button type="button" className="link-button" onClick={() => { setState(undo); setUndo(null); setNotice('Put the target back where it was.'); }}>Undo</button></>}</p>}
       {stale && <p className="director-error" role="alert">This framing changed since you loaded it. Reload to see the saved draft before editing again.</p>}
       {(problem || (save.isError && !stale)) && <p className="director-error" role="alert">{problem || message(save.error)}</p>}
       <div className="director-actions">

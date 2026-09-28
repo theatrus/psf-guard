@@ -250,6 +250,35 @@ describe('Framing view', () => {
     expect(screen.getByText(/The view center is/)).toHaveTextContent('20h 59m 00.0s');
     // Enter in the search box looked the name up; it did not save the draft.
     expect(saves).toHaveLength(0);
+    // One click puts the previous target back, view included.
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(screen.getByLabelText('Target name')).toHaveValue('M31');
+    expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(seed.center.ra_degrees);
+    expect(screen.getByText(/The view center is/)).toHaveTextContent('00h 42m 44.3s');
+    expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+    // With nothing saved yet there is no saved framing to go back to.
+    expect(screen.queryByRole('button', { name: 'Back to saved framing' })).not.toBeInTheDocument();
+  });
+
+  it('goes back to the saved framing after a search, and only while something differs', async () => {
+    const draft: DirectorFramingDraft = { project_id: 'project', revision: 3, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.45 }, position_angle_degrees: 15,
+      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 8, updated_at_ms: 1 };
+    fixture(draft); mount();
+    expect(await screen.findByLabelText('Target name')).toHaveValue('Heart');
+    expect(screen.getByRole('button', { name: 'Back to saved framing' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Find a target'), { target: { value: 'NGC 7000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }));
+    expect(await screen.findByText('Moved the target to NGC 7000.')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Position angle degrees'), { target: { value: '90' } });
+    const back = screen.getByRole('button', { name: 'Back to saved framing' });
+    expect(back).toBeEnabled();
+    fireEvent.click(back);
+    expect(screen.getByText('Back to saved framing revision 3.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Target name')).toHaveValue('Heart');
+    expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(38.2);
+    expect(screen.getByLabelText('Position angle degrees')).toHaveValue(15);
+    expect(screen.getByRole('button', { name: 'Back to saved framing' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
   });
 
   it('switches the survey from the chips on the sky and remembers it in the draft', async () => {
