@@ -21,6 +21,10 @@ struct TargetProgress {
     desired: i64,
     acquired: i64,
     accepted: i64,
+    /// Where Target Scheduler points this target, in ICRS degrees, when the
+    /// row has coordinates.
+    center: Option<IcrsPosition>,
+    rotation_degrees: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -50,6 +54,10 @@ struct Progress {
 /// survey view at the center, with the panel rectangles over it.
 #[derive(Serialize)]
 struct FramingSummary {
+    /// `draft`: a framing saved in Director. `catalog`: no draft yet, so the
+    /// first linked database's target stands in, with the rig's field as
+    /// the panel when its optics are known.
+    source: &'static str,
     revision: u64,
     target_name: String,
     panels: u32,
@@ -94,14 +102,37 @@ const MAX_PROJECTS: usize = 1024;
 /// schema lacks the columns reports no progress rather than failing the list.
 fn target_progress(connection: &rusqlite::Connection) -> BTreeMap<i64, Vec<TargetProgress>> {
     let mut by_project: BTreeMap<i64, Vec<TargetProgress>> = BTreeMap::new();
-    let Ok(mut statement) = connection.prepare(
-        "SELECT t.projectid, t.name, COALESCE(SUM(e.desired), 0), COALESCE(SUM(e.acquired), 0), COALESCE(SUM(e.accepted), 0)
+    // `rotation` arrived with a later Target Scheduler schema.
+    let rotation = if connection
+        .prepare("SELECT rotation FROM target LIMIT 0")
+        .is_ok()
+    {
+        "t.rotation"
+    } else {
+        "NULL"
+    };
+    let Ok(mut statement) = connection.prepare(&format!(
+        "SELECT t.projectid, t.name, COALESCE(SUM(e.desired), 0), COALESCE(SUM(e.acquired), 0), COALESCE(SUM(e.accepted), 0),
+                t.ra, t.dec, {rotation}
          FROM target t LEFT JOIN exposureplan e ON e.targetid = t.Id
-         GROUP BY t.Id ORDER BY t.Id",
-    ) else {
+         GROUP BY t.Id ORDER BY t.Id"
+    )) else {
         return by_project;
     };
     let rows = statement.query_map([], |row| {
+        let ra_hours: Option<f64> = row.get(5)?;
+        let dec: Option<f64> = row.get(6)?;
+        let center = match (ra_hours, dec) {
+            (Some(ra_hours), Some(dec_degrees)) => {
+                crate::astrometry::target_scheduler_coordinates(ra_hours, dec_degrees).map(
+                    |(ra_degrees, dec_degrees)| IcrsPosition {
+                        ra_degrees,
+                        dec_degrees,
+                    },
+                )
+            }
+            _ => None,
+        };
         Ok((
             row.get::<_, i64>(0)?,
             TargetProgress {
@@ -109,6 +140,8 @@ fn target_progress(connection: &rusqlite::Connection) -> BTreeMap<i64, Vec<Targe
                 desired: row.get(2)?,
                 acquired: row.get(3)?,
                 accepted: row.get(4)?,
+                center,
+                rotation_degrees: row.get::<_, Option<f64>>(7)?.filter(|r| r.is_finite()),
             },
         ))
     });
@@ -253,6 +286,47 @@ fn ensure_adopted(
     Ok(())
 }
 
+/// A framing summary from the first linked target with coordinates: its
+/// center and rotation, the rig's field as the panel when the rig profile
+/// holds optics, and every target of that database counted as a panel.
+fn catalog_framing(
+    store: &MetaStore,
+    links: &[PlanLink],
+) -> Result<Option<FramingSummary>, StoreError> {
+    for link in links {
+        let Some(target) = link.targets.iter().find(|t| t.center.is_some()) else {
+            continue;
+        };
+        let center = target.center.expect("filtered on Some");
+        let panel = store
+            .rig_profile(link.rig.id)?
+            .and_then(|profile| profile.optics)
+            .and_then(|optics| optics.value.field_of_view().ok())
+            .map(|fov| PanelSize {
+                width_degrees: fov.width_degrees,
+                height_degrees: fov.height_degrees,
+            });
+        return Ok(Some(FramingSummary {
+            source: "catalog",
+            revision: 0,
+            target_name: target.name.clone(),
+            panels: link.targets.len() as u32,
+            panel_rig_id: panel.is_some().then_some(link.rig.id),
+            center,
+            position_angle_degrees: target.rotation_degrees.unwrap_or(0.0).rem_euclid(360.0),
+            panel,
+            mosaic: Mosaic {
+                rows: 1,
+                columns: 1,
+                overlap_percent: 20,
+            },
+            survey_id: "dss2_color".to_owned(),
+            extent: panel,
+        }));
+    }
+    Ok(None)
+}
+
 pub(super) async fn list(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<PlanList>>, Error> {
@@ -367,6 +441,7 @@ pub(super) async fn list(
                     .ok()
                 });
                 FramingSummary {
+                    source: "draft",
                     revision: draft.revision,
                     target_name: draft.target_name.clone(),
                     panels: preview
@@ -400,6 +475,12 @@ pub(super) async fn list(
                 rigs: a.rigs.len() as u32,
             });
             let links = links.remove(&project.id).unwrap_or_default();
+            // No draft yet, but Target Scheduler already points somewhere:
+            // that is the framing until Director saves one of its own.
+            let framing = match framing {
+                Some(framing) => Some(framing),
+                None => catalog_framing(&store, &links)?,
+            };
             let targets: Vec<&TargetProgress> = links.iter().flat_map(|l| &l.targets).collect();
             let progress = (!targets.is_empty()).then(|| Progress {
                 desired: targets.iter().map(|t| t.desired).sum(),

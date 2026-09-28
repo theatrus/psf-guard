@@ -51,12 +51,20 @@ async fn every_database_project_becomes_a_plan_and_shared_guids_become_one_plan(
             (3, "No GUID", None),
         ],
     );
-    register(
+    let redcat = register(
         &f,
         "redcat",
         "Redcat data",
         &[(1, "Andromeda", Some(shared))],
     );
+    // Target Scheduler already points the shared project somewhere (RA in hours).
+    rusqlite::Connection::open(&redcat)
+        .unwrap()
+        .execute(
+            "INSERT INTO target (name, active, ra, dec, epochcode, rotation, roi, projectid, guid) VALUES ('M 31', 1, 0.7123, 41.269, 2, 35.0, 100, 1, 'target-m31')",
+            [],
+        )
+        .unwrap();
     // A registered file with no project table is reported, not fatal.
     let odd = f._dir.path().join("odd.sqlite");
     rusqlite::Connection::open(&odd)
@@ -104,6 +112,22 @@ async fn every_database_project_becomes_a_plan_and_shared_guids_become_one_plan(
     assert_eq!(links[0]["catalog_name"], "C925 data");
     assert_eq!(links[1]["catalog_name"], "Redcat data");
     assert_ne!(links[0]["rig"]["id"], links[1]["rig"]["id"]);
+    // No Director draft, but the catalog target frames the plan: hours become degrees.
+    let framing = &andromeda[0]["framing"];
+    assert_eq!(framing["source"], "catalog", "{framing}");
+    assert_eq!(framing["target_name"], "M 31");
+    assert!(
+        (framing["center"]["ra_degrees"].as_f64().unwrap() - 10.6845).abs() < 1e-6,
+        "{framing}"
+    );
+    assert_eq!(framing["position_angle_degrees"], 35.0);
+    assert_eq!(framing["panels"], 1);
+    // No optics on that rig yet, so no panel size and no panel rig.
+    assert_eq!(framing["panel"], Value::Null);
+    assert_eq!(framing["panel_rig_id"], Value::Null);
+    assert_eq!(links[1]["targets"][0]["center"]["dec_degrees"], 41.269);
+    // A project whose databases hold no target has nothing to frame from.
+    assert_eq!(by_name("Only here")[0]["framing"], Value::Null);
     assert_eq!(by_name("Only here").len(), 1);
     assert_eq!(by_name("No GUID").len(), 0);
     // The fixture's own hand-made catalog (M31 with a GUID) is adopted too.
