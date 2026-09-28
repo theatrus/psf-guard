@@ -25,3 +25,15 @@
 .visibility-chart .transit line { stroke: rgba(255, 255, 255, 0.5); stroke-width: 1; stroke-dasharray: 2 4; }
 .visibility-chart .transit text { fill: #a9b4c4; font-size: 10px; }
 .visibility-legend .key.paused { background: #ff6b6b; }
+/* Under the framing stage: a strip that stays on screen. */
+.visibility.is-compact { margin-top: 8px; }
+.visibility.is-compact .director-toolbar { justify-content: flex-start; margin: 0 0 4px; gap: 8px 12px; }
+.visibility.is-compact .director-toolbar .visibility-verdict { flex: 1 1 320px; margin: 0; }
+.visibility.is-compact h3 { font-size: 14px; }
+.visibility.is-compact select { min-height: 28px; padding: 3px 24px 3px 6px; font-size: 12px; }
+.visibility.is-compact .visibility-verdict { font-size: 13px; font-weight: 500; margin: 0 0 4px; }
+.visibility.is-compact .visibility-chart { height: 130px; width: 100%; }
+.visibility.is-compact .visibility-legend { font-size: 11px; margin: 4px 0; gap: 2px 10px; }
+.visibility.is-compact p.director-muted { font-size: 12px; margin: 2px 0; }
+.visibility-more summary { cursor: pointer; font-size: 12px; color: var(--color-text-secondary); }
+.visibility-more { margin-top: 2px; }

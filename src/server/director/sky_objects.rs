@@ -24,6 +24,11 @@ const DEFAULT_LIMIT: usize = 300;
 /// Minor bodies fainter than this are not worth a mark on a survey image.
 const DEFAULT_LIMIT_MAG: f64 = 16.0;
 const DEG: f64 = std::f64::consts::PI / 180.0;
+/// Catalogs left out unless the request says otherwise. PGC lists hundreds
+/// of faint galaxies per square degree and HD every naked-eye star; both
+/// crowd out the marks an imager frames around.
+const DEFAULT_HIDDEN: &[&str] = &["PGC", "HD"];
+const MAX_HIDDEN: usize = 32;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -41,6 +46,10 @@ pub(super) struct MarksQuery {
     limit: usize,
     #[serde(default = "default_limit_mag")]
     limit_mag: f64,
+    /// Comma-separated catalog prefixes to leave out, matched against the
+    /// letters a designation starts with ("PGC,HD" when unsaid; empty to
+    /// hide nothing).
+    hide: Option<String>,
 }
 fn default_aspect() -> f64 {
     4.0 / 3.0
@@ -93,6 +102,8 @@ pub(super) struct MinorBodyMark {
 
 #[derive(Serialize)]
 pub(super) struct SkyMarks {
+    /// The catalog prefixes left out of `objects`, as applied.
+    pub hidden: Vec<String>,
     pub at_ms: i64,
     /// The angular radius searched around the center.
     pub radius_degrees: f64,
@@ -103,6 +114,32 @@ pub(super) struct SkyMarks {
 
 /// How far from the center the stage reaches: the stereographic plane's
 /// corner radius taken back to the sky, never past the hemisphere.
+/// The catalog a designation belongs to: its leading letters, lower-cased,
+/// so "PGC 2557" is "pgc", "Sh2-101" is "sh" and "vdB 1" is "vdb".
+pub(super) fn designation_prefix(name: &str) -> String {
+    name.chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// The prefixes a request hides: the default set when it says nothing, or
+/// its own list (which may be empty). `None` when the list is too long.
+pub(super) fn hidden_prefixes(hide: Option<&str>) -> Option<Vec<String>> {
+    let prefixes: Vec<String> = match hide {
+        None => DEFAULT_HIDDEN
+            .iter()
+            .map(|p| p.to_ascii_lowercase())
+            .collect(),
+        Some(list) => list
+            .split(',')
+            .map(|p| designation_prefix(p.trim()))
+            .filter(|p| !p.is_empty())
+            .collect(),
+    };
+    (prefixes.len() <= MAX_HIDDEN).then_some(prefixes)
+}
+
 pub(super) fn search_radius(fov_degrees: f64, aspect: f64) -> f64 {
     let rho = (fov_degrees / 2.0) * DEG;
     let across = 2.0 * (rho / 2.0).atan() / DEG;
@@ -124,20 +161,36 @@ fn bearing(ra1: f64, dec1: f64, ra2: f64, dec2: f64) -> f64 {
     (y.atan2(x) / DEG).rem_euclid(360.0)
 }
 
+/// What a marks request asks for, once checked.
+pub(super) struct MarksAsked<'a> {
+    pub center: (f64, f64),
+    pub radius: f64,
+    pub jd: f64,
+    pub limit: usize,
+    pub limit_mag: f64,
+    pub hidden: &'a [String],
+}
+
 /// The marks within `radius` of a place at `jd`, from whatever catalogs are there.
 pub(super) fn marks_for(
     objects: Result<Arc<ObjectCatalog>, String>,
     minor_bodies: Result<Arc<MinorBodyCatalog>, String>,
-    center: (f64, f64),
-    radius: f64,
-    jd: f64,
-    limit: usize,
-    limit_mag: f64,
+    asked: &MarksAsked<'_>,
 ) -> SkyMarks {
+    let MarksAsked {
+        center,
+        radius,
+        jd,
+        limit,
+        limit_mag,
+        hidden,
+    } = *asked;
     let objects = match objects {
         Ok(catalog) => {
+            // The catalog cuts to its limit before this filter could run, so
+            // it is asked for every hit and cut here.
             let query = ObjectQuery {
-                limit: Some(limit),
+                limit: None,
                 sort: ObjectSort::Prominence,
                 include_extent_overlaps: true,
                 ..ObjectQuery::default()
@@ -154,8 +207,16 @@ pub(super) fn marks_for(
                     note: None,
                     items: hits
                         .into_iter()
+                        .filter(|hit| !hidden.contains(&designation_prefix(&hit.object.name)))
+                        .take(limit)
                         .map(|hit| ObjectMark {
-                            id: hit.object.metadata.id.clone(),
+                            // Older catalog files carry no record ids; the
+                            // designation then stands in, so every mark has a key.
+                            id: if hit.object.metadata.id.is_empty() {
+                                hit.object.name.clone()
+                            } else {
+                                hit.object.metadata.id.clone()
+                            },
                             name: hit.object.name.clone(),
                             common_name: hit.object.common_name.clone(),
                             kind: hit.object.kind.as_str(),
@@ -243,6 +304,7 @@ pub(super) fn marks_for(
         },
     };
     SkyMarks {
+        hidden: hidden.to_vec(),
         at_ms: ((jd - 2_440_587.5) * 86_400_000.0).round() as i64,
         radius_degrees: radius,
         objects,
@@ -276,6 +338,7 @@ pub(super) async fn marks(
     if !(0..=4_102_444_800_000).contains(&at_ms) {
         return Err(Error::Invalid);
     }
+    let hidden = hidden_prefixes(query.hide.as_deref()).ok_or(Error::Invalid)?;
     let jd = crate::ephemeris::julian_date_from_unix_ms(at_ms);
     let radius = search_radius(query.fov, query.aspect);
     let astrometry = state.astrometry.clone();
@@ -283,11 +346,14 @@ pub(super) async fn marks(
         marks_for(
             astrometry.object_catalog(),
             astrometry.minor_body_catalog(),
-            (query.ra, query.dec),
-            radius,
-            jd,
-            query.limit,
-            query.limit_mag,
+            &MarksAsked {
+                center: (query.ra, query.dec),
+                radius,
+                jd,
+                limit: query.limit,
+                limit_mag: query.limit_mag,
+                hidden: &hidden,
+            },
         )
     })
     .await
@@ -333,6 +399,71 @@ mod tests {
     }
 
     #[test]
+    fn crowded_catalogs_are_hidden_unless_asked_for_and_never_eat_the_limit() {
+        let center = (10.68, 41.27);
+        let mut objects = vec![galaxy("M 31", "Andromeda Galaxy", 10.68, 41.27, 190.0)];
+        // A swarm of faint PGC galaxies and HD stars around it, each bigger
+        // on paper than the next real mark so prominence ranks them first.
+        for i in 0..40 {
+            objects.push(galaxy(
+                &format!("PGC {i}"),
+                "",
+                10.7 + f64::from(i) * 0.01,
+                41.3,
+                20.0,
+            ));
+            objects.push(galaxy(
+                &format!("HD {i}"),
+                "",
+                10.6 - f64::from(i) * 0.01,
+                41.2,
+                20.0,
+            ));
+        }
+        objects.push(galaxy("NGC 205", "", 10.09, 41.68, 2.0));
+        let jd = crate::ephemeris::julian_date_from_unix_ms(1_790_000_000_000);
+        let none = Err("no minor bodies".to_owned());
+        let names = |marks: &SkyMarks| {
+            marks
+                .objects
+                .items
+                .iter()
+                .map(|o| o.name.clone())
+                .collect::<Vec<_>>()
+        };
+        let default = hidden_prefixes(None).unwrap();
+        assert_eq!(default, ["pgc", "hd"]);
+        let catalog = Arc::new(ObjectCatalog::new(objects));
+        let asked = |hidden: &[String]| MarksAsked {
+            center,
+            radius: 2.0,
+            jd,
+            limit: 10,
+            limit_mag: 16.0,
+            hidden: Box::leak(hidden.to_vec().into_boxed_slice()),
+        };
+        let marks = marks_for(Ok(catalog.clone()), none.clone(), &asked(&default));
+        assert_eq!(names(&marks), ["M 31", "NGC 205"]);
+        assert_eq!(marks.hidden, ["pgc", "hd"]);
+        // Asking for everything brings the swarm back, and the limit then bites.
+        let all = hidden_prefixes(Some("")).unwrap();
+        let marks = marks_for(Ok(catalog.clone()), none.clone(), &asked(&all));
+        assert_eq!(marks.objects.items.len(), 10);
+        assert!(names(&marks).iter().any(|n| n.starts_with("PGC")));
+        // A list of its own, in any case, with spaces.
+        let own = hidden_prefixes(Some(" ngc, Pgc ")).unwrap();
+        let marks = marks_for(Ok(catalog), none, &asked(&own));
+        assert_eq!(names(&marks)[0], "M 31");
+        assert!(names(&marks)
+            .iter()
+            .all(|n| !n.starts_with("NGC") && !n.starts_with("PGC")));
+        assert!(names(&marks).iter().any(|n| n.starts_with("HD")));
+        assert_eq!(designation_prefix("Sh2-101"), "sh");
+        assert_eq!(designation_prefix("vdB 1"), "vdb");
+        assert!(hidden_prefixes(Some(&"a,".repeat(MAX_HIDDEN + 1))).is_none());
+    }
+
+    #[test]
     fn marks_come_from_whatever_catalogs_are_there_and_say_what_is_missing() {
         let objects = ObjectCatalog::new(vec![
             galaxy("M 31", "Andromeda Galaxy", 10.68, 41.27, 190.0),
@@ -357,11 +488,14 @@ mod tests {
         let marks = marks_for(
             Ok(Arc::new(objects)),
             Ok(Arc::new(bodies)),
-            (10.68, 41.27),
-            90.0,
-            jd,
-            300,
-            30.0,
+            &MarksAsked {
+                center: (10.68, 41.27),
+                radius: 90.0,
+                jd,
+                limit: 300,
+                limit_mag: 30.0,
+                hidden: &[],
+            },
         );
         assert!(marks.objects.available);
         assert_eq!(marks.objects.items[0].name, "M 31");
@@ -381,11 +515,14 @@ mod tests {
         let marks = marks_for(
             Ok(Arc::new(objects)),
             Err("no minor bodies".to_owned()),
-            (189.0, 26.0),
-            1.0,
-            jd,
-            300,
-            16.0,
+            &MarksAsked {
+                center: (189.0, 26.0),
+                radius: 1.0,
+                jd,
+                limit: 300,
+                limit_mag: 16.0,
+                hidden: &[],
+            },
         );
         assert_eq!(
             marks
@@ -406,6 +543,103 @@ mod tests {
                     189.0,
                     26.0
                 ) <= 1.0)
+        );
+    }
+}
+
+#[cfg(test)]
+mod bench {
+    use super::*;
+    use std::time::Instant;
+
+    /// `PSF_GUARD_OBJECTS_BENCH=/path/to/objects.bin cargo test --release --lib
+    /// server::director::sky_objects::bench -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn render_timing() {
+        let Some(path) = std::env::var_os("PSF_GUARD_OBJECTS_BENCH") else {
+            return;
+        };
+        let started = Instant::now();
+        let catalog = Arc::new(ObjectCatalog::open(std::path::Path::new(&path)).unwrap());
+        eprintln!("open {} objects in {:?}", catalog.len(), started.elapsed());
+        for fov in [2.0, 10.0, 30.0, 60.0, 120.0, 180.0] {
+            let radius = search_radius(fov, 4.0 / 3.0);
+            let started = Instant::now();
+            let marks = marks_for(
+                Ok(catalog.clone()),
+                Err("none".into()),
+                &MarksAsked {
+                    center: (10.68, 41.27),
+                    radius,
+                    jd: 2_461_000.5,
+                    limit: 300,
+                    limit_mag: 16.0,
+                    hidden: &hidden_prefixes(None).unwrap(),
+                },
+            );
+            let mut prefixes: std::collections::BTreeMap<String, usize> = Default::default();
+            for mark in &marks.objects.items {
+                let prefix: String = mark
+                    .name
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphabetic())
+                    .collect();
+                *prefixes.entry(prefix).or_default() += 1;
+            }
+            eprintln!(
+                "fov {fov:>5} radius {radius:>6.1}: {} marks in {:?}; {:?}",
+                marks.objects.items.len(),
+                started.elapsed(),
+                prefixes
+            );
+        }
+        let mut prefixes: std::collections::BTreeMap<String, usize> = Default::default();
+        let mut kinds: std::collections::BTreeMap<&str, usize> = Default::default();
+        for object in catalog.objects() {
+            let prefix: String = object
+                .name
+                .chars()
+                .take_while(|c| c.is_ascii_alphabetic())
+                .collect();
+            *prefixes.entry(prefix).or_default() += 1;
+            *kinds.entry(object.kind.as_str()).or_default() += 1;
+        }
+        let common: Vec<_> = prefixes.iter().filter(|(_, n)| **n >= 20).collect();
+        eprintln!("whole catalog prefixes with 20+ entries: {common:?}\nkinds {kinds:?}");
+        let started = Instant::now();
+        let hits = catalog
+            .query_region(
+                &SkyRegion::Cone {
+                    center: (10.68, 41.27),
+                    radius_deg: 60.0,
+                },
+                &ObjectQuery {
+                    include_extent_overlaps: true,
+                    ..ObjectQuery::default()
+                },
+            )
+            .unwrap();
+        let mut prefixes: std::collections::BTreeMap<String, usize> = Default::default();
+        let mut sources: std::collections::BTreeMap<String, usize> = Default::default();
+        for hit in &hits {
+            let prefix: String = hit
+                .object
+                .name
+                .chars()
+                .take_while(|c| c.is_ascii_alphabetic())
+                .collect();
+            *prefixes.entry(prefix).or_default() += 1;
+            *sources
+                .entry(hit.object.metadata.source.clone())
+                .or_default() += 1;
+        }
+        eprintln!(
+            "all hits within 60 deg: {} in {:?}\nprefixes {:?}\nsources {:?}",
+            hits.len(),
+            started.elapsed(),
+            prefixes,
+            sources
         );
     }
 }

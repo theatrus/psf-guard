@@ -175,6 +175,18 @@
   its minor-body catalog placed for the moment you look, and the Sun, Moon
   and planets from a built-in ephemeris. Each layer has its own switch and
   says when its catalog is not on the server.
+- The framing view keeps tonight's visibility chart on screen: the sky
+  takes the height left over, the visibility strip sits under it with the
+  nights table folded away, and the column stays put while the form beside
+  it scrolls. The drag mode (rectangle or sky), the sky turn and the layer
+  switches (grid, constellations, deep-sky marks, comets and asteroids,
+  Sun, Moon and planets) are small buttons at the top of the stage.
+- Marks leave the PGC and HD catalogs out unless asked: they flooded every
+  field with faint galaxies and stars and crowded out the nebulae and
+  clusters. **Catalogs marked** under **View** picks the families shown, and
+  the choice is remembered in the browser. Marks also follow the view sooner
+  after a drag: they no longer wait for the survey tile to settle, and a tile
+  arriving no longer pushes that wait back.
 - Offline sky maps are preferred wherever one stands in for an online
   survey: a framing saved on the DSS2 plates or the online NSNS SHO layer
   opens on the offline set when the server has it, and plan thumbnails draw

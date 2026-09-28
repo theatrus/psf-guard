@@ -1,4 +1,6 @@
-.director-page { flex: 1; overflow: auto; padding: 24px; min-height: 0; }
+/* The app's main column scrolls; this page must not scroll on its own, or
+   the framing view's sticky sky column would have nothing to stick to. */
+.director-page { padding: 24px; }
 .director-page > * { max-width: 1400px; margin-left: auto; margin-right: auto; }
 .director-database-links { padding: 16px 0; border-top: 1px solid var(--color-border-secondary); }
 .director-page a { display: inline-flex; gap: 6px; align-items: center; color: var(--color-primary); }
@@ -92,7 +94,11 @@
 .director-plan .project-targets-list { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
 @media (max-width: 600px) { .director-plan-body.has-thumb { grid-template-columns: minmax(0, 1fr); } }
 
-.director-workspace h2 { margin: 16px 0 0; font-size: 22px; }
+.director-workspace h2 { margin: 0; font-size: 22px; }
+/* The way back and the plan's name share one row, so the sky starts high. */
+.director-workspace-head { justify-content: flex-start; margin: 8px 0 0; }
+.director-workspace-head h2 { overflow-wrap: anywhere; }
+.director-framing-heading { margin-top: 12px; }
 /* Planning is a wide screen: the sky takes the width the window has. */
 .director-page > .director-workspace { max-width: 1760px; }
 .director-workspace-columns { display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr); gap: 24px; align-items: start; }
