@@ -51,7 +51,11 @@ table refreshes every fifteen seconds.
 
 **Plans** lists every global project with where it is linked (each database
 and the source project there) and how far its planning has come: not linked,
-framed, planned, or activated with the revision and date. A framed plan
+framed, planned, or activated with the revision and date. A project that
+Target Scheduler already points somewhere counts as framed there: the list
+says so, takes the first target's coordinates and rotation as the framing
+and the rig's field as the panel, and opening the plan starts Director's
+own framing from it. A framed plan
 shows a thumbnail of the sky it was framed on, from the same survey cache
 the framing view uses, with its panels drawn where the plan puts them, so a
 glance down the list says what each plan covers. Once a database

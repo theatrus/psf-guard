@@ -21,8 +21,9 @@ function frames(progress: { desired: number; accepted: number }): string {
 function stage(row: DirectorPlanRow): string {
   if (row.activation) return `Activated rev ${row.activation.revision} on ${new Date(row.activation.applied_at_ms).toLocaleDateString()}, ${row.activation.rigs} rig${row.activation.rigs === 1 ? '' : 's'}${row.progress ? `, ${frames(row.progress)} accepted` : ''}`;
   if (row.plan && row.plan.objectives > 0) return `Planned: ${row.plan.objectives} objective${row.plan.objectives === 1 ? '' : 's'}, ${row.plan.rigs} rig${row.plan.rigs === 1 ? '' : 's'}, not activated`;
+  if (row.framing?.source === 'catalog') return `Framed in Target Scheduler: ${row.framing.target_name || 'target'}${row.framing.panels > 1 ? `, ${row.framing.panels} targets` : ''}; open to plan it in Director`;
   if (row.framing) return `Framed: ${row.framing.target_name || 'target'}, ${row.framing.panels} panel${row.framing.panels === 1 ? '' : 's'}`;
-  return row.links.length ? 'Linked, not framed yet' : 'Not linked to any database';
+  return row.links.length ? 'Linked; its database has no target with coordinates yet' : 'Not linked to any database';
 }
 
 /** Every global project with its links and how far its planning has come. */

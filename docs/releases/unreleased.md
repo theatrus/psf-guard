@@ -169,6 +169,11 @@
 
 ## Fixed
 
+- Plans whose Target Scheduler project already has a target no longer read
+  "Linked, not framed yet": the list says they are framed in Target
+  Scheduler, shows the target's sky as the thumbnail, and opening the plan
+  starts Director's framing from it.
+
 - The catalog identity and Director tables PSF Guard adds to a rig database
   are plain SQL again, so N.I.N.A., Target Scheduler and older SQLite tools
   open the file as before; tables a preview build made `STRICT` are rebuilt

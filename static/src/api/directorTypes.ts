@@ -302,7 +302,7 @@ export interface DirectorMosaicPreview {
 }
 
 /** One target of a linked project, with the frames its exposure plans ask for, have and have accepted. */
-export interface DirectorTargetProgress { name: string; desired: number; acquired: number; accepted: number }
+export interface DirectorTargetProgress { name: string; desired: number; acquired: number; accepted: number; center: DirectorSkyPosition | null; rotation_degrees: number | null }
 export interface DirectorPlanLink {
   catalog_slug: string;
   catalog_name: string;
@@ -314,6 +314,8 @@ export interface DirectorPlanLink {
 }
 /** Enough of a saved framing for the plan list to draw its survey thumbnail. */
 export interface DirectorFramingSummary {
+  /** `draft`: saved in Director. `catalog`: the linked database's target stands in until a draft is saved. */
+  source: 'draft' | 'catalog';
   revision: number;
   target_name: string;
   panels: number;

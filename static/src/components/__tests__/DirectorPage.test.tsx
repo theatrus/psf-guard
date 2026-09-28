@@ -102,10 +102,13 @@ describe('Director management', () => {
     mount(false, undefined, [
       http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list([
         row(record, { links: [{ catalog_slug: 'c925', catalog_name: 'C925', rig, source_project_guid: 'g', source_row_id: 7, source_name: 'Andromeda subs',
-          targets: [{ name: 'M31 r1c1', desired: 72, acquired: 40, accepted: 36 }, { name: 'M31 r2c1', desired: 72, acquired: 0, accepted: 0 }] }],
+          targets: [{ name: 'M31 r1c1', desired: 72, acquired: 40, accepted: 36, center: { ra_degrees: 10.68, dec_degrees: 41.27 }, rotation_degrees: 35 }, { name: 'M31 r2c1', desired: 72, acquired: 0, accepted: 0, center: null, rotation_degrees: null }] }],
           progress: { desired: 144, acquired: 40, accepted: 36, targets: 2 },
-          framing: { revision: 2, target_name: 'M31', panels: 4, panel_rig_id: rig.id, center: { ra_degrees: 10.68, dec_degrees: 41.27 }, position_angle_degrees: 35, panel: { width_degrees: 1, height_degrees: 0.75 }, mosaic: { rows: 2, columns: 2, overlap_percent: 20 }, survey_id: 'dss2_color', extent: { width_degrees: 1.8, height_degrees: 1.35 } }, plan: { revision: 1, objectives: 2, rigs: 1 }, activation: null }),
+          framing: { source: 'draft', revision: 2, target_name: 'M31', panels: 4, panel_rig_id: rig.id, center: { ra_degrees: 10.68, dec_degrees: 41.27 }, position_angle_degrees: 35, panel: { width_degrees: 1, height_degrees: 0.75 }, mosaic: { rows: 2, columns: 2, overlap_percent: 20 }, survey_id: 'dss2_color', extent: { width_degrees: 1.8, height_degrees: 1.35 } }, plan: { revision: 1, objectives: 2, rigs: 1 }, activation: null }),
         row({ ...record, id: '33333333-3333-4333-8333-333333333333', name: 'Bare' }),
+        row({ ...record, id: '44444444-4444-4444-8444-444444444444', name: 'Pelican' }, { links: [{ catalog_slug: 'c925', catalog_name: 'C925', rig, source_project_guid: 'p', source_row_id: 9, source_name: 'Pelican', targets: [{ name: 'IC 5070', desired: 40, acquired: 12, accepted: 10, center: { ra_degrees: 312.75, dec_degrees: 44.37 }, rotation_degrees: 90 }] }],
+          progress: { desired: 40, acquired: 12, accepted: 10, targets: 1 },
+          framing: { source: 'catalog', revision: 0, target_name: 'IC 5070', panels: 1, panel_rig_id: rig.id, center: { ra_degrees: 312.75, dec_degrees: 44.37 }, position_angle_degrees: 90, panel: { width_degrees: 0.7, height_degrees: 0.5 }, mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, survey_id: 'dss2_color', extent: { width_degrees: 0.7, height_degrees: 0.5 } } }),
       ], ['Odd file: has no Target Scheduler project table'])))),
       http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([{ rig, catalog_slug: 'c925', catalog_name: 'C925', profile: null,
         field_of_view: { width_degrees: 0.7, height_degrees: 0.5, pixel_scale_arcsec: 0.41, focal_ratio: 10 }, default_exposure_seconds: { broadband: 120, narrowband: 300 } }]))),
@@ -122,6 +125,9 @@ describe('Director management', () => {
     await waitFor(() => expect(thumb.querySelector('img')).toBeInTheDocument());
     expect(thumb.querySelectorAll('.plan-thumb-panel')).toHaveLength(4);
     expect(screen.queryByRole('img', { name: /Framing of Bare/ })).not.toBeInTheDocument();
+    // A project Target Scheduler already points somewhere is framed there, thumbnail and all.
+    expect(screen.getByText('Framed in Target Scheduler: IC 5070; open to plan it in Director')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Framing of Pelican on dss2 color' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open M31' })).toHaveAttribute('href', `/director?db=old-catalog&project=123&directorProject=${record.id}`);
     expect(screen.getByText('Not linked to any database')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Bare' })).toBeInTheDocument();
