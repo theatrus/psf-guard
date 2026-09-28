@@ -281,7 +281,9 @@ impl Cutout {
         if !finite(query.ra, 0.0, 360.0)
             || query.ra >= 360.0
             || !finite(query.dec, -90.0, 90.0)
-            || !finite(query.fov, 0.02, 40.0)
+            // Up to a hemisphere and a bit, so the framing view has a picture
+            // behind it at every zoom.
+            || !finite(query.fov, 0.02, 180.0)
             || !(64..=2048).contains(&query.width)
             || !(64..=2048).contains(&query.height)
             || !finite(query.rotation, 0.0, 360.0)

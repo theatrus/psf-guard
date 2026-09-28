@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { DirectorFramingPreview, DirectorFramingRequest } from '../../../api/directorTypes';
-import { DEFAULT_STAGE, angleAt, deprojectFrom, framingBackdrop, framingGeometry, framingGraticule, gridSteps, handleSky, compassDirections, deprojectOn, offsetFrom, projectOn, reanchoredViewCenter, stageDeproject, stageFor, stageProject, tileMatrix, toStage, trueWidth, viewAt } from '../framingModel';
+import { DEFAULT_STAGE, angleAt, deprojectFrom, framingBackdrop, framingGeometry, framingGraticule, gridSteps, handleSky, compassDirections, deprojectOn, offsetFrom, projectOn, stageDeproject, stageFor, stageProject, tileMatrix, toStage, trueWidth, viewAt } from '../framingModel';
 
 /** Written by `crates/director-core/tests/framing_fixture.rs`; the core keeps
  *  reproducing it, so this test pins the browser port to the server. */
@@ -108,6 +108,9 @@ describe('the chart under the framing', () => {
     const pole = { ra_degrees: 0, dec_degrees: 89 };
     const polar = framingGraticule(viewAt(pole, pole), 20);
     expect(polar.paths.filter(p => p.kind === 'ra').length).toBeGreaterThanOrEqual(12);
+    // Labels never sit on top of one another where meridians crowd.
+    const xs = polar.labels.filter(l => l.kind === 'ra').map(l => l.x).sort((a, b) => a - b);
+    for (let i = 1; i < xs.length; i += 1) expect(xs[i] - xs[i - 1]).toBeGreaterThanOrEqual(70);
   });
   it('brings in stars, figures, names and the Milky Way as the view widens', () => {
     // Looking at Orion's belt; the constellation's name sits 13° north of it.
@@ -125,7 +128,7 @@ describe('the chart under the framing', () => {
 
 describe('the anchored window', () => {
   const target = { ra_degrees: 38.2, dec_degrees: 61.45 };
-  it('slides over the plane without turning it, so a footprint keeps its bearing as the view pans', () => {
+  it('keeps a footprint\'s bearing when the window slides over one plane', () => {
     const geometry = framingGeometry({ center: target, position_angle_degrees: 35, panel: { width_degrees: 2, height_degrees: 1.5 }, mosaic: { rows: 1, columns: 1, overlap_percent: 0 }, overlays: [], view: null });
     const corners = geometry.panels[0].corners;
     const bearing = (view: ReturnType<typeof viewAt>) => {
@@ -138,13 +141,6 @@ describe('the anchored window', () => {
     // The window's own center is where the view was put.
     const back = stageDeproject(panned.anchor, panned.offset);
     expect(back.ra_degrees).toBeCloseTo(46, 6); expect(back.dec_degrees).toBeCloseTo(63, 6);
-  });
-  it('re-anchors on a moved target without moving it on the stage', () => {
-    const view = viewAt(target, target);
-    const moved = { ra_degrees: 41, dec_degrees: 61.2 };
-    const before = projectOn(view, moved)!;
-    const after = projectOn(viewAt(moved, reanchoredViewCenter(view, moved)), moved)!;
-    expect(after[0]).toBeCloseTo(before[0], 9); expect(after[1]).toBeCloseTo(before[1], 9);
   });
   it('lays a tile fetched away from the anchor with the turn between the two planes', () => {
     // A tile centered 7.8° of right ascension east of the target: at this
@@ -167,7 +163,7 @@ describe('the anchored window', () => {
 
 describe('a turned sky', () => {
   const target = { ra_degrees: 38.2, dec_degrees: 61.45 };
-  it('turns the window by the camera angle, round-trips, and keeps a moved target in place when re-anchored', () => {
+  it('turns the window by the camera angle and round-trips', () => {
     const view = viewAt(target, target, 35);
     const north = projectOn(view, { ra_degrees: 38.2, dec_degrees: 62.45 })!;
     // North now leans 35° toward the right of the stage (window x runs left).
@@ -176,10 +172,6 @@ describe('a turned sky', () => {
       const back = deprojectOn(view, projectOn(view, p)!);
       expect(back.ra_degrees).toBeCloseTo(p.ra_degrees, 9); expect(back.dec_degrees).toBeCloseTo(p.dec_degrees, 9);
     }
-    const moved = { ra_degrees: 41, dec_degrees: 61.2 };
-    const before = projectOn(view, moved)!;
-    const after = projectOn(viewAt(moved, reanchoredViewCenter(view, moved), 35), moved)!;
-    expect(after[0]).toBeCloseTo(before[0], 9); expect(after[1]).toBeCloseTo(before[1], 9);
   });
   it('points the compass with the sky', () => {
     const up = compassDirections(0);

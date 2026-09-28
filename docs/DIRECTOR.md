@@ -349,35 +349,42 @@ Open a plan from the Planning page. The workspace is a wide screen:
 of its height, with the controls beside it; the plan and activation sit under
 it side by side, and the linked databases last.
 
-The sky is drawn the way the Sky view draws it, on a plane anchored at the
-target, and a drag works one of two ways, as in N.I.N.A.'s framing
-assistant. **The rectangle over a still sky** (the default, like N.I.N.A.
-with a survey image): drag the rectangle to move the target, and drag the
-sky to look around without moving it. **The sky under a pinned rectangle**
-(like N.I.N.A.'s sky atlas): the rectangle stays where it is and dragging
-anywhere moves the sky, and the target with it; Shift-drag looks around
-without moving the target. Either way the plane slides rather than turns,
-so the rectangle keeps its bearing and the grid its shape, and the plane
-follows the target once a move is done. **Turn the sky with the camera**
-keeps the rectangle upright and turns the sky by the camera angle instead,
-N.I.N.A.'s "rotate sky"; the compass shows where north has gone. Both
-choices are remembered in the browser. Scroll or use the corner buttons to
-zoom, from three arcminutes across out to a hemisphere. Survey imagery shows up to 30°
-across; wider than that the stage is a chart, which draws at once: bright
-stars, constellation figures and names, the Milky Way band, and an
-equatorial grid whose spacing follows the zoom, with declination labelled
-down the left edge and right ascension along the top. The grid and the
-chart layers each have a switch under **View**. The projection is
-stereographic, in the browser, on the server's survey images and on the
-offline maps alike. A survey tile is fetched about the window's center, so
-its north leans against the stage's once the view has panned; the tile is
-laid on the stage through a matrix fitted through the sky, which carries
-that turn along with the scale and shift, so the picture stays under the
-grid and the rectangle. At framing widths the projection is the tangent
-plane to within a pixel, and the readout under the stage gives the width of
-sky the stage really spans. The rotation handle lives on the target's own plane, so it stays on
-the rectangle's up direction however far the view has panned from the
-target.
+The sky is drawn the way N.I.N.A.'s framing assistant and the Sky view draw
+it: a stereographic globe about the center of the view, so a drag turns the
+sky under the pointer and a rectangle away from the center leans with its
+local north. A drag works one of two ways, as in N.I.N.A. **The rectangle
+over a still sky** (the default, like N.I.N.A. with a survey image): drag
+the rectangle to move the target, and drag the sky to look around without
+moving it. **The sky under a pinned rectangle** (like N.I.N.A.'s sky atlas):
+the rectangle stays where it is and dragging anywhere turns the sky, and the
+target with it; Shift-drag looks around without moving the target. **Turn
+the sky with the camera** keeps the rectangle upright and turns the sky by
+the camera angle instead, N.I.N.A.'s "rotate sky"; the compass shows where
+north has gone. Both choices are remembered in the browser. Scroll or use
+the corner buttons to zoom, from three arcminutes across out to a
+hemisphere.
+
+The survey picture follows at every zoom, out to a hemisphere: the server
+renders it at the width asked for, and the offline maps composite every tile
+of the set for a wide view in a fraction of a second (decoded tiles stay in
+memory between renders, and a wide view takes the small versions of each
+tile). Over it sit constellation figures and names once the view is wide
+enough, and an equatorial grid whose spacing follows the zoom, with
+declination labelled down the left edge and right ascension along the top;
+drawn stars and the Milky Way band stand in only until a picture is up. The
+grid and the constellation layer each have a switch under **View**. The
+projection is stereographic, in the browser, on the server's survey images
+and on the offline maps alike. A survey tile is fetched about where the view
+rested, so its north leans against the stage's once the view has turned on;
+while the pointer moves the tile is laid on the stage through a matrix
+fitted through the sky, which carries that turn along with the scale and
+shift, so the picture stays under the grid and the rectangle until the
+settled view's own tile lands. At framing widths the projection is the
+tangent plane to within a pixel, and the readout under the stage gives the
+width of sky the stage really spans. The rotation handle lives on the
+target's own plane, so it stays on the rectangle's up direction wherever the
+view is.
+
 **Framing** shows the sky around the project's first target on a survey
 image, with the target's catalog coordinates and rotation already filled in,
 the way N.I.N.A.'s framing assistant does. When the server holds N.I.N.A.'s

@@ -8,7 +8,7 @@ import { AccessContext, useAccess } from '../../auth/access';
 import FramingView from '../director/FramingView';
 import type { DirectorFramingDraft, DirectorMosaicPreview } from '../../api/directorTypes';
 import type { SkyPreview } from '../../api/types';
-import { moveBy, offsetFrom, skyAtStage, stackMatrix, thumbnailFov, toStage, viewAt } from '../director/framingModel';
+import { angleAt, moveBy, offsetFrom, skyAtStage, stackMatrix, thumbnailFov, toStage, viewAt } from '../director/framingModel';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
 const rigA = { rig: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'RedCat', revision: 1 }, catalog_slug: 'redcat', catalog_name: 'RedCat 61',
@@ -187,11 +187,16 @@ describe('Framing view', () => {
     fireEvent.pointerDown(stage, pointer(hx, hy));
     fireEvent.pointerMove(stage, { pointerId: 1, clientX: 300, clientY: 384 });
     fireEvent.pointerUp(stage, { pointerId: 1 });
-    // Once the drag ends the plane is re-anchored on the moved target and the
-    // window moved so the rectangle stays put, so the target's row on the
-    // stage is its own east-west line: due east on the stage reads 90°.
+    // The angle is read on the target's own plane. The stage projects about
+    // the view center, which is still the seed, and from the moved target the
+    // stage's horizontal is a shade off the target's east, so the reading is
+    // what the model gives for that stage point: a little under 90°.
     const turned = () => Number((screen.getByLabelText('Position angle degrees') as HTMLInputElement).value);
-    await waitFor(() => expect(turned()).toBeCloseTo(90, 1));
+    const center = { ra_degrees: Number((screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value), dec_degrees: Number((screen.getByLabelText('Declination degrees') as HTMLInputElement).value) };
+    const fov = Number((screen.getByLabelText('View width degrees') as HTMLInputElement).value);
+    const expected = angleAt(center, skyAtStage(viewAt(seed.center, seed.center), fov, 300, 384));
+    await waitFor(() => expect(turned()).toBeCloseTo(expected, 1));
+    expect(turned()).toBeGreaterThan(88); expect(turned()).toBeLessThan(92);
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
     await waitFor(() => expect(saves).toHaveLength(1));
     expect(saves[0].panel_rig_id).toBe(rigA.rig.id);
@@ -388,20 +393,19 @@ describe('Framing view', () => {
     expect(screen.getByText(/sky turned 35.0°/)).toBeInTheDocument();
   });
 
-  it('turns into a chart when zoomed out: no survey request, a grid, stars and names', async () => {
+  it('keeps a picture behind the sky out to a hemisphere, with the grid and constellation names over it', async () => {
     const { cutouts } = fixture(); mount();
     // The first tile answers 202 once and then arrives; under a loaded suite that takes a while.
     await waitFor(() => expect(screen.getByTestId('framing-sky')).toBeInTheDocument(), { timeout: 10_000 });
     expect(screen.getByTestId('framing-graticule').querySelectorAll('path').length).toBeGreaterThan(3);
     expect(screen.queryByTestId('framing-names')).not.toBeInTheDocument();
-    const before = cutouts.length;
     fireEvent.change(screen.getByLabelText('View width degrees'), { target: { value: '120' } });
     await waitFor(() => expect(screen.getByTestId('framing-names')).toBeInTheDocument(), { timeout: 10_000 });
-    expect(screen.getByTestId('framing-stars').querySelectorAll('circle').length).toBeGreaterThan(20);
-    expect(screen.getByText(/Chart view; survey imagery returns below 30° across/)).toBeInTheDocument();
-    expect(screen.queryByTestId('framing-sky')).not.toBeInTheDocument();
-    await new Promise(resolve => setTimeout(resolve, 400));
-    expect(cutouts.length).toBe(before);
+    // A wide view still asks for a picture: the widest the server renders.
+    await waitFor(() => expect(cutouts.some(query => query.includes('fov=180'))).toBe(true), { timeout: 10_000 });
+    // The survey shows the real stars, so the drawn ones stay off while a picture is up.
+    await waitFor(() => expect(screen.getByTestId('framing-sky')).toBeInTheDocument(), { timeout: 10_000 });
+    expect(screen.queryByTestId('framing-stars')).not.toBeInTheDocument();
     // The rectangle is still drawn, tiny, and the readout gives the sky width the stage really spans.
     expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1);
     expect(screen.getByText(/across · N up, E left/).textContent).toMatch(/^1[0-3]\d\.\d+° across/);
