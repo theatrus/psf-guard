@@ -30,10 +30,10 @@ export default function DirectorPage() {
   }, [selected, available, params, setParams]);
   return (
     <main className="director-page">
-      <header className="director-heading"><h1>Director</h1><span className="director-preview">Experimental</span></header>
-      {status.isPending && <p role="status">Loading Director...</p>}
+      <header className="director-heading"><h1>Planning</h1><span className="director-preview">Experimental</span></header>
+      {status.isPending && <p role="status">Loading Planning...</p>}
       {status.isError && <div role="alert"><p>{message(status.error)}</p><button type="button" onClick={() => void status.refetch()}>Retry</button></div>}
-      {status.data && !available && <p>Director management is unavailable on this server.</p>}
+      {status.data && !available && <p>Planning is unavailable on this server; Director management is off.</p>}
       {available && status.data && <>
         {!status.data.acquisition_available && <p className="director-muted">Acquisition is not yet available.</p>}
         {workspaceProject
@@ -41,9 +41,9 @@ export default function DirectorPage() {
           : sourceSlug
           ? projectId !== null && sourceSlug === params.get('db')
             ? <DirectorProjectContext key={`${status.data.instance_id}:${sourceSlug}:${projectId}`} instanceId={status.data.instance_id!} slug={sourceSlug} projectId={projectId} />
-            : <p role="alert">Invalid project scope. <Link to="/">Overview</Link></p>
+            : <p role="alert">Invalid project scope. <Link to="/">Library</Link></p>
           : <>
-            <Link to="/">Overview projects</Link>
+            <Link to="/">Library</Link>
             <DirectorDashboard />
             <DirectorPlans key={status.data.instance_id!} instanceId={status.data.instance_id!} />
             <DirectorRigs />

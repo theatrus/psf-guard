@@ -91,7 +91,7 @@ web server for Docker or a NAS, and as a standalone CLI.
 2. In Settings, choose **New Database from Images** to build a catalog from FITS
    folders, or **Add Database** to open an existing Target Scheduler catalog.
 3. Add the folders that hold the FITS files.
-4. Choose a project on Overview, then open Images or Sequence.
+4. Choose a project on Library, then open Images or Sequence.
 
 PSF Guard reads images in place; it does not copy the FITS library. Image
 folders can stay read-only. The database must be writable to save grades or
@@ -107,9 +107,9 @@ before a full calibration and processing run.
 
 ### Review and grade a night quickly
 
-| Overview Dashboard | Image Grid | Side-by-Side Comparison |
+| Library | Image Grid | Side-by-Side Comparison |
 |:--:|:--:|:--:|
-| ![Overview with recent projects and real narrowband frames](docs/overview.png) | ![Flaming Star H-alpha frames in the cleaned image grid](docs/grid-flaming-star-narrowband.png) | ![Compare](docs/compare.jpg) |
+| ![Library with recent projects and real narrowband frames](docs/overview.png) | ![Flaming Star H-alpha frames in the cleaned image grid](docs/grid-flaming-star-narrowband.png) | ![Compare](docs/compare.jpg) |
 | Project statistics and progress tracking | Grid view with filtering and batch operations | Synchronized zoom and detailed comparison |
 
 The compact grid header keeps project, target, filters, grouping, image size,
@@ -126,7 +126,7 @@ Ctrl/Cmd+Click toggles one frame.
 
 </details>
 
-Each Overview project has a **Plan & coordinates** view. It shows the project
+Each Library project has a **Plan & coordinates** view. It shows the project
 settings and every target's catalog coordinates and exposure plans. The
 inherited Target Scheduler mapping stores RA as decimal hours and Dec as
 degrees. New plans reuse an exact matching profile template or create one with
@@ -226,7 +226,7 @@ guess why every request comes back 403. Neither block needs
 `--allow-database-management`: accepting a sync must not require the grant
 that lets a network caller name server filesystem paths.
 
-The Overview's **Plan & coordinates** dialog lets you correct imported names,
+The Library's **Plan & coordinates** dialog lets you correct imported names,
 coordinates, limits, and desired counts. See the
 **[import and planning guide](docs/IMPORTING.md)** for database paths, grouping
 rules, backfill behavior, and CLI commands.
@@ -670,13 +670,13 @@ tuning, and safety properties: **[docs/SCREENING.md](docs/SCREENING.md)**.
 
 ## 📤 Export accepted frames for stacking
 
-After grading, expand a project on **Overview** and choose **⬇ Export**. The
+After grading, expand a project on **Library** and choose **⬇ Export**. The
 desktop app writes a WBPP-style target/filter tree to a folder you choose. A
 browser downloads the same tree as a ZIP. Rejected frames never enter the
 export. When the calibration library contains a safe match, the export also
 includes raw `BIAS`, `DARK`, `DARKFLAT`, and target/filter `FLAT` folders.
 
-![Overview project card with the Export action](docs/export-overview.png)
+![Library project card with the Export action](docs/export-overview.png)
 
 A remote server can export onto its own drive instead of streaming a ZIP.
 Set a **server export directory** for the database (Settings, or `export_dir`
@@ -716,7 +716,7 @@ psf-guard astrobin-csv my-db --target-id 12 --detail full -o ngc7023.csv
 See **[AstroBin acquisition export](docs/ASTROBIN_EXPORT.md)** for the row
 rules and the filter id map.
 
-## ⚗ Stack in WBPP from the Overview
+## ⚗ Stack in WBPP from the Library
 
 **Stack in WBPP** on a project card runs PixInsight's WeightedBatchPreprocessing
 on the server, against the frames where they are, with each night's flats

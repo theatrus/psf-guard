@@ -5,7 +5,7 @@ import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
 import { applyRealSchema } from '../e2e/fixtures/sync';
 
-test('every database project is a plan, shared GUIDs make one plan across rigs, and the workspace opens from Overview', async ({ page, request }, testInfo) => {
+test('every database project is a plan, shared GUIDs make one plan across rigs, and the workspace opens from the Library', async ({ page, request }, testInfo) => {
   test.setTimeout(60_000);
   const slugs: string[] = [];
   const errors: string[] = [];
@@ -78,11 +78,11 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     expect(await page.locator('.director-page').evaluate(element => element.scrollWidth <= element.clientWidth)).toBeTruthy();
     await page.setViewportSize({ width: 1440, height: 1000 });
 
-    // Overview's Rig planning lands in the same workspace.
+    // The Library's Open in Planning lands in the same workspace.
     await page.goto(`/#/?db=${slugs[0]}&project=1&dbfilter=${slugs[0]}`);
     const card = page.locator(`[data-project-key="${slugs[0]}:1"]`);
     await card.getByRole('button', { name: 'Plan & coordinates' }).click();
-    await page.getByRole('button', { name: 'Rig planning' }).click();
+    await page.getByRole('button', { name: 'Open in Planning' }).click();
     await expect(page.getByRole('heading', { name: 'Andromeda exposures' })).toBeVisible();
     expect(new URL(page.url().split('#')[1], 'http://test').searchParams.get('directorProject')).toBe(mappings[1].items[0].project_id);
     await page.getByRole('link', { name: 'Plans' }).click();

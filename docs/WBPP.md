@@ -3,7 +3,7 @@
 PixInsight's WeightedBatchPreprocessing (WBPP) is the stacker most people
 end up in. PSF Guard hands it a project two ways: as an **export** whose
 runner scripts you start yourself, on any machine, or as a **run** PSF
-Guard starts on its own server from the Overview. Both send WBPP the same
+Guard starts on its own server from the Library. Both send WBPP the same
 thing: the graded lights where they already are, each night's flats
 matched to its lights, and every setting spelled out, so a headless run
 does what you meant.
@@ -62,7 +62,7 @@ PixInsight needs a display, and that gives it a virtual one.
 
 ![The WBPP run dialog with settings, progress and results](wbpp-run.png)
 
-**Stack in WBPP**, on a project card of the Overview, runs WBPP on the
+**Stack in WBPP**, on a project card of the Library, runs WBPP on the
 server. It needs the database-management grant, because it starts a
 program on the server, and a PixInsight install the server can reach.
 
@@ -100,7 +100,7 @@ a time across all databases. Starting a second project while one runs
 queues it: the dialog opens under that project's own name, says which run
 PixInsight is busy with, and its button reads **Queue stacking**. A queued
 run starts on its own when the running one ends, with the settings it was
-queued with, whatever the first run's outcome. The Overview lists runs in
+queued with, whatever the first run's outcome. The Library lists runs in
 line with their place; **×** takes one out, and so does **Remove from
 queue** in its dialog. The queue lives in the server process, so a
 restart drops it along with the run under way. Opening the dialog on the
@@ -113,7 +113,7 @@ output. Everything stays in the run folder, so it is also there on the
 server's disk for PixInsight to open directly. A run that wrote no master
 is reported as failed, with the last error WBPP logged.
 
-The Overview shows every database's run under way, just finished, or in
+The Library shows every database's run under way, just finished, or in
 line, in whichever browser or tab you open it from: one row per job above
 the metrics, coloured by state, and the project's own **Stack in WBPP**
 action reads *Stacking in WBPP…*, *Queued for WBPP*, *WBPP masters ready*

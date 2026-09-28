@@ -28,8 +28,8 @@ replacement data, process, and assess completion. A project can span different
 telescopes, sites, catalogs, and eventually collaborating PSF Guard instances.
 
 Director covers acquisition planning and acquisition within that lifecycle; it
-does not replace PSF Guard's Overview or take ownership of catalog review,
-grading, calibration inspection or processing. Overview remains a key project
+does not replace PSF Guard's Library or take ownership of catalog review,
+grading, calibration inspection or processing. Library remains a key project
 and collected-data view, including the per-rig catalogs already represented
 under its projects. Both surfaces refer to the same projects.
 
@@ -87,7 +87,7 @@ untested integration requirements unchecked.
 | Project framing wizard | Framing view in the project workspace: survey backgrounds from N.I.N.A.'s HiPS list, name resolution through CDS Sesame, interactive center, angle and zoom, mosaic rows/columns/overlap, per-rig footprints from rig profiles, draft editing with compare-and-set, and a visibility panel with tonight's altitude chart, custom horizon, Moon and darkness like N.I.N.A.'s framing assistant, plus a week of nights per rig. | Reference images with WCS, layer comparison, offline region cache, rotation feasibility per rig. |
 | Catalog discovery | [#498](https://github.com/theatrus/psf-guard/pull/498) merged: operator-scoped read-only project/profile evidence from registered TS-compatible catalogs, with bounded results and invalid/duplicate identity reports. | Discovery does not infer rig ownership or read image history. |
 | Catalog adoption | [#502](https://github.com/theatrus/psf-guard/pull/502) merged explicit durable lineage; [#503](https://github.com/theatrus/psf-guard/pull/503) merged operator preview/apply, exact identity matching, stale-review refusal and interrupted-write recovery. [#506](https://github.com/theatrus/psf-guard/pull/506) merged the reviewed mapping UI and read-only inventory, with real-server browser tests. | Independent forks, historical-image attribution, contribution accounting and acquisition authorization remain separate work. |
-| Operator API and UI | Director page is a plan list (`GET /plans`: links, framing/plan/activation stage, Rig planning entry) over a rig list (planning state, optics, last plugin status); reviewed planning links and rig profiles in database settings; Rig planning holds framing, plan and activation over Overview's existing target/exposure editor. The identity lists and Catalogs tab are retired; old links redirect. Desktop/mobile real-server tests cover two databases contributing to one project and return navigation. | Pairing-code management UI and acquisition control. The Live table shows connectivity, last report, contact ages and assignments per rig. UI tests are not equipment tests. |
+| Operator API and UI | Planning page is a plan list (`GET /plans`: links, framing/plan/activation stage, Open in Planning entry) over a rig list (planning state, optics, last plugin status); reviewed planning links and rig profiles in database settings; the planning workspace holds framing, plan and activation over the Library's existing target/exposure editor. The identity lists and Catalogs tab are retired; old links redirect. Desktop/mobile real-server tests cover two databases contributing to one project and return navigation. | Pairing-code management UI and acquisition control. The Live table shows connectivity, last report, contact ages and assignments per rig. UI tests are not equipment tests. |
 | Program delivery | #528 adds `GET /rigs/{rig}/program`, compiling activated rig rows and reported configuration into core Program plus identity links and rig context. Plugin #28 adds bounded, read-only HTTP preview intake with exact scope/configuration/link checks and immutable-identity drift detection. The current commissioning increment adds an atomic, identity-bound durable preview cache; expired history is not renewed authorization. | Immutable issued allocations, explicit filter mapping, progress-preserving refresh and acquisition commissioning. The current compiler response must not yet arm acquisition; see the program-intake audit below. |
 | Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
 | Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. #530 adds server receipt ingestion/contiguous acknowledgements and coalesced status routes; #531 shows reported rig status in Director. The current commissioning increment adds separate scoped pairing and a bounded capture sender with durable, identity-bound cursors, tested against a real local server after a native simulator run. | Preparation feed, production background/status delivery, grade feedback, offline authorization lifecycle, manual/sequence batch reconcile and replacement activation remain missing. |
@@ -120,7 +120,7 @@ configurations; neither creates another rig by itself.
 
 ### Rigs are registered project databases
 
-The per-rig databases already visible through Overview are Director's rig
+The per-rig databases already visible through Library are Director's rig
 inventory. This is why another "New rig" workflow and manually assigning each
 TS profile to an unrelated rig identity is the wrong default: it asks users to
 reconstruct information PSF Guard already has and lets the two inventories
@@ -153,7 +153,7 @@ equipment provenance rather than pretending all frames used today's setup.
 
 The meta database coordinates project intent and contributions across those
 database-backed rigs. Each downstream project belongs to a participating rig
-database and links back to the same shared project. Overview still owns catalog
+database and links back to the same shared project. Library still owns catalog
 review and combined progress; Director plans and acquires contributions. Reuse
 TS project metadata to seed that planning flow, not to create parallel catalogs.
 
@@ -199,14 +199,14 @@ Never silently combine same-named projects or infer rig ownership from a name.
 Shared GUIDs are identity: the same project synced to two rig databases is one
 plan with two rigs, taken in without an operator step.
 
-Keep Overview and Director as complementary views of the same project, not one
-replacement workspace. Overview retains project browsing, per-rig catalog
+Keep Library and Director as complementary views of the same project, not one
+replacement workspace. Library retains project browsing, per-rig catalog
 contributions, collected-data summaries and entry points to review, grading and
 processing. Director provides framing, objectives, rig participation, planning
-and acquisition status. A project can exist in Overview without using Director;
+and acquisition status. A project can exist in Library without using Director;
 planning can also begin before a project has any captured data.
 
-Provide contextual navigation between an Overview project and its Director
+Provide contextual navigation between an Library project and its Director
 plan, preserving project identity and any applicable rig/database scope on the
 return path. Shared progress projections can appear in both views; neither view
 creates a second project or independently editable copy of acquisition history.
@@ -216,11 +216,11 @@ Reuse existing database settings for source/import/sync connections and expose
 source links in project context when needed. The current experimental Director
 identity lists and Catalogs mapping tab are implementation scaffolding, not the
 intended catalog navigation. Retire that parallel catalog workflow without
-removing Overview's projects or per-rig catalog access.
+removing Library's projects or per-rig catalog access.
 
 ### Planner entry and source metadata
 
-Extend the existing Overview project/target dialog ("Plan & coordinates") into
+Extend the existing Library project/target dialog ("Plan & coordinates") into
 the planner workflow. Its TS-backed project description, target coordinates and
 rotation, exposure plans, template capture settings and desired counts provide
 the starting data; do not ask users to enter these again in an identity form.
@@ -230,7 +230,7 @@ The next steps are framing against survey backgrounds, choosing participating
 rigs and their optical setups, reviewing rig-specific downstream projects, then
 activating the shared intent and bounded assignments for Director. Downstream
 projects are contributions to the originating project, not independent top-level
-campaigns. Overview retains their collected data and the combined project rollup.
+campaigns. Library retains their collected data and the combined project rollup.
 
 Seed a reviewed draft, not immediate acquisition authority. Preserve source GUIDs
 and metadata revisions; convert RA hours at the planning boundary and handle the
@@ -333,7 +333,7 @@ input and must not call an endpoint before its row above says it exists.
 4. Framing view. Done: `director-core::framing` (gnomonic plane, mosaic
    layout, view-relative corners), framing drafts in meta schema 7 with
    compare-and-set, `POST /framing/preview`, `GET/PUT /projects/{id}/framing`,
-   `GET /rigs/profiles`, and the browser view under Rig planning: survey
+   `GET /rigs/profiles`, and the browser view under Open in Planning: survey
    image with pan and zoom, panel rig or typed panel size, mosaic grid and
    overlap, rig overlays, and draft save. Still open from the wizard section:
    reference images with WCS, blink or opacity comparison of layers, a
@@ -368,10 +368,10 @@ input and must not call an endpoint before its row above says it exists.
    contact by server receipt time; `GET /rigs/status` lists every bound rig
    with connectivity (`online` within 3 min, `stale` within 30, `offline`,
    `never`), the newest report flagged stale past 10 min, contact ages,
-   assignments and pending receipts; the Director page opens with the Live
+   assignments and pending receipts; the Planning page opens with the Live
    table. The plugin's sender for status and check-in is the other side.
 
-The Director page changed with these: the identity lists gave way to a plan
+The Planning page changed with these: the identity lists gave way to a plan
 list across databases (`GET /plans`) over a rig list with live status. Listing
 adopts automatically: every registered database becomes a rig and every
 project row with a GUID becomes a plan, same-GUID rows across databases one
@@ -744,7 +744,7 @@ the public container and the combined server session remain unverified.
 
 Start with a separate coordination SQLite database, provisionally named
 `psf-guard-meta.sqlite`, alongside existing registered catalogs. This is a new
-domain, not a repurposing of the catalog registry or the current merged Overview.
+domain, not a repurposing of the catalog registry or the current merged Library.
 Keep PSF-owned coordination tables out of TS-owned schema. Decide the precise
 sidecar layout for Director state during the execution spike.
 
@@ -2579,15 +2579,15 @@ allocation accounting and native assignment delivery are not implemented here.
   setup/intent references; current adoption refuses these cases without writes.
 - [ ] Bind plugin enrollment/check-in and site/setup resolution to that selected
   database context, including offline cached evidence and reconnect validation.
-- [ ] Connect Overview projects to Director planning using the same project
-  identity. Preserve Overview's project/per-rig catalog navigation and existing
+- [ ] Connect Library projects to Director planning using the same project
+  identity. Preserve Library's project/per-rig catalog navigation and existing
   review workflows; Director covers planning and acquisition, not their
   replacement. Add rigs as contribution plans without duplicate projects.
   The current UI reuses the existing project/target editor and reviewed mapping
-  APIs with the database-backed rig model. Overview -> Rig planning -> Overview
+  APIs with the database-backed rig model. Library -> Open in Planning -> Library
   preserves source scope. It is not a framing wizard,
   intent export, downstream-project generator or combined progress implementation.
-- [x] Browser-test navigation from an existing Overview project to its Director
+- [x] Browser-test navigation from an existing Library project to its Director
   plan and back with project/rig/database scope intact, and two database-backed
   rigs linked to one project. Check desktop/mobile layouts and stale reviews.
 - [ ] Extend browser coverage to the full planned-project workflow without
