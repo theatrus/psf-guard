@@ -109,6 +109,9 @@ pub struct ProjectOverviewResponse {
     pub date_range: DateRange,
     pub filters_used: Vec<String>,
     pub recent_images: Vec<crate::models::RecentImageSummary>,
+    /// Target Scheduler's project GUID; the same value in two databases is
+    /// one plan shot by two rigs, and the Library shows them as one.
+    pub guid: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

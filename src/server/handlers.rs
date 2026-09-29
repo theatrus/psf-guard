@@ -6102,6 +6102,7 @@ pub async fn get_projects_overview(
 
         response.push(ProjectOverviewResponse {
             id: project.id,
+            guid: project.guid.clone(),
             profile_id: project.profile_id.clone(),
             profile_name: project_with_profile.profile_name.clone(),
             name: project.name.clone(),

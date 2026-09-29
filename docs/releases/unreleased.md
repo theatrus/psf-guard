@@ -181,6 +181,12 @@
   it scrolls. The drag mode (rectangle or sky), the sky turn and the layer
   switches (grid, constellations, deep-sky marks, comets and asteroids,
   Sun, Moon and planets) are small buttons at the top of the stage.
+- The Library opens compact: one row of pills per project with its
+  database, state, accepted-of-desired progress, grading counts and dates,
+  and a plan shot by several rigs wrapped in an outer pill that sums them.
+  A row opens into the full card on request, the project you came from
+  opens on its own, and **Detailed** brings every card back; the choice is
+  remembered in the browser.
 - A plan can take over another plan's database project: under
   **Databases** in the workspace, **Attach a project from another database**
   lists projects in databases the plan has none in, and attaching moves
