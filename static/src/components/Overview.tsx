@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { ago, percentDone, projectFamilies, stateLabel } from './libraryFamilies';
+import { setDisplayPreferences, useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Merge } from 'lucide-react';
@@ -95,14 +96,27 @@ export default function Overview() {
   const [organizeError, setOrganizeError] = useState('');
   const [seenProjects, setSeenProjects] = useState(loadProjectSeenState);
   const [relativeNow, setRelativeNow] = useState(Date.now);
-  // Compact rows for browsing, the full card on request; remembered here.
-  const DENSITY_KEY = 'psf-guard.library.density';
-  const [density, setDensity] = useState<'compact' | 'detailed'>(() => {
-    try { return window.localStorage.getItem(DENSITY_KEY) === 'detailed' ? 'detailed' : 'compact'; } catch { return 'compact'; }
-  });
-  const chooseDensity = (next: 'compact' | 'detailed') => { setDensity(next); try { window.localStorage.setItem(DENSITY_KEY, next); } catch { /* remembered for this visit only */ } };
-  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
-  const toggleExpanded = (key: string) => setExpandedProjects(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+  // Compact rows for browsing, the full card on request. The default lives
+  // with the other display preferences (Settings, Review); the toolbar
+  // toggle changes the same setting. Any row can be opened or folded on
+  // its own in either view, and the project the user came from opens by
+  // itself until they fold it.
+  const displayPreferences = useDisplayPreferences();
+  const density = displayPreferences.libraryDensity;
+  const chooseDensity = (next: 'compact' | 'detailed') => {
+    setDisplayPreferences({ ...displayPreferences, libraryDensity: next });
+    // A new default starts clean: rows opened or folded by hand go back to it.
+    setOpenedProjects(new Set());
+    setFoldedProjects(new Set());
+  };
+  const [openedProjects, setOpenedProjects] = useState<Set<string>>(() => new Set());
+  const [foldedProjects, setFoldedProjects] = useState<Set<string>>(() => new Set());
+  const showsCard = (key: string, isCurrent: boolean) => density === 'detailed' ? !foldedProjects.has(key) : openedProjects.has(key) || (isCurrent && !foldedProjects.has(key));
+  const toggleCard = (key: string, isCurrent: boolean) => {
+    const shown = showsCard(key, isCurrent);
+    setOpenedProjects(current => { const next = new Set(current); if (shown) next.delete(key); else next.add(key); return next; });
+    setFoldedProjects(current => { const next = new Set(current); if (shown) next.add(key); else next.delete(key); return next; });
+  };
   const [calibrationReportProject, setCalibrationReportProject] = useState<{
     dbId: string;
     id: number;
@@ -829,12 +843,12 @@ export default function Overview() {
               const isCurrent = key === currentProjectKey;
               // A compact row says what matters at a glance; the project the
               // user came from, and any row they open, shows the whole card.
-              if (density === 'compact' && !expandedProjects.has(key) && !isCurrent) {
+              if (!showsCard(key, isCurrent)) {
                 const done = percentDone(project.accepted_images, project.total_desired);
                 const last = ago(project.date_range.latest, relativeNow);
                 return (
                   <div key={key} data-project-key={key} className={['library-row', !project.has_files ? 'no-files' : '', projectNewImages > 0 ? 'has-new-images' : ''].filter(Boolean).join(' ')} data-testid="library-row">
-                    <button type="button" className="library-expand" aria-expanded={false} aria-label={`Show details for ${project.display_name}`} title="Show details" onClick={() => toggleExpanded(key)}>▸</button>
+                    <button type="button" className="library-expand" aria-expanded={false} aria-label={`Show details for ${project.display_name}`} title="Show details" onClick={() => toggleCard(key, isCurrent)}>▸</button>
                     <button type="button" className="library-name" onClick={() => project.has_files && handleSelectProject(project)} disabled={!project.has_files} aria-label={`Open ${project.display_name} image grid`}>{project.display_name}</button>
                     <span className="library-pill library-pill-db" title={`Database ID: ${project.db_id}`}>{project.db_name}</span>
                     <span className={`library-pill library-pill-state is-state-${project.state}`}>{stateLabel(project.state)}</span>
@@ -869,6 +883,7 @@ export default function Overview() {
                   ].filter(Boolean).join(' ')}
                 >
                   <div className="project-header">
+                    <button type="button" className="library-expand is-open" aria-expanded={true} aria-label={`Hide details for ${project.display_name}`} title="Fold to a row" onClick={() => toggleCard(key, isCurrent)}>▾</button>
                     <button
                       type="button"
                       className="project-open-main"
@@ -895,7 +910,6 @@ export default function Overview() {
                       </span>
                     </button>
                     <div className="project-header-actions">
-                      {density === 'compact' && <button type="button" className="project-settings-button" aria-expanded={true} aria-label={`Hide details for ${project.display_name}`} title="Back to the compact row" onClick={() => { if (expandedProjects.has(key)) toggleExpanded(key); else setExpandedProjects(current => new Set(current)); }} disabled={isCurrent && !expandedProjects.has(key)}>▾ Less</button>}
                       {!project.has_files && <span className="no-files-badge">No Files</span>}
                       <button
                         type="button"

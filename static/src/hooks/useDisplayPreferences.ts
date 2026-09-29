@@ -7,6 +7,8 @@ import { useSyncExternalStore } from 'react';
  */
 /** How the top-bar project picker organizes its list. */
 export type ProjectPickerGrouping = 'activity' | 'database';
+/** How the Library lists projects on load: one row of pills each, or the full card. */
+export type LibraryDensity = 'compact' | 'detailed';
 
 export interface DisplayPreferences {
   /** Show the smaller "night <score>" chip — the per-session basis shown
@@ -20,6 +22,8 @@ export interface DisplayPreferences {
   advanceOnGrade: boolean;
   /** Group the top-bar project picker by recent activity or by database. */
   projectPickerGrouping: ProjectPickerGrouping;
+  /** Whether Library projects open as compact rows or full cards. */
+  libraryDensity: LibraryDensity;
 }
 
 const STORAGE_KEY = 'psf-guard.display-preferences';
@@ -28,6 +32,7 @@ const DEFAULTS: DisplayPreferences = {
   showAllChip: true,
   advanceOnGrade: true,
   projectPickerGrouping: 'activity',
+  libraryDensity: 'compact',
 };
 
 type Listener = () => void;
@@ -59,6 +64,7 @@ function sanitize(parsed: StoredPreferences): DisplayPreferences {
         : DEFAULTS.advanceOnGrade,
     projectPickerGrouping:
       parsed.projectPickerGrouping === 'database' ? 'database' : DEFAULTS.projectPickerGrouping,
+    libraryDensity: parsed.libraryDensity === 'detailed' ? 'detailed' : DEFAULTS.libraryDensity,
   };
 }
 

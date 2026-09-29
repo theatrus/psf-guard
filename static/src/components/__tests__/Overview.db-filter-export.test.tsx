@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { setDisplayPreferences } from '../../hooks/useDisplayPreferences';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -85,7 +86,7 @@ function useTwoCatalogs() {
 
 describe('Overview database filter', () => {
   // These tests read the full cards; the Library opens compact by default.
-  beforeEach(() => { window.localStorage.setItem('psf-guard.library.density', 'detailed'); });
+  beforeEach(() => { setDisplayPreferences({ showNightChip: true, showAllChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'detailed' }); });
   it('narrows the projects list to the chosen database', async () => {
     useTwoCatalogs();
     render(<Overview />, { wrapper: wrapper() });

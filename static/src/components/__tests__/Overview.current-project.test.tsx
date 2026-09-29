@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { setDisplayPreferences } from '../../hooks/useDisplayPreferences';
 import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -76,7 +77,7 @@ function useOverviewData(projects: ReturnType<typeof project>[]) {
 
 describe('Overview return scope', () => {
   // These tests read the full cards; the Library opens compact by default.
-  beforeEach(() => { window.localStorage.setItem('psf-guard.library.density', 'detailed'); });
+  beforeEach(() => { setDisplayPreferences({ showNightChip: true, showAllChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'detailed' }); });
   it('marks and reveals the project the user came from', async () => {
     useOverviewData([project(1, 'Sh2 86'), project(2, 'NGC 6820')]);
     const scrollIntoView = vi.fn();

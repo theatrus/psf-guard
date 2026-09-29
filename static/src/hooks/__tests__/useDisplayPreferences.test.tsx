@@ -13,6 +13,7 @@ describe('display preferences', () => {
       showAllChip: true,
       advanceOnGrade: true,
       projectPickerGrouping: 'activity',
+      libraryDensity: 'compact',
     });
   });
 
@@ -23,6 +24,7 @@ describe('display preferences', () => {
       showAllChip: true,
       advanceOnGrade: true,
       projectPickerGrouping: 'activity',
+      libraryDensity: 'compact',
     });
   });
 
@@ -33,6 +35,7 @@ describe('display preferences', () => {
         showAllChip: true,
         advanceOnGrade: true,
         projectPickerGrouping: 'activity',
+        libraryDensity: 'compact',
       });
     });
     const { result } = renderHook(() => useDisplayPreferences());
@@ -51,6 +54,7 @@ describe('display preferences', () => {
         showAllChip: false,
         advanceOnGrade: true,
         projectPickerGrouping: 'activity',
+        libraryDensity: 'compact',
       });
     });
     expect(grid.result.current.showAllChip).toBe(false);
@@ -64,6 +68,7 @@ describe('display preferences', () => {
         showAllChip: false,
         advanceOnGrade: false,
         projectPickerGrouping: 'database',
+        libraryDensity: 'compact',
       });
     });
     expect(
@@ -73,6 +78,7 @@ describe('display preferences', () => {
       showAllChip: false,
       advanceOnGrade: false,
       projectPickerGrouping: 'database',
+      libraryDensity: 'compact',
     });
   });
 
@@ -82,6 +88,7 @@ describe('display preferences', () => {
       showAllChip: true,
       advanceOnGrade: true,
       projectPickerGrouping: 'sideways' as unknown as 'activity',
+      libraryDensity: 'huge' as unknown as 'compact',
     });
     const { result } = renderHook(() => useDisplayPreferences());
     expect(result.current.showNightChip).toBe(true);

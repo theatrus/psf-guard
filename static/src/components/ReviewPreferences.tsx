@@ -82,6 +82,29 @@ export default function ReviewPreferences() {
         </select>
       </label>
 
+      <h3>Library</h3>
+      <label className="review-preference">
+        <span>
+          Projects open as
+          <small>
+            Compact rows show each project's database, state, progress and
+            dates as pills, with a plan shot by several rigs in one outer pill;
+            any row opens into its full card. The Library's own toggle changes
+            this too.
+          </small>
+        </span>
+        <select
+          value={preferences.libraryDensity}
+          aria-label="Library project view"
+          onChange={(event) =>
+            set({ libraryDensity: event.target.value === 'detailed' ? 'detailed' : 'compact' })
+          }
+        >
+          <option value="compact">Compact rows</option>
+          <option value="detailed">Full cards</option>
+        </select>
+      </label>
+
       <p className="review-preferences-note">
         These preferences live in this browser and apply immediately.
       </p>
