@@ -5,8 +5,8 @@
 
 use crate::ephemeris::{moon_illumination, moon_position, separation_degrees, sun_position};
 use crate::visibility::{
-    altitude_allowed, meridian_windows, observe, AltitudeLimits, EarthOrientation, Horizon,
-    IcrsPosition, Site, VisibilityError,
+    altitude_allowed, meridian_windows, AltitudeLimits, EarthOrientation, Horizon, IcrsPosition,
+    Observer, Site, VisibilityError,
 };
 use crate::windows::{Interval, MeridianExclusion};
 use serde::{Deserialize, Serialize};
@@ -183,6 +183,17 @@ pub fn night_preview(request: &NightRequest) -> Result<Vec<Night>, NightError> {
         .collect()
 }
 
+/// One night's summary, by index from the first: what [`night_preview`]
+/// gives for that night alone, so a caller can spread the nights over
+/// threads.
+pub fn night_summary(request: &NightRequest, index: u32) -> Result<Night, NightError> {
+    validate(request)?;
+    if index >= request.nights {
+        return Err(NightError::InvalidRequest);
+    }
+    one_night(request, index, false).map(|curve| curve.night)
+}
+
 /// The curves for one of the requested nights, by index from the first.
 pub fn night_curve(request: &NightRequest, index: u32) -> Result<NightCurve, NightError> {
     validate(request)?;
@@ -255,14 +266,17 @@ fn one_night(
     let mut last_hour_angle: Vec<Option<f64>> = vec![None; request.targets.len()];
     let mut t = noon;
     while t < next_noon {
+        // One prepared observer per instant: the Earth's part of the sum is
+        // the same for the Sun, the Moon and every target.
+        let mut observer = Observer::at(request.site, orientation, t)?;
         let sun = sun_position(t).ok_or(VisibilityError::AstronomyUnavailable)?;
-        let sun_altitude = observe(sun, request.site, orientation, t)?.altitude_degrees;
+        let sun_altitude = observer.observe(sun)?.altitude_degrees;
         let dark = sun_altitude < request.dark_below_degrees;
         // Outside darkness only the drawing needs positions.
         let wanted = dark || keep_samples;
         let moon = moon_position(t);
         let moon_altitude = if wanted {
-            observe(moon, request.site, orientation, t)?.altitude_degrees
+            observer.observe(moon)?.altitude_degrees
         } else {
             0.0
         };
@@ -285,7 +299,7 @@ fn one_night(
             .zip(per_target.iter_mut())
             .enumerate()
         {
-            let observed = observe(target.position, request.site, orientation, t)?;
+            let observed = observer.observe(target.position)?;
             if let Some(previous) = last_hour_angle[index]
                 && previous < 0.0
                 && observed.hour_angle_degrees >= 0.0

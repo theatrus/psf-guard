@@ -181,6 +181,12 @@
   it scrolls. The drag mode (rectangle or sky), the sky turn and the layer
   switches (grid, constellations, deep-sky marks, comets and asteroids,
   Sun, Moon and planets) are small buttons at the top of the stage.
+- The visibility chart arrives about ten times sooner (a week for two rigs
+  now takes under a tenth of a second on the server, with the same numbers)
+  and asks a third of a second after the target stops moving instead of
+  more than half. Under the framing stage it is drawn at one unit per
+  pixel, so its box is the chart and nothing more, with the rig, verdict,
+  estimate and the folded legend and nights table beside it.
 - Activation takes over the targets a project already has instead of
   creating twins beside them: the one with the panel's name, else the one at
   the panel's place, else the only target of a single-panel plan. The

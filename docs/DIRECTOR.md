@@ -643,8 +643,13 @@ stored and shown nowhere yet.
 Under the framing stage, **Visibility** times the target from each rig that
 has a site in its rig profile, the way N.I.N.A.'s framing assistant does it
 for one site. It is a strip there, sized to stay on screen with the sky: the
-verdict, the chart and the estimate, with the nights table folded under
-**Next nights**. A verdict line says whether the target is visible tonight and for
+chart on the left, drawn at one unit per pixel so it fills its box and
+nothing else, and beside it the rig, the verdict and the estimate, with the
+legend and the nights table folded under **Legend and the next nights**.
+The server spreads the rigs and their nights over its thread pool and
+prepares each instant's Earth-side astrometry once for the Sun, the Moon
+and the target, so a week for two rigs answers in well under a tenth of a
+second. A verdict line says whether the target is visible tonight and for
 how long: dark hours (Sun below −12°), hours the target sits above the rig's
 minimum altitude and its custom horizon when it has one, the peak altitude,
 the Moon's phase, separation and hours up. Below it an altitude chart draws
