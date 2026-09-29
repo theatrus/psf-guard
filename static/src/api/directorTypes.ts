@@ -206,6 +206,21 @@ export interface DirectorTemplate {
   bandpass: DirectorBandpass;
 }
 export interface DirectorTemplateList { catalog_slug: string; catalog_name: string; rig: DirectorIdentity | null; templates: DirectorTemplate[] }
+/** A template in Director's own library: settings any rig can shoot with; activation writes it into a rig database that lacks it. */
+export interface DirectorLibraryTemplate {
+  id: string;
+  /** 0 until first saved. */
+  revision: number;
+  name: string;
+  filter_name: string;
+  gain: number | null;
+  offset: number | null;
+  bin: number | null;
+  readout_mode: number | null;
+  default_exposure_seconds: number;
+  updated_at_ms: number;
+  bandpass: DirectorBandpass;
+}
 export type DirectorGoal = { kind: 'hours'; value: number } | { kind: 'frames'; value: number };
 export interface DirectorObjective { id: string; bandpass_id: string; purpose: string; goal: DirectorGoal; priority: number }
 export interface DirectorTemplateChoice {

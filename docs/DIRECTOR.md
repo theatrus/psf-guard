@@ -489,8 +489,10 @@ when the template has none. Hours become frames per rig through that exposure,
 so a fast rig under bright skies shoots more short frames than a slow one under
 dark skies for the same goal. Switching a goal between hours and frames keeps
 the goal: the number is converted through the exposure of the first rig
-shooting the objective, or the first rig's default for that band. A rig with no template for a bandpass sits that
-one out and says so. When the framing is a mosaic, each rig's section has a
+shooting the objective, or the first rig's default for that band. A rig binds each objective to a template in its own database, or to one
+from the shared **Exposure templates** library (below), which activation
+writes into the database for it. A rig with neither for a bandpass sits that
+one out. When the framing is a mosaic, each rig's section has a
 panel chooser: every panel by default, or the panels that rig alone should
 shoot, so a wide rig can take the whole field while a long-focus rig takes
 one corner. A **Coverage** box names any objective and panel no rig covers.
@@ -500,6 +502,9 @@ as framing. Feasibility by night and activation into rig databases follow.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
+| GET | `/templates` | The exposure template library: Director's own templates, each with `id`, `revision`, `name`, `filter_name`, `gain`, `offset`, `bin`, `readout_mode`, `default_exposure_seconds` and the `bandpass` its filter resolves to. |
+| PUT | `/templates/{id}` | Save a library template; the body is the whole template and its `revision` is the one read, 0 for a new one. `409` on a stale revision. Open to every server, like plan drafts. |
+| DELETE | `/templates/{id}?revision=` | Remove a library template at the revision read. Plans that chose it keep their copy of its settings. |
 | GET | `/catalogs/{slug}/templates` | Every Target Scheduler exposure template in the database, across profiles, with the `bandpass` its filter name resolves to (`id`, `name`, `kind`). Read only. |
 | GET | `/projects/{id}/plan` | The project and its plan draft, or `plan: null`. |
 | PUT | `/projects/{id}/plan` | The whole draft with `revision` set to the one read. `409` when it moved; `404` for an unknown project or rig. |
@@ -512,6 +517,19 @@ being folded into a neighbour. Default exposures also come from the core:
 for slower optics and darker skies, shorter under bright skies, rounded to a
 common length. Typed models: [bandpass](../crates/director-core/src/bandpass.rs)
 and [plan](../crates/director-meta/src/plan.rs).
+
+## Exposure template library
+
+**Exposure templates** on the Planning page is Director's own list of
+templates: a name, the filter as the rig calls it, gain, offset, binning,
+readout mode and a starting exposure. They belong to no database. A plan may
+bind a rig to one of them where the rig's database has no template for the
+band, and activation writes it into that database under the library's GUID,
+so every rig ends up with the same template and a second activation finds
+it again. Rows are edited in place and saved one at a time with the
+revision they were read at; **Copy from** lists a rig's own templates and
+copies any of them into the library, skipping ones already there. Removing
+a template leaves plans that chose it with their copy of its settings.
 
 ## Activation
 
@@ -529,7 +547,7 @@ rig's database, the same rows Target Scheduler and the Director plugin read:
   project's only target not yet owned by a panel. The preview lists these as
   `adopt` when nothing about them changes and `update` when they move;
 - one exposure plan per rig objective and panel, bound to the chosen template
-  (or one matching its settings, created if needed), with `desired` set to the
+  (or one matching its settings, created if needed; a library template is created under the library's own GUID, so every rig database carries the same one), with `desired` set to the
   frames that objective needs at that rig's exposure length.
 
 A second activation updates the same rows in place: coordinates, angle,

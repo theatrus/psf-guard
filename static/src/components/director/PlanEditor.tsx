@@ -5,7 +5,7 @@ import { Check, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorContribution, DirectorObjective, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplate } from '../../api/directorTypes';
-import { PURPOSES, bandpassKind, bandpassOptions, convertGoal, coverageGaps, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, newContribution, newObjective, panelIds, planProblem, rigPanels, rigTotals, templatesFor } from './planModel';
+import { PURPOSES, bandpassKind, bandpassOptions, convertGoal, coverageGaps, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, libraryChoice, libraryFor, newContribution, newLibraryContribution, newObjective, panelIds, planProblem, rigPanels, rigTotals, templateValue, templatesFor } from './planModel';
 import './PlanEditor.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Plan request failed';
@@ -54,7 +54,10 @@ export default function PlanEditor({ projectId }: { projectId: string }) {
     onSuccess: saved => { setNotice(`Saved plan revision ${saved.plan?.revision ?? 0}.`); client.setQueryData<DirectorPlanView>(planKey, saved); },
   });
   const stale = httpStatus(save.error) === 409;
-  const options = useMemo(() => bandpassOptions(templatesByRig), [templatesByRig]);
+  // Director's own templates: a rig whose database has none for a band shoots with one of these.
+  const libraryQuery = useQuery({ queryKey: ['directorTemplateLibrary'], queryFn: apiClient.getDirectorTemplateLibrary, retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false });
+  const library = useMemo(() => libraryQuery.data ?? [], [libraryQuery.data]);
+  const options = useMemo(() => bandpassOptions(templatesByRig, library), [templatesByRig, library]);
   const update = (change: (current: DirectorPlanDraft) => DirectorPlanDraft) => setPlan(current => current ? change(current) : current);
   const number = (value: string, fallback: number) => { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : fallback; };
 
@@ -79,8 +82,10 @@ export default function PlanEditor({ projectId }: { projectId: string }) {
     const added = current.objectives.flatMap(objective => {
       const matching = templatesFor(objective.bandpass_id, templatesByRig[rig.rig.id] ?? []);
       const template = matching[0];
-      if (!template) return [];
-      return [newContribution(objective, rig, template, defaultExposure(rig, bandpassKind(objective.bandpass_id, templatesByRig), template))];
+      if (template) return [newContribution(objective, rig, template, defaultExposure(rig, bandpassKind(objective.bandpass_id, templatesByRig, library), template))];
+      // Nothing in the rig's database for this band: the library stands in.
+      const shared = libraryFor(objective.bandpass_id, library)[0];
+      return shared ? [newLibraryContribution(objective, rig, shared)] : [];
     });
     return { ...current, contributions: [...current.contributions, ...added] };
   });
@@ -131,7 +136,7 @@ export default function PlanEditor({ projectId }: { projectId: string }) {
       </fieldset>
       <fieldset disabled={!canWrite || stale}>
         <legend>Rigs</legend>
-        <p className="director-muted">Tick a rig to have it shoot the objectives with its own templates and exposure lengths. A rig with no template for a bandpass sits that one out.</p>
+        <p className="director-muted">Tick a rig to have it shoot the objectives. Each rig binds to a template in its own database, or to one from the shared library, which activation writes into the database for it. A rig with neither for a bandpass sits that one out.</p>
         {rigs.isError && <p className="director-error" role="alert">Rigs could not be loaded: {message(rigs.error)} <button type="button" onClick={() => void rigs.refetch()}>Retry</button></p>}
         {!rigs.isError && rigList.length === 0 && <p className="director-muted">{rigs.isPending ? 'Loading rigs...' : 'No rig has planning enabled yet.'}</p>}
         {rigList.map((rig, index) => {
@@ -162,14 +167,24 @@ export default function PlanEditor({ projectId }: { projectId: string }) {
                 const frames = contribution ? framesFor(objective.goal, contribution.exposure_seconds) : null;
                 return <tr key={objective.id}>
                   <td>{label}<br /><small className="director-muted">{PURPOSES.find(p => p.id === objective.purpose)?.name ?? objective.purpose}</small></td>
-                  <td>{matching.length === 0 ? <span className="director-muted">No {label} template in this database</span>
-                    : <select aria-label={`${rig.catalog_name} template for ${label}`} value={contribution?.template.template_id ?? ''} onChange={event => {
-                      const template = matching.find(t => String(t.id) === event.target.value);
-                      setContribution(rig, objective, current => template ? { ...(current ?? newContribution(objective, rig, template, defaultExposure(rig, bandpassKind(objective.bandpass_id, templatesByRig), template))), template: { template_guid: template.guid, template_id: template.id, name: template.name, filter_name: template.filter_name, gain: template.gain, offset: template.offset, bin: template.bin, readout_mode: template.readout_mode } } : null);
+                  <td>{(() => {
+                    const shared = libraryFor(objective.bandpass_id, library);
+                    if (matching.length === 0 && shared.length === 0) return <span className="director-muted">No {label} template in this database or the library</span>;
+                    return <select aria-label={`${rig.catalog_name} template for ${label}`} value={templateValue(contribution, library)} onChange={event => {
+                      const [kind, key] = event.target.value.split(':');
+                      const own = kind === 'db' ? matching.find(t => String(t.id) === key) : undefined;
+                      const fromLibrary = kind === 'lib' ? shared.find(t => t.id === key) : undefined;
+                      setContribution(rig, objective, current => own
+                        ? { ...(current ?? newContribution(objective, rig, own, defaultExposure(rig, bandpassKind(objective.bandpass_id, templatesByRig, library), own))), template: { template_guid: own.guid, template_id: own.id, name: own.name, filter_name: own.filter_name, gain: own.gain, offset: own.offset, bin: own.bin, readout_mode: own.readout_mode } }
+                        : fromLibrary ? { ...(current ?? newLibraryContribution(objective, rig, fromLibrary)), template: libraryChoice(fromLibrary) }
+                        : null);
                     }}>
                       <option value="">Skip on this rig</option>
-                      {matching.map(t => <option key={t.id} value={t.id}>{t.name} ({t.filter_name}{t.bin && t.bin > 1 ? `, ${t.bin}×${t.bin}` : ''})</option>)}
-                    </select>}</td>
+                      {matching.length > 0 && <optgroup label="In this database">{matching.map(t => <option key={t.id} value={`db:${t.id}`}>{t.name} ({t.filter_name}{t.bin && t.bin > 1 ? `, ${t.bin}×${t.bin}` : ''})</option>)}</optgroup>}
+                      {shared.length > 0 && <optgroup label="Library, written on activation">{shared.map(t => <option key={t.id} value={`lib:${t.id}`}>{t.name} ({t.filter_name}{t.bin && t.bin > 1 ? `, ${t.bin}×${t.bin}` : ''})</option>)}</optgroup>}
+                      {contribution && templateValue(contribution, library).startsWith('lib:') && !shared.some(t => t.id === contribution.template.template_guid) && <option value={templateValue(contribution, library)}>{contribution.template.name} (library, since removed)</option>}
+                    </select>;
+                  })()}</td>
                   <td>{contribution && <span className="plan-goal"><input aria-label={`${rig.catalog_name} exposure for ${label}`} type="number" min={1} step="any" value={contribution.exposure_seconds} onChange={event => setContribution(rig, objective, current => current ? { ...current, exposure_seconds: number(event.target.value, current.exposure_seconds) } : current)} /><small>s</small></span>}</td>
                   <td>{contribution && frames !== null && <span data-testid={`frames-${rig.catalog_slug}-${objective.bandpass_id}`}>{frames}{panels.length > 1 && <small className="director-muted"> per panel</small>}<br /><small className="director-muted">{formatHours(hoursFor(frames, contribution.exposure_seconds))}{panels.length > 1 ? ' each' : ''}</small></span>}</td>
                   <td>{contribution && <input type="checkbox" aria-label={`${rig.catalog_name} shoots ${label}`} checked={contribution.enabled} onChange={event => setContribution(rig, objective, current => current ? { ...current, enabled: event.target.checked } : current)} />}</td>

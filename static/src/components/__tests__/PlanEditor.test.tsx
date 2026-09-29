@@ -16,10 +16,13 @@ const c925 = { rig: { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: 'C925', 
 const template = (id: number, name: string, filter: string, bandpass: string, kind: 'broadband' | 'narrowband', exposure: number) =>
   ({ id, guid: `00000000-0000-4000-8000-${String(id).padStart(12, '0')}`, profile_id: 'p', name, filter_name: filter, gain: 100, offset: 30, bin: 1, readout_mode: null, default_exposure: exposure, bandpass: { id: bandpass, name, kind } });
 
-function fixture(existing: DirectorPlanDraft | null = null, mosaic: { rows: number; columns: number; overlap_percent: number } | null = null) {
+const libraryHa = { id: '11111111-1111-4111-8111-111111111111', revision: 1, name: 'Ha 600 shared', filter_name: 'Ha', gain: 200, offset: 50, bin: 2, readout_mode: null, default_exposure_seconds: 600, updated_at_ms: 1, bandpass: { id: 'h_alpha', name: 'H-alpha', kind: 'narrowband' as const } };
+
+function fixture(existing: DirectorPlanDraft | null = null, mosaic: { rows: number; columns: number; overlap_percent: number } | null = null, library = [libraryHa]) {
   const saves: DirectorPlanDraft[] = [];
   let plan = existing;
   server.use(
+    http.get('/api/director/v1/templates', () => HttpResponse.json(ok(library))),
     http.get('/api/director/v1/projects/project/framing', () => HttpResponse.json(ok({ project: { id: 'project', name: 'Heart', revision: 1 }, draft: mosaic ? {
       project_id: 'project', revision: 1, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.45 }, position_angle_degrees: 0, mosaic, panel_rig_id: null,
       panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 4, updated_at_ms: 1 } : null }))),
@@ -50,8 +53,31 @@ function mount(canWrite = true) {
 }
 
 describe('Plan editor', () => {
-  it('adds an objective in hours, binds a rig through its matching template, and saves frames per rig', async () => {
+  it('binds a rig whose database lacks a template to a library template, by the library GUID and settings', async () => {
     const { saves } = fixture(); mount();
+    await screen.findByText(/3 templates/);
+    fireEvent.click(screen.getByRole('button', { name: 'Add objective' }));
+    fireEvent.change(screen.getByLabelText('Objective bandpass'), { target: { value: 'h_alpha' } });
+    // The C925 database has only a red template; the H-alpha objective falls back to the library.
+    fireEvent.click(screen.getByRole('checkbox', { name: /C925 data/ }));
+    const control = await screen.findByLabelText('C925 data template for H-alpha');
+    expect(control).toHaveValue('lib:11111111-1111-4111-8111-111111111111');
+    expect(screen.getByRole('group', { name: 'Library, written on activation' })).toBeInTheDocument();
+    expect(screen.getByLabelText('C925 data exposure for H-alpha')).toHaveValue(600);
+    fireEvent.click(screen.getByRole('button', { name: 'Save plan' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].contributions[0]).toMatchObject({ rig_id: c925.rig.id, exposure_seconds: 600,
+      template: { template_guid: '11111111-1111-4111-8111-111111111111', template_id: null, name: 'Ha 600 shared', filter_name: 'Ha', gain: 200, offset: 50, bin: 2, readout_mode: null } });
+    // The RedCat database has its own H-alpha template and keeps it; the library is still on offer beside it.
+    fireEvent.click(screen.getByRole('checkbox', { name: /RedCat 61/ }));
+    const redcatControl = await screen.findByLabelText('RedCat 61 template for H-alpha');
+    expect(redcatControl).toHaveValue('db:1');
+    fireEvent.change(redcatControl, { target: { value: 'lib:11111111-1111-4111-8111-111111111111' } });
+    expect(screen.getByLabelText('RedCat 61 template for H-alpha')).toHaveValue('lib:11111111-1111-4111-8111-111111111111');
+  });
+
+  it('adds an objective in hours, binds a rig through its matching template, and saves frames per rig', async () => {
+    const { saves } = fixture(null, null, []); mount();
     expect(await screen.findByText('No objectives yet.')).toBeInTheDocument();
     await screen.findByText(/3 templates/);
     fireEvent.click(screen.getByRole('button', { name: 'Add objective' }));
@@ -59,7 +85,7 @@ describe('Plan editor', () => {
     fireEvent.change(screen.getByLabelText('Objective goal'), { target: { value: '6' } });
     fireEvent.click(screen.getByRole('checkbox', { name: /RedCat 61/ }));
     // The template's own default exposure wins; 6 h at 300 s is 72 frames.
-    expect(screen.getByLabelText('RedCat 61 template for H-alpha')).toHaveValue('1');
+    expect(screen.getByLabelText('RedCat 61 template for H-alpha')).toHaveValue('db:1');
     expect(screen.getByLabelText('RedCat 61 exposure for H-alpha')).toHaveValue(300);
     expect(screen.getByTestId('frames-redcat-h_alpha')).toHaveTextContent('72');
     expect(screen.getByText('72 frames, 6.0 h')).toBeInTheDocument();
@@ -73,13 +99,13 @@ describe('Plan editor', () => {
     expect(convertGoal({ kind: 'frames', value: 10 }, 'hours', 300)).toEqual({ kind: 'hours', value: 0.83 });
     expect(convertGoal({ kind: 'hours', value: 2 }, 'hours', 300)).toEqual({ kind: 'hours', value: 2 });
     // A template without a default falls back to the rig's narrowband default.
-    fireEvent.change(screen.getByLabelText('RedCat 61 template for H-alpha'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('RedCat 61 template for H-alpha'), { target: { value: 'db:2' } });
     expect(screen.getByLabelText('RedCat 61 exposure for H-alpha')).toHaveValue(300);
     fireEvent.change(screen.getByLabelText('RedCat 61 exposure for H-alpha'), { target: { value: '600' } });
     expect(screen.getByTestId('frames-redcat-h_alpha')).toHaveTextContent('36');
-    // The other rig has no H-alpha template and says so instead of guessing.
+    // The other rig has no H-alpha template of its own; with the library empty it says so instead of guessing.
     fireEvent.click(screen.getByRole('checkbox', { name: /C925 data/ }));
-    expect(screen.getByText('No H-alpha template in this database')).toBeInTheDocument();
+    expect(screen.getByText('No H-alpha template in this database or the library')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save plan' }));
     expect(await screen.findByText('Saved plan revision 1.')).toBeInTheDocument();
     expect(saves).toHaveLength(1);

@@ -7,6 +7,7 @@ import DirectorPlans from './DirectorPlans';
 import ProjectWorkspace from './ProjectWorkspace';
 import DirectorRigs from './DirectorRigs';
 import DirectorDashboard from './DirectorDashboard';
+import TemplateLibrary from './TemplateLibrary';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
@@ -48,6 +49,7 @@ export default function DirectorPage() {
             <DirectorDashboard />
             <DirectorPlans key={status.data.instance_id!} instanceId={status.data.instance_id!} />
             <DirectorRigs />
+            <TemplateLibrary />
           </>}
       </>}
     </main>

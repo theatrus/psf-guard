@@ -623,3 +623,101 @@ async fn sqlite_contention_is_retryable_and_storage_diagnostics_stay_private() {
     assert!(!error.to_string().contains("private-root-path-marker"));
     assert!(error["error"].as_str().unwrap().contains("see server logs"));
 }
+
+#[tokio::test]
+async fn the_template_library_is_shared_over_http_with_revisions() {
+    let dir = TempDir::new().unwrap();
+    let state = Arc::new(state(&dir, true));
+    let app = router(state);
+    let id = Uuid::new_v4();
+    let template = |revision: u64, exposure: f64| json!({ "id": id, "revision": revision, "name": "Ha 300", "filter_name": "Ha", "gain": 100, "offset": 30, "bin": 1, "readout_mode": null, "default_exposure_seconds": exposure, "updated_at_ms": 0 });
+    let (status, empty) = call(&app, "GET", "/templates", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{empty}");
+    assert_eq!(empty["data"], json!([]));
+    let (status, saved) = call(
+        &app,
+        "PUT",
+        &format!("/templates/{id}"),
+        template(0, 300.0),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["data"]["revision"], 1);
+    assert_eq!(saved["data"]["bandpass"]["id"], "h_alpha");
+    // The path and the body must agree; a stale revision conflicts.
+    assert_eq!(
+        call(
+            &app,
+            "PUT",
+            &format!("/templates/{}", Uuid::new_v4()),
+            template(1, 300.0),
+            None
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(
+            &app,
+            "PUT",
+            &format!("/templates/{id}"),
+            template(0, 600.0),
+            None
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let (status, changed) = call(
+        &app,
+        "PUT",
+        &format!("/templates/{id}"),
+        template(1, 600.0),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(changed["data"]["revision"], 2);
+    let (_, listed) = call(&app, "GET", "/templates", Value::Null, None).await;
+    assert_eq!(listed["data"][0]["default_exposure_seconds"], 600.0);
+    assert_eq!(
+        call(
+            &app,
+            "DELETE",
+            &format!("/templates/{id}?revision=1"),
+            Value::Null,
+            None
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        call(
+            &app,
+            "DELETE",
+            &format!("/templates/{id}?revision=2"),
+            Value::Null,
+            None
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &app,
+            "DELETE",
+            &format!("/templates/{id}?revision=2"),
+            Value::Null,
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    let (_, listed) = call(&app, "GET", "/templates", Value::Null, None).await;
+    assert_eq!(listed["data"], json!([]));
+}

@@ -1389,7 +1389,12 @@ fn resolve_template(
             bin,
             readout,
             contribution.exposure_seconds,
-            new_guid(),
+            // A library template keeps its own GUID in every rig database,
+            // so a second activation, and Sync, know it for the same one.
+            choice
+                .template_guid
+                .map(|guid| guid.to_string())
+                .unwrap_or_else(new_guid),
         ],
     )?;
     Ok(tx.last_insert_rowid())

@@ -1,4 +1,4 @@
-import type { DirectorContribution, DirectorGoal, DirectorMosaic, DirectorObjective, DirectorPlanDraft, DirectorRigProfileSummary, DirectorTemplate, DirectorTemplateChoice } from '../../api/directorTypes';
+import type { DirectorContribution, DirectorGoal, DirectorLibraryTemplate, DirectorMosaic, DirectorObjective, DirectorPlanDraft, DirectorRigProfileSummary, DirectorTemplate, DirectorTemplateChoice } from '../../api/directorTypes';
 
 export const PURPOSES: Array<{ id: string; name: string }> = [
   { id: 'faint_detail', name: 'Faint detail' },
@@ -16,18 +16,40 @@ export const KNOWN_BANDPASSES: Array<{ id: string; name: string; kind: 'broadban
   { id: 'sii', name: 'S II', kind: 'narrowband' },
 ];
 
-export function bandpassOptions(templatesByRig: Record<string, DirectorTemplate[]>) {
+export function bandpassOptions(templatesByRig: Record<string, DirectorTemplate[]>, library: DirectorLibraryTemplate[] = []) {
   const options = new Map(KNOWN_BANDPASSES.map(b => [b.id, b]));
-  for (const templates of Object.values(templatesByRig)) {
-    for (const template of templates) {
-      if (!options.has(template.bandpass.id)) options.set(template.bandpass.id, { id: template.bandpass.id, name: template.bandpass.name === 'Custom' ? template.filter_name : template.bandpass.name, kind: template.bandpass.kind });
-    }
+  for (const template of [...Object.values(templatesByRig).flat(), ...library]) {
+    if (!options.has(template.bandpass.id)) options.set(template.bandpass.id, { id: template.bandpass.id, name: template.bandpass.name === 'Custom' ? template.filter_name : template.bandpass.name, kind: template.bandpass.kind });
   }
   return [...options.values()];
 }
 
-export function bandpassKind(id: string, templatesByRig: Record<string, DirectorTemplate[]>): 'broadband' | 'narrowband' {
-  return bandpassOptions(templatesByRig).find(b => b.id === id)?.kind ?? 'broadband';
+export function bandpassKind(id: string, templatesByRig: Record<string, DirectorTemplate[]>, library: DirectorLibraryTemplate[] = []): 'broadband' | 'narrowband' {
+  return bandpassOptions(templatesByRig, library).find(b => b.id === id)?.kind ?? 'broadband';
+}
+
+/** The library templates for a bandpass. */
+export function libraryFor(bandpassId: string, library: DirectorLibraryTemplate[]): DirectorLibraryTemplate[] {
+  return library.filter(template => template.bandpass.id === bandpassId);
+}
+
+/** A library template as a plan binds to it: by its library GUID and its
+ *  settings, with no row id, since the rig database has no such row yet. */
+export function libraryChoice(template: DirectorLibraryTemplate): DirectorTemplateChoice {
+  return { template_guid: template.id, template_id: null, name: template.name, filter_name: template.filter_name, gain: template.gain, offset: template.offset, bin: template.bin, readout_mode: template.readout_mode };
+}
+
+export function newLibraryContribution(objective: DirectorObjective, rig: DirectorRigProfileSummary, template: DirectorLibraryTemplate): DirectorContribution {
+  return { id: newId(), objective_id: objective.id, rig_id: rig.rig.id, template: libraryChoice(template), exposure_seconds: template.default_exposure_seconds, panel_ids: [], enabled: true };
+}
+
+/** What the template control shows for a contribution: the rig's own row
+ *  (`db:<id>`), a library template (`lib:<id>`), or nothing. */
+export function templateValue(contribution: DirectorContribution | null, library: DirectorLibraryTemplate[]): string {
+  if (!contribution) return '';
+  if (contribution.template.template_id !== null) return `db:${contribution.template.template_id}`;
+  if (contribution.template.template_guid && library.some(t => t.id === contribution.template.template_guid)) return `lib:${contribution.template.template_guid}`;
+  return contribution.template.template_guid ? `lib:${contribution.template.template_guid}` : '';
 }
 
 export function newId(): string {
