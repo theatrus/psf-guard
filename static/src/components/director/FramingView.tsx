@@ -191,7 +191,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   // The stage projects about the view center, as N.I.N.A.'s framing
   // assistant does: a drag turns the globe under the pointer, and a
   // rectangle away from the center leans with its local north.
-  const drag = useRef<{ kind: 'look' | 'sky' | 'target' | 'rotate'; x: number; y: number; center: FramingState['viewCenter']; target: FramingState['center']; grab: [number, number] } | null>(null);
+  const drag = useRef<{ rig?: string | null; kind: 'look' | 'sky' | 'target' | 'rotate'; x: number; y: number; center: FramingState['viewCenter']; target: FramingState['center']; grab: [number, number] } | null>(null);
   const [dragMode, setDragMode] = useState<DragMode>(() => remembered(DRAG_MODE_KEY, ['rectangle', 'sky'] as const, 'rectangle'));
   const [rotateSky, setRotateSky] = useState(() => remembered(ROTATE_SKY_KEY, ['true', 'false'] as const, 'false') === 'true');
   const chooseDragMode = (mode: DragMode) => { setDragMode(mode); remember(DRAG_MODE_KEY, mode); };
@@ -353,7 +353,14 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     // rectangle when it starts on it, or the sky under a pinned rectangle;
     // Shift looks around without moving the target in both modes.
     let kind: 'look' | 'sky' | 'target' | 'rotate' = event.shiftKey ? 'look' : dragMode === 'sky' ? 'sky' : 'look';
-    if (geometry && geometry.panels.length > 0) {
+    // The rig being framed on its own comes first: a drag on its grid moves
+    // its own center, and detaches it from the shared one if it followed it.
+    const own = ownRigsRef.current.find(entry => entry.rigId === editingRef.current);
+    let rig: string | null = null;
+    if (own && kind === 'look' && !event.shiftKey && dragMode === 'rectangle' && own.geometry.panels.some(panel => { const corners = stageCorners(panel.corners, stageView); return corners && insidePolygon(point, corners, state.viewFov, stageSize); })) {
+      kind = 'target';
+      rig = own.rigId;
+    } else if (geometry && geometry.panels.length > 0) {
       const handleAt = projectOn(stageView, rotationHandle(geometry, state));
       const handle = handleAt ? toStage(handleAt, state.viewFov, stageSize) : null;
       if (handle && Math.hypot(handle[0] - point[0], handle[1] - point[1]) <= 18) kind = 'rotate';
@@ -362,8 +369,9 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     // Where the pointer took hold, relative to the target, so the target
     // follows the hand instead of jumping to it.
     const pointerOffset = fromStage(point[0], point[1], state.viewFov, stageSize);
-    const targetOffset = projectOn(stageView, state.center) ?? [0, 0];
-    drag.current = { kind, x: event.clientX, y: event.clientY, center: state.viewCenter, target: state.center, grab: [pointerOffset[0] - targetOffset[0], pointerOffset[1] - targetOffset[1]] };
+    const target = own && rig ? own.layout.center : state.center;
+    const targetOffset = projectOn(stageView, target) ?? [0, 0];
+    drag.current = { kind, rig, x: event.clientX, y: event.clientY, center: state.viewCenter, target, grab: [pointerOffset[0] - targetOffset[0], pointerOffset[1] - targetOffset[1]] };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -388,8 +396,10 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     const point = stagePoint(event);
     const pointerOffset = fromStage(point[0], point[1], state.viewFov, stageSize);
     if (drag.current.kind === 'target') {
-      const { grab } = drag.current;
-      update({ center: deprojectOn(stageView, [pointerOffset[0] - grab[0], pointerOffset[1] - grab[1]]) });
+      const { grab, rig } = drag.current;
+      const center = deprojectOn(stageView, [pointerOffset[0] - grab[0], pointerOffset[1] - grab[1]]);
+      if (rig) update(current => ({ rigFramings: current.rigFramings.map(own => own.rig_id === rig ? { ...own, center } : own) }));
+      else update({ center });
     } else {
       // The angle is read on the target's plane, where the camera angle
       // lives, so the handle and the rectangle agree wherever the view is.
@@ -416,12 +426,16 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   // Rigs framed on their own: their grids over the same target, each in its own colour.
   const ownRigs = useMemo(() => state ? rigGeometries(state, rigList) : [], [state, rigList]);
   const [editingRig, setEditingRig] = useState<string | null>(null);
+  const ownRigsRef = useRef(ownRigs);
+  ownRigsRef.current = ownRigs;
+  const editingRef = useRef<string | null>(null);
+  editingRef.current = editingRig;
   const editing = state?.rigFramings.find(own => own.rig_id === editingRig) ?? null;
   const rigName = (id: string) => rigList.find(entry => entry.rig.id === id)?.catalog_name ?? 'Rig';
   const editOwn = (patch: Partial<DirectorRigFraming>) => update(current => ({ rigFramings: current.rigFramings.map(own => own.rig_id === editingRig ? { ...own, ...patch } : own) }));
   const frameRig = (id: string) => {
     if (!id) return;
-    update(current => current.rigFramings.some(own => own.rig_id === id) ? {} : ({ rigFramings: [...current.rigFramings, { rig_id: id, position_angle_degrees: null, mosaic: { ...current.mosaic }, panel: panelForRig(rigList, id) ? null : current.panel }] }));
+    update(current => current.rigFramings.some(own => own.rig_id === id) ? {} : ({ rigFramings: [...current.rigFramings, { rig_id: id, center: null, position_angle_degrees: null, mosaic: { ...current.mosaic }, panel: panelForRig(rigList, id) ? null : current.panel }] }));
     setEditingRig(id);
   };
   const chooseRig = (rigId: string) => update({ panelRigId: rigId || null, panel: rigId ? panelForRig(rigList, rigId) : null });
@@ -571,7 +585,15 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
           const own = ownRigs.find(entry => entry.rigId === editing.rig_id);
           const field = panelForRig(rigList, editing.rig_id);
           const size = editing.panel ?? field;
+          const center = editing.center ?? state.center;
           return <div className="framing-own" data-testid="framing-own-rig">
+            <div className="framing-grid">
+              <label>RA<span className="framing-input"><input aria-label={`${rigName(editing.rig_id)} right ascension degrees`} type="number" step="any" min={0} max={359.99999} value={Number(center.ra_degrees.toFixed(5))} onChange={event => editOwn({ center: { ra_degrees: ((number(event.target.value, center.ra_degrees) % 360) + 360) % 360, dec_degrees: center.dec_degrees } })} /><small>°</small></span></label>
+              <label>Dec<span className="framing-input"><input aria-label={`${rigName(editing.rig_id)} declination degrees`} type="number" step="any" min={-90} max={90} value={Number(center.dec_degrees.toFixed(5))} onChange={event => editOwn({ center: { ra_degrees: center.ra_degrees, dec_degrees: Math.max(-90, Math.min(90, number(event.target.value, center.dec_degrees))) } })} /><small>°</small></span></label>
+            </div>
+            <p className="director-muted"><label className="framing-check"><input type="checkbox" aria-label={`${rigName(editing.rig_id)} follows the shared center`} checked={editing.center === null} onChange={event => editOwn({ center: event.target.checked ? null : state.center })} />same center as shared</label>
+              {editing.center && <> <button type="button" className="link-button" onClick={() => editOwn({ center: state.viewCenter })}>Move to view center</button></>}
+              {editing.center === null ? ' Drag this rig\'s rectangle on the sky to give it a center of its own.' : ''}</p>
             <label>Camera angle<span className="framing-input">
               <input aria-label={`${rigName(editing.rig_id)} camera angle degrees`} type="number" step="any" min={0} max={359.99} value={Number((editing.position_angle_degrees ?? state.positionAngle).toFixed(2))} onChange={event => editOwn({ position_angle_degrees: ((number(event.target.value, 0) % 360) + 360) % 360 })} /><small>° E of N</small>
               <label className="framing-check"><input type="checkbox" aria-label={`${rigName(editing.rig_id)} follows the shared angle`} checked={editing.position_angle_degrees === null} onChange={event => editOwn({ position_angle_degrees: event.target.checked ? null : state.positionAngle })} />same as shared</label>

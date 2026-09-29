@@ -229,13 +229,25 @@ describe('Framing view', () => {
     expect(screen.getByTestId('framing-own-extent')).toHaveTextContent('3 panels for C925 data');
     // The shared framing is untouched: one panel for RedCat.
     expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1);
+    // Its center follows the shared one until it is given one of its own.
+    expect(screen.getByLabelText('C925 data follows the shared center')).toBeChecked();
+    expect(screen.getByLabelText('C925 data right ascension degrees')).toHaveValue(seed.center.ra_degrees);
+    const before = own.querySelector('polygon')!.getAttribute('points');
+    fireEvent.change(screen.getByLabelText('C925 data right ascension degrees'), { target: { value: '12' } });
+    expect(screen.getByLabelText('C925 data follows the shared center')).not.toBeChecked();
+    expect(screen.getByTestId('framing-rig-panels').querySelector('polygon')!.getAttribute('points')).not.toBe(before);
+    // The shared target did not move with it.
+    expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(seed.center.ra_degrees);
     fireEvent.change(screen.getByLabelText('Framing for'), { target: { value: '' } });
     expect(screen.getByLabelText('Mosaic columns')).toHaveValue(1);
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
     await waitFor(() => expect(saves).toHaveLength(1));
-    expect(saves[0].rig_framings).toEqual([{ rig_id: rigB.rig.id, position_angle_degrees: 90, mosaic: { rows: 1, columns: 3, overlap_percent: 20 }, panel: { width_degrees: 5.38, height_degrees: 3.6 } }]);
-    // Back to the shared framing drops the rig's own grid.
+    expect(saves[0].rig_framings).toEqual([{ rig_id: rigB.rig.id, center: { ra_degrees: 12, dec_degrees: seed.center.dec_degrees }, position_angle_degrees: 90, mosaic: { rows: 1, columns: 3, overlap_percent: 20 }, panel: { width_degrees: 5.38, height_degrees: 3.6 } }]);
+    // One tick puts it back in step with the shared center.
     fireEvent.change(screen.getByLabelText('Framing for'), { target: { value: rigB.rig.id } });
+    fireEvent.click(screen.getByLabelText('C925 data follows the shared center'));
+    expect(screen.getByLabelText('C925 data right ascension degrees')).toHaveValue(seed.center.ra_degrees);
+    // Back to the shared framing drops the rig's own grid.
     fireEvent.click(screen.getByRole('button', { name: 'Back to the shared framing for C925 data' }));
     expect(screen.queryByTestId('framing-rig-panels')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Framing for')).not.toBeInTheDocument();

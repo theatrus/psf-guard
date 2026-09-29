@@ -68,13 +68,13 @@ export function draftFromState(state: FramingState, projectId: string, revision:
 /** What one rig shoots, the way the server lays it out: its own framing when
  *  it has one (its field standing in for a size not set by hand), else the
  *  shared framing. Null when no panel size is known. */
-export function rigLayout(state: FramingState, rigId: string, rigs: DirectorRigProfileSummary[]): { positionAngle: number; panel: DirectorPanelSize; mosaic: DirectorMosaic; own: boolean } | null {
+export function rigLayout(state: FramingState, rigId: string, rigs: DirectorRigProfileSummary[]): { center: DirectorSkyPosition; positionAngle: number; panel: DirectorPanelSize; mosaic: DirectorMosaic; own: boolean } | null {
   const own = state.rigFramings.find(entry => entry.rig_id === rigId);
   if (own) {
     const panel = own.panel ?? panelForRig(rigs, rigId);
-    return panel ? { positionAngle: own.position_angle_degrees ?? state.positionAngle, panel, mosaic: own.mosaic, own: true } : null;
+    return panel ? { center: own.center ?? state.center, positionAngle: own.position_angle_degrees ?? state.positionAngle, panel, mosaic: own.mosaic, own: true } : null;
   }
-  return state.panel ? { positionAngle: state.positionAngle, panel: state.panel, mosaic: state.mosaic, own: false } : null;
+  return state.panel ? { center: state.center, positionAngle: state.positionAngle, panel: state.panel, mosaic: state.mosaic, own: false } : null;
 }
 
 /** The geometry of every rig framed on its own, for the stage. */
@@ -82,7 +82,7 @@ export function rigGeometries(state: FramingState, rigs: DirectorRigProfileSumma
   return state.rigFramings.flatMap(own => {
     const layout = rigLayout(state, own.rig_id, rigs);
     if (!layout) return [];
-    return [{ rigId: own.rig_id, layout, geometry: framingGeometry({ center: state.center, position_angle_degrees: layout.positionAngle, panel: layout.panel, mosaic: layout.mosaic, overlays: [], view: { center: state.viewCenter, rotation_degrees: 0 } }) }];
+    return [{ rigId: own.rig_id, layout, geometry: framingGeometry({ center: layout.center, position_angle_degrees: layout.positionAngle, panel: layout.panel, mosaic: layout.mosaic, overlays: [], view: { center: state.viewCenter, rotation_degrees: 0 } }) }];
   });
 }
 
