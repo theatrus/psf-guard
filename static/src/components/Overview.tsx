@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
+import { ago, percentDone, projectFamilies, stateLabel } from './libraryFamilies';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Merge } from 'lucide-react';
@@ -94,6 +95,14 @@ export default function Overview() {
   const [organizeError, setOrganizeError] = useState('');
   const [seenProjects, setSeenProjects] = useState(loadProjectSeenState);
   const [relativeNow, setRelativeNow] = useState(Date.now);
+  // Compact rows for browsing, the full card on request; remembered here.
+  const DENSITY_KEY = 'psf-guard.library.density';
+  const [density, setDensity] = useState<'compact' | 'detailed'>(() => {
+    try { return window.localStorage.getItem(DENSITY_KEY) === 'detailed' ? 'detailed' : 'compact'; } catch { return 'compact'; }
+  });
+  const chooseDensity = (next: 'compact' | 'detailed') => { setDensity(next); try { window.localStorage.setItem(DENSITY_KEY, next); } catch { /* remembered for this visit only */ } };
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
+  const toggleExpanded = (key: string) => setExpandedProjects(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; });
   const [calibrationReportProject, setCalibrationReportProject] = useState<{
     dbId: string;
     id: number;
@@ -768,6 +777,10 @@ export default function Overview() {
                   <option value="images">Most images</option>
                 </select>
               </label>
+              <div className="project-density" role="radiogroup" aria-label="Project view">
+                <button type="button" role="radio" aria-checked={density === 'compact'} onClick={() => chooseDensity('compact')}>Compact</button>
+                <button type="button" role="radio" aria-checked={density === 'detailed'} onClick={() => chooseDensity('detailed')}>Detailed</button>
+              </div>
             </div>
           </div>
 
@@ -792,8 +805,9 @@ export default function Overview() {
                     {group.projects.length} project{group.projects.length === 1 ? '' : 's'}
                   </span>
                 </div>
-                <div className="projects-list">
-            {group.projects.map((project) => {
+                <div className={`projects-list${density === 'compact' ? ' is-compact' : ''}`}>
+            {projectFamilies(group.projects).map((family) => {
+            const renderProject = (project: WithDb<ProjectOverview>) => {
               const dbProjects = projectsByDb[project.db_id] || [];
               const progress = getGradingProgress(
                 project.accepted_images,
@@ -813,6 +827,33 @@ export default function Overview() {
               );
 
               const isCurrent = key === currentProjectKey;
+              // A compact row says what matters at a glance; the project the
+              // user came from, and any row they open, shows the whole card.
+              if (density === 'compact' && !expandedProjects.has(key) && !isCurrent) {
+                const done = percentDone(project.accepted_images, project.total_desired);
+                const last = ago(project.date_range.latest, relativeNow);
+                return (
+                  <div key={key} data-project-key={key} className={['library-row', !project.has_files ? 'no-files' : '', projectNewImages > 0 ? 'has-new-images' : ''].filter(Boolean).join(' ')} data-testid="library-row">
+                    <button type="button" className="library-expand" aria-expanded={false} aria-label={`Show details for ${project.display_name}`} title="Show details" onClick={() => toggleExpanded(key)}>▸</button>
+                    <button type="button" className="library-name" onClick={() => project.has_files && handleSelectProject(project)} disabled={!project.has_files} aria-label={`Open ${project.display_name} image grid`}>{project.display_name}</button>
+                    <span className="library-pill library-pill-db" title={`Database ID: ${project.db_id}`}>{project.db_name}</span>
+                    <span className={`library-pill library-pill-state is-state-${project.state}`}>{stateLabel(project.state)}</span>
+                    {project.total_desired > 0
+                      ? <span className="library-pill library-pill-progress" title={`${project.accepted_images} of ${project.total_desired} desired frames accepted`}><span className="library-pill-bar" aria-hidden="true"><span style={{ width: `${Math.min(100, done ?? 0)}%` }} /></span>{project.accepted_images} / {project.total_desired} · {done}%</span>
+                      : <span className="library-pill library-pill-progress is-open" title="No desired frame count in Target Scheduler">{project.total_images} images</span>}
+                    <span className="library-pill library-pill-grading" title={`${project.accepted_images} accepted, ${project.rejected_images} rejected, ${project.pending_images} pending`}><span className="grade-accepted">{project.accepted_images}</span><span className="grade-rejected">{project.rejected_images}</span><span className="grade-pending">{project.pending_images}</span></span>
+                    <span className="library-pill library-pill-dates" title={formatDateRange(project.date_range)}>{project.date_range.latest ? `${formatDate(project.date_range.earliest)} – ${formatDate(project.date_range.latest)}` : 'No dates'}{last ? <small> · {last}</small> : null}</span>
+                    {projectNewImages > 0 && <span className="new-images-badge"><span aria-hidden="true" />{projectNewImages} new</span>}
+                    {!project.has_files && <span className="no-files-badge">No Files</span>}
+                    {project.files_missing > 0 && <span className="library-pill files-missing">{project.files_missing} missing</span>}
+                    <button type="button" className="library-planning" title="Open this project in Planning" aria-label={`Open ${project.display_name} in Planning`} onClick={() => {
+                      const params = new URLSearchParams({ db: project.db_id, project: String(project.id), directorSource: project.db_id, directorView: 'projects' });
+                      if (dbFilter) params.set('dbfilter', dbFilter);
+                      navigate(`/director?${params}`);
+                    }}>⚙</button>
+                  </div>
+                );
+              }
 
               return (
                 <div
@@ -854,6 +895,7 @@ export default function Overview() {
                       </span>
                     </button>
                     <div className="project-header-actions">
+                      {density === 'compact' && <button type="button" className="project-settings-button" aria-expanded={true} aria-label={`Hide details for ${project.display_name}`} title="Back to the compact row" onClick={() => { if (expandedProjects.has(key)) toggleExpanded(key); else setExpandedProjects(current => new Set(current)); }} disabled={isCurrent && !expandedProjects.has(key)}>▾ Less</button>}
                       {!project.has_files && <span className="no-files-badge">No Files</span>}
                       <button
                         type="button"
@@ -1400,7 +1442,25 @@ export default function Overview() {
                   )}
                 </div>
               );
-            })}
+            };
+            if (family.members.length === 1) return renderProject(family.members[0]);
+            const done = percentDone(family.accepted, family.desired);
+            const last = ago(family.latest, relativeNow);
+            return (
+              <div key={family.key} className={`library-family${density === 'compact' ? ' is-compact' : ''}`} data-testid="library-family">
+                <div className="library-family-head">
+                  <span className="library-pill library-pill-family" title="One plan shot by several rigs: the same Target Scheduler project in each database">{family.members.length} rigs</span>
+                  <strong className="library-family-name">{family.name}</strong>
+                  <span className="library-pill library-pill-db">{family.members.map(member => member.db_name).join(' · ')}</span>
+                  {family.desired > 0
+                    ? <span className="library-pill library-pill-progress" title={`${family.accepted} of ${family.desired} desired frames accepted across the rigs`}><span className="library-pill-bar" aria-hidden="true"><span style={{ width: `${Math.min(100, done ?? 0)}%` }} /></span>{family.accepted} / {family.desired} · {done}%</span>
+                    : <span className="library-pill library-pill-progress is-open">{family.totalImages} images</span>}
+                  {last && <span className="library-pill library-pill-dates">{last}</span>}
+                </div>
+                <div className="library-family-members">{family.members.map(renderProject)}</div>
+              </div>
+            );
+          })}
                 </div>
               </section>
             );

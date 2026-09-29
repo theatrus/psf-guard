@@ -2115,6 +2115,8 @@ export interface DateRange {
 
 export interface ProjectOverview {
   id: number;
+  /** Target Scheduler's project GUID; the same value in two databases is one plan shot by two rigs. */
+  guid?: string | null;
   profile_id: string;
   profile_name: string;
   name: string;

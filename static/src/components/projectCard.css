@@ -273,3 +273,40 @@
   color: var(--color-warning);
   border-color: var(--color-warning);
 }
+
+/* Compact Library: one row of pills per project, the full card on request.
+   A plan shot by several rigs wraps its rows in an outer pill. */
+.project-density { display: inline-flex; border: 1px solid var(--color-border-secondary); border-radius: 6px; overflow: hidden; align-self: flex-end; }
+.project-density button { min-height: 32px; padding: 4px 12px; border: 0; border-radius: 0; background: transparent; color: var(--color-text-secondary); cursor: pointer; font: inherit; }
+.project-density button + button { border-left: 1px solid var(--color-border-secondary); }
+.project-density button[aria-checked="true"] { background: var(--color-primary-alpha-20); color: var(--color-text-primary); }
+.projects-list.is-compact { gap: 6px; }
+.library-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 10px; border: 1px solid var(--color-border-secondary); border-radius: 999px; background: var(--color-bg-surface); }
+.library-row:hover { border-color: var(--color-border-tertiary); background: var(--color-bg-elevated); }
+.library-row.has-new-images { border-color: var(--color-primary); box-shadow: inset 3px 0 0 var(--color-primary); }
+.library-row.no-files { opacity: 0.6; }
+.library-expand, .library-planning { min-height: 26px; width: 26px; padding: 0; border: 1px solid transparent; border-radius: 50%; background: transparent; color: var(--color-text-secondary); cursor: pointer; font: inherit; }
+.library-expand:hover, .library-planning:hover { border-color: var(--color-border-tertiary); color: var(--color-text-primary); }
+.library-name { flex: 1 1 12rem; min-width: 0; text-align: left; padding: 2px 4px; border: 0; background: transparent; color: var(--color-text-primary); font: inherit; font-weight: 600; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-name:disabled { cursor: default; }
+.library-pill { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 10px; border-radius: 999px; font-size: 12px; line-height: 1.2; background: var(--color-bg-tertiary); color: var(--color-text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.library-pill small { color: var(--color-text-hint); }
+.library-pill-db { max-width: 16rem; overflow: hidden; text-overflow: ellipsis; }
+.library-pill-state.is-state-1 { color: #7be495; background: rgba(123, 228, 149, 0.12); }
+.library-pill-state.is-state-2 { color: var(--color-text-hint); }
+.library-pill-state.is-state-3 { color: var(--color-text-hint); text-decoration: line-through; }
+.library-pill-progress { color: var(--color-text-primary); }
+.library-pill-progress.is-open { color: var(--color-text-secondary); }
+.library-pill-bar { display: inline-block; width: 64px; height: 6px; border-radius: 3px; background: var(--color-bg-quaternary); overflow: hidden; }
+.library-pill-bar > span { display: block; height: 100%; background: var(--color-primary); }
+.library-pill-grading .grade-accepted::before { content: '✓'; margin-right: 2px; color: #7be495; }
+.library-pill-grading .grade-rejected::before { content: '✗'; margin-right: 2px; color: #ff6b6b; }
+.library-pill-grading .grade-pending::before { content: '·'; margin-right: 2px; color: var(--color-text-hint); }
+.library-pill.files-missing { color: var(--color-warning-light); }
+.library-family { border: 1px solid var(--color-border-tertiary); border-radius: 22px; padding: 6px; background: var(--color-bg-elevated); }
+.library-family-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 4px 8px 8px; }
+.library-family-name { flex: 1 1 10rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-pill-family { background: var(--color-primary-alpha-20); color: var(--color-text-primary); font-weight: 600; }
+.library-family-members { display: flex; flex-direction: column; gap: 6px; }
+.library-family:not(.is-compact) .library-family-members { gap: 12px; }
+@media (max-width: 700px) { .library-pill-dates small { display: none; } .library-pill-bar { width: 40px; } }
