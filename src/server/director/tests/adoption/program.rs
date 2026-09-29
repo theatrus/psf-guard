@@ -35,7 +35,7 @@ async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment(
     let a = activated().await;
     let instance = a.f.state.director.as_ref().unwrap().instance_id;
     let catalog = {
-        let store = a.f.state.director.as_ref().unwrap().store.lock().unwrap();
+        let store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut found = None;
         // The rig binding minted the rig id from the catalog id; find the catalog that maps to it.
         for id in [a.rig] {

@@ -62,7 +62,7 @@ pub(super) async fn activated() -> Activated {
     let rig = Uuid::parse_str(applied["data"]["binding"]["rig"]["id"].as_str().unwrap()).unwrap();
     let objective = Uuid::new_v4();
     let project = {
-        let mut store = f.state.director.as_ref().unwrap().store.lock().unwrap();
+        let mut store = f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let project = store
             .create_project(Uuid::new_v4(), "Heart Nebula")
             .unwrap()
@@ -266,7 +266,7 @@ async fn activation_previews_without_writing_then_applies_and_updates_in_place()
     a.db.execute("UPDATE exposureplan SET acquired=5, accepted=3", [])
         .unwrap();
     {
-        let mut store = a.f.state.director.as_ref().unwrap().store.lock().unwrap();
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut framing = store.framing_draft(a.project).unwrap().unwrap();
         framing.position_angle_degrees = 95.0;
         store.save_framing_draft(&framing, 1).unwrap();
@@ -304,7 +304,7 @@ async fn activation_previews_without_writing_then_applies_and_updates_in_place()
 async fn a_rig_that_owns_one_panel_gets_only_that_target_and_gaps_are_named() {
     let a = activated().await;
     {
-        let mut store = a.f.state.director.as_ref().unwrap().store.lock().unwrap();
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut plan = store.plan_draft(a.project).unwrap().unwrap();
         plan.contributions[0].panel_ids = vec!["r2c1".into()];
         store.save_plan_draft(&plan, 1).unwrap();
@@ -341,7 +341,7 @@ async fn a_rig_that_owns_one_panel_gets_only_that_target_and_gaps_are_named() {
     assert_eq!(count("SELECT count(*) FROM exposureplan"), 1);
     // Widening back to every panel adds the missing panel without touching the first.
     {
-        let mut store = a.f.state.director.as_ref().unwrap().store.lock().unwrap();
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut plan = store.plan_draft(a.project).unwrap().unwrap();
         plan.contributions[0].panel_ids = vec![];
         store.save_plan_draft(&plan, 2).unwrap();
@@ -371,7 +371,7 @@ async fn a_rig_that_owns_one_panel_gets_only_that_target_and_gaps_are_named() {
 async fn activation_names_what_is_missing_and_skips_rigs_it_cannot_write() {
     let a = activated().await;
     let other = {
-        let mut store = a.f.state.director.as_ref().unwrap().store.lock().unwrap();
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         store.create_project(Uuid::new_v4(), "Bare").unwrap().id
     };
     let (status, body) = call(
@@ -398,7 +398,7 @@ async fn activation_names_what_is_missing_and_skips_rigs_it_cannot_write() {
     );
     // A rig with no registered database is reported, not failed.
     let stray = {
-        let mut store = a.f.state.director.as_ref().unwrap().store.lock().unwrap();
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let stray = store.create_rig(Uuid::new_v4(), "Remote").unwrap().id;
         let mut plan = store.plan_draft(a.project).unwrap().unwrap();
         let mut copy = plan.contributions[0].clone();

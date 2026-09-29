@@ -111,8 +111,26 @@ pub(super) fn validate_registry_separation(
     Ok(())
 }
 
+/// How many reads of the meta store run at once. SQLite in WAL mode serves
+/// any number of readers beside one writer; this only bounds the blocking
+/// threads a burst of requests can take.
+fn reader_slots() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(2, 8)
+}
+
+/// The meta store and the two gates on it. Reads share a pool of read-only
+/// connections and never queue behind a write; writes take the one writer in
+/// turn. `discovery_admission` is the separate gate on work that scans or
+/// writes rig databases, since that takes seconds and must not stall the
+/// store.
 pub struct Service {
-    store: Mutex<MetaStore>,
+    path: std::path::PathBuf,
+    writer: Mutex<MetaStore>,
+    readers: Mutex<Vec<MetaStore>>,
+    read_slots: Arc<Semaphore>,
     instance_id: Uuid,
     admission: Arc<Semaphore>,
     discovery_admission: Arc<Semaphore>,
@@ -128,32 +146,86 @@ impl Service {
             MetaStore::create(path)?
         };
         Ok(Some(Arc::new(Self {
+            path: path.to_path_buf(),
             instance_id: store.instance_id(),
-            store: Mutex::new(store),
+            writer: Mutex::new(store),
+            readers: Mutex::new(Vec::new()),
+            read_slots: Arc::new(Semaphore::new(reader_slots())),
             admission: Arc::new(Semaphore::new(1)),
             discovery_admission: Arc::new(Semaphore::new(1)),
         })))
     }
 
+    /// A write, in turn behind every other write. Dropping the HTTP request
+    /// must not release the permit while its SQLite write still runs, so the
+    /// permit travels into the blocking task.
     async fn run<T: Send + 'static>(
         self: Arc<Self>,
         operation: impl FnOnce(&mut MetaStore) -> Result<T, StoreError> + Send + 'static,
     ) -> Result<T, Error> {
-        // Bound admission before scheduling blocking work. Dropping an HTTP
-        // request must not release the permit while its SQLite write still runs.
-        let permit = self
-            .admission
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| Error::Busy)?;
+        self.with_writer(move |store| operation(store).map_err(Error::from))
+            .await
+    }
+
+    /// A read on a pooled read-only connection: it runs beside any write
+    /// and beside other reads, and sees the last committed state.
+    async fn query<T: Send + 'static>(
+        self: Arc<Self>,
+        operation: impl FnOnce(&MetaStore) -> Result<T, StoreError> + Send + 'static,
+    ) -> Result<T, Error> {
+        self.with_reader(move |store| operation(store).map_err(Error::from))
+            .await
+    }
+
+    /// Like [`Self::run`] for a handler with its own error type; the
+    /// closure may do other blocking work (rig databases) around the store.
+    async fn with_writer<T, E>(
+        self: Arc<Self>,
+        operation: impl FnOnce(&mut MetaStore) -> Result<T, E> + Send + 'static,
+    ) -> Result<T, E>
+    where
+        T: Send + 'static,
+        E: From<Error> + Send + 'static,
+    {
+        let permit = admit(&self.admission).await?;
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            let mut store = self.store.lock().map_err(|_| Error::Internal)?;
-            operation(&mut store).map_err(Error::from)
+            let mut store = self.writer.lock().map_err(|_| Error::Internal)?;
+            operation(&mut store)
         })
         .await
         .map_err(|error| {
             tracing::error!(%error, "Director metadata worker failed");
+            Error::Internal
+        })?
+    }
+
+    /// Like [`Self::query`] for a handler with its own error type.
+    async fn with_reader<T, E>(
+        self: Arc<Self>,
+        operation: impl FnOnce(&MetaStore) -> Result<T, E> + Send + 'static,
+    ) -> Result<T, E>
+    where
+        T: Send + 'static,
+        E: From<Error> + Send + 'static,
+    {
+        let slot = admit(&self.read_slots).await?;
+        tokio::task::spawn_blocking(move || {
+            let _slot = slot;
+            let reader = self.readers.lock().map_err(|_| Error::Internal)?.pop();
+            let reader = match reader {
+                Some(reader) => reader,
+                None => MetaStore::open_reader(&self.path).map_err(Error::from)?,
+            };
+            let result = operation(&reader);
+            if let Ok(mut idle) = self.readers.lock() {
+                idle.push(reader);
+            }
+            result
+        })
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "Director metadata reader failed");
             Error::Internal
         })?
     }
@@ -449,13 +521,10 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .layer(DefaultBodyLimit::max(4096))
 }
 
-/// Wait briefly for an admission permit instead of failing at once. Reads
-/// that merely list state should not lose to a neighbouring request; a write
-/// still uses `try_acquire_owned` so a dropped request cannot queue work.
-/// How long a request waits for its turn at the metadata store before it
-/// answers 503. A workspace opens with a handful of requests at once and
-/// some of them (adoption of every database, feasibility) take seconds, so
-/// the wait must cover a queue of them; the browser retries a 503 anyway.
+/// How long a request waits for its turn at a gate before it answers 503.
+/// Writes queue behind one another and adoption of every database can take
+/// seconds, so the wait must cover a queue of them; the browser retries a
+/// 503 anyway. Reads do not wait on writes at all.
 const ADMISSION_WAIT: std::time::Duration = if cfg!(test) {
     // Tests hold the gate on purpose to see the busy answer; they should not
     // sit through the production wait for it.
@@ -540,7 +609,7 @@ async fn list_projects(
 ) -> Result<Json<ApiResponse<IdentityPage>>, Error> {
     Ok(Json(ApiResponse::success(
         enabled(&state)?
-            .run(move |store| store.projects(page.after, page.limit))
+            .query(move |store| store.projects(page.after, page.limit))
             .await?,
     )))
 }
@@ -561,7 +630,7 @@ async fn project(
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<NamedIdentity>>, Error> {
     let record = enabled(&state)?
-        .run(move |store| store.project(id))
+        .query(move |store| store.project(id))
         .await?
         .ok_or(Error::Missing)?;
     Ok(Json(ApiResponse::success(record)))

@@ -180,7 +180,7 @@ async fn mosaic_places_each_panels_stack_by_its_solve_and_names_the_rest() {
 
     // A framing saved after the activation is flagged, not hidden.
     {
-        let mut store = a.f.state.director.as_ref().unwrap().store.lock().unwrap();
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut draft = store.framing_draft(a.project).unwrap().unwrap();
         let revision = draft.revision;
         draft.position_angle_degrees = 20.0;

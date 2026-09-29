@@ -375,197 +375,193 @@ pub(super) async fn list(
         .values()
         .cloned()
         .collect();
-    let metadata_permit = admit(&service.admission).await?;
     let catalog_permit = admit(&service.discovery_admission).await?;
-    let list = tokio::task::spawn_blocking(move || {
-        let _permits = (metadata_permit, catalog_permit);
-        let mut store = service.store.lock().map_err(|_| Error::Internal)?;
-        // A hand-copied file carries its original's identity: name it and
-        // leave it alone, so it never gets plans or links of its own.
-        let before = identified_catalogs(&catalogs, service.instance_id);
-        let mut warnings = before.duplicates.clone();
-        for catalog in &catalogs {
-            if before.is_duplicate(&catalog.id) {
-                continue;
+    let list = service
+        .clone()
+        .with_writer(move |store| {
+            let _catalog_permit = catalog_permit;
+            // A hand-copied file carries its original's identity: name it and
+            // leave it alone, so it never gets plans or links of its own.
+            let before = identified_catalogs(&catalogs, service.instance_id);
+            let mut warnings = before.duplicates.clone();
+            for catalog in &catalogs {
+                if before.is_duplicate(&catalog.id) {
+                    continue;
+                }
+                if let Err(warning) =
+                    ensure_adopted(store, service.instance_id, catalog, management)
+                {
+                    warnings.push(warning);
+                }
             }
-            if let Err(warning) =
-                ensure_adopted(&mut store, service.instance_id, catalog, management)
-            {
-                warnings.push(warning);
-            }
-        }
-        // Links first: each bound database's mappings, joined to its rows.
-        let mut links: BTreeMap<Uuid, Vec<PlanLink>> = BTreeMap::new();
-        for (identity, catalog) in identified_catalogs(&catalogs, service.instance_id).iter() {
-            let Ok(connection) =
-                super::super::database_context::open_scheduler_connection_with_flags(
-                    FilePath::new(&catalog.database_path),
-                    OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-                )
-            else {
-                continue;
-            };
-            if connection.busy_timeout(Duration::from_secs(1)).is_err() {
-                continue;
-            }
-            let Some(binding) = store.catalog_rig(identity.id)? else {
-                continue;
-            };
-            let rows: BTreeMap<Uuid, (i64, Option<String>)> =
-                match catalog_discovery::read_evidence(&connection) {
-                    Ok(evidence) => evidence
-                        .identified_rows()
-                        .map(|(guid, row, name)| (guid, (row, name.map(str::to_owned))))
-                        .collect(),
-                    Err(_) => BTreeMap::new(),
+            // Links first: each bound database's mappings, joined to its rows.
+            let mut links: BTreeMap<Uuid, Vec<PlanLink>> = BTreeMap::new();
+            for (identity, catalog) in identified_catalogs(&catalogs, service.instance_id).iter() {
+                let Ok(connection) =
+                    super::super::database_context::open_scheduler_connection_with_flags(
+                        FilePath::new(&catalog.database_path),
+                        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                    )
+                else {
+                    continue;
                 };
-            let progress = target_progress(&connection);
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0);
+                if connection.busy_timeout(Duration::from_secs(1)).is_err() {
+                    continue;
+                }
+                let Some(binding) = store.catalog_rig(identity.id)? else {
+                    continue;
+                };
+                let rows: BTreeMap<Uuid, (i64, Option<String>)> =
+                    match catalog_discovery::read_evidence(&connection) {
+                        Ok(evidence) => evidence
+                            .identified_rows()
+                            .map(|(guid, row, name)| (guid, (row, name.map(str::to_owned))))
+                            .collect(),
+                        Err(_) => BTreeMap::new(),
+                    };
+                let progress = target_progress(&connection);
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                let mut after = None;
+                loop {
+                    let page = store.catalog_project_mappings(identity.id, after, 256)?;
+                    for mapping in &page.items {
+                        let row = rows.get(&mapping.source_project_guid);
+                        // What Target Scheduler already holds for the project is
+                        // its plan: take it in as drafts the first time, once.
+                        if let Some((row_id, name)) = row {
+                            let label = name.as_deref().unwrap_or("Project");
+                            if let Err(error) = super::import_drafts::import_from_catalog(
+                                &mut *store,
+                                &connection,
+                                binding.rig.id,
+                                mapping.project_id,
+                                *row_id,
+                                label,
+                                now,
+                            ) {
+                                warnings.push(format!(
+                                    "{}: {label} could not be imported into Director ({error})",
+                                    catalog.name
+                                ));
+                            }
+                        }
+                        links.entry(mapping.project_id).or_default().push(PlanLink {
+                            catalog_slug: catalog.id.clone(),
+                            catalog_name: catalog.name.clone(),
+                            rig: binding.rig.clone(),
+                            source_project_guid: mapping.source_project_guid,
+                            source_row_id: row.map(|(id, _)| *id),
+                            source_name: row.and_then(|(_, name)| name.clone()),
+                            targets: row
+                                .and_then(|(id, _)| progress.get(id))
+                                .cloned()
+                                .unwrap_or_default(),
+                        });
+                    }
+                    match page.next_after {
+                        Some(next) if links.values().map(Vec::len).sum::<usize>() < 4096 => {
+                            after = Some(next)
+                        }
+                        _ => break,
+                    }
+                }
+            }
+            let mut projects = Vec::new();
             let mut after = None;
             loop {
-                let page = store.catalog_project_mappings(identity.id, after, 256)?;
-                for mapping in &page.items {
-                    let row = rows.get(&mapping.source_project_guid);
-                    // What Target Scheduler already holds for the project is
-                    // its plan: take it in as drafts the first time, once.
-                    if let Some((row_id, name)) = row {
-                        let label = name.as_deref().unwrap_or("Project");
-                        if let Err(error) = super::import_drafts::import_from_catalog(
-                            &mut store,
-                            &connection,
-                            binding.rig.id,
-                            mapping.project_id,
-                            *row_id,
-                            label,
-                            now,
-                        ) {
-                            warnings.push(format!(
-                                "{}: {label} could not be imported into Director ({error})",
-                                catalog.name
-                            ));
-                        }
-                    }
-                    links.entry(mapping.project_id).or_default().push(PlanLink {
-                        catalog_slug: catalog.id.clone(),
-                        catalog_name: catalog.name.clone(),
-                        rig: binding.rig.clone(),
-                        source_project_guid: mapping.source_project_guid,
-                        source_row_id: row.map(|(id, _)| *id),
-                        source_name: row.and_then(|(_, name)| name.clone()),
-                        targets: row
-                            .and_then(|(id, _)| progress.get(id))
-                            .cloned()
-                            .unwrap_or_default(),
-                    });
-                }
+                let page = store.projects(after, 256)?;
+                projects.extend(page.items);
                 match page.next_after {
-                    Some(next) if links.values().map(Vec::len).sum::<usize>() < 4096 => {
-                        after = Some(next)
-                    }
+                    Some(next) if projects.len() < MAX_PROJECTS => after = Some(next),
                     _ => break,
                 }
             }
-        }
-        let mut projects = Vec::new();
-        let mut after = None;
-        loop {
-            let page = store.projects(after, 256)?;
-            projects.extend(page.items);
-            match page.next_after {
-                Some(next) if projects.len() < MAX_PROJECTS => after = Some(next),
-                _ => break,
+            // Databases come from a map; name order keeps the first link stable.
+            for entries in links.values_mut() {
+                entries.sort_by(|a, b| {
+                    a.catalog_name
+                        .cmp(&b.catalog_name)
+                        .then_with(|| a.source_row_id.cmp(&b.source_row_id))
+                });
             }
-        }
-        // Databases come from a map; name order keeps the first link stable.
-        for entries in links.values_mut() {
-            entries.sort_by(|a, b| {
-                a.catalog_name
-                    .cmp(&b.catalog_name)
-                    .then_with(|| a.source_row_id.cmp(&b.source_row_id))
-            });
-        }
-        let mut rows = Vec::with_capacity(projects.len());
-        for project in projects {
-            let framing = store.framing_draft(project.id)?.map(|draft| {
-                let preview = draft.panel.and_then(|panel| {
-                    FramingRequest {
+            let mut rows = Vec::with_capacity(projects.len());
+            for project in projects {
+                let framing = store.framing_draft(project.id)?.map(|draft| {
+                    let preview = draft.panel.and_then(|panel| {
+                        FramingRequest {
+                            center: draft.center,
+                            position_angle_degrees: draft.position_angle_degrees,
+                            panel,
+                            mosaic: draft.mosaic,
+                            overlays: vec![],
+                            view: None,
+                        }
+                        .preview()
+                        .ok()
+                    });
+                    FramingSummary {
+                        source: "draft",
+                        revision: draft.revision,
+                        target_name: draft.target_name.clone(),
+                        panels: preview
+                            .as_ref()
+                            .map(|p| p.panels.len() as u32)
+                            // No panel size yet; the grid still says how many.
+                            .unwrap_or(draft.mosaic.rows * draft.mosaic.columns),
+                        panel_rig_id: draft.panel_rig_id,
                         center: draft.center,
                         position_angle_degrees: draft.position_angle_degrees,
-                        panel,
+                        panel: draft.panel,
                         mosaic: draft.mosaic,
-                        overlays: vec![],
-                        view: None,
+                        survey_id: draft.survey_id.clone(),
+                        extent: preview.map(|p| p.extent),
                     }
-                    .preview()
-                    .ok()
                 });
-                FramingSummary {
-                    source: "draft",
-                    revision: draft.revision,
-                    target_name: draft.target_name.clone(),
-                    panels: preview
-                        .as_ref()
-                        .map(|p| p.panels.len() as u32)
-                        // No panel size yet; the grid still says how many.
-                        .unwrap_or(draft.mosaic.rows * draft.mosaic.columns),
-                    panel_rig_id: draft.panel_rig_id,
-                    center: draft.center,
-                    position_angle_degrees: draft.position_angle_degrees,
-                    panel: draft.panel,
-                    mosaic: draft.mosaic,
-                    survey_id: draft.survey_id.clone(),
-                    extent: preview.map(|p| p.extent),
-                }
-            });
-            let plan = store.plan_draft(project.id)?.map(|plan| PlanSummary {
-                revision: plan.revision,
-                objectives: plan.objectives.len() as u32,
-                rigs: plan
-                    .contributions
-                    .iter()
-                    .filter(|c| c.enabled)
-                    .map(|c| c.rig_id)
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .len() as u32,
-            });
-            let activation = store.activation(project.id)?.map(|a| ActivationSummary {
-                revision: a.revision,
-                applied_at_ms: a.applied_at_ms,
-                rigs: a.rigs.len() as u32,
-            });
-            let links = links.remove(&project.id).unwrap_or_default();
-            // No draft yet, but Target Scheduler already points somewhere:
-            // that is the framing until Director saves one of its own.
-            let framing = match framing {
-                Some(framing) => Some(framing),
-                None => catalog_framing(&store, &links)?,
-            };
-            let targets: Vec<&TargetProgress> = links.iter().flat_map(|l| &l.targets).collect();
-            let progress = (!targets.is_empty()).then(|| Progress {
-                desired: targets.iter().map(|t| t.desired).sum(),
-                acquired: targets.iter().map(|t| t.acquired).sum(),
-                accepted: targets.iter().map(|t| t.accepted).sum(),
-                rejected: targets.iter().map(|t| t.rejected).sum(),
-                targets: targets.len() as u32,
-            });
-            rows.push(PlanRow {
-                links,
-                progress,
-                project,
-                framing,
-                plan,
-                activation,
-            });
-        }
-        Ok::<_, Error>(PlanList { rows, warnings })
-    })
-    .await
-    .map_err(|error| {
-        tracing::error!(%error, "Director plan listing failed");
-        Error::Internal
-    })??;
+                let plan = store.plan_draft(project.id)?.map(|plan| PlanSummary {
+                    revision: plan.revision,
+                    objectives: plan.objectives.len() as u32,
+                    rigs: plan
+                        .contributions
+                        .iter()
+                        .filter(|c| c.enabled)
+                        .map(|c| c.rig_id)
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .len() as u32,
+                });
+                let activation = store.activation(project.id)?.map(|a| ActivationSummary {
+                    revision: a.revision,
+                    applied_at_ms: a.applied_at_ms,
+                    rigs: a.rigs.len() as u32,
+                });
+                let links = links.remove(&project.id).unwrap_or_default();
+                // No draft yet, but Target Scheduler already points somewhere:
+                // that is the framing until Director saves one of its own.
+                let framing = match framing {
+                    Some(framing) => Some(framing),
+                    None => catalog_framing(store, &links)?,
+                };
+                let targets: Vec<&TargetProgress> = links.iter().flat_map(|l| &l.targets).collect();
+                let progress = (!targets.is_empty()).then(|| Progress {
+                    desired: targets.iter().map(|t| t.desired).sum(),
+                    acquired: targets.iter().map(|t| t.acquired).sum(),
+                    accepted: targets.iter().map(|t| t.accepted).sum(),
+                    rejected: targets.iter().map(|t| t.rejected).sum(),
+                    targets: targets.len() as u32,
+                });
+                rows.push(PlanRow {
+                    links,
+                    progress,
+                    project,
+                    framing,
+                    plan,
+                    activation,
+                });
+            }
+            Ok::<_, Error>(PlanList { rows, warnings })
+        })
+        .await?;
     Ok(Json(ApiResponse::success(list)))
 }

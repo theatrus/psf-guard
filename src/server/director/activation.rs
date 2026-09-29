@@ -150,7 +150,7 @@ pub(super) async fn last(
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<Last>>, Error> {
     let activation = enabled(&state)?
-        .run(move |store| {
+        .query(move |store| {
             store.project(id)?.ok_or(StoreError::NotFound)?;
             store.activation(id)
         })
@@ -261,14 +261,12 @@ async fn execute(
         .values()
         .cloned()
         .collect();
-    let metadata_permit = admit(&service.admission).await?;
     let catalog_permit = admit(&service.discovery_admission).await?;
     let peers = registered_peers(&state);
     let known_peers = peers.clone();
-    let mut report = tokio::task::spawn_blocking(move || {
-        let _permits = (metadata_permit, catalog_permit);
+    let mut report = service.clone().with_writer(move |store| {
+        let _catalog_permit = catalog_permit;
         let applying = expected.is_some();
-        let mut store = service.store.lock().map_err(|_| Error::Internal)?;
         let project = store.project(id)?.ok_or(Error::Missing)?;
         let framing = store
             .framing_draft(id)?
@@ -550,11 +548,7 @@ async fn execute(
             activation_revision,
         })
     })
-    .await
-    .map_err(|error| {
-        tracing::error!(%error, "Director activation worker failed");
-        Error::Internal
-    })??;
+    .await?;
     if report.applied {
         // The local rows are committed; now each remote rig's peer. A push
         // that fails leaves the activation standing and says so in its row.
@@ -622,41 +616,35 @@ pub(super) async fn push(
         .cloned()
         .collect();
     let peers = registered_peers(&state);
-    let metadata_permit = admit(&service.admission).await?;
-    let catalog_permit = admit(&service.discovery_admission).await?;
-    let (project, revision, targets, mut warnings) = tokio::task::spawn_blocking(move || {
-        let _permits = (metadata_permit, catalog_permit);
-        let store = service.store.lock().map_err(|_| Error::Internal)?;
-        let project = store.project(id)?.ok_or(Error::Missing)?;
-        let activation = store
-            .activation(id)?
-            .ok_or(ActivationError::NotReady("Apply an activation first."))?;
-        let mut targets: Vec<(NamedIdentity, Arc<DatabaseContext>, String)> = Vec::new();
-        let found = identified_catalogs(&catalogs, service.instance_id);
-        let mut warnings = found.duplicates.clone();
-        for activated in &activation.rigs {
-            let rig = store.rig(activated.rig_id)?.ok_or(Error::Missing)?;
-            let Some(peer_id) = store
-                .rig_profile(activated.rig_id)?
-                .and_then(|profile| profile.peer_id)
-            else {
-                continue;
-            };
-            match found.get(activated.catalog_id) {
-                Some(context) => targets.push((rig, context.clone(), peer_id)),
-                None => warnings.push(format!(
-                    "{}: its database is no longer registered on this server.",
-                    rig.name
-                )),
+    let (project, revision, targets, mut warnings) = service
+        .clone()
+        .with_reader(move |store| {
+            let project = store.project(id)?.ok_or(Error::Missing)?;
+            let activation = store
+                .activation(id)?
+                .ok_or(ActivationError::NotReady("Apply an activation first."))?;
+            let mut targets: Vec<(NamedIdentity, Arc<DatabaseContext>, String)> = Vec::new();
+            let found = identified_catalogs(&catalogs, service.instance_id);
+            let mut warnings = found.duplicates.clone();
+            for activated in &activation.rigs {
+                let rig = store.rig(activated.rig_id)?.ok_or(Error::Missing)?;
+                let Some(peer_id) = store
+                    .rig_profile(activated.rig_id)?
+                    .and_then(|profile| profile.peer_id)
+                else {
+                    continue;
+                };
+                match found.get(activated.catalog_id) {
+                    Some(context) => targets.push((rig, context.clone(), peer_id)),
+                    None => warnings.push(format!(
+                        "{}: its database is no longer registered on this server.",
+                        rig.name
+                    )),
+                }
             }
-        }
-        Ok::<_, ActivationError>((project, activation.revision, targets, warnings))
-    })
-    .await
-    .map_err(|error| {
-        tracing::error!(%error, "Director activation push worker failed");
-        Error::Internal
-    })??;
+            Ok::<_, ActivationError>((project, activation.revision, targets, warnings))
+        })
+        .await?;
     let mut rigs = Vec::with_capacity(targets.len());
     for (rig, context, peer_id) in targets {
         let push = match peers.iter().find(|peer| peer.id == peer_id) {

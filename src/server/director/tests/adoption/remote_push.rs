@@ -222,7 +222,7 @@ async fn activation_pushes_planning_rows_to_the_rig_peer_and_can_push_again() {
 
     // Nothing activated yet: nothing to push.
     let bare = {
-        let mut store = a.f.state.director.as_ref().unwrap().store.lock().unwrap();
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         store.create_project(Uuid::new_v4(), "Bare").unwrap().id
     };
     assert_eq!(

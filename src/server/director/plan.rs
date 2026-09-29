@@ -39,40 +39,32 @@ pub(super) async fn templates(
 ) -> Result<Json<ApiResponse<TemplateList>>, Error> {
     let service = enabled(&state)?;
     let catalog = state.get_database(&slug).ok_or(Error::Missing)?;
-    let catalog_permit = admit(&service.discovery_admission).await?;
-    let metadata_permit = admit(&service.admission).await?;
-    let list = tokio::task::spawn_blocking(move || {
-        let _permits = (catalog_permit, metadata_permit);
-        let connection = super::super::database_context::open_scheduler_connection_with_flags(
-            FilePath::new(&catalog.database_path),
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(StoreError::from)
-        .map_err(Error::from)?;
-        connection
-            .busy_timeout(Duration::from_secs(2))
+    let list = service
+        .clone()
+        .with_reader(move |store| {
+            let connection = super::super::database_context::open_scheduler_connection_with_flags(
+                FilePath::new(&catalog.database_path),
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
             .map_err(StoreError::from)
             .map_err(Error::from)?;
-        let identity = crate::catalog_identity::read(&connection)?.unwrap_or_else(|| {
-            super::derived_identity(service.instance_id, &catalog.database_path)
-        });
-        let rig = {
-            let store = service.store.lock().map_err(|_| Error::Internal)?;
-            store.catalog_rig(identity.id)?.map(|binding| binding.rig)
-        };
-        let templates = read_templates(&connection)?;
-        Ok::<_, Error>(TemplateList {
-            catalog_slug: catalog.id.clone(),
-            catalog_name: catalog.name.clone(),
-            rig,
-            templates,
+            connection
+                .busy_timeout(Duration::from_secs(2))
+                .map_err(StoreError::from)
+                .map_err(Error::from)?;
+            let identity = crate::catalog_identity::read(&connection)?.unwrap_or_else(|| {
+                super::derived_identity(service.instance_id, &catalog.database_path)
+            });
+            let rig = store.catalog_rig(identity.id)?.map(|binding| binding.rig);
+            let templates = read_templates(&connection)?;
+            Ok::<_, Error>(TemplateList {
+                catalog_slug: catalog.id.clone(),
+                catalog_name: catalog.name.clone(),
+                rig,
+                templates,
+            })
         })
-    })
-    .await
-    .map_err(|error| {
-        tracing::error!(%error, "Director template listing failed");
-        Error::Internal
-    })??;
+        .await?;
     Ok(Json(ApiResponse::success(list)))
 }
 
@@ -160,7 +152,7 @@ pub(super) async fn get_plan(
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<PlanView>>, Error> {
     let view = enabled(&state)?
-        .run(move |store| {
+        .query(move |store| {
             let project = store.project(id)?.ok_or(StoreError::NotFound)?;
             let plan = store.plan_draft(id)?;
             Ok(PlanView { project, plan })

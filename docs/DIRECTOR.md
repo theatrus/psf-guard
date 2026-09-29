@@ -227,7 +227,8 @@ prefix above). Listing returns an array of `client_id`, `catalog_id`, `rig_id`,
 `{"revoked":true}` or `false` if absent. The limit is 256 clients per rig; revoke
 unused records before issuing more. Every authenticated request rechecks the
 credential and current catalog-rig binding. Invalid credentials, profile or route
-scope return 401; disabled management returns 403 and a busy metadata store 503.
+scope return 401; disabled management returns 403, and a write that waited its
+full turn for the metadata store answers 503.
 
 Metadata schema 11 stores only SHA-256 hashes of random 256-bit secrets in separate
 Director tables. Code consumption and client creation commit together. A failed
@@ -746,8 +747,15 @@ composition aid, not evidence of pointing, transparency or coverage.
 
 ## Contention and recovery
 
-Storage runs off the asynchronous HTTP worker. Only one operation is admitted
-at a time; contention returns `503` with `Retry-After: 1`. A canceled HTTP
-request may still commit its already admitted transaction. Use the same create
-identity on retry, or GET after an ambiguous rename result. Errors do not return
-filesystem paths or raw SQLite diagnostics; detailed failures are logged locally.
+Storage runs off the asynchronous HTTP worker. The metadata store is SQLite in
+WAL mode with one writer and a pool of read-only connections. Reads (plans,
+framing, rig profiles, feasibility, mosaic, marks) are served from the pool at
+once, beside any write and beside one another; they never queue behind a
+write or answer busy for one. Writes take the single writer in turn; one that
+has waited twenty seconds for it answers `503` with `Retry-After: 1`, which the
+browser retries. Work that scans or writes the rig databases (adoption on the
+plans listing, rig binding, activation) has a gate of its own so it does not
+hold the store. A canceled HTTP request may still commit its already admitted
+transaction. Use the same create identity on retry, or GET after an ambiguous
+rename result. Errors do not return filesystem paths or raw SQLite diagnostics;
+detailed failures are logged locally.

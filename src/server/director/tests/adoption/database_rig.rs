@@ -30,7 +30,7 @@ async fn database_rig_preview_apply_and_retry_preserve_grades_and_source_project
         .director
         .as_ref()
         .unwrap()
-        .store
+        .writer
         .lock()
         .unwrap()
         .catalog_rig(f.catalog)
@@ -85,7 +85,7 @@ async fn changed_source_refuses_the_old_review_without_creating_a_rig() {
         .director
         .as_ref()
         .unwrap()
-        .store
+        .writer
         .lock()
         .unwrap()
         .rig(f.catalog)
@@ -129,7 +129,7 @@ async fn source_commit_lock_rolls_back_the_rig_and_retries_after_release() {
         .director
         .as_ref()
         .unwrap()
-        .store
+        .writer
         .lock()
         .unwrap()
         .catalog_rig(f.catalog)
