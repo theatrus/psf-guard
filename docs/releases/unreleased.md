@@ -181,6 +181,12 @@
   it scrolls. The drag mode (rectangle or sky), the sky turn and the layer
   switches (grid, constellations, deep-sky marks, comets and asteroids,
   Sun, Moon and planets) are small buttons at the top of the stage.
+- A plan can take over another plan's database project: under
+  **Databases** in the workspace, **Attach a project from another database**
+  lists projects in databases the plan has none in, and attaching moves
+  them over and retires the other plan, keeping this plan's drafts. Two
+  rigs that each made their own project for one target become one plan
+  this way. **Detach** gives a database's project a plan of its own again.
 - A rig in a plan can be framed on its own: its own grid, camera angle and
   panel size, drawn in a colour of its own beside the shared framing. It
   starts on the shared target center and follows it until you drag its

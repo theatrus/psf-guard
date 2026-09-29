@@ -225,7 +225,7 @@ impl MetaStore {
     }
 }
 
-fn read_draft(conn: &Connection, project: Uuid) -> Result<Option<FramingDraft>, Error> {
+pub(crate) fn read_draft(conn: &Connection, project: Uuid) -> Result<Option<FramingDraft>, Error> {
     valid_id(project)?;
     let row: Option<(i64, Vec<u8>)> = conn
         .query_row(

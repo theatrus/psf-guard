@@ -518,6 +518,8 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .route("/sky/search", get(sky_search::search))
         .route("/sky/objects", get(sky_objects::marks))
         .route("/projects/{id}", get(project).patch(rename_project))
+        .route("/projects/{id}/attach", axum::routing::post(attach_project))
+        .route("/projects/{id}/detach", axum::routing::post(detach_project))
         .merge(configuration_api::routes())
         .merge(templates::routes())
         .layer(DefaultBodyLimit::max(4096))
@@ -646,6 +648,67 @@ async fn rename_project(
     Ok(Json(ApiResponse::success(
         enabled(&state)?
             .run(move |store| store.rename_project(id, request.expected_revision, &request.name))
+            .await?,
+    )))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AttachRequest {
+    /// The plan to absorb: every database link it has moves to this plan.
+    from_project_id: Uuid,
+}
+
+/// Two databases that each made their own project for one target are two
+/// plans until one is attached to the other. Only the meta store moves; the
+/// next activation takes the attached project's rows over where they stand.
+async fn attach_project(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Json(request): Json<AttachRequest>,
+) -> Result<Json<ApiResponse<psf_guard_director_meta::merge::Attached>>, Error> {
+    Ok(Json(ApiResponse::success(
+        enabled(&state)?
+            .run(move |store| store.attach_project(id, request.from_project_id))
+            .await?,
+    )))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DetachRequest {
+    catalog_slug: String,
+    source_project_guid: Uuid,
+    /// The name for the plan the project gets back; its own name, as a rule.
+    name: String,
+}
+
+/// Give one database's project a plan of its own again.
+async fn detach_project(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Json(request): Json<DetachRequest>,
+) -> Result<Json<ApiResponse<NamedIdentity>>, Error> {
+    let service = enabled(&state)?;
+    let catalog = state
+        .get_database(&request.catalog_slug)
+        .ok_or(Error::Missing)?;
+    let identity = identity_of(service.instance_id, &catalog.database_path);
+    let name = request.name.trim().to_owned();
+    if name.is_empty() || name.len() > 256 {
+        return Err(Error::Invalid);
+    }
+    Ok(Json(ApiResponse::success(
+        service
+            .run(move |store| {
+                store.detach_project(
+                    id,
+                    identity.id,
+                    request.source_project_guid,
+                    Uuid::new_v4(),
+                    &name,
+                )
+            })
             .await?,
     )))
 }

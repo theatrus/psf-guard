@@ -12,6 +12,7 @@ pub mod client;
 pub mod configuration;
 pub mod framing;
 pub mod inbox;
+pub mod merge;
 pub mod plan;
 pub mod profile;
 pub mod project;

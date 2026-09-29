@@ -361,6 +361,8 @@ export interface DirectorPlanRow {
   activation: { revision: number; applied_at_ms: number; rigs: number } | null;
 }
 export interface DirectorPlanList { rows: DirectorPlanRow[]; warnings: string[] }
+/** What attaching a plan did: whose links moved, and which drafts came along because this plan had none. */
+export interface DirectorAttached { into: DirectorIdentity; absorbed: DirectorIdentity; moved_links: number; framing_taken: boolean; plan_taken: boolean }
 export interface DirectorRigStatus { rig_id: string; session_id: string; reported_at_ms: number; payload: Record<string, unknown>; received_at_ms: number }
 export interface DirectorContact { at_ms: number; detail: string | null }
 export type DirectorConnectivityState = 'online' | 'stale' | 'offline' | 'never';

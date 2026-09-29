@@ -571,3 +571,153 @@ async fn planning_reads_catalogs_without_database_management_and_keeps_the_rig_w
         "a managing server writes the identity it planned under"
     );
 }
+
+/// Two databases that each made their own project for one target are two
+/// plans; attaching one to the other moves its links and retires it, and
+/// detaching hands a database's project a plan of its own again.
+#[tokio::test]
+async fn attaching_a_plan_moves_its_links_and_detaching_hands_them_back() {
+    let f = Fixture::new();
+    let c925_guid = Uuid::new_v4();
+    let redcat_guid = Uuid::new_v4();
+    register(
+        &f,
+        "c925",
+        "C925 data",
+        &[(1, "Heart by C925", Some(c925_guid))],
+    );
+    let redcat = register(
+        &f,
+        "redcat",
+        "Redcat data",
+        &[(1, "Heart", Some(redcat_guid))],
+    );
+    rusqlite::Connection::open(&redcat)
+        .unwrap()
+        .execute(
+            "INSERT INTO target (name, active, ra, dec, epochcode, rotation, roi, projectid, guid) VALUES ('IC 1805', 1, 2.5467, 61.45, 2, 15.0, 100, 1, 'target-heart')",
+            [],
+        )
+        .unwrap();
+    let (status, listed) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let rows = listed["data"]["rows"].as_array().unwrap().clone();
+    let plan_of = |name: &str| {
+        rows.iter()
+            .find(|r| r["project"]["name"] == name)
+            .unwrap_or_else(|| panic!("{name} in {rows:?}"))
+            .clone()
+    };
+    let heart = plan_of("Heart");
+    let by_c925 = plan_of("Heart by C925");
+    let heart_id = heart["project"]["id"].as_str().unwrap().to_owned();
+    let by_c925_id = by_c925["project"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(heart["framing"]["source"], "draft");
+
+    let (status, attached) = call(
+        &f.app,
+        "POST",
+        &format!("/projects/{heart_id}/attach"),
+        json!({"from_project_id": by_c925_id}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{attached}");
+    assert_eq!(attached["data"]["moved_links"], 1);
+    assert_eq!(attached["data"]["absorbed"]["name"], "Heart by C925");
+    assert_eq!(
+        attached["data"]["framing_taken"], false,
+        "the plan kept its own framing"
+    );
+    // One plan with two rigs; the absorbed plan is gone, and its drafts with it.
+    let (_, listed) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    let rows = listed["data"]["rows"].as_array().unwrap();
+    assert!(
+        rows.iter().all(|r| r["project"]["name"] != "Heart by C925"),
+        "{rows:?}"
+    );
+    let heart = rows
+        .iter()
+        .find(|r| r["project"]["id"] == heart_id)
+        .unwrap();
+    let links = heart["links"].as_array().unwrap();
+    assert_eq!(links.len(), 2, "{links:?}");
+    assert!(links
+        .iter()
+        .any(|l| l["catalog_name"] == "C925 data" && l["source_name"] == "Heart by C925"));
+    assert_eq!(heart["framing"]["target_name"], "IC 1805");
+    // The absorbed plan is not there to attach again, and a plan cannot absorb itself.
+    assert_eq!(
+        call(
+            &f.app,
+            "POST",
+            &format!("/projects/{heart_id}/attach"),
+            json!({"from_project_id": by_c925_id}),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &f.app,
+            "POST",
+            &format!("/projects/{heart_id}/attach"),
+            json!({"from_project_id": heart_id}),
+            None
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+
+    // Detaching gives the C925 project a plan of its own again, under its own name.
+    let (status, detached) = call(
+        &f.app,
+        "POST",
+        &format!("/projects/{heart_id}/detach"),
+        json!({"catalog_slug": "c925", "source_project_guid": c925_guid, "name": "Heart by C925"}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detached}");
+    let fresh = detached["data"]["id"].as_str().unwrap().to_owned();
+    assert_ne!(fresh, by_c925_id, "a new plan, not the old one back");
+    let (_, listed) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    let rows = listed["data"]["rows"].as_array().unwrap();
+    let again = rows.iter().find(|r| r["project"]["id"] == fresh).unwrap();
+    assert_eq!(again["project"]["name"], "Heart by C925");
+    assert_eq!(again["links"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        rows.iter()
+            .find(|r| r["project"]["id"] == heart_id)
+            .unwrap()["links"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    // Two plans on the same database cannot be joined: a rig shoots one project per plan.
+    let (status, twice) = call(
+        &f.app,
+        "POST",
+        &format!("/projects/{heart_id}/attach"),
+        json!({"from_project_id": fresh}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{twice}");
+    assert_eq!(
+        call(
+            &f.app,
+            "POST",
+            &format!("/projects/{heart_id}/detach"),
+            json!({"catalog_slug": "redcat", "source_project_guid": c925_guid, "name": "x"}),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+}

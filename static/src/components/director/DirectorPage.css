@@ -127,3 +127,8 @@
 .director-connectivity.is-stale { background: rgba(230, 170, 40, 0.18); color: #a8720d; }
 .director-connectivity.is-offline { background: rgba(200, 60, 60, 0.15); color: #b93a3a; }
 @media (max-width: 800px) { .director-dashboard-table thead { display: none; } .director-dashboard-table tr { display: grid; gap: 4px; padding: 8px 0; border-top: 1px solid var(--color-border-secondary); } .director-dashboard-table td { border: none; padding: 0; } .director-dashboard-table .director-cell-label { display: inline; color: var(--color-text-secondary); margin-right: 6px; } }
+/* Attaching another database's project to a plan, under Databases. */
+.director-attach { margin: 8px 0 12px; }
+.director-attach label { display: flex; flex-direction: column; gap: 4px; max-width: 520px; font-size: 13px; color: var(--color-text-secondary); }
+.director-attach [role="note"], .director-workspace [role="note"] .director-actions { margin-top: 6px; }
+.director-workspace [role="note"] .director-actions { display: inline-flex; margin-left: 8px; gap: 6px; }
