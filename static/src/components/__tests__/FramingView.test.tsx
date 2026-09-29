@@ -212,6 +212,35 @@ describe('Framing view', () => {
     expect(saves[0].position_angle_degrees).toBeCloseTo(turned(), 5);
   });
 
+  it('frames a second rig on its own grid and angle over the same target, and saves it with the draft', async () => {
+    const { saves } = fixture(); mount(true, true, [rigA.rig.id]);
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
+    expect(screen.queryByTestId('framing-rig-panels')).not.toBeInTheDocument();
+    // C925 has no optics, so its own framing starts from the shared size.
+    fireEvent.change(screen.getByLabelText('Frame a rig on its own'), { target: { value: rigB.rig.id } });
+    expect(screen.getByLabelText('Framing for')).toHaveValue(rigB.rig.id);
+    expect(screen.getByTestId('framing-own-rig')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('C925 data columns'), { target: { value: '3' } });
+    fireEvent.click(screen.getByLabelText('C925 data follows the shared angle'));
+    fireEvent.change(screen.getByLabelText('C925 data camera angle degrees'), { target: { value: '90' } });
+    const own = screen.getByTestId('framing-rig-panels');
+    expect(own.querySelectorAll('polygon')).toHaveLength(3);
+    expect(own).toHaveTextContent('C925 data r1c1');
+    expect(screen.getByTestId('framing-own-extent')).toHaveTextContent('3 panels for C925 data');
+    // The shared framing is untouched: one panel for RedCat.
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1);
+    fireEvent.change(screen.getByLabelText('Framing for'), { target: { value: '' } });
+    expect(screen.getByLabelText('Mosaic columns')).toHaveValue(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].rig_framings).toEqual([{ rig_id: rigB.rig.id, position_angle_degrees: 90, mosaic: { rows: 1, columns: 3, overlap_percent: 20 }, panel: { width_degrees: 5.38, height_degrees: 3.6 } }]);
+    // Back to the shared framing drops the rig's own grid.
+    fireEvent.change(screen.getByLabelText('Framing for'), { target: { value: rigB.rig.id } });
+    fireEvent.click(screen.getByRole('button', { name: 'Back to the shared framing for C925 data' }));
+    expect(screen.queryByTestId('framing-rig-panels')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Framing for')).not.toBeInTheDocument();
+  });
+
   it('is read only without write access and explains a missing seed', async () => {
     fixture(); mount(false);
     await screen.findByLabelText('Target name');

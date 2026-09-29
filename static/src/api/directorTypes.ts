@@ -153,6 +153,8 @@ export interface DirectorFramingPreview {
   extent: DirectorPanelSize;
   view_center_offset: DirectorOffset | null;
 }
+/** One rig framed on its own over the shared target: its grid, an angle of its own or the shared one, and a size set by hand or its own field. */
+export interface DirectorRigFraming { rig_id: string; position_angle_degrees: number | null; mosaic: DirectorMosaic; panel: DirectorPanelSize | null }
 export interface DirectorFramingDraft {
   project_id: string;
   revision: number;
@@ -166,6 +168,8 @@ export interface DirectorFramingDraft {
   survey_id: string;
   view_fov_degrees: number;
   updated_at_ms: number;
+  /** Absent in drafts saved before rigs could be framed on their own. */
+  rig_framings?: DirectorRigFraming[];
 }
 export interface DirectorFramingDraftView { project: DirectorIdentity; draft: DirectorFramingDraft | null }
 export interface DirectorRigProfileSummary {

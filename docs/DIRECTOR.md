@@ -443,7 +443,12 @@ also takes a number, quarter turns, or the rig's fixed camera angle. Rows,
 columns and overlap lay out a mosaic; every panel is drawn and named, and the
 readout under the image gives the target, its coordinates, the angle, the
 panel size and the whole extent. **Compare rigs** overlays other rigs' fields
-on the center. **Move target to view center** and **Center view on target**
+on the center. A rig that should not follow the shared layout is framed on
+its own: **Frame a rig on its own** under Panels gives it its own grid, a
+camera angle of its own or the shared one, and a panel size from its optics
+or set by hand, all over the same target; its grid is drawn in a colour of
+its own, and **Framing for** switches the panel controls between the shared
+framing and each rig's. Every other rig keeps shooting the shared framing. **Move target to view center** and **Center view on target**
 keep the two apart on purpose: panning the sky never moves the plan. **Save
 framing** keeps a draft on the project; a draft saved elsewhere since you
 loaded is refused until you reload. Survey imagery is attributed below the
@@ -540,7 +545,8 @@ rig's database, the same rows Target Scheduler and the Director plugin read:
   the Active state, marked as a mosaic when there is more than one panel, under
   the profile that owns the database's existing projects;
 - one target per panel the rig owns, named after the target with the panel
-  id appended for mosaics, at the panel center with the plan's camera angle.
+  id appended for mosaics, at the panel center with the plan's camera angle,
+  or with the rig's own grid and angle when it is framed on its own.
   A target the project already has (imported from Target Scheduler, or made
   by hand) is taken over rather than doubled: the one with the panel's name,
   else the one at the panel's place, else, for a single-panel framing, the

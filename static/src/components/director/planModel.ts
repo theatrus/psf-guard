@@ -1,4 +1,4 @@
-import type { DirectorContribution, DirectorGoal, DirectorLibraryTemplate, DirectorMosaic, DirectorObjective, DirectorPlanDraft, DirectorRigProfileSummary, DirectorTemplate, DirectorTemplateChoice } from '../../api/directorTypes';
+import type { DirectorContribution, DirectorGoal, DirectorLibraryTemplate, DirectorMosaic, DirectorObjective, DirectorPlanDraft, DirectorRigProfileSummary, DirectorTemplate, DirectorTemplateChoice, DirectorFramingDraft} from '../../api/directorTypes';
 
 export const PURPOSES: Array<{ id: string; name: string }> = [
   { id: 'faint_detail', name: 'Faint detail' },
@@ -119,13 +119,14 @@ export function formatHours(hours: number): string {
 
 export interface RigTotal { rigId: string; frames: number; hours: number }
 
-export function rigTotals(plan: DirectorPlanDraft, panels: string[] = []): RigTotal[] {
+export function rigTotals(plan: DirectorPlanDraft, panels: string[] = [], byRigPanels: Record<string, string[]> = {}): RigTotal[] {
   const byRig = new Map<string, RigTotal>();
   for (const contribution of plan.contributions) {
     if (!contribution.enabled) continue;
     const objective = plan.objectives.find(o => o.id === contribution.objective_id);
     if (!objective) continue;
-    const frames = (framesFor(objective.goal, contribution.exposure_seconds) ?? 0) * (panels.length > 1 ? panelFactor(contribution, panels) : 1);
+    const own = byRigPanels[contribution.rig_id] ?? panels;
+    const frames = (framesFor(objective.goal, contribution.exposure_seconds) ?? 0) * (own.length > 1 ? panelFactor(contribution, own) : 1);
     const total = byRig.get(contribution.rig_id) ?? { rigId: contribution.rig_id, frames: 0, hours: 0 };
     total.frames += frames;
     total.hours += hoursFor(frames, contribution.exposure_seconds);
@@ -158,6 +159,18 @@ export function panelIds(mosaic: DirectorMosaic | null | undefined): string[] {
   return ids;
 }
 
+/** The panels each rig can own: its own grid when it is framed on its own,
+ *  else the shared grid. */
+export function panelsByRig(draft: DirectorFramingDraft | null | undefined, rigIds: string[]): Record<string, string[]> {
+  const shared = panelIds(draft?.mosaic);
+  const map: Record<string, string[]> = {};
+  for (const rigId of rigIds) {
+    const own = draft?.rig_framings?.find(entry => entry.rig_id === rigId);
+    map[rigId] = own ? panelIds(own.mosaic) : shared;
+  }
+  return map;
+}
+
 /** The panels a rig owns: the union over its contributions; empty means all. */
 export function rigPanels(plan: DirectorPlanDraft, rigId: string, panels: string[]): string[] {
   const own = plan.contributions.filter(c => c.rig_id === rigId);
@@ -166,10 +179,12 @@ export function rigPanels(plan: DirectorPlanDraft, rigId: string, panels: string
 }
 
 /** Per objective, the panels no enabled contribution covers. */
-export function coverageGaps(plan: DirectorPlanDraft, panels: string[]): Array<{ objective: DirectorObjective; panels: string[] }> {
+export function coverageGaps(plan: DirectorPlanDraft, panels: string[], ownFramed: string[] = []): Array<{ objective: DirectorObjective; panels: string[] }> {
+  // A rig framed on its own covers its own grid, not the shared one.
+  const shared = plan.contributions.filter(c => !ownFramed.includes(c.rig_id));
   return plan.objectives.map(objective => ({
     objective,
-    panels: panels.filter(panel => !plan.contributions.some(c => c.enabled && c.objective_id === objective.id && (c.panel_ids.length === 0 || c.panel_ids.includes(panel)))),
+    panels: panels.filter(panel => !shared.some(c => c.enabled && c.objective_id === objective.id && (c.panel_ids.length === 0 || c.panel_ids.includes(panel)))),
   })).filter(gap => gap.panels.length > 0);
 }
 

@@ -31,6 +31,62 @@ pub struct FramingDraft {
     /// Width of the view in degrees.
     pub view_fov_degrees: f64,
     pub updated_at_ms: u64,
+    /// Rigs framed on their own over the same target: their own grid, panel
+    /// size and camera angle. A rig not listed shoots the shared framing.
+    #[serde(default)]
+    pub rig_framings: Vec<RigFraming>,
+}
+
+/// One rig's own layout over the shared target.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RigFraming {
+    pub rig_id: Uuid,
+    /// This rig's camera angle; None follows the shared angle.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub position_angle_degrees: Option<f64>,
+    pub mosaic: Mosaic,
+    /// A panel size set by hand; None means the rig's own field of view.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub panel: Option<PanelSize>,
+}
+
+/// The layout one rig shoots: shared or its own, with every gap filled in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RigLayout {
+    pub position_angle_degrees: f64,
+    pub panel: PanelSize,
+    pub mosaic: Mosaic,
+    /// Whether the rig has a framing of its own rather than the shared one.
+    pub own: bool,
+}
+
+impl FramingDraft {
+    pub fn rig_framing(&self, rig: Uuid) -> Option<&RigFraming> {
+        self.rig_framings.iter().find(|entry| entry.rig_id == rig)
+    }
+
+    /// What `rig` shoots, given its current field of view: its own framing
+    /// when it has one (its field standing in for a panel size not set by
+    /// hand), else the shared framing. None when no panel size is known.
+    pub fn layout_for(&self, rig: Uuid, field: Option<PanelSize>) -> Option<RigLayout> {
+        match self.rig_framing(rig) {
+            Some(own) => Some(RigLayout {
+                position_angle_degrees: own
+                    .position_angle_degrees
+                    .unwrap_or(self.position_angle_degrees),
+                panel: own.panel.or(field)?,
+                mosaic: own.mosaic,
+                own: true,
+            }),
+            None => Some(RigLayout {
+                position_angle_degrees: self.position_angle_degrees,
+                panel: self.panel?,
+                mosaic: self.mosaic,
+                own: false,
+            }),
+        }
+    }
 }
 
 const MAX_TIME_MS: u64 = 4_102_444_800_000; // 2100-01-01
@@ -58,6 +114,31 @@ pub(crate) fn validate_draft(draft: &FramingDraft) -> Result<(), Error> {
     }
     for rig in &draft.shown_rig_ids {
         valid_id(*rig)?;
+    }
+    if draft.rig_framings.len() > 64 {
+        return Err(Error::InvalidInput);
+    }
+    let mut framed = std::collections::BTreeSet::new();
+    for own in &draft.rig_framings {
+        valid_id(own.rig_id)?;
+        if !framed.insert(own.rig_id) {
+            return Err(Error::InvalidInput);
+        }
+        FramingRequest {
+            center: draft.center,
+            position_angle_degrees: own
+                .position_angle_degrees
+                .unwrap_or(draft.position_angle_degrees),
+            panel: own.panel.unwrap_or(PanelSize {
+                width_degrees: 1.0,
+                height_degrees: 1.0,
+            }),
+            mosaic: own.mosaic,
+            overlays: vec![],
+            view: None,
+        }
+        .validate()
+        .map_err(|_| Error::InvalidInput)?;
     }
     // The core validates the geometry; a draft without a panel size still
     // needs a sound center, angle and grid.
@@ -100,6 +181,11 @@ impl MetaStore {
             && read_named(&tx, Kind::Rig, rig)?.is_none()
         {
             return Err(Error::NotFound);
+        }
+        for own in &draft.rig_framings {
+            if read_named(&tx, Kind::Rig, own.rig_id)?.is_none() {
+                return Err(Error::NotFound);
+            }
         }
         let stored = read_draft(&tx, draft.project_id)?;
         let current = stored.as_ref().map_or(0, |value| value.revision);

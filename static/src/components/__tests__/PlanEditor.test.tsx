@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
@@ -18,14 +18,14 @@ const template = (id: number, name: string, filter: string, bandpass: string, ki
 
 const libraryHa = { id: '11111111-1111-4111-8111-111111111111', revision: 1, name: 'Ha 600 shared', filter_name: 'Ha', gain: 200, offset: 50, bin: 2, readout_mode: null, default_exposure_seconds: 600, updated_at_ms: 1, bandpass: { id: 'h_alpha', name: 'H-alpha', kind: 'narrowband' as const } };
 
-function fixture(existing: DirectorPlanDraft | null = null, mosaic: { rows: number; columns: number; overlap_percent: number } | null = null, library = [libraryHa]) {
+function fixture(existing: DirectorPlanDraft | null = null, mosaic: { rows: number; columns: number; overlap_percent: number } | null = null, library = [libraryHa], rigFramings: Array<{ rig_id: string; position_angle_degrees: number | null; mosaic: { rows: number; columns: number; overlap_percent: number }; panel: { width_degrees: number; height_degrees: number } | null }> = []) {
   const saves: DirectorPlanDraft[] = [];
   let plan = existing;
   server.use(
     http.get('/api/director/v1/templates', () => HttpResponse.json(ok(library))),
     http.get('/api/director/v1/projects/project/framing', () => HttpResponse.json(ok({ project: { id: 'project', name: 'Heart', revision: 1 }, draft: mosaic ? {
       project_id: 'project', revision: 1, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.45 }, position_angle_degrees: 0, mosaic, panel_rig_id: null,
-      panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 4, updated_at_ms: 1 } : null }))),
+      panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 4, updated_at_ms: 1, rig_framings: rigFramings } : null }))),
     http.get('/api/director/v1/projects/project/plan', () => HttpResponse.json(ok({ project: { id: 'project', name: 'Heart', revision: 1 }, plan }))),
     http.put('/api/director/v1/projects/project/plan', async ({ request }) => {
       const body = await request.json() as DirectorPlanDraft;
@@ -53,6 +53,25 @@ function mount(canWrite = true) {
 }
 
 describe('Plan editor', () => {
+  it('gives a rig framed on its own its own panels, and leaves it out of the shared coverage check', async () => {
+    const objective = { id: 'o1', bandpass_id: 'red', purpose: 'faint_detail', goal: { kind: 'hours' as const, value: 2 }, priority: 1 };
+    const plan = { project_id: 'project', revision: 1, updated_at_ms: 1, objectives: [objective], contributions: [
+      { id: 'c1', objective_id: 'o1', rig_id: c925.rig.id, template: { template_guid: null, template_id: 7, name: 'Red', filter_name: 'R', gain: 100, offset: 30, bin: 1, readout_mode: null }, exposure_seconds: 120, panel_ids: [], enabled: true },
+    ] };
+    fixture(plan, { rows: 2, columns: 1, overlap_percent: 20 }, [], [{ rig_id: c925.rig.id, position_angle_degrees: 90, mosaic: { rows: 1, columns: 3, overlap_percent: 10 }, panel: null }]);
+    mount();
+    await screen.findByText(/1 template/);
+    // C925 owns its own three panels; RedCat would own the shared two.
+    const own = screen.getByRole('group', { name: 'C925 data panels' });
+    expect(own).toHaveTextContent('Its own panels:');
+    expect(within(own).getByLabelText('C925 data shoots panel r1c3')).toBeChecked();
+    expect(within(own).queryByLabelText('C925 data shoots panel r2c1')).not.toBeInTheDocument();
+    // Three panels at 60 frames each.
+    expect(screen.getByText('180 frames, 6.0 h')).toBeInTheDocument();
+    // The shared grid has nobody on it for red, but the rig framed on its own is not a gap in it.
+    expect(screen.getByTestId('plan-coverage')).toHaveTextContent('Red: no rig on any panel');
+  });
+
   it('binds a rig whose database lacks a template to a library template, by the library GUID and settings', async () => {
     const { saves } = fixture(); mount();
     await screen.findByText(/3 templates/);

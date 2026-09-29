@@ -92,6 +92,7 @@ pub(super) async fn activated() -> Activated {
                     survey_id: "dss2_color".into(),
                     view_fov_degrees: 5.0,
                     updated_at_ms: 1,
+                    rig_framings: vec![],
                 },
                 0,
             )
@@ -780,4 +781,84 @@ async fn a_library_template_is_written_into_the_rig_database_under_its_own_guid(
         assert_eq!(count(&format!("SELECT count(*) FROM exposuretemplate WHERE guid='{library}' AND name='Ha 600 library' AND filtername='Ha' AND gain=200 AND offset=50 AND bin=2 AND profileId='profile-a'")), 1);
         assert_eq!(count(&format!("SELECT count(*) FROM exposureplan WHERE exposure=600.0 AND exposureTemplateId=(SELECT Id FROM exposuretemplate WHERE guid='{library}')")), 2);
     }
+}
+
+/// A rig framed on its own shoots its own grid at its own angle over the same
+/// target; the shared framing's coverage check leaves it alone.
+#[tokio::test]
+async fn a_rig_framed_on_its_own_gets_its_own_panels_and_angle() {
+    let a = activated().await;
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut framing = store.framing_draft(a.project).unwrap().unwrap();
+        framing.rig_framings = vec![psf_guard_director_meta::framing::RigFraming {
+            rig_id: a.rig,
+            position_angle_degrees: Some(90.0),
+            mosaic: Mosaic {
+                rows: 1,
+                columns: 3,
+                overlap_percent: 10,
+            },
+            panel: Some(PanelSize {
+                width_degrees: 1.0,
+                height_degrees: 0.8,
+            }),
+        }];
+        let revision = framing.revision;
+        store.save_framing_draft(&framing, revision).unwrap();
+    }
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(
+        actions(&preview["data"], "target"),
+        ["create", "create", "create"],
+        "{preview}"
+    );
+    assert_eq!(
+        preview["data"]["rigs"][0]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|w| w.as_str().unwrap().contains("No rig shoots"))
+            .count(),
+        0,
+        "{preview}"
+    );
+    let digest = preview["data"]["preview_digest"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/apply", a.project),
+        json!({"preview_digest": digest}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(count("SELECT count(*) FROM target WHERE rotation=90.0"), 3);
+    assert_eq!(count("SELECT count(*) FROM target WHERE name IN ('IC 1805 r1c1','IC 1805 r1c2','IC 1805 r1c3')"), 3);
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE desired=72"),
+        3
+    );
+    // The three panels lie along the camera's row, which at 90° runs north-south.
+    let (min_dec, max_dec, spread_ra): (f64, f64, f64) =
+        a.db.query_row(
+            "SELECT min(dec), max(dec), max(ra)-min(ra) FROM target",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert!(max_dec - min_dec > 1.5, "{min_dec} {max_dec}");
+    assert!(spread_ra.abs() < 0.05, "{spread_ra}");
 }
