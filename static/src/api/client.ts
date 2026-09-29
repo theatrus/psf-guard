@@ -4,7 +4,7 @@ import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorFeasibility, DirectorMosaicPreview, DirectorResolvedName,
   DirectorSkyMarks,
-  DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey } from './directorTypes';
+  DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch} from './directorTypes';
 import type {
   ProjectProcessingSettings,
   StackColorInputSources,
@@ -414,6 +414,13 @@ export const apiClient = {
     const api = await getApi();
     const { data } = await api.get<ApiResponse<DirectorSkyMarks>>('/director/v1/sky/objects', { params: query });
     if (!data.data) throw new Error(data.error || 'Sky marks could not be loaded');
+    return data.data;
+  },
+
+  searchDirectorNames: async (q: string, online = false): Promise<DirectorNameSearch> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorNameSearch>>('/director/v1/sky/search', { params: online ? { q, online: true } : { q } });
+    if (!data.data) throw new Error(data.error || 'Name search failed');
     return data.data;
   },
 

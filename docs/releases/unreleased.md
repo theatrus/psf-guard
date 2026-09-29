@@ -181,8 +181,14 @@
   it scrolls. The drag mode (rectangle or sky), the sky turn and the layer
   switches (grid, constellations, deep-sky marks, comets and asteroids,
   Sun, Moon and planets) are small buttons at the top of the stage.
+- **Find a target** offers names as you type. The server's own Seiza
+  catalog answers first, with no network: designations, common names and
+  aliases, one row per object with its kind. The last row looks the name up
+  online at CDS Sesame, and those answers are kept on the server so a name
+  goes online once. Enter takes the highlighted row, an exact local match,
+  or goes online, in that order. The start-framing form uses the same box.
 - Marks start as the map an imager frames by: Messier, NGC, IC, Sharpless,
-  LDN and LBN, drawn with thinner outlines. The other catalogs, PGC and HD
+  LDN, LBN and the supernova remnants, drawn with thinner outlines. The other catalogs, PGC and HD
   above all, wait for a chip under **Catalogs marked** in **View**; they
   flooded every field with faint galaxies and stars and crowded out the
   nebulae and clusters. Comets, asteroids and the Sun, Moon and planets

@@ -48,6 +48,14 @@ function fixture(existing: DirectorFramingDraft | null = null) {
       if (cutouts.length === 1) return HttpResponse.json(ok({ state: 'generating' }), { status: 202 });
       return HttpResponse.arrayBuffer(new Uint8Array([255, 216, 255]).buffer, { status: 200, headers: { 'content-type': 'image/jpeg' } });
     }),
+    http.get('/api/director/v1/sky/search', ({ request }) => {
+      const q = new URL(request.url).searchParams.get('q') ?? '';
+      const items = q.toLowerCase().startsWith('nor') || q.toLowerCase().startsWith('ngc 70')
+        ? [{ name: 'NGC 7000', common_name: 'North America Nebula', kind: 'nebula', ra_degrees: 314.75, dec_degrees: 44.37, matched: q.toLowerCase().startsWith('nor') ? 'North America Nebula' : 'NGC 7000', source: 'Seiza object catalog' },
+           { name: 'NGC 7023', common_name: 'Iris Nebula', kind: 'nebula', ra_degrees: 315.4, dec_degrees: 68.16, matched: 'NGC 7023', source: 'Seiza object catalog' }]
+        : [];
+      return HttpResponse.json(ok({ query: q, local: { available: true, items }, online: null, online_state: 'skipped', online_cached: false }));
+    }),
     http.get('/api/director/v1/sky/resolve', ({ request }) => {
       const name = new URL(request.url).searchParams.get('name');
       return name === 'NGC 7000'
@@ -223,6 +231,7 @@ describe('Framing view', () => {
     fireEvent.change(await screen.findByLabelText('Object name to resolve'), { target: { value: 'Nowhere' } });
     fireEvent.click(screen.getByRole('button', { name: 'Look up name' }));
     expect(await screen.findByRole('alert')).toHaveTextContent("No object named 'Nowhere'");
+    // The search endpoint is asked for each spelling, but the online resolver only for the name as typed.
     fireEvent.change(screen.getByLabelText('Object name to resolve'), { target: { value: 'IC 1805' } });
     fireEvent.click(screen.getByRole('button', { name: 'Look up name' }));
     expect(await screen.findByLabelText('Target name')).toHaveValue('IC 1805');
@@ -286,6 +295,45 @@ describe('Framing view', () => {
     expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
     // With nothing saved yet there is no saved framing to go back to.
     expect(screen.queryByRole('button', { name: 'Back to saved framing' })).not.toBeInTheDocument();
+  });
+
+  it('offers the local catalog names as they are typed and picks one without going online', async () => {
+    const resolves: string[] = [];
+    fixture();
+    server.use(http.get('/api/director/v1/sky/resolve', ({ request }) => { resolves.push(new URL(request.url).searchParams.get('name') ?? ''); return HttpResponse.json({ success: false, data: null, error: 'offline' }, { status: 502 }); }));
+    mount();
+    await screen.findByLabelText('Target name');
+    const box = screen.getByLabelText('Find a target');
+    expect(box).toHaveAttribute('role', 'combobox');
+    fireEvent.change(box, { target: { value: 'Nor' } });
+    const list = await screen.findByRole('listbox', { name: 'Matching names' });
+    await within(list).findByText('NGC 7000');
+    const options = within(list).getAllByRole('option');
+    expect(options[0]).toHaveTextContent('NGC 7000');
+    expect(options[0]).toHaveTextContent('North America Nebula');
+    expect(options[0]).toHaveTextContent('nebula');
+    expect(options.at(-1)).toHaveTextContent('Look up “Nor” online');
+    // Arrow down highlights the first name; Enter takes it.
+    fireEvent.keyDown(box, { key: 'ArrowDown' });
+    expect(options[0]).toHaveAttribute('aria-selected', 'true');
+    expect(box).toHaveAttribute('aria-activedescendant', options[0].id);
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(await screen.findByText('Moved the target to NGC 7000.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Target name')).toHaveValue('NGC 7000');
+    expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(314.75);
+    expect(screen.getByText(/NGC 7000 from Seiza object catalog/)).toBeInTheDocument();
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    expect(resolves).toEqual([]);
+    // A name typed in full is taken from the local list on Enter, with nothing highlighted.
+    fireEvent.change(box, { target: { value: 'NGC 7023' } });
+    await within(await screen.findByRole('listbox', { name: 'Matching names' })).findByText('Iris Nebula');
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(await screen.findByText('Moved the target to NGC 7023.')).toBeInTheDocument();
+    expect(resolves).toEqual([]);
+    // A name the local catalog does not know goes online.
+    fireEvent.change(box, { target: { value: 'Zeta Nowhere' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await waitFor(() => expect(resolves).toEqual(['Zeta Nowhere']));
   });
 
   it('goes back to the saved framing after a search, and only while something differs', async () => {
@@ -451,21 +499,27 @@ describe('Framing view', () => {
     expect(screen.getByTestId('framing-mark-solar')).toHaveTextContent('Jupiter');
     expect(screen.getByRole('note')).toHaveTextContent('Comets and asteroids need the Seiza minor-body catalog on this server (minor-body catalog is not configured).');
     expect(window.localStorage.getItem('psf-guard.framing.marks.bodies')).toBe('true');
-    // The big galaxy is drawn at its catalog size and angle.
+    // The big galaxy is drawn at its catalog size and angle: 35° east of
+    // north leans its major axis up and to the left on a north-up stage
+    // (east is left), which in screen terms is 125° anticlockwise from x.
     const ellipse = screen.getAllByTestId('framing-mark-object')[0].querySelector('ellipse')!;
     expect(Number(ellipse.getAttribute('rx'))).toBeGreaterThan(Number(ellipse.getAttribute('ry')));
-    expect(ellipse.getAttribute('transform')).toMatch(/rotate\(/);
+    const turned = Number(ellipse.getAttribute('transform')!.match(/rotate\((-?[\d.]+)\)/)![1]);
+    expect(turned).toBeCloseTo(-125, 0);
+    // Without a catalog angle the shape is a circle of the same area, not an ellipse along the screen.
+    const unknown = screen.getAllByTestId('framing-mark-object')[1].querySelector('ellipse')!;
+    expect(unknown.getAttribute('rx')).toBe(unknown.getAttribute('ry'));
     // The request names the settled view and a time rounded to ten minutes.
     expect(asked[0]).toMatch(/ra=10\.68&dec=41\.27&fov=/);
     expect(Number(asked[0].match(/at=(\d+)/)![1]) % 600_000).toBe(0);
-    // Messier, NGC, IC, Sharpless and the Lynds catalogs start on; a chip adds a family and the choice is kept.
-    expect(asked[0]).toContain('catalogs=M,NGC,IC,Sh,LDN,LBN');
+    // Messier, NGC, IC, Sharpless, the Lynds catalogs and the supernova remnants start on; a chip adds a family and the choice is kept.
+    expect(asked[0]).toContain('catalogs=M,NGC,IC,Sh,LDN,LBN,SNR');
     expect(asked[0]).not.toContain('hide=');
     expect(screen.getByRole('button', { name: 'PGC' })).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('button', { name: 'NGC' })).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'PGC' }));
-    await waitFor(() => expect(asked.at(-1)).toContain('catalogs=M,NGC,IC,Sh,LDN,LBN,PGC'), { timeout: 8000 });
-    expect(window.localStorage.getItem('psf-guard.framing.marks.catalogs')).toBe('M,NGC,IC,Sh,LDN,LBN,PGC');
+    await waitFor(() => expect(asked.at(-1)).toContain('catalogs=M,NGC,IC,Sh,LDN,LBN,SNR,PGC'), { timeout: 8000 });
+    expect(window.localStorage.getItem('psf-guard.framing.marks.catalogs')).toBe('M,NGC,IC,Sh,LDN,LBN,SNR,PGC');
     fireEvent.click(screen.getByLabelText('Deep-sky marks'));
     expect(screen.queryByTestId('framing-mark-object')).not.toBeInTheDocument();
     expect(window.localStorage.getItem('psf-guard.framing.marks.objects')).toBe('false');

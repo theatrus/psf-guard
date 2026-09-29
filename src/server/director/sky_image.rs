@@ -369,16 +369,18 @@ pub struct SkyImageService {
     warmed: Mutex<std::collections::HashSet<String>>,
     jobs: Mutex<HashMap<String, Job>>,
     admission: Arc<Semaphore>,
+    /// What Sesame said about each name asked, so a name goes online once.
+    resolver_cache: super::sky_search::ResolverCache,
 }
 
 /// A resolved name: where the catalog puts it, never a pointing solution.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub(super) struct Resolved {
-    query: String,
-    name: String,
-    ra_degrees: f64,
-    dec_degrees: f64,
-    source: &'static str,
+    pub query: String,
+    pub name: String,
+    pub ra_degrees: f64,
+    pub dec_degrees: f64,
+    pub source: String,
 }
 
 impl SkyImageService {
@@ -403,7 +405,24 @@ impl SkyImageService {
             jobs: Mutex::new(HashMap::new()),
             warmed: Mutex::new(std::collections::HashSet::new()),
             admission: Arc::new(Semaphore::new(CONCURRENT_FETCHES)),
+            resolver_cache: super::sky_search::ResolverCache::new(
+                &cache_root.join("director").join("sesame"),
+            ),
         }
+    }
+
+    /// Sesame's answer for a name, from the cache when it has one; the flag
+    /// says which. A miss is an answer too and is remembered for a day.
+    pub(super) async fn resolve_remembered(
+        &self,
+        query: &str,
+    ) -> Result<(Option<Resolved>, bool), String> {
+        if let Some(remembered) = self.resolver_cache.lookup(query) {
+            return Ok((remembered, true));
+        }
+        let answer = self.resolve(query).await?;
+        self.resolver_cache.remember(query, answer.clone());
+        Ok((answer, false))
     }
 
     /// Look for offline maps somewhere else than under the cache root.
@@ -691,7 +710,7 @@ fn parse_sesame(query: &str, text: &str) -> Option<Resolved> {
                 name: name.unwrap_or_else(|| query.to_owned()),
                 ra_degrees: ra,
                 dec_degrees: dec,
-                source: "CDS Sesame (Simbad, NED, VizieR)",
+                source: "CDS Sesame (Simbad, NED, VizieR)".to_owned(),
             });
         }
     }
@@ -713,7 +732,22 @@ pub(super) async fn resolve(
     if name.is_empty() || name.len() > 128 || name.chars().any(char::is_control) {
         return Err(Error::Invalid);
     }
-    match service(&state).resolve(name).await {
+    // The local catalog answers a name it knows without a network round trip.
+    let astrometry = state.astrometry.clone();
+    let typed = name.to_owned();
+    let local = tokio::task::spawn_blocking(move || {
+        super::sky_search::local_exact(astrometry.object_catalog(), &typed)
+    })
+    .await
+    .map_err(|_| Error::Internal)?;
+    if let Some(resolved) = local {
+        return Ok(Json(ApiResponse::success(resolved)).into_response());
+    }
+    match service(&state)
+        .resolve_remembered(name)
+        .await
+        .map(|(answer, _)| answer)
+    {
         Ok(Some(resolved)) => Ok(Json(ApiResponse::success(resolved)).into_response()),
         Ok(None) => Ok((
             StatusCode::NOT_FOUND,

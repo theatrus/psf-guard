@@ -2766,6 +2766,32 @@ contribution exchange or collaborative permissions in the current work. Define
 its acceptance gate when that work is explicitly requested. Deferral does not
 block single-coordinator planning and acquisition across multiple rigs/sites.
 
+### Later: moving targets (design note)
+
+A target can be a comet or an asteroid: a body on an orbit, not a fixed
+place. Nothing in the current model allows for that, and the framing view
+already draws them from the Seiza minor-body catalog, so the gap shows. When
+this work is taken up, the target model needs, at least:
+
+- an orbital identity (designation and the orbital elements' epoch) beside
+  or instead of fixed ICRS coordinates, with the position computed for the
+  night, hour and site being planned, the way the marks are placed today;
+- tracking requirements the acquisition side can carry into N.I.N.A.:
+  the body's rate and direction of motion at exposure time, whether to track
+  the body or the stars, and exposure lengths bounded by the motion across a
+  pixel, so a fast mover does not trail;
+- per-night re-framing: the rectangle and any mosaic are re-solved against
+  the body's position at the planned time, and the Target Scheduler target
+  row is updated before each night rather than written once at activation;
+- feasibility that follows the body: altitude, Moon separation and horizon
+  checks at the moving position, plus the body's brightness from the
+  catalog's magnitude model, so a fading comet drops out of the plan;
+- provenance and quality: solves and stacks tagged with the body and the
+  ephemeris used, so a later, better orbit does not silently move history.
+
+Until then a comet is framed as a fixed place at the moment it was looked
+at, and the framing view says so in its marks.
+
 ## Review and validation policy
 
 Each implementation phase requires code review, relevant contract and migration
