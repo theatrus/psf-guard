@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, renderHook, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
@@ -7,6 +7,7 @@ import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
 import Overview from '../Overview';
 import { ago, percentDone, projectFamilies, stateLabel } from '../libraryFamilies';
+import { setDisplayPreferences, useDisplayPreferences } from '../../hooks/useDisplayPreferences';
 
 function ok(data: unknown) {
   return HttpResponse.json({ success: true, data, error: null, status: 'ready' });
@@ -43,7 +44,7 @@ function twoRigs() {
 
 describe('compact Library', () => {
   it('shows one row of pills per project, wraps a plan shot by two rigs in an outer pill, and opens the full card on request', async () => {
-    window.localStorage.removeItem('psf-guard.library.density');
+    setDisplayPreferences({ showNightChip: true, showAllChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
     twoRigs();
     render(<Overview />, { wrapper: wrapper('/') });
     const family = await screen.findByTestId('library-family');
@@ -73,12 +74,31 @@ describe('compact Library', () => {
     expect(screen.getAllByTestId('library-row')).toHaveLength(3);
     fireEvent.click(within(card as HTMLElement).getByRole('button', { name: 'Hide details for Heart Nebula' }));
     expect(document.querySelector('.project-card')).toBeNull();
-    // Detailed brings every card back, and the choice is remembered.
+    // Detailed brings every card back, and the choice is the shared display preference.
     fireEvent.click(screen.getByRole('radio', { name: 'Detailed' }));
     expect(document.querySelectorAll('.project-card')).toHaveLength(4);
     expect(screen.queryByTestId('library-row')).toBeNull();
-    expect(window.localStorage.getItem('psf-guard.library.density')).toBe('detailed');
-    window.localStorage.removeItem('psf-guard.library.density');
+    expect(renderHook(() => useDisplayPreferences()).result.current.libraryDensity).toBe('detailed');
+    // A card folds to a row in the detailed view too, and opens again.
+    const second = document.querySelectorAll('.project-card')[1] as HTMLElement;
+    const name = within(second).getByRole('button', { name: /image grid/ }).getAttribute('aria-label')!.replace(/^Open | image grid$/g, '');
+    fireEvent.click(within(second).getByRole('button', { name: `Hide details for ${name}` }));
+    expect(document.querySelectorAll('.project-card')).toHaveLength(3);
+    expect(screen.getAllByTestId('library-row')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: `Show details for ${name}` }));
+    expect(document.querySelectorAll('.project-card')).toHaveLength(4);
+    setDisplayPreferences({ showNightChip: true, showAllChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
+  });
+
+  it('opens the project the user came from on its own and lets them fold it', async () => {
+    setDisplayPreferences({ showNightChip: true, showAllChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
+    twoRigs();
+    render(<Overview />, { wrapper: wrapper('/?db=c925&project=2') });
+    const card = await screen.findByText('Loner', { selector: '.project-title' });
+    expect(card.closest('.project-card')).toHaveAttribute('data-current-project', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Hide details for Loner' }));
+    expect(document.querySelector('.project-card')).toBeNull();
+    expect(screen.getAllByTestId('library-row')).toHaveLength(4);
   });
 
   it('groups by GUID, sums progress, and names states', () => {

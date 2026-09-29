@@ -285,7 +285,9 @@
 .library-row:hover { border-color: var(--color-border-tertiary); background: var(--color-bg-elevated); }
 .library-row.has-new-images { border-color: var(--color-primary); box-shadow: inset 3px 0 0 var(--color-primary); }
 .library-row.no-files { opacity: 0.6; }
-.library-expand, .library-planning { min-height: 26px; width: 26px; padding: 0; border: 1px solid transparent; border-radius: 50%; background: transparent; color: var(--color-text-secondary); cursor: pointer; font: inherit; }
+.library-expand, .library-planning { min-height: 26px; width: 26px; padding: 0; border: 1px solid transparent; border-radius: 50%; background: transparent; color: var(--color-text-secondary); cursor: pointer; font: inherit; flex: 0 0 auto; }
+.project-header .library-expand { align-self: center; }
+.projects-list:not(.is-compact) .library-row { border-radius: 8px; }
 .library-expand:hover, .library-planning:hover { border-color: var(--color-border-tertiary); color: var(--color-text-primary); }
 .library-name { flex: 1 1 12rem; min-width: 0; text-align: left; padding: 2px 4px; border: 0; background: transparent; color: var(--color-text-primary); font: inherit; font-weight: 600; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .library-name:disabled { cursor: default; }

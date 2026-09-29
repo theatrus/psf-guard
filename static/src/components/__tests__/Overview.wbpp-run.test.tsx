@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { setDisplayPreferences } from '../../hooks/useDisplayPreferences';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -95,7 +96,7 @@ function wrapper() {
 
 describe('Overview WBPP run visibility', () => {
   // These tests read the full cards; the Library opens compact by default.
-  beforeEach(() => { window.localStorage.setItem('psf-guard.library.density', 'detailed'); });
+  beforeEach(() => { setDisplayPreferences({ showNightChip: true, showAllChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'detailed' }); });
   it('shows a database’s run under way in a fresh tab, on its line and on the project’s action', async () => {
     server.use(
       http.get('/api/databases', () =>

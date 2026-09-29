@@ -67,6 +67,19 @@ export default defineConfig({
 
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,
+    // The Library opens compact by default; these specs read the full
+    // project cards, so every browser starts with the detailed view set,
+    // the way a user who chose it under Settings would. Compact rows have
+    // their own unit coverage.
+    storageState: {
+      cookies: [],
+      origins: [PORT, TELESCOPE_PORT, REVIEW_PORT].map((port) => ({
+        origin: `http://127.0.0.1:${port}`,
+        localStorage: [
+          { name: 'psf-guard.display-preferences', value: JSON.stringify({ libraryDensity: 'detailed' }) },
+        ],
+      })),
+    },
     actionTimeout: 5_000,
     navigationTimeout: 10_000,
     trace: 'retain-on-failure',
