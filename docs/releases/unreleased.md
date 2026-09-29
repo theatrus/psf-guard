@@ -181,10 +181,13 @@
   it scrolls. The drag mode (rectangle or sky), the sky turn and the layer
   switches (grid, constellations, deep-sky marks, comets and asteroids,
   Sun, Moon and planets) are small buttons at the top of the stage.
-- Marks leave the PGC and HD catalogs out unless asked: they flooded every
-  field with faint galaxies and stars and crowded out the nebulae and
-  clusters. **Catalogs marked** under **View** picks the families shown, and
-  the choice is remembered in the browser. Marks also follow the view sooner
+- Marks start as the map an imager frames by: Messier, NGC, IC, Sharpless,
+  LDN and LBN, drawn with thinner outlines. The other catalogs, PGC and HD
+  above all, wait for a chip under **Catalogs marked** in **View**; they
+  flooded every field with faint galaxies and stars and crowded out the
+  nebulae and clusters. Comets, asteroids and the Sun, Moon and planets
+  wait for their button too, since a zoomed-in field filled with faint
+  asteroids. Every choice is remembered in the browser. Marks also follow the view sooner
   after a drag: they no longer wait for the survey tile to settle, and a tile
   arriving no longer pushes that wait back.
 - Offline sky maps are preferred wherever one stands in for an online

@@ -50,6 +50,9 @@ pub(super) struct MarksQuery {
     /// letters a designation starts with ("PGC,HD" when unsaid; empty to
     /// hide nothing).
     hide: Option<String>,
+    /// Comma-separated catalog prefixes to keep, the same way; every catalog
+    /// when unsaid. With this given, nothing is hidden unless `hide` says so.
+    catalogs: Option<String>,
 }
 fn default_aspect() -> f64 {
     4.0 / 3.0
@@ -104,6 +107,9 @@ pub(super) struct MinorBodyMark {
 pub(super) struct SkyMarks {
     /// The catalog prefixes left out of `objects`, as applied.
     pub hidden: Vec<String>,
+    /// The catalog prefixes `objects` was kept to, when the request named them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalogs: Option<Vec<String>>,
     pub at_ms: i64,
     /// The angular radius searched around the center.
     pub radius_degrees: f64,
@@ -123,21 +129,31 @@ pub(super) fn designation_prefix(name: &str) -> String {
         .collect()
 }
 
-/// The prefixes a request hides: the default set when it says nothing, or
-/// its own list (which may be empty). `None` when the list is too long.
-pub(super) fn hidden_prefixes(hide: Option<&str>) -> Option<Vec<String>> {
-    let prefixes: Vec<String> = match hide {
-        None => DEFAULT_HIDDEN
-            .iter()
-            .map(|p| p.to_ascii_lowercase())
-            .collect(),
-        Some(list) => list
-            .split(',')
-            .map(|p| designation_prefix(p.trim()))
-            .filter(|p| !p.is_empty())
-            .collect(),
-    };
+/// A comma-separated list of catalog prefixes, lower-cased; `None` when it
+/// is too long to be honest.
+pub(super) fn catalog_prefixes(list: &str) -> Option<Vec<String>> {
+    let prefixes: Vec<String> = list
+        .split(',')
+        .map(|p| designation_prefix(p.trim()))
+        .filter(|p| !p.is_empty())
+        .collect();
     (prefixes.len() <= MAX_HIDDEN).then_some(prefixes)
+}
+
+/// The prefixes a request hides: its own list when it gives one (which may
+/// be empty), nothing when it names the catalogs it wants instead, and the
+/// default set when it says neither.
+pub(super) fn hidden_prefixes(hide: Option<&str>, catalogs_named: bool) -> Option<Vec<String>> {
+    match hide {
+        Some(list) => catalog_prefixes(list),
+        None if catalogs_named => Some(Vec::new()),
+        None => Some(
+            DEFAULT_HIDDEN
+                .iter()
+                .map(|p| p.to_ascii_lowercase())
+                .collect(),
+        ),
+    }
 }
 
 pub(super) fn search_radius(fov_degrees: f64, aspect: f64) -> f64 {
@@ -169,6 +185,8 @@ pub(super) struct MarksAsked<'a> {
     pub limit: usize,
     pub limit_mag: f64,
     pub hidden: &'a [String],
+    /// Keep only these catalogs, when given.
+    pub catalogs: Option<&'a [String]>,
 }
 
 /// The marks within `radius` of a place at `jd`, from whatever catalogs are there.
@@ -184,6 +202,7 @@ pub(super) fn marks_for(
         limit,
         limit_mag,
         hidden,
+        catalogs,
     } = *asked;
     let objects = match objects {
         Ok(catalog) => {
@@ -207,7 +226,11 @@ pub(super) fn marks_for(
                     note: None,
                     items: hits
                         .into_iter()
-                        .filter(|hit| !hidden.contains(&designation_prefix(&hit.object.name)))
+                        .filter(|hit| {
+                            let prefix = designation_prefix(&hit.object.name);
+                            !hidden.contains(&prefix)
+                                && catalogs.is_none_or(|kept| kept.contains(&prefix))
+                        })
                         .take(limit)
                         .map(|hit| ObjectMark {
                             // Older catalog files carry no record ids; the
@@ -305,6 +328,7 @@ pub(super) fn marks_for(
     };
     SkyMarks {
         hidden: hidden.to_vec(),
+        catalogs: catalogs.map(<[String]>::to_vec),
         at_ms: ((jd - 2_440_587.5) * 86_400_000.0).round() as i64,
         radius_degrees: radius,
         objects,
@@ -338,7 +362,12 @@ pub(super) async fn marks(
     if !(0..=4_102_444_800_000).contains(&at_ms) {
         return Err(Error::Invalid);
     }
-    let hidden = hidden_prefixes(query.hide.as_deref()).ok_or(Error::Invalid)?;
+    let catalogs = match query.catalogs.as_deref() {
+        Some(list) => Some(catalog_prefixes(list).ok_or(Error::Invalid)?),
+        None => None,
+    };
+    let hidden =
+        hidden_prefixes(query.hide.as_deref(), catalogs.is_some()).ok_or(Error::Invalid)?;
     let jd = crate::ephemeris::julian_date_from_unix_ms(at_ms);
     let radius = search_radius(query.fov, query.aspect);
     let astrometry = state.astrometry.clone();
@@ -353,6 +382,7 @@ pub(super) async fn marks(
                 limit: query.limit,
                 limit_mag: query.limit_mag,
                 hidden: &hidden,
+                catalogs: catalogs.as_deref(),
             },
         )
     })
@@ -431,7 +461,7 @@ mod tests {
                 .map(|o| o.name.clone())
                 .collect::<Vec<_>>()
         };
-        let default = hidden_prefixes(None).unwrap();
+        let default = hidden_prefixes(None, false).unwrap();
         assert_eq!(default, ["pgc", "hd"]);
         let catalog = Arc::new(ObjectCatalog::new(objects));
         let asked = |hidden: &[String]| MarksAsked {
@@ -441,17 +471,18 @@ mod tests {
             limit: 10,
             limit_mag: 16.0,
             hidden: Box::leak(hidden.to_vec().into_boxed_slice()),
+            catalogs: None,
         };
         let marks = marks_for(Ok(catalog.clone()), none.clone(), &asked(&default));
         assert_eq!(names(&marks), ["M 31", "NGC 205"]);
         assert_eq!(marks.hidden, ["pgc", "hd"]);
         // Asking for everything brings the swarm back, and the limit then bites.
-        let all = hidden_prefixes(Some("")).unwrap();
+        let all = hidden_prefixes(Some(""), false).unwrap();
         let marks = marks_for(Ok(catalog.clone()), none.clone(), &asked(&all));
         assert_eq!(marks.objects.items.len(), 10);
         assert!(names(&marks).iter().any(|n| n.starts_with("PGC")));
         // A list of its own, in any case, with spaces.
-        let own = hidden_prefixes(Some(" ngc, Pgc ")).unwrap();
+        let own = hidden_prefixes(Some(" ngc, Pgc "), false).unwrap();
         let marks = marks_for(Ok(catalog), none, &asked(&own));
         assert_eq!(names(&marks)[0], "M 31");
         assert!(names(&marks)
@@ -460,7 +491,32 @@ mod tests {
         assert!(names(&marks).iter().any(|n| n.starts_with("HD")));
         assert_eq!(designation_prefix("Sh2-101"), "sh");
         assert_eq!(designation_prefix("vdB 1"), "vdb");
-        assert!(hidden_prefixes(Some(&"a,".repeat(MAX_HIDDEN + 1))).is_none());
+        assert!(hidden_prefixes(Some(&"a,".repeat(MAX_HIDDEN + 1)), false).is_none());
+        // Naming the catalogs wanted keeps only those, and lifts the default hiding.
+        assert_eq!(hidden_prefixes(None, true).unwrap(), Vec::<String>::new());
+        let kept = catalog_prefixes("M, PGC").unwrap();
+        let marks = marks_for(
+            Ok(Arc::new(ObjectCatalog::new(vec![
+                galaxy("M 31", "Andromeda Galaxy", 10.68, 41.27, 190.0),
+                galaxy("NGC 205", "", 10.09, 41.68, 2.0),
+                galaxy("PGC 2557", "", 10.7, 41.3, 20.0),
+            ]))),
+            Err("no minor bodies".to_owned()),
+            &MarksAsked {
+                center,
+                radius: 2.0,
+                jd,
+                limit: 10,
+                limit_mag: 16.0,
+                hidden: &[],
+                catalogs: Some(&kept),
+            },
+        );
+        assert_eq!(names(&marks), ["M 31", "PGC 2557"]);
+        assert_eq!(
+            marks.catalogs.as_deref(),
+            Some(&["m".to_owned(), "pgc".to_owned()][..])
+        );
     }
 
     #[test]
@@ -495,6 +551,7 @@ mod tests {
                 limit: 300,
                 limit_mag: 30.0,
                 hidden: &[],
+                catalogs: None,
             },
         );
         assert!(marks.objects.available);
@@ -522,6 +579,7 @@ mod tests {
                 limit: 300,
                 limit_mag: 16.0,
                 hidden: &[],
+                catalogs: None,
             },
         );
         assert_eq!(
@@ -575,7 +633,8 @@ mod bench {
                     jd: 2_461_000.5,
                     limit: 300,
                     limit_mag: 16.0,
-                    hidden: &hidden_prefixes(None).unwrap(),
+                    hidden: &hidden_prefixes(None, false).unwrap(),
+                    catalogs: None,
                 },
             );
             let mut prefixes: std::collections::BTreeMap<String, usize> = Default::default();

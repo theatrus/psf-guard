@@ -384,12 +384,16 @@ holds the minor-body catalog, comets and asteroids are placed for the moment
 the view is looked at (comets with their tail direction, asteroids with
 their motion); and the Sun, Moon and planets come from a built-in ephemeris
 good to a few arcminutes. Each layer has a button at the top of the stage,
-and says on the stage when its catalog is not on this server. **Catalogs
-marked** under **View** picks the catalog families that get marks; PGC and
-HD start hidden, since PGC lists hundreds of faint galaxies in any field and
+and says on the stage when its catalog is not on this server. Deep-sky
+marks start on; comets, asteroids and the solar system wait for their
+button, since a zoomed-in field otherwise fills with faint asteroids.
+**Catalogs marked** under **View** picks the catalog families that get
+marks: Messier, NGC, IC, Sharpless, LDN and LBN start on, the map an imager
+frames by; Barnard, vdB, SNR, UGC, WR, PGC and HD wait for a chip, PGC and
+HD above all, since PGC lists hundreds of faint galaxies in any field and
 HD every star the survey already shows, and with them in, the limit of 300
-marks left no room for the nebulae and clusters an imager frames around.
-The choice is remembered in the browser and sent as `hide`. A mark is a
+marks left no room for the nebulae and clusters.
+The choice is remembered in the browser and sent as `catalogs`. A mark is a
 catalog place, not pointing evidence; the survey picture and the plate solve
 say where things really are. The
 projection is stereographic, in the browser, on the server's survey images
@@ -723,7 +727,7 @@ layers are marked as such and never stand in for one another.
 | --- | --- | --- |
 | GET | `/sky/surveys` | The allowed surveys: `id`, `name`, `hips`, `kind` (`broadband`, `narrowband`, `panorama`), `bandpass`, `attribution`. |
 | GET | `/sky/resolve` | `name`: an object name for CDS Sesame (Simbad, NED, VizieR). Returns the resolved `name`, ICRS `ra_degrees` and `dec_degrees` and the `source`; `404` when no catalog knows the name. A catalog position, not a pointing solution. |
-| GET | `/sky/objects` | `ra` and `dec` in ICRS degrees, `fov` (stage width in degrees), optional `aspect` (width over height, 4:3 by default), `at` (Unix milliseconds, now by default), `limit` (300 by default, at most 1000), `limit_mag` (16 by default) and `hide` (comma-separated catalog prefixes to leave out of `objects`, matched against the letters a designation starts with; `PGC,HD` when absent, empty to hide nothing). Answers the marks within the stage's reach: `hidden` (the prefixes applied), `objects` from the Seiza object catalog by prominence after the hidden catalogs are dropped, `minor_bodies` (comets and asteroids from its minor-body catalog at `at`, brightest first, with motion and a tail or motion direction), and `solar_system` (Sun, Moon and planets from the built-in ephemeris). Each catalog layer says whether it is `available` on the server and, if not, why. |
+| GET | `/sky/objects` | `ra` and `dec` in ICRS degrees, `fov` (stage width in degrees), optional `aspect` (width over height, 4:3 by default), `at` (Unix milliseconds, now by default), `limit` (300 by default, at most 1000), `limit_mag` (16 by default), `catalogs` (comma-separated catalog prefixes to keep in `objects`, matched against the letters a designation starts with; every catalog when absent) and `hide` (prefixes to leave out; `PGC,HD` when neither is given, nothing when `catalogs` is, empty to hide nothing). Answers the marks within the stage's reach: `catalogs` and `hidden` (the prefixes applied), `objects` from the Seiza object catalog by prominence after the catalog filter, `minor_bodies` (comets and asteroids from its minor-body catalog at `at`, brightest first, with motion and a tail or motion direction), and `solar_system` (Sun, Moon and planets from the built-in ephemeris). Each catalog layer says whether it is `available` on the server and, if not, why. |
 | GET | `/sky/cutout` | `survey` (an `id` from the list), `ra` and `dec` in ICRS degrees, `fov` (image width in degrees, 0.02 to 180), optional `width` and `height` in pixels (64 to 2048, default 1024) and `rotation` in degrees east of north. A cached image answers `200 image/jpeg`. A miss starts one fetch and answers `202` with `Retry-After: 1`; poll the same URL. A failed fetch answers `502` with the reason for about a minute. |
 
 Cutouts are tangent-plane JPEGs cached under `<cache>/director/sky/` by

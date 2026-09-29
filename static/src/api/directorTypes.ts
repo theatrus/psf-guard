@@ -376,14 +376,15 @@ export interface DirectorMinorBodyMark {
 export interface DirectorSolarSystemMark { name: string; kind: 'sun' | 'moon' | 'planet'; ra_degrees: number; dec_degrees: number; distance_au: number; elongation_degrees: number }
 export interface DirectorSkyMarks {
   hidden: string[];
+  catalogs?: string[];
   at_ms: number;
   radius_degrees: number;
   objects: DirectorMarkLayer<DirectorObjectMark>;
   minor_bodies: DirectorMarkLayer<DirectorMinorBodyMark>;
   solar_system: DirectorSolarSystemMark[];
 }
-/** `hide` names catalog prefixes to leave out, comma-separated; the server hides PGC and HD when it is absent. */
-export interface DirectorSkyMarksQuery { ra: number; dec: number; fov: number; aspect: number; at: number; limit?: number; hide?: string }
+/** `catalogs` names the catalog prefixes to keep, comma-separated, and `hide` those to leave out; with neither the server hides PGC and HD. */
+export interface DirectorSkyMarksQuery { ra: number; dec: number; fov: number; aspect: number; at: number; limit?: number; hide?: string; catalogs?: string }
 
 export interface DirectorNightTarget { id: string; hours_up: number; hours_up_moon_down: number; hours_lost_to_meridian: number; transit_ms: number | null; max_altitude_degrees: number; min_moon_separation_degrees: number }
 export interface DirectorNight {

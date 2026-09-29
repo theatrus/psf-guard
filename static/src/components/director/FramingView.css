@@ -79,19 +79,36 @@
 .framing-stars circle { fill: rgba(235, 240, 255, 0.9); }
 .framing-figures path { fill: none; stroke: rgba(150, 175, 235, 0.4); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .framing-names text { fill: rgba(170, 185, 230, 0.55); font-size: 14px; letter-spacing: 0.08em; text-transform: uppercase; text-anchor: middle; }
-/* Catalog marks: places, not pixels. */
+/* Catalog marks: places, not pixels. One colour per kind of object, on the
+   outline and its label alike (kinds are the catalog's kebab-case names). */
 .framing-marks text { font-size: 13px; fill: #e8eefc; paint-order: stroke; stroke: rgba(0, 0, 0, 0.75); stroke-width: 3px; }
-.framing-mark ellipse { fill: none; stroke: rgba(255, 214, 120, 0.85); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
-.framing-mark-galaxy ellipse { stroke: rgba(255, 170, 120, 0.9); }
-.framing-mark-nebula ellipse, .framing-mark-hii_region ellipse, .framing-mark-supernova_remnant ellipse, .framing-mark-planetary_nebula ellipse { stroke: rgba(150, 230, 180, 0.9); }
-.framing-mark-open_cluster ellipse, .framing-mark-globular_cluster ellipse, .framing-mark-cluster_with_nebula ellipse { stroke: rgba(200, 200, 255, 0.9); }
-.framing-mark polygon { fill: rgba(255, 120, 200, 0.4); stroke: #ff7ac8; stroke-width: 1.5; }
+.framing-mark ellipse { fill: none; stroke: rgba(255, 214, 120, 0.8); stroke-width: 0.75; vector-effect: non-scaling-stroke; }
+.framing-mark-galaxy ellipse { stroke: rgba(255, 160, 110, 0.9); }
+.framing-mark-galaxy text { fill: #ffc9b0; }
+.framing-mark-nebula ellipse, .framing-mark-hii-region ellipse { stroke: rgba(120, 225, 160, 0.9); }
+.framing-mark-nebula text, .framing-mark-hii-region text { fill: #c4f2d4; }
+.framing-mark-planetary-nebula ellipse { stroke: rgba(110, 220, 235, 0.95); }
+.framing-mark-planetary-nebula text { fill: #c8f3f8; }
+.framing-mark-supernova-remnant ellipse { stroke: rgba(255, 110, 200, 0.95); stroke-dasharray: 5 3; }
+.framing-mark-supernova-remnant text { fill: #ffc6ea; }
+.framing-mark-dark-nebula ellipse { stroke: rgba(170, 160, 150, 0.8); stroke-dasharray: 3 3; }
+.framing-mark-dark-nebula text { fill: #d6d0c8; }
+.framing-mark-open-cluster ellipse { stroke: rgba(150, 190, 255, 0.9); }
+.framing-mark-open-cluster text { fill: #cfe0ff; }
+.framing-mark-globular-cluster ellipse { stroke: rgba(200, 160, 255, 0.95); }
+.framing-mark-globular-cluster text { fill: #e2d2ff; }
+.framing-mark-cluster-nebula ellipse { stroke: rgba(140, 220, 220, 0.9); }
+.framing-mark-cluster-nebula text { fill: #cdf0f0; }
+.framing-mark-star ellipse, .framing-mark-double-star ellipse { stroke: rgba(235, 235, 245, 0.7); }
+.framing-mark.is-wider-than-view ellipse { stroke-dasharray: 2 3; stroke-width: 1.25; }
+.framing-mark-association ellipse { stroke: rgba(180, 200, 255, 0.6); stroke-dasharray: 8 4; }
+.framing-mark polygon { fill: rgba(255, 120, 200, 0.4); stroke: #ff7ac8; stroke-width: 1; }
 .framing-mark-asteroid polygon { fill: rgba(200, 200, 200, 0.4); stroke: #d0d0d0; }
-.framing-mark line { stroke: #ff7ac8; stroke-width: 1.5; stroke-dasharray: 3 3; }
+.framing-mark line { stroke: #ff7ac8; stroke-width: 1; stroke-dasharray: 3 3; }
 .framing-mark-asteroid line { stroke: #d0d0d0; }
-.framing-mark circle { fill: rgba(255, 230, 120, 0.25); stroke: #ffe678; stroke-width: 1.5; }
+.framing-mark circle { fill: rgba(255, 230, 120, 0.25); stroke: #ffe678; stroke-width: 1; }
 .framing-mark-moon circle { fill: rgba(230, 230, 240, 0.3); stroke: #e6e6f0; }
-.framing-mark-sun circle { fill: rgba(255, 200, 60, 0.5); stroke: #ffc83c; stroke-width: 2; }
+.framing-mark-sun circle { fill: rgba(255, 200, 60, 0.5); stroke: #ffc83c; stroke-width: 1.25; }
 /* Catalog families as small chips: lit when marked, dim when hidden. */
 .framing-catalogs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 8px; }
 .framing-catalogs-title { flex-basis: 100%; font-size: 12px; color: var(--color-text-secondary); }
