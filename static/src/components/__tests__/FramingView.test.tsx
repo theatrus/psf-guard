@@ -426,6 +426,7 @@ describe('Framing view', () => {
         objects: { available: true, items: [
           { id: 'm31', name: 'M 31', common_name: 'Andromeda Galaxy', kind: 'galaxy', ra_degrees: seed.center.ra_degrees, dec_degrees: seed.center.dec_degrees, mag: 3.4, major_arcmin: 190, minor_arcmin: 60, position_angle_degrees: 35, prominence: 0.9 },
           { id: 'm32', name: 'M 32', common_name: '', kind: 'galaxy', ra_degrees: seed.center.ra_degrees + 0.2, dec_degrees: seed.center.dec_degrees - 0.4, mag: 8.1, major_arcmin: 8, minor_arcmin: 6, position_angle_degrees: null, prominence: 0.3 },
+          { id: 'sh2-109', name: 'Sh2-109', common_name: '', kind: 'hii-region', ra_degrees: seed.center.ra_degrees - 0.3, dec_degrees: seed.center.dec_degrees + 0.2, mag: null, major_arcmin: 1080, minor_arcmin: null, position_angle_degrees: null, prominence: 0.29 },
         ] },
         minor_bodies: { available: false, note: 'minor-body catalog is not configured', items: [] },
         solar_system: [{ name: 'Jupiter', kind: 'planet', ra_degrees: seed.center.ra_degrees - 0.5, dec_degrees: seed.center.dec_degrees + 0.3, distance_au: 4.2, elongation_degrees: 120 }],
@@ -433,11 +434,23 @@ describe('Framing view', () => {
     }));
     mount();
     await waitFor(() => expect(screen.getByTestId('framing-marks')).toBeInTheDocument(), { timeout: 8000 });
-    expect(screen.getAllByTestId('framing-mark-object')).toHaveLength(2);
+    expect(screen.getAllByTestId('framing-mark-object')).toHaveLength(3);
     expect(screen.getByText('Andromeda Galaxy')).toBeInTheDocument();
     expect(screen.getByText('M 32')).toBeInTheDocument();
+    // An object wider than the view is a dotted centre mark with its label beside it, not an arc across everything.
+    const wider = screen.getAllByTestId('framing-mark-object')[2];
+    expect(wider.getAttribute('class')).toContain('is-wider-than-view');
+    expect(wider.querySelector('ellipse')!.getAttribute('rx')).toBe('10');
+    const sh2 = screen.getByText('Sh2-109');
+    expect(Number(sh2.getAttribute('x')) - Number(wider.querySelector('ellipse')!.getAttribute('cx'))).toBe(16);
+    // Comets and the solar system wait for their switch.
+    expect(screen.queryByTestId('framing-mark-solar')).not.toBeInTheDocument();
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Sun, Moon and planets'));
+    fireEvent.click(screen.getByLabelText('Comets and asteroids'));
     expect(screen.getByTestId('framing-mark-solar')).toHaveTextContent('Jupiter');
     expect(screen.getByRole('note')).toHaveTextContent('Comets and asteroids need the Seiza minor-body catalog on this server (minor-body catalog is not configured).');
+    expect(window.localStorage.getItem('psf-guard.framing.marks.bodies')).toBe('true');
     // The big galaxy is drawn at its catalog size and angle.
     const ellipse = screen.getAllByTestId('framing-mark-object')[0].querySelector('ellipse')!;
     expect(Number(ellipse.getAttribute('rx'))).toBeGreaterThan(Number(ellipse.getAttribute('ry')));
@@ -445,14 +458,14 @@ describe('Framing view', () => {
     // The request names the settled view and a time rounded to ten minutes.
     expect(asked[0]).toMatch(/ra=10\.68&dec=41\.27&fov=/);
     expect(Number(asked[0].match(/at=(\d+)/)![1]) % 600_000).toBe(0);
-    // PGC and HD start hidden; a chip brings a family back and the choice is kept.
-    expect(asked[0]).toContain('hide=PGC,HD');
+    // Messier, NGC, IC, Sharpless and the Lynds catalogs start on; a chip adds a family and the choice is kept.
+    expect(asked[0]).toContain('catalogs=M,NGC,IC,Sh,LDN,LBN');
+    expect(asked[0]).not.toContain('hide=');
     expect(screen.getByRole('button', { name: 'PGC' })).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('button', { name: 'NGC' })).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'PGC' }));
-    await waitFor(() => expect(asked.at(-1)).toContain('hide=HD'), { timeout: 8000 });
-    expect(asked.at(-1)).not.toContain('PGC');
-    expect(window.localStorage.getItem('psf-guard.framing.marks.hide')).toBe('HD');
+    await waitFor(() => expect(asked.at(-1)).toContain('catalogs=M,NGC,IC,Sh,LDN,LBN,PGC'), { timeout: 8000 });
+    expect(window.localStorage.getItem('psf-guard.framing.marks.catalogs')).toBe('M,NGC,IC,Sh,LDN,LBN,PGC');
     fireEvent.click(screen.getByLabelText('Deep-sky marks'));
     expect(screen.queryByTestId('framing-mark-object')).not.toBeInTheDocument();
     expect(window.localStorage.getItem('psf-guard.framing.marks.objects')).toBe('false');

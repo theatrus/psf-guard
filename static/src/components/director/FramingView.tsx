@@ -27,16 +27,18 @@ type DragMode = 'rectangle' | 'sky';
 const DRAG_MODE_KEY = 'psf-guard.framing.dragMode';
 const ROTATE_SKY_KEY = 'psf-guard.framing.rotateSky';
 const MARK_KEYS = { objects: 'psf-guard.framing.marks.objects', bodies: 'psf-guard.framing.marks.bodies', solar: 'psf-guard.framing.marks.solar' } as const;
-const HIDDEN_CATALOGS_KEY = 'psf-guard.framing.marks.hide';
+const SHOWN_CATALOGS_KEY = 'psf-guard.framing.marks.catalogs';
 /** The catalog families a mark can come from, by the letters a designation
- *  starts with. PGC and HD start hidden: they swamp a field with faint
- *  galaxies and every star. The choice is remembered in this browser. */
+ *  starts with. Messier, NGC, IC, Sharpless and the Lynds catalogs start
+ *  on: the map an imager frames by. The rest, PGC's faint galaxies and HD's stars above all,
+ *  swamp a field and wait for a chip. The choice is remembered in this browser. */
 const CATALOG_FAMILIES: ReadonlyArray<{ prefix: string; label: string; title: string }> = [
   { prefix: 'M', label: 'Messier', title: 'Messier objects' },
   { prefix: 'NGC', label: 'NGC', title: 'New General Catalogue' },
   { prefix: 'IC', label: 'IC', title: 'Index Catalogue' },
   { prefix: 'Sh', label: 'Sh2', title: 'Sharpless H II regions' },
   { prefix: 'LDN', label: 'LDN', title: 'Lynds dark nebulae' },
+  { prefix: 'LBN', label: 'LBN', title: 'Lynds bright nebulae' },
   { prefix: 'B', label: 'Barnard', title: 'Barnard dark nebulae' },
   { prefix: 'vdB', label: 'vdB', title: 'van den Bergh reflection nebulae' },
   { prefix: 'SNR', label: 'SNR', title: 'Supernova remnants' },
@@ -45,14 +47,14 @@ const CATALOG_FAMILIES: ReadonlyArray<{ prefix: string; label: string; title: st
   { prefix: 'HD', label: 'HD', title: 'Henry Draper stars: every star the survey already shows' },
   { prefix: 'WR', label: 'WR', title: 'Wolf-Rayet stars' },
 ];
-const DEFAULT_HIDDEN_CATALOGS = ['PGC', 'HD'];
-function rememberedHidden(): string[] {
+const DEFAULT_SHOWN_CATALOGS = ['M', 'NGC', 'IC', 'Sh', 'LDN', 'LBN'];
+function rememberedCatalogs(): string[] {
   try {
-    const value = window.localStorage.getItem(HIDDEN_CATALOGS_KEY);
-    if (value === null) return DEFAULT_HIDDEN_CATALOGS;
+    const value = window.localStorage.getItem(SHOWN_CATALOGS_KEY);
+    if (value === null) return DEFAULT_SHOWN_CATALOGS;
     const known = new Set(CATALOG_FAMILIES.map(family => family.prefix.toLowerCase()));
     return value.split(',').map(entry => entry.trim()).filter(entry => known.has(entry.toLowerCase()));
-  } catch { return DEFAULT_HIDDEN_CATALOGS; }
+  } catch { return DEFAULT_SHOWN_CATALOGS; }
 }
 /** Marks are asked for at a time rounded to ten minutes, so a view that
  *  moves a little reuses the answer; comets do not move far in that. */
@@ -203,12 +205,14 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   const chooseDragMode = (mode: DragMode) => { setDragMode(mode); remember(DRAG_MODE_KEY, mode); };
   const chooseRotateSky = (on: boolean) => { setRotateSky(on); remember(ROTATE_SKY_KEY, String(on)); };
   const [showObjects, setShowObjects] = useState(() => remembered(MARK_KEYS.objects, ['true', 'false'] as const, 'true') === 'true');
-  const [showBodies, setShowBodies] = useState(() => remembered(MARK_KEYS.bodies, ['true', 'false'] as const, 'true') === 'true');
-  const [showSolar, setShowSolar] = useState(() => remembered(MARK_KEYS.solar, ['true', 'false'] as const, 'true') === 'true');
-  const [hiddenCatalogs, setHiddenCatalogs] = useState<string[]>(rememberedHidden);
-  const toggleCatalog = (prefix: string) => setHiddenCatalogs(current => {
+  // Comets, asteroids and the solar system wait for their switch: a zoomed-in
+  // field otherwise fills with faint asteroids.
+  const [showBodies, setShowBodies] = useState(() => remembered(MARK_KEYS.bodies, ['true', 'false'] as const, 'false') === 'true');
+  const [showSolar, setShowSolar] = useState(() => remembered(MARK_KEYS.solar, ['true', 'false'] as const, 'false') === 'true');
+  const [shownCatalogs, setShownCatalogs] = useState<string[]>(rememberedCatalogs);
+  const toggleCatalog = (prefix: string) => setShownCatalogs(current => {
     const next = current.some(entry => entry.toLowerCase() === prefix.toLowerCase()) ? current.filter(entry => entry.toLowerCase() !== prefix.toLowerCase()) : [...current, prefix];
-    remember(HIDDEN_CATALOGS_KEY, next.join(','));
+    remember(SHOWN_CATALOGS_KEY, next.join(','));
     return next;
   });
   const chooseMarks = (key: keyof typeof MARK_KEYS, on: boolean) => {
@@ -281,7 +285,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     ra: Number(marksView.center.ra_degrees.toFixed(2)), dec: Number(marksView.center.dec_degrees.toFixed(2)),
     fov: Number(marksView.fov.toFixed(2)), aspect: Number((stageSize.width / stageSize.height).toFixed(3)),
     at: Math.floor(Date.now() / MARKS_TIME_BUCKET_MS) * MARKS_TIME_BUCKET_MS,
-    hide: hiddenCatalogs.join(','),
+    catalogs: shownCatalogs.join(','),
   } : null;
   const marks = useQuery({
     queryKey: ['directorSkyMarks', marksQuery],
@@ -573,7 +577,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
         </div>
         <div className="framing-catalogs" role="group" aria-label="Catalogs marked">
           <span className="framing-catalogs-title">Catalogs marked</span>
-          {CATALOG_FAMILIES.map(family => { const shown = !hiddenCatalogs.some(entry => entry.toLowerCase() === family.prefix.toLowerCase()); return <button key={family.prefix} type="button" aria-pressed={shown} title={family.title} onClick={() => toggleCatalog(family.prefix)}>{family.label}</button>; })}
+          {CATALOG_FAMILIES.map(family => { const shown = shownCatalogs.some(entry => entry.toLowerCase() === family.prefix.toLowerCase()); return <button key={family.prefix} type="button" aria-pressed={shown} title={family.title} onClick={() => toggleCatalog(family.prefix)}>{family.label}</button>; })}
         </div>
       </fieldset>
       {notice && <p role="status">{notice}{undo && <> <button type="button" className="link-button" onClick={() => { setState(undo); setUndo(null); setNotice('Put the target back where it was.'); }}>Undo</button></>}</p>}
@@ -610,9 +614,15 @@ function SkyMarks({ marks, view, viewFov, stage, objects, bodies, solar }: { mar
       const ry = Math.max(4, ((object.minor_arcmin ?? object.major_arcmin ?? 0) / 60 / 2) / scale);
       const angle = object.position_angle_degrees !== null ? stageAngleAt(view, position, object.position_angle_degrees, viewFov, stage) ?? 0 : 0;
       const label = object.common_name || object.name;
-      return <g key={`${object.id || object.name}#${index}`} className={`framing-mark framing-mark-${object.kind}`} data-testid="framing-mark-object">
-        <ellipse cx={0} cy={0} rx={rx} ry={ry} transform={`translate(${at[0].toFixed(1)} ${at[1].toFixed(1)}) rotate(${angle.toFixed(1)})`} />
-        {index < labels && <text x={at[0] + rx + 6} y={at[1] + 4}>{label}</text>}
+      // An object wider than the stage (Cygnus X is 18° across) would be
+      // one arc through everything: it gets a dotted centre mark instead,
+      // and a label that stays near the centre for anything big.
+      const wider = 2 * Math.min(rx, ry) > stage.width * 1.25;
+      return <g key={`${object.id || object.name}#${index}`} className={`framing-mark framing-mark-${object.kind}${wider ? ' is-wider-than-view' : ''}`} data-testid="framing-mark-object">
+        {wider
+          ? <ellipse cx={at[0]} cy={at[1]} rx={10} ry={10} />
+          : <ellipse cx={0} cy={0} rx={rx} ry={ry} transform={`translate(${at[0].toFixed(1)} ${at[1].toFixed(1)}) rotate(${angle.toFixed(1)})`} />}
+        {index < labels && <text x={at[0] + Math.min(wider ? 10 : rx, 40) + 6} y={at[1] + 4}>{label}</text>}
       </g>;
     })}
     {bodies && marks.minor_bodies.items.map(body => {
