@@ -5,7 +5,7 @@
 
 use super::*;
 use psf_guard_director_core::{
-    night::{night_curve, night_preview, Night, NightCurve, NightRequest, NightTarget},
+    night::{night_curve, night_summary, Night, NightCurve, NightRequest, NightTarget},
     visibility::{AltitudeLimits, Horizon, IcrsPosition, Site},
 };
 use psf_guard_director_meta::{plan::Goal, profile::Limits};
@@ -146,11 +146,13 @@ pub(super) async fn evaluate(
                 None => warnings.push(format!("{catalog_name}: no rig profile yet; set its site under Setup.")),
             }
         }
-        // Everything below is arithmetic on what was read.
-        for (rig_id, rig, catalog_name, profile) in inputs {
+        // Everything below is arithmetic on what was read: each rig, and
+        // each of its nights, on its own thread of the shared pool, since a
+        // night is thousands of SOFA transforms and the browser is waiting.
+        use rayon::prelude::*;
+        let outcomes: Vec<Result<RigFeasibility, String>> = inputs.into_par_iter().map(|(rig_id, rig, catalog_name, profile)| {
             let Some(site) = profile.site.as_ref().map(|s| s.value) else {
-                warnings.push(format!("{catalog_name}: no site in its rig profile; set it under Setup or let the plugin report it."));
-                continue;
+                return Err(format!("{catalog_name}: no site in its rig profile; set it under Setup or let the plugin report it."));
             };
             let horizon = profile
                 .horizon
@@ -178,19 +180,29 @@ pub(super) async fn evaluate(
                 dark_below_degrees: DARK_BELOW_DEGREES,
                 meridian_exclusion: limits.meridian_exclusion,
             };
-            let nights_out = match night_preview(&night_request) {
-                Ok(nights) => nights,
-                Err(error) => {
-                    warnings.push(format!("{catalog_name}: feasibility could not be computed ({error:?})."));
-                    continue;
+            let computed: Vec<Result<(Night, Option<NightCurve>), _>> = (0..nights)
+                .into_par_iter()
+                .map(|index| if index == 0 {
+                    night_curve(&night_request, 0).map(|curve| (curve.night.clone(), Some(curve)))
+                } else {
+                    night_summary(&night_request, index).map(|night| (night, None))
+                })
+                .collect();
+            let mut nights_out = Vec::with_capacity(computed.len());
+            let mut curve = None;
+            for entry in computed {
+                match entry {
+                    Ok((night, drawn)) => {
+                        if drawn.is_some() {
+                            curve = drawn;
+                        }
+                        nights_out.push(night);
+                    }
+                    Err(error) => return Err(format!("{catalog_name}: feasibility could not be computed ({error:?}).")),
                 }
-            };
-            let curve = match night_curve(&night_request, 0) {
-                Ok(curve) => curve,
-                Err(error) => {
-                    warnings.push(format!("{catalog_name}: tonight's curve could not be computed ({error:?})."));
-                    continue;
-                }
+            }
+            let Some(curve) = curve else {
+                return Err(format!("{catalog_name}: tonight's curve could not be computed."));
             };
             let contributions: Vec<_> = plan
                 .as_ref()
@@ -222,7 +234,7 @@ pub(super) async fn evaluate(
             let nights_to_complete = hours_needed
                 .filter(|_| mean_hours_up > 0.05)
                 .map(|needed| (needed / mean_hours_up).ceil() as u32);
-            rigs.push(RigFeasibility {
+            Ok(RigFeasibility {
                 rig,
                 catalog_name,
                 site,
@@ -233,7 +245,13 @@ pub(super) async fn evaluate(
                 hours_needed,
                 nights_to_complete,
                 in_plan,
-            });
+            })
+        }).collect();
+        for outcome in outcomes {
+            match outcome {
+                Ok(rig) => rigs.push(rig),
+                Err(warning) => warnings.push(warning),
+            }
         }
         rigs.sort_by(|a, b| b.in_plan.cmp(&a.in_plan).then_with(|| a.catalog_name.cmp(&b.catalog_name)));
         if rigs.is_empty() {
