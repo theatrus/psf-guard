@@ -362,6 +362,16 @@ export interface DirectorRigStatusView {
 }
 
 export interface DirectorResolvedName { query: string; name: string; ra_degrees: number; dec_degrees: number; source: string }
+/** One local catalog name for the search dropdown, with what matched the typing. */
+export interface DirectorNameSearchHit { name: string; common_name: string; kind: string; ra_degrees: number; dec_degrees: number; matched: string; source: string }
+export interface DirectorNameSearch {
+  query: string;
+  local: { available: boolean; note?: string; items: DirectorNameSearchHit[] };
+  online: DirectorResolvedName | null;
+  online_state: 'skipped' | 'hit' | 'miss' | 'failed';
+  online_note?: string;
+  online_cached: boolean;
+}
 
 /** One catalog layer of sky marks: whether its catalog is on the server, and what it found. */
 export interface DirectorMarkLayer<T> { available: boolean; note?: string; items: T[] }

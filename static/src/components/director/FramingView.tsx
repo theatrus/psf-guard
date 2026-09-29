@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { Check, Crosshair, Globe, Grid3x3, LocateFixed, Orbit, RefreshCw, RotateCw, Search, Sparkles, SquareDashedMousePointer, Sun, Telescope, Undo2 } from 'lucide-react';
+import { Check, Crosshair, Globe, Grid3x3, LocateFixed, Orbit, RefreshCw, RotateCw, Sparkles, SquareDashedMousePointer, Sun, Telescope, Undo2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorCutoutRequest, DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigProfileSummary, DirectorSkyMarks, DirectorSkyPosition } from '../../api/directorTypes';
@@ -10,6 +10,7 @@ import {
   compassDirections, insidePolygon, markLabelBudget, panelForRig, pixelScale, polygonPoints, preferredSurveyId, previewRequest, projectOn, stackMatrix, stageAngleAt, stageCorners, stageFor, stageProject, stateFromDraft, stateFromSeed, tileMatrix, tileSize, toStage, trueWidth, viewAt, type FramingSeed, type FramingState, type Stage, type StageView, chipSurveys, framingGeometry, tileFor, viewLeftTile, type SkyTile, defaultSurveyId,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
+import TargetSearch, { type TargetPick } from './TargetSearch';
 import SkyCanvas, { type SkyTileImage } from './SkyCanvas';
 import { useDebounced, useSurveyCutout } from './useSurveyCutout';
 import './FramingView.css';
@@ -29,8 +30,8 @@ const ROTATE_SKY_KEY = 'psf-guard.framing.rotateSky';
 const MARK_KEYS = { objects: 'psf-guard.framing.marks.objects', bodies: 'psf-guard.framing.marks.bodies', solar: 'psf-guard.framing.marks.solar' } as const;
 const SHOWN_CATALOGS_KEY = 'psf-guard.framing.marks.catalogs';
 /** The catalog families a mark can come from, by the letters a designation
- *  starts with. Messier, NGC, IC, Sharpless and the Lynds catalogs start
- *  on: the map an imager frames by. The rest, PGC's faint galaxies and HD's stars above all,
+ *  starts with. Messier, NGC, IC, Sharpless, the Lynds catalogs and the
+ *  supernova remnants start on: the map an imager frames by. The rest, PGC's faint galaxies and HD's stars above all,
  *  swamp a field and wait for a chip. The choice is remembered in this browser. */
 const CATALOG_FAMILIES: ReadonlyArray<{ prefix: string; label: string; title: string }> = [
   { prefix: 'M', label: 'Messier', title: 'Messier objects' },
@@ -47,7 +48,7 @@ const CATALOG_FAMILIES: ReadonlyArray<{ prefix: string; label: string; title: st
   { prefix: 'HD', label: 'HD', title: 'Henry Draper stars: every star the survey already shows' },
   { prefix: 'WR', label: 'WR', title: 'Wolf-Rayet stars' },
 ];
-const DEFAULT_SHOWN_CATALOGS = ['M', 'NGC', 'IC', 'Sh', 'LDN', 'LBN'];
+const DEFAULT_SHOWN_CATALOGS = ['M', 'NGC', 'IC', 'Sh', 'LDN', 'LBN', 'SNR'];
 function rememberedCatalogs(): string[] {
   try {
     const value = window.localStorage.getItem(SHOWN_CATALOGS_KEY);
@@ -92,11 +93,6 @@ function StartFraming({ canWrite, onStart }: { canWrite: boolean; onStart: (seed
   const [ra, setRa] = useState('');
   const [dec, setDec] = useState('');
   const [problem, setProblem] = useState('');
-  const resolve = useMutation({
-    retry: false,
-    mutationFn: (query: string) => apiClient.resolveDirectorName(query),
-    onSuccess: hit => onStart({ name: hit.name, center: { ra_degrees: hit.ra_degrees, dec_degrees: hit.dec_degrees }, position_angle_degrees: 0 }),
-  });
   const byCoordinates = () => {
     const [r, d] = [Number(ra), Number(dec)];
     if (!Number.isFinite(r) || !Number.isFinite(d) || r < 0 || r >= 360 || d < -90 || d > 90) { setProblem('Enter RA in degrees from 0 to 360 and Dec from -90 to 90.'); return; }
@@ -104,16 +100,17 @@ function StartFraming({ canWrite, onStart }: { canWrite: boolean; onStart: (seed
     onStart({ name: name.trim() || 'Target', center: { ra_degrees: r, dec_degrees: d }, position_angle_degrees: 0 });
   };
   if (!canWrite) return <p className="director-muted">This project has no framing yet.</p>;
-  return <form className="framing-start" aria-label="Start framing" onSubmit={event => { event.preventDefault(); if (name.trim()) resolve.mutate(name.trim()); }}>
+  return <form className="framing-start" aria-label="Start framing" onSubmit={event => event.preventDefault()}>
     <p className="director-muted">No linked catalog target yet. Start from a name the catalogs know, or type the center.</p>
+    <TargetSearch label="Object name" ariaLabel="Object name to resolve" placeholder="IC 1805" buttonLabel="Look up name" hint="The local catalog answers as you type; the last row asks CDS Sesame."
+      onPick={pick => onStart({ name: pick.name, center: pick.center, position_angle_degrees: 0 })} />
     <div className="framing-grid">
-      <label>Object name<input aria-label="Object name to resolve" value={name} maxLength={128} placeholder="IC 1805" onChange={event => setName(event.target.value)} /></label>
+      <label>Name for coordinates<input aria-label="Name for typed coordinates" value={name} maxLength={128} placeholder="Target" onChange={event => setName(event.target.value)} /></label>
       <label>RA<span className="framing-input"><input aria-label="Start RA degrees" type="number" step="any" min={0} max={359.99999} value={ra} onChange={event => setRa(event.target.value)} /><small>°</small></span></label>
       <label>Dec<span className="framing-input"><input aria-label="Start Dec degrees" type="number" step="any" min={-90} max={90} value={dec} onChange={event => setDec(event.target.value)} /><small>°</small></span></label>
     </div>
-    {(problem || resolve.isError) && <p className="director-error" role="alert">{problem || message(resolve.error)}</p>}
+    {problem && <p className="director-error" role="alert">{problem}</p>}
     <div className="director-actions">
-      <button type="submit" disabled={!name.trim() || resolve.isPending}>{resolve.isPending ? 'Looking up...' : 'Look up name'}</button>
       <button type="button" disabled={ra.trim() === '' || dec.trim() === ''} onClick={byCoordinates}>Use these coordinates</button>
     </div>
   </form>;
@@ -175,21 +172,16 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   // uses when it activates, so it follows the pointer without a round trip.
   const request = useMemo(() => state ? previewRequest(state, rigList) : null, [state, rigList]);
   const geometry = useMemo(() => request ? framingGeometry(request) : undefined, [request]);
-  const [search, setSearch] = useState('');
+
   // A found target replaces what was on screen; keep that so one click
   // puts it back, and offer the saved draft as the other way back.
   const [undo, setUndo] = useState<FramingState | null>(null);
-  const lookup = useMutation({
-    retry: false,
-    mutationFn: ({ query }: { query: string; before: FramingState }) => apiClient.resolveDirectorName(query),
-    onSuccess: (hit, { before }) => {
-      const center = { ra_degrees: hit.ra_degrees, dec_degrees: hit.dec_degrees };
-      setUndo(before);
-      update({ targetName: hit.name, center, viewCenter: center });
-      setNotice(`Moved the target to ${hit.name}.`);
-    },
-  });
-  const findTarget = () => { if (state && search.trim() && canWrite) lookup.mutate({ query: search.trim(), before: state }); };
+  const pickTarget = (pick: TargetPick) => {
+    if (!state || !canWrite) return;
+    setUndo(state);
+    update({ targetName: pick.name, center: pick.center, viewCenter: pick.center });
+    setNotice(`Moved the target to ${pick.name}.`);
+  };
   const savedState = draft.data?.draft ? stateFromDraft(draft.data.draft) : null;
   const planFields = (s: FramingState) => JSON.stringify([s.targetName, s.center, s.positionAngle, s.mosaic, s.panelRigId, s.panel, s.shownRigIds, s.surveyId]);
   const differsFromSaved = !!state && !!savedState && planFields(state) !== planFields(savedState);
@@ -515,11 +507,8 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     <form className="framing-controls" onSubmit={event => { event.preventDefault(); if (canWrite && !save.isPending && !stale) { setNotice(''); setProblem(''); save.mutate(); } }}>
       <fieldset>
         <legend>Target</legend>
-        <label>Find a target<span className="framing-input">
-          <input aria-label="Find a target" value={search} maxLength={128} placeholder="M 31, NGC 7000, Heart Nebula" disabled={!canWrite || lookup.isPending} onChange={event => setSearch(event.target.value)}
-            onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); findTarget(); } }} />
-          <button type="button" disabled={!canWrite || !search.trim() || lookup.isPending} onClick={findTarget}><Search size={16} />{lookup.isPending ? 'Looking up...' : 'Go'}</button>
-        </span><small>{lookup.isError ? message(lookup.error) : lookup.data ? `${lookup.data.name} from ${lookup.data.source}; the target and view moved there.` : 'Names the CDS catalogs know: Messier, NGC, IC, Sharpless, common names.'}</small></label>
+        <TargetSearch label="Find a target" ariaLabel="Find a target" placeholder="M 31, NGC 7000, Heart Nebula" buttonLabel="Go" disabled={!canWrite}
+          hint="The local catalog answers as you type; the last row asks CDS Sesame (Simbad, NED, VizieR)." onPick={pickTarget} />
         <label>Name<input aria-label="Target name" value={state.targetName} maxLength={256} onChange={event => update({ targetName: event.target.value })} /></label>
         <div className="framing-grid">
           <label>RA<span className="framing-input"><input aria-label="Right ascension degrees" type="number" step="any" min={0} max={359.99999} value={state.center.ra_degrees} onChange={event => update(current => ({ center: { ...current.center, ra_degrees: number(event.target.value, current.center.ra_degrees) } }))} /><small>°</small></span><small>{formatRaHours(state.center.ra_degrees)}</small></label>
@@ -610,9 +599,16 @@ function SkyMarks({ marks, view, viewFov, stage, objects, bodies, solar }: { mar
       const position = { ra_degrees: object.ra_degrees, dec_degrees: object.dec_degrees };
       const at = place(position);
       if (!at) return null;
-      const rx = Math.max(4, ((object.major_arcmin ?? 0) / 60 / 2) / scale);
-      const ry = Math.max(4, ((object.minor_arcmin ?? object.major_arcmin ?? 0) / 60 / 2) / scale);
-      const angle = object.position_angle_degrees !== null ? stageAngleAt(view, position, object.position_angle_degrees, viewFov, stage) ?? 0 : 0;
+      // The catalog's major axis lies along the position angle, east of
+      // north, turned onto the stage at this place. Without an angle the
+      // shape is not known, so it is drawn as a circle of the same area
+      // rather than an ellipse lying along the screen.
+      const known = object.position_angle_degrees !== null;
+      const major = ((object.major_arcmin ?? 0) / 60 / 2) / scale;
+      const minor = ((object.minor_arcmin ?? object.major_arcmin ?? 0) / 60 / 2) / scale;
+      const rx = Math.max(4, known ? major : Math.sqrt(major * minor));
+      const ry = Math.max(4, known ? minor : Math.sqrt(major * minor));
+      const angle = known ? stageAngleAt(view, position, object.position_angle_degrees!, viewFov, stage) ?? 0 : 0;
       const label = object.common_name || object.name;
       // An object wider than the stage (Cygnus X is 18° across) would be
       // one arc through everything: it gets a dotted centre mark instead,

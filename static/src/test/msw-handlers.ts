@@ -68,6 +68,9 @@ const idleWbppRun = {
 };
 
 export const handlers = [
+  http.get('/api/director/v1/sky/search', ({ request }) => HttpResponse.json({
+    success: true, data: { query: new URL(request.url).searchParams.get('q') ?? '', local: { available: false, note: 'object catalog is not configured', items: [] }, online: null, online_state: 'skipped', online_cached: false }, error: null,
+  })),
   http.get('/api/director/v1/status', () => HttpResponse.json({ success: true, data: {
     protocol_version: 1, enabled: false, instance_id: null, acquisition_available: false, database_management: true,
   }, error: null })),

@@ -416,11 +416,17 @@ image, with the target's catalog coordinates and rotation already filled in,
 the way N.I.N.A.'s framing assistant does. When the server holds N.I.N.A.'s
 offline sky maps (below), a new framing starts on the offline DSS map and the
 narrowband maps lead the chips, so framing works with no network at all.
-**Find a target** looks a name up
-in the CDS catalogs (Messier, NGC, IC, Sharpless and common names) and moves
-the target and the view there without saving anything; **Undo** beside the
-notice puts the previous target back, and **Back to saved framing** drops
-every change since the last save. The rectangle and the
+**Find a target** offers names as you type: the server's Seiza object
+catalog answers from its name index (designations, common names and
+aliases, one row per object with the kind beside it) with no network at
+all, and the last row of the list asks CDS Sesame (Simbad, NED, VizieR)
+for the name as typed. Enter takes the highlighted row, else an exact local
+match, else goes online. Sesame's answers, hits and misses alike, are kept
+under the cache root (`director/sesame`), hits for ninety days and misses
+for a day, so a name goes online once. A pick moves the target and the view
+there without saving anything; **Undo** beside the notice puts the previous
+target back, and **Back to saved framing** drops every change since the
+last save. The rectangle and the
 mosaic grid are drawn in the browser with the same tangent-plane geometry the
 server applies when it activates, so they follow the pointer at once; a
 fixture shared between the core's tests and the browser's keeps the two in
@@ -726,7 +732,8 @@ layers are marked as such and never stand in for one another.
 | Method | Route | Body or query |
 | --- | --- | --- |
 | GET | `/sky/surveys` | The allowed surveys: `id`, `name`, `hips`, `kind` (`broadband`, `narrowband`, `panorama`), `bandpass`, `attribution`. |
-| GET | `/sky/resolve` | `name`: an object name for CDS Sesame (Simbad, NED, VizieR). Returns the resolved `name`, ICRS `ra_degrees` and `dec_degrees` and the `source`; `404` when no catalog knows the name. A catalog position, not a pointing solution. |
+| GET | `/sky/search` | `q` (2 to 64 characters typed so far), optional `limit` (8 by default, at most 25) and `online` (false by default). Answers `local`: the Seiza object catalog's names starting with `q`, one row per object with `name`, `common_name`, `kind`, ICRS degrees, the `matched` designation or alias and `source`, an exact match first, plus whether the catalog is `available`. With `online=true` it also asks CDS Sesame through the cache: `online` (the resolved name or null), `online_state` (`hit`, `miss`, `failed`, or `skipped` when not asked), `online_note` and `online_cached`. |
+| GET | `/sky/resolve` | `name`: an object name. The local Seiza catalog answers a name it knows in full (source `Seiza object catalog`); otherwise CDS Sesame (Simbad, NED, VizieR), whose answers are cached under `director/sesame` in the cache root, hits for ninety days and misses for a day. Returns the resolved `name`, ICRS `ra_degrees` and `dec_degrees` and the `source`; `404` when no catalog knows the name. A catalog position, not a pointing solution. |
 | GET | `/sky/objects` | `ra` and `dec` in ICRS degrees, `fov` (stage width in degrees), optional `aspect` (width over height, 4:3 by default), `at` (Unix milliseconds, now by default), `limit` (300 by default, at most 1000), `limit_mag` (16 by default), `catalogs` (comma-separated catalog prefixes to keep in `objects`, matched against the letters a designation starts with; every catalog when absent) and `hide` (prefixes to leave out; `PGC,HD` when neither is given, nothing when `catalogs` is, empty to hide nothing). Answers the marks within the stage's reach: `catalogs` and `hidden` (the prefixes applied), `objects` from the Seiza object catalog by prominence after the catalog filter, `minor_bodies` (comets and asteroids from its minor-body catalog at `at`, brightest first, with motion and a tail or motion direction), and `solar_system` (Sun, Moon and planets from the built-in ephemeris). Each catalog layer says whether it is `available` on the server and, if not, why. |
 | GET | `/sky/cutout` | `survey` (an `id` from the list), `ra` and `dec` in ICRS degrees, `fov` (image width in degrees, 0.02 to 180), optional `width` and `height` in pixels (64 to 2048, default 1024) and `rotation` in degrees east of north. A cached image answers `200 image/jpeg`. A miss starts one fetch and answers `202` with `Retry-After: 1`; poll the same URL. A failed fetch answers `502` with the reason for about a minute. |
 
