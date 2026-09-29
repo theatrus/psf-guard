@@ -5,7 +5,7 @@ import { Check, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorContribution, DirectorObjective, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplate } from '../../api/directorTypes';
-import { PURPOSES, bandpassKind, bandpassOptions, coverageGaps, defaultExposure, emptyPlan, formatHours, framesFor, hoursFor, newContribution, newObjective, panelIds, planProblem, rigPanels, rigTotals, templatesFor } from './planModel';
+import { PURPOSES, bandpassKind, bandpassOptions, convertGoal, coverageGaps, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, newContribution, newObjective, panelIds, planProblem, rigPanels, rigTotals, templatesFor } from './planModel';
 import './PlanEditor.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Plan request failed';
@@ -119,7 +119,8 @@ export default function PlanEditor({ projectId }: { projectId: string }) {
             </select></label>
             <label>Goal<span className="plan-goal">
               <input aria-label="Objective goal" type="number" min={0} step="any" value={objective.goal.value} onChange={event => changeObjective(objective.id, { goal: { ...objective.goal, value: number(event.target.value, 0) } as DirectorObjective['goal'] })} />
-              <select aria-label="Objective goal unit" value={objective.goal.kind} onChange={event => changeObjective(objective.id, { goal: { kind: event.target.value as 'hours' | 'frames', value: objective.goal.value } as DirectorObjective['goal'] })}>
+              <select aria-label="Objective goal unit" value={objective.goal.kind} title={`Switching units keeps the same goal, read through ${goalExposure(objective, plan, rigList, templatesByRig)} s exposures`}
+                onChange={event => changeObjective(objective.id, { goal: convertGoal(objective.goal, event.target.value as 'hours' | 'frames', goalExposure(objective, plan, rigList, templatesByRig)) })}>
                 <option value="hours">hours</option><option value="frames">frames per rig</option>
               </select></span></label>
             <label>Priority<input aria-label="Objective priority" type="number" min={0} max={1000} step={1} value={objective.priority} onChange={event => changeObjective(objective.id, { priority: Math.max(0, Math.min(1000, Math.round(number(event.target.value, 1)))) })} /></label>

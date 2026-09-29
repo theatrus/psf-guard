@@ -503,3 +503,223 @@ async fn side_tables_an_earlier_build_made_strict_are_rebuilt_with_their_rows() 
         .is_err());
     let _ = (a.rig, a.objective);
 }
+
+/// A plan adopted from a Target Scheduler project already has that project's
+/// targets: activation takes them over by name, by place, or as the only
+/// target of a single-panel framing, and never writes a twin beside them.
+#[tokio::test]
+async fn activation_takes_over_the_linked_projects_existing_targets_instead_of_doubling_them() {
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    // The source project, as imported: one profile, two hand-made targets,
+    // one named like the first panel and one sitting where the second
+    // panel will land, under a name of its own, plus a stranger.
+    let source = Uuid::new_v4();
+    a.db.execute(
+        "INSERT INTO project (Id, profileId, name, description, state, priority, isMosaic, flatsHandling, guid)
+         VALUES (1, 'profile-a', 'Heart by hand', '', 1, 1, 0, 0, ?1)",
+        [source.to_string()],
+    )
+    .unwrap();
+    // Where the panels land, laid out the way activation lays them out.
+    let places: Vec<(f64, f64)> = psf_guard_director_core::framing::FramingRequest {
+        center: IcrsPosition {
+            ra_degrees: 38.2,
+            dec_degrees: 61.45,
+        },
+        position_angle_degrees: 15.0,
+        panel: PanelSize {
+            width_degrees: 2.0,
+            height_degrees: 1.5,
+        },
+        mosaic: Mosaic {
+            rows: 2,
+            columns: 1,
+            overlap_percent: 20,
+        },
+        overlays: vec![],
+        view: None,
+    }
+    .preview()
+    .unwrap()
+    .panels
+    .iter()
+    .map(|panel| {
+        (
+            panel.footprint.center.ra_degrees / 15.0,
+            panel.footprint.center.dec_degrees,
+        )
+    })
+    .collect();
+    assert_eq!(places.len(), 2);
+    a.db.execute(
+        "INSERT INTO target (name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+         VALUES ('IC 1805 r1c1', 1, 0.0, 0.0, 2, 0.0, 100, 1, NULL)",
+        [],
+    )
+    .unwrap();
+    a.db.execute(
+        "INSERT INTO target (name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+         VALUES ('Lower half', 1, ?1, ?2, 2, 15.0, 100, 1, ?3)",
+        rusqlite::params![places[1].0, places[1].1, Uuid::new_v4().to_string()],
+    )
+    .unwrap();
+    a.db.execute(
+        "INSERT INTO project (Id, profileId, name, description, state, priority, isMosaic, flatsHandling, guid)
+         VALUES (2, 'profile-a', 'Somewhere else', '', 1, 1, 0, 0, ?1)",
+        [Uuid::new_v4().to_string()],
+    )
+    .unwrap();
+    a.db.execute(
+        "INSERT INTO target (name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+         VALUES ('IC 1805 r2c1', 1, 0.0, 0.0, 2, 0.0, 100, 2, ?1)",
+        [Uuid::new_v4().to_string()],
+    )
+    .unwrap();
+    // Link the source project to the plan, as adoption from the database does.
+    let catalog = crate::catalog_identity::read(&a.db).unwrap().unwrap().id;
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        store
+            .link_catalog_project(&psf_guard_director_meta::catalog::ProjectMapping {
+                catalog_id: catalog,
+                source_project_guid: source,
+                source_profile_id: "profile-a".into(),
+                project_id: a.project,
+                rig_id: a.rig,
+            })
+            .unwrap();
+    }
+
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let data = &preview["data"];
+    assert_eq!(actions(data, "project"), ["update"]);
+    // The named target moves to its panel; the one already in place is kept as it is.
+    assert_eq!(actions(data, "target"), ["update", "adopt"], "{data}");
+    let digest = data["preview_digest"].as_str().unwrap().to_owned();
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/apply", a.project),
+        json!({"preview_digest": digest}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(
+        count("SELECT count(*) FROM target WHERE projectid=1"),
+        2,
+        "no twin targets"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM target"),
+        3,
+        "the other project is untouched"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM target WHERE name='Lower half' AND rotation=15.0"),
+        1
+    );
+    assert_eq!(count("SELECT count(*) FROM target WHERE name='IC 1805 r1c1' AND projectid=1 AND rotation=15.0 AND ra>2.0 AND guid IS NOT NULL"), 1, "named target moved and given a GUID");
+    assert_eq!(
+        count("SELECT count(*) FROM target WHERE projectid=2 AND ra=0.0"),
+        1,
+        "the stranger keeps its place"
+    );
+    assert_eq!(count("SELECT count(*) FROM psf_guard_director_target"), 2);
+    assert_eq!(count("SELECT count(*) FROM exposureplan"), 2);
+
+    // Activating again changes nothing.
+    let (_, again) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        actions(&again["data"], "target"),
+        ["unchanged", "unchanged"]
+    );
+}
+
+/// A single-panel plan takes over the project's only target whatever it is called.
+#[tokio::test]
+async fn a_single_panel_plan_takes_over_the_projects_only_target_by_any_name() {
+    let a = activated().await;
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut framing = store.framing_draft(a.project).unwrap().unwrap();
+        framing.mosaic = Mosaic {
+            rows: 1,
+            columns: 1,
+            overlap_percent: 20,
+        };
+        let revision = framing.revision;
+        store.save_framing_draft(&framing, revision).unwrap();
+    }
+    let source = Uuid::new_v4();
+    a.db.execute(
+        "INSERT INTO project (Id, profileId, name, description, state, priority, isMosaic, flatsHandling, guid)
+         VALUES (1, 'profile-a', 'Heart by hand', '', 1, 1, 0, 0, ?1)",
+        [source.to_string()],
+    )
+    .unwrap();
+    a.db.execute(
+        "INSERT INTO target (name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+         VALUES ('My heart', 1, 1.0, 1.0, 2, 0.0, 100, 1, ?1)",
+        [Uuid::new_v4().to_string()],
+    )
+    .unwrap();
+    let catalog = crate::catalog_identity::read(&a.db).unwrap().unwrap().id;
+    a.f.state
+        .director
+        .as_ref()
+        .unwrap()
+        .writer
+        .lock()
+        .unwrap()
+        .link_catalog_project(&psf_guard_director_meta::catalog::ProjectMapping {
+            catalog_id: catalog,
+            source_project_guid: source,
+            source_profile_id: "profile-a".into(),
+            project_id: a.project,
+            rig_id: a.rig,
+        })
+        .unwrap();
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(actions(&preview["data"], "target"), ["update"], "{preview}");
+    let digest = preview["data"]["preview_digest"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/apply", a.project),
+        json!({"preview_digest": digest}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    assert_eq!(count("SELECT count(*) FROM target"), 1);
+    assert_eq!(count("SELECT count(*) FROM target WHERE name='My heart' AND rotation=15.0 AND abs(ra - 38.2/15.0) < 1e-6 AND abs(dec - 61.45) < 1e-6"), 1);
+}

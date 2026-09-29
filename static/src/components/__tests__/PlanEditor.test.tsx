@@ -7,7 +7,7 @@ import { server } from '../../test/msw-server';
 import { AccessContext, useAccess } from '../../auth/access';
 import PlanEditor from '../director/PlanEditor';
 import type { DirectorPlanDraft } from '../../api/directorTypes';
-import { framesFor, rigTotals } from '../director/planModel';
+import { convertGoal, framesFor, rigTotals } from '../director/planModel';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
 const redcat = { rig: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'RedCat', revision: 1 }, catalog_slug: 'redcat', catalog_name: 'RedCat 61', profile: null,
@@ -63,6 +63,15 @@ describe('Plan editor', () => {
     expect(screen.getByLabelText('RedCat 61 exposure for H-alpha')).toHaveValue(300);
     expect(screen.getByTestId('frames-redcat-h_alpha')).toHaveTextContent('72');
     expect(screen.getByText('72 frames, 6.0 h')).toBeInTheDocument();
+    // Switching the unit keeps the goal: 6 h at the rig's 300 s is 72 frames, and back again 6 h.
+    fireEvent.change(screen.getByLabelText('Objective goal unit'), { target: { value: 'frames' } });
+    expect(screen.getByLabelText('Objective goal')).toHaveValue(72);
+    expect(screen.getByTestId('frames-redcat-h_alpha')).toHaveTextContent('72');
+    fireEvent.change(screen.getByLabelText('Objective goal unit'), { target: { value: 'hours' } });
+    expect(screen.getByLabelText('Objective goal')).toHaveValue(6);
+    expect(convertGoal({ kind: 'hours', value: 1 }, 'frames', 300)).toEqual({ kind: 'frames', value: 12 });
+    expect(convertGoal({ kind: 'frames', value: 10 }, 'hours', 300)).toEqual({ kind: 'hours', value: 0.83 });
+    expect(convertGoal({ kind: 'hours', value: 2 }, 'hours', 300)).toEqual({ kind: 'hours', value: 2 });
     // A template without a default falls back to the rig's narrowband default.
     fireEvent.change(screen.getByLabelText('RedCat 61 template for H-alpha'), { target: { value: '2' } });
     expect(screen.getByLabelText('RedCat 61 exposure for H-alpha')).toHaveValue(300);

@@ -487,7 +487,9 @@ exposure template whose filter resolves to that bandpass, and starts the
 exposure length from the template's default, or from the rig's optics and sky
 when the template has none. Hours become frames per rig through that exposure,
 so a fast rig under bright skies shoots more short frames than a slow one under
-dark skies for the same goal. A rig with no template for a bandpass sits that
+dark skies for the same goal. Switching a goal between hours and frames keeps
+the goal: the number is converted through the exposure of the first rig
+shooting the objective, or the first rig's default for that band. A rig with no template for a bandpass sits that
 one out and says so. When the framing is a mosaic, each rig's section has a
 panel chooser: every panel by default, or the panels that rig alone should
 shoot, so a wide rig can take the whole field while a long-focus rig takes
@@ -520,7 +522,12 @@ rig's database, the same rows Target Scheduler and the Director plugin read:
   the Active state, marked as a mosaic when there is more than one panel, under
   the profile that owns the database's existing projects;
 - one target per panel the rig owns, named after the target with the panel
-  id appended for mosaics, at the panel center with the plan's camera angle;
+  id appended for mosaics, at the panel center with the plan's camera angle.
+  A target the project already has (imported from Target Scheduler, or made
+  by hand) is taken over rather than doubled: the one with the panel's name,
+  else the one at the panel's place, else, for a single-panel framing, the
+  project's only target not yet owned by a panel. The preview lists these as
+  `adopt` when nothing about them changes and `update` when they move;
 - one exposure plan per rig objective and panel, bound to the chosen template
   (or one matching its settings, created if needed), with `desired` set to the
   frames that objective needs at that rig's exposure length.

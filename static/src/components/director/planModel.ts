@@ -67,6 +67,29 @@ export function hoursFor(frames: number, exposureSeconds: number): number {
   return (frames * exposureSeconds) / 3600;
 }
 
+/** The exposure length a goal is read through when it changes unit: the
+ *  first rig already shooting the objective, else the first rig's default
+ *  for the band, else a plain 300 s narrowband or 120 s broadband. */
+export function goalExposure(objective: DirectorObjective, plan: DirectorPlanDraft, rigs: DirectorRigProfileSummary[], templatesByRig: Record<string, DirectorTemplate[]>): number {
+  const shooting = plan.contributions.find(c => c.objective_id === objective.id && c.enabled && c.exposure_seconds > 0);
+  if (shooting) return shooting.exposure_seconds;
+  const kind = bandpassKind(objective.bandpass_id, templatesByRig);
+  const rig = rigs[0];
+  if (rig) {
+    const exposure = defaultExposure(rig, kind, templatesFor(objective.bandpass_id, templatesByRig[rig.rig.id] ?? [])[0] ?? null);
+    if (exposure > 0) return exposure;
+  }
+  return kind === 'narrowband' ? 300 : 120;
+}
+
+/** The same goal in the other unit, so switching units keeps the meaning:
+ *  6 h at 300 s is 72 frames, and 72 frames at 300 s is 6 h. */
+export function convertGoal(goal: DirectorGoal, kind: DirectorGoal['kind'], exposureSeconds: number): DirectorGoal {
+  if (goal.kind === kind) return goal;
+  if (kind === 'frames') return { kind, value: framesFor(goal, exposureSeconds) ?? 0 };
+  return { kind, value: Math.round(hoursFor(goal.value, exposureSeconds) * 100) / 100 };
+}
+
 export function formatHours(hours: number): string {
   if (hours < 1) return `${Math.round(hours * 60)} min`;
   return `${hours.toFixed(hours >= 10 ? 0 : 1)} h`;
