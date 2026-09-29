@@ -121,37 +121,93 @@ fn rigs_framed_on_their_own_are_kept_checked_and_laid_out_over_the_shared_target
         rig_id: long,
         center: None,
         position_angle_degrees: Some(90.0),
-        mosaic: Mosaic { rows: 1, columns: 3, overlap_percent: 10 },
+        mosaic: Mosaic {
+            rows: 1,
+            columns: 3,
+            overlap_percent: 10,
+        },
         panel: None,
     }];
     let saved = store.save_framing_draft(&own, 0).unwrap();
     assert_eq!(saved.rig_framings.len(), 1);
     // The shared framing for a rig not listed; the rig's own for the one that is,
     // its field standing in for the size, and nothing when neither is known.
-    let field = PanelSize { width_degrees: 0.5, height_degrees: 0.4 };
-    assert_eq!(saved.layout_for(wide, Some(field)), Some(RigLayout { center: own.center, position_angle_degrees: 35.0, panel: own.panel.unwrap(), mosaic: own.mosaic, own: false }));
-    assert_eq!(saved.layout_for(long, Some(field)), Some(RigLayout { center: own.center, position_angle_degrees: 90.0, panel: field, mosaic: Mosaic { rows: 1, columns: 3, overlap_percent: 10 }, own: true }));
+    let field = PanelSize {
+        width_degrees: 0.5,
+        height_degrees: 0.4,
+    };
+    assert_eq!(
+        saved.layout_for(wide, Some(field)),
+        Some(RigLayout {
+            center: own.center,
+            position_angle_degrees: 35.0,
+            panel: own.panel.unwrap(),
+            mosaic: own.mosaic,
+            own: false
+        })
+    );
+    assert_eq!(
+        saved.layout_for(long, Some(field)),
+        Some(RigLayout {
+            center: own.center,
+            position_angle_degrees: 90.0,
+            panel: field,
+            mosaic: Mosaic {
+                rows: 1,
+                columns: 3,
+                overlap_percent: 10
+            },
+            own: true
+        })
+    );
     // A rig's own center, once set, replaces the shared one for that rig alone.
     let mut moved = saved.clone();
-    moved.rig_framings[0].center = Some(IcrsPosition { ra_degrees: 12.0, dec_degrees: 40.0 });
-    assert_eq!(moved.layout_for(long, Some(field)).unwrap().center, IcrsPosition { ra_degrees: 12.0, dec_degrees: 40.0 });
-    assert_eq!(moved.layout_for(wide, Some(field)).unwrap().center, own.center);
+    moved.rig_framings[0].center = Some(IcrsPosition {
+        ra_degrees: 12.0,
+        dec_degrees: 40.0,
+    });
+    assert_eq!(
+        moved.layout_for(long, Some(field)).unwrap().center,
+        IcrsPosition {
+            ra_degrees: 12.0,
+            dec_degrees: 40.0
+        }
+    );
+    assert_eq!(
+        moved.layout_for(wide, Some(field)).unwrap().center,
+        own.center
+    );
     assert_eq!(saved.layout_for(long, None), None);
     let mut sized = saved.clone();
-    sized.rig_framings[0].panel = Some(PanelSize { width_degrees: 1.0, height_degrees: 1.0 });
+    sized.rig_framings[0].panel = Some(PanelSize {
+        width_degrees: 1.0,
+        height_degrees: 1.0,
+    });
     sized.rig_framings[0].position_angle_degrees = None;
     let layout = sized.layout_for(long, None).unwrap();
-    assert_eq!((layout.position_angle_degrees, layout.panel.width_degrees), (35.0, 1.0));
+    assert_eq!(
+        (layout.position_angle_degrees, layout.panel.width_degrees),
+        (35.0, 1.0)
+    );
     // An unknown rig, a rig listed twice, and a bad grid are refused.
     let mut stranger = saved.clone();
     stranger.rig_framings[0].rig_id = Uuid::new_v4();
-    assert!(matches!(store.save_framing_draft(&stranger, 1), Err(Error::NotFound)));
+    assert!(matches!(
+        store.save_framing_draft(&stranger, 1),
+        Err(Error::NotFound)
+    ));
     let mut twice = saved.clone();
     twice.rig_framings.push(twice.rig_framings[0].clone());
-    assert!(matches!(store.save_framing_draft(&twice, 1), Err(Error::InvalidInput)));
+    assert!(matches!(
+        store.save_framing_draft(&twice, 1),
+        Err(Error::InvalidInput)
+    ));
     let mut bad = saved.clone();
     bad.rig_framings[0].mosaic.rows = 0;
-    assert!(matches!(store.save_framing_draft(&bad, 1), Err(Error::InvalidInput)));
+    assert!(matches!(
+        store.save_framing_draft(&bad, 1),
+        Err(Error::InvalidInput)
+    ));
     // A draft saved before rigs could be framed on their own still reads.
     let stored = store.framing_draft(project).unwrap().unwrap();
     assert_eq!(stored.rig_framings.len(), 1);
