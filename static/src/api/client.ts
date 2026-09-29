@@ -4,7 +4,7 @@ import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorFeasibility, DirectorMosaicPreview, DirectorResolvedName,
   DirectorSkyMarks,
-  DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch} from './directorTypes';
+  DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate} from './directorTypes';
 import type {
   ProjectProcessingSettings,
   StackColorInputSources,
@@ -345,6 +345,26 @@ export const apiClient = {
     const { data } = await api.get<ApiResponse<DirectorTemplateList>>(`/director/v1/catalogs/${encodeURIComponent(slug)}/templates`);
     if (!data.data) throw new Error(data.error || 'Failed to load exposure templates');
     return data.data;
+  },
+
+  getDirectorTemplateLibrary: async (): Promise<DirectorLibraryTemplate[]> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorLibraryTemplate[]>>('/director/v1/templates');
+    if (!data.data) throw new Error(data.error || 'Failed to load the template library');
+    return data.data;
+  },
+
+  saveDirectorLibraryTemplate: async (template: Omit<DirectorLibraryTemplate, 'bandpass'>): Promise<DirectorLibraryTemplate> => {
+    const api = await getApi();
+    const { data } = await api.put<ApiResponse<DirectorLibraryTemplate>>(`/director/v1/templates/${encodeURIComponent(template.id)}`, template);
+    if (!data.data) throw new Error(data.error || 'Failed to save the template');
+    return data.data;
+  },
+
+  deleteDirectorLibraryTemplate: async (id: string, revision: number): Promise<void> => {
+    const api = await getApi();
+    const { data } = await api.delete<ApiResponse<{ deleted: boolean }>>(`/director/v1/templates/${encodeURIComponent(id)}`, { params: { revision } });
+    if (!data.data) throw new Error(data.error || 'Failed to delete the template');
   },
 
   getDirectorPlan: async (projectId: string): Promise<DirectorPlanView> => {

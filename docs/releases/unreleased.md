@@ -181,6 +181,12 @@
   it scrolls. The drag mode (rectangle or sky), the sky turn and the layer
   switches (grid, constellations, deep-sky marks, comets and asteroids,
   Sun, Moon and planets) are small buttons at the top of the stage.
+- Planning has a shared **Exposure templates** library. A plan can bind a
+  rig to a library template when the rig's database has no template for the
+  band, so a second or third database joins a plan without templates of its
+  own; activation writes the template into that database under the
+  library's identity. Copy a rig's templates into the library in one click,
+  edit rows in place, and remove what is no longer wanted.
 - The visibility chart arrives about ten times sooner (a week for two rigs
   now takes under a tenth of a second on the server, with the same numbers)
   and asks a third of a second after the target stops moving instead of

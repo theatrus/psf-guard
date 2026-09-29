@@ -16,6 +16,7 @@ pub mod plan;
 pub mod profile;
 pub mod project;
 mod storage;
+pub mod templates;
 
 #[derive(Debug)]
 pub enum Error {

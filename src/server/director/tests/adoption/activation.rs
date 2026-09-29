@@ -723,3 +723,61 @@ async fn a_single_panel_plan_takes_over_the_projects_only_target_by_any_name() {
     assert_eq!(count("SELECT count(*) FROM target"), 1);
     assert_eq!(count("SELECT count(*) FROM target WHERE name='My heart' AND rotation=15.0 AND abs(ra - 38.2/15.0) < 1e-6 AND abs(dec - 61.45) < 1e-6"), 1);
 }
+
+/// A contribution bound to a library template, one the rig database has never
+/// seen, gets that template written into the database under the library's own
+/// GUID, and a second activation finds it again instead of making another.
+#[tokio::test]
+async fn a_library_template_is_written_into_the_rig_database_under_its_own_guid() {
+    let a = activated().await;
+    let library = Uuid::new_v4();
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut plan = store.plan_draft(a.project).unwrap().unwrap();
+        plan.contributions[0].template = TemplateChoice {
+            template_guid: Some(library),
+            template_id: None,
+            name: "Ha 600 library".into(),
+            filter_name: "Ha".into(),
+            gain: Some(200),
+            offset: Some(50),
+            bin: Some(2),
+            readout_mode: None,
+        };
+        plan.contributions[0].exposure_seconds = 600.0;
+        let revision = plan.revision;
+        store.save_plan_draft(&plan, revision).unwrap();
+    }
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    for _ in 0..2 {
+        let (status, preview) = call(
+            &a.f.app,
+            "POST",
+            &format!("/projects/{}/activation/preview", a.project),
+            json!({}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{preview}");
+        let digest = preview["data"]["preview_digest"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let (status, applied) = call(
+            &a.f.app,
+            "POST",
+            &format!("/projects/{}/activation/apply", a.project),
+            json!({"preview_digest": digest}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{applied}");
+        assert_eq!(
+            count("SELECT count(*) FROM exposuretemplate"),
+            2,
+            "the rig's own template plus the library's, once"
+        );
+        assert_eq!(count(&format!("SELECT count(*) FROM exposuretemplate WHERE guid='{library}' AND name='Ha 600 library' AND filtername='Ha' AND gain=200 AND offset=50 AND bin=2 AND profileId='profile-a'")), 1);
+        assert_eq!(count(&format!("SELECT count(*) FROM exposureplan WHERE exposure=600.0 AND exposureTemplateId=(SELECT Id FROM exposuretemplate WHERE guid='{library}')")), 2);
+    }
+}
