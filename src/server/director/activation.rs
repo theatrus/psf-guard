@@ -271,26 +271,32 @@ async fn execute(
         let framing = store
             .framing_draft(id)?
             .ok_or(ActivationError::NotReady("Save a framing first."))?;
-        let panel = framing.panel.ok_or(ActivationError::NotReady(
-            "Choose a panel rig or enter a panel size in Framing first.",
-        ))?;
+        if framing.panel.is_none() && framing.rig_framings.is_empty() {
+            return Err(ActivationError::NotReady(
+                "Choose a panel rig or enter a panel size in Framing first.",
+            ));
+        }
         let plan = store
             .plan_draft(id)?
             .filter(|plan| !plan.objectives.is_empty())
             .ok_or(ActivationError::NotReady(
                 "Save a plan with at least one objective first.",
             ))?;
-        let panels = FramingRequest {
-            center: framing.center,
-            position_angle_degrees: framing.position_angle_degrees,
-            panel,
-            mosaic: framing.mosaic,
-            overlays: vec![],
-            view: None,
-        }
-        .preview()
-        .map_err(|_| Error::Invalid)?
-        .panels;
+        // The shared framing's panels; a rig framed on its own has its own.
+        let panels = match framing.panel {
+            Some(panel) => FramingRequest {
+                center: framing.center,
+                position_angle_degrees: framing.position_angle_degrees,
+                panel,
+                mosaic: framing.mosaic,
+                overlays: vec![],
+                view: None,
+            }
+            .preview()
+            .map_err(|_| Error::Invalid)?
+            .panels,
+            None => vec![],
+        };
         let mut by_rig: BTreeMap<Uuid, Vec<&Contribution>> = BTreeMap::new();
         for contribution in plan.contributions.iter().filter(|c| c.enabled) {
             by_rig.entry(contribution.rig_id).or_default().push(contribution);
@@ -300,28 +306,36 @@ async fn execute(
                 "Tick at least one rig in the plan first.",
             ));
         }
-        // Every objective should have some rig on every panel; say where not.
+        // Every objective should have some rig on every shared panel; say
+        // where not. A rig framed on its own covers its own grid.
         let mut coverage_warnings = Vec::new();
+        let on_shared = |c: &&&Contribution| framing.rig_framing(c.rig_id).is_none();
         for objective in &plan.objectives {
             let uncovered: Vec<&str> = panels
                 .iter()
                 .map(|p| p.footprint.id.as_str())
                 .filter(|panel| {
-                    !by_rig.values().flatten().any(|c| {
+                    !by_rig.values().flatten().filter(on_shared).any(|c| {
                         c.objective_id == objective.id
                             && (c.panel_ids.is_empty() || c.panel_ids.iter().any(|id| id == panel))
                     })
                 })
                 .collect();
-            if !uncovered.is_empty() && uncovered.len() < panels.len() {
+            let anywhere = by_rig
+                .values()
+                .flatten()
+                .any(|c| c.objective_id == objective.id);
+            if !anywhere {
+                coverage_warnings.push(format!("No rig shoots {} on any panel.", objective.bandpass_id));
+            } else if !uncovered.is_empty() && uncovered.len() < panels.len() {
                 coverage_warnings.push(format!(
                     "No rig shoots {} on panel{} {}.",
                     objective.bandpass_id,
                     if uncovered.len() == 1 { "" } else { "s" },
                     uncovered.join(", ")
                 ));
-            } else if uncovered.len() == panels.len() {
-                coverage_warnings.push(format!("No rig shoots {} on any panel.", objective.bandpass_id));
+            } else if !panels.is_empty() && uncovered.len() == panels.len() && !by_rig.values().flatten().filter(on_shared).any(|c| c.objective_id == objective.id) && by_rig.keys().any(|rig| framing.rig_framing(*rig).is_none()) {
+                coverage_warnings.push(format!("No rig on the shared framing shoots {}.", objective.bandpass_id));
             }
         }
         // Which registered database each participating rig is bound to. A
@@ -365,6 +379,46 @@ async fn execute(
             };
             let mut warnings = Vec::new();
             let profile = store.rig_profile(*rig_id)?;
+            // This rig's own layout, or the shared one; its field stands in
+            // for a panel size its own framing leaves unset.
+            let field = profile
+                .as_ref()
+                .and_then(|p| p.optics.as_ref())
+                .and_then(|optics| optics.value.field_of_view().ok())
+                .map(|fov| psf_guard_director_core::framing::PanelSize {
+                    width_degrees: fov.width_degrees,
+                    height_degrees: fov.height_degrees,
+                });
+            let Some(layout) = framing.layout_for(*rig_id, field) else {
+                reports.push(RigReport {
+                    rig,
+                    catalog_slug: Some(catalog.context.id.clone()),
+                    catalog_name: catalog.context.name.clone(),
+                    profile_id: None,
+                    changes: vec![],
+                    warnings: vec![
+                        "No panel size for this rig: give its framing a size in Framing, or set its optics under Rigs, Setup.".into(),
+                    ],
+                    applied: false,
+                    push: None,
+                });
+                continue;
+            };
+            let rig_panels = if layout.own {
+                FramingRequest {
+                    center: framing.center,
+                    position_angle_degrees: layout.position_angle_degrees,
+                    panel: layout.panel,
+                    mosaic: layout.mosaic,
+                    overlays: vec![],
+                    view: None,
+                }
+                .preview()
+                .map_err(|_| Error::Invalid)?
+                .panels
+            } else {
+                panels.clone()
+            };
             if profile.as_ref().is_none_or(|p| p.configuration.is_none()) {
                 warnings.push("The N.I.N.A. plugin has not reported this rig's camera yet; the Target Scheduler plugin can still run these rows.".into());
             }
@@ -404,7 +458,8 @@ async fn execute(
                         project: &project,
                         framing: &framing,
                         plan: &plan,
-                        panels: &panels,
+                        panels: &rig_panels,
+                        position_angle_degrees: layout.position_angle_degrees,
                         contributions,
                         rig_id: *rig_id,
                         catalog: catalog.identity,
@@ -698,7 +753,9 @@ struct Inputs<'a> {
     project: &'a NamedIdentity,
     framing: &'a FramingDraft,
     plan: &'a PlanDraft,
+    /// This rig's panels, from its own framing or the shared one.
     panels: &'a [Panel],
+    position_angle_degrees: f64,
     contributions: &'a [&'a Contribution],
     rig_id: Uuid,
     catalog: CatalogIdentity,
@@ -880,7 +937,7 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
         };
         let ra_hours = panel.footprint.center.ra_degrees / 15.0;
         let dec = panel.footprint.center.dec_degrees;
-        let rotation = inputs.framing.position_angle_degrees;
+        let rotation = inputs.position_angle_degrees;
         let detail = format!(
             "{} {}, angle {rotation:.1}°",
             format_ra(ra_hours),

@@ -1,4 +1,4 @@
-import type { DirectorFootprint, DirectorFramingDraft, DirectorFramingPreview, DirectorFramingRequest, DirectorMosaic, DirectorOffset, DirectorPanelSize, DirectorRigProfileSummary, DirectorSkyPosition, DirectorSurvey } from '../../api/directorTypes';
+import type { DirectorFootprint, DirectorFramingDraft, DirectorFramingPreview, DirectorFramingRequest, DirectorMosaic, DirectorOffset, DirectorPanelSize, DirectorRigProfileSummary, DirectorSkyPosition, DirectorSurvey, DirectorRigFraming} from '../../api/directorTypes';
 import type { SkyPreview } from '../../api/types';
 import { formatDecShort, formatRaShort, galacticBandQuads, tanPixelToSky } from '../../utils/skyProjection';
 import { BRIGHT_STARS, CONSTELLATION_LINES, CONSTELLATION_NAMES } from '../../data/skyBackdrop';
@@ -36,13 +36,15 @@ export interface FramingState {
   surveyId: string;
   viewCenter: DirectorSkyPosition;
   viewFov: number;
+  /** Rigs framed on their own; every other rig shoots the shared framing. */
+  rigFramings: DirectorRigFraming[];
 }
 
 export function stateFromDraft(draft: DirectorFramingDraft): FramingState {
   return {
     targetName: draft.target_name, center: draft.center, positionAngle: draft.position_angle_degrees,
     mosaic: draft.mosaic, panelRigId: draft.panel_rig_id, panel: draft.panel, shownRigIds: draft.shown_rig_ids,
-    surveyId: draft.survey_id, viewCenter: draft.center, viewFov: draft.view_fov_degrees,
+    surveyId: draft.survey_id, viewCenter: draft.center, viewFov: draft.view_fov_degrees, rigFramings: draft.rig_framings ?? [],
   };
 }
 
@@ -50,7 +52,7 @@ export function stateFromSeed(seed: FramingSeed, defaultSurvey: string): Framing
   return {
     targetName: seed.name, center: seed.center, positionAngle: seed.position_angle_degrees,
     mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panelRigId: null, panel: null, shownRigIds: [],
-    surveyId: defaultSurvey, viewCenter: seed.center, viewFov: 4,
+    surveyId: defaultSurvey, viewCenter: seed.center, viewFov: 4, rigFramings: [],
   };
 }
 
@@ -59,8 +61,29 @@ export function draftFromState(state: FramingState, projectId: string, revision:
     project_id: projectId, revision, target_name: state.targetName.trim(), center: state.center,
     position_angle_degrees: state.positionAngle, mosaic: state.mosaic, panel_rig_id: state.panelRigId,
     panel: state.panel, shown_rig_ids: state.shownRigIds, survey_id: state.surveyId,
-    view_fov_degrees: state.viewFov, updated_at_ms: 0,
+    view_fov_degrees: state.viewFov, updated_at_ms: 0, rig_framings: state.rigFramings,
   };
+}
+
+/** What one rig shoots, the way the server lays it out: its own framing when
+ *  it has one (its field standing in for a size not set by hand), else the
+ *  shared framing. Null when no panel size is known. */
+export function rigLayout(state: FramingState, rigId: string, rigs: DirectorRigProfileSummary[]): { positionAngle: number; panel: DirectorPanelSize; mosaic: DirectorMosaic; own: boolean } | null {
+  const own = state.rigFramings.find(entry => entry.rig_id === rigId);
+  if (own) {
+    const panel = own.panel ?? panelForRig(rigs, rigId);
+    return panel ? { positionAngle: own.position_angle_degrees ?? state.positionAngle, panel, mosaic: own.mosaic, own: true } : null;
+  }
+  return state.panel ? { positionAngle: state.positionAngle, panel: state.panel, mosaic: state.mosaic, own: false } : null;
+}
+
+/** The geometry of every rig framed on its own, for the stage. */
+export function rigGeometries(state: FramingState, rigs: DirectorRigProfileSummary[]): Array<{ rigId: string; geometry: DirectorFramingPreview; layout: NonNullable<ReturnType<typeof rigLayout>> }> {
+  return state.rigFramings.flatMap(own => {
+    const layout = rigLayout(state, own.rig_id, rigs);
+    if (!layout) return [];
+    return [{ rigId: own.rig_id, layout, geometry: framingGeometry({ center: state.center, position_angle_degrees: layout.positionAngle, panel: layout.panel, mosaic: layout.mosaic, overlays: [], view: { center: state.viewCenter, rotation_degrees: 0 } }) }];
+  });
 }
 
 /** The panel a rig would shoot: its field, or nothing until its profile has optics. */
@@ -74,7 +97,8 @@ export function previewRequest(state: FramingState, rigs: DirectorRigProfileSumm
   if (!state.panel) return null;
   return {
     center: state.center, position_angle_degrees: state.positionAngle, panel: state.panel, mosaic: state.mosaic,
-    overlays: state.shownRigIds.flatMap(id => {
+    // A rig framed on its own is drawn as its own grid, not as an overlay.
+    overlays: state.shownRigIds.filter(id => !state.rigFramings.some(own => own.rig_id === id)).flatMap(id => {
       const size = panelForRig(rigs, id);
       return size ? [{ id, size, position_angle_degrees: state.positionAngle }] : [];
     }),

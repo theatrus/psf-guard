@@ -117,11 +117,17 @@ pub(super) async fn evaluate(
             .unwrap_or_else(|| "Target".into());
         let plan = store.plan_draft(id)?;
         // A contribution covers every panel unless it names some; the rig
-        // shoots each panel's frames, so the hours owed scale with panels.
-        let panels = framing
-            .as_ref()
-            .map(|f| (f.mosaic.rows * f.mosaic.columns).max(1))
-            .unwrap_or(1);
+        // shoots each panel's frames, so the hours owed scale with panels,
+        // its own grid when it is framed on its own.
+        let panels_for = |rig_id: Uuid| {
+            framing
+                .as_ref()
+                .map(|f| {
+                    let mosaic = f.rig_framing(rig_id).map_or(f.mosaic, |own| own.mosaic);
+                    (mosaic.rows * mosaic.columns).max(1)
+                })
+                .unwrap_or(1)
+        };
         let start_ms = request.start_ms.unwrap_or_else(|| {
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -218,7 +224,7 @@ pub(super) async fn evaluate(
                         Goal::Frames { value } => f64::from(value),
                     };
                     let panel_count = if c.panel_ids.is_empty() {
-                        panels
+                        panels_for(rig_id)
                     } else {
                         c.panel_ids.len() as u32
                     };

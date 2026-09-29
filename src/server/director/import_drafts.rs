@@ -275,6 +275,7 @@ pub(super) fn import_from_catalog(
             survey_id: DEFAULT_SURVEY.to_owned(),
             view_fov_degrees: view_fov,
             updated_at_ms: now_ms,
+            rig_framings: vec![],
         };
         store.save_framing_draft(&draft, 0)?;
         imported.framing = true;

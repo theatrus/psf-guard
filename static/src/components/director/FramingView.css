@@ -20,6 +20,15 @@
 .framing-panel polygon { fill: rgba(80, 180, 255, 0.12); stroke: #5ab4ff; stroke-width: 2.5; vector-effect: non-scaling-stroke; }
 .framing-panel text { fill: #d8ecff; font-size: 22px; paint-order: stroke; stroke: rgba(0, 0, 0, 0.7); stroke-width: 4px; }
 .framing-overlay { fill: none; stroke: #ffc56b; stroke-width: 2; stroke-dasharray: 10 8; vector-effect: non-scaling-stroke; }
+/* Rigs framed on their own: each grid in a colour of its own, the one being edited solid. */
+.framing-rig-panels polygon { fill: rgba(255, 197, 107, 0.08); stroke: #ffc56b; stroke-width: 2; stroke-dasharray: 6 5; vector-effect: non-scaling-stroke; }
+.framing-rig-panels text { fill: #ffe3b3; font-size: 18px; paint-order: stroke; stroke: rgba(0, 0, 0, 0.7); stroke-width: 4px; }
+.framing-rig-1 polygon { stroke: #7be495; fill: rgba(123, 228, 149, 0.08); } .framing-rig-1 text { fill: #d2f7dc; }
+.framing-rig-2 polygon { stroke: #ff8ad4; fill: rgba(255, 138, 212, 0.08); } .framing-rig-2 text { fill: #ffd6ef; }
+.framing-rig-3 polygon { stroke: #c9a7ff; fill: rgba(201, 167, 255, 0.08); } .framing-rig-3 text { fill: #ebe0ff; }
+.framing-rig-panels.is-editing polygon { stroke-dasharray: none; stroke-width: 2.5; }
+.framing-own { border-left: 3px solid var(--color-border-tertiary); padding-left: 10px; margin: 6px 0; }
+.framing-own .framing-check { display: inline-flex; margin-left: 8px; padding: 0; }
 .framing-target line { stroke: #ff6b6b; stroke-width: 2.5; vector-effect: non-scaling-stroke; }
 /* Tools over the sky: what a drag moves, then the layers, as one row of
    small buttons; the compass keeps the top-right corner. */

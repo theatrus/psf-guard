@@ -29,6 +29,7 @@ fn draft(project: Uuid) -> FramingDraft {
         survey_id: "dss2_color".into(),
         view_fov_degrees: 6.0,
         updated_at_ms: 1_000,
+        rig_framings: vec![],
     }
 }
 
@@ -105,4 +106,47 @@ fn bad_geometry_and_survey_ids_are_refused() {
     let mut no_panel = draft(project.id);
     no_panel.panel = None;
     assert_eq!(store.save_framing_draft(&no_panel, 0).unwrap().revision, 1);
+}
+
+#[test]
+fn rigs_framed_on_their_own_are_kept_checked_and_laid_out_over_the_shared_target() {
+    use psf_guard_director_meta::framing::{RigFraming, RigLayout};
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let project = store.create_project(Uuid::new_v4(), "M31").unwrap().id;
+    let wide = store.create_rig(Uuid::new_v4(), "RedCat").unwrap().id;
+    let long = store.create_rig(Uuid::new_v4(), "C925").unwrap().id;
+    let mut own = draft(project);
+    own.rig_framings = vec![RigFraming {
+        rig_id: long,
+        position_angle_degrees: Some(90.0),
+        mosaic: Mosaic { rows: 1, columns: 3, overlap_percent: 10 },
+        panel: None,
+    }];
+    let saved = store.save_framing_draft(&own, 0).unwrap();
+    assert_eq!(saved.rig_framings.len(), 1);
+    // The shared framing for a rig not listed; the rig's own for the one that is,
+    // its field standing in for the size, and nothing when neither is known.
+    let field = PanelSize { width_degrees: 0.5, height_degrees: 0.4 };
+    assert_eq!(saved.layout_for(wide, Some(field)), Some(RigLayout { position_angle_degrees: 35.0, panel: own.panel.unwrap(), mosaic: own.mosaic, own: false }));
+    assert_eq!(saved.layout_for(long, Some(field)), Some(RigLayout { position_angle_degrees: 90.0, panel: field, mosaic: Mosaic { rows: 1, columns: 3, overlap_percent: 10 }, own: true }));
+    assert_eq!(saved.layout_for(long, None), None);
+    let mut sized = saved.clone();
+    sized.rig_framings[0].panel = Some(PanelSize { width_degrees: 1.0, height_degrees: 1.0 });
+    sized.rig_framings[0].position_angle_degrees = None;
+    let layout = sized.layout_for(long, None).unwrap();
+    assert_eq!((layout.position_angle_degrees, layout.panel.width_degrees), (35.0, 1.0));
+    // An unknown rig, a rig listed twice, and a bad grid are refused.
+    let mut stranger = saved.clone();
+    stranger.rig_framings[0].rig_id = Uuid::new_v4();
+    assert!(matches!(store.save_framing_draft(&stranger, 1), Err(Error::NotFound)));
+    let mut twice = saved.clone();
+    twice.rig_framings.push(twice.rig_framings[0].clone());
+    assert!(matches!(store.save_framing_draft(&twice, 1), Err(Error::InvalidInput)));
+    let mut bad = saved.clone();
+    bad.rig_framings[0].mosaic.rows = 0;
+    assert!(matches!(store.save_framing_draft(&bad, 1), Err(Error::InvalidInput)));
+    // A draft saved before rigs could be framed on their own still reads.
+    let stored = store.framing_draft(project).unwrap().unwrap();
+    assert_eq!(stored.rig_framings.len(), 1);
 }
