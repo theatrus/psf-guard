@@ -393,10 +393,22 @@ mod observer_tests {
             valid_until_ms: 1_800_000_000_000,
         };
         let bodies = [
-            IcrsPosition { ra_degrees: 38.2, dec_degrees: 61.45 },
-            IcrsPosition { ra_degrees: 314.75, dec_degrees: 44.37 },
-            IcrsPosition { ra_degrees: 0.0, dec_degrees: -89.0 },
-            IcrsPosition { ra_degrees: 359.9, dec_degrees: 5.0 },
+            IcrsPosition {
+                ra_degrees: 38.2,
+                dec_degrees: 61.45,
+            },
+            IcrsPosition {
+                ra_degrees: 314.75,
+                dec_degrees: 44.37,
+            },
+            IcrsPosition {
+                ra_degrees: 0.0,
+                dec_degrees: -89.0,
+            },
+            IcrsPosition {
+                ra_degrees: 359.9,
+                dec_degrees: 5.0,
+            },
         ];
         for t in [1_759_000_000_000_u64, 1_759_000_300_000, 1_762_345_678_901] {
             let mut prepared = Observer::at(site, orientation, t).unwrap();

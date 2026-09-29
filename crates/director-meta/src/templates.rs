@@ -42,8 +42,12 @@ pub(crate) fn validate_template(template: &ExposureTemplate) -> Result<(), Error
     valid_id(template.id)?;
     if !text_ok(&template.name, 256)
         || !text_ok(&template.filter_name, 128)
-        || template.gain.is_some_and(|value| !(0..=100_000).contains(&value))
-        || template.offset.is_some_and(|value| !(0..=100_000).contains(&value))
+        || template
+            .gain
+            .is_some_and(|value| !(0..=100_000).contains(&value))
+        || template
+            .offset
+            .is_some_and(|value| !(0..=100_000).contains(&value))
         || template.bin.is_some_and(|value| !(1..=8).contains(&value))
         || template
             .readout_mode
@@ -99,8 +103,9 @@ impl MetaStore {
             return Err(Error::Conflict);
         }
         if stored.is_none() {
-            let count: i64 =
-                tx.query_row("SELECT count(*) FROM exposure_template", [], |row| row.get(0))?;
+            let count: i64 = tx.query_row("SELECT count(*) FROM exposure_template", [], |row| {
+                row.get(0)
+            })?;
             if count >= MAX_TEMPLATES {
                 return Err(Error::InvalidInput);
             }
