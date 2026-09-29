@@ -18,7 +18,7 @@ const template = (id: number, name: string, filter: string, bandpass: string, ki
 
 const libraryHa = { id: '11111111-1111-4111-8111-111111111111', revision: 1, name: 'Ha 600 shared', filter_name: 'Ha', gain: 200, offset: 50, bin: 2, readout_mode: null, default_exposure_seconds: 600, updated_at_ms: 1, bandpass: { id: 'h_alpha', name: 'H-alpha', kind: 'narrowband' as const } };
 
-function fixture(existing: DirectorPlanDraft | null = null, mosaic: { rows: number; columns: number; overlap_percent: number } | null = null, library = [libraryHa], rigFramings: Array<{ rig_id: string; position_angle_degrees: number | null; mosaic: { rows: number; columns: number; overlap_percent: number }; panel: { width_degrees: number; height_degrees: number } | null }> = []) {
+function fixture(existing: DirectorPlanDraft | null = null, mosaic: { rows: number; columns: number; overlap_percent: number } | null = null, library = [libraryHa], rigFramings: Array<{ rig_id: string; center?: { ra_degrees: number; dec_degrees: number } | null; position_angle_degrees: number | null; mosaic: { rows: number; columns: number; overlap_percent: number }; panel: { width_degrees: number; height_degrees: number } | null }> = []) {
   const saves: DirectorPlanDraft[] = [];
   let plan = existing;
   server.use(
@@ -58,7 +58,7 @@ describe('Plan editor', () => {
     const plan = { project_id: 'project', revision: 1, updated_at_ms: 1, objectives: [objective], contributions: [
       { id: 'c1', objective_id: 'o1', rig_id: c925.rig.id, template: { template_guid: null, template_id: 7, name: 'Red', filter_name: 'R', gain: 100, offset: 30, bin: 1, readout_mode: null }, exposure_seconds: 120, panel_ids: [], enabled: true },
     ] };
-    fixture(plan, { rows: 2, columns: 1, overlap_percent: 20 }, [], [{ rig_id: c925.rig.id, position_angle_degrees: 90, mosaic: { rows: 1, columns: 3, overlap_percent: 10 }, panel: null }]);
+    fixture(plan, { rows: 2, columns: 1, overlap_percent: 20 }, [], [{ rig_id: c925.rig.id, center: null, position_angle_degrees: 90, mosaic: { rows: 1, columns: 3, overlap_percent: 10 }, panel: null }]);
     mount();
     await screen.findByText(/1 template/);
     // C925 owns its own three panels; RedCat would own the shared two.

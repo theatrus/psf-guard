@@ -42,6 +42,10 @@ pub struct FramingDraft {
 #[serde(deny_unknown_fields)]
 pub struct RigFraming {
     pub rig_id: Uuid,
+    /// This rig's own target center; None follows the shared center, which
+    /// is where every rig starts.
+    #[serde(default, deserialize_with = "Option::deserialize")]
+    pub center: Option<IcrsPosition>,
     /// This rig's camera angle; None follows the shared angle.
     #[serde(deserialize_with = "Option::deserialize")]
     pub position_angle_degrees: Option<f64>,
@@ -54,6 +58,7 @@ pub struct RigFraming {
 /// The layout one rig shoots: shared or its own, with every gap filled in.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RigLayout {
+    pub center: IcrsPosition,
     pub position_angle_degrees: f64,
     pub panel: PanelSize,
     pub mosaic: Mosaic,
@@ -72,6 +77,7 @@ impl FramingDraft {
     pub fn layout_for(&self, rig: Uuid, field: Option<PanelSize>) -> Option<RigLayout> {
         match self.rig_framing(rig) {
             Some(own) => Some(RigLayout {
+                center: own.center.unwrap_or(self.center),
                 position_angle_degrees: own
                     .position_angle_degrees
                     .unwrap_or(self.position_angle_degrees),
@@ -80,6 +86,7 @@ impl FramingDraft {
                 own: true,
             }),
             None => Some(RigLayout {
+                center: self.center,
                 position_angle_degrees: self.position_angle_degrees,
                 panel: self.panel?,
                 mosaic: self.mosaic,
@@ -125,7 +132,7 @@ pub(crate) fn validate_draft(draft: &FramingDraft) -> Result<(), Error> {
             return Err(Error::InvalidInput);
         }
         FramingRequest {
-            center: draft.center,
+            center: own.center.unwrap_or(draft.center),
             position_angle_degrees: own
                 .position_angle_degrees
                 .unwrap_or(draft.position_angle_degrees),

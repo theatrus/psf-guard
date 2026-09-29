@@ -182,8 +182,10 @@
   switches (grid, constellations, deep-sky marks, comets and asteroids,
   Sun, Moon and planets) are small buttons at the top of the stage.
 - A rig in a plan can be framed on its own: its own grid, camera angle and
-  panel size over the same target, drawn in a colour of its own beside the
-  shared framing. Activation writes that rig's targets from its own layout;
+  panel size, drawn in a colour of its own beside the shared framing. It
+  starts on the shared target center and follows it until you drag its
+  rectangle, type a center, or move it to the view center; one tick puts it
+  back in step. Activation writes that rig's targets from its own layout;
   the plan's panel picker and coverage check follow each rig's grid.
 - Planning has a shared **Exposure templates** library. A plan can bind a
   rig to a library template when the rig's database has no template for the

@@ -119,6 +119,7 @@ fn rigs_framed_on_their_own_are_kept_checked_and_laid_out_over_the_shared_target
     let mut own = draft(project);
     own.rig_framings = vec![RigFraming {
         rig_id: long,
+        center: None,
         position_angle_degrees: Some(90.0),
         mosaic: Mosaic { rows: 1, columns: 3, overlap_percent: 10 },
         panel: None,
@@ -128,8 +129,13 @@ fn rigs_framed_on_their_own_are_kept_checked_and_laid_out_over_the_shared_target
     // The shared framing for a rig not listed; the rig's own for the one that is,
     // its field standing in for the size, and nothing when neither is known.
     let field = PanelSize { width_degrees: 0.5, height_degrees: 0.4 };
-    assert_eq!(saved.layout_for(wide, Some(field)), Some(RigLayout { position_angle_degrees: 35.0, panel: own.panel.unwrap(), mosaic: own.mosaic, own: false }));
-    assert_eq!(saved.layout_for(long, Some(field)), Some(RigLayout { position_angle_degrees: 90.0, panel: field, mosaic: Mosaic { rows: 1, columns: 3, overlap_percent: 10 }, own: true }));
+    assert_eq!(saved.layout_for(wide, Some(field)), Some(RigLayout { center: own.center, position_angle_degrees: 35.0, panel: own.panel.unwrap(), mosaic: own.mosaic, own: false }));
+    assert_eq!(saved.layout_for(long, Some(field)), Some(RigLayout { center: own.center, position_angle_degrees: 90.0, panel: field, mosaic: Mosaic { rows: 1, columns: 3, overlap_percent: 10 }, own: true }));
+    // A rig's own center, once set, replaces the shared one for that rig alone.
+    let mut moved = saved.clone();
+    moved.rig_framings[0].center = Some(IcrsPosition { ra_degrees: 12.0, dec_degrees: 40.0 });
+    assert_eq!(moved.layout_for(long, Some(field)).unwrap().center, IcrsPosition { ra_degrees: 12.0, dec_degrees: 40.0 });
+    assert_eq!(moved.layout_for(wide, Some(field)).unwrap().center, own.center);
     assert_eq!(saved.layout_for(long, None), None);
     let mut sized = saved.clone();
     sized.rig_framings[0].panel = Some(PanelSize { width_degrees: 1.0, height_degrees: 1.0 });

@@ -406,7 +406,7 @@ async fn execute(
             };
             let rig_panels = if layout.own {
                 FramingRequest {
-                    center: framing.center,
+                    center: layout.center,
                     position_angle_degrees: layout.position_angle_degrees,
                     panel: layout.panel,
                     mosaic: layout.mosaic,

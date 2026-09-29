@@ -793,6 +793,11 @@ async fn a_rig_framed_on_its_own_gets_its_own_panels_and_angle() {
         let mut framing = store.framing_draft(a.project).unwrap().unwrap();
         framing.rig_framings = vec![psf_guard_director_meta::framing::RigFraming {
             rig_id: a.rig,
+            // Its own center, a degree east of the shared one.
+            center: Some(IcrsPosition {
+                ra_degrees: 39.2,
+                dec_degrees: 61.45,
+            }),
             position_angle_degrees: Some(90.0),
             mosaic: Mosaic {
                 rows: 1,
@@ -852,13 +857,15 @@ async fn a_rig_framed_on_its_own_gets_its_own_panels_and_angle() {
         3
     );
     // The three panels lie along the camera's row, which at 90° runs north-south.
-    let (min_dec, max_dec, spread_ra): (f64, f64, f64) =
+    let (min_dec, max_dec, spread_ra, mean_ra): (f64, f64, f64, f64) =
         a.db.query_row(
-            "SELECT min(dec), max(dec), max(ra)-min(ra) FROM target",
+            "SELECT min(dec), max(dec), max(ra)-min(ra), avg(ra) FROM target",
             [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .unwrap();
     assert!(max_dec - min_dec > 1.5, "{min_dec} {max_dec}");
     assert!(spread_ra.abs() < 0.05, "{spread_ra}");
+    // The row sits on the rig's own center, not the shared one.
+    assert!((mean_ra - 39.2 / 15.0).abs() < 1e-3, "{mean_ra}");
 }
