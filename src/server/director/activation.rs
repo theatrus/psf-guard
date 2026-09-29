@@ -932,17 +932,40 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                 }
                 guid
             }
-            None => {
-                let guid = new_guid();
-                insert_target(tx, &guid, &name, ra_hours, dec, rotation, project_row_id)?;
-                changes.push(Change {
-                    kind: "target",
-                    action: "create",
-                    name: name.clone(),
-                    detail,
-                });
-                guid
-            }
+            // Nothing owned yet: a target already in this project (imported
+            // from Target Scheduler, or made by hand) is taken over rather
+            // than doubled.
+            None => match adoptable_target(tx, project_row_id, &name, ra_hours, dec, !mosaic)? {
+                Some(found) => {
+                    let same = (found.ra_hours - ra_hours).abs() < 1e-7
+                        && (found.dec - dec).abs() < 1e-6
+                        && (found.rotation - rotation).abs() < 1e-3;
+                    if !same {
+                        tx.execute(
+                            "UPDATE target SET ra=?2, dec=?3, rotation=?4 WHERE guid=?1",
+                            params![found.guid, ra_hours, dec, rotation],
+                        )?;
+                    }
+                    changes.push(Change {
+                        kind: "target",
+                        action: if same { "adopt" } else { "update" },
+                        name: found.name,
+                        detail,
+                    });
+                    found.guid
+                }
+                None => {
+                    let guid = new_guid();
+                    insert_target(tx, &guid, &name, ra_hours, dec, rotation, project_row_id)?;
+                    changes.push(Change {
+                        kind: "target",
+                        action: "create",
+                        name: name.clone(),
+                        detail,
+                    });
+                    guid
+                }
+            },
         };
         tx.execute(
             "INSERT INTO psf_guard_director_target(target_guid,project_guid,panel_id,framing_revision) VALUES(?1,?2,?3,?4)
@@ -1185,6 +1208,78 @@ fn insert_project(
         )?;
     }
     Ok(guid)
+}
+
+/// A target row of this project that no panel owns yet.
+struct Adoptable {
+    guid: String,
+    name: String,
+    ra_hours: f64,
+    dec: f64,
+    rotation: f64,
+}
+
+/// The existing target a panel should take over, if any: the one with the
+/// panel's name, else the one at the panel's place (within a quarter of an
+/// arcminute, an import's round trip), else, for a single-panel framing,
+/// the project's only unowned target. A row without a GUID is given one,
+/// since ownership is by GUID.
+fn adoptable_target(
+    tx: &Connection,
+    project_row_id: i64,
+    name: &str,
+    ra_hours: f64,
+    dec: f64,
+    single_panel: bool,
+) -> rusqlite::Result<Option<Adoptable>> {
+    let mut statement = tx.prepare(
+        "SELECT Id, guid, name, ra, dec, rotation FROM target
+         WHERE projectid=?1
+           AND (guid IS NULL OR guid NOT IN (SELECT target_guid FROM psf_guard_director_target))
+         ORDER BY Id",
+    )?;
+    let rows: Vec<(i64, Option<String>, String, f64, f64, f64)> = statement
+        .query_map([project_row_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                row.get::<_, Option<f64>>(3)?.unwrap_or(f64::NAN),
+                row.get::<_, Option<f64>>(4)?.unwrap_or(f64::NAN),
+                row.get::<_, Option<f64>>(5)?.unwrap_or(0.0),
+            ))
+        })?
+        .collect::<Result<_, _>>()?;
+    let wanted = name.trim().to_lowercase();
+    let by_name = rows
+        .iter()
+        .position(|row| row.2.trim().to_lowercase() == wanted);
+    let by_place = rows.iter().position(|row| {
+        (row.3 - ra_hours).abs() * 15.0 * 60.0 < 0.25 && (row.4 - dec).abs() * 60.0 < 0.25
+    });
+    let only = (single_panel && rows.len() == 1).then_some(0);
+    let Some(index) = by_name.or(by_place).or(only) else {
+        return Ok(None);
+    };
+    let (row_id, guid, found_name, found_ra, found_dec, found_rotation) = rows[index].clone();
+    let guid = match guid {
+        Some(guid) if !guid.is_empty() => guid,
+        _ => {
+            let minted = new_guid();
+            tx.execute(
+                "UPDATE target SET guid=?2 WHERE Id=?1",
+                params![row_id, minted],
+            )?;
+            minted
+        }
+    };
+    Ok(Some(Adoptable {
+        guid,
+        name: found_name,
+        ra_hours: found_ra,
+        dec: found_dec,
+        rotation: found_rotation,
+    }))
 }
 
 fn insert_target(

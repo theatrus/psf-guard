@@ -181,6 +181,13 @@
   it scrolls. The drag mode (rectangle or sky), the sky turn and the layer
   switches (grid, constellations, deep-sky marks, comets and asteroids,
   Sun, Moon and planets) are small buttons at the top of the stage.
+- Activation takes over the targets a project already has instead of
+  creating twins beside them: the one with the panel's name, else the one at
+  the panel's place, else the only target of a single-panel plan. The
+  preview says `adopt` or `update` for them.
+- Switching a plan goal between hours and frames converts the number
+  through the rig's exposure length, so 6 h at 300 s becomes 72 frames and
+  back again.
 - Planning no longer answers "Director metadata is busy" when a workspace
   opens. Reads of the planning store run on a pool of read-only connections
   beside the one writer, so the eight requests a page fires at once are all
