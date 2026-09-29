@@ -98,12 +98,9 @@ pub(super) async fn evaluate(
         .values()
         .cloned()
         .collect();
-    let permit = admit(&service.admission).await?;
-    let view = tokio::task::spawn_blocking(move || {
-        // Reads happen under the store lock and the admission permit; the
-        // night curves, which take the time, run after both are released so
-        // the rest of the workspace is not kept waiting behind them.
-        let store = service.store.lock().map_err(|_| Error::Internal)?;
+    let view = service.clone().with_reader(move |store| {
+        // This holds one reader slot for as long as the night curves take;
+        // writes and other reads go on beside it.
         store.project(id)?.ok_or(Error::Missing)?;
         let framing = store.framing_draft(id)?;
         let center = request
@@ -149,10 +146,7 @@ pub(super) async fn evaluate(
                 None => warnings.push(format!("{catalog_name}: no rig profile yet; set its site under Setup.")),
             }
         }
-        // Everything below is arithmetic on what was read: let the next
-        // request at the store go while the night curves are computed.
-        drop(store);
-        drop(permit);
+        // Everything below is arithmetic on what was read.
         for (rig_id, rig, catalog_name, profile) in inputs {
             let Some(site) = profile.site.as_ref().map(|s| s.value) else {
                 warnings.push(format!("{catalog_name}: no site in its rig profile; set it under Setup or let the plugin report it."));
@@ -253,10 +247,6 @@ pub(super) async fn evaluate(
             warnings,
         })
     })
-    .await
-    .map_err(|error| {
-        tracing::error!(%error, "Director feasibility worker failed");
-        Error::Internal
-    })??;
+    .await?;
     Ok(Json(ApiResponse::success(view)))
 }

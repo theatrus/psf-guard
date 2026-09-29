@@ -31,7 +31,7 @@ pub(super) async fn get_draft(
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<DraftView>>, Error> {
     let view = enabled(&state)?
-        .run(move |store| {
+        .query(move |store| {
             let project = store.project(id)?.ok_or(StoreError::NotFound)?;
             let draft = store.framing_draft(id)?;
             Ok(DraftView { project, draft })
@@ -114,40 +114,34 @@ pub(super) async fn rig_profiles(
         .values()
         .cloned()
         .collect();
-    let metadata_permit = admit(&service.admission).await?;
-    let catalog_permit = admit(&service.discovery_admission).await?;
-    let summaries = tokio::task::spawn_blocking(move || {
-        let _permits = (metadata_permit, catalog_permit);
-        let store = service.store.lock().map_err(|_| Error::Internal)?;
-        let mut summaries = Vec::new();
-        for (identity, catalog) in identified_catalogs(&catalogs, service.instance_id).iter() {
-            let Some(binding) = store.catalog_rig(identity.id)? else {
-                continue;
-            };
-            let profile = store.rig_profile(binding.rig.id)?;
-            let field_of_view = profile
-                .as_ref()
-                .and_then(|p| p.optics.as_ref())
-                .and_then(|optics| optics.value.field_of_view().ok());
-            summaries.push(RigProfileSummary {
-                rig: binding.rig,
-                catalog_slug: catalog.id.clone(),
-                catalog_name: catalog.name.clone(),
-                default_exposure_seconds: default_exposures(
-                    profile.as_ref(),
-                    field_of_view.as_ref(),
-                ),
-                profile,
-                field_of_view,
-            });
-        }
-        summaries.sort_by(|a, b| a.catalog_name.cmp(&b.catalog_name));
-        Ok::<_, Error>(summaries)
-    })
-    .await
-    .map_err(|error| {
-        tracing::error!(%error, "Director rig profile listing failed");
-        Error::Internal
-    })??;
+    let summaries = service
+        .clone()
+        .with_reader(move |store| {
+            let mut summaries = Vec::new();
+            for (identity, catalog) in identified_catalogs(&catalogs, service.instance_id).iter() {
+                let Some(binding) = store.catalog_rig(identity.id)? else {
+                    continue;
+                };
+                let profile = store.rig_profile(binding.rig.id)?;
+                let field_of_view = profile
+                    .as_ref()
+                    .and_then(|p| p.optics.as_ref())
+                    .and_then(|optics| optics.value.field_of_view().ok());
+                summaries.push(RigProfileSummary {
+                    rig: binding.rig,
+                    catalog_slug: catalog.id.clone(),
+                    catalog_name: catalog.name.clone(),
+                    default_exposure_seconds: default_exposures(
+                        profile.as_ref(),
+                        field_of_view.as_ref(),
+                    ),
+                    profile,
+                    field_of_view,
+                });
+            }
+            summaries.sort_by(|a, b| a.catalog_name.cmp(&b.catalog_name));
+            Ok::<_, Error>(summaries)
+        })
+        .await?;
     Ok(Json(ApiResponse::success(summaries)))
 }

@@ -60,7 +60,7 @@ async fn templates_list_every_profile_with_a_bandpass_and_plans_use_compare_and_
     assert_eq!(defaults["narrowband"], 300.0);
 
     let project = {
-        let mut store = f.state.director.as_ref().unwrap().store.lock().unwrap();
+        let mut store = f.state.director.as_ref().unwrap().writer.lock().unwrap();
         store.create_project(Uuid::new_v4(), "Heart").unwrap().id
     };
     let path = format!("/projects/{project}/plan");

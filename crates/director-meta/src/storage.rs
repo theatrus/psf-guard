@@ -106,6 +106,26 @@ impl MetaStore {
         })
     }
 
+    /// A second connection to an open store for reads only, so readers run
+    /// beside the writer instead of behind it (the store is in WAL mode).
+    /// SQLite refuses every write on it. The schema must already be current:
+    /// migration belongs to [`MetaStore::open`].
+    pub fn open_reader(path: &Path) -> Result<Self, Error> {
+        // Read-write flags: a WAL reader still needs the shared-memory index.
+        let conn = connect(path, false)?;
+        let instance_id = validate(&conn)?;
+        let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version != SCHEMA_VERSION {
+            return Err(Error::UnsupportedSchema);
+        }
+        conn.pragma_update(None, "query_only", true)?;
+        conn.pragma_update(None, "foreign_keys", true)?;
+        Ok(Self {
+            connection: conn,
+            instance_id,
+        })
+    }
+
     /// Consistent snapshot, including committed WAL pages. Never copy the live
     /// SQLite file directly. The destination must be new, even for a retry.
     pub fn backup(&self, destination: &Path) -> Result<(), Error> {

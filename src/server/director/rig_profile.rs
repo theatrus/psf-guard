@@ -245,36 +245,31 @@ async fn run_bound<T: Send + 'static>(
         + Send
         + 'static,
 ) -> Result<T, Error> {
-    let metadata_permit = admit(&service.admission).await?;
-    let catalog_permit = admit(&service.discovery_admission).await?;
-    tokio::task::spawn_blocking(move || {
-        let _permits = (metadata_permit, catalog_permit);
-        let mut connection = super::super::database_context::open_scheduler_connection_with_flags(
-            FilePath::new(&catalog.database_path),
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(StoreError::from)
-        .map_err(Error::from)?;
-        connection
-            .busy_timeout(Duration::from_secs(2))
-            .map_err(StoreError::from)
-            .map_err(Error::from)?;
-        let tx = connection
-            .transaction_with_behavior(TransactionBehavior::Deferred)
-            .map_err(StoreError::from)
-            .map_err(Error::from)?;
-        let identity = crate::catalog_identity::read(&tx)?.unwrap_or_else(|| {
-            super::derived_identity(service.instance_id, &catalog.database_path)
-        });
-        let mut store = service.store.lock().map_err(|_| Error::Internal)?;
-        let binding = store.catalog_rig(identity.id)?.ok_or(Error::Missing)?;
-        operation(&mut store, &catalog, &tx, binding.rig)
-    })
-    .await
-    .map_err(|error| {
-        tracing::error!(%error, "Director rig profile worker failed");
-        Error::Internal
-    })?
+    service
+        .clone()
+        .with_writer(move |store| {
+            let mut connection =
+                super::super::database_context::open_scheduler_connection_with_flags(
+                    FilePath::new(&catalog.database_path),
+                    OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                )
+                .map_err(StoreError::from)
+                .map_err(Error::from)?;
+            connection
+                .busy_timeout(Duration::from_secs(2))
+                .map_err(StoreError::from)
+                .map_err(Error::from)?;
+            let tx = connection
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .map_err(StoreError::from)
+                .map_err(Error::from)?;
+            let identity = crate::catalog_identity::read(&tx)?.unwrap_or_else(|| {
+                super::derived_identity(service.instance_id, &catalog.database_path)
+            });
+            let binding = store.catalog_rig(identity.id)?.ok_or(Error::Missing)?;
+            operation(store, &catalog, &tx, binding.rig)
+        })
+        .await
 }
 
 /// Optics and site from the newest frames whose files can be found. One

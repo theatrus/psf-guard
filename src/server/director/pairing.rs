@@ -113,7 +113,7 @@ pub(in crate::server) async fn authorize(
     let service = enabled(state).map_err(|e| no_store(e.into_response()))?;
     let hash = hash_token(secret);
     let client = service
-        .run(move |store| store.client_for_token(&hash))
+        .query(move |store| store.client_for_token(&hash))
         .await
         .map_err(|e| no_store(e.into_response()))?
         .ok_or_else(denied)?;
@@ -283,7 +283,7 @@ async fn clients(
         operator(&access).map_err(|response| *response)?;
         let service = enabled(&state).map_err(IntoResponse::into_response)?;
         let clients: Vec<Client> = service
-            .run(move |store| store.clients(rig))
+            .query(move |store| store.clients(rig))
             .await
             .map_err(IntoResponse::into_response)?;
         Ok::<_, Response>(Json(ApiResponse::success(clients)))

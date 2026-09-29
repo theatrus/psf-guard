@@ -63,7 +63,7 @@ impl Fixture {
             .insert("catalog".into(), Arc::new(context));
         let catalog = Uuid::new_v4();
         let (project, rig) = {
-            let mut store = state.director.as_ref().unwrap().store.lock().unwrap();
+            let mut store = state.director.as_ref().unwrap().writer.lock().unwrap();
             (
                 store
                     .create_project(Uuid::new_v4(), "Global project")
@@ -116,7 +116,7 @@ async fn preview_commits_nothing_and_apply_is_idempotent_with_complete_review_co
             .director
             .as_ref()
             .unwrap()
-            .store
+            .writer
             .lock()
             .unwrap()
             .catalog_identity(fixture.catalog)
@@ -143,7 +143,7 @@ async fn preview_commits_nothing_and_apply_is_idempotent_with_complete_review_co
             .director
             .as_ref()
             .unwrap()
-            .store
+            .writer
             .lock()
             .unwrap();
         assert_eq!(store.catalog_identity(identity.id).unwrap(), Some(identity));
@@ -196,7 +196,7 @@ async fn changed_source_or_destination_names_require_a_new_preview_before_any_wr
                 .director
                 .as_ref()
                 .unwrap()
-                .store
+                .writer
                 .lock()
                 .unwrap()
                 .rename_rig(id, 1, "Changed rig")
@@ -254,7 +254,7 @@ async fn profile_guid_and_catalog_scope_cannot_be_fabricated_or_repointed() {
             .director
             .as_ref()
             .unwrap()
-            .store
+            .writer
             .lock()
             .unwrap()
             .catalog_identity(fixture.catalog)
@@ -295,7 +295,7 @@ async fn interrupted_coordinator_commit_recovers_using_the_same_durable_lineage(
             .director
             .as_ref()
             .unwrap()
-            .store
+            .writer
             .lock()
             .unwrap()
             .catalog_identity(identity.id)
@@ -339,7 +339,7 @@ async fn blocked_catalog_commit_rolls_back_both_databases_and_allows_exact_retry
             .director
             .as_ref()
             .unwrap()
-            .store
+            .writer
             .lock()
             .unwrap();
         assert_eq!(store.catalog_identity(fixture.catalog).unwrap(), None);
@@ -513,7 +513,7 @@ async fn new_catalog_cannot_claim_an_already_registered_identity() {
     let fixture = Fixture::new();
     let service = fixture.state.director.as_ref().unwrap();
     service
-        .store
+        .writer
         .lock()
         .unwrap()
         .register_catalog(CatalogIdentity {
@@ -719,7 +719,7 @@ async fn mapping_inventory_preserves_unregistered_lineage_and_refuses_origin_con
             .director
             .as_ref()
             .unwrap()
-            .store
+            .writer
             .lock()
             .unwrap();
         assert_eq!(store.catalog_identity(identity.id).unwrap(), None);

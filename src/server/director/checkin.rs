@@ -81,56 +81,50 @@ pub(super) async fn check_in(
         .values()
         .cloned()
         .collect();
-    let metadata_permit = admit(&service.admission).await?;
-    let catalog_permit = admit(&service.discovery_admission).await?;
-    let ack = tokio::task::spawn_blocking(move || {
-        let _permits = (metadata_permit, catalog_permit);
-        let mut store = service.store.lock().map_err(|_| Error::Internal)?;
-        store
-            .catalog_rig(request.catalog_id)?
-            .filter(|binding| binding.rig.id == rig)
-            .ok_or(Error::WrongRig)?;
-        let now = now_ms();
-        let (outcomes, cursor) = store.store_receipts(&receipts, now)?;
-        store.record_contact(rig, ContactKind::CheckIn, now, Some(&request.ledger_id))?;
-        let program_revision = program::current_revision(
-            &store,
-            &catalogs,
-            service.instance_id,
-            rig,
-            request.catalog_id,
-        )?;
-        let program_changed = match (&program_revision, &request.program_revision) {
-            (Some(current), Some(held)) => current != held,
-            (Some(_), None) => true,
-            (None, _) => false,
-        };
-        Ok::<_, program::PullError>(Acknowledgement {
-            coordinator_instance_id: service.instance_id,
-            catalog_id: request.catalog_id,
-            rig_id: rig,
-            ledger_id: request.ledger_id.clone(),
-            acknowledged_through: cursor.highest_contiguous,
-            highest_seen: cursor.highest_seen,
-            applied: outcomes.iter().filter(|o| **o == Stored::Applied).count(),
-            duplicates: outcomes.iter().filter(|o| **o == Stored::Duplicate).count(),
-            conflicts: outcomes
-                .iter()
-                .zip(&receipts)
-                .filter(|(o, _)| **o == Stored::Conflict)
-                .map(|(_, r)| r.sequence)
-                .collect(),
-            outcomes,
-            program_revision,
-            program_changed,
-            received_at_ms: now,
+    let ack = service
+        .clone()
+        .with_writer(move |store| {
+            store
+                .catalog_rig(request.catalog_id)?
+                .filter(|binding| binding.rig.id == rig)
+                .ok_or(Error::WrongRig)?;
+            let now = now_ms();
+            let (outcomes, cursor) = store.store_receipts(&receipts, now)?;
+            store.record_contact(rig, ContactKind::CheckIn, now, Some(&request.ledger_id))?;
+            let program_revision = program::current_revision(
+                store,
+                &catalogs,
+                service.instance_id,
+                rig,
+                request.catalog_id,
+            )?;
+            let program_changed = match (&program_revision, &request.program_revision) {
+                (Some(current), Some(held)) => current != held,
+                (Some(_), None) => true,
+                (None, _) => false,
+            };
+            Ok::<_, program::PullError>(Acknowledgement {
+                coordinator_instance_id: service.instance_id,
+                catalog_id: request.catalog_id,
+                rig_id: rig,
+                ledger_id: request.ledger_id.clone(),
+                acknowledged_through: cursor.highest_contiguous,
+                highest_seen: cursor.highest_seen,
+                applied: outcomes.iter().filter(|o| **o == Stored::Applied).count(),
+                duplicates: outcomes.iter().filter(|o| **o == Stored::Duplicate).count(),
+                conflicts: outcomes
+                    .iter()
+                    .zip(&receipts)
+                    .filter(|(o, _)| **o == Stored::Conflict)
+                    .map(|(_, r)| r.sequence)
+                    .collect(),
+                outcomes,
+                program_revision,
+                program_changed,
+                received_at_ms: now,
+            })
         })
-    })
-    .await
-    .map_err(|error| {
-        tracing::error!(%error, "Director check-in worker failed");
-        Error::Internal
-    })??;
+        .await?;
     Ok(Json(ApiResponse::success(ack)))
 }
 
@@ -201,48 +195,42 @@ pub(super) async fn report_status(
         .values()
         .cloned()
         .collect();
-    let metadata_permit = admit(&service.admission).await?;
-    let catalog_permit = admit(&service.discovery_admission).await?;
-    let answer = tokio::task::spawn_blocking(move || {
-        let _permits = (metadata_permit, catalog_permit);
-        let mut store = service.store.lock().map_err(|_| Error::Internal)?;
-        store
-            .catalog_rig(request.catalog_id)?
-            .filter(|binding| binding.rig.id == rig)
-            .ok_or(Error::WrongRig)?;
-        let now = now_ms();
-        let accepted = store.record_status(&RigStatus {
-            rig_id: rig,
-            session_id: request.session_id.clone(),
-            reported_at_ms: request.reported_at_ms,
-            payload: request.status.clone(),
-            received_at_ms: now,
-        })?;
-        store.record_contact(rig, ContactKind::Status, now, Some(&request.session_id))?;
-        let program_revision = program::current_revision(
-            &store,
-            &catalogs,
-            service.instance_id,
-            rig,
-            request.catalog_id,
-        )?;
-        let program_changed = match (&program_revision, &request.program_revision) {
-            (Some(current), Some(held)) => current != held,
-            (Some(_), None) => true,
-            (None, _) => false,
-        };
-        Ok::<_, program::PullError>(StatusAnswer {
-            accepted,
-            program_revision,
-            program_changed,
-            received_at_ms: now,
+    let answer = service
+        .clone()
+        .with_writer(move |store| {
+            store
+                .catalog_rig(request.catalog_id)?
+                .filter(|binding| binding.rig.id == rig)
+                .ok_or(Error::WrongRig)?;
+            let now = now_ms();
+            let accepted = store.record_status(&RigStatus {
+                rig_id: rig,
+                session_id: request.session_id.clone(),
+                reported_at_ms: request.reported_at_ms,
+                payload: request.status.clone(),
+                received_at_ms: now,
+            })?;
+            store.record_contact(rig, ContactKind::Status, now, Some(&request.session_id))?;
+            let program_revision = program::current_revision(
+                store,
+                &catalogs,
+                service.instance_id,
+                rig,
+                request.catalog_id,
+            )?;
+            let program_changed = match (&program_revision, &request.program_revision) {
+                (Some(current), Some(held)) => current != held,
+                (Some(_), None) => true,
+                (None, _) => false,
+            };
+            Ok::<_, program::PullError>(StatusAnswer {
+                accepted,
+                program_revision,
+                program_changed,
+                received_at_ms: now,
+            })
         })
-    })
-    .await
-    .map_err(|error| {
-        tracing::error!(%error, "Director status worker failed");
-        Error::Internal
-    })??;
+        .await?;
     Ok(Json(ApiResponse::success(answer)))
 }
 
@@ -348,7 +336,7 @@ pub(super) async fn statuses(
     let service = enabled(&state)?;
     let instance = service.instance_id;
     let views = service
-        .run(move |store| {
+        .query(move |store| {
             let now = now_ms();
             // Every bound database is a rig; name the database beside it.
             let mut rigs: std::collections::BTreeMap<Uuid, (Option<String>, Option<String>)> =

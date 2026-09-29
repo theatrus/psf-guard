@@ -16,7 +16,7 @@ import { useDebounced, useSurveyCutout } from './useSurveyCutout';
 import './FramingView.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Framing request failed';
-/** Director admits one metadata request at a time and answers 503 with Retry-After while busy. */
+/** Director writes take turns at the metadata store; one that waited its full turn answers 503 with Retry-After. */
 const httpStatus = (error: unknown) => isAxiosError(error) ? error.response?.status
   : error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined;
 const retryWhenBusy = (count: number, error: unknown) => httpStatus(error) === 503 && count < 5;

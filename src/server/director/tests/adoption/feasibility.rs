@@ -95,7 +95,7 @@ async fn feasibility_times_each_rig_with_a_site_and_names_the_rest() {
         StatusCode::BAD_REQUEST
     );
     let bare = {
-        let mut store = a.f.state.director.as_ref().unwrap().store.lock().unwrap();
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         store.create_project(Uuid::new_v4(), "Bare").unwrap().id
     };
     assert_eq!(

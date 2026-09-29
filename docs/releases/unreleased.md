@@ -181,6 +181,12 @@
   it scrolls. The drag mode (rectangle or sky), the sky turn and the layer
   switches (grid, constellations, deep-sky marks, comets and asteroids,
   Sun, Moon and planets) are small buttons at the top of the stage.
+- Planning no longer answers "Director metadata is busy" when a workspace
+  opens. Reads of the planning store run on a pool of read-only connections
+  beside the one writer, so the eight requests a page fires at once are all
+  served; only writes take turns, and only a write that has waited twenty
+  seconds answers busy. Rig-database work (adoption, binding, activation) has
+  a gate of its own and no longer holds the store.
 - **Find a target** offers names as you type. The server's own Seiza
   catalog answers first, with no network: designations, common names and
   aliases, one row per object with its kind. The last row looks the name up

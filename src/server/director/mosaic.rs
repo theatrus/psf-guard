@@ -89,120 +89,116 @@ pub(super) async fn get(
         .values()
         .cloned()
         .collect();
-    let metadata_permit = admit(&service.admission).await?;
-    let catalog_permit = admit(&service.discovery_admission).await?;
-    let mosaic = tokio::task::spawn_blocking(move || {
-        let _permits = (metadata_permit, catalog_permit);
-        let store = service.store.lock().map_err(|_| Error::Internal)?;
-        let project = store.project(id)?.ok_or(Error::Missing)?;
-        let framing_revision = store.framing_draft(id)?.map(|draft| draft.revision);
-        let Some(activation) = store.activation(id)? else {
-            return Ok(Mosaic {
-                project,
-                activation_revision: None,
-                framing_revision,
-                framing_stale: false,
-                panels: vec![],
-                warnings: vec![
+    let mosaic = service
+        .clone()
+        .with_reader(move |store| {
+            let project = store.project(id)?.ok_or(Error::Missing)?;
+            let framing_revision = store.framing_draft(id)?.map(|draft| draft.revision);
+            let Some(activation) = store.activation(id)? else {
+                return Ok(Mosaic {
+                    project,
+                    activation_revision: None,
+                    framing_revision,
+                    framing_stale: false,
+                    panels: vec![],
+                    warnings: vec![
                     "Activate the plan first; stacks appear once the rigs have shot their panels."
                         .into(),
                 ],
-            });
-        };
-        let framing_stale =
-            framing_revision.is_some_and(|revision| revision != activation.framing_revision);
-        // One preview index read per rig database, however many panels it owns.
-        let mut previews: BTreeMap<String, std::collections::HashMap<i32, SkyPreview>> =
-            BTreeMap::new();
-        let mut panels = Vec::new();
-        let mut warnings = Vec::new();
-        let found = identified_catalogs(&catalogs, service.instance_id);
-        warnings.extend(found.duplicates.iter().cloned());
-        for activated in &activation.rigs {
-            let rig = store.rig(activated.rig_id)?.ok_or(Error::Missing)?;
-            let Some(context) = found.get(activated.catalog_id) else {
-                warnings.push(format!(
-                    "{}: its database is no longer registered on this server.",
-                    rig.name
-                ));
+                });
+            };
+            let framing_stale =
+                framing_revision.is_some_and(|revision| revision != activation.framing_revision);
+            // One preview index read per rig database, however many panels it owns.
+            let mut previews: BTreeMap<String, std::collections::HashMap<i32, SkyPreview>> =
+                BTreeMap::new();
+            let mut panels = Vec::new();
+            let mut warnings = Vec::new();
+            let found = identified_catalogs(&catalogs, service.instance_id);
+            warnings.extend(found.duplicates.iter().cloned());
+            for activated in &activation.rigs {
+                let rig = store.rig(activated.rig_id)?.ok_or(Error::Missing)?;
+                let Some(context) = found.get(activated.catalog_id) else {
+                    warnings.push(format!(
+                        "{}: its database is no longer registered on this server.",
+                        rig.name
+                    ));
+                    for target in &activated.targets {
+                        panels.push(MosaicPanel {
+                            panel_id: target.panel_id.clone(),
+                            rig: rig.clone(),
+                            catalog_slug: None,
+                            catalog_name: String::new(),
+                            target_guid: target.target_guid,
+                            target_id: None,
+                            target_name: None,
+                            progress: None,
+                            status: "missing_catalog",
+                            preview: None,
+                        });
+                    }
+                    continue;
+                };
+                let connection =
+                    super::super::database_context::open_scheduler_connection_with_flags(
+                        FilePath::new(&context.database_path),
+                        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                    )
+                    .map_err(StoreError::from)?;
+                connection
+                    .busy_timeout(Duration::from_secs(2))
+                    .map_err(StoreError::from)?;
+                let found = previews
+                    .entry(context.id.clone())
+                    .or_insert_with(|| previews_for(&context.cache_dir_path));
                 for target in &activated.targets {
+                    let row =
+                        target_row(&connection, target.target_guid).map_err(StoreError::from)?;
+                    let (target_id, target_name) = match row {
+                        Some((target_id, name)) => (Some(target_id), Some(name)),
+                        None => (None, None),
+                    };
+                    let progress = target_id
+                        .map(|target_id| progress(&connection, target_id))
+                        .transpose()
+                        .map_err(StoreError::from)?;
+                    let preview = target_id
+                        .and_then(|target_id| i32::try_from(target_id).ok())
+                        .and_then(|target_id| found.get(&target_id).cloned());
+                    let status = match (&target_id, &preview) {
+                        (None, _) => "missing_target",
+                        (Some(_), None) => "no_stack",
+                        (Some(_), Some(preview)) if preview.wcs.is_some() => "ready",
+                        (Some(_), Some(_)) => "unsolved",
+                    };
                     panels.push(MosaicPanel {
                         panel_id: target.panel_id.clone(),
                         rig: rig.clone(),
-                        catalog_slug: None,
-                        catalog_name: String::new(),
+                        catalog_slug: Some(context.id.clone()),
+                        catalog_name: context.name.clone(),
                         target_guid: target.target_guid,
-                        target_id: None,
-                        target_name: None,
-                        progress: None,
-                        status: "missing_catalog",
-                        preview: None,
+                        target_id,
+                        target_name,
+                        progress,
+                        status,
+                        preview,
                     });
                 }
-                continue;
-            };
-            let connection = super::super::database_context::open_scheduler_connection_with_flags(
-                FilePath::new(&context.database_path),
-                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            )
-            .map_err(StoreError::from)?;
-            connection
-                .busy_timeout(Duration::from_secs(2))
-                .map_err(StoreError::from)?;
-            let found = previews
-                .entry(context.id.clone())
-                .or_insert_with(|| previews_for(&context.cache_dir_path));
-            for target in &activated.targets {
-                let row = target_row(&connection, target.target_guid).map_err(StoreError::from)?;
-                let (target_id, target_name) = match row {
-                    Some((target_id, name)) => (Some(target_id), Some(name)),
-                    None => (None, None),
-                };
-                let progress = target_id
-                    .map(|target_id| progress(&connection, target_id))
-                    .transpose()
-                    .map_err(StoreError::from)?;
-                let preview = target_id
-                    .and_then(|target_id| i32::try_from(target_id).ok())
-                    .and_then(|target_id| found.get(&target_id).cloned());
-                let status = match (&target_id, &preview) {
-                    (None, _) => "missing_target",
-                    (Some(_), None) => "no_stack",
-                    (Some(_), Some(preview)) if preview.wcs.is_some() => "ready",
-                    (Some(_), Some(_)) => "unsolved",
-                };
-                panels.push(MosaicPanel {
-                    panel_id: target.panel_id.clone(),
-                    rig: rig.clone(),
-                    catalog_slug: Some(context.id.clone()),
-                    catalog_name: context.name.clone(),
-                    target_guid: target.target_guid,
-                    target_id,
-                    target_name,
-                    progress,
-                    status,
-                    preview,
-                });
             }
-        }
-        panels.sort_by(|a, b| {
-            a.panel_id
-                .cmp(&b.panel_id)
-                .then_with(|| a.rig.name.cmp(&b.rig.name))
-        });
-        Ok::<_, Error>(Mosaic {
-            project,
-            activation_revision: Some(activation.revision),
-            framing_revision,
-            framing_stale,
-            panels,
-            warnings,
+            panels.sort_by(|a, b| {
+                a.panel_id
+                    .cmp(&b.panel_id)
+                    .then_with(|| a.rig.name.cmp(&b.rig.name))
+            });
+            Ok::<_, Error>(Mosaic {
+                project,
+                activation_revision: Some(activation.revision),
+                framing_revision,
+                framing_stale,
+                panels,
+                warnings,
+            })
         })
-    })
-    .await
-    .map_err(|error| {
-        tracing::error!(%error, "Director mosaic worker failed");
-        Error::Internal
-    })??;
+        .await?;
     Ok(Json(ApiResponse::success(mosaic)))
 }

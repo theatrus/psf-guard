@@ -65,100 +65,95 @@ async fn execute(
         return Err(Error::Invalid.into());
     }
     let catalog = state.get_database(&slug).ok_or(Error::Missing)?;
-    let metadata_permit = service
-        .admission
+    let catalog_permit = admit(&service.discovery_admission).await?;
+    let result = service
         .clone()
-        .try_acquire_owned()
-        .map_err(|_| Error::Busy)?;
-    let catalog_permit = service
-        .discovery_admission
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| Error::Busy)?;
-    let result = tokio::task::spawn_blocking(move || {
-        let _permits = (metadata_permit, catalog_permit);
-        let applying = expected.is_some();
-        let flags = if applying {
-            OpenFlags::SQLITE_OPEN_READ_WRITE
-        } else {
-            OpenFlags::SQLITE_OPEN_READ_ONLY
-        };
-        let mut connection = super::super::database_context::open_scheduler_connection_with_flags(
-            FilePath::new(&catalog.database_path),
-            flags | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(StoreError::from)
-        .map_err(Error::from)?;
-        connection
-            .busy_timeout(Duration::from_secs(2))
-            .map_err(StoreError::from)
-            .map_err(Error::from)?;
-        let mut tx = connection
-            .transaction_with_behavior(if applying {
-                TransactionBehavior::Immediate
+        .with_writer(move |store| {
+            let _catalog_permit = catalog_permit;
+            let applying = expected.is_some();
+            let flags = if applying {
+                OpenFlags::SQLITE_OPEN_READ_WRITE
             } else {
-                TransactionBehavior::Deferred
-            })
-            .map_err(StoreError::from)
-            .map_err(Error::from)?;
-        let saved = catalog_identity::read(&tx)?;
-        let require_new = saved.is_none();
-        let identity = saved.unwrap_or(CatalogIdentity {
-            id: plan.catalog_id,
-            origin_instance_id: service.instance_id,
-        });
-        if identity.id != plan.catalog_id {
-            return Err(Error::Conflict.into());
-        }
-        let evidence = catalog_discovery::read_evidence(&tx)?;
-        let mut store = service.store.lock().map_err(|_| Error::Internal)?;
-        let binding = store
-            .preview_catalog_rig(identity, &catalog.name, require_new)
-            .map_err(binding_error)?;
-        let bytes = serde_json::to_vec(&(
-            "catalog-rig-v1",
-            &plan,
-            &binding,
-            &evidence,
-            service.instance_id,
-            &catalog.id,
-            &catalog.name,
-            &catalog.database_path,
-        ))
-        .map_err(|_| Error::Internal)?;
-        let digest = catalog_discovery::digest(&bytes);
-        if expected.as_ref().is_some_and(|value| value != &digest) {
-            return Err(Error::Conflict.into());
-        }
-        if applying {
-            store
-                .bind_catalog_rig_after(identity, &catalog.name, require_new, || {
-                    catalog_identity::adopt(&mut tx, identity).map_err(|error| match error {
-                        catalog_identity::Error::Sqlite(error) => StoreError::Sqlite(error),
-                        catalog_identity::Error::Conflict => StoreError::Conflict,
-                        catalog_identity::Error::InvalidIdentity => StoreError::InvalidInput,
-                        catalog_identity::Error::InvalidRecord => StoreError::CorruptDatabase,
-                        catalog_identity::Error::UnsupportedVersion => {
-                            StoreError::UnsupportedSchema
-                        }
-                    })?;
-                    tx.commit().map_err(StoreError::from)
+                OpenFlags::SQLITE_OPEN_READ_ONLY
+            };
+            let mut connection =
+                super::super::database_context::open_scheduler_connection_with_flags(
+                    FilePath::new(&catalog.database_path),
+                    flags | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                )
+                .map_err(StoreError::from)
+                .map_err(Error::from)?;
+            connection
+                .busy_timeout(Duration::from_secs(2))
+                .map_err(StoreError::from)
+                .map_err(Error::from)?;
+            let mut tx = connection
+                .transaction_with_behavior(if applying {
+                    TransactionBehavior::Immediate
+                } else {
+                    TransactionBehavior::Deferred
                 })
+                .map_err(StoreError::from)
+                .map_err(Error::from)?;
+            let saved = catalog_identity::read(&tx)?;
+            let require_new = saved.is_none();
+            let identity = saved.unwrap_or(CatalogIdentity {
+                id: plan.catalog_id,
+                origin_instance_id: service.instance_id,
+            });
+            if identity.id != plan.catalog_id {
+                return Err(Error::Conflict.into());
+            }
+            let evidence = catalog_discovery::read_evidence(&tx)?;
+            let binding = store
+                .preview_catalog_rig(identity, &catalog.name, require_new)
                 .map_err(binding_error)?;
-        } else {
-            tx.commit().map_err(StoreError::from).map_err(Error::from)?;
-        }
-        Ok::<_, AdoptionError>(Report {
-            binding,
-            preview_digest: digest,
-            applied: applying,
+            let bytes = serde_json::to_vec(&(
+                "catalog-rig-v1",
+                &plan,
+                &binding,
+                &evidence,
+                service.instance_id,
+                &catalog.id,
+                &catalog.name,
+                &catalog.database_path,
+            ))
+            .map_err(|_| Error::Internal)?;
+            let digest = catalog_discovery::digest(&bytes);
+            if expected.as_ref().is_some_and(|value| value != &digest) {
+                return Err(Error::Conflict.into());
+            }
+            if applying {
+                store
+                    .bind_catalog_rig_after(identity, &catalog.name, require_new, || {
+                        catalog_identity::adopt(&mut tx, identity).map_err(
+                            |error| match error {
+                                catalog_identity::Error::Sqlite(error) => StoreError::Sqlite(error),
+                                catalog_identity::Error::Conflict => StoreError::Conflict,
+                                catalog_identity::Error::InvalidIdentity => {
+                                    StoreError::InvalidInput
+                                }
+                                catalog_identity::Error::InvalidRecord => {
+                                    StoreError::CorruptDatabase
+                                }
+                                catalog_identity::Error::UnsupportedVersion => {
+                                    StoreError::UnsupportedSchema
+                                }
+                            },
+                        )?;
+                        tx.commit().map_err(StoreError::from)
+                    })
+                    .map_err(binding_error)?;
+            } else {
+                tx.commit().map_err(StoreError::from).map_err(Error::from)?;
+            }
+            Ok::<_, AdoptionError>(Report {
+                binding,
+                preview_digest: digest,
+                applied: applying,
+            })
         })
-    })
-    .await
-    .map_err(|error| {
-        tracing::error!(%error, "Director database rig binding failed");
-        Error::Internal
-    })??;
+        .await?;
     Ok(Json(ApiResponse::success(result)))
 }
 

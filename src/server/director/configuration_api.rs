@@ -43,7 +43,7 @@ async fn list(
 ) -> Result<Json<ApiResponse<IdentityPage>>, Error> {
     Ok(Json(ApiResponse::success(
         enabled(&state)?
-            .run(move |store| match kind {
+            .query(move |store| match kind {
                 Identity::Site => store.sites(page.after, page.limit),
                 Identity::Rig => store.rigs(page.after, page.limit),
             })
@@ -72,7 +72,7 @@ async fn identity(
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<NamedIdentity>>, Error> {
     let value = enabled(&state)?
-        .run(move |store| match kind {
+        .query(move |store| match kind {
             Identity::Site => store.site(id),
             Identity::Rig => store.rig(id),
         })
@@ -104,7 +104,7 @@ async fn site_ids(
 ) -> Result<Json<ApiResponse<SnapshotIds>>, Error> {
     Ok(Json(ApiResponse::success(
         enabled(&state)?
-            .run(move |store| {
+            .query(move |store| {
                 store.site(site)?.ok_or(StoreError::NotFound)?;
                 store.site_snapshot_ids(site, page.after, page.limit)
             })
@@ -119,7 +119,7 @@ async fn setup_ids(
 ) -> Result<Json<ApiResponse<SnapshotIds>>, Error> {
     Ok(Json(ApiResponse::success(
         enabled(&state)?
-            .run(move |store| {
+            .query(move |store| {
                 store.rig(rig)?.ok_or(StoreError::NotFound)?;
                 store.rig_setup_ids(rig, page.after, page.limit)
             })
@@ -168,7 +168,7 @@ async fn site_snapshot(
     Path((site, snapshot)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<ApiResponse<SiteSnapshot>>, Error> {
     let value = enabled(&state)?
-        .run(move |store| store.site_snapshot(snapshot))
+        .query(move |store| store.site_snapshot(snapshot))
         .await?
         .filter(|value| value.site_id == site)
         .ok_or(Error::Missing)?;
@@ -180,7 +180,7 @@ async fn rig_setup(
     Path((rig, setup)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<ApiResponse<RigSetup>>, Error> {
     let value = enabled(&state)?
-        .run(move |store| store.rig_setup(setup))
+        .query(move |store| store.rig_setup(setup))
         .await?
         .filter(|value| value.configuration.rig_id == rig.to_string())
         .ok_or(Error::Missing)?;

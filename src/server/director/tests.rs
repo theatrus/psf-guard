@@ -533,17 +533,47 @@ async fn canceled_requests_do_not_release_admission_before_the_write_finishes() 
     start.await.unwrap();
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
-    let response = router(state)
+    // The stuck write holds the writer: another write waits its turn and
+    // then answers busy, while a read is served from the pool at once.
+    let app = router(state.clone());
+    let response = app
+        .clone()
         .oneshot(
             Request::builder()
+                .method("POST")
                 .uri("/api/director/v1/projects")
-                .body(Body::empty())
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "id": Uuid::new_v4(), "name": "M33" }).to_string(),
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(response.headers()[RETRY_AFTER], "1");
+    // A workspace opens with a burst of reads; every one of them is served
+    // while the writer is held, none waits and none answers busy.
+    let started_at = tokio::time::Instant::now();
+    let reads: Vec<_> = (0..8)
+        .map(|_| {
+            tokio::spawn(
+                app.clone().oneshot(
+                    Request::builder()
+                        .uri("/api/director/v1/projects")
+                        .body(Body::empty())
+                        .unwrap(),
+                ),
+            )
+        })
+        .collect();
+    for read in reads {
+        assert_eq!(read.await.unwrap().unwrap().status(), StatusCode::OK);
+    }
+    assert!(
+        started_at.elapsed() < ADMISSION_WAIT,
+        "reads must not wait for the writer"
+    );
     release.send(()).unwrap();
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
