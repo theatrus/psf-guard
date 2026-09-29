@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ChevronDown, ChevronRight } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronRight, Link2, Unlink } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
@@ -49,6 +49,38 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
     : openSource;
   const back = new URLSearchParams(params);
   back.delete('directorProject');
+  // Attaching: another plan's database project joins this plan; the other
+  // plan is retired. Only databases this plan has no project in yet.
+  const client = useQueryClient();
+  const [attachPick, setAttachPick] = useState('');
+  const [detachPick, setDetachPick] = useState<string | null>(null);
+  const [notice, setNotice] = useState('');
+  const [problem, setProblem] = useState('');
+  const candidates = useMemo(() => {
+    if (!plans.data || !row) return [];
+    const taken = new Set(row.links.map(link => link.catalog_slug));
+    return plans.data.rows.filter(other => other.project.id !== projectId && other.links.length > 0 && other.links.every(link => !taken.has(link.catalog_slug)))
+      .flatMap(other => other.links.map(link => ({ key: `${other.project.id}:${link.catalog_slug}:${link.source_project_guid}`, plan: other, link })));
+  }, [plans.data, row, projectId]);
+  const chosen = candidates.find(entry => entry.key === attachPick) ?? null;
+  const attach = useMutation({
+    retry: false,
+    mutationFn: (fromProjectId: string) => apiClient.attachDirectorProject(projectId, fromProjectId),
+    onSuccess: done => {
+      setAttachPick(''); setProblem('');
+      setNotice(`Attached ${done.absorbed.name}: ${done.moved_links} database${done.moved_links === 1 ? '' : 's'} joined this plan${done.framing_taken ? ', and its framing came along' : ''}${done.plan_taken ? ', and its plan came along' : ''}.`);
+      void client.invalidateQueries({ queryKey: ['directorPlans'] });
+      void client.invalidateQueries({ queryKey: ['directorFraming', projectId] });
+      void client.invalidateQueries({ queryKey: ['directorPlan', projectId] });
+    },
+    onError: error => setProblem(message(error)),
+  });
+  const detach = useMutation({
+    retry: false,
+    mutationFn: (link: { catalog_slug: string; source_project_guid: string; source_name: string | null }) => apiClient.detachDirectorProject(projectId, link.catalog_slug, link.source_project_guid, link.source_name ?? row?.project.name ?? 'Project'),
+    onSuccess: fresh => { setDetachPick(null); setProblem(''); setNotice(`Detached: ${fresh.name} is a plan of its own again.`); void client.invalidateQueries({ queryKey: ['directorPlans'] }); },
+    onError: error => setProblem(message(error)),
+  });
   if (plans.isPending) return <p role="status">Loading project...</p>;
   if (plans.isError) return <div role="alert"><p>{message(plans.error)}</p><button type="button" onClick={() => void plans.refetch()}>Retry</button></div>;
   if (!row) return <p role="alert">Project not found. <Link to={`/director?${back}`}>Back to plans</Link></p>;
@@ -63,7 +95,21 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
     <section aria-label="Linked databases">
       <h3 className="director-section-heading">Databases</h3>
       {!manageable && <p className="director-muted">This server cannot change rig databases, so the targets and exposures below are view only.</p>}
-      {row.links.length === 0 && <p className="director-muted">No database holds this project yet. Activation creates it in each rig you tick in the plan.</p>}
+      {row.links.length === 0 && <p className="director-muted">No database holds this project yet. Activation creates it in each rig you tick in the plan, or attach a project a database already has.</p>}
+      {canWrite && candidates.length > 0 && <div className="director-attach">
+        <label>Attach a project from another database
+          <select aria-label="Attach a project from another database" value={attachPick} onChange={event => { setAttachPick(event.target.value); setProblem(''); }}>
+            <option value="">Choose a project…</option>
+            {candidates.map(entry => <option key={entry.key} value={entry.key}>{entry.link.catalog_name}: {entry.link.source_name ?? entry.link.source_project_guid}{entry.plan.project.name !== (entry.link.source_name ?? '') ? ` (plan “${entry.plan.project.name}”)` : ''}</option>)}
+          </select></label>
+        {chosen && <p className="director-muted" role="note">
+          {chosen.plan.links.length > 1 ? `The plan “${chosen.plan.project.name}” and all ${chosen.plan.links.length} of its databases join this plan; ` : `“${chosen.plan.project.name}” is retired as a plan and its database joins this one; `}
+          its own framing and plan drafts are dropped unless this plan has none. The next activation takes the project's targets over where they stand.
+          <span className="director-actions"><button type="button" disabled={attach.isPending} onClick={() => attach.mutate(chosen.plan.project.id)}><Link2 size={16} />{attach.isPending ? 'Attaching…' : 'Attach'}</button><button type="button" onClick={() => setAttachPick('')}>Cancel</button></span>
+        </p>}
+      </div>}
+      {notice && <p role="status">{notice}</p>}
+      {problem && <p className="director-error" role="alert">{problem}</p>}
       <ul className="director-list">
         {row.links.map(link => {
           const key = `${link.catalog_slug}:${link.source_project_guid}`;
@@ -75,7 +121,10 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
                 <span className="director-muted">{link.source_name ?? 'Project row missing in this database'}</span>
               </div>
               {link.source_row_id !== null && <button type="button" aria-expanded={open} onClick={() => setOpenSource(open ? null : key)}>{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}Targets and exposures</button>}
+              {canWrite && row.links.length > 1 && <button type="button" aria-label={`Detach ${link.catalog_name}`} title="Give this database's project a plan of its own" onClick={() => { setDetachPick(detachPick === key ? null : key); setProblem(''); }}><Unlink size={16} /></button>}
             </div>
+            {detachPick === key && <p className="director-muted" role="note">{link.source_name ?? 'This project'} in {link.catalog_name} becomes a plan of its own; this plan keeps its drafts.
+              <span className="director-actions"><button type="button" disabled={detach.isPending} onClick={() => detach.mutate(link)}>{detach.isPending ? 'Detaching…' : 'Detach'}</button><button type="button" onClick={() => setDetachPick(null)}>Cancel</button></span></p>}
             {open && link.source_row_id !== null && <ProjectPlanEditor dbId={link.catalog_slug} projectId={link.source_row_id} canEdit={canWrite && !!info.data?.allow_database_management} />}
           </li>;
         })}

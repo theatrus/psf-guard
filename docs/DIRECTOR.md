@@ -124,6 +124,21 @@ catalog: the first by slug stands for it and the copy is named at the top of
 the plan list and left out of planning until it is removed from the registry
 or its identity table is dropped.
 
+### Attaching a database's project to a plan
+
+Two databases that each made their own project for one target become two
+plans, since their GUIDs differ. In the plan's workspace, under
+**Databases**, **Attach a project from another database** lists the
+projects of other plans in databases this plan has no project in yet.
+Attaching moves every database link of that other plan onto this one and
+retires it; this plan keeps its own framing and plan drafts and takes the
+other's only where it has none. Nothing in the rig databases moves: the next
+activation takes the attached project's targets over where they stand, by
+name, place, or as the lone target, and updates its exposure plans in place.
+**Detach** beside a linked database hands that project a plan of its own
+again, named after the project; this plan keeps its drafts. A plan never
+holds two projects in one database, so attaching such a plan is refused.
+
 ### Plans read like Library projects
 
 The plan list uses the Library's project card: the name opens the workspace,
@@ -248,6 +263,8 @@ delivery requirement.
 | POST | `/projects` | `{"id":"<caller-generated UUID>","name":"M31"}` |
 | GET | `/projects/{id}` | Exact project UUID. |
 | PATCH | `/projects/{id}` | `{"expected_revision":1,"name":"Andromeda"}` |
+| POST | `/projects/{id}/attach` | `from_project_id`: the plan to absorb. Moves every database link of that plan onto this one, takes its framing and plan drafts where this plan has none, and retires it. `409` when both plans link the same database, `404` when the other plan is gone, `400` for a plan attaching itself. Answers `into`, `absorbed`, `moved_links`, `framing_taken`, `plan_taken`. |
+| POST | `/projects/{id}/detach` | `catalog_slug`, `source_project_guid` and `name`: moves that one database link onto a new plan called `name` and answers the new plan's identity. `404` when the link is not this plan's. |
 
 The same identity operations and body/query shapes are available at `/sites`
 and `/rigs`. The latter remains a compatibility API for prototype references;

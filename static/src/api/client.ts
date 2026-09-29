@@ -4,7 +4,7 @@ import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorFeasibility, DirectorMosaicPreview, DirectorResolvedName,
   DirectorSkyMarks,
-  DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate} from './directorTypes';
+  DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate, DirectorAttached} from './directorTypes';
 import type {
   ProjectProcessingSettings,
   StackColorInputSources,
@@ -365,6 +365,22 @@ export const apiClient = {
     const api = await getApi();
     const { data } = await api.delete<ApiResponse<{ deleted: boolean }>>(`/director/v1/templates/${encodeURIComponent(id)}`, { params: { revision } });
     if (!data.data) throw new Error(data.error || 'Failed to delete the template');
+  },
+
+  /** Move every database link of another plan onto this one and retire it. */
+  attachDirectorProject: async (projectId: string, fromProjectId: string): Promise<DirectorAttached> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<DirectorAttached>>(`/director/v1/projects/${encodeURIComponent(projectId)}/attach`, { from_project_id: fromProjectId });
+    if (!data.data) throw new Error(data.error || 'Failed to attach the project');
+    return data.data;
+  },
+
+  /** Give one database's project a plan of its own again. */
+  detachDirectorProject: async (projectId: string, catalogSlug: string, sourceProjectGuid: string, name: string): Promise<DirectorIdentity> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<DirectorIdentity>>(`/director/v1/projects/${encodeURIComponent(projectId)}/detach`, { catalog_slug: catalogSlug, source_project_guid: sourceProjectGuid, name });
+    if (!data.data) throw new Error(data.error || 'Failed to detach the project');
+    return data.data;
   },
 
   getDirectorPlan: async (projectId: string): Promise<DirectorPlanView> => {

@@ -216,7 +216,7 @@ impl MetaStore {
     }
 }
 
-fn read_plan(conn: &Connection, project: Uuid) -> Result<Option<PlanDraft>, Error> {
+pub(crate) fn read_plan(conn: &Connection, project: Uuid) -> Result<Option<PlanDraft>, Error> {
     valid_id(project)?;
     let row: Option<(i64, Vec<u8>)> = conn
         .query_row(
