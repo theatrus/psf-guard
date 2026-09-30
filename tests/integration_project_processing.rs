@@ -59,29 +59,30 @@ async fn request(app: &Router, project: i32, body: Option<Value>) -> (StatusCode
 #[tokio::test]
 async fn project_setting_round_trip_is_isolated_and_reversible() {
     let app = app();
+    // Exposures stack apart until someone says otherwise.
     let (status, initial) = request(&app, 1, None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(initial["data"]["split_exposure_groups"], false);
-    let (status, saved) = request(&app, 1, Some(json!({"split_exposure_groups":true}))).await;
+    assert_eq!(initial["data"]["split_exposure_groups"], true);
+    let (status, saved) = request(&app, 1, Some(json!({"split_exposure_groups":false}))).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(saved["data"]["split_exposure_groups"], true);
+    assert_eq!(saved["data"]["split_exposure_groups"], false);
     assert_eq!(
         request(&app, 1, None).await.1["data"]["split_exposure_groups"],
-        true
-    );
-    assert_eq!(
-        request(&app, 2, None).await.1["data"]["split_exposure_groups"],
         false
     );
     assert_eq!(
-        request(&app, 1, Some(json!({"split_exposure_groups":false})))
+        request(&app, 2, None).await.1["data"]["split_exposure_groups"],
+        true
+    );
+    assert_eq!(
+        request(&app, 1, Some(json!({"split_exposure_groups":true})))
             .await
             .0,
         StatusCode::OK
     );
     assert_eq!(
         request(&app, 1, None).await.1["data"]["split_exposure_groups"],
-        false
+        true
     );
 }
 
@@ -107,6 +108,6 @@ async fn project_setting_rejects_missing_projects_and_invalid_payloads() {
     }
     assert_eq!(
         request(&app, 1, None).await.1["data"]["split_exposure_groups"],
-        false
+        true
     );
 }

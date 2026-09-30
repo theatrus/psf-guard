@@ -26,10 +26,13 @@ only that channel's remembered result; the other channel cards remain intact.
 
 ### Separate exposure lengths
 
-Enable **Separate exposure groups** in a project's image grid to keep short
-exposures apart from substantially longer ones. The setting is saved for that
-project in this database and is off by default. It does not change Target
-Scheduler templates or exposure plans.
+**Separate exposure groups** in a project's image grid keeps short exposures
+apart from substantially longer ones. It is on by default: normalization
+matches each frame's noise, not its signal, so a 120 s frame stacked with
+300 s frames carries well under half their signal and dims the result. Turn
+it off in a project's image grid to mix them; the choice is saved for that
+project in this database, and a project that never chose follows the default.
+It does not change Target Scheduler templates or exposure plans.
 
 PSF Guard uses each image's recorded exposure, not the template's current
 default. Within each exact target and filter, it sorts known exposure lengths
