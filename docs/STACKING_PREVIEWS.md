@@ -86,7 +86,7 @@ It helps most within one exposure length whose frames were shot under
 changing conditions: a rising Moon, twilight at either end of the night,
 haze, or thin cloud that brightened the sky or dimmed the target without
 failing the frame. It is not a way to blend different exposure lengths;
-turn on **Separate exposure groups** to keep those apart.
+**Separate exposure groups**, on by default, keeps those apart.
 
 Expand **Frame decisions** on a weighted card to see each frame's weight,
 one value per channel; hover a weight to see the noise it came from. The
