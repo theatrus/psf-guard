@@ -21,6 +21,19 @@ import {
   type SkyCut,
 } from './skyModel';
 import { recallSkyView, rememberSkyView } from './skyViewMemory';
+import { useQuery } from '@tanstack/react-query';
+import { apiClient } from '../../api/client';
+import { useUrlParams } from '../../hooks/useUrlState';
+import { useAccess } from '../../auth/access';
+import { openSettings } from '../../utils/settingsIntent';
+import { usePlans } from '../header/useCurrentPlan';
+import { retryWhenBusy } from '../director/retry';
+import DirectorDashboard from '../director/DirectorDashboard';
+import DirectorRigs from '../director/DirectorRigs';
+import TemplateLibrary from '../director/TemplateLibrary';
+import '../director/DirectorPage.css';
+import { placeRigs, type PlacedRig } from './liveRigs';
+import SkyLive from './SkyLive';
 import './SkyPage.css';
 
 const REPLAY_STEP_MS = 90;
@@ -28,6 +41,27 @@ const REPLAY_STEP_MS = 90;
 export default function SkyPage() {
   const navigate = useNavigate();
   const { data: rows, isLoading, isError } = useMergedSkyCoverage();
+  // Live: the rigs as they are now, over the coverage of what they took.
+  // URL state (`live=1`) so the header's Live chip can open it.
+  const { getParam, updateParams } = useUrlParams();
+  const plans = usePlans();
+  const live = plans.enabled && getParam('live') === '1';
+  const { canWrite } = useAccess();
+  const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, enabled: plans.enabled, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 15_000, refetchOnWindowFocus: true });
+  const placed = useMemo(() => placeRigs(statuses.data ?? [], plans.rows, Date.now()), [statuses.data, plans.rows]);
+  const [focus, setFocus] = useState<{ ra: number; dec: number; nonce: number } | null>(null);
+  const focusOn = (rig: PlacedRig) => { if (rig.ra !== null && rig.dec !== null) setFocus({ ra: rig.ra, dec: rig.dec, nonce: Date.now() }); };
+  const liveTable = live && (
+    <section className="sky-live-table director-page director-embedded" aria-label="Live table">
+      <DirectorDashboard />
+      {canWrite ? <p className="director-muted">
+        Rig setup and the exposure template library are under Settings:{' '}
+        <button type="button" className="director-link-button" onClick={() => openSettings('rigs')}>Rigs</button>
+        {' and '}
+        <button type="button" className="director-link-button" onClick={() => openSettings('templates')}>Exposure templates</button>.
+      </p> : <><DirectorRigs /><TemplateLibrary /></>}
+    </section>
+  );
   const merged = useMemo(() => mergeCoverage(rows), [rows]);
 
   // Start where the last visit left off, for this browser session.
@@ -181,19 +215,17 @@ export default function SkyPage() {
     }
   };
 
-  if (isLoading && rows.length === 0) {
-    return <div className="sky-page sky-loading">Reading the catalogs…</div>;
-  }
-  if (isError && rows.length === 0) {
-    return <div className="sky-page sky-loading">The sky coverage could not be loaded.</div>;
-  }
-  if (merged.targets.length === 0) {
-    return (
-      <div className="sky-page sky-loading">
-        No targets yet. Add a database or import image folders, and this page fills in.
-      </div>
-    );
-  }
+  // Without a map, Live still lists the rigs and shows the table.
+  const noMap = (note: string) => (
+    <div className="sky-page">
+      <div className="sky-loading">{note}</div>
+      {live && <SkyLive rigs={placed} />}
+      {liveTable}
+    </div>
+  );
+  if (isLoading && rows.length === 0) return noMap('Reading the catalogs…');
+  if (isError && rows.length === 0) return noMap('The sky coverage could not be loaded.');
+  if (merged.targets.length === 0) return noMap('No targets yet. Add a database or import image folders, and this page fills in.');
 
   return (
     <div className="sky-page">
@@ -345,6 +377,16 @@ export default function SkyPage() {
             </button>
           ))}
         </div>
+        {plans.enabled && (
+          <button
+            type="button"
+            className={`sky-chip sky-live-toggle${live ? ' is-on' : ''}`}
+            aria-pressed={live}
+            onClick={() => updateParams({ live: live ? null : '1' })}
+          >
+            Live
+          </button>
+        )}
         {!isTauriApp() && (
           <button type="button" className="sky-chip sky-save" onClick={savePng}>
             <Download size={14} /> Save PNG
@@ -352,17 +394,22 @@ export default function SkyPage() {
         )}
       </div>
 
-      <SkyMap
-        targets={shown}
-        frame={frame}
-        mode={mode}
-        showBackdrop={showBackdrop}
-        showStacks={showStacks}
-        initialZoom={initialZoom}
-        initialCenter={initialCenter}
-        onViewChange={rememberView}
-        onOpen={open}
-      />
+      <div className={`sky-body${live ? ' has-live' : ''}`}>
+        <SkyMap
+          targets={shown}
+          frame={frame}
+          mode={mode}
+          showBackdrop={showBackdrop}
+          showStacks={showStacks}
+          initialZoom={initialZoom}
+          initialCenter={initialCenter}
+          onViewChange={rememberView}
+          onOpen={open}
+          rigs={live ? placed : []}
+          focus={focus}
+        />
+        {live && <SkyLive rigs={placed} onFocus={focusOn} />}
+      </div>
 
       <SkyTimeline
         lanes={lanes}
@@ -377,6 +424,7 @@ export default function SkyPage() {
         playing={playing}
         onTogglePlay={() => setPlaying((current) => !current)}
       />
+      {liveTable}
     </div>
   );
 }
@@ -450,6 +498,9 @@ function inlineMapStyles(svg: SVGSVGElement): SVGSVGElement {
       if (value) target.style.setProperty(property, value);
     }
   });
+  // A picture of the coverage, not of tonight: live rigs stay out of it.
+  // Removed after the styles are copied, so the two node lists line up.
+  clone.querySelectorAll('.sky-rigs').forEach((node) => node.remove());
   clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
   clone.setAttribute('width', String(MAP_WIDTH));
   clone.setAttribute('height', String(MAP_HEIGHT));

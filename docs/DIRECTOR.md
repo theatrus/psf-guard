@@ -64,10 +64,13 @@ the picker lists every plan with its rigs and progress, follows the project
 chosen for review to its plan, and a rig chip in it hops back to that rig's
 project in Images; **All plans** goes to the Library. Beside the jobs slot a
 **Live** chip counts the fleet, `2 rigs · 1 exposing`, turns red when a rig
-that used to talk has gone quiet, and opens the Live table in a drawer from
-any view. Rig setup and the exposure template library are under **Settings
-› Rigs** and **Settings › Exposure templates**; a read-only viewer cannot
-open Settings, so the Live drawer shows them both, read only. Choosing a
+that used to talk has gone quiet, and opens **Live on the Sky** from any
+view: each reporting rig drawn on the coverage map where it points now, a
+list of the rigs beside the map (choosing one turns the map to it), and the
+full Live table under the map. Rig setup and the exposure template library
+are under **Settings › Rigs** and **Settings › Exposure templates**; a
+read-only viewer cannot open Settings, so Live on the Sky shows them both
+under the table, read only. Choosing a
 project in the Review picker from the Library, Sky or a workspace opens
 Images for it, and Planning's own URL parameter (`plan`) stays behind, so a
 plan you had open does not follow you into review.
@@ -721,7 +724,15 @@ Every program pull, check-in and status report is noted as contact with its
 server receipt time, and the Live table derives connectivity from those alone.
 For the status payload the Live table reads `phase` (or `state`),
 `target_name` (or `target`), `operation` with `operation_started_ms`,
-`wait_reason`, `safety`, `queue_depth`, and `errors` (or `error`); the rest is
+`wait_reason`, `safety`, `queue_depth`, and `errors` (or `error`). The Sky
+places a rig from `pointing`, `{ "ra_degrees": …, "dec_degrees": … }` in
+ICRS (J2000) degrees with right ascension 0–360, when the plugin sends it:
+the mount's position now, whatever it is doing. Without it the Sky uses the
+centre of the Target Scheduler target the report names, looked up by name
+among that rig's own plan targets, and draws that place dotted and labelled
+"at target", since it is a guess from the plan rather than a report. A rig
+with neither is listed beside the map but not drawn. The phases `exposing`,
+`imaging` and `capturing` count as exposing. The rest of the payload is
 stored and shown nowhere yet.
 
 ## Visibility

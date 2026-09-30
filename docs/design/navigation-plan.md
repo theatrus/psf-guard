@@ -3,7 +3,8 @@
 Status: agreed 2026-09-29. Step 1 shipped (header regroup, Live chip and
 drawer, Rigs and Exposure templates under Settings). Step 2 shipped (the
 Library holds every plan; `/director` without a plan redirects there).
-Step 3 shipped (the workspace lives at `/plan?plan=<key>`). Delete this file once every step
+Step 3 shipped (the workspace lives at `/plan?plan=<key>`). Step 4 shipped
+(Live on the Sky; the header chip opens it and the drawer is gone). Delete this file once every step
 below has shipped and [DIRECTOR.md](../DIRECTOR.md) and
 [SKY_COVERAGE.md](../SKY_COVERAGE.md) describe the result. The reasoning
 sits in [director.md](director.md) under "one list, two groups, Live on the
@@ -122,6 +123,14 @@ opens Sky with the panel open. Remove the drawer from step 1.
 Accept when: a rig reporting `exposing` on a target appears at that target's
 place with its name; a quiet rig is marked stale on the map, in the panel
 and in the chip; the Sky e2e spec covers one live rig from a seeded check-in.
+
+As built: the plugin's status carried no position, so the Sky reads a new
+optional `pointing` field (ICRS degrees) and falls back to the named
+target's centre among the rig's plan targets; the design record's status
+row states the contract for the plugin. The panel is a compact list beside
+the map, with the full Live table under the timeline and, for read-only
+viewers, rigs and templates under it. `e2e-director/live.spec.ts` covers
+one rig placed by its target and one by its pointing.
 
 ### 5. Remove the Planning page
 
