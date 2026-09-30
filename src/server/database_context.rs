@@ -240,6 +240,73 @@ pub(crate) fn spawn_calibration_header_backfill(path: String) {
     });
 }
 
+/// Measure the level of every calibration dark not measured yet, then grade
+/// the library for stray light, off every request path.
+///
+/// Each dark is a full read of a raw frame, so a large library on a NAS takes
+/// minutes. One pass runs per database at a time; a second request while one
+/// runs is dropped, since the running pass will reach the new frames or the
+/// next start will.
+pub(crate) fn spawn_dark_level_backfill(path: String) {
+    static RUNNING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    {
+        let mut running = RUNNING
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if running.contains(&path) {
+            return;
+        }
+        running.push(path.clone());
+    }
+    std::thread::spawn(move || {
+        let outcome = Connection::open_with_flags(&path, db_open_flags())
+            .and_then(|conn| {
+                conn.busy_timeout(INDEX_BUILD_BUSY_TIMEOUT)?;
+                Ok(conn)
+            })
+            .map_err(anyhow::Error::from)
+            .and_then(|conn| {
+                let mut announced = false;
+                crate::calibration::measure_dark_levels(&conn, |done, total| {
+                    if !announced {
+                        tracing::info!(
+                            "Measuring the level of {total} calibration dark(s) in {path} to \
+                             check them for stray light"
+                        );
+                        announced = true;
+                    }
+                    if done < total && done % 50 == 0 {
+                        tracing::info!("Dark levels: {done} of {total} frames in {path}");
+                    }
+                })
+            });
+        match outcome {
+            Ok(outcome) if outcome.stray_light > 0 => tracing::warn!(
+                "{} calibration dark(s) in {path} caught stray light and are kept out of \
+                 masters and exports ({} measured this pass, {} unreadable)",
+                outcome.stray_light,
+                outcome.measured,
+                outcome.unreadable
+            ),
+            Ok(outcome) if outcome.pending > 0 => tracing::info!(
+                "Measured {} calibration dark(s) in {path}; none caught stray light \
+                 ({} unreadable, left for the next pass)",
+                outcome.measured,
+                outcome.unreadable
+            ),
+            Ok(_) => {}
+            Err(error) => tracing::info!(
+                "Paused measuring calibration darks in {path}: {error:#}. \
+                 The next pass continues where this left off."
+            ),
+        }
+        RUNNING
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|running| running != &path);
+    });
+}
+
 /// Identity of the on-disk database file: the `(device, inode)` pair on unix.
 ///
 /// This is deliberately file *identity*, not file *content*. When another

@@ -458,6 +458,7 @@ export default function CalibrationLibraryDialog({
                   {groups.map((group) => {
                     const expanded = expandedGroups.has(group.key);
                     const shared = groupValidity(group.frames);
+                    const strayLight = group.frames.filter((frame) => frame.stray_light).length;
                     return [
                       <tr key={group.key} className="calibration-night-row">
                         <td colSpan={canManage ? 5 : 4}>
@@ -491,6 +492,14 @@ export default function CalibrationLibraryDialog({
                                 title={VALIDITY_TITLES[shared]}
                               >
                                 {VALIDITY_LABELS[shared]}
+                              </span>
+                            )}
+                            {strayLight > 0 && (
+                              <span
+                                className="calibration-validity calibration-stray-light"
+                                title="These darks sit well above the matching darks, the mark of stray light. Masters and exports leave them out."
+                              >
+                                {strayLight} stray light
                               </span>
                             )}
                             {/* Destructive, so it only appears once the
@@ -550,6 +559,14 @@ export default function CalibrationLibraryDialog({
                             title={VALIDITY_TITLES[frame.valid_direction]}
                           >
                             {VALIDITY_LABELS[frame.valid_direction]}
+                          </span>
+                        )}
+                        {frame.stray_light && (
+                          <span
+                            className="calibration-validity calibration-stray-light"
+                            title={`${frame.stray_light}. Left out of masters and exports.`}
+                          >
+                            Stray light
                           </span>
                         )}
                       </td>

@@ -136,6 +136,8 @@ pub async fn forget_calibration_frame(
     let conn = ctx.db();
     let mut conn = conn.lock().map_err(AppError::db)?;
     let outcome = crate::calibration::forget_frame(&mut conn, &frame_uuid).map_err(AppError::db)?;
+    // A forgotten dark may have been the quiet one its peers were judged by.
+    crate::calibration::grade_dark_levels(&conn).map_err(AppError::db)?;
     if outcome.frames_removed == 0 {
         return Err(AppError::NotFound);
     }
@@ -161,6 +163,8 @@ pub async fn forget_calibration_frames(
     let mut conn = conn.lock().map_err(AppError::db)?;
     let outcome =
         crate::calibration::forget_frames(&mut conn, &request.frame_uuids).map_err(AppError::db)?;
+    // A forgotten dark may have been the quiet one its peers were judged by.
+    crate::calibration::grade_dark_levels(&conn).map_err(AppError::db)?;
     if outcome.frames_removed == 0 {
         return Err(AppError::NotFound);
     }
@@ -3138,6 +3142,12 @@ pub(crate) fn spawn_import_job_with_trigger(
         // New rows reference files the DB-based file cache hasn't seen; kick
         // the normal background refresh so the UI resolves them promptly.
         let _ = ctx.ensure_cache_available();
+
+        // New darks are checked for stray light before a stack or an export
+        // relies on them; with none to measure this is one query.
+        if !dry_run {
+            crate::server::database_context::spawn_dark_level_backfill(ctx.database_path.clone());
+        }
 
         // Quality analysis is a general database maintenance job, not an
         // import stage. An opt-in import only queues the changed targets.

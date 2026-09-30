@@ -395,6 +395,8 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
               {progress.frames - progress.lights === 1 ? '' : 's'}
               {progress.missing_files > 0 &&
                 `; ${progress.missing_files} catalog row(s) had no file and were left out`}
+              {(progress.stray_light_darks ?? 0) > 0 &&
+                `; ${progress.stray_light_darks} dark(s) that caught stray light were left out`}
               .
             </p>
           )}

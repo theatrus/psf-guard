@@ -302,6 +302,11 @@
 
 ## Fixed
 
+- Darks that caught stray light, such as dawn through an open roof, no longer
+  reach stack masters or WBPP exports. PSF Guard measures each dark once in
+  the background, marks one that sits well above its matching darks, and
+  names the frames it left out. The calibration library shows the mark.
+
 - Color previews with background extraction no longer tint the corners. The
   automatic model now picks one background shape for all channels instead of
   one per channel, which had left some previews green in one corner and
