@@ -2811,8 +2811,11 @@ should say so instead of hiding it:
   becomes selectable only once Grid and Sequence can span a family (below).
 - **Plan** is a labeled group, shown when Director is enabled: a plan
   picker over families, then the **Workspace** (framing, sky, feasibility,
-  exposure plan, rigs, activation, attach and detach). Old `directorProject`
-  links land here. Each picker offers the hop to the other group.
+  exposure plan, rigs, activation, attach and detach) at `/plan?plan=<key>`,
+  where the key is the Target Scheduler GUID the rigs share (the same on
+  every instance holding those databases), else the plan id, or
+  `slug:row` for a row not yet planned. Old `directorProject` links
+  forward there. Each picker offers the hop to the other group.
 - **Live** has no scope of its own, so it is not a tab. It folds under
   **Sky**: the coverage map already reads every catalog and shows the past,
   and it gains the present, each rig drawn where it points now with its

@@ -6,6 +6,7 @@ import type { DirectorPlanRow } from '../../api/directorTypes';
 import { useDbProjectTarget } from '../../hooks/useUrlState';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import { retryWhenBusy } from '../director/retry';
+import { planHref, planKey, resolvePlan } from '../director/planAddress';
 
 /** Every plan, once for the whole page: the header's plan picker, the
  *  Library's plan links and its plans without a database share this query.
@@ -25,29 +26,23 @@ export function usePlans() {
   }, [rows]);
   const planFor = useCallback((dbId: string, projectId: number) => byProject.get(`${dbId}:${projectId}`) ?? null, [byProject]);
   // The workspace keeps the page's other scope so the Library returns where it was.
-  const hrefFor = (planId: string) => {
-    const next = new URLSearchParams(params);
-    next.delete('directorSource'); next.delete('directorView'); next.delete('directorCatalog');
-    next.set('directorProject', planId);
-    return `/director?${next}`;
-  };
+  const hrefFor = (plan: DirectorPlanRow | string, scope: URLSearchParams = params) => planHref(typeof plan === 'string' ? plan : planKey(plan, rows), scope);
   return { enabled, instanceId, query, rows, planFor, hrefFor, loading: enabled && query.isPending, error: query.isError };
 }
 
 /** The plan in scope and the way to its workspace. A plan is in scope when
- *  the Planning page names one (`directorProject`) or when the review scope's
- *  project is one of its rigs, so picking a project for review also picks
- *  its plan. */
+ *  its workspace is open (`/plan?plan=…`) or when the review scope's project
+ *  is one of its rigs, so picking a project for review also picks its plan. */
 export function useCurrentPlan() {
   const plans = usePlans();
   const [params] = useSearchParams();
   const { dbId, projectId } = useDbProjectTarget();
-  // Only the Planning page names a plan; elsewhere the review scope decides.
+  // Only a workspace names a plan; elsewhere the review scope decides.
   const { pathname } = useLocation();
-  const named = pathname === '/director' ? params.get('directorProject') : null;
+  const named = pathname === '/plan' ? params.get('plan') : null;
   const { rows, planFor } = plans;
   const current = useMemo(() => {
-    if (named) return rows.find(row => row.project.id === named) ?? null;
+    if (named) { const resolved = resolvePlan(rows, named); return resolved.kind === 'plan' ? resolved.row : null; }
     if (dbId && projectId !== null) return planFor(dbId, projectId);
     return null;
   }, [rows, named, dbId, projectId, planFor]);

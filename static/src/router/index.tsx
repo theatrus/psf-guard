@@ -23,6 +23,8 @@ const router = createHashRouter([
     path: "/",
     element: <App />,
     children: [
+      { path: 'plan', element: <DirectorPage /> },
+      // Old Planning links: sent on to their plan or to the Library.
       { path: 'director', element: <DirectorPage /> },
       {
         index: true,

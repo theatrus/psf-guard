@@ -5,6 +5,7 @@ import { apiClient } from '../../api/client';
 import type { DirectorRigStatusView } from '../../api/directorTypes';
 import { describeNow, errorsOf, formatAge } from './dashboardModel';
 import { retryWhenBusy } from './retry';
+import { planHref } from './planAddress';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
@@ -18,12 +19,7 @@ export default function DirectorDashboard() {
   const [params] = useSearchParams();
   const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 15_000, refetchOnWindowFocus: true });
   const now = Date.now();
-  const workspaceHref = (projectId: string) => {
-    const next = new URLSearchParams(params);
-    next.delete('directorSource'); next.delete('directorView'); next.delete('directorCatalog');
-    next.set('directorProject', projectId);
-    return `/director?${next}`;
-  };
+  const workspaceHref = (projectId: string) => planHref(projectId, params);
   const rows = statuses.data ?? [];
   const age = (at: number | null | undefined) => at ? formatAge(now - at) : 'never';
   return <section className="director-records director-dashboard" aria-label="Live rigs">

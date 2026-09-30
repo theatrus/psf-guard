@@ -13,7 +13,7 @@ import UpdateNotice from './components/UpdateNotice';
 import DatabaseActivityStatus from './components/DatabaseActivityStatus';
 import AggregatedCacheStatus from './components/AggregatedCacheStatus';
 import TauriSettings from './components/TauriSettings';
-import { isOverviewPath, isSkyPath, useDbProjectTarget, useGridState, withoutPlanningParams } from './hooks/useUrlState';
+import { isOverviewPath, isPlanningPath, isSkyPath, useDbProjectTarget, useGridState, withoutPlanningParams } from './hooks/useUrlState';
 import { isTauriApp, tauriConfig } from './utils/tauri';
 import {
   OPEN_SETTINGS_EVENT,
@@ -28,13 +28,13 @@ import './App.css';
 function AppContent() {
   const navigate = useNavigate();
   const location = useLocation();
-  const isOnDirector = location.pathname === '/director';
+  const isOnDirector = isPlanningPath(location.pathname);
   const { showStats, setShowStats } = useGridState();
   // The review scope: a database, and usually a project, parked in the URL.
   const { dbId } = useDbProjectTarget();
   const hasReviewScope = dbId !== null;
   const plan = useCurrentPlan();
-  const isOnWorkspace = isOnDirector && new URLSearchParams(location.search).has('directorProject');
+  const isOnWorkspace = location.pathname === '/plan' && !!plan.current;
   const { data: serverInfo } = useQuery({
     queryKey: ['serverInfo'],
     queryFn: apiClient.getServerInfo,
@@ -202,7 +202,7 @@ function AppContent() {
               <PlanPicker />
               <button
                 type="button"
-                onClick={() => plan.current && navigate(plan.hrefFor(plan.current.project.id))}
+                onClick={() => plan.current && navigate(plan.hrefFor(plan.current))}
                 className="header-button"
                 aria-current={isOnWorkspace ? 'page' : undefined}
                 disabled={!plan.current}
