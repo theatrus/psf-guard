@@ -993,7 +993,7 @@ export default function Overview() {
                           }}
                         >
                           <span aria-hidden="true">⚙</span>
-                          Plan
+                          Planning
                         </button>
                       )}
                       <button

@@ -36,7 +36,7 @@ export default function PlanPage() {
   const library = <Link to={back ? `/?${back}` : '/'}>Library</Link>;
   return (
     <main className="director-page">
-      <header className="director-heading"><h1>Plan workspace</h1><span className="director-preview">Experimental</span></header>
+      <header className="director-heading"><h1>Planning</h1><span className="director-preview">Experimental</span></header>
       {status.isPending && <p role="status">Loading plans...</p>}
       {status.isError && <div role="alert"><p>{message(status.error)}</p><button type="button" onClick={() => void status.refetch()}>Retry</button></div>}
       {status.data && !available && <p>Plans are unavailable on this server.</p>}

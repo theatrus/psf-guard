@@ -407,3 +407,8 @@
   **Sequence** show. A lone rig's project lists its targets there. Every
   view button marks the current page the same way, and the view strip is
   only as wide as its buttons.
+
+- The header's button to a plan's workspace is called **Planning** again,
+  as are the Library card's button and the page heading. A project with one
+  rig and one target shows them as a captioned label beside Images, set
+  apart from the buttons, rather than as bare text that looked clickable.

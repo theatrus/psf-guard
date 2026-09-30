@@ -51,7 +51,9 @@ describe('rig and target switcher', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/grid?db=c925&project=3&target=31');
     lone.unmount();
     mount('/grid?db=c925&project=2');
-    expect(await screen.findByLabelText('Rig: C925')).toHaveClass('rig-target-fixed');
+    const fixed = await screen.findByLabelText('Rig and target: C925 · Pelican');
+    expect(fixed).toHaveClass('rig-target-fixed');
+    expect(fixed).toHaveTextContent('Rig · target');
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
   });
 

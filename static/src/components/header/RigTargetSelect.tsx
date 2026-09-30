@@ -45,10 +45,19 @@ export default function RigTargetSelect() {
     targets.filter(target => target.db_id === member.db_id && target.project_id === member.id)
       .sort((a, b) => a.name.localeCompare(b.name));
 
-  if (members.length === 0) return <span className="rig-target-empty" aria-label="Rig: none in scope">No rig in scope</span>;
+  // Nothing to choose reads as a label, not a control: a caption over the
+  // value, in the muted inset the scope uses for facts.
+  if (members.length === 0) {
+    return <span className="rig-target-fixed is-empty" aria-label="Rig: none in scope"><small>Rig</small><span>None in scope</span></span>;
+  }
   const single = members.length === 1;
-  if (single && targetsOf(members[0]).length <= 1) {
-    return <span className="rig-target-fixed" aria-label={`Rig: ${members[0].db_name}`} title="The database this project lives in">{members[0].db_name}</span>;
+  const lone = single ? targetsOf(members[0]) : [];
+  if (single && lone.length <= 1) {
+    const what = lone[0] ? `${members[0].db_name} · ${lone[0].name}` : members[0].db_name;
+    return <span className="rig-target-fixed" aria-label={`Rig and target: ${what}`}
+      title="This project has one rig and one target, so there is nothing to choose">
+      <small>Rig · target</small><span>{what}</span>
+    </span>;
   }
   const inScope = members.some(member => member.db_id === dbId && member.id === projectId);
   // A target the URL still names from another project reads as all targets.

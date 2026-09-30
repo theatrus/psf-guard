@@ -2846,7 +2846,7 @@ is not unique (a detach keeps the GUID); the Live chip opens the Sky with a
 rig list beside the map and the table under it, read-only viewers getting
 rigs and templates there; and placing a rig needed the new optional
 `pointing` status field (see the plugin handoff below). The workspace
-page is headed "Plan workspace" and is reached from the Library, the
+page is headed "Planning" and is reached from the Library, the
 header and old links.
 
 ### Plugin handoff after the navigation change
