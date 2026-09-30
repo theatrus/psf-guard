@@ -87,7 +87,7 @@ untested integration requirements unchecked.
 | Project framing wizard | Framing view in the project workspace: survey backgrounds from N.I.N.A.'s HiPS list, name resolution through CDS Sesame, interactive center, angle and zoom, mosaic rows/columns/overlap, per-rig footprints from rig profiles, draft editing with compare-and-set, and a visibility panel with tonight's altitude chart, custom horizon, Moon and darkness like N.I.N.A.'s framing assistant, plus a week of nights per rig. | Reference images with WCS, layer comparison, offline region cache, rotation feasibility per rig. |
 | Catalog discovery | [#498](https://github.com/theatrus/psf-guard/pull/498) merged: operator-scoped read-only project/profile evidence from registered TS-compatible catalogs, with bounded results and invalid/duplicate identity reports. | Discovery does not infer rig ownership or read image history. |
 | Catalog adoption | [#502](https://github.com/theatrus/psf-guard/pull/502) merged explicit durable lineage; [#503](https://github.com/theatrus/psf-guard/pull/503) merged operator preview/apply, exact identity matching, stale-review refusal and interrupted-write recovery. [#506](https://github.com/theatrus/psf-guard/pull/506) merged the reviewed mapping UI and read-only inventory, with real-server browser tests. | Independent forks, historical-image attribution, contribution accounting and acquisition authorization remain separate work. |
-| Operator API and UI | The Library lists plans (`GET /plans`: links, stage, per-rig state and capture dates) as its own rows and families, with plans that have captured nothing in a section below; the header's Plan group picks a plan and opens its workspace at `/plan?plan=<TS GUID or plan id>`, which holds framing, plan and activation over the Library's existing target/exposure editor; rig setup and the template library are Settings tabs; Live is drawn on the Sky with the table under it. The Planning list page, the identity lists and the Catalogs tab are retired; old `/director` links redirect. Desktop/mobile real-server tests cover two databases contributing to one project and return navigation. | Pairing-code management UI and acquisition control. The Live table shows connectivity, last report, contact ages and assignments per rig. UI tests are not equipment tests. |
+| Operator API and UI | The Library lists plans (`GET /plans`: links, stage, per-rig state and capture dates) as its own rows and families, with plans that have captured nothing in a section below; the header's scope (one project picker, Workspace, then a rig and target switcher for Images and Sequence) opens a plan's workspace at `/plan?plan=<TS GUID or plan id>`, which holds framing, plan and activation over the Library's existing target/exposure editor; rig setup and the template library are Settings tabs; Live is drawn on the Sky with the table under it. The Planning list page, the identity lists and the Catalogs tab are retired; old `/director` links redirect. Desktop/mobile real-server tests cover two databases contributing to one project and return navigation. | Pairing-code management UI and acquisition control. The Live table shows connectivity, last report, contact ages and assignments per rig. UI tests are not equipment tests. |
 | Program delivery | #528 adds `GET /rigs/{rig}/program`, compiling activated rig rows and reported configuration into core Program plus identity links and rig context. Plugin #28 adds bounded, read-only HTTP preview intake with exact scope/configuration/link checks and immutable-identity drift detection. The current commissioning increment adds an atomic, identity-bound durable preview cache; expired history is not renewed authorization. | Immutable issued allocations, explicit filter mapping, progress-preserving refresh and acquisition commissioning. The current compiler response must not yet arm acquisition; see the program-intake audit below. |
 | Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
 | Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. #530 adds server receipt ingestion/contiguous acknowledgements and coalesced status routes; #531 shows reported rig status in Director. The current commissioning increment adds separate scoped pairing and a bounded capture sender with durable, identity-bound cursors, tested against a real local server after a native simulator run. | Preparation feed, production background/status delivery, grade feedback, offline authorization lifecycle, manual/sequence batch reconcile and replacement activation remain missing. |
@@ -2813,8 +2813,11 @@ should say so instead of hiding it:
   **Sequence**. The picker keeps grouping a family under one heading with a
   row per rig, so both views stay per rig without a seam. A family heading
   becomes selectable only once Grid and Sequence can span a family (below).
-- **Plan** is a labeled group, shown when Director is enabled: a plan
-  picker over families, then the **Workspace** (framing, sky, feasibility,
+  As built on 2026-09-30 the Review and Plan groups became one scope: the
+  project picker, Workspace, then a rig and target switcher for Images and
+  Sequence, superset to subset, left to right.
+- **Plan** was a labeled group, shown when Director is enabled (since merged
+  into the one scope above): a plan picker over families, then the **Workspace** (framing, sky, feasibility,
   exposure plan, rigs, activation, attach and detach) at `/plan?plan=<key>`,
   where the key is the Target Scheduler GUID the rigs share (the same on
   every instance holding those databases), else the plan id, or
@@ -2887,6 +2890,18 @@ should now take into account:
   minutes (`stale`) and reads offline after thirty. Any program pull,
   check-in or status report counts as contact, so a plugin that only
   reports status still reads online.
+
+### Later: a mosaic's targets as one view (design note)
+
+Asked for 2026-09-30, not yet. Today a mosaic is several Target Scheduler
+targets, one per panel, and Images and Sequence show one target or all of a
+project's targets as separate frames. A meta-target mode would treat a
+mosaic's panels as one target: the grid grouped by panel in the mosaic's
+layout, Sequence interleaving the panels by capture time, and the stack
+previews placed side by side on the framing's sky. It belongs in the rig and
+target switcher as one more choice ("M31 mosaic"), beside "All targets" and
+the single panels, and it needs the panel layout from the plan's framing
+draft rather than guessing it from target names.
 
 ### Later: review across a multi-rig project (design note)
 

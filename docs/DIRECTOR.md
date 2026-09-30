@@ -2,7 +2,7 @@
 
 Director is experimental. It has no page of its own: plans live in the
 **Library** beside the projects they shoot, each plan has a **workspace**
-reached from the Library or from the header's **Plan** group, and the rigs
+reached from the Library or from the header's scope, and the rigs
 live on the **Sky** and in **Settings**. Director stays the name of the
 plugin, the protocol and the API. This API manages global
 project, site and rig identities in a separate meta database. Director clients can pair to inspect programs and report
@@ -61,10 +61,16 @@ A plan closed on every rig stays out of it until Show asks for Closed, and
 when a database's projects cannot be read, plans linked to databases are
 left out rather than shown as empty.
 
-The header's **Plan** group holds a plan picker and a **Workspace** button:
-the picker lists every plan with its rigs and progress, follows the project
-chosen for review to its plan, and a rig chip in it hops back to that rig's
-project in Images; **All plans** goes to the Library. Beside the jobs slot a
+The header reads Library, then the **scope**, then Sky. The scope runs from
+the whole to the part: the project picker (a plan shot by several rigs is
+one row there, and the closed picker names it with its rig count), the
+**Workspace** button for that plan, then a switcher for which rig and
+target **Images** and **Sequence** show. For a plan shot by several rigs
+the switcher lists each rig with its targets; for a lone rig it lists the
+project's targets, and with one target it only names the database. Used on
+a workspace, the picker opens the chosen project's workspace; it also lists
+plans no database takes yet, which open straight into theirs. Every view
+button shows the page you are on the same way, filled. Beside the jobs slot a
 **Live** chip counts the fleet, `2 rigs · 1 exposing`, turns red when a rig
 that used to talk has gone quiet, and opens **Live on the Sky** from any
 view: each reporting rig drawn on the coverage map where it points now, a
@@ -127,7 +133,7 @@ rig profile. The identity API for sites remains for the plugin.
 
 ### Rigs and plans appear on their own
 
-Opening the Library, or any view with the header's plan picker, takes every
+Opening the Library, or any view with the header's scope, takes every
 registered database in as a rig and every Target Scheduler project in it as
 a plan. Nothing to enable, name or
 link: the database keeps a small identity table so a moved or renamed file
@@ -408,8 +414,8 @@ server folds both back to the sensor before offering them. Typed models:
 
 ## Framing view
 
-Open a plan from its Plan button in the Library, or from the header's
-plan picker. The workspace is a wide screen:
+Open a plan from its Plan button in the Library, or pick its project in the
+header and choose **Workspace**. The workspace is a wide screen:
 **Framing** comes first. The sky takes the width the window has and the
 height left once tonight's visibility strip fits under it, and that column
 stays put while the form beside it scrolls, so the horizon chart is always

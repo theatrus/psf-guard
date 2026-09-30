@@ -12,13 +12,34 @@
   background: var(--color-bg-tertiary);
 }
 
-.header-group-label {
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--color-text-hint);
+.header-scope-divider {
+  align-self: stretch;
+  width: 1px;
+  margin: 4px 2px;
+  background: var(--color-border-secondary);
+}
+
+.rig-target-select {
+  flex: 0 1 14rem;
+  min-width: 7rem;
+  width: auto;
+}
+
+.rig-target-fixed,
+.rig-target-empty {
+  padding: 0 6px;
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
   white-space: nowrap;
+}
+
+.rig-target-empty {
+  color: var(--color-text-hint);
+}
+
+.header-nav .header-button:disabled {
+  background: transparent;
+  border-color: transparent;
 }
 
 .header-group .project-target-selector.compact {
@@ -34,72 +55,6 @@
 .header-group .header-button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
-}
-
-.plan-picker {
-  position: relative;
-  flex: 1 1 12rem;
-  min-width: 0;
-  max-width: 18rem;
-}
-
-.plan-picker-popover {
-  width: min(480px, calc(100vw - 24px));
-}
-
-.plan-option {
-  display: grid;
-  gap: 4px;
-  padding: 6px 8px;
-  border-radius: 6px;
-}
-
-.plan-option.is-selected {
-  background: var(--color-primary-alpha-10);
-}
-
-.plan-option-main {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  width: 100%;
-  padding: 2px 0;
-  border: 0;
-  background: none;
-  color: var(--color-text-primary);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.plan-option-main:hover .plan-option-name {
-  text-decoration: underline;
-}
-
-.plan-option-name {
-  flex: 1 1 8rem;
-  min-width: 0;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.plan-option-rigs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.plan-option-rig {
-  border: 1px solid transparent;
-  cursor: pointer;
-}
-
-.plan-option-rig:hover {
-  border-color: var(--color-primary);
-  color: var(--color-text-primary);
 }
 
 .live-chip {
@@ -131,10 +86,6 @@
 }
 
 @media (max-width: 760px) {
-  .header-group-label {
-    display: none;
-  }
-
   .header-view-tabs.header-nav {
     flex-wrap: wrap;
   }
@@ -155,10 +106,27 @@
     flex: 0 0 auto;
   }
 
-  .header-group .project-target-selector.compact,
-  .header-group .plan-picker {
-    flex: 1 1 0;
+  /* The scope wraps into its two halves: the project and its workspace,
+     then the rig and the views of it. */
+  .header-scope {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .header-scope-divider {
+    flex-basis: 100%;
+    height: 0;
+    margin: 0;
+  }
+
+  .header-group .project-target-selector.compact {
+    flex: 1 1 10rem;
+    min-width: 9rem;
     max-width: none;
+  }
+
+  .rig-target-select {
+    flex: 1 1 8rem;
   }
 
   .live-chip .utility-label {

@@ -8,8 +8,8 @@ import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import { retryWhenBusy } from '../director/retry';
 import { planHref, planKey, resolvePlan } from '../director/planAddress';
 
-/** Every plan, once for the whole page: the header's plan picker, the
- *  Library's plan links and its plans without a database share this query.
+/** Every plan, once for the whole page: the header's scope, the Library's
+ *  plan links and its plans without a database share this query.
  *  Nothing is asked when Director is off. */
 export function usePlans() {
   const director = useDirectorStatus();

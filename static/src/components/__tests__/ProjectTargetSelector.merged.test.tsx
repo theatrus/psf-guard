@@ -27,8 +27,8 @@ function renderAt(route: string) {
 }
 
 describe('ProjectTargetSelector on a merged view', () => {
-  it('opens Images for a project chosen from the Library, keeping the rest of the URL', async () => {
-    renderAt('/plan?dbfilter=attic&show=active&plan=abc&directorView=projects');
+  it('opens Images for a project chosen from the Sky, keeping the rest of the URL', async () => {
+    renderAt('/sky?dbfilter=attic&show=active&plan=abc&directorView=projects&live=1');
     const trigger = document.querySelector<HTMLButtonElement>('#scope-select')!;
     await waitFor(() => expect(trigger).not.toBeDisabled());
     fireEvent.click(trigger);
@@ -37,6 +37,21 @@ describe('ProjectTargetSelector on a merged view', () => {
     // Planning's own params stay behind; the rest of the URL comes along.
     expect(screen.getByTestId('location')).toHaveTextContent('/grid?dbfilter=attic&show=active&db=attic&project=1');
     expect(screen.getByTestId('location')).not.toHaveTextContent('plan=');
+  });
+
+  it("opens the chosen project's workspace when used from a workspace", async () => {
+    server.use(
+      http.get('/api/director/v1/status', () => HttpResponse.json({ success: true, data: { protocol_version: 1, enabled: true, instance_id: '11111111-1111-4111-8111-111111111111', acquisition_available: false, database_management: true }, error: null })),
+      http.get('/api/director/v1/plans', () => HttpResponse.json({ success: true, data: { rows: [], warnings: [] }, error: null })),
+    );
+    renderAt('/plan?plan=elsewhere&dbfilter=attic');
+    const trigger = document.querySelector<HTMLButtonElement>('#scope-select')!;
+    await waitFor(() => expect(trigger).not.toBeDisabled());
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole('button', { name: /^Sh2 86/, expanded: false }));
+    fireEvent.click(await screen.findByRole('button', { name: /All images/ }));
+    // No plan knows the row yet, so its workspace is addressed by database and row.
+    expect(screen.getByTestId('location')).toHaveTextContent('/plan?dbfilter=attic&db=attic&project=1&plan=attic%3A1');
   });
 
   it('refreshes caches only for the database a scoped view shows', async () => {
