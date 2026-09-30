@@ -28,7 +28,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.97.1
         with:
           components: rustfmt, clippy
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
       - run: cargo fmt --all -- --check
@@ -48,7 +48,7 @@ jobs:
           Copy-Item crates/director-core/SOFARS-LICENSE.txt target/release/SOFARS-LICENSE.txt
           Copy-Item crates/director-core/THIRD_PARTY_NOTICES.md target/release/THIRD_PARTY_NOTICES.md
       - if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: director-runtime-windows-x64
           path: |
