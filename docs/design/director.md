@@ -2792,6 +2792,77 @@ this work is taken up, the target model needs, at least:
 Until then a comet is framed as a fixed place at the moment it was looked
 at, and the framing view says so in its marks.
 
+### Later: one list, two groups, Live on the Sky (design note)
+
+Decided 2026-09-29, to be built in steps. The Library and the plan list
+now render from the same rows, and the header's Library, Images and
+Sequence tabs were three views of one thing while Planning was a second
+list with a workspace attached. The unit of review is one rig's project,
+because frames, grades, caches and sequence scores live in one catalog; the
+unit of planning is the family, one plan shot by several rigs. The header
+should say so instead of hiding it:
+
+- **Library** stands alone: the one list of projects and families, with
+  the Show select, search and archive fold the plan list grew. The plan
+  list under Planning goes away; `/director` redirects into the Library.
+- **Review** is a labeled group: the project picker, then **Images** and
+  **Sequence**. The picker keeps grouping a family under one heading with a
+  row per rig, so both views stay per rig without a seam. A family heading
+  becomes selectable only once Grid and Sequence can span a family (below).
+- **Plan** is a labeled group, shown when Director is enabled: a plan
+  picker over families, then the **Workspace** (framing, sky, feasibility,
+  exposure plan, rigs, activation, attach and detach). Old `directorProject`
+  links land here. Each picker offers the hop to the other group.
+- **Live** has no scope of its own, so it is not a tab. It folds under
+  **Sky**: the coverage map already reads every catalog and shows the past,
+  and it gains the present, each rig drawn where it points now with its
+  phase and target, and today's dashboard as a panel beside the map. A
+  header status chip (`2 rigs · 1 exposing`, red when one has gone quiet)
+  sits in the existing jobs slot on every view and opens Sky's live panel.
+  The Library's family rows and the Workspace's rig list show their slice
+  of the same status inline.
+- **Rig setup** and **Exposure templates** move under Settings. They are
+  configuration, not daily work.
+
+Grid, Detail, Comparison and Sequence keep the `db` slug in URL state; the
+Library keeps merging databases through `useScopedDbId`; shared links keep
+working through redirects. Order of work: header regroup with the chip and
+the Settings pages; Library absorbs the plan list and `/director` redirects;
+Workspace addressed by family key; Live drawn on the Sky.
+
+### Later: review across a multi-rig project (design note)
+
+Grid and Sequence should one day take a family as scope: frames from every
+rig that shoots the plan, interleaved by time in Sequence and grouped by
+rig in the grid, with Detail and Comparison reached from either. That
+means fan-out queries across member catalogs, the `db` slug carried per
+frame instead of per view, family-keyed URL state, and caches that stay
+scoped below each rig's slug. Grading still writes per frame, so it fits.
+Quality scores, comparison and stacking stay per rig, since optics and
+pixel scale differ. Until then the project picker's family grouping keeps
+review per rig, and the family heading in it is not selectable.
+
+### Later: settings that sync between PSF Guard instances (design note)
+
+A user runs more than one PSF Guard: a desktop for review and an always-on
+server the rigs report to. Some of what they hold is instance-local (paths,
+caches, registry) and some is shared knowledge that should meet in the
+middle: the exposure template library, rig setup (optics, site, limits),
+and in time plans and framing drafts. Today each instance keeps its own and
+the user copies by hand. When this is taken up, alongside Phase 6:
+
+- every shared record is keyed by a stable GUID and carries a revision, as
+  the template library and Director identities already do, so two copies
+  can be told apart from two edits;
+- sync is a compare-and-set exchange of records, not a file copy, over the
+  same HTTP the plugin already pulls programs through, with the last writer
+  named and a conflict surfaced rather than merged silently;
+- each record type says which fields travel and which stay local (a rig's
+  site travels; its catalog path does not), and activation never follows a
+  synced draft without the user applying it on the receiving side;
+- the Settings pages that own these records show where a record came from
+  and when it last agreed with the other instance.
+
 ## Review and validation policy
 
 Each implementation phase requires code review, relevant contract and migration
