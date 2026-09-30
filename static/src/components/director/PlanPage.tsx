@@ -1,30 +1,29 @@
-import { useRef } from 'react';
-import { Link, Navigate, useLocation, useSearchParams } from 'react-router-dom';
+import { useEffect, useRef } from 'react';
+import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import { withoutPlanningParams } from '../../hooks/useUrlState';
 import { usePlans } from '../header/useCurrentPlan';
 import './DirectorPage.css';
 import DirectorProjectContext from './DirectorProjectContext';
 import ProjectWorkspace from './ProjectWorkspace';
-import { legacyPlanningHref, planHref, planKey, resolvePlan } from './planAddress';
+import { planHref, planKey, resolvePlan } from './planAddress';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
 /** One plan's workspace at `/plan?plan=<key>`. The key is the Target
- *  Scheduler GUID its rigs share, Planning's plan id, or `slug:row` for a
- *  project not planned yet (see planAddress). An old `/director` link is
- *  sent to its plan or to the Library. */
-export default function DirectorPage() {
-  const { pathname } = useLocation();
+ *  Scheduler GUID its rigs share, the plan id, or `slug:row` for a project
+ *  not planned yet (see planAddress). */
+export default function PlanPage() {
   const [params] = useSearchParams();
   const status = useDirectorStatus();
   const plans = usePlans();
   // The plan this page showed last: when a detach leaves two plans holding
   // the address's GUID, the one already open stays open.
   const shown = useRef<string | null>(null);
-  if (pathname === '/director') return <Navigate to={legacyPlanningHref(params)} replace />;
   const available = status.data?.enabled && status.data.protocol_version === 1 && !!status.data.instance_id;
   const key = params.get('plan');
+  // A plan opens at its top, not at the scroll offset of the list it came from.
+  useEffect(() => { document.querySelector('.app-main')?.scrollTo?.({ top: 0 }); }, [key]);
   const resolved = resolvePlan(plans.rows, key, shown.current);
   if (resolved.kind === 'plan') {
     shown.current = resolved.row.project.id;
@@ -37,10 +36,10 @@ export default function DirectorPage() {
   const library = <Link to={back ? `/?${back}` : '/'}>Library</Link>;
   return (
     <main className="director-page">
-      <header className="director-heading"><h1>Planning</h1><span className="director-preview">Experimental</span></header>
-      {status.isPending && <p role="status">Loading Planning...</p>}
+      <header className="director-heading"><h1>Plan workspace</h1><span className="director-preview">Experimental</span></header>
+      {status.isPending && <p role="status">Loading plans...</p>}
       {status.isError && <div role="alert"><p>{message(status.error)}</p><button type="button" onClick={() => void status.refetch()}>Retry</button></div>}
-      {status.data && !available && <p>Planning is unavailable on this server.</p>}
+      {status.data && !available && <p>Plans are unavailable on this server.</p>}
       {available && status.data && <>
         {!status.data.acquisition_available && <p className="director-muted">Acquisition is not yet available.</p>}
         {!status.data.database_management && <p className="director-muted" role="note">Read only over the catalogs: this server was started without database management, so plans and framing can be drafted but activation and Target Scheduler edits are off.</p>}

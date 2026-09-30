@@ -1,13 +1,14 @@
 import { type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import { AccessContext, useAccess } from '../../auth/access';
 import { useScopedDbId } from '../../hooks/useUrlState';
-import DirectorPage from '../director/DirectorPage';
+import PlanPage from '../director/PlanPage';
+import LegacyPlanningRedirect from '../director/LegacyPlanningRedirect';
 import type { DirectorPlanRow } from '../../api/directorTypes';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
@@ -43,17 +44,17 @@ function mount(canWrite = true, route = '/plan?db=old-catalog&project=123&plan=n
     // Plan thumbnails: a survey image; the panels are drawn from the framing itself.
     http.get('/api/director/v1/sky/cutout', () => HttpResponse.arrayBuffer(new Uint8Array([255, 216, 255]).buffer, { status: 200, headers: { 'content-type': 'image/jpeg' } })),
   );
-  render(<DirectorPage />, { wrapper: Wrapper });
+  render(<Routes><Route path="/plan" element={<PlanPage />} /><Route path="/director" element={<LegacyPlanningRedirect />} /><Route path="/" element={<p>The Library</p>} /></Routes>, { wrapper: Wrapper });
 }
 
-describe('Planning page', () => {
+describe('plan page', () => {
   afterEach(() => { vi.unstubAllGlobals(); chooseDensity(null); });
 
   it('sends the old plan list to the Library with its scope, Show and search', async () => {
     server.use(http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list([])))));
     mount(true, '/director?db=old-catalog&project=123&directorView=sites&directorShow=done&directorSearch=m3');
     await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('?db=old-catalog&project=123&show=done&q=m3|scope=global'));
-    expect(screen.queryByRole('heading', { name: 'Plans' })).not.toBeInTheDocument();
+    expect(screen.getByText('The Library')).toBeInTheDocument();
   });
 
   it('forwards an old workspace link to the plan address and opens the workspace there', async () => {
@@ -93,7 +94,7 @@ describe('Planning page', () => {
     const plansCall = vi.fn(() => HttpResponse.json(ok(list([]))));
     mount();
     server.use(http.get('/api/director/v1/status', () => HttpResponse.json(ok(status))), http.get('/api/director/v1/plans', plansCall));
-    expect(await screen.findByText('Planning is unavailable on this server.')).toBeInTheDocument();
+    expect(await screen.findByText('Plans are unavailable on this server.')).toBeInTheDocument();
     expect(plansCall).not.toHaveBeenCalled();
   });
 });

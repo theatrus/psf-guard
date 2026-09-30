@@ -29,7 +29,7 @@ export default function DirectorDashboard() {
     </div>
     {statuses.isPending && <p role="status">Loading live status...</p>}
     {statuses.isError && <p className="director-error" role="alert">{message(statuses.error)}</p>}
-    {statuses.isSuccess && rows.length === 0 && <p className="director-muted">No rig yet. Every registered database becomes a rig once Planning has read it.</p>}
+    {statuses.isSuccess && rows.length === 0 && <p className="director-muted">No rig yet. Every registered database becomes a rig once the Library lists its plans.</p>}
     {rows.length > 0 && <div className="director-table-scroll"><table className="director-dashboard-table" data-testid="director-dashboard">
       <thead><tr><th>Rig</th><th>Link</th><th>Now</th><th>Program pull</th><th>Check-in</th><th>Status report</th><th>Assigned</th></tr></thead>
       <tbody>{rows.map(view => {
