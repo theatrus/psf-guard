@@ -85,26 +85,14 @@
 .director-plan-list { display: flex; flex-direction: column; gap: 12px; margin: 0; padding: 0; list-style: none; }
 .director-plan-list > li { border-bottom: none; }
 .director-plan-list.is-compact { gap: 6px; }
-.director-plan-filter, .director-plan-search { min-height: 32px; padding: 4px 8px; border: 1px solid var(--color-border-secondary); border-radius: 6px; background: var(--color-bg-surface); color: var(--color-text-primary); font: inherit; }
-.director-plan-search { width: 12rem; }
-.director-plan-count { margin: 0 0 8px; }
+.plan-row-rig { display: inline-flex; gap: 4px; }
 .director-link-button { padding: 0; border: 0; background: none; color: var(--color-primary); font: inherit; cursor: pointer; text-decoration: underline; }
 a.library-planning { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 select.library-pill-state { appearance: auto; border: 0; cursor: pointer; font: inherit; font-size: 12px; }
 select.library-pill-state option { color: var(--color-text-primary); background: var(--color-bg-surface); }
-.director-rig-card .target-compact-title { flex-wrap: wrap; gap: 6px; align-items: center; }
-.director-plan-row .director-stage-badge { min-height: 24px; display: inline-flex; align-items: center; }
 .director-page .project-open-main { display: flex; color: inherit; text-decoration: none; }
 .director-page .project-open-main:hover { color: inherit; }
-.director-plan-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; }
-.director-plan-body.has-thumb { grid-template-columns: auto minmax(0, 1fr); }
-.director-plan-summary { min-width: 0; }
 .director-stage-badge { flex: none; padding: 2px 7px; border: 1px solid var(--color-success); border-radius: 999px; background: var(--color-success-alpha-20); color: var(--color-success); font-size: 0.72rem; font-weight: 700; }
-.director-rig-card .target-compact-main { cursor: default; }
-.director-rig-card .target-compact-main:hover { background: transparent; }
-.director-rig-bar { margin-top: 3px; height: 6px; }
-.director-plan .project-targets-list { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
-@media (max-width: 600px) { .director-plan-body.has-thumb { grid-template-columns: minmax(0, 1fr); } }
 
 .director-workspace h2 { margin: 0; font-size: 22px; }
 /* The way back and the plan's name share one row, so the sky starts high. */
@@ -115,12 +103,6 @@ select.library-pill-state option { color: var(--color-text-primary); background:
 .director-page > .director-workspace { max-width: 1760px; }
 .director-workspace-columns { display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr); gap: 24px; align-items: start; }
 @media (max-width: 1100px) { .director-workspace-columns { grid-template-columns: minmax(0, 1fr); } }
-.plan-thumb { position: relative; width: 200px; aspect-ratio: 4 / 3; background: #05070c; border: 1px solid var(--color-border-secondary); border-radius: 6px; overflow: hidden; }
-.plan-thumb img, .plan-thumb svg, .plan-thumb-empty { position: absolute; inset: 0; width: 100%; height: 100%; }
-.plan-thumb img { object-fit: fill; }
-.plan-thumb-empty { display: flex; align-items: center; justify-content: center; color: var(--color-text-secondary); font-size: 12px; }
-.plan-thumb-panel { fill: rgba(80, 180, 255, 0.14); stroke: #5ab4ff; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
-@media (max-width: 600px) { .plan-thumb { width: 100%; } }
 .director-workspace .director-list li > .director-database-links { border-top: none; padding-top: 0; }
 
 /* Rows whose actions carry text: stack them on a phone instead of squeezing
@@ -129,7 +111,6 @@ select.library-pill-state option { color: var(--color-text-primary); background:
   .director-record-wide { grid-template-columns: minmax(0, 1fr); }
   .director-record-wide > button, .director-record-wide > a { grid-column: 1; grid-row: auto; justify-self: start; }
 }
-.director-plan-panels { display: block; font-size: 12px; color: var(--color-text-secondary); }
 .director-dashboard-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .director-dashboard-table th { text-align: left; font-weight: 500; color: var(--color-text-secondary); padding: 4px 6px; }
 .director-dashboard-table td { padding: 6px; vertical-align: top; border-top: 1px solid var(--color-border-secondary); }

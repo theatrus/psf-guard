@@ -36,12 +36,11 @@ export default function PlanPicker() {
     next.set('db', slug); next.set('project', String(projectId)); next.delete('target');
     navigate(`/grid?${next}`);
   };
-  // Until the Library lists plans, the plan list and Live table live on the
-  // Planning page; this row is the way there.
+  // Every plan is in the Library, with its rigs and the plans no database shoots yet.
   const allPlans = () => {
     setOpen(false); setSearch('');
     const query = withoutPlanningParams(location.search).toString();
-    navigate(query ? `/director?${query}` : '/director');
+    navigate(query ? `/?${query}` : '/');
   };
   const shown = plan.rows.filter(row => matchesSearch(row, search));
   const live = shown.filter(row => !isArchivedPlan(row));
@@ -75,9 +74,9 @@ export default function PlanPicker() {
     {open && <div className="selector-popover plan-picker-popover" role="dialog" aria-label="Choose a plan">
       <input ref={searchRef} type="search" className="selector-search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Type to find a plan" aria-label="Search plans" />
       <div className="selector-options" aria-label="Plans">
-        <button type="button" className={`selector-option${!current && location.pathname === '/director' ? ' is-selected' : ''}`} onClick={allPlans}>
+        <button type="button" className="selector-option" onClick={allPlans}>
           <span>All plans</span>
-          <small>The plan list and the Live table</small>
+          <small>In the Library</small>
         </button>
         {live.map(option)}
         {archived.length > 0 && <details className="selector-archive" open={!!search}><summary>Closed plans <span>{archived.length}</span></summary>{archived.map(option)}</details>}

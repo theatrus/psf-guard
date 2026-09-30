@@ -42,7 +42,7 @@ describe('project workspace', () => {
     expect(screen.getByText('Source editor catalog:7')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Targets and exposures/ }));
     expect(screen.queryByText('Source editor catalog:7')).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Plans' })).toHaveAttribute('href', '/director?db=catalog');
+    expect(screen.getByRole('link', { name: 'Library' })).toHaveAttribute('href', '/?db=catalog');
   });
   it('keeps every database editor closed when it did not arrive from one', async () => {
     mount(links, '/director?db=elsewhere&directorProject=project');

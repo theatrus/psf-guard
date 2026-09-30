@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { useQuery } from '@tanstack/react-query';
@@ -62,6 +62,9 @@ function AppContent() {
   // the modal itself is shown regardless of mode.
   const [, setIsTauri] = useState(false);
   const access = useAccess();
+  // Settings opens by itself at most once: the check repeats for late Tauri
+  // globals, and a user who closed it should not see it come back.
+  const autoOpened = useRef(false);
 
   // Check configuration on mount. In both Tauri and browser/CLI-server mode,
   // we pop the settings modal automatically when no databases are configured.
@@ -92,13 +95,17 @@ function AppContent() {
         // If management is disabled and there are no DBs, leave the user on
         // the overview's empty state where they can read the explanation
         // without a modal blocking them.
-        if (!cancelled && !isOnDirector && access.canWrite && !hasValid && managementAllowed) {
+        if (!cancelled && !isOnDirector && access.canWrite && !hasValid && managementAllowed && !autoOpened.current) {
           console.log('No databases configured — opening settings modal');
+          autoOpened.current = true;
           setShowSettings(true);
         }
       } catch (error) {
         console.error('Failed to check configuration:', error);
-        if (!cancelled && !isOnDirector && access.canWrite) setShowSettings(true);
+        if (!cancelled && !isOnDirector && access.canWrite && !autoOpened.current) {
+          autoOpened.current = true;
+          setShowSettings(true);
+        }
       }
     };
 

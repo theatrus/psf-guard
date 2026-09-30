@@ -1,7 +1,8 @@
 # Navigation plan: one Library, Review and Plan groups, Live on the Sky
 
 Status: agreed 2026-09-29. Step 1 shipped (header regroup, Live chip and
-drawer, Rigs and Exposure templates under Settings). Delete this file once every step
+drawer, Rigs and Exposure templates under Settings). Step 2 shipped (the
+Library holds every plan; `/director` without a plan redirects there). Delete this file once every step
 below has shipped and [DIRECTOR.md](../DIRECTOR.md) and
 [SKY_COVERAGE.md](../SKY_COVERAGE.md) describe the result. The reasoning
 sits in [director.md](director.md) under "one list, two groups, Live on the
@@ -80,6 +81,16 @@ Accept when: every assertion in the plan-list unit tests holds against the
 Library; the Director e2e specs read the Library; a closed-everywhere family
 sits under the Library's archive; `directorShow` and `directorSearch` keep
 working as Library URL state.
+
+As built: the Library lists only projects with frames, so a plan whose rigs
+have captured nothing (or that no database takes yet) would have vanished
+with the plan list. Those wait in a **Plans with nothing captured yet**
+section after the active projects and before the archive, which also
+holds New plan and rename. The
+Library's search and Show are `q` and `show`; the old names redirect. Read
+-only viewers find rigs and templates in the Live drawer, since they cannot
+open Settings. The plan card with its survey thumbnail is gone; the
+workspace keeps the framing.
 
 ### 3. Workspace by family key
 

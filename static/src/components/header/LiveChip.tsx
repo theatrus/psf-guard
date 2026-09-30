@@ -5,6 +5,10 @@ import { X } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import DirectorDashboard from '../director/DirectorDashboard';
+import DirectorRigs from '../director/DirectorRigs';
+import TemplateLibrary from '../director/TemplateLibrary';
+import { useAccess } from '../../auth/access';
+import { openSettings } from '../../utils/settingsIntent';
 import '../director/DirectorPage.css';
 import { liveSummary } from './liveSummary';
 import { retryWhenBusy } from '../director/retry';
@@ -20,6 +24,7 @@ export default function LiveChip() {
   const enabled = !!director.data?.enabled && director.data.protocol_version === 1;
   const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, enabled, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 15_000, refetchOnWindowFocus: true });
   const [open, setOpen] = useState(false);
+  const { canWrite } = useAccess();
   const chipRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -53,7 +58,17 @@ export default function LiveChip() {
     {open && <div className="live-drawer-backdrop" onClick={close}>
       <div ref={drawerRef} className="live-drawer" role="dialog" aria-modal="true" aria-label="Live rigs" onClick={event => event.stopPropagation()} onKeyDown={onKeyDown}>
         <button ref={closeRef} type="button" className="live-drawer-close" aria-label="Close live rigs" onClick={close}><X size={16} /></button>
-        <div className="director-page director-embedded"><DirectorDashboard /></div>
+        <div className="director-page director-embedded">
+          <DirectorDashboard />
+          {/* Editors set rigs and templates up in Settings; a read-only
+              viewer cannot open Settings, so they read both here. */}
+          {canWrite ? <p className="director-muted">
+            Rig setup and the exposure template library are under Settings:{' '}
+            <button type="button" className="director-link-button" onClick={() => { close(); openSettings('rigs'); }}>Rigs</button>
+            {' and '}
+            <button type="button" className="director-link-button" onClick={() => { close(); openSettings('templates'); }}>Exposure templates</button>.
+          </p> : <><DirectorRigs /><TemplateLibrary /></>}
+        </div>
       </div>
     </div>}
   </>;
