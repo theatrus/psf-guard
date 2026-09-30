@@ -16,6 +16,13 @@ const rig = { id: '22222222-2222-4222-8222-222222222222', name: 'C925', revision
 const enabled = { protocol_version: 1, enabled: true, instance_id: record.id, acquisition_available: false, database_management: true };
 const row = (project = record, extra: Partial<DirectorPlanRow> = {}): DirectorPlanRow => ({ project, links: [], progress: null, framing: null, plan: null, activation: null, ...extra });
 const list = (rows: DirectorPlanRow[], warnings: string[] = []) => ({ rows, warnings });
+/** The display preference module reads storage once and again on a storage
+ *  event, so set the density the way another tab would. */
+function chooseDensity(density: 'compact' | 'detailed' | null) {
+  if (density) localStorage.setItem('psf-guard.display-preferences', JSON.stringify({ libraryDensity: density }));
+  else localStorage.removeItem('psf-guard.display-preferences');
+  window.dispatchEvent(new StorageEvent('storage', { key: 'psf-guard.display-preferences' }));
+}
 function Location() {
   const location = useLocation();
   const db = useScopedDbId();
@@ -42,7 +49,7 @@ function mount(canWrite = true, route = '/director?db=old-catalog&project=123', 
 
 describe('Director management', () => {
   beforeEach(() => { vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:thumb'), revokeObjectURL: vi.fn() })); });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => { vi.unstubAllGlobals(); chooseDensity(null); });
 
   it('creates with the same UUID after an ambiguous failure, and trims names', async () => {
     const requests: { id: string; name: string }[] = [];
@@ -98,7 +105,65 @@ describe('Director management', () => {
     expect(updates).toEqual([{ name: 'Andromeda', expected_revision: 1 }, { name: 'Andromeda', expected_revision: 2 }]);
   });
 
+  it('lists plans as Library rows with state, progress and rigs, and folds one open to its card', async () => {
+    const target = (name: string, desired: number, acquired: number, accepted: number, rejected: number) => ({ name, desired, acquired, accepted, rejected, center: null, rotation_degrees: null });
+    const day = 86_400;
+    const now = Math.floor(Date.now() / 1000);
+    const other = { id: '55555555-5555-4555-8555-555555555555', name: 'RC51', revision: 1 };
+    mount(false, undefined, [
+      http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list([
+        row(record, { links: [
+          { catalog_slug: 'c925', catalog_name: 'C925', rig, source_project_guid: 'g', source_row_id: 7, source_name: 'M31', source_state: 1, earliest_capture_s: now - 30 * day, latest_capture_s: now - 3 * day, targets: [target('M31', 72, 40, 36, 3)] },
+          { catalog_slug: 'rc51', catalog_name: 'RC51', rig: other, source_project_guid: 'g', source_row_id: 3, source_name: 'M31', source_state: 2, earliest_capture_s: now - 60 * day, latest_capture_s: now - 20 * day, targets: [target('M31', 10, 12, 10, 2)] },
+        ], progress: { desired: 82, acquired: 52, accepted: 46, rejected: 5, targets: 2 }, plan: { revision: 1, objectives: 2, rigs: 2 } }),
+        row({ ...record, id: '33333333-3333-4333-8333-333333333333', name: 'Bare' }),
+        row({ ...record, id: '44444444-4444-4444-8444-444444444444', name: 'Pelican' }, { links: [{ catalog_slug: 'c925', catalog_name: 'C925', rig, source_project_guid: 'p', source_row_id: 9, source_name: 'Pelican', source_state: 3, earliest_capture_s: null, latest_capture_s: null, targets: [target('IC 5070', 40, 12, 10, 0)] }],
+          progress: { desired: 40, acquired: 12, accepted: 10, rejected: 0, targets: 1 },
+          framing: { source: 'catalog', revision: 0, target_name: 'IC 5070', panels: 1, panel_rig_id: rig.id, center: { ra_degrees: 312.75, dec_degrees: 44.37 }, position_angle_degrees: 90, panel: { width_degrees: 0.7, height_degrees: 0.5 }, mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, survey_id: 'dss2_color', extent: { width_degrees: 0.7, height_degrees: 0.5 } } }),
+      ])))),
+    ]);
+    // A plan shot by two rigs is an outer pill with a row per rig, each in the Library's pills.
+    const family = await screen.findByTestId('plan-family');
+    expect(within(family).getByRole('link', { name: 'Open M31' })).toBeInTheDocument();
+    expect(within(family).getByText('2 rigs')).toBeInTheDocument();
+    expect(within(family).getByText('Planned')).toBeInTheDocument();
+    expect(within(family).getByText(/46 \/ 82 · 56%/)).toBeInTheDocument();
+    const members = within(family).getAllByTestId('plan-row');
+    expect(members).toHaveLength(2);
+    expect(within(members[0]).getByText('C925')).toBeInTheDocument();
+    expect(within(members[0]).getByText('Active')).toBeInTheDocument();
+    expect(within(members[0]).getByText(/36 \/ 72 · 50%/)).toBeInTheDocument();
+    expect(within(members[0]).getByText(/3 d ago/)).toBeInTheDocument();
+    expect(within(members[1]).getByText('Inactive')).toBeInTheDocument();
+    expect(within(members[1]).getByText(/10 \/ 10 · Done/)).toHaveClass('is-done');
+    // A plan with no database says so where the pills would be.
+    expect(screen.getByText('Not linked to any database')).toBeInTheDocument();
+    // Closed on every rig that shoots it: behind the Library's archive fold, then one row.
+    expect(screen.queryByText('Closed')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Archived plans/ }));
+    expect(screen.getByText('Closed')).toBeInTheDocument();
+    expect(screen.getByText('Framed in Target Scheduler')).toBeInTheDocument();
+    expect(screen.getByText('No dates')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Bare' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Rigs shooting M31' })).not.toBeInTheDocument();
+    // The arrow opens the full card and folds it back.
+    fireEvent.click(screen.getByRole('button', { name: 'Show details for M31' }));
+    expect(screen.getByRole('region', { name: 'Rigs shooting M31' })).toBeInTheDocument();
+    expect(screen.queryByTestId('plan-family')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide details for M31' }));
+    expect(screen.queryByRole('region', { name: 'Rigs shooting M31' })).not.toBeInTheDocument();
+    // Detailed opens every plan as its card, as it does in the Library.
+    fireEvent.click(screen.getByRole('radio', { name: 'Detailed' }));
+    expect(screen.getByRole('region', { name: 'Rigs shooting M31' })).toBeInTheDocument();
+    expect(screen.getByText('Framed in Target Scheduler: IC 5070; open to plan it in Director')).toBeInTheDocument();
+    expect(screen.queryAllByTestId('plan-row')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('radio', { name: 'Compact' }));
+    expect(screen.getAllByTestId('plan-row')).toHaveLength(4);
+  });
+
   it('shows each plan with its stage and opens planning at its linked database row', async () => {
+    // The detailed view shows every plan as its full card.
+    chooseDensity('detailed');
     mount(false, undefined, [
       http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list([
         row(record, { links: [{ catalog_slug: 'c925', catalog_name: 'C925', rig, source_project_guid: 'g', source_row_id: 7, source_name: 'Andromeda subs',

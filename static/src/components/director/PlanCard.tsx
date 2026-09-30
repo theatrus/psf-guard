@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Pencil } from 'lucide-react';
 import type { DirectorPlanRow } from '../../api/directorTypes';
@@ -10,20 +11,23 @@ interface PlanCardProps {
   canWrite: boolean;
   editing: boolean;
   onRename: () => void;
+  /** The arrow that folds the card back to a row. */
+  fold?: ReactNode;
 }
 
 /** One plan as an Overview-style project card. The headline counts add up
  *  every rig; the Rigs list underneath gives each rig its own bar, since two
  *  rigs shooting one plan each have their own targets and exposure plans. */
-export default function PlanCard({ row, href, canWrite, editing, onRename }: PlanCardProps) {
+export default function PlanCard({ row, href, canWrite, editing, onRename, fold }: PlanCardProps) {
   const name = row.project.name;
   const progress = row.progress;
   const pct = progress ? percentDone(progress) : 0;
   const split = progress ? gradingSplit(progress) : null;
   const rigs = row.links.length;
   return (
-    <div className={`project-card director-plan${row.activation ? ' is-activated' : ''}`}>
+    <div className={`project-card director-plan-card${row.activation ? ' is-activated' : ''}`}>
       <div className="project-header">
+        {fold}
         <Link className="project-open-main" to={href} aria-label={`Open ${name}`}>
           <span className="project-title">{name}</span>
           {row.links.map(link => (

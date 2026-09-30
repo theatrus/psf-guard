@@ -335,3 +335,11 @@
 - A browser-user file (`auth.json`) written by a newer PSF Guard loads
   instead of stopping the server; fields this version does not know are
   kept and written back unchanged.
+
+- Planning lists plans the way the Library lists projects: compact rows
+  with the same pills for database, Target Scheduler state, progress that
+  reads Done once the goal is met, grading and capture dates; a plan shot
+  by several rigs is an outer pill with a row per rig, and a plan closed
+  on every rig sits under an Archived plans fold. The arrow opens a row
+  into its full card, and the Library's Compact / Detailed setting applies
+  to both views.

@@ -39,8 +39,56 @@ struct PlanLink {
     /// The row and name in that database, when the project still exists there.
     source_row_id: Option<i64>,
     source_name: Option<String>,
+    /// Target Scheduler's project state there: 0 draft, 1 active, 2
+    /// inactive, 3 closed; None when the row is gone.
+    source_state: Option<i32>,
+    /// First and last capture of the project's frames there, Unix seconds.
+    earliest_capture_s: Option<i64>,
+    latest_capture_s: Option<i64>,
     /// The project's targets in that database, in row order.
     targets: Vec<TargetProgress>,
+}
+
+/// What the Library shows for a project and the plan list shows per rig:
+/// its Target Scheduler state and when its frames were taken.
+#[derive(Clone, Copy, Default)]
+struct ProjectFacts {
+    state: Option<i32>,
+    earliest_capture_s: Option<i64>,
+    latest_capture_s: Option<i64>,
+}
+
+/// Per project row, its state and capture dates; a schema without the
+/// columns reports none rather than failing the list.
+fn project_facts(connection: &rusqlite::Connection) -> BTreeMap<i64, ProjectFacts> {
+    let mut facts: BTreeMap<i64, ProjectFacts> = BTreeMap::new();
+    if let Ok(mut statement) = connection.prepare("SELECT Id, state FROM project")
+        && let Ok(rows) = statement.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i32>>(1)?))
+        })
+    {
+        for (id, state) in rows.flatten() {
+            facts.entry(id).or_default().state = state;
+        }
+    }
+    if let Ok(mut statement) = connection.prepare(
+        "SELECT t.projectid, MIN(a.acquireddate), MAX(a.acquireddate)
+         FROM acquiredimage a JOIN target t ON a.targetId = t.Id
+         WHERE a.acquireddate IS NOT NULL GROUP BY t.projectid",
+    ) && let Ok(rows) = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, Option<i64>>(1)?,
+            row.get::<_, Option<i64>>(2)?,
+        ))
+    }) {
+        for (id, earliest, latest) in rows.flatten() {
+            let entry = facts.entry(id).or_default();
+            entry.earliest_capture_s = earliest;
+            entry.latest_capture_s = latest;
+        }
+    }
+    facts
 }
 
 /// Frames across every linked database, so the list can say how far a plan
@@ -420,6 +468,7 @@ pub(super) async fn list(
                         Err(_) => BTreeMap::new(),
                     };
                 let progress = target_progress(&connection);
+                let facts = project_facts(&connection);
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as u64)
@@ -455,6 +504,15 @@ pub(super) async fn list(
                             source_project_guid: mapping.source_project_guid,
                             source_row_id: row.map(|(id, _)| *id),
                             source_name: row.and_then(|(_, name)| name.clone()),
+                            source_state: row
+                                .and_then(|(id, _)| facts.get(id))
+                                .and_then(|f| f.state),
+                            earliest_capture_s: row
+                                .and_then(|(id, _)| facts.get(id))
+                                .and_then(|f| f.earliest_capture_s),
+                            latest_capture_s: row
+                                .and_then(|(id, _)| facts.get(id))
+                                .and_then(|f| f.latest_capture_s),
                             targets: row
                                 .and_then(|(id, _)| progress.get(id))
                                 .cloned()

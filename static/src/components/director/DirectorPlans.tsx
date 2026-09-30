@@ -3,11 +3,16 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { Check, Plus, RefreshCw, X } from 'lucide-react';
 import { apiClient } from '../../api/client';
-import type { DirectorIdentity } from '../../api/directorTypes';
+import type { DirectorIdentity, DirectorPlanRow } from '../../api/directorTypes';
 import { useAccess } from '../../auth/access';
 import { identityId } from './identityId';
 import { retryWhenBusy } from './retry';
 import PlanCard from './PlanCard';
+import PlanRow from './PlanRow';
+import { setDisplayPreferences, useDisplayPreferences } from '../../hooks/useDisplayPreferences';
+import { useFoldedRows } from '../../hooks/useFoldedRows';
+import { DensityToggle, FoldButton } from '../projectPills';
+import { isArchivedPlan } from './planCardModel';
 import '../projectCard.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
@@ -28,6 +33,14 @@ export default function DirectorPlans({ instanceId }: { instanceId: string }) {
     return `/director?${next}`;
   };
   const plans = useQuery({ queryKey, queryFn: apiClient.getDirectorPlans, retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false, refetchOnMount: 'always' });
+  // The same Compact / Detailed choice as the Library, and the same folding.
+  const displayPreferences = useDisplayPreferences();
+  const density = displayPreferences.libraryDensity;
+  const folds = useFoldedRows(density);
+  const chooseDensity = (next: typeof density) => { setDisplayPreferences({ ...displayPreferences, libraryDensity: next }); folds.reset(); };
+  const nowMs = Date.now();
+  // Closed everywhere it is shot: behind the same fold the Library uses.
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const [edit, setEdit] = useState<Edit | null>(null);
   const [name, setName] = useState('');
   const [notice, setNotice] = useState('');
@@ -72,10 +85,24 @@ export default function DirectorPlans({ instanceId }: { instanceId: string }) {
     </form>
   );
   const rows = plans.data?.rows ?? [];
+  const live = rows.filter(row => !isArchivedPlan(row));
+  const archived = rows.filter(isArchivedPlan);
+  const item = (row: DirectorPlanRow) => {
+    const key = row.project.id;
+    const href = workspaceHref(key);
+    return <li key={key} className="director-plan">
+      {folds.showsCard(key)
+        ? <PlanCard row={row} href={href} canWrite={canWrite} editing={!!edit} onRename={() => begin({ creating: false, record: row.project })}
+            fold={<FoldButton open={true} name={row.project.name} onClick={() => folds.toggle(key)} />} />
+        : <PlanRow row={row} href={href} nowMs={nowMs} onOpen={() => folds.toggle(key)} canWrite={canWrite} editing={!!edit} onRename={() => begin({ creating: false, record: row.project })} />}
+      {edit?.record.id === key && !edit.creating && form}
+    </li>;
+  };
   return <section className="director-records director-plans" aria-label="Plans">
     <div className="director-toolbar">
       <h2>Plans</h2>
       <div className="director-actions">
+        <DensityToggle density={density} onChange={chooseDensity} />
         <button type="button" title="Refresh records" aria-label="Refresh records" disabled={plans.isFetching || !!edit} onClick={() => void plans.refetch()}><RefreshCw size={16} /></button>
         {canWrite && <button type="button" disabled={!!edit} onClick={() => begin({ creating: true, record: { id: identityId(), name: '', revision: 1 } })}><Plus size={16} />New project</button>}
       </div>
@@ -88,13 +115,16 @@ export default function DirectorPlans({ instanceId }: { instanceId: string }) {
     {plans.isPending && <p role="status">Loading plans...</p>}
     {plans.isError && <p className="director-error" role="alert">{message(plans.error)}</p>}
     {plans.isSuccess && rows.length === 0 && <p className="director-muted">No projects yet.</p>}
-    <ul className="director-plan-list">
-      {rows.map(row => (
-        <li key={row.project.id}>
-          <PlanCard row={row} href={workspaceHref(row.project.id)} canWrite={canWrite} editing={!!edit} onRename={() => begin({ creating: false, record: row.project })} />
-          {edit?.record.id === row.project.id && !edit.creating && form}
-        </li>
-      ))}
-    </ul>
+    <ul className={`director-plan-list${density === 'compact' ? ' is-compact' : ''}`}>{live.map(item)}</ul>
+    {archived.length > 0 && (
+      <section className="project-archive">
+        <button type="button" className="project-archive-toggle" onClick={() => setArchivedOpen(open => !open)} aria-expanded={archivedOpen}>
+          <span className={`expand-toggle ${archivedOpen ? 'expanded' : ''}`} aria-hidden="true">▶</span>
+          <span>Archived plans</span>
+          <span>{archived.length}</span>
+        </button>
+        {archivedOpen && <ul className={`director-plan-list${density === 'compact' ? ' is-compact' : ''}`}>{archived.map(item)}</ul>}
+      </section>
+    )}
   </section>;
 }
