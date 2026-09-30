@@ -103,7 +103,11 @@ test('persists project exposure grouping and separates mono and color choices', 
   await waitForCacheReady(request, dbId);
   const settingsPath = `/api/db/${encodeURIComponent(dbId)}/projects/2/processing-settings`;
   const initial = await request.get(settingsPath);
-  expect((await initial.json()).data.split_exposure_groups).toBe(false);
+  // Exposures stack apart by default; this walk starts from a project that
+  // chose to mix them.
+  expect((await initial.json()).data.split_exposure_groups).toBe(true);
+  const mixed = await request.put(settingsPath, { data: { split_exposure_groups: false } });
+  expect(mixed.ok()).toBe(true);
   await page.setViewportSize({ width: 1440, height: 1050 });
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=2&groupingMode=filter`);
   const toggle = page.getByRole('checkbox', { name: 'Separate exposure groups' });

@@ -157,6 +157,11 @@
 
 ## Changed
 
+- Stack previews keep different exposure lengths apart by default, so 120 s
+  and 300 s frames build separate stacks instead of dimming each other. A
+  project can still turn **Separate exposure groups** off, and a project that
+  chose either way keeps its choice.
+
 - The Linux AppImage and .deb carry AppStream metadata: a summary, a
   description, links and four screenshots, so software centres and the
   AppImage catalog show PSF Guard properly instead of a first-run capture

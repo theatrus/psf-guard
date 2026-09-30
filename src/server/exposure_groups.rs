@@ -19,10 +19,14 @@ use super::{
 
 const SETTINGS_TABLE: &str = "psf_guard_project_processing";
 const EXPOSURE_SPLIT_RATIO: f64 = 2.0;
+/// Frames of different integration times are stacked apart unless a project
+/// says otherwise: normalization cannot give a 120 s frame the signal of a
+/// 300 s one, so mixing them dims the stack.
+const SPLIT_EXPOSURE_GROUPS_DEFAULT: bool = true;
 
 type ExposureStream = Vec<(i32, Option<f64>)>;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectProcessingSettings {
     pub split_exposure_groups: bool,
@@ -32,9 +36,18 @@ pub struct ProjectProcessingSettings {
     pub process_folder: Option<String>,
 }
 
-/// Whether the settings table already carries the process folder column;
-/// a table made by an earlier build lacks it.
-fn has_process_folder_column(conn: &Connection) -> Result<bool, AppError> {
+impl Default for ProjectProcessingSettings {
+    fn default() -> Self {
+        Self {
+            split_exposure_groups: SPLIT_EXPOSURE_GROUPS_DEFAULT,
+            process_folder: None,
+        }
+    }
+}
+
+/// Whether the settings table already carries `column`; a table made by an
+/// earlier build lacks the later ones.
+fn has_column(conn: &Connection, column: &str) -> Result<bool, AppError> {
     let mut statement = conn
         .prepare("PRAGMA table_info(psf_guard_project_processing)")
         .map_err(AppError::db)?;
@@ -43,7 +56,31 @@ fn has_process_folder_column(conn: &Connection) -> Result<bool, AppError> {
         .map_err(AppError::db)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(AppError::db)?;
-    Ok(columns.iter().any(|name| name == "process_folder"))
+    Ok(columns.iter().any(|name| name == column))
+}
+
+/// Create the settings table and bring an older one up to date.
+///
+/// `split_chosen` records that a person set the grouping. Rows without it
+/// (made only to remember a process folder, or by a build whose default was
+/// off) follow [`SPLIT_EXPOSURE_GROUPS_DEFAULT`].
+fn ensure_settings_table(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS psf_guard_project_processing (
+            project_key TEXT PRIMARY KEY,
+            split_exposure_groups INTEGER NOT NULL CHECK(split_exposure_groups IN (0,1))
+        )",
+    )
+    .map_err(AppError::db)?;
+    for (column, definition) in [("process_folder", "TEXT"), ("split_chosen", "INTEGER")] {
+        if !has_column(conn, column)? {
+            conn.execute_batch(&format!(
+                "ALTER TABLE psf_guard_project_processing ADD COLUMN {column} {definition}"
+            ))
+            .map_err(AppError::db)?;
+        }
+    }
+    Ok(())
 }
 
 /// Remember the folder a project's masters were saved to, without touching
@@ -53,9 +90,21 @@ pub fn remember_process_folder(
     project_id: i32,
     folder: &str,
 ) -> Result<(), AppError> {
-    let mut settings = load_settings(conn, project_id)?;
-    settings.process_folder = Some(folder.to_string());
-    save_settings(conn, project_id, settings)
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(AppError::db)?;
+    let key = project_key(&tx, project_id)?;
+    ensure_settings_table(&tx)?;
+    // The folder is not a grouping choice: a new row leaves `split_chosen`
+    // empty so the project keeps following the default.
+    tx.execute(
+        "INSERT INTO psf_guard_project_processing(project_key,split_exposure_groups,process_folder)
+         VALUES (?1,?2,?3) ON CONFLICT(project_key) DO UPDATE
+         SET process_folder=excluded.process_folder",
+        params![key, SPLIT_EXPOSURE_GROUPS_DEFAULT, folder],
+    )
+    .map_err(AppError::db)?;
+    tx.commit().map_err(AppError::db)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -192,25 +241,42 @@ pub fn load_settings(
     if !exists {
         return Ok(ProjectProcessingSettings::default());
     }
-    let with_folder = has_process_folder_column(conn)?;
-    let sql = if with_folder {
-        "SELECT split_exposure_groups, process_folder FROM psf_guard_project_processing WHERE project_key=?1"
+    let folder = if has_column(conn, "process_folder")? {
+        "process_folder"
     } else {
-        "SELECT split_exposure_groups, NULL FROM psf_guard_project_processing WHERE project_key=?1"
+        "NULL"
     };
+    let chosen = if has_column(conn, "split_chosen")? {
+        "split_chosen"
+    } else {
+        "NULL"
+    };
+    let sql = format!(
+        "SELECT split_exposure_groups, {folder}, {chosen} \
+         FROM psf_guard_project_processing WHERE project_key=?1"
+    );
     let row = conn
-        .query_row(sql, [key], |row| {
-            Ok((row.get::<_, bool>(0)?, row.get::<_, Option<String>>(1)?))
+        .query_row(&sql, [key], |row| {
+            Ok((
+                row.get::<_, bool>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<bool>>(2)?,
+            ))
         })
         .optional()
         .map_err(AppError::db)?;
-    let (split_exposure_groups, process_folder) = row.unwrap_or((false, None));
+    let (split_exposure_groups, process_folder) = match row {
+        Some((split, folder, Some(true))) => (split, folder),
+        Some((_, folder, _)) => (SPLIT_EXPOSURE_GROUPS_DEFAULT, folder),
+        None => (SPLIT_EXPOSURE_GROUPS_DEFAULT, None),
+    };
     Ok(ProjectProcessingSettings {
         split_exposure_groups,
         process_folder: process_folder.filter(|folder| !folder.trim().is_empty()),
     })
 }
 
+/// Record a person's grouping choice, with the folder alongside.
 fn save_settings(
     conn: &mut Connection,
     project_id: i32,
@@ -220,22 +286,14 @@ fn save_settings(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(AppError::db)?;
     let key = project_key(&tx, project_id)?;
-    tx.execute_batch(
-        "CREATE TABLE IF NOT EXISTS psf_guard_project_processing (
-            project_key TEXT PRIMARY KEY,
-            split_exposure_groups INTEGER NOT NULL CHECK(split_exposure_groups IN (0,1))
-        )",
-    )
-    .map_err(AppError::db)?;
-    if !has_process_folder_column(&tx)? {
-        tx.execute_batch("ALTER TABLE psf_guard_project_processing ADD COLUMN process_folder TEXT")
-            .map_err(AppError::db)?;
-    }
+    ensure_settings_table(&tx)?;
     tx.execute(
-        "INSERT INTO psf_guard_project_processing(project_key,split_exposure_groups,process_folder)
-         VALUES (?1,?2,?3) ON CONFLICT(project_key) DO UPDATE
+        "INSERT INTO psf_guard_project_processing
+            (project_key,split_exposure_groups,process_folder,split_chosen)
+         VALUES (?1,?2,?3,1) ON CONFLICT(project_key) DO UPDATE
          SET split_exposure_groups=excluded.split_exposure_groups,
-             process_folder=excluded.process_folder",
+             process_folder=excluded.process_folder,
+             split_chosen=1",
         params![key, settings.split_exposure_groups, settings.process_folder],
     )
     .map_err(AppError::db)?;
@@ -320,7 +378,15 @@ pub fn load_project_groups(
 ) -> Result<ProjectExposureGroups, AppError> {
     let settings = load_settings(conn, project_id)?;
     let mut by_image = HashMap::new();
-    if settings.split_exposure_groups {
+    // A catalog with no image table yet has nothing to group.
+    let has_images: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='acquiredimage')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(AppError::db)?;
+    if settings.split_exposure_groups && has_images {
         let mut statement = conn.prepare(
             "SELECT Id,targetid,COALESCE(filtername,''),metadata FROM acquiredimage WHERE projectid=?1",
         ).map_err(AppError::db)?;
@@ -382,6 +448,40 @@ pub async fn update_project_settings(
 mod tests {
     use super::*;
 
+    /// A person's choice to stack every exposure together.
+    fn unsplit() -> ProjectProcessingSettings {
+        ProjectProcessingSettings {
+            split_exposure_groups: false,
+            process_folder: None,
+        }
+    }
+
+    #[test]
+    fn a_choice_sticks_and_an_unchosen_row_follows_the_default() {
+        let mut conn = fixture();
+        // A row an earlier build wrote while remembering a folder: off, but
+        // nobody chose that.
+        conn.execute_batch(
+            "CREATE TABLE psf_guard_project_processing (
+                project_key TEXT PRIMARY KEY,
+                split_exposure_groups INTEGER NOT NULL CHECK(split_exposure_groups IN (0,1)),
+                process_folder TEXT);
+             INSERT INTO psf_guard_project_processing VALUES ('guid:project-one', 0, 'iris');",
+        )
+        .unwrap();
+        let before = load_settings(&conn, 1).unwrap();
+        assert!(before.split_exposure_groups);
+        assert_eq!(before.process_folder.as_deref(), Some("iris"));
+
+        save_settings(&mut conn, 1, unsplit()).unwrap();
+        assert!(!load_settings(&conn, 1).unwrap().split_exposure_groups);
+        // Remembering a folder later does not undo the choice.
+        remember_process_folder(&mut conn, 1, "iris-v2").unwrap();
+        let after = load_settings(&conn, 1).unwrap();
+        assert!(!after.split_exposure_groups);
+        assert_eq!(after.process_folder.as_deref(), Some("iris-v2"));
+    }
+
     fn fixture() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE project(Id INTEGER PRIMARY KEY,guid TEXT);
@@ -418,19 +518,20 @@ mod tests {
         let after = load_settings(&conn, 1).unwrap();
         assert!(after.split_exposure_groups);
         assert_eq!(after.process_folder.as_deref(), Some("2026-iris-v1"));
-        // Project two never had a row; the folder alone makes one.
+        // Project two never had a row; the folder alone makes one, and it
+        // keeps following the default rather than recording a choice.
         remember_process_folder(&mut conn, 2, "2026-m31").unwrap();
         let other = load_settings(&conn, 2).unwrap();
-        assert!(!other.split_exposure_groups);
+        assert!(other.split_exposure_groups);
         assert_eq!(other.process_folder.as_deref(), Some("2026-m31"));
     }
 
     #[test]
-    fn reads_default_off_without_writing_schema() {
+    fn reads_default_on_without_writing_schema() {
         let conn = fixture();
         let groups = load_project_groups(&conn, 1).unwrap();
-        assert!(!groups.settings.split_exposure_groups);
-        assert!(groups.by_image.is_empty());
+        assert!(groups.settings.split_exposure_groups);
+        assert!(!groups.by_image.is_empty());
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE name=?1",
@@ -476,7 +577,7 @@ mod tests {
         let updated = cached_project_groups(&ctx, &conn, 1).unwrap();
         assert!(!Arc::ptr_eq(&first, &updated));
         assert_eq!(updated.by_image[&5].min_seconds, Some(600.0));
-        save_settings(&mut conn, 1, ProjectProcessingSettings::default()).unwrap();
+        save_settings(&mut conn, 1, unsplit()).unwrap();
         assert!(cached_project_groups(&ctx, &conn, 1)
             .unwrap()
             .by_image
@@ -544,8 +645,12 @@ mod tests {
         assert_eq!(groups[&8].min_seconds, Some(12.0));
         assert_eq!(groups[&9].min_seconds, Some(12.0));
         assert!(!groups.contains_key(&10));
-        assert!(load_project_groups(&conn, 2).unwrap().by_image.is_empty());
-        save_settings(&mut conn, 1, ProjectProcessingSettings::default()).unwrap();
+        // Project two made no choice, so it follows the default and groups.
+        assert!(load_project_groups(&conn, 2)
+            .unwrap()
+            .by_image
+            .contains_key(&10));
+        save_settings(&mut conn, 1, unsplit()).unwrap();
         assert!(load_project_groups(&conn, 1).unwrap().by_image.is_empty());
     }
 
@@ -591,21 +696,13 @@ mod tests {
     #[test]
     fn settings_follow_guid_and_do_not_leak_to_reused_ids() {
         let mut conn = fixture();
-        save_settings(
-            &mut conn,
-            1,
-            ProjectProcessingSettings {
-                split_exposure_groups: true,
-                process_folder: None,
-            },
-        )
-        .unwrap();
+        save_settings(&mut conn, 1, unsplit()).unwrap();
         conn.execute("UPDATE project SET Id=3 WHERE Id=1", [])
             .unwrap();
-        assert!(load_settings(&conn, 3).unwrap().split_exposure_groups);
+        assert!(!load_settings(&conn, 3).unwrap().split_exposure_groups);
         conn.execute("INSERT INTO project VALUES(1,'replacement')", [])
             .unwrap();
-        assert!(!load_settings(&conn, 1).unwrap().split_exposure_groups);
+        assert!(load_settings(&conn, 1).unwrap().split_exposure_groups);
     }
 
     #[test]
@@ -657,17 +754,9 @@ mod tests {
         let mut conn = fixture();
         conn.execute("UPDATE project SET guid='project-one' WHERE Id=2", [])
             .unwrap();
-        save_settings(
-            &mut conn,
-            1,
-            ProjectProcessingSettings {
-                split_exposure_groups: true,
-                process_folder: None,
-            },
-        )
-        .unwrap();
-        assert!(load_settings(&conn, 1).unwrap().split_exposure_groups);
-        assert!(!load_settings(&conn, 2).unwrap().split_exposure_groups);
+        save_settings(&mut conn, 1, unsplit()).unwrap();
+        assert!(!load_settings(&conn, 1).unwrap().split_exposure_groups);
+        assert!(load_settings(&conn, 2).unwrap().split_exposure_groups);
     }
 
     #[test]

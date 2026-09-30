@@ -34,7 +34,7 @@ export default function ProjectExposureGrouping({ dbId, projectId, canManage }: 
       <label title={canManage ? 'Project processing setting' : 'Database management access required'}>
         <input
           type="checkbox"
-          checked={settings.data?.split_exposure_groups ?? false}
+          checked={settings.data?.split_exposure_groups ?? true}
           disabled={!canManage || settings.isPending || settings.isError || save.isPending}
           onChange={(event) => save.mutate(event.target.checked)}
         />

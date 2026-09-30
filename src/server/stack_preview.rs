@@ -3902,8 +3902,8 @@ mod tests {
         conn.execute_batch("INSERT INTO project(Id,name,profileId,guid) VALUES(1,'Project','profile','project-one');
             INSERT INTO target(Id,name,projectId,active,ra,dec,epochcode,rotation,roi,guid)
                 VALUES(1,'Target',1,1,10,20,0,0,100,'target-one');
-            CREATE TABLE psf_guard_project_processing(project_key TEXT PRIMARY KEY,split_exposure_groups INTEGER NOT NULL);
-            INSERT INTO psf_guard_project_processing VALUES('guid:project-one',1);").unwrap();
+            CREATE TABLE psf_guard_project_processing(project_key TEXT PRIMARY KEY,split_exposure_groups INTEGER NOT NULL,split_chosen INTEGER);
+            INSERT INTO psf_guard_project_processing VALUES('guid:project-one',1,1);").unwrap();
         for (id, exposure) in [(1, 10.0), (2, 11.0), (3, 300.0), (4, 310.0)] {
             conn.execute("INSERT INTO acquiredimage(Id,projectId,targetId,gradingStatus,metadata,acquireddate,filtername)
                 VALUES(?1,1,1,1,?2,?1,'Ha')", rusqlite::params![id, serde_json::json!({"ExposureDuration":exposure}).to_string()]).unwrap();
@@ -3938,7 +3938,7 @@ mod tests {
             db.lock()
                 .unwrap()
                 .execute(
-                    "UPDATE psf_guard_project_processing SET split_exposure_groups=0",
+                    "UPDATE psf_guard_project_processing SET split_exposure_groups=0, split_chosen=1",
                     [],
                 )
                 .unwrap();
