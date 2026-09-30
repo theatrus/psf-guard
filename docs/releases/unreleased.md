@@ -395,3 +395,10 @@
 - The last of the Planning page is gone: the workspace is headed **Plan workspace**,
   the Library's project cards offer **Plan** instead of Planning, and old
   `/director` links still forward to the right place.
+
+- The header's two pickers became one scope, read left to right from the
+  whole to the part: the project (a plan shot by several rigs shows its rig
+  count), its **Workspace**, then which rig and target **Images** and
+  **Sequence** show. A lone rig's project lists its targets there. Every
+  view button marks the current page the same way, and the view strip is
+  only as wide as its buttons.

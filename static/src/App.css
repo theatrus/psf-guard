@@ -280,6 +280,10 @@
 
 .header-view-tabs {
   grid-area: nav;
+  /* As wide as its buttons: the spare width falls between the views and
+     the utilities, not inside the strip. */
+  justify-self: start;
+  max-width: 100%;
   min-width: 0;
   padding: 0.18rem;
   border: 1px solid var(--color-border-primary);
@@ -316,10 +320,11 @@
   background: transparent;
 }
 
+/* One "you are here" for every view button, in the strip or in the scope. */
 .header-view-tabs .header-button[aria-current="page"] {
-  color: var(--color-primary);
-  border-color: var(--color-primary-alpha-30);
-  background: var(--color-primary-alpha-10);
+  color: var(--color-bg-primary, #111);
+  border-color: var(--color-primary);
+  background: var(--color-primary);
 }
 
 .utility-icon {
@@ -717,12 +722,8 @@
     padding: 0.5rem 0.8rem;
   }
 
-  .header-view-tabs {
-    width: 100%;
-  }
-
-  .header-group--review {
-    flex: 1 1 auto;
+  .header-scope {
+    flex: 0 1 auto;
   }
 }
 

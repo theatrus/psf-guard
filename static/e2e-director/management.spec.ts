@@ -75,7 +75,7 @@ test('a disabled Director has no navigation entry or editable records', async ({
   await expect(page).toHaveURL(/#\/$/);
   await page.goto('/#/plan?plan=anything');
   await expect(page.getByText('Plans are unavailable on this server.')).toBeVisible();
-  await expect(page.getByRole('navigation', { name: 'Views' }).getByRole('group', { name: 'Plan' })).toHaveCount(0);
+  await expect(page.getByRole('navigation', { name: 'Views' }).getByRole('button', { name: 'Workspace' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^Live rigs/ })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /New plan|New project|New site|New rig/ })).toHaveCount(0);
   // The Library has no Planning section either.

@@ -14,6 +14,7 @@ import { useAccess } from '../auth/access';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import ProjectTreeOption from './projectSelector/ProjectTreeOption';
 import ProjectFamilyOption from './projectSelector/ProjectFamilyOption';
+import { useCurrentPlan, usePlans } from './header/useCurrentPlan';
 
 export default function ProjectTargetSelector() {
   const {
@@ -26,6 +27,10 @@ export default function ProjectTargetSelector() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
+  const plans = usePlans();
+  const currentPlan = useCurrentPlan();
+  // Only a live Planning answers a workspace; with it off the page says so.
+  const onPlan = location.pathname === '/plan' && plans.enabled;
   // Refresh acts on the database a scoped view shows, never on one parked in a merged view's URL.
   const scopedDbId = useScopedDbId();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -151,13 +156,19 @@ export default function ProjectTargetSelector() {
     (project) => project.db_id === dbId && project.id === selectedProjectId
   );
   const selectedDatabase = databases?.find((database) => database.id === dbId);
-  const selectedTarget = targets.find(
-    (target) => target.db_id === dbId && target.id === selectedTargetId
-  );
 
-  // On the Library, Sky or Planning the picker is the way into review: a
-  // choice there opens Images for it. On a scoped view it just moves scope.
+  // On the Library or the Sky the picker is the way into review: a choice
+  // there opens Images for it. In a workspace it opens that project's
+  // workspace. On a scoped view it just moves scope.
   const scopeTo = (db: string | null, project: number | null, target: number | null) => {
+    // In a workspace, choosing a project opens that project's workspace.
+    if (onPlan && db !== null && project !== null) {
+      const scope = withoutPlanningParams(location.search);
+      scope.set('db', db); scope.set('project', String(project));
+      if (target === null) scope.delete('target'); else scope.set('target', String(target));
+      navigate(plans.hrefFor(plans.planFor(db, project) ?? `${db}:${project}`, scope));
+      return;
+    }
     if (isMergedPath(location.pathname) && db !== null) {
       const next = withoutPlanningParams(location.search);
       next.set('db', db);
@@ -213,18 +224,31 @@ export default function ProjectTargetSelector() {
     });
   };
 
+  // The trigger names the whole: the plan in a workspace, else the project,
+  // with its rig count when several rigs shoot it or its database when one
+  // does (project names repeat across catalogs). The rig and target switcher
+  // beside it names the part.
+  const selectedFamily = selectedProject ? navigation.familyOf(selectedProject) : null;
+  const workspacePlan = onPlan ? currentPlan.current : null;
   const scopeLabel = projectsLoading
     ? 'Loading projects…'
-    : selectedTarget && selectedProject
-      ? `${selectedProject.display_name} · ${selectedTarget.name}`
-      : selectedProject?.display_name ??
-        (selectedDatabase ? 'All projects' : 'Choose project or target');
-  // Closed, the trigger is the only place the current database is named, and
-  // project names repeat across catalogs. Every row inside the picker already
-  // carries its database this way.
+    : workspacePlan?.project.name ??
+      selectedProject?.display_name ??
+      (selectedDatabase ? 'All projects' : 'Choose project or target');
   const scopeDatabase = projectsLoading
     ? null
-    : selectedProject?.db_name ?? selectedDatabase?.name ?? null;
+    : workspacePlan
+      ? (() => {
+          // Count the rigs the switcher can show: links with a project row.
+          const rigs = workspacePlan.links.filter((link) => link.source_row_id !== null);
+          return rigs.length > 1 ? `${rigs.length} rigs` : rigs[0]?.catalog_name ?? 'no database';
+        })()
+      : selectedFamily
+        ? `${selectedFamily.members.length} rigs`
+        : selectedProject?.db_name ?? selectedDatabase?.name ?? null;
+  // Plans no database takes yet can only be planned: their workspace.
+  const databaseless = plans.rows.filter((row) => row.links.length === 0)
+    .filter((row) => !search.trim() || row.project.name.toLowerCase().includes(search.trim().toLowerCase()));
   const refreshPending = refreshCacheMutation.isPending || refreshBothCachesMutation.isPending;
 
   const renderProject = (project: NavigationProject) => {
@@ -370,7 +394,27 @@ export default function ProjectTargetSelector() {
                 </details>
               )}
 
-              {navigation.projectGroups.length === 0 &&
+              {databaseless.length > 0 && (
+                <section className="selector-option-group" aria-label="Plans without a database">
+                  <div className="selector-group-heading">
+                    <span>Plans without a database</span>
+                    <span>{databaseless.length}</span>
+                  </div>
+                  {databaseless.map((row) => (
+                    <button
+                      key={row.project.id}
+                      type="button"
+                      className={`selector-option${workspacePlan?.project.id === row.project.id ? ' is-selected' : ''}`}
+                      onClick={() => { setPickerOpen(false); setSearch(''); navigate(plans.hrefFor(row)); }}
+                    >
+                      <span>{row.project.name}</span>
+                      <small>Opens its workspace</small>
+                    </button>
+                  ))}
+                </section>
+              )}
+
+              {navigation.projectGroups.length === 0 && databaseless.length === 0 &&
                 navigation.archivedProjects.length === 0 &&
                 navigation.matchingDatabases.length === 0 && (
                   <p className="selector-empty">No projects or targets match.</p>

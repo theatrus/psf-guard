@@ -98,7 +98,9 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     const trigger = page.locator('#scope-select');
     await expect(trigger).toBeEnabled();
     await trigger.click();
-    const family = page.getByRole('button', { name: /Andromeda exposures.*2 rigs/ });
+    // The closed trigger names the family too; the row lives in the open picker.
+    const family = page.getByRole('dialog', { name: 'Choose a project or target' }).getByRole('button', { name: /Andromeda exposures.*2 rigs/ });
+    await expect(trigger).toContainText('2 rigs');
     await expect(family).toHaveCount(1);
     await expect(page.locator('.selector-project-toggle', { hasText: 'Andromeda exposures' })).toHaveCount(1);
     await expect(page.getByRole('region', { name: 'Andromeda exposures on Redcat data' })).toBeVisible();

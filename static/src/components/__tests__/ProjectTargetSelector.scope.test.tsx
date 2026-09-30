@@ -84,13 +84,14 @@ describe('the closed project picker', () => {
     );
   });
 
-  it('keeps naming the database once a target narrows the view', async () => {
+  it('keeps naming the project and database once a target narrows the view', async () => {
     serveTwoCatalogs();
     renderAt('/grid?db=attic&project=1&target=4');
 
+    // The target is named by the rig and target switcher beside the picker.
     await waitFor(() =>
       expect(scopeLines()).toEqual({
-        name: '2026 - Sh2 86 · Sh2 86',
+        name: '2026 - Sh2 86',
         database: 'Attic catalog',
       })
     );

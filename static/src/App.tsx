@@ -3,7 +3,7 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { useQuery } from '@tanstack/react-query';
 import ProjectTargetSelector from './components/ProjectTargetSelector';
-import PlanPicker from './components/header/PlanPicker';
+import RigTargetSelect from './components/header/RigTargetSelect';
 import { useCurrentPlan } from './components/header/useCurrentPlan';
 import LiveChip from './components/header/LiveChip';
 import KeyboardShortcutHelp from './components/KeyboardShortcutHelp';
@@ -168,11 +168,25 @@ function AppContent() {
           >
             Library
           </button>
-          {/* One rig's project, seen two ways. The picker is the scope for the
-              buttons to its right; without a database in scope they wait. */}
-          <div className="header-group header-group--review" role="group" aria-label="Review">
-            <span className="header-group-label">Review</span>
+          {/* The scope, from the whole to the part: the project (a plan shot
+              by several rigs is one), its workspace, then which rig and
+              target Images and Sequence show. */}
+          <div className="header-group header-scope" role="group" aria-label="Scope">
             <ProjectTargetSelector />
+            {plan.enabled && (
+              <button
+                type="button"
+                onClick={() => plan.current && navigate(plan.hrefFor(plan.current))}
+                className="header-button"
+                aria-current={isOnWorkspace ? 'page' : undefined}
+                disabled={!plan.current}
+                title={plan.current ? `Open the workspace for ${plan.current.project.name}` : 'Choose a project with a plan first'}
+              >
+                Workspace
+              </button>
+            )}
+            <span className="header-scope-divider" aria-hidden="true" />
+            <RigTargetSelect />
             <button
               type="button"
               onClick={() => navigate(toScoped('/grid'))}
@@ -194,24 +208,6 @@ function AppContent() {
               Sequence
             </button>
           </div>
-          {/* One plan across its rigs. The plan follows the review scope
-              unless the URL names one. */}
-          {plan.enabled && (
-            <div className="header-group header-group--plan" role="group" aria-label="Plan">
-              <span className="header-group-label">Plan</span>
-              <PlanPicker />
-              <button
-                type="button"
-                onClick={() => plan.current && navigate(plan.hrefFor(plan.current))}
-                className="header-button"
-                aria-current={isOnWorkspace ? 'page' : undefined}
-                disabled={!plan.current}
-                title={plan.current ? `Open the workspace for ${plan.current.project.name}` : 'Choose a plan first'}
-              >
-                Workspace
-              </button>
-            </div>
-          )}
           <button
             type="button"
             onClick={() => navigate(toScoped('/sky'))}
