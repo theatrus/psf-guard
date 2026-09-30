@@ -2644,6 +2644,77 @@ pub async fn update_project_route(
     )))
 }
 
+/// What `GET /api/db/{db_id}/guids` reports: each Target Scheduler table's
+/// rows without a GUID, and whether this server could fill them.
+#[derive(Debug, Serialize)]
+pub struct GuidReport {
+    pub tables: Vec<crate::ts_guids::GuidGap>,
+    pub missing: u64,
+    pub writable: bool,
+}
+
+/// What `POST /api/db/{db_id}/guids/fill` did: rows given a GUID, per
+/// table, and the copy taken first (none when nothing was missing).
+#[derive(Debug, Serialize)]
+pub struct GuidFillReport {
+    pub tables: Vec<crate::ts_guids::GuidGap>,
+    pub filled: u64,
+    pub backup_path: Option<String>,
+}
+
+fn guid_error(error: anyhow::Error) -> AppError {
+    AppError::InternalError(format!("{error:#}"))
+}
+
+/// `GET /api/db/{db_id}/guids` — rows Target Scheduler's migration left
+/// without a GUID (see `ts_guids`). Read only.
+pub async fn missing_guids_route(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Result<Json<ApiResponse<GuidReport>>, AppError> {
+    let path = std::path::PathBuf::from(&ctx.database_path);
+    let management = state.database_management_allowed();
+    let report = tokio::task::spawn_blocking(move || -> anyhow::Result<GuidReport> {
+        let conn = crate::ts_guids::open_existing(&path, false)?;
+        let tables = crate::ts_guids::missing_guids(&conn)?;
+        Ok(GuidReport {
+            missing: crate::ts_guids::total_missing(&tables),
+            tables,
+            writable: management && crate::ts_guids::is_writable(&path),
+        })
+    })
+    .await
+    .map_err(|error| AppError::InternalError(error.to_string()))?
+    .map_err(guid_error)?;
+    Ok(Json(ApiResponse::success(report)))
+}
+
+/// `POST /api/db/{db_id}/guids/fill` — copy the database beside itself, then
+/// give every row without a GUID a new one. Behind the database-management
+/// gate: it writes the rig's Target Scheduler file. Runs off the request
+/// path on its own connections, so the shared one stays free for the
+/// minutes a large copy over the network can take.
+pub async fn fill_guids_route(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Result<Json<ApiResponse<GuidFillReport>>, AppError> {
+    require_database_management_allowed(&state)?;
+    let path = std::path::PathBuf::from(&ctx.database_path);
+    let outcome = tokio::task::spawn_blocking(move || crate::ts_guids::fill_database(&path))
+        .await
+        .map_err(|error| AppError::InternalError(error.to_string()))?
+        .map_err(guid_error)?;
+    let filled = crate::ts_guids::total_missing(&outcome.filled);
+    if let Some(backup) = &outcome.backup {
+        tracing::info!(db = %ctx.id, filled, backup = %backup.display(), "filled missing Target Scheduler GUIDs");
+    }
+    Ok(Json(ApiResponse::success(GuidFillReport {
+        tables: outcome.filled,
+        filled,
+        backup_path: outcome.backup.map(|backup| backup.display().to_string()),
+    })))
+}
+
 /// `PUT /api/db/{db_id}/targets/{target_id}` — rename a target and/or move it
 /// to another project (same profile; images follow the target).
 pub async fn update_target_route(

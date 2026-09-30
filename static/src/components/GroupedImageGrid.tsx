@@ -1035,6 +1035,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
             selectionSource={stackCandidates.source}
             imageSize={imageSize}
             onOpenImage={navigateToDetail}
+            targetId={targetId}
           />
         )}
 

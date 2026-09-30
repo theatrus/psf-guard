@@ -412,3 +412,14 @@
   as are the Library card's button and the page heading. A project with one
   rig and one target shows them as a captioned label beside Images, set
   apart from the buttons, rather than as bare text that looked clickable.
+
+- Target Scheduler projects without a GUID can be planned again. Target
+  Scheduler skips giving existing rows a GUID when a database is upgraded
+  past its schema 22 in one step, and such projects were invisible to
+  Planning. Settings › Databases now says how many rows are affected and
+  offers **Fill in GUIDs**, which backs the database up beside itself and
+  fills only the empty ones; `psf-guard fill-guids` does the same.
+- A Target Scheduler mosaic far from the equator is imported as its grid
+  of panels instead of a single panel.
+- With a target chosen in the header, the stack previews show only that
+  target's stacks and colour compositions, not every panel of a mosaic.

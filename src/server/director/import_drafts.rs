@@ -128,6 +128,20 @@ fn infer_layout(targets: &[SourceTarget], panel: Option<PanelSize>) -> (IcrsPosi
         offsets.iter().map(|o| o[1]).sum::<f64>() / offsets.len() as f64,
     ];
     let center = plane.deproject(mean);
+    // Measure the grid in the plane of the mosaic's centre, where N.I.N.A.
+    // lays panels out. Seen from the first panel's plane instead, a grid far
+    // from the equator bends: at +61° a 2×2 of 1.4° panels is off by 0.03°,
+    // more than the tolerance, and would read as scattered targets.
+    let Ok(plane) = TangentPlane::at(center) else {
+        return single;
+    };
+    let mut offsets = Vec::with_capacity(targets.len());
+    for target in targets {
+        let Some(offset) = plane.project(target.center) else {
+            return single;
+        };
+        offsets.push(offset);
+    }
     // Camera frame: up along the position angle, right a quarter turn on.
     let (sin, cos) = first.rotation_degrees.to_radians().sin_cos();
     let along_x: Vec<f64> = offsets.iter().map(|o| -o[0] * cos + o[1] * sin).collect();
@@ -386,6 +400,42 @@ mod tests {
             },
             rotation_degrees: rotation,
         }
+    }
+
+    #[test]
+    fn a_mosaic_far_from_the_equator_still_reads_as_its_grid() {
+        // Askar107PHQ's Heart Mosaic, as N.I.N.A. laid it out: a 2×2 at +61°
+        // (RA in Target Scheduler hours, times 15). From the first panel's
+        // plane the columns bend by 0.03°; from the centre's they line up.
+        let targets = [
+            target(
+                "Heart and Soul Nebula Panel 1",
+                2.645_499_681_489_58 * 15.0,
+                61.832_231_223_272_4,
+                0.0,
+            ),
+            target(
+                "Heart and Soul Nebula Panel 2",
+                2.442_450_009_872_69 * 15.0,
+                61.832_231_223_272_4,
+                0.0,
+            ),
+            target(
+                "Heart and Soul Nebula Panel 3",
+                2.642_430_289_441_8 * 15.0,
+                60.871_626_084_609_4,
+                0.0,
+            ),
+            target(
+                "Heart and Soul Nebula Panel 4",
+                2.445_519_401_920_46 * 15.0,
+                60.871_626_084_609_4,
+                0.0,
+            ),
+        ];
+        let (center, mosaic) = infer_layout(&targets, None);
+        assert_eq!((mosaic.rows, mosaic.columns), (2, 2));
+        assert!((center.dec_degrees - 61.35).abs() < 0.05, "{center:?}");
     }
 
     #[test]

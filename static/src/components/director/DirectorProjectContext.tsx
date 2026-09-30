@@ -22,7 +22,7 @@ export default function DirectorProjectContext({ instanceId, slug, projectId }: 
     <div className="director-toolbar"><Link to={`/?${back}`}><ArrowLeft size={16} />Library</Link></div>
     {plans.isPending && <p role="status">Finding this project's plan...</p>}
     {plans.isError && <div role="alert"><p>{plans.error.message}</p><button type="button" onClick={() => void plans.refetch()}>Retry</button></div>}
-    {plans.data && <p role="alert">This project has no plan yet. A Target Scheduler project needs a GUID to be planned; open it in Target Scheduler once, or import a frame into it.</p>}
+    {plans.data && <p role="alert">This project has no plan yet. A Target Scheduler project needs a GUID to be planned. If its database was upgraded past Target Scheduler schema 22 in one step, its older rows never got one: Settings › Databases offers <strong>Fill in GUIDs</strong> for that database.</p>}
     {plans.data?.warnings.map(warning => <p key={warning} className="director-error" role="alert">{warning}</p>)}
   </section>;
 }

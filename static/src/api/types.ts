@@ -2771,3 +2771,10 @@ export interface SchedulerFlatHistoryPage {
   records: SchedulerFlatHistoryRecord[];
   total: number;
 }
+
+/** One Target Scheduler table's rows without a GUID. */
+export interface GuidGap { table: string; missing: number; total: number }
+/** Rows Target Scheduler's migration left without a GUID, and whether this server can fill them. */
+export interface GuidReport { tables: GuidGap[]; missing: number; writable: boolean }
+/** What a fill did: rows given a GUID, and the copy taken first (none when nothing was missing). */
+export interface GuidFillReport { tables: GuidGap[]; filled: number; backup_path: string | null }

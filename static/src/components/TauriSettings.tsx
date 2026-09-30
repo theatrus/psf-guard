@@ -31,6 +31,7 @@ import {
 } from '../hooks/useImportJob';
 import { starMetadataFillEnabled } from '../hooks/useStarMetadataFill';
 import QualityBackfillControls from './QualityBackfillControls';
+import MissingGuidRepair from './MissingGuidRepair';
 import AutoImportFields from './AutoImportFields';
 import AutoImportSummary from './AutoImportSummary';
 import RemotePeerSync from './RemotePeerSync';
@@ -1783,6 +1784,7 @@ export default function TauriSettings({
                         dbName={entry.name}
                         canManage={managementAllowed}
                       />
+                      <MissingGuidRepair dbId={entry.id} dbName={entry.name} canManage={managementAllowed} />
                       <QualityBackfillControls dbId={entry.id} />
                       <AutoImportSummary dbId={entry.id} settings={entry.autoimport} />
                     </div>

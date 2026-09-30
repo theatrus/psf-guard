@@ -2047,3 +2047,29 @@
     display: flex;
   }
 }
+
+/* A per-database note, and the warning form used for missing GUIDs. */
+.tauri-settings .settings-note {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 0.85rem;
+}
+
+.tauri-settings .settings-note p {
+  margin: 0 0 6px;
+}
+
+.tauri-settings .settings-note p:last-child {
+  margin-bottom: 0;
+}
+
+.tauri-settings .settings-warning {
+  border-left: 3px solid var(--color-warning, #f0b429);
+}
+
+.tauri-settings .settings-error {
+  color: var(--color-error, #ff6b6b);
+}

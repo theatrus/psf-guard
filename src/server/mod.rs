@@ -446,6 +446,8 @@ async fn run_server_internal(
             "/projects/{project_id}",
             put(handlers::update_project_route),
         )
+        .route("/guids", get(handlers::missing_guids_route))
+        .route("/guids/fill", post(handlers::fill_guids_route))
         .route(
             "/projects/{project_id}/merge",
             post(handlers::merge_project_route),
