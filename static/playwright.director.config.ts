@@ -14,7 +14,16 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   timeout: 30_000,
-  use: { baseURL: `http://127.0.0.1:${port}`, trace: 'retain-on-failure', screenshot: 'only-on-failure' },
+  use: {
+    baseURL: `http://127.0.0.1:${port}`,
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
+    // The plan list opens compact by default; these specs read the full cards.
+    storageState: {
+      cookies: [],
+      origins: [{ origin: `http://127.0.0.1:${port}`, localStorage: [{ name: 'psf-guard.display-preferences', value: JSON.stringify({ libraryDensity: 'detailed' }) }] }],
+    },
+  },
   projects: [{ name: 'chromium', use: devices['Desktop Chrome'] }],
   webServer: {
     command: `${command} server --host 127.0.0.1 --port ${port} --registry "${path.join(root, 'registry.json')}" --cache-dir "${path.join(root, 'cache')}" --director-meta "${path.join(root, 'meta.sqlite')}" --allow-database-management --static-dir "${path.resolve('dist')}"`,

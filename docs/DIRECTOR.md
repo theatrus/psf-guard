@@ -141,16 +141,24 @@ holds two projects in one database, so attaching such a plan is refused.
 
 ### Plans read like Library projects
 
-The plan list uses the Library's project card: the name opens the workspace,
-one database chip per rig replaces the Library's single database name, and
-under it sit the same frame counts, desired-progress bar and grading bar
-(accepted, rejected, pending), then a stage line (activated, planned, framed,
-linked). Every count on the card adds up all of the plan's rigs. A **Rigs**
-list stands where the Library lists targets: one entry per rig with its own
-accepted-of-desired bar and, for a mosaic, the count per panel, because each
-rig holds its own targets and exposure plans in its own database and can be
-ahead of or behind the others. Library stays the per-database view of what
-is on disk and how it graded; Director is the per-plan view across rigs.
+The plan list and the Library share one layout. Both open **Compact** by
+default: one row per project with the same pills in the same order, the
+database, Target Scheduler's state there (Draft, Active, Inactive, Closed),
+accepted against desired with a bar that reads **Done** once the goal is met,
+the grading split, and the first and last capture with how long ago that
+was. A plan shot by several rigs is an outer pill, **N rigs**, with the
+plan's total progress and one row per rig under it, since each rig holds its
+own targets and exposure plans and can be ahead of or behind the others. A
+plan without a database says **Not linked to any database** where the pills
+would sit. A plan closed in Target Scheduler on every rig that shoots it
+sits under **Archived plans**, folded the way the Library folds closed
+projects. The name opens the workspace; the arrow opens the row into the
+full card, which keeps the frame counts, bars, survey thumbnail and the
+**Rigs** list, and folds it back. **Detailed** opens every plan as its card.
+The Compact / Detailed choice is one setting, Settings → Review → Library,
+and the Library and Planning follow it together. Library stays the
+per-database view of what is on disk and how it graded; Director is the
+per-plan view across rigs.
 
 The header's project picker follows the same rule. A project that lives in
 several databases under one GUID is one row there, badged with its rig count

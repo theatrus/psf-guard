@@ -32,6 +32,22 @@ export function gradingSplit(counts: FrameCounts): { pending: number; acceptedPc
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+/** Archived the way the Library archives a project: closed in Target
+ *  Scheduler on every rig that shoots it. */
+export function isArchivedPlan(row: DirectorPlanRow): boolean {
+  return row.links.length > 0 && row.links.every(link => link.source_state === 3);
+}
+
+/** The stage in a word or two, for a compact row; the full line sits in
+ *  the row's title. */
+export function stageShort(row: DirectorPlanRow): string {
+  if (row.activation) return 'Activated';
+  if (row.plan && row.plan.objectives > 0) return 'Planned';
+  if (row.framing?.source === 'catalog') return 'Framed in Target Scheduler';
+  if (row.framing) return 'Framed';
+  return row.links.length ? 'No target yet' : 'Not linked';
+}
+
 /** Where the plan stands, from activated back to unlinked. */
 export function stage(row: DirectorPlanRow): string {
   if (row.activation) return `Activated rev ${row.activation.revision} on ${new Date(row.activation.applied_at_ms).toLocaleDateString()}, ${plural(row.activation.rigs, 'rig')}`;

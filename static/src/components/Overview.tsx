@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import { ago, percentDone, projectFamilies, stateLabel } from './libraryFamilies';
+import { ago, projectFamilies } from './libraryFamilies';
 import { setDisplayPreferences, useDisplayPreferences } from '../hooks/useDisplayPreferences';
+import { useFoldedRows } from '../hooks/useFoldedRows';
+import { DatesPill, DbPill, DensityToggle, FamilyPill, FoldButton, GradingPill, ProgressPill, StatePill } from './projectPills';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Merge } from 'lucide-react';
@@ -103,19 +105,13 @@ export default function Overview() {
   // itself until they fold it.
   const displayPreferences = useDisplayPreferences();
   const density = displayPreferences.libraryDensity;
+  const folds = useFoldedRows(density);
+  const showsCard = folds.showsCard;
+  const toggleCard = folds.toggle;
   const chooseDensity = (next: 'compact' | 'detailed') => {
     setDisplayPreferences({ ...displayPreferences, libraryDensity: next });
     // A new default starts clean: rows opened or folded by hand go back to it.
-    setOpenedProjects(new Set());
-    setFoldedProjects(new Set());
-  };
-  const [openedProjects, setOpenedProjects] = useState<Set<string>>(() => new Set());
-  const [foldedProjects, setFoldedProjects] = useState<Set<string>>(() => new Set());
-  const showsCard = (key: string, isCurrent: boolean) => density === 'detailed' ? !foldedProjects.has(key) : openedProjects.has(key) || (isCurrent && !foldedProjects.has(key));
-  const toggleCard = (key: string, isCurrent: boolean) => {
-    const shown = showsCard(key, isCurrent);
-    setOpenedProjects(current => { const next = new Set(current); if (shown) next.delete(key); else next.add(key); return next; });
-    setFoldedProjects(current => { const next = new Set(current); if (shown) next.add(key); else next.delete(key); return next; });
+    folds.reset();
   };
   const [calibrationReportProject, setCalibrationReportProject] = useState<{
     dbId: string;
@@ -791,10 +787,7 @@ export default function Overview() {
                   <option value="images">Most images</option>
                 </select>
               </label>
-              <div className="project-density" role="radiogroup" aria-label="Project view">
-                <button type="button" role="radio" aria-checked={density === 'compact'} onClick={() => chooseDensity('compact')}>Compact</button>
-                <button type="button" role="radio" aria-checked={density === 'detailed'} onClick={() => chooseDensity('detailed')}>Detailed</button>
-              </div>
+              <DensityToggle density={density} onChange={chooseDensity} />
             </div>
           </div>
 
@@ -844,19 +837,15 @@ export default function Overview() {
               // A compact row says what matters at a glance; the project the
               // user came from, and any row they open, shows the whole card.
               if (!showsCard(key, isCurrent)) {
-                const done = percentDone(project.accepted_images, project.total_desired);
-                const last = ago(project.date_range.latest, relativeNow);
                 return (
                   <div key={key} data-project-key={key} className={['library-row', !project.has_files ? 'no-files' : '', projectNewImages > 0 ? 'has-new-images' : ''].filter(Boolean).join(' ')} data-testid="library-row">
-                    <button type="button" className="library-expand" aria-expanded={false} aria-label={`Show details for ${project.display_name}`} title="Show details" onClick={() => toggleCard(key, isCurrent)}>▸</button>
+                    <FoldButton open={false} name={project.display_name} onClick={() => toggleCard(key, isCurrent)} />
                     <button type="button" className="library-name" onClick={() => project.has_files && handleSelectProject(project)} disabled={!project.has_files} aria-label={`Open ${project.display_name} image grid`}>{project.display_name}</button>
-                    <span className="library-pill library-pill-db" title={`Database ID: ${project.db_id}`}>{project.db_name}</span>
-                    <span className={`library-pill library-pill-state is-state-${project.state}`}>{stateLabel(project.state)}</span>
-                    {project.total_desired > 0
-                      ? <span className="library-pill library-pill-progress" title={`${project.accepted_images} of ${project.total_desired} desired frames accepted`}><span className="library-pill-bar" aria-hidden="true"><span style={{ width: `${Math.min(100, done ?? 0)}%` }} /></span>{project.accepted_images} / {project.total_desired} · {done}%</span>
-                      : <span className="library-pill library-pill-progress is-open" title="No desired frame count in Target Scheduler">{project.total_images} images</span>}
-                    <span className="library-pill library-pill-grading" title={`${project.accepted_images} accepted, ${project.rejected_images} rejected, ${project.pending_images} pending`}><span className="grade-accepted">{project.accepted_images}</span><span className="grade-rejected">{project.rejected_images}</span><span className="grade-pending">{project.pending_images}</span></span>
-                    <span className="library-pill library-pill-dates" title={formatDateRange(project.date_range)}>{project.date_range.latest ? `${formatDate(project.date_range.earliest)} – ${formatDate(project.date_range.latest)}` : 'No dates'}{last ? <small> · {last}</small> : null}</span>
+                    <DbPill name={project.db_name} title={`Database ID: ${project.db_id}`} />
+                    <StatePill state={project.state} />
+                    <ProgressPill accepted={project.accepted_images} desired={project.total_desired} totalImages={project.total_images} />
+                    <GradingPill accepted={project.accepted_images} rejected={project.rejected_images} pending={project.pending_images} />
+                    <DatesPill earliest={project.date_range.earliest} latest={project.date_range.latest} nowMs={relativeNow} title={formatDateRange(project.date_range)} />
                     {projectNewImages > 0 && <span className="new-images-badge"><span aria-hidden="true" />{projectNewImages} new</span>}
                     {!project.has_files && <span className="no-files-badge">No Files</span>}
                     {project.files_missing > 0 && <span className="library-pill files-missing">{project.files_missing} missing</span>}
@@ -883,7 +872,7 @@ export default function Overview() {
                   ].filter(Boolean).join(' ')}
                 >
                   <div className="project-header">
-                    <button type="button" className="library-expand is-open" aria-expanded={true} aria-label={`Hide details for ${project.display_name}`} title="Fold to a row" onClick={() => toggleCard(key, isCurrent)}>▾</button>
+                    <FoldButton open={true} name={project.display_name} onClick={() => toggleCard(key, isCurrent)} />
                     <button
                       type="button"
                       className="project-open-main"
@@ -1458,18 +1447,14 @@ export default function Overview() {
               );
             };
             if (family.members.length === 1) return renderProject(family.members[0]);
-            const done = percentDone(family.accepted, family.desired);
-            const last = ago(family.latest, relativeNow);
             return (
               <div key={family.key} className={`library-family${density === 'compact' ? ' is-compact' : ''}`} data-testid="library-family">
                 <div className="library-family-head">
-                  <span className="library-pill library-pill-family" title="One plan shot by several rigs: the same Target Scheduler project in each database">{family.members.length} rigs</span>
+                  <FamilyPill rigs={family.members.length} />
                   <strong className="library-family-name">{family.name}</strong>
-                  <span className="library-pill library-pill-db">{family.members.map(member => member.db_name).join(' · ')}</span>
-                  {family.desired > 0
-                    ? <span className="library-pill library-pill-progress" title={`${family.accepted} of ${family.desired} desired frames accepted across the rigs`}><span className="library-pill-bar" aria-hidden="true"><span style={{ width: `${Math.min(100, done ?? 0)}%` }} /></span>{family.accepted} / {family.desired} · {done}%</span>
-                    : <span className="library-pill library-pill-progress is-open">{family.totalImages} images</span>}
-                  {last && <span className="library-pill library-pill-dates">{last}</span>}
+                  <DbPill name={family.members.map(member => member.db_name).join(' · ')} />
+                  <ProgressPill accepted={family.accepted} desired={family.desired} totalImages={family.totalImages} title={`${family.accepted} of ${family.desired} desired frames accepted across the rigs`} />
+                  {ago(family.latest, relativeNow) && <span className="library-pill library-pill-dates">{ago(family.latest, relativeNow)}</span>}
                 </div>
                 <div className="library-family-members">{family.members.map(renderProject)}</div>
               </div>

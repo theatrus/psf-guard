@@ -334,6 +334,11 @@ export interface DirectorPlanLink {
   source_project_guid: string;
   source_row_id: number | null;
   source_name: string | null;
+  /** Target Scheduler's project state there: 0 draft, 1 active, 2 inactive, 3 closed. */
+  source_state?: number | null;
+  /** First and last capture of the project's frames there, Unix seconds. */
+  earliest_capture_s?: number | null;
+  latest_capture_s?: number | null;
   targets: DirectorTargetProgress[];
 }
 /** Enough of a saved framing for the plan list to draw its survey thumbnail. */

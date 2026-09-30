@@ -299,6 +299,11 @@
 .library-pill-state.is-state-3 { color: var(--color-text-hint); text-decoration: line-through; }
 .library-pill-progress { color: var(--color-text-primary); }
 .library-pill-progress.is-open { color: var(--color-text-secondary); }
+.library-pill-progress.is-done { color: #7be495; background: rgba(123, 228, 149, 0.12); }
+.library-pill-progress.is-done .library-pill-bar > span { background: #7be495; }
+a.library-name, a.library-family-name { text-decoration: none; color: var(--color-text-primary); }
+a.library-name:hover, a.library-family-name:hover { text-decoration: underline; }
+.library-name.is-static { cursor: default; }
 .library-pill-bar { display: inline-block; width: 64px; height: 6px; border-radius: 3px; background: var(--color-bg-quaternary); overflow: hidden; }
 .library-pill-bar > span { display: block; height: 100%; background: var(--color-primary); }
 .library-pill-grading .grade-accepted::before { content: '✓'; margin-right: 2px; color: #7be495; }
@@ -312,3 +317,44 @@
 .library-family-members { display: flex; flex-direction: column; gap: 6px; }
 .library-family:not(.is-compact) .library-family-members { gap: 12px; }
 @media (max-width: 700px) { .library-pill-dates small { display: none; } .library-pill-bar { width: 40px; } }
+
+/* The archive fold the Library and Planning share: closed projects, closed plans. */
+.project-archive {
+  margin-top: 24px;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border-secondary);
+}
+
+.project-archive-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.project-archive-toggle:hover {
+  background: var(--color-bg-hover);
+}
+
+.project-archive-toggle > span:last-child {
+  margin-left: auto;
+  color: var(--color-text-muted);
+}
+
+.expand-toggle {
+  color: var(--color-text-muted);
+  font-size: 1.2em;
+  margin-left: 10px;
+  transition: transform 0.2s ease;
+}
+
+.expand-toggle.expanded {
+  transform: rotate(90deg);
+}
