@@ -19,6 +19,8 @@ pub struct StackSnrOptions {
     pub json: Option<PathBuf>,
     pub csv: Option<PathBuf>,
     pub detector_threads: Option<usize>,
+    /// How much each admitted frame counts toward the mean.
+    pub weighting: crate::server::stack_preview::StackWeighting,
 }
 
 /// One input frame and what decides where it lands in the order.
@@ -73,7 +75,7 @@ pub fn stack_snr(paths: &[String], options: &StackSnrOptions) -> Result<()> {
         }
     }
 
-    let (points, accepted_exposures) = accumulate(&candidates)?;
+    let (points, accepted_exposures) = accumulate(&candidates, options.weighting)?;
     let progressive = snr::ProgressiveSnr::new(options.order, points, &accepted_exposures);
     report(&progressive);
 
@@ -92,7 +94,10 @@ pub fn stack_snr(paths: &[String], options: &StackSnrOptions) -> Result<()> {
 
 /// Stack the frames in order, reading the accumulator at every depth on the
 /// ladder. This is the group build's loop with the catalog taken out.
-fn accumulate(candidates: &[Candidate]) -> Result<(Vec<snr::SnrPoint>, Vec<f64>)> {
+fn accumulate(
+    candidates: &[Candidate],
+    weighting: crate::server::stack_preview::StackWeighting,
+) -> Result<(Vec<snr::SnrPoint>, Vec<f64>)> {
     use seiza_stacking::{FrameDisposition, LiveStacker, NormalizationMode, StackOptions};
 
     let reference = crate::image_io::open_linear_frame(&candidates[0].path)
@@ -102,6 +107,7 @@ fn accumulate(candidates: &[Candidate]) -> Result<(Vec<snr::SnrPoint>, Vec<f64>)
         Default::default(),
         StackOptions {
             normalization: NormalizationMode::Global,
+            weighting: weighting.frame_weighting(),
             ..StackOptions::default()
         },
     )
@@ -133,7 +139,15 @@ fn accumulate(candidates: &[Candidate]) -> Result<(Vec<snr::SnrPoint>, Vec<f64>)
                 let frame = &batch[consumed];
                 consumed += 1;
                 match outcome {
-                    Ok(FrameDisposition::Accepted(_)) => {
+                    Ok(FrameDisposition::Accepted(diagnostics)) => {
+                        if !diagnostics.weight.is_empty() {
+                            println!(
+                                "  weight {} (noise {}) for {}",
+                                join_values(&diagnostics.weight, 3),
+                                join_values(&diagnostics.noise, 2),
+                                frame.path.display()
+                            );
+                        }
                         integrated_exposure += frame.exposure_seconds;
                         accepted_exposures.push(frame.exposure_seconds);
                     }
@@ -163,6 +177,15 @@ fn accumulate(candidates: &[Candidate]) -> Result<(Vec<snr::SnrPoint>, Vec<f64>)
         }
     }
     Ok((points, accepted_exposures))
+}
+
+/// Per-channel values, separated by slashes.
+fn join_values(values: &[f32], decimals: usize) -> String {
+    values
+        .iter()
+        .map(|value| format!("{value:.decimals$}"))
+        .collect::<Vec<_>>()
+        .join(" / ")
 }
 
 /// Rank frames by detected stars against their sharpness: more stars and

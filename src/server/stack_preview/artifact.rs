@@ -1423,6 +1423,8 @@ mod tests {
                 source_fingerprint: Some(source_fingerprint(&path)),
                 overlap_fraction: None,
                 integrated_fraction: None,
+                noise_sigma: None,
+                integration_weight: None,
             });
         }
         drop(connection);

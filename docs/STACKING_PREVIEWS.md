@@ -68,6 +68,47 @@ databases, so full-frame accumulator buffers cannot multiply unexpectedly.
 Cards are capped at two columns on wide displays so the inspection preview does
 not become excessively wide.
 
+### Weight frames by noise
+
+By default every admitted frame counts the same toward the stack mean.
+Turn on **Weight frames by noise** to let quieter frames count for more.
+The choice is off by default and is remembered across reloads, like the
+calibration mode.
+
+Seiza measures each frame's pixel-scale noise, per channel, on the
+calibrated frame before resampling, and scales it by the frame's
+normalization gain, so all frames are compared in the units they are stacked
+in. A frame's weight is `(reference noise / frame noise)²`, so the reference
+frame weighs 1 and a frame twice as noisy as the reference weighs 0.25.
+Weights are clamped to 0.05–20, so no single frame can vanish or take over.
+
+It helps most within one exposure length whose frames were shot under
+changing conditions: a rising Moon, twilight at either end of the night,
+haze, or thin cloud that brightened the sky or dimmed the target without
+failing the frame. It is not a way to blend different exposure lengths;
+turn on **Separate exposure groups** to keep those apart.
+
+Expand **Frame decisions** on a weighted card to see each frame's weight,
+one value per channel; hover a weight to see the noise it came from. The
+final transient-rejection pass replays every frame with the weight the live
+pass recorded, so noise is measured once and the published stack uses the
+same weights that admitted it.
+
+Changing the setting marks existing cards **Out of date — frame weighting
+changed**. Only a weighted build adds the setting to its job id, so an
+equal-weight build hashes exactly as it did before the option existed. A resume
+checkpoint records its weighting, and a build with the other setting starts
+over and says `Full restack: the frame weighting changed`. A weighted
+checkpoint that lacks a frame's weight is also rebuilt rather than replayed
+with made-up weights. Weighted checkpoints use a newer Seiza context format
+that older PSF Guard releases cannot reopen; an older release rebuilds from
+scratch instead.
+
+API callers send `"weighting": "noise"` in the build request; `"equal"` is the
+default. Jobs and the latest index record `weighting`, and each admitted frame
+of a weighted build records `integration_weight` and `noise_sigma`, one value
+per channel.
+
 ### Queue builds by hand
 
 Build buttons stay available while a build runs. Clicking **Build channel** on
@@ -99,7 +140,7 @@ dimensions, configuration, and payload checksum before continuing. The
 checkpoint is only reused when it is provably an ancestor of the request:
 every recorded frame must still be requested with an identical source
 fingerprint, and the calibration set, Accepted-only policy, scoring policy,
-stacking order, and pipeline version must match. Removing a frame, regrading
+frame weighting, stacking order, and pipeline version must match. Removing a frame, regrading
 one in place, changing calibration or scoring, or upgrading Seiza rebuilds
 from scratch — and when a checkpoint existed but could not be extended, the
 card says why (`Full restack: the scoring policy changed`), so a slow rebuild
@@ -327,7 +368,12 @@ finished result. It is also published three ways:
 ```bash
 psf-guard stack-snr /path/to/lights
 psf-guard stack-snr /path/to/lights --order quality --csv curve.csv --json curve.json
+psf-guard stack-snr /path/to/lights --weight-by-noise
 ```
+
+`--weight-by-noise` applies the same inverse-noise weights as the panel
+option, relative to the first frame, and prints each frame's weight and
+noise.
 
 It stacks the frames raw — calibration lives in the catalog, and a folder has
 none to match against — and prints the curve and its reading. Its quality order
@@ -419,8 +465,8 @@ Setups → Stack previews. It applies to every database on the server and is
 off by default.
 
 A refresh rebuilds exactly what the project's cards remember: the same
-targets and channels, the same Accepted-only policy, order, scoring, and
-per-channel calibration choices, over the frames the project holds now. Any
+targets and channels, the same Accepted-only policy, order, scoring, frame
+weighting, and per-channel calibration choices, over the frames the project holds now. Any
 color preview composed from a rebuilt channel is recomposed afterwards with
 its kind, palette, crop, and processing unchanged. A refresh whose inputs and
 grades match the cards already built is a cache hit and starts nothing.

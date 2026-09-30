@@ -789,12 +789,18 @@ pub fn main() -> Result<()> {
             json,
             csv,
             threads,
+            weight_by_noise,
         } => {
             let options = crate::commands::stack_snr::StackSnrOptions {
                 order: order.into(),
                 json,
                 csv,
                 detector_threads: threads,
+                weighting: if weight_by_noise {
+                    crate::server::stack_preview::StackWeighting::Noise
+                } else {
+                    crate::server::stack_preview::StackWeighting::Equal
+                },
             };
             crate::commands::stack_snr(&paths, &options)?;
         }
