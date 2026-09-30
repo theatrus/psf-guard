@@ -423,3 +423,8 @@
   of panels instead of a single panel.
 - With a target chosen in the header, the stack previews show only that
   target's stacks and colour compositions, not every panel of a mosaic.
+
+- The header's rig and target switcher is as wide as the chosen target's
+  name, within reason, so long names show whole. Mosaic panels that share
+  a long start show the part that sets them apart ("Panel 2"), with the
+  full name as a tooltip.
