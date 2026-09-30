@@ -714,6 +714,35 @@ pub fn main() -> Result<()> {
                 .with_context(|| format!("Failed to open database: {}", cli.database))?;
             show_images(&conn, &ids)?;
         }
+        Commands::FillGuids { dry_run } => {
+            let path = std::path::Path::new(&cli.database);
+            let conn = crate::ts_guids::open_existing(path, false)?;
+            let gaps = crate::ts_guids::missing_guids(&conn)?;
+            drop(conn);
+            for gap in &gaps {
+                println!(
+                    "{:<18} {:>7} of {:>7} rows without a GUID",
+                    gap.table, gap.missing, gap.total
+                );
+            }
+            let missing = crate::ts_guids::total_missing(&gaps);
+            if gaps.is_empty() {
+                println!("This database predates Target Scheduler's GUID columns (schema 22); nothing to fill.");
+            } else if missing == 0 {
+                println!("Every row has a GUID.");
+            } else if dry_run {
+                println!("Dry run: {missing} rows would get a GUID.");
+            } else {
+                let outcome = crate::ts_guids::fill_database(path)?;
+                if let Some(backup) = &outcome.backup {
+                    println!("Copied the database to {}", backup.display());
+                }
+                println!(
+                    "Gave {} rows a GUID.",
+                    crate::ts_guids::total_missing(&outcome.filled)
+                );
+            }
+        }
         Commands::UpdateGrade { id, status, reason } => {
             let conn = Connection::open(&cli.database)
                 .with_context(|| format!("Failed to open database: {}", cli.database))?;

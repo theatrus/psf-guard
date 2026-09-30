@@ -148,9 +148,24 @@ holds for it becomes Director's own drafts: its targets become the framing
 one, the rig's field as the panel size when its optics are known) and its
 exposure plans become the plan (one objective per bandpass with the frames
 a panel wants, bound to the template each plan uses at its exposure). From
-then on the drafts are the operator's; nothing is imported twice. A project
-row without a GUID (an old catalog that Target Scheduler has
-not touched since its GUID migration) is skipped until it gets one. A file
+then on the drafts are the operator's; nothing is imported twice. The
+targets are measured in the plane of the mosaic's centre, where N.I.N.A.
+lays panels out, so a mosaic far from the equator still reads as its grid.
+
+A project row without a GUID is skipped until it gets one. Target
+Scheduler added GUID columns in its schema 22 and meant to give every
+existing row one, but it only does so when a database stops at 22: one
+upgraded from 21 or earlier straight to 23 in a single start keeps empty
+GUIDs on every row older than the upgrade. Settings › Databases says so for
+such a database and offers **Fill in GUIDs**, which copies the file beside
+itself (`<file>.before-guid-fill-<seconds>`) and then gives each empty row
+in `project`, `target`, `exposureplan`, `exposuretemplate`,
+`acquiredimage` and `profilepreference` a new GUID, touching nothing else;
+`psf-guard -d <file> fill-guids [--dry-run]` does the same from the command
+line. Close N.I.N.A. on that rig first, and fill the rig's own database
+rather than a sync copy of it, so the GUIDs start where the rows do. A file
+the server cannot write is reported with no button, and nothing is copied
+or changed. The next listing takes the projects in as plans. A file
 that cannot be written, or has no project table, is reported in the
 Library's plans section and left out.
 

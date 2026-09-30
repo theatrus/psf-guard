@@ -852,12 +852,13 @@ psf-guard stretch-to-png image.fits -o output.png   # MTF auto-stretch
 psf-guard read-fits image.fits                      # header/metadata dump
 
 # Database queries & manual grading
-psf-guard list-projects -d database.sqlite
-psf-guard list-targets "Project Name" -d database.sqlite
-psf-guard dump-grading -d database.sqlite [--project NAME]
-psf-guard show-images <IDS> -d database.sqlite
-psf-guard update-grade <ID> rejected -d database.sqlite
+psf-guard -d database.sqlite list-projects
+psf-guard -d database.sqlite list-targets "Project Name"
+psf-guard -d database.sqlite dump-grading [--project NAME]
+psf-guard -d database.sqlite show-images <IDS>
+psf-guard -d database.sqlite update-grade <ID> rejected
 psf-guard regrade database.sqlite [--dry-run]        # statistical re-grading
+psf-guard -d database.sqlite fill-guids [--dry-run]  # GUIDs Target Scheduler's upgrade skipped
 ```
 
 Batch commands also support statistical outlier detection

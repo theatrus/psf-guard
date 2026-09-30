@@ -5,7 +5,7 @@ import { getServerUrl } from '../utils/tauri';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorFeasibility, DirectorMosaicPreview, DirectorResolvedName,
   DirectorSkyMarks,
   DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate, DirectorAttached} from './directorTypes';
-import type {
+import type { GuidFillReport, GuidReport,
   ProjectProcessingSettings,
   StackColorInputSources,
   FlatHistoryState,
@@ -684,6 +684,22 @@ export const apiClient = {
       update
     );
     if (!data.data) throw new Error(data.error || 'Failed to update PixInsight settings');
+    return data.data;
+  },
+
+  /** Target Scheduler rows its own migration left without a GUID. */
+  getMissingGuids: async (dbId: string): Promise<GuidReport> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<GuidReport>>(dbPath(dbId, '/guids'));
+    if (!data.data) throw new Error(data.error || 'Failed to count missing GUIDs');
+    return data.data;
+  },
+
+  /** Copy the database beside itself, then give every such row a GUID. Management-gated server-side. */
+  fillMissingGuids: async (dbId: string): Promise<GuidFillReport> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<GuidFillReport>>(dbPath(dbId, '/guids/fill'));
+    if (!data.data) throw new Error(data.error || 'Failed to fill missing GUIDs');
     return data.data;
   },
 

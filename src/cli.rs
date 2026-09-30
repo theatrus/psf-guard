@@ -660,6 +660,17 @@ pub enum Commands {
         ids: String,
     },
 
+    /// Give Target Scheduler rows without a GUID a new one. Target
+    /// Scheduler meant to do this when it added GUIDs (schema 22), but a
+    /// database upgraded straight past 22 in one start was skipped. Copies
+    /// the database beside itself first. Close N.I.N.A. on that rig before
+    /// writing.
+    FillGuids {
+        /// Only report what is missing; write nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Manually update the grading status of an image
     UpdateGrade {
         /// Image ID to update

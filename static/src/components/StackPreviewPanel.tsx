@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatIntegration, totalIntegration } from '../utils/integrationTime';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
@@ -45,6 +45,9 @@ interface StackPreviewPanelProps {
   /** The grid's thumbnail size; large zooms widen the result cards too. */
   imageSize?: number;
   onOpenImage: (imageId: number) => void;
+  /** The target chosen in the header. With one chosen, stacks remembered
+   *  from the project's other targets (a mosaic's other panels) stay out. */
+  targetId?: number | null;
 }
 
 /**
@@ -289,6 +292,7 @@ export default function StackPreviewPanel({
   selectionSource,
   imageSize,
   onOpenImage,
+  targetId = null,
 }: StackPreviewPanelProps) {
   const queryClient = useQueryClient();
   const { canCompute } = useAccess();
@@ -515,20 +519,28 @@ export default function StackPreviewPanel({
     });
   }, [adoptableIds]);
 
+  // The project's remembered and running stacks cover every target; the
+  // grid shows one when the header names one, and so does this panel.
+  // No target, 0 or a malformed one all mean every target, as in the grid.
+  const scopedTarget = targetId && Number.isFinite(targetId) ? targetId : null;
+  const onTarget = useCallback((id: number) => scopedTarget === null || id === scopedTarget, [scopedTarget]);
   const latestByChannel = useMemo(
     () =>
       new Map(
-        (latest.data?.groups ?? []).map((entry) => [
-          channelKey(entry.group.target_id, entry.group.filter_name, entry.group.exposure_group),
-          entry,
-        ])
+        (latest.data?.groups ?? [])
+          .filter((entry) => onTarget(entry.group.target_id))
+          .map((entry) => [
+            channelKey(entry.group.target_id, entry.group.filter_name, entry.group.exposure_group),
+            entry,
+          ])
       ),
-    [latest.data]
+    [latest.data, onTarget]
   );
   const activeByChannel = useMemo(() => {
     const merged = new Map<string, { job: StackPreviewJob; group: StackPreviewJob['groups'][number] }>();
     for (const job of watchedJobs) {
       for (const group of job.groups) {
+        if (!onTarget(group.target_id)) continue;
         const key = channelKey(group.target_id, group.filter_name, group.exposure_group);
         const existing = merged.get(key);
         // A build still holding the channel outranks a settled one; among
@@ -542,7 +554,7 @@ export default function StackPreviewPanel({
       }
     }
     return merged;
-  }, [watchedJobs]);
+  }, [watchedJobs, onTarget]);
 
   const displayKeys = useMemo(() => {
     const keys = new Set([...currentChannels.keys(), ...latestByChannel.keys(), ...activeByChannel.keys()]);
@@ -859,6 +871,7 @@ export default function StackPreviewPanel({
           outdatedSourceKeys={outdatedSourceKeys}
           canCompute={canCompute}
           onOpenImage={onOpenImage}
+          targetId={scopedTarget}
         />
 
         {displayKeys.length > 0 && (

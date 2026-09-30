@@ -33,6 +33,8 @@ interface StackColorPreviewPanelProps {
   outdatedSourceKeys: ReadonlySet<string>;
   canCompute: boolean;
   onOpenImage: (imageId: number) => void;
+  /** The target chosen in the header; null shows every target's compositions. */
+  targetId?: number | null;
 }
 
 interface ColorOperation {
@@ -418,6 +420,7 @@ export default function StackColorPreviewPanel({
   outdatedSourceKeys,
   canCompute,
   onOpenImage,
+  targetId = null,
 }: StackColorPreviewPanelProps) {
   const queryClient = useQueryClient();
   const [watchedJobIds, setWatchedJobIds] = useState<string[]>([]);
@@ -552,11 +555,13 @@ export default function StackColorPreviewPanel({
       }
     }
     return [...byId.values()].filter((target) =>
+      // With a target chosen in the header, only its compositions.
+      (targetId === null || target.target_id === targetId) && (
       target.rgb_available || target.lrgb_available || target.narrowband_palettes.length > 0 ||
       target.source_candidates?.some((source) => source.exposure_group) ||
-      jobs.some((job) => job.target_id === target.target_id)
+      jobs.some((job) => job.target_id === target.target_id))
     );
-  }, [catalog.data, watchedJobs]);
+  }, [catalog.data, watchedJobs, targetId]);
 
   if (targets.length === 0 && !catalog.error) return null;
 
