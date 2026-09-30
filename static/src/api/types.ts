@@ -1441,6 +1441,8 @@ export interface WbppRunProgress {
   frames: number;
   lights: number;
   missing_files: number;
+  /** Darks the calibration library left out because they caught stray light. */
+  stray_light_darks?: number;
   command: string | null;
   pid: number | null;
   started_at: number | null;
@@ -1957,6 +1959,13 @@ export interface CalibrationFrameSummary {
    * after this frame, `backward` only at or before. Absent means both.
    */
   valid_direction?: CalibrationValidDirection | null;
+  /** Median level of a raw dark or dark-flat, once measured. */
+  dark_level?: number | null;
+  /**
+   * Why library health keeps this dark out of masters and exports: its level
+   * sits well above the matching darks, the mark of stray light.
+   */
+  stray_light?: string | null;
 }
 
 export type CalibrationValidDirection = 'forward' | 'backward';

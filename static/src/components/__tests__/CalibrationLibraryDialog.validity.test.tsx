@@ -168,4 +168,31 @@ describe('calibration validity marking', () => {
     expect(await screen.findByText('Night of 2026-06-01')).toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: /Select Flats/ })).toBeNull();
   });
+
+  it('marks darks that caught stray light on the night and on the frame', async () => {
+    serveLibrary([
+      {
+        ...flat('dark-quiet', earlyNight),
+        kind: 'dark',
+        dark_level: 503,
+      },
+      {
+        ...flat('dark-dawn', earlyNight + 600),
+        kind: 'dark',
+        dark_level: 1172,
+        stray_light: 'stray light: level 1172.0 sits 669.0 above the quietest dark',
+      },
+    ]);
+    render(
+      <CalibrationLibraryDialog dbId="demo" dbName="Demo" canManage onClose={() => {}} />,
+      { wrapper: wrapper() }
+    );
+
+    // The collapsed night already says it holds a leaking dark.
+    expect(await screen.findByText('1 stray light')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Night of 2026-06-01/ }));
+    const badge = await screen.findByText('Stray light');
+    expect(badge.getAttribute('title')).toContain('669.0 above the quietest dark');
+    expect(screen.getAllByText('Stray light')).toHaveLength(1);
+  });
 });

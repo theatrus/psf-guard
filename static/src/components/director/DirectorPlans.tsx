@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { Check, Plus, RefreshCw, X } from 'lucide-react';
 import { apiClient } from '../../api/client';
-import type { DirectorIdentity, DirectorPlanRow } from '../../api/directorTypes';
+import type { DirectorIdentity, DirectorPlanLink, DirectorPlanRow } from '../../api/directorTypes';
+import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import { useAccess } from '../../auth/access';
 import { identityId } from './identityId';
 import { retryWhenBusy } from './retry';
@@ -13,6 +14,8 @@ import { setDisplayPreferences, useDisplayPreferences } from '../../hooks/useDis
 import { useFoldedRows } from '../../hooks/useFoldedRows';
 import { DensityToggle, FoldButton } from '../projectPills';
 import { isArchivedPlan } from './planCardModel';
+import { PLAN_FILTERS, matchesFilter, matchesSearch, parsePlanFilter } from './planFilters';
+import { stateLabel } from '../libraryFamilies';
 import '../projectCard.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
@@ -23,7 +26,8 @@ interface Edit { record: DirectorIdentity; creating: boolean }
 export default function DirectorPlans({ instanceId }: { instanceId: string }) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
+  const status = useDirectorStatus();
   const queryKey = ['directorPlans', instanceId];
   // The workspace keeps the page's catalog scope so Overview returns where it was.
   const workspaceHref = (projectId: string) => {
@@ -39,6 +43,29 @@ export default function DirectorPlans({ instanceId }: { instanceId: string }) {
   const folds = useFoldedRows(density);
   const chooseDensity = (next: typeof density) => { setDisplayPreferences({ ...displayPreferences, libraryDensity: next }); folds.reset(); };
   const nowMs = Date.now();
+  // Which plans show, kept in the URL so reload and the workspace's way back keep it.
+  const filter = parsePlanFilter(params.get('directorShow'));
+  const search = params.get('directorSearch') ?? '';
+  const narrow = (next: { filter?: string; search?: string }) => {
+    const copy = new URLSearchParams(params);
+    const show = next.filter ?? filter;
+    const text = next.search ?? search;
+    if (show === 'all') copy.delete('directorShow'); else copy.set('directorShow', show);
+    if (text.trim()) copy.set('directorSearch', text); else copy.delete('directorSearch');
+    setParams(copy, { replace: true });
+  };
+  // A rig's project state is Target Scheduler data in that rig's database.
+  const setState = useMutation({
+    retry: false,
+    mutationFn: ({ link, state }: { link: DirectorPlanLink; state: number }) => apiClient.updateProject(link.catalog_slug, link.source_row_id!, { state }),
+    onSuccess: (_, { link, state }) => {
+      setNotice(`${link.source_name ?? link.catalog_name} is now ${stateLabel(state)} on ${link.catalog_name}.`);
+      void client.invalidateQueries({ queryKey });
+      void client.invalidateQueries({ queryKey: ['db', link.catalog_slug] });
+    },
+    onError: error => setNotice(message(error)),
+  });
+  const actions = { canEditState: canWrite && !!status.data?.database_management, onStateChange: (link: DirectorPlanLink, state: number) => setState.mutate({ link, state }) };
   // Closed everywhere it is shot: behind the same fold the Library uses.
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [edit, setEdit] = useState<Edit | null>(null);
@@ -85,16 +112,19 @@ export default function DirectorPlans({ instanceId }: { instanceId: string }) {
     </form>
   );
   const rows = plans.data?.rows ?? [];
-  const live = rows.filter(row => !isArchivedPlan(row));
-  const archived = rows.filter(isArchivedPlan);
+  const shown = rows.filter(row => matchesFilter(row, filter) && matchesSearch(row, search));
+  // Closed plans stay behind the fold unless the list was asked for them.
+  const live = filter === 'closed' ? shown : shown.filter(row => !isArchivedPlan(row));
+  const archived = filter === 'closed' ? [] : shown.filter(isArchivedPlan);
+  const narrowed = filter !== 'all' || search.trim() !== '';
   const item = (row: DirectorPlanRow) => {
     const key = row.project.id;
     const href = workspaceHref(key);
     return <li key={key} className="director-plan">
       {folds.showsCard(key)
-        ? <PlanCard row={row} href={href} canWrite={canWrite} editing={!!edit} onRename={() => begin({ creating: false, record: row.project })}
+        ? <PlanCard row={row} href={href} canWrite={canWrite} editing={!!edit} onRename={() => begin({ creating: false, record: row.project })} actions={actions}
             fold={<FoldButton open={true} name={row.project.name} onClick={() => folds.toggle(key)} />} />
-        : <PlanRow row={row} href={href} nowMs={nowMs} onOpen={() => folds.toggle(key)} canWrite={canWrite} editing={!!edit} onRename={() => begin({ creating: false, record: row.project })} />}
+        : <PlanRow row={row} href={href} nowMs={nowMs} onOpen={() => folds.toggle(key)} canWrite={canWrite} editing={!!edit} onRename={() => begin({ creating: false, record: row.project })} actions={actions} />}
       {edit?.record.id === key && !edit.creating && form}
     </li>;
   };
@@ -102,6 +132,10 @@ export default function DirectorPlans({ instanceId }: { instanceId: string }) {
     <div className="director-toolbar">
       <h2>Plans</h2>
       <div className="director-actions">
+        <select className="director-plan-filter" aria-label="Show plans" value={filter} onChange={event => narrow({ filter: event.target.value })}>
+          {PLAN_FILTERS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </select>
+        <input className="director-plan-search" type="search" placeholder="Search plans" aria-label="Search plans" value={search} onChange={event => narrow({ search: event.target.value })} />
         <DensityToggle density={density} onChange={chooseDensity} />
         <button type="button" title="Refresh records" aria-label="Refresh records" disabled={plans.isFetching || !!edit} onClick={() => void plans.refetch()}><RefreshCw size={16} /></button>
         {canWrite && <button type="button" disabled={!!edit} onClick={() => begin({ creating: true, record: { id: identityId(), name: '', revision: 1 } })}><Plus size={16} />New project</button>}
@@ -115,6 +149,9 @@ export default function DirectorPlans({ instanceId }: { instanceId: string }) {
     {plans.isPending && <p role="status">Loading plans...</p>}
     {plans.isError && <p className="director-error" role="alert">{message(plans.error)}</p>}
     {plans.isSuccess && rows.length === 0 && <p className="director-muted">No projects yet.</p>}
+    {plans.isSuccess && rows.length > 0 && narrowed && <p className="director-muted director-plan-count" role="status">
+      Showing {shown.length} of {rows.length} plans. <button type="button" className="director-link-button" onClick={() => narrow({ filter: 'all', search: '' })}>Show all</button>
+    </p>}
     <ul className={`director-plan-list${density === 'compact' ? ' is-compact' : ''}`}>{live.map(item)}</ul>
     {archived.length > 0 && (
       <section className="project-archive">

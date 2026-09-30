@@ -367,6 +367,13 @@ pub fn main() -> Result<()> {
             if plan.missing.len() > 10 {
                 eprintln!("  … and {} more missing", plan.missing.len() - 10);
             }
+            if let Some(example) = plan.stray_light.first() {
+                eprintln!(
+                    "  ⚠️ left out {} dark(s) that caught stray light, e.g. {}",
+                    plan.stray_light.len(),
+                    example.display()
+                );
+            }
             if summary.errors > 0 {
                 return Err(anyhow::anyhow!(
                     "{} file(s) failed to export",

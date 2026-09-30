@@ -68,6 +68,10 @@ pub struct WbppRunProgress {
     pub lights: usize,
     /// Catalog rows whose file was not found, so they are not in the run.
     pub missing_files: usize,
+    /// Darks the calibration library left out because they caught stray
+    /// light.
+    #[serde(default)]
+    pub stray_light_darks: usize,
     /// The command line, as a person would type it.
     pub command: Option<String>,
     pub pid: Option<u32>,
@@ -906,18 +910,24 @@ async fn run(
         };
         crate::commands::export::write_wbpp_scripts(&plan, &plan_work_dir, &spec)?;
         let runner = plan_work_dir.join(crate::commands::export::wbpp::JS_RUNNER);
-        let summary = (plan.items.len(), lights, plan.missing.len());
+        let summary = (
+            plan.items.len(),
+            lights,
+            plan.missing.len(),
+            plan.stray_light.len(),
+        );
         let _ = &plan_store;
         Ok((summary, runner))
     })
     .await
     .map_err(|e| anyhow::anyhow!("planning task: {e}"))??;
 
-    let (frames, lights, missing) = plan_summary;
+    let (frames, lights, missing, stray_light) = plan_summary;
     update(&store, |progress| {
         progress.frames = frames;
         progress.lights = lights;
         progress.missing_files = missing;
+        progress.stray_light_darks = stray_light;
         progress.stage = "launching".to_string();
     });
     if cancel.load(Ordering::SeqCst) {
