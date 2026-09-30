@@ -36,6 +36,11 @@ pub struct CatalogStar {
     pub x: f64,
     pub y: f64,
     pub flux: f64,
+    /// Background-subtracted flux in a wide aperture, in ADU, for an
+    /// unsaturated star the quality scan measured. The aperture scales with
+    /// the frame's HFR, so unlike `flux` it does not change with seeing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aperture_flux: Option<f64>,
 }
 
 /// All usable detections of one frame.
@@ -264,6 +269,7 @@ pub fn build_reference(
             x: s.x,
             y: s.y,
             flux: median(f),
+            aperture_flux: None,
         })
         .filter(|s| s.flux > 0.0)
         .collect();
@@ -807,7 +813,12 @@ mod tests {
                 let x = ((i * 7919) % 1000) as f64 / 1000.0 * (W as f64 - 40.0) + 20.0;
                 let y = ((i * 104729) % 1000) as f64 / 1000.0 * (H as f64 - 40.0) + 20.0;
                 let flux = 500.0 + ((i * 613) % 5000) as f64;
-                CatalogStar { x, y, flux }
+                CatalogStar {
+                    x,
+                    y,
+                    flux,
+                    aperture_flux: None,
+                }
             })
             .collect()
     }
@@ -828,6 +839,7 @@ mod tests {
                         x: s.x + dither.0,
                         y: s.y + dither.1,
                         flux: s.flux * transparency * extra,
+                        aperture_flux: None,
                     })
                 })
                 .collect(),

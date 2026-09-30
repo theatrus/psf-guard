@@ -6950,6 +6950,70 @@ pub(crate) fn merge_photometric_signals(
 /// Merge fresh detector and spatial results from the per-DB quality cache.
 /// A quality scan is the source of truth for star count and HFR once present;
 /// the spatial fields fill values that N.I.N.A. does not store.
+/// One frame of a quality scan: the work item, the expected target position,
+/// and whether it needs the spatial, astrometry and satellite stages.
+type QualityScanItem = (
+    crate::server::spatial_scan::ScanWorkItem,
+    Option<(f64, f64)>,
+    bool,
+    bool,
+    bool,
+);
+
+/// Give every scanned frame that wants one a photometric zero point, from
+/// its aperture-measured stars and its fresh plate solve (just persisted or
+/// cached).
+///
+/// Only a Gaia catalog is used: its single G band keeps the zero point from
+/// drifting with star color, which Tycho's mixed VT and BT would not.
+fn record_frame_zero_points(
+    ctx: &DatabaseContext,
+    astrometry: &crate::astrometry::AstrometryContext,
+    items: &[QualityScanItem],
+) {
+    let Some(catalog) = astrometry
+        .star_catalog()
+        .ok()
+        .filter(|catalog| catalog.attribution().contains("Gaia"))
+    else {
+        return;
+    };
+    let mut attempts = Vec::new();
+    for (item, expected, ..) in items {
+        let entry = {
+            let store = ctx.spatial_metrics.read().unwrap();
+            match store.metrics.get(&item.image_id) {
+                Some(entry) if entry.filename == item.filename && entry.wants_zero_point() => {
+                    entry.clone()
+                }
+                _ => continue,
+            }
+        };
+        let Some(solution) = astrometry
+            .validated_persisted_pixel_analysis(&ctx.cache_dir_path, item.image_id, *expected)
+            .and_then(|analysis| analysis.solution)
+        else {
+            continue;
+        };
+        let zero_point = entry.exposure_s.and_then(|exposure_s| {
+            crate::zero_point::measure(
+                &crate::astrometry::wcs_from_response(&solution.wcs),
+                solution.image_width as usize,
+                solution.image_height as usize,
+                &entry.measured_stars(),
+                exposure_s,
+                catalog.as_ref(),
+            )
+        });
+        attempts.push((item.image_id, zero_point));
+    }
+    crate::server::spatial_scan::record_zero_points(
+        &ctx.spatial_metrics,
+        &ctx.cache_dir_path,
+        &attempts,
+    );
+}
+
 pub(crate) fn merge_spatial_metrics(
     metrics: &mut crate::sequence_analysis::ImageMetrics,
     store: &crate::server::spatial_scan::SharedSpatialStore,
@@ -6979,6 +7043,11 @@ pub(crate) fn merge_spatial_metrics(
         }
         if metrics.bg_glow_max.is_none() && entry.bg_glow_max > 0.0 {
             metrics.bg_glow_max = Some(entry.bg_glow_max);
+        }
+        // Capture software rarely records an SNR; the scan's zero point and
+        // sky noise fill the scoring dimension that would otherwise drop out.
+        if metrics.snr.is_none() {
+            metrics.snr = entry.signal_to_noise();
         }
     }
 }
@@ -7207,13 +7276,24 @@ async fn start_spatial_scan_with_priority(
                     )
             });
         let astrometry_cached = cached_astrometry.is_some();
+        // A frame measured and solved earlier, but never given a zero point,
+        // needs neither stage again, only the cheap catalog match.
+        let zero_point_pending = spatial_cached
+            && astrometry_cached
+            && ctx
+                .spatial_metrics
+                .read()
+                .unwrap()
+                .metrics
+                .get(&img.id)
+                .is_some_and(crate::server::spatial_scan::StoredSpatialMetrics::wants_zero_point);
         let satellite_cached = !include_satellites
             || (!force_satellites
                 && cached_astrometry.as_ref().is_some_and(|analysis| {
                     crate::satellites::persisted_analysis(&ctx.cache_dir_path, img.id, analysis)
                         .is_some()
                 }));
-        if !spatial_cached || !astrometry_cached || !satellite_cached {
+        if !spatial_cached || !astrometry_cached || !satellite_cached || zero_point_pending {
             work.push((
                 img,
                 target_name,
@@ -7506,6 +7586,7 @@ async fn start_spatial_scan_with_priority(
                     }
                 }
             }
+            record_frame_zero_points(&ctx_arc, &astrometry, &items);
             crate::server::spatial_scan::finalize_scan(&ctx_arc.spatial_metrics);
         }));
         if scan_body.is_err() {
@@ -8245,6 +8326,9 @@ mod file_resolution_tests {
                 bg_cell_spread: 0.0,
                 bg_cell_max_dev: 0.0,
                 median_adu: 1000.0,
+                sky_noise_adu: None,
+                zero_point: None,
+                zero_point_version: 0,
                 computed_at: 0,
                 catalog: Default::default(),
                 star_cell_counts: vec![1.0],

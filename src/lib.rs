@@ -36,6 +36,7 @@ pub mod sync_client;
 pub mod ts_guids;
 pub mod ts_schema;
 pub mod utils;
+pub mod zero_point;
 
 // Main entry points
 pub mod cli_main;
