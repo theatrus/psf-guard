@@ -156,7 +156,18 @@ projects. The name opens the workspace; the arrow opens the row into the
 full card, which keeps the frame counts, bars, survey thumbnail and the
 **Rigs** list, and folds it back. **Detailed** opens every plan as its card.
 The Compact / Detailed choice is one setting, Settings → Review → Library,
-and the Library and Planning follow it together. Library stays the
+and the Library and Planning follow it together.
+
+The **Show plans** select narrows the list: Active, Inactive or Draft keep a
+plan when any rig has that state; Closed and Done ask for every rig; Still to
+shoot keeps what has a goal left; No database keeps plans nothing shoots yet.
+The search box matches the plan name, a rig's project name or its database.
+Both live in the URL (`directorShow`, `directorSearch`), so reload and the
+way back from a workspace keep them, and a **Show all** link clears them.
+Each rig's row links to that project in the Library and to its image grid.
+When the server runs with database management, the state pill is a select:
+choosing Active, Inactive, Draft or Closed writes that rig's project row in
+Target Scheduler at once, the same edit the Library's plan editor makes. Library stays the
 per-database view of what is on disk and how it graded; Director is the
 per-plan view across rigs.
 
