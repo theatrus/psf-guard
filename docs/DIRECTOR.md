@@ -42,7 +42,53 @@ switching are not exposed. Catalog adoption requires the explicit workflow below
 
 ## Management screen
 
-The **Director** entry in the header opens one page with three sections.
+Planning lives in the Library and the header; there is no separate list
+page. The **Library** lists every project that has frames, and a plan shot
+by several rigs is an outer pill there with a row per rig. The outer pill
+carries the plan's stage (Framed, Planned, or Active on N rigs) and a
+Planning button that opens the plan's **workspace**; a project shot by one
+rig has that button on its own row and card, and the rows and cards inside
+a family leave it to the outer pill. A state change locks that row's select
+until the database has it. Below the projects, **Plans
+with nothing captured yet** lists what the Library has no row for: plans
+framed before any rig takes them, and plans activated on rigs that have not
+captured a frame. Each shows its rigs and their project states, or that no
+database takes it yet; **New plan** starts one and the pencil renames one.
+A plan leaves that list for the projects above once its first frame arrives.
+A plan closed on every rig stays out of it until Show asks for Closed, and
+when a database's projects cannot be read, plans linked to databases are
+left out rather than shown as empty.
+
+The header's **Plan** group holds a plan picker and a **Workspace** button:
+the picker lists every plan with its rigs and progress, follows the project
+chosen for review to its plan, and a rig chip in it hops back to that rig's
+project in Images; **All plans** goes to the Library. Beside the jobs slot a
+**Live** chip counts the fleet, `2 rigs · 1 exposing`, turns red when a rig
+that used to talk has gone quiet, and opens the Live table in a drawer from
+any view. Rig setup and the exposure template library are under **Settings
+› Rigs** and **Settings › Exposure templates**; a read-only viewer cannot
+open Settings, so the Live drawer shows them both, read only. Choosing a
+project in the Review picker from the Library, Sky or a workspace opens
+Images for it, and Planning's own URL parameter (`plan`) stays behind, so a
+plan you had open does not follow you into review.
+
+A workspace lives at `/plan?plan=<key>`. The key is the Target Scheduler
+GUID the plan's rigs share, so the same link opens the same plan on any
+PSF Guard instance that holds those databases. Planning's own plan id names
+a plan instead when the GUID cannot: a plan with no database, one whose
+rigs carry different GUIDs after an attach, or one whose GUID another plan
+also holds, since a detached project keeps its GUID. Any rig's GUID still
+finds its plan, and `plan=<database>:<row>` finds the plan of a project row
+or says why the row has none yet (a project without a GUID cannot be
+planned). Whatever the address, the page rewrites it to the plan's own key,
+so history and bookmarks stay right. A workspace open when a detach makes
+its GUID ambiguous stays on its plan; a fresh visit to such a GUID lists
+the plans that hold it. An address that names nothing says so and links
+back to the Library. Opening a plan from a Library row carries that row's
+database, so its targets and exposures editor is open on arrival. Old `/director` links forward: `directorProject` to its plan,
+`directorSource` with `project` to that row, and anything else to the
+Library with its scope, `directorShow` and `directorSearch` becoming the
+Library's `show` and `q`.
 
 **Live** is the operator's table of rigs. For each rig it shows the link
 state, from the server's own receipt times of the plugin's calls: *Online*
@@ -56,46 +102,29 @@ in (with saved frames grading has not yet accepted), and reported status, and
 which activated plans it is assigned to, each a link to the workspace. The
 table refreshes every fifteen seconds.
 
-**Plans** lists every global project with where it is linked (each database
-and the source project there) and how far its planning has come: not linked,
-framed, planned, or activated with the revision and date. A project that
-Target Scheduler already points somewhere counts as framed there: the list
-says so, takes the first target's coordinates and rotation as the framing
-and the rig's field as the panel, and opening the plan starts Director's
-own framing from it. A framed plan
-shows a thumbnail of the sky it was framed on, from the same survey cache
-the framing view uses, with its panels drawn where the plan puts them, so a
-glance down the list says what each plan covers. Once a database
-holds targets for the project, the row also counts frames accepted against
-desired across every rig, and each link gives the count per target, so a
-mosaic shows every panel's progress at a glance. **Open plan** goes to the
-project's workspace. **New project** creates an unlinked global
-project; linking a database's projects under that database's setup can also
-create one on the spot.
+**Settings › Rigs** lists every registered database as a rig: whether
+planning is enabled, its field of view and pixel scale from the rig profile,
+whether the plugin has reported its camera, and the plugin's last live
+status. **Setup** expands the database's planning setup in place: enable
+planning, the rig profile, and the project links. **Library** opens its
+catalog.
 
-**Rigs** lists every registered database as a rig: whether planning is
-enabled, its field of view and pixel scale from the rig profile, whether the
-plugin has reported its camera, and the plugin's last live status. **Setup**
-expands the database's planning setup in place: enable planning, the rig
-profile, and the project links. **Library** opens its catalog.
-
-The **workspace** for one project shows its linked databases, each with the
+The **workspace** for one plan shows its linked databases, each with the
 familiar targets and exposures editor a click away, then **Framing**, **Plan**
-and **Activation**. A project with no linked database yet starts its framing
+and **Activation**. A plan with no linked database yet starts its framing
 by looking a name up in the CDS catalogs or by typing a center; activation
 then creates and links the Target Scheduler project in each rig database.
-The Library's project card offers **Planning**; for a linked project it
-lands in the same workspace.
+Its **Library** link goes back with the scope it came from. A project
+Planning has not taken in yet opens a page that finds or starts its plan.
 
-Older links that named the Catalogs, Sites or Rigs tabs still work: the
-Catalogs link opens the database's settings and the others land on this page.
 Sites are no longer edited as their own records; a rig's site lives in its
 rig profile. The identity API for sites remains for the plugin.
 
 ### Rigs and plans appear on their own
 
-Opening the Planning page takes every registered database in as a rig and
-every Target Scheduler project in it as a plan. Nothing to enable, name or
+Opening the Library, or any view with the header's plan picker, takes every
+registered database in as a rig and every Target Scheduler project in it as
+a plan. Nothing to enable, name or
 link: the database keeps a small identity table so a moved or renamed file
 stays the same rig, and each project row with a GUID gets a plan named after
 it. Projects that share a GUID across databases, as Sync copies do, become
@@ -109,8 +138,8 @@ a panel wants, bound to the template each plan uses at its exposure). From
 then on the drafts are the operator's; nothing is imported twice. A project
 row without a GUID (an old catalog that Target Scheduler has
 not touched since its GUID migration) is skipped until it gets one. A file
-that cannot be written, or has no project table, is reported at the top of
-the plan list and left out.
+that cannot be written, or has no project table, is reported in the
+Library's plans section and left out.
 
 The identity table, `psf_guard_catalog_identity`, and the Director side
 tables are plain SQL, so N.I.N.A., Target Scheduler and any SQLite tool open
@@ -120,8 +149,8 @@ never carries these tables: a planning push, a grade push or a pull moves
 Target Scheduler rows only, so a database synced from a peer gets an
 identity of its own when it is adopted here. Copying the file by hand does
 carry the identity, and two registered files with one identity are one
-catalog: the first by slug stands for it and the copy is named at the top of
-the plan list and left out of planning until it is removed from the registry
+catalog: the first by slug stands for it and the copy is named in the
+Library's plans section and left out of planning until it is removed from the registry
 or its identity table is dropped.
 
 ### Attaching a database's project to a plan
@@ -139,37 +168,31 @@ name, place, or as the lone target, and updates its exposure plans in place.
 again, named after the project; this plan keeps its drafts. A plan never
 holds two projects in one database, so attaching such a plan is refused.
 
-### Plans read like Library projects
+### Plans are Library projects
 
-The plan list and the Library share one layout. Both open **Compact** by
-default: one row per project with the same pills in the same order, the
-database, Target Scheduler's state there (Draft, Active, Inactive, Closed),
-accepted against desired with a bar that reads **Done** once the goal is met,
-the grading split, and the first and last capture with how long ago that
-was. A plan shot by several rigs is an outer pill, **N rigs**, with the
-plan's total progress and one row per rig under it, since each rig holds its
-own targets and exposure plans and can be ahead of or behind the others. A
-plan without a database says **Not linked to any database** where the pills
-would sit. A plan closed in Target Scheduler on every rig that shoots it
-sits under **Archived plans**, folded the way the Library folds closed
-projects. The name opens the workspace; the arrow opens the row into the
-full card, which keeps the frame counts, bars, survey thumbnail and the
-**Rigs** list, and folds it back. **Detailed** opens every plan as its card.
-The Compact / Detailed choice is one setting, Settings → Review → Library,
-and the Library and Planning follow it together.
+Planning has no list of its own: a plan is its projects in the Library.
+Rows and cards use the same pills in the same order: the database, Target
+Scheduler's state there (Draft, Active, Inactive, Closed), accepted against
+desired with a bar that reads **Done** once the goal is met, the grading
+split, and the first and last capture with how long ago that was. A plan
+shot by several rigs is an outer pill, **N rigs**, with the plan's total
+progress, its stage and its Planning button, and one row per rig under it,
+since each rig holds its own targets and exposure plans and can be ahead of
+or behind the others. The Compact / Detailed choice is Settings → Review →
+Library.
 
-The **Show plans** select narrows the list: Active, Inactive or Draft keep a
-plan when any rig has that state; Closed and Done ask for every rig; Still to
-shoot keeps what has a goal left; No database keeps plans nothing shoots yet.
-The search box matches the plan name, a rig's project name or its database.
-Both live in the URL (`directorShow`, `directorSearch`), so reload and the
-way back from a workspace keep them, and a **Show all** link clears them.
-Each rig's row links to that project in the Library and to its image grid.
-When the server runs with database management, the state pill is a select:
-choosing Active, Inactive, Draft or Closed writes that rig's project row in
-Target Scheduler at once, the same edit the Library's plan editor makes. Library stays the
-per-database view of what is on disk and how it graded; Director is the
-per-plan view across rigs.
+The **Show** select narrows the Library family by family: Active, Inactive
+or Draft keep a family when any rig has that state; Closed and Done ask for
+every rig; Still to shoot keeps what is neither done nor closed; with
+Planning on, No
+database keeps only plans nothing shoots yet. Closed projects sit in the
+archive, which opens when Show or search narrows the list. The search box
+matches project and target names. Both live in the URL (`show`, `q`), a
+"Showing N of M projects" line says how much is hidden, and **Show all**
+clears both. When the server runs with database management, a row's state
+pill is a select: choosing Active, Inactive, Draft or Closed writes that
+project row in Target Scheduler at once, the same edit the plan editor
+makes. The plans with nothing captured yet follow Show and search too.
 
 The header's project picker follows the same rule. A project that lives in
 several databases under one GUID is one row there, badged with its rig count
@@ -381,7 +404,8 @@ server folds both back to the sensor before offering them. Typed models:
 
 ## Framing view
 
-Open a plan from the Planning page. The workspace is a wide screen:
+Open a plan from its Planning button in the Library, or from the header's
+plan picker. The workspace is a wide screen:
 **Framing** comes first. The sky takes the width the window has and the
 height left once tonight's visibility strip fits under it, and that column
 stays put while the form beside it scrolls, so the horizon chart is always
@@ -564,8 +588,7 @@ and [plan](../crates/director-meta/src/plan.rs).
 
 ## Exposure template library
 
-**Exposure templates** on the Planning page is Director's own list of
-templates: a name, the filter as the rig calls it, gain, offset, binning,
+**Settings › Exposure templates** is Director's own list of templates: a name, the filter as the rig calls it, gain, offset, binning,
 readout mode and a starting exposure. They belong to no database. A plan may
 bind a rig to one of them where the rig's database has no template for the
 band, and activation writes it into that database under the library's GUID,
@@ -784,8 +807,8 @@ An offline map is preferred wherever it can stand in for an online survey:
 the DSS set for the DSS2 colour plates and the SHO set with stars for the
 online NSNS SHO layer (`stands_in_for` on the survey listing names the
 pair). A plan whose framing was saved on the online layer opens on the
-offline map, and its thumbnail on the plan list draws from it; the online
-layer stays a click away on its chip, and a layer picked by hand is kept.
+offline map; the online layer stays a click away on its chip, and a layer
+picked by hand is kept.
 When the server first lists a set it decodes the smallest version of every
 tile into memory in the background, a few tens of megabytes, so the first
 wide view renders at once; and once a framing view has its own tile, the

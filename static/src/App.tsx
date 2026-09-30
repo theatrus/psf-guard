@@ -1,8 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { useQuery } from '@tanstack/react-query';
 import ProjectTargetSelector from './components/ProjectTargetSelector';
+import PlanPicker from './components/header/PlanPicker';
+import { useCurrentPlan } from './components/header/useCurrentPlan';
+import LiveChip from './components/header/LiveChip';
 import KeyboardShortcutHelp from './components/KeyboardShortcutHelp';
 import ServerInfoPanel from './components/ServerInfoPanel';
 import SiteBanner from './components/SiteBanner';
@@ -10,7 +13,7 @@ import UpdateNotice from './components/UpdateNotice';
 import DatabaseActivityStatus from './components/DatabaseActivityStatus';
 import AggregatedCacheStatus from './components/AggregatedCacheStatus';
 import TauriSettings from './components/TauriSettings';
-import { isOverviewPath, isSkyPath, useGridState } from './hooks/useUrlState';
+import { isOverviewPath, isPlanningPath, isSkyPath, useDbProjectTarget, useGridState, withoutPlanningParams } from './hooks/useUrlState';
 import { isTauriApp, tauriConfig } from './utils/tauri';
 import {
   OPEN_SETTINGS_EVENT,
@@ -20,15 +23,18 @@ import {
 import { apiClient } from './api/client';
 import AuthGate from './auth/AccessContext';
 import { useAccess } from './auth/access';
-import { useDirectorStatus } from './hooks/useDirectorStatus';
 import './App.css';
 
 function AppContent() {
   const navigate = useNavigate();
   const location = useLocation();
-  const isOnDirector = location.pathname === '/director';
-  const director = useDirectorStatus();
+  const isOnDirector = isPlanningPath(location.pathname);
   const { showStats, setShowStats } = useGridState();
+  // The review scope: a database, and usually a project, parked in the URL.
+  const { dbId } = useDbProjectTarget();
+  const hasReviewScope = dbId !== null;
+  const plan = useCurrentPlan();
+  const isOnWorkspace = location.pathname === '/plan' && !!plan.current;
   const { data: serverInfo } = useQuery({
     queryKey: ['serverInfo'],
     queryFn: apiClient.getServerInfo,
@@ -40,8 +46,11 @@ function AppContent() {
   // on an empty view. The Overview keeps it too: it shows every database, but
   // holding the scope lets it point at the project the user left and hand the
   // same scope back to Images or Sequence.
-  const toScoped = (path: string) =>
-    location.search ? `${path}${location.search}` : path;
+  // Planning's own params (which workspace is open) stay behind.
+  const toScoped = (path: string) => {
+    const query = withoutPlanningParams(location.search).toString();
+    return query ? `${path}?${query}` : path;
+  };
   const [showHelp, setShowHelp] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   // Which form the settings modal should land on. Set by whoever asked for
@@ -53,6 +62,9 @@ function AppContent() {
   // the modal itself is shown regardless of mode.
   const [, setIsTauri] = useState(false);
   const access = useAccess();
+  // Settings opens by itself at most once: the check repeats for late Tauri
+  // globals, and a user who closed it should not see it come back.
+  const autoOpened = useRef(false);
 
   // Check configuration on mount. In both Tauri and browser/CLI-server mode,
   // we pop the settings modal automatically when no databases are configured.
@@ -83,13 +95,17 @@ function AppContent() {
         // If management is disabled and there are no DBs, leave the user on
         // the overview's empty state where they can read the explanation
         // without a modal blocking them.
-        if (!cancelled && !isOnDirector && access.canWrite && !hasValid && managementAllowed) {
+        if (!cancelled && !isOnDirector && access.canWrite && !hasValid && managementAllowed && !autoOpened.current) {
           console.log('No databases configured — opening settings modal');
+          autoOpened.current = true;
           setShowSettings(true);
         }
       } catch (error) {
         console.error('Failed to check configuration:', error);
-        if (!cancelled && !isOnDirector && access.canWrite) setShowSettings(true);
+        if (!cancelled && !isOnDirector && access.canWrite && !autoOpened.current) {
+          autoOpened.current = true;
+          setShowSettings(true);
+        }
       }
     };
 
@@ -101,7 +117,9 @@ function AppContent() {
     // the Overview empty-state button).
     const openHandler = (event: Event) => {
       if (!access.canWrite) return;
-      setSettingsIntent(settingsIntentOf(event));
+      // Clear first so asking twice for the same form still lands on it.
+      setSettingsIntent(null);
+      queueMicrotask(() => setSettingsIntent(settingsIntentOf(event)));
       setShowSettings(true);
     };
     window.addEventListener(OPEN_SETTINGS_EVENT, openHandler);
@@ -123,7 +141,7 @@ function AppContent() {
 
   return (
     <div className="app">
-      <header className={`app-header compact${isOnOverview ? ' app-header--overview' : ''}`}>
+      <header className="app-header compact">
         <div className="header-brand">
           <button
             type="button"
@@ -141,21 +159,7 @@ function AppContent() {
           </button>
         </div>
 
-        <div className={`header-context${isOnOverview ? ' header-context--overview' : ''}`}>
-          {!isOnOverview && !isOnDirector && <ProjectTargetSelector />}
-          <div className="header-cache-slot" aria-live="polite">
-          {/* Scoped views show the active database's refresh or quality job;
-              unscoped views merge active jobs across databases. This fixed
-              slot keeps status changes from moving the header. */}
-            <DatabaseActivityStatus className="header-cache-progress" />
-            <AggregatedCacheStatus className="header-cache-progress" />
-          </div>
-        </div>
-
-        <nav className="header-view-tabs" aria-label="Views">
-          {director.data?.enabled && director.data.protocol_version === 1 && (
-            <button type="button" onClick={() => navigate(toScoped('/director'))} className="header-button" aria-current={isOnDirector ? 'page' : undefined}>Planning</button>
-          )}
+        <nav className="header-view-tabs header-nav" aria-label="Views">
           <button
             type="button"
             onClick={() => navigate(toScoped('/'))}
@@ -164,22 +168,50 @@ function AppContent() {
           >
             Library
           </button>
-          <button
-            type="button"
-            onClick={() => navigate(toScoped('/grid'))}
-            className="header-button"
-            aria-current={isOnGrid ? 'page' : undefined}
-          >
-            Images
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate(toScoped('/sequence'))}
-            className="header-button"
-            aria-current={isOnSequence ? 'page' : undefined}
-          >
-            Sequence
-          </button>
+          {/* One rig's project, seen two ways. The picker is the scope for the
+              buttons to its right; without a database in scope they wait. */}
+          <div className="header-group header-group--review" role="group" aria-label="Review">
+            <span className="header-group-label">Review</span>
+            <ProjectTargetSelector />
+            <button
+              type="button"
+              onClick={() => navigate(toScoped('/grid'))}
+              className="header-button"
+              aria-current={isOnGrid ? 'page' : undefined}
+              disabled={!hasReviewScope}
+              title={hasReviewScope ? undefined : 'Choose a project or database first'}
+            >
+              Images
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate(toScoped('/sequence'))}
+              className="header-button"
+              aria-current={isOnSequence ? 'page' : undefined}
+              disabled={!hasReviewScope}
+              title={hasReviewScope ? undefined : 'Choose a project or database first'}
+            >
+              Sequence
+            </button>
+          </div>
+          {/* One plan across its rigs. The plan follows the review scope
+              unless the URL names one. */}
+          {plan.enabled && (
+            <div className="header-group header-group--plan" role="group" aria-label="Plan">
+              <span className="header-group-label">Plan</span>
+              <PlanPicker />
+              <button
+                type="button"
+                onClick={() => plan.current && navigate(plan.hrefFor(plan.current))}
+                className="header-button"
+                aria-current={isOnWorkspace ? 'page' : undefined}
+                disabled={!plan.current}
+                title={plan.current ? `Open the workspace for ${plan.current.project.name}` : 'Choose a plan first'}
+              >
+                Workspace
+              </button>
+            </div>
+          )}
           <button
             type="button"
             onClick={() => navigate(toScoped('/sky'))}
@@ -191,6 +223,14 @@ function AppContent() {
         </nav>
 
         <div className="header-utilities">
+          <div className="header-cache-slot" aria-live="polite">
+            {/* Scoped views show the active database's refresh or quality job;
+                unscoped views merge active jobs across databases. This fixed
+                slot keeps status changes from moving the header. */}
+            <DatabaseActivityStatus className="header-cache-progress" />
+            <AggregatedCacheStatus className="header-cache-progress" />
+          </div>
+          <LiveChip />
           {isOnGrid && (
             <button
               type="button"

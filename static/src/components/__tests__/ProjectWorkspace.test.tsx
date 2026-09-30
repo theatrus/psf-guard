@@ -17,7 +17,7 @@ vi.mock('../director/ActivationPanel', () => ({ default: ({ projectId }: { proje
 const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: null });
 const rig = { id: 'rig', name: 'C925', revision: 1 };
 
-function mount(links: Array<{ catalog_slug: string; catalog_name: string; source_row_id: number | null; source_name: string | null }>, route = '/director?db=catalog&directorProject=project') {
+function mount(links: Array<{ catalog_slug: string; catalog_name: string; source_row_id: number | null; source_name: string | null }>, route = '/plan?db=catalog&plan=project') {
   server.use(
     http.get('/api/director/v1/plans', () => ok({ warnings: [], rows: [{ project: { id: 'project', name: 'Andromeda', revision: 1 }, framing: null, plan: null, activation: null,
       links: links.map(link => ({ ...link, rig, source_project_guid: 'guid' })) }] })),
@@ -42,10 +42,10 @@ describe('project workspace', () => {
     expect(screen.getByText('Source editor catalog:7')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Targets and exposures/ }));
     expect(screen.queryByText('Source editor catalog:7')).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Plans' })).toHaveAttribute('href', '/director?db=catalog');
+    expect(screen.getByRole('link', { name: 'Library' })).toHaveAttribute('href', '/?db=catalog');
   });
   it('keeps every database editor closed when it did not arrive from one', async () => {
-    mount(links, '/director?db=elsewhere&directorProject=project');
+    mount(links, '/plan?db=elsewhere&plan=project');
     expect(await screen.findByRole('heading', { name: 'Andromeda' })).toBeInTheDocument();
     expect(screen.queryByText('Source editor catalog:7')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Targets and exposures/ }));
@@ -77,7 +77,7 @@ describe('attaching and detaching database projects', () => {
       http.post('/api/director/v1/projects/project/detach', async ({ request }) => { posts.push({ url: 'detach', body: await request.json() }); return ok({ id: 'fresh', name: 'Heart', revision: 1 }); }),
     );
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/director?directorProject=project']}>
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/plan?plan=project']}>
       <ProjectWorkspace instanceId="instance" projectId="project" />
     </MemoryRouter></QueryClientProvider>);
     return posts;

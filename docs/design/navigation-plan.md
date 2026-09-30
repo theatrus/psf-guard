@@ -1,6 +1,9 @@
 # Navigation plan: one Library, Review and Plan groups, Live on the Sky
 
-Status: agreed 2026-09-29, not started. Delete this file once every step
+Status: agreed 2026-09-29. Step 1 shipped (header regroup, Live chip and
+drawer, Rigs and Exposure templates under Settings). Step 2 shipped (the
+Library holds every plan; `/director` without a plan redirects there).
+Step 3 shipped (the workspace lives at `/plan?plan=<key>`). Delete this file once every step
 below has shipped and [DIRECTOR.md](../DIRECTOR.md) and
 [SKY_COVERAGE.md](../SKY_COVERAGE.md) describe the result. The reasoning
 sits in [director.md](director.md) under "one list, two groups, Live on the
@@ -80,6 +83,16 @@ Library; the Director e2e specs read the Library; a closed-everywhere family
 sits under the Library's archive; `directorShow` and `directorSearch` keep
 working as Library URL state.
 
+As built: the Library lists only projects with frames, so a plan whose rigs
+have captured nothing (or that no database takes yet) would have vanished
+with the plan list. Those wait in a **Plans with nothing captured yet**
+section after the active projects and before the archive, which also
+holds New plan and rename. The
+Library's search and Show are `q` and `show`; the old names redirect. Read
+-only viewers find rigs and templates in the Live drawer, since they cannot
+open Settings. The plan card with its survey thumbnail is gone; the
+workspace keeps the framing.
+
 ### 3. Workspace by family key
 
 Scope: `ProjectWorkspace.tsx`, `DirectorProjectContext.tsx`, the plan
@@ -91,6 +104,13 @@ Library rows.
 Accept when: a Workspace opened from the Library, from the picker and from
 an old `directorProject` link shows the same plan; attach and detach still
 work; the Plan picker's unit tests pass.
+
+As built: the route is `/plan`, and the key is the Target Scheduler GUID
+when every rig shares one, else Planning's plan id (a plan with no
+database, or rigs with different GUIDs after an attach); any rig's GUID
+and `slug:row` also resolve. `/director` forwards old links. The plan
+picker already drew its rows from the Library's pill components after
+step 1.
 
 ### 4. Live on the Sky
 

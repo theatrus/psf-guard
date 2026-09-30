@@ -366,3 +366,27 @@
   in the Library and to its image grid, and on a server with database
   management the state pill is a select that changes the rig's Target
   Scheduler project state in place.
+
+- The header now reads Library, then a **Review** group (the project
+  picker with Images and Sequence) and, with Planning on, a **Plan** group
+  (a plan picker with Workspace), then Sky. Images and Sequence wait until
+  a project or database is chosen; picking one from the Library opens
+  Images for it. A **Live** chip beside the job status counts the rigs and
+  which are exposing, turns red when one has gone quiet, and opens the Live
+  table from any view. Rig setup and the exposure template library moved to
+  Settings › Rigs and Settings › Exposure templates.
+
+- The Library now holds every plan, and the Planning list page is gone. A
+  plan shot by several rigs shows its stage and a Planning button on its
+  outer pill, a lone project opens its plan from its own row, and plans
+  with nothing captured yet wait in their own section under the projects,
+  where New plan and rename live. A **Show** select (Active, Still to
+  shoot, Done, Draft, Inactive, Closed, and No database with Planning on)
+  and the search box narrow the Library and stay in the URL, and a row's
+  state pill changes the project's Target Scheduler state when the server
+  allows database changes. Old Planning links land in the Library.
+
+- A plan's workspace has its own address, `/plan?plan=<key>`. The key is
+  the Target Scheduler GUID the plan's rigs share, so a link opens the same
+  plan on any PSF Guard instance that holds those databases. Old Planning
+  links still land on the right plan or in the Library.

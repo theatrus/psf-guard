@@ -11,6 +11,7 @@ import PlanEditor from './PlanEditor';
 import ActivationPanel from './ActivationPanel';
 import type { FramingSeed } from './framingModel';
 import { retryWhenBusy } from './retry';
+import { withoutPlanningParams } from '../../hooks/useUrlState';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
@@ -47,8 +48,7 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
   const openKey = openSource === undefined
     ? arrival ? `${arrival.catalog_slug}:${arrival.source_project_guid}` : null
     : openSource;
-  const back = new URLSearchParams(params);
-  back.delete('directorProject');
+  const back = withoutPlanningParams(params.toString());
   // Attaching: another plan's database project joins this plan; the other
   // plan is retired. Only databases this plan has no project in yet.
   const client = useQueryClient();
@@ -83,9 +83,9 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
   });
   if (plans.isPending) return <p role="status">Loading project...</p>;
   if (plans.isError) return <div role="alert"><p>{message(plans.error)}</p><button type="button" onClick={() => void plans.refetch()}>Retry</button></div>;
-  if (!row) return <p role="alert">Project not found. <Link to={`/director?${back}`}>Back to plans</Link></p>;
+  if (!row) return <p role="alert">Project not found. <Link to={`/?${back}`}>Back to the Library</Link></p>;
   return <section aria-label="Project planning" className="director-workspace">
-    <div className="director-toolbar director-workspace-head"><Link to={`/director?${back}`}><ArrowLeft size={16} />Plans</Link><h2>{row.project.name}</h2></div>
+    <div className="director-toolbar director-workspace-head"><Link to={`/?${back}`}><ArrowLeft size={16} />Library</Link><h2>{row.project.name}</h2></div>
     <h3 className="director-section-heading director-framing-heading">Framing</h3>
     {first && scheduler.isPending ? <p role="status">Loading targets...</p> : <FramingView projectId={projectId} seed={seed} preferredRigIds={row.links.map(link => link.rig.id)} />}
     <div className="director-workspace-columns">

@@ -220,6 +220,7 @@
 }
 
 .project-search input,
+.project-show select,
 .project-sort select,
 .project-db-filter select {
   box-sizing: border-box;
@@ -237,6 +238,7 @@
   padding: 7px 10px;
 }
 
+.project-show,
 .project-sort,
 .project-db-filter {
   display: grid;
@@ -245,12 +247,14 @@
   font-size: 0.7rem;
 }
 
+.project-show select,
 .project-sort select,
 .project-db-filter select {
   padding: 6px 26px 6px 9px;
 }
 
 .project-search input:focus,
+.project-show select:focus,
 .project-sort select:focus,
 .project-db-filter select:focus {
   border-color: var(--color-primary);
@@ -1120,4 +1124,37 @@
 .overview-job-dismiss:hover {
   border-color: var(--color-border-secondary);
   color: var(--color-text-primary);
+}
+
+/* "Showing N of M projects" with the way back to everything. */
+.library-narrowed {
+  margin: 0 0 12px;
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
+}
+
+.library-link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-primary);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* Planning's plans without a database, under the Library's projects. */
+.library-plans {
+  margin-top: 24px;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border-secondary);
+}
+
+.library-plans .director-toolbar {
+  margin: 0 0 8px;
+}
+
+.library-plans h3 {
+  margin: 0;
+  font-size: 1rem;
 }

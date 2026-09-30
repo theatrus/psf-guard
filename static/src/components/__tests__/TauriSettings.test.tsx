@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { HttpResponse, http } from 'msw';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import { AccessContext } from '../../auth/access';
@@ -102,6 +103,25 @@ describe('TauriSettings import state', () => {
 
     expect(await screen.findByText('viewer')).toBeInTheDocument();
     expect(await screen.findByText('viewer@example.com')).toBeInTheDocument();
+  });
+
+  it('offers Rigs and Exposure templates tabs when Planning is on, and lands on the one asked for', async () => {
+    const rig = { id: '22222222-2222-4222-8222-222222222222', name: 'C925', revision: 1 };
+    server.use(
+      http.get('/api/director/v1/status', () => HttpResponse.json({ success: true, data: { protocol_version: 1, enabled: true, instance_id: '11111111-1111-4111-8111-111111111111', acquisition_available: false, database_management: true }, error: null })),
+      http.get('/api/databases', () => HttpResponse.json({ success: true, data: [{ id: 'c925', name: 'C925', path: '/c925.sqlite' }], error: null })),
+      http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json({ success: true, data: [{ rig, catalog_slug: 'c925', catalog_name: 'C925', profile: null, field_of_view: { width_degrees: 0.7, height_degrees: 0.5, pixel_scale_arcsec: 0.41, focal_ratio: 10 }, default_exposure_seconds: { broadband: 120, narrowband: 300 } }], error: null })),
+      http.get('/api/director/v1/rigs/status', () => HttpResponse.json({ success: true, data: [], error: null })),
+      http.get('/api/director/v1/templates', () => HttpResponse.json({ success: true, data: [], error: null })),
+    );
+    render(<MemoryRouter><TauriSettings isOpen onClose={() => {}} initialIntent="rigs" /></MemoryRouter>, { wrapper: createWrapper() });
+    const tabs = await screen.findByRole('tab', { name: 'Rigs' });
+    expect(tabs).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: 'Exposure templates' })).toBeInTheDocument();
+    expect(await screen.findByText(/Field 42.0′ × 30.0′, 0.41″\/px, camera not reported yet/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Setup C925' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Exposure templates' }));
+    expect(await screen.findByRole('region', { name: 'Exposure template library' })).toBeInTheDocument();
   });
 
   it('hides catalog management on a read-only server', async () => {

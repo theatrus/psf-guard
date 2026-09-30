@@ -140,8 +140,8 @@ test('the sky remembers its turn and zoom while you are away in another view', a
   await expect(map).toHaveAttribute('data-zoom', '1.00');
   await page.getByRole('button', { name: 'Zoom in' }).click();
 
-  await page.getByRole('button', { name: 'Images' }).click();
-  await expect(page).toHaveURL(/#\/grid/);
+  await page.getByRole('button', { name: 'Library', exact: true }).click();
+  await expect(page).toHaveURL(/#\/(\?|$)/);
   await page.getByRole('button', { name: 'Sky' }).click();
   await expect(page.locator('.sky-map')).toBeVisible({ timeout: 15_000 });
   await expect(page.locator('.sky-map')).toHaveAttribute('data-zoom', '1.60');

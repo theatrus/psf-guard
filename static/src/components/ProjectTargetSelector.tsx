@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
-import { useDbProjectTarget } from '../hooks/useUrlState';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { isMergedPath, useDbProjectTarget, useScopedDbId, withoutPlanningParams } from '../hooks/useUrlState';
 import { useMergedProjects, useMergedTargets } from '../hooks/useDatabases';
 import {
   buildProjectTargetNavigation,
@@ -23,6 +24,10 @@ export default function ProjectTargetSelector() {
   } = useDbProjectTarget();
   const access = useAccess();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const location = useLocation();
+  // Refresh acts on the database a scoped view shows, never on one parked in a merged view's URL.
+  const scopedDbId = useScopedDbId();
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -150,14 +155,28 @@ export default function ProjectTargetSelector() {
     (target) => target.db_id === dbId && target.id === selectedTargetId
   );
 
+  // On the Library, Sky or Planning the picker is the way into review: a
+  // choice there opens Images for it. On a scoped view it just moves scope.
+  const scopeTo = (db: string | null, project: number | null, target: number | null) => {
+    if (isMergedPath(location.pathname) && db !== null) {
+      const next = withoutPlanningParams(location.search);
+      next.set('db', db);
+      if (project === null) next.delete('project'); else next.set('project', String(project));
+      if (target === null) next.delete('target'); else next.set('target', String(target));
+      navigate(`/grid?${next}`);
+    } else {
+      setDbProjectTarget(db, project, target);
+    }
+  };
+
   const chooseProject = (nextDbId: string | null, nextProjectId: number | null) => {
-    setDbProjectTarget(nextDbId, nextProjectId, null);
+    scopeTo(nextDbId, nextProjectId, null);
     setPickerOpen(false);
     setSearch('');
   };
 
   const chooseTarget = (target: NavigationTarget) => {
-    setDbProjectTarget(target.db_id, target.project_id, target.id);
+    scopeTo(target.db_id, target.project_id, target.id);
     setPickerOpen(false);
     setSearch('');
   };
@@ -367,7 +386,7 @@ export default function ProjectTargetSelector() {
           if (event.shiftKey) refreshBothCachesMutation.mutate();
           else refreshCacheMutation.mutate();
         }}
-        disabled={!access.canWrite || !dbId || refreshPending}
+        disabled={!access.canWrite || !scopedDbId || refreshPending}
         title={
           !access.canWrite
             ? 'A read-only account cannot refresh file caches.'

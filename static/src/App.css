@@ -79,14 +79,17 @@
 }
 
 /* Header */
+/* Brand, then the views (Library, the Review and Plan groups, Sky), then
+   the utilities with the jobs slot and the Live chip. One row on a wide
+   window; below 1500px the views take a row of their own. */
 .app-header {
   position: relative;
   z-index: 200;
   background: var(--color-bg-secondary);
   padding: 0.6rem 1rem;
   display: grid;
-  grid-template-columns: auto minmax(31rem, 1fr) auto auto;
-  grid-template-areas: "brand context views utilities";
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "brand nav utilities";
   align-items: center;
   border-bottom: 1px solid var(--color-border-primary);
   column-gap: 0.75rem;
@@ -240,30 +243,15 @@
   outline-offset: 2px;
 }
 
-/* The picker is capped so a wide window feeds the leftover width to the
-   status slot instead of stretching the picker button across the header. */
-.header-context {
-  grid-area: context;
-  display: grid;
-  grid-template-columns: minmax(19rem, 30rem) minmax(17rem, 1fr);
-  align-items: center;
-  gap: 0.5rem;
-  min-width: 0;
-}
-
-.header-context.header-context--overview {
-  grid-template-columns: minmax(17rem, 28rem);
-  justify-content: end;
-}
-
+/* The jobs slot sits with the utilities; it grows into whatever the row
+   has left and shrinks to its indicators on a narrow window. */
 .header-cache-slot {
   display: flex;
   align-items: center;
   gap: 0.35rem;
-  width: 100%;
+  flex: 0 1 22rem;
   min-width: 0;
-  max-width: 28rem;
-  justify-self: end;
+  max-width: 22rem;
   height: 32px;
   overflow: hidden;
 }
@@ -291,7 +279,8 @@
 }
 
 .header-view-tabs {
-  grid-area: views;
+  grid-area: nav;
+  min-width: 0;
   padding: 0.18rem;
   border: 1px solid var(--color-border-primary);
   border-radius: 6px;
@@ -300,6 +289,8 @@
 
 .header-utilities {
   grid-area: utilities;
+  justify-self: end;
+  min-width: 0;
 }
 
 .help-button,
@@ -716,27 +707,22 @@
   cursor: not-allowed;
 }
 
-@media (max-width: 1240px) {
+@media (max-width: 1500px) {
   .app-header,
   .app-header.compact {
-    grid-template-columns: auto 1fr auto;
+    grid-template-columns: auto minmax(0, 1fr);
     grid-template-areas:
-      "brand views utilities"
-      "context context context";
+      "brand utilities"
+      "nav nav";
     padding: 0.5rem 0.8rem;
   }
 
-  .header-context {
-    grid-template-columns: minmax(19rem, 30rem) minmax(17rem, 1fr);
+  .header-view-tabs {
+    width: 100%;
   }
 
-  .header-context.header-context--overview {
-    justify-content: end;
-  }
-
-  .app-header.app-header--overview {
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
-    grid-template-areas: "brand context views utilities";
+  .header-group--review {
+    flex: 1 1 auto;
   }
 }
 
@@ -766,17 +752,10 @@
     display: none;
   }
 
-  .header-context {
-    grid-template-columns: minmax(0, 1fr) 4.5rem;
-  }
-
-  .header-context.header-context--overview {
-    grid-template-columns: 4.5rem;
-  }
-
   /* Room for the analysis chip and the secondary stacking chip side by side,
      both reduced to their indicators. */
   .header-cache-slot {
+    flex: 0 0 4.5rem;
     width: 4.5rem;
     min-width: 0;
     max-width: none;
@@ -831,25 +810,17 @@
 
 @media (max-width: 520px) {
   .app-header,
-  .app-header.compact,
-  .app-header.app-header--overview {
+  .app-header.compact {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
       "brand utilities"
-      "context context"
-      "views views";
+      "nav nav";
     padding: 0.4rem 0.5rem;
     column-gap: 0.4rem;
   }
 
-  .header-context,
   .header-view-tabs {
     width: 100%;
-    min-width: 0;
-  }
-
-  .header-view-tabs .header-button {
-    flex: 1 1 0;
     min-width: 0;
   }
 

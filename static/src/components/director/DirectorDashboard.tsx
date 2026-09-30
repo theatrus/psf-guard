@@ -5,6 +5,7 @@ import { apiClient } from '../../api/client';
 import type { DirectorRigStatusView } from '../../api/directorTypes';
 import { describeNow, errorsOf, formatAge } from './dashboardModel';
 import { retryWhenBusy } from './retry';
+import { planHref } from './planAddress';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
@@ -18,12 +19,7 @@ export default function DirectorDashboard() {
   const [params] = useSearchParams();
   const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 15_000, refetchOnWindowFocus: true });
   const now = Date.now();
-  const workspaceHref = (projectId: string) => {
-    const next = new URLSearchParams(params);
-    next.delete('directorSource'); next.delete('directorView'); next.delete('directorCatalog');
-    next.set('directorProject', projectId);
-    return `/director?${next}`;
-  };
+  const workspaceHref = (projectId: string) => planHref(projectId, params);
   const rows = statuses.data ?? [];
   const age = (at: number | null | undefined) => at ? formatAge(now - at) : 'never';
   return <section className="director-records director-dashboard" aria-label="Live rigs">
@@ -33,7 +29,7 @@ export default function DirectorDashboard() {
     </div>
     {statuses.isPending && <p role="status">Loading live status...</p>}
     {statuses.isError && <p className="director-error" role="alert">{message(statuses.error)}</p>}
-    {statuses.isSuccess && rows.length === 0 && <p className="director-muted">No rig yet. Rigs appear here once a database is adopted under Plans.</p>}
+    {statuses.isSuccess && rows.length === 0 && <p className="director-muted">No rig yet. Every registered database becomes a rig once Planning has read it.</p>}
     {rows.length > 0 && <div className="director-table-scroll"><table className="director-dashboard-table" data-testid="director-dashboard">
       <thead><tr><th>Rig</th><th>Link</th><th>Now</th><th>Program pull</th><th>Check-in</th><th>Status report</th><th>Assigned</th></tr></thead>
       <tbody>{rows.map(view => {

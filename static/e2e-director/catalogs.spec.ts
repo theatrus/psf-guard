@@ -35,40 +35,42 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
       slugs.push(slug);
     }
 
-    // Opening the page adopts both databases and lists their projects as plans.
-    await page.goto('/#/director?db=parked-catalog');
-    const andromeda = page.locator('.director-plan', { hasText: 'Andromeda exposures' });
+    // Opening the Library adopts both databases: the shared GUID is one plan
+    // shot by two rigs, an outer pill with a card per rig.
+    await page.goto('/#/?db=parked-catalog');
+    const andromeda = page.getByTestId('library-family').filter({ hasText: 'Andromeda exposures' });
     await expect(andromeda).toHaveCount(1);
-    // One card for both rigs: the counts add up, and each rig has its own row.
-    await expect(andromeda.getByText('2 / 80 desired')).toBeVisible();
-    const rigRows = andromeda.getByRole('region', { name: 'Rigs shooting Andromeda exposures' });
-    await expect(rigRows.getByText('C925 data')).toBeVisible();
-    await expect(rigRows.getByText('Redcat data')).toBeVisible();
-    await expect(rigRows.getByText('1/40 frames · 3%')).toHaveCount(2);
-    await expect(page.locator('.director-plan', { hasText: 'Andromeda older setup' })).toHaveCount(1);
-    await expect(page.getByText('Legacy project without GUID')).toHaveCount(0);
-    await expect(page.getByText('C925 data', { exact: true }).first()).toBeVisible();
-    await expect(page.getByText('Redcat data', { exact: true }).first()).toBeVisible();
+    await expect(andromeda.getByText('2 rigs')).toBeVisible();
+    await expect(andromeda.getByText('2 / 80 · 3%')).toBeVisible();
+    // Its Target Scheduler targets and exposure plans were imported as a draft plan.
+    await expect(andromeda.getByText('Planned', { exact: true })).toBeVisible();
+    await expect(andromeda.locator('[data-project-key]')).toHaveCount(2);
+    // A plan with nothing captured yet has no Library row; it waits in the plans section.
+    await expect(page.getByRole('region', { name: 'Plans with nothing captured yet' }).getByTestId('plan-row').filter({ hasText: 'Andromeda older setup' })).toHaveCount(1);
     await expect(page.getByRole('button', { name: 'New rig' })).toHaveCount(0);
-    await page.screenshot({ path: testInfo.outputPath('plans-desktop.png'), fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath('library-plans-desktop.png'), fullPage: true });
     const mappings = await Promise.all(slugs.map(async slug => (await (await request.get(`/api/director/v1/catalogs/${slug}/mappings`)).json()).data));
     expect(mappings[0].items).toHaveLength(2);
     expect(mappings[1].items).toHaveLength(1);
     expect(mappings[0].items.find((item: { source_project_guid: string }) => item.source_project_guid === shared).project_id).toBe(mappings[1].items[0].project_id);
     expect(mappings[0].rig.id).not.toBe(mappings[1].rig.id);
 
-    // Setup expands the rig profile in place.
-    await page.getByRole('button', { name: 'Setup C925 data' }).click();
-    await expect(page.getByRole('region', { name: 'Rig profile' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Save rig profile' })).toBeVisible();
-    await page.getByRole('button', { name: 'Setup C925 data' }).click();
+    // Rig setup lives under Settings › Rigs; Setup expands the rig profile in place.
+    await page.getByRole('button', { name: 'Settings' }).click();
+    const settings = page.locator('.tauri-settings');
+    await settings.getByRole('tab', { name: 'Rigs' }).click();
+    await settings.getByRole('button', { name: 'Setup C925 data' }).click();
+    await expect(settings.getByRole('region', { name: 'Rig profile' })).toBeVisible();
+    await expect(settings.getByRole('button', { name: 'Save rig profile' })).toBeVisible();
+    await settings.getByRole('button', { name: '×' }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
 
-    // The workspace shows both databases and each database's own editor.
-    await andromeda.getByRole('link', { name: 'Open Andromeda exposures' }).click();
+    // The outer pill opens the workspace: both databases, each with its own editor.
+    await andromeda.getByRole('button', { name: 'Open the Andromeda exposures plan' }).click();
     await expect(page.getByRole('heading', { name: 'Andromeda exposures' })).toBeVisible();
     await expect(page.getByRole('region', { name: 'Linked databases' }).getByText('C925 data')).toBeVisible();
     await expect(page.getByRole('region', { name: 'Linked databases' }).getByText('Redcat data')).toBeVisible();
-    await page.getByRole('button', { name: /Targets and exposures/ }).first().click();
+    // The outer pill passes the database it opened from, so that editor is already open.
     await expect(page.getByLabel('RA (decimal hours)')).toHaveValue('0.712313');
     await expect(page.getByLabel('Ha desired count')).toHaveValue('40');
     await expect(page.getByRole('region', { name: 'Acquisition plan' })).toBeVisible();
@@ -85,9 +87,11 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     await expect(page.getByRole('heading', { name: 'Andromeda exposures' })).toBeVisible();
     // The database the card came from is already open to its targets.
     await expect(page.getByLabel('RA (decimal hours)')).toHaveValue('0.712313');
-    expect(new URL(page.url().split('#')[1], 'http://test').searchParams.get('directorProject')).toBe(mappings[1].items[0].project_id);
-    await page.getByRole('link', { name: 'Plans' }).click();
-    await expect(page.getByRole('heading', { name: 'Plans' })).toBeVisible();
+    // The workspace's address is the Target Scheduler GUID both rigs share.
+    expect(new URL(page.url().split('#')[1], 'http://test').searchParams.get('plan')).toBe(shared.toLowerCase());
+    await page.getByRole('main').getByRole('link', { name: 'Library' }).click();
+    await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible();
+    expect(page.url()).toContain(`dbfilter=${slugs[0]}`);
 
     // The header picker shows the shared project once, opening to each rig.
     await page.goto(`/#/grid?db=${slugs[0]}&project=1`);

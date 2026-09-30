@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import { ago, projectFamilies } from './libraryFamilies';
+import { ago, projectFamilies, stateLabel } from './libraryFamilies';
 import { setDisplayPreferences, useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import { useFoldedRows } from '../hooks/useFoldedRows';
-import { DatesPill, DbPill, DensityToggle, FamilyPill, FoldButton, GradingPill, ProgressPill, StatePill } from './projectPills';
+import { DatesPill, DbPill, DensityToggle, FamilyPill, FoldButton, GradingPill, ProgressPill, StateControl } from './projectPills';
+import { familyMatchesShow, parseShow, SHOW_OPTIONS } from './libraryShow';
+import { usePlans } from './header/useCurrentPlan';
+import LibraryPlans from './director/LibraryPlans';
+import { stage, stageShort } from './director/planCardModel';
+import type { DirectorPlanRow } from '../api/directorTypes';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Merge } from 'lucide-react';
 import { apiClient } from '../api/client';
 import type {
@@ -83,14 +88,22 @@ function projectKey(dbId: string, projectId: number): string {
 export default function Overview() {
   const color = useColorPreview();
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
-  const [projectSearch, setProjectSearch] = useState('');
   const [projectSort, setProjectSort] = useState<ProjectSort>('recent');
   // Narrows the projects list to one catalog. Lives in URL state (`dbfilter`)
   // so reload restores it. Distinct from the parked `db` return-scope slug,
   // which marks where the user came from and never filters this view.
   const { getParam, updateParams } = useUrlParams();
   const dbFilter = getParam('dbfilter');
+  // Plans from Planning: which project rows belong to one, and the plans no
+  // database shoots yet. Nothing is asked when Planning is off.
+  const plans = usePlans();
+  // What to show and the search text are URL state too, so a reload or a
+  // shared link lands on the same list.
+  const show = parseShow(getParam('show'), plans.enabled);
+  const projectSearch = getParam('q') ?? '';
+  const setProjectSearch = (value: string) => updateParams({ q: value });
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [organizing, setOrganizing] = useState<Organizing | null>(null);
   const [organizationScope, setOrganizationScope] = useState<OrganizationScope | null>(null);
@@ -126,10 +139,45 @@ export default function Overview() {
     staleTime: 5 * 60 * 1000,
   });
   const { data: overallStats, isLoading: statsLoading } = useMergedOverallStats();
-  const { data: projects, isLoading: projectsLoading } = useMergedProjectsOverview();
+  const { data: projects, isLoading: projectsLoading, isError: projectsIncomplete } = useMergedProjectsOverview();
   const { data: targets, isLoading: targetsLoading } = useMergedTargetsOverview();
   const { canWrite } = useAccess();
   const organizeAllowed = canWrite && (serverInfo?.allow_database_management ?? false);
+  // A project's Target Scheduler state, written straight into its database.
+  const [stateNotice, setStateNotice] = useState('');
+  const [pendingStates, setPendingStates] = useState<Record<string, number>>({});
+  useEffect(() => {
+    if (!stateNotice) return;
+    const timer = window.setTimeout(() => setStateNotice(''), 8000);
+    return () => window.clearTimeout(timer);
+  }, [stateNotice]);
+  const changeState = async (project: WithDb<ProjectOverview>, state: number) => {
+    const key = projectKey(project.db_id, project.id);
+    if (key in pendingStates) return;
+    setPendingStates((current) => ({ ...current, [key]: state }));
+    try {
+      await apiClient.updateProject(project.db_id, project.id, { state });
+      setStateNotice(`${project.display_name} is now ${stateLabel(state)} on ${project.db_name}.`);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['db', project.db_id] }),
+        queryClient.invalidateQueries({ queryKey: ['directorPlans'] }),
+      ]);
+    } catch (error) {
+      setStateNotice(error instanceof Error ? error.message : 'Could not change the project state.');
+    } finally {
+      setPendingStates((current) => { const next = { ...current }; delete next[key]; return next; });
+    }
+  };
+  // The workspace for a plan, or for a project Planning has not adopted yet
+  // the page that finds or starts its plan.
+  // The project clicked becomes the scope, so the workspace opens that
+  // database's editor and its back link marks the row in the Library.
+  const openPlanning = (project: WithDb<ProjectOverview>, plan: DirectorPlanRow | null) => {
+    const scope = new URLSearchParams(location.search);
+    scope.set('db', project.db_id);
+    scope.set('project', String(project.id));
+    navigate(plans.hrefFor(plan ?? `${project.db_id}:${project.id}`, scope));
+  };
 
   useEffect(() => {
     const timer = window.setInterval(() => setRelativeNow(Date.now()), 60_000);
@@ -306,6 +354,10 @@ export default function Overview() {
     return map;
   }, [targets]);
 
+  // Every project row the Library has, whatever its filters show: a plan
+  // with none of these waits in the plans section below the list.
+  const projectKeys = useMemo(() => new Set(projects.map((project) => projectKey(project.db_id, project.id))), [projects]);
+
   const projectsByDb = useMemo(() => {
     const map: Record<string, WithDb<ProjectOverview>[]> = {};
     for (const project of projects) {
@@ -314,7 +366,7 @@ export default function Overview() {
     return map;
   }, [projects]);
 
-  const filteredProjects = useMemo(() => {
+  const searchedProjects = useMemo(() => {
     const search = projectSearch.trim().toLocaleLowerCase();
     return projects.filter((project) => {
       if (dbFilter && project.db_id !== dbFilter) return false;
@@ -325,6 +377,19 @@ export default function Overview() {
       );
     });
   }, [dbFilter, projectSearch, projects, targetsByProject]);
+
+  // Show narrows by family: a plan shot by several rigs stays whole, and
+  // matches a state when any rig has it (Closed and Done need every rig).
+  const filteredProjects = useMemo(() => {
+    if (show === 'all') return searchedProjects;
+    const keep = new Set<string>();
+    for (const family of projectFamilies(searchedProjects)) {
+      if (!familyMatchesShow(family.members, show)) continue;
+      for (const member of family.members) keep.add(projectKey(member.db_id, member.id));
+    }
+    return searchedProjects.filter((project) => keep.has(projectKey(project.db_id, project.id)));
+  }, [searchedProjects, show]);
+  const narrowed = show !== 'all' || projectSearch.trim() !== '';
 
   const activeProjectGroups = useMemo(
     () =>
@@ -561,6 +626,8 @@ export default function Overview() {
             </p>
           </>
         )}
+        {/* A plan can exist before any database does. */}
+        <LibraryPlans search="" show="all" listed={projectKeys} />
       </div>
     );
   }
@@ -766,6 +833,14 @@ export default function Overview() {
                   </select>
                 </label>
               )}
+              <label className="project-show">
+                <span>Show</span>
+                <select value={show} onChange={(event) => updateParams({ show: event.target.value })} aria-label="Show projects">
+                  {SHOW_OPTIONS.filter((option) => plans.enabled || !option.planning).map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
               <label className="project-search">
                 <span className="sr-only">Search projects or targets</span>
                 <input
@@ -791,9 +866,17 @@ export default function Overview() {
             </div>
           </div>
 
-          {activeProjectGroups.length === 0 && archivedProjects.length === 0 && (
+          {narrowed && (
+            <p className="library-narrowed" role="status">
+              Showing {filteredProjects.length} of {projects.length} projects.{' '}
+              <button type="button" className="library-link-button" onClick={() => updateParams({ show: null, q: null })}>Show all</button>
+            </p>
+          )}
+          {stateNotice && <p className="library-narrowed" role="status">{stateNotice}</p>}
+
+          {activeProjectGroups.length === 0 && archivedProjects.length === 0 && show !== 'unlinked' && (
             <div className="empty-state">
-              {projectSearch ? 'No projects or targets match your search.' : 'No projects with images yet.'}
+              {narrowed ? 'No projects or targets match.' : 'No projects with images yet.'}
             </div>
           )}
 
@@ -814,7 +897,9 @@ export default function Overview() {
                 </div>
                 <div className={`projects-list${density === 'compact' ? ' is-compact' : ''}`}>
             {projectFamilies(group.projects).map((family) => {
+            const inFamily = family.members.length > 1;
             const renderProject = (project: WithDb<ProjectOverview>) => {
+              const plan = plans.planFor(project.db_id, project.id);
               const dbProjects = projectsByDb[project.db_id] || [];
               const progress = getGradingProgress(
                 project.accepted_images,
@@ -842,18 +927,14 @@ export default function Overview() {
                     <FoldButton open={false} name={project.display_name} onClick={() => toggleCard(key, isCurrent)} />
                     <button type="button" className="library-name" onClick={() => project.has_files && handleSelectProject(project)} disabled={!project.has_files} aria-label={`Open ${project.display_name} image grid`}>{project.display_name}</button>
                     <DbPill name={project.db_name} title={`Database ID: ${project.db_id}`} />
-                    <StatePill state={project.state} />
+                    <StateControl state={project.state} name={project.display_name} dbName={project.db_name} editable={organizeAllowed} pending={pendingStates[key] ?? null} onChange={(state) => void changeState(project, state)} />
                     <ProgressPill accepted={project.accepted_images} desired={project.total_desired} totalImages={project.total_images} />
                     <GradingPill accepted={project.accepted_images} rejected={project.rejected_images} pending={project.pending_images} />
                     <DatesPill earliest={project.date_range.earliest} latest={project.date_range.latest} nowMs={relativeNow} title={formatDateRange(project.date_range)} />
                     {projectNewImages > 0 && <span className="new-images-badge"><span aria-hidden="true" />{projectNewImages} new</span>}
                     {!project.has_files && <span className="no-files-badge">No Files</span>}
                     {project.files_missing > 0 && <span className="library-pill files-missing">{project.files_missing} missing</span>}
-                    <button type="button" className="library-planning" title="Open this project in Planning" aria-label={`Open ${project.display_name} in Planning`} onClick={() => {
-                      const params = new URLSearchParams({ db: project.db_id, project: String(project.id), directorSource: project.db_id, directorView: 'projects' });
-                      if (dbFilter) params.set('dbfilter', dbFilter);
-                      navigate(`/director?${params}`);
-                    }}>⚙</button>
+                    {plans.enabled && !inFamily && <button type="button" className="library-planning" title={plan ? "Open this project's plan workspace" : 'Open this project in Planning'} aria-label={`Open ${project.display_name} in Planning`} onClick={() => openPlanning(project, plan)}>⚙</button>}
                   </div>
                 );
               }
@@ -900,25 +981,20 @@ export default function Overview() {
                     </button>
                     <div className="project-header-actions">
                       {!project.has_files && <span className="no-files-badge">No Files</span>}
-                      <button
-                        type="button"
-                        className="project-settings-button"
-                        title="Open this project in Planning: framing, plan, activation, and its Target Scheduler targets and exposures"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const params = new URLSearchParams({
-                            db: project.db_id,
-                            project: String(project.id),
-                            directorSource: project.db_id,
-                            directorView: 'projects',
-                          });
-                          if (dbFilter) params.set('dbfilter', dbFilter);
-                          navigate(`/director?${params}`);
-                        }}
-                      >
-                        <span aria-hidden="true">⚙</span>
-                        Planning
-                      </button>
+                      {plans.enabled && !inFamily && (
+                        <button
+                          type="button"
+                          className="project-settings-button"
+                          title="Open this project's plan: framing, rigs, activation, and its Target Scheduler targets and exposures"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openPlanning(project, plan);
+                          }}
+                        >
+                          <span aria-hidden="true">⚙</span>
+                          Planning
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="project-settings-button"
@@ -1446,15 +1522,23 @@ export default function Overview() {
                 </div>
               );
             };
-            if (family.members.length === 1) return renderProject(family.members[0]);
+            if (!inFamily) return renderProject(family.members[0]);
+            // One plan across the rigs: its stage and its workspace sit on the outer pill.
+            const planned = family.members.map((member) => ({ member, plan: plans.planFor(member.db_id, member.id) })).find((entry) => entry.plan);
+            const familyPlan = planned?.plan ?? null;
+            const planMember = planned?.member ?? family.members[0];
             return (
               <div key={family.key} className={`library-family${density === 'compact' ? ' is-compact' : ''}`} data-testid="library-family">
                 <div className="library-family-head">
                   <FamilyPill rigs={family.members.length} />
                   <strong className="library-family-name">{family.name}</strong>
+                  {familyPlan?.activation
+                    ? <span className="director-stage-badge">Active on {familyPlan.activation.rigs} rig{familyPlan.activation.rigs === 1 ? '' : 's'}</span>
+                    : familyPlan && (familyPlan.framing || familyPlan.plan) && <span className="library-pill library-pill-stage" title={stage(familyPlan)}>{stageShort(familyPlan)}</span>}
                   <DbPill name={family.members.map(member => member.db_name).join(' · ')} />
                   <ProgressPill accepted={family.accepted} desired={family.desired} totalImages={family.totalImages} title={`${family.accepted} of ${family.desired} desired frames accepted across the rigs`} />
                   {ago(family.latest, relativeNow) && <span className="library-pill library-pill-dates">{ago(family.latest, relativeNow)}</span>}
+                  {plans.enabled && <button type="button" className="library-planning" title={familyPlan ? "Open this plan's workspace" : 'Open this plan in Planning'} aria-label={`Open the ${family.name} plan`} onClick={() => openPlanning(planMember, familyPlan)}>⚙</button>}
                 </div>
                 <div className="library-family-members">{family.members.map(renderProject)}</div>
               </div>
@@ -1465,16 +1549,18 @@ export default function Overview() {
             );
           })}
 
+          <LibraryPlans search={projectSearch} show={show} listed={projectKeys} dbFilter={dbFilter} incomplete={projectsIncomplete} />
+
           {archivedProjects.length > 0 && (
             <section className="project-archive">
               <button
                 type="button"
                 className="project-archive-toggle"
                 onClick={() => setArchivedOpen((open) => !open)}
-                aria-expanded={archivedOpen || Boolean(projectSearch)}
+                aria-expanded={archivedOpen || narrowed}
               >
                 <span
-                  className={`expand-toggle ${archivedOpen || projectSearch ? 'expanded' : ''}`}
+                  className={`expand-toggle ${archivedOpen || narrowed ? 'expanded' : ''}`}
                   aria-hidden="true"
                 >
                   ▶
@@ -1482,7 +1568,7 @@ export default function Overview() {
                 <span>Archived projects</span>
                 <span>{archivedProjects.length}</span>
               </button>
-              {(archivedOpen || Boolean(projectSearch)) && (
+              {(archivedOpen || narrowed) && (
                 <div className="project-archive-list">
                   {archivedProjects.map((project) => {
                     const key = projectKey(project.db_id, project.id);

@@ -120,6 +120,23 @@ export function useDbProjectTarget() {
   };
 }
 
+/** Query params that belong to the Planning page: which plan's workspace is
+ *  open (`plan`, and the older names) and which of its sections. They never
+ *  travel to another view. */
+export const PLANNING_PARAMS = ['plan', 'directorProject', 'directorSource', 'directorView', 'directorCatalog'] as const;
+
+/** A copy of `search` without the Planning page's own params. */
+export function withoutPlanningParams(search: string): URLSearchParams {
+  const next = new URLSearchParams(search);
+  for (const key of PLANNING_PARAMS) next.delete(key);
+  return next;
+}
+
+/** A plan's workspace, and the old Planning address that forwards to it. */
+export function isPlanningPath(pathname: string): boolean {
+  return pathname === '/plan' || pathname === '/director';
+}
+
 /** The Overview route, which merges every database instead of scoping to one. */
 export function isOverviewPath(pathname: string): boolean {
   return pathname === '/' || pathname === '/overview';
@@ -132,7 +149,7 @@ export function isSkyPath(pathname: string): boolean {
 
 /** Routes that show every database, where a parked `db` slug means nothing. */
 export function isMergedPath(pathname: string): boolean {
-  return isOverviewPath(pathname) || isSkyPath(pathname) || pathname === '/director';
+  return isOverviewPath(pathname) || isSkyPath(pathname) || isPlanningPath(pathname);
 }
 
 /**
