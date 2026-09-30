@@ -1,12 +1,13 @@
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import LiveChip from '../header/LiveChip';
 import { liveSummary } from '../header/liveSummary';
+import { withoutPlanningParams } from '../../hooks/useUrlState';
 import type { DirectorRigStatusView } from '../../api/directorTypes';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
@@ -18,12 +19,17 @@ const view = (name: string, state: DirectorRigStatusView['connectivity']['state'
   connectivity: { state, last_contact_ms: 1_700_000_000_001, age_ms: 5000 }, assignments: [], pending_receipts: 0,
 });
 
-function mount(statuses: DirectorRigStatusView[], status: unknown = enabled) {
+function Location() {
+  const location = useLocation();
+  return <output data-testid="location">{location.pathname}{location.search}</output>;
+}
+
+function mount(statuses: DirectorRigStatusView[], status: unknown = enabled, route = '/') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const statusCall = vi.fn(() => HttpResponse.json(ok(status)));
   const rigsCall = vi.fn(() => HttpResponse.json(ok(statuses)));
   server.use(http.get('/api/director/v1/status', statusCall), http.get('/api/director/v1/rigs/status', rigsCall));
-  const Wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}><MemoryRouter>{children}</MemoryRouter></QueryClientProvider>;
+  const Wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}><MemoryRouter initialEntries={[route]}>{children}<Location /></MemoryRouter></QueryClientProvider>;
   return { ...render(<LiveChip />, { wrapper: Wrapper }), statusCall, rigsCall };
 }
 
@@ -36,33 +42,27 @@ describe('Live chip', () => {
     expect(liveSummary([view('C925', 'online', 'exposing')], now).title).toContain('C925: exposing');
   });
 
-  it('shows the fleet from any view and opens the dashboard in a drawer', async () => {
-    mount([view('C925', 'online', 'exposing'), view('RC51', 'offline', null)]);
+  it('shows the fleet from any view and opens Live on the Sky, keeping the scope', async () => {
+    mount([view('C925', 'online', 'exposing'), view('RC51', 'offline', null)], enabled, '/grid?db=c925&project=3&plan=abc');
     const chip = await screen.findByRole('button', { name: 'Live rigs: 2 rigs · 1 exposing' });
     expect(chip).toHaveClass('is-alert');
     fireEvent.click(chip);
-    const drawer = screen.getByRole('dialog', { name: 'Live rigs' });
-    expect(drawer).toHaveAttribute('aria-modal', 'true');
-    expect(drawer).toHaveTextContent('C925');
-    expect(drawer).toHaveTextContent('Offline');
-    // Focus moves in, Escape closes, focus returns to the chip.
-    const closeButton = screen.getByRole('button', { name: 'Close live rigs' });
-    expect(closeButton).toHaveFocus();
-    fireEvent.keyDown(drawer, { key: 'Escape' });
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(chip).toHaveFocus();
+    expect(screen.getByTestId('location')).toHaveTextContent('/sky?db=c925&project=3&live=1');
+    expect(screen.getByRole('button', { name: 'Live rigs: 2 rigs · 1 exposing' })).toHaveAttribute('aria-current', 'page');
+    // Live stays with the Sky: it is one of the params other views drop.
+    expect(withoutPlanningParams('db=c925&live=1').toString()).toBe('db=c925');
   });
 
   it('stays out of the header without rigs, and never asks for rigs without Director', async () => {
     const empty = mount([]);
     await waitFor(() => expect(empty.rigsCall).toHaveBeenCalled());
     await new Promise(resolve => setTimeout(resolve, 0));
-    expect(empty.container).toBeEmptyDOMElement();
+    expect(screen.queryByRole('button', { name: /Live rigs/ })).not.toBeInTheDocument();
     empty.unmount();
     const off = mount([view('C925', 'online', 'exposing')], { ...enabled, enabled: false });
     await waitFor(() => expect(off.statusCall).toHaveBeenCalled());
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(off.rigsCall).not.toHaveBeenCalled();
-    expect(off.container).toBeEmptyDOMElement();
+    expect(screen.queryByRole('button', { name: /Live rigs/ })).not.toBeInTheDocument();
   });
 });

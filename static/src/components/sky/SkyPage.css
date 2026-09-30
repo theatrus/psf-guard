@@ -613,3 +613,146 @@
     margin-left: 0;
   }
 }
+
+/* Live: the rigs now, beside the coverage map. */
+.sky-body.has-live {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(15rem, 19rem);
+  gap: 12px;
+  align-items: start;
+}
+
+.sky-live {
+  border: 1px solid var(--color-border-primary, #2a2f45);
+  border-radius: 14px;
+  background: var(--color-bg-secondary);
+  padding: 12px;
+  max-height: 560px;
+  overflow: auto;
+}
+
+.sky-live h2 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.sky-live ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.sky-live-rig {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 10px;
+  background: var(--color-bg-surface);
+}
+
+.sky-live-rig.is-exposing {
+  border-color: rgba(123, 228, 149, 0.55);
+}
+
+.sky-live-rig.is-stale {
+  opacity: 0.7;
+  border-color: rgba(255, 107, 107, 0.5);
+}
+
+.sky-live-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.sky-live-state {
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+}
+
+.sky-live-state.is-online {
+  color: #7be495;
+  background: rgba(123, 228, 149, 0.12);
+}
+
+.sky-live-state.is-stale,
+.sky-live-state.is-offline {
+  color: #ff6b6b;
+  background: rgba(255, 107, 107, 0.12);
+}
+
+.sky-live-now,
+.sky-live-unplaced,
+.sky-live-empty {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.sky-live-focus {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sky-live-table {
+  margin-top: 16px;
+}
+
+.sky-rig circle,
+.sky-rig path {
+  fill: none;
+  stroke: #ffd166;
+  stroke-width: 2;
+}
+
+.sky-rig.is-exposing circle,
+.sky-rig.is-exposing path {
+  stroke: #7be495;
+}
+
+.sky-rig text {
+  fill: #ffe6a8;
+  paint-order: stroke;
+  stroke: rgba(5, 7, 15, 0.9);
+  stroke-width: 3px;
+}
+
+/* Placed from the target it names, not from a reported pointing. */
+.sky-rig.is-inferred circle {
+  stroke-dasharray: 1.5 3;
+}
+
+.sky-rig.is-stale circle,
+.sky-rig.is-stale path {
+  stroke: #ff6b6b;
+  stroke-dasharray: 3 3;
+}
+
+.sky-rig.is-stale text {
+  fill: #ffb3b3;
+}
+
+@media (max-width: 900px) {
+  .sky-body.has-live {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sky-live {
+    max-height: none;
+  }
+}

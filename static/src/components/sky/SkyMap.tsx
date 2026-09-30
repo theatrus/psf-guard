@@ -15,6 +15,7 @@ import {
   projectedPath,
   projectedPoint,
   tanPixelToSky,
+  toFrame,
   wrap360,
   type LonLat,
   type PathScale,
@@ -22,6 +23,7 @@ import {
 import { blendFilterColors, filterColor } from '../../utils/filterColors';
 import { BRIGHT_STARS, CONSTELLATION_LINES, CONSTELLATION_NAMES } from '../../data/skyBackdrop';
 import { formatHours, formatNight, type ShownTarget } from './skyModel';
+import type { PlacedRig } from './liveRigs';
 
 export const MAP_WIDTH = 1000;
 export const MAP_HEIGHT = 540;
@@ -42,6 +44,10 @@ interface Props {
   /** Called whenever the zoom or turn changes, so the page can remember it. */
   onViewChange?: (zoom: number, center: { lon: number; lat: number }) => void;
   onOpen: (target: ShownTarget) => void;
+  /** Rigs drawn where they point now; those without a place are skipped. */
+  rigs?: PlacedRig[];
+  /** Turn the sky to put this place in the middle; a new `nonce` asks again. */
+  focus?: { ra: number; dec: number; nonce: number } | null;
 }
 
 interface View {
@@ -112,6 +118,8 @@ export default function SkyMap({
   initialCenter,
   onViewChange,
   onOpen,
+  rigs = [],
+  focus = null,
 }: Props) {
   const [hovered, setHovered] = useState<ShownTarget | null>(null);
   const [pointer, setPointer] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -148,6 +156,17 @@ export default function SkyMap({
   useEffect(() => {
     onViewChange?.(view.k, center);
   }, [view.k, center, onViewChange]);
+
+  // Asked to look at a rig: turn the sky to it and come in close enough to
+  // tell it from its neighbours.
+  const focusNonce = focus?.nonce;
+  useEffect(() => {
+    if (!focus) return;
+    const [lon, lat] = toFrame(focus.ra, focus.dec, frame);
+    setCenter({ lon: wrap360(lon), lat: Math.max(-90, Math.min(90, lat)) });
+    setView((current) => centredView(Math.max(current.k, 4)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusNonce]);
 
   const home = () => {
     setView(HOME);
@@ -279,6 +298,15 @@ export default function SkyMap({
         })
         .filter((entry) => entry !== null),
     [targets, sky, maxSeconds]
+  );
+
+  const placedRigs = useMemo(
+    () =>
+      rigs
+        .filter((rig) => rig.ra !== null && rig.dec !== null)
+        .map((rig) => ({ rig, at: projectedPoint(rig.ra as number, rig.dec as number, sky, AT) }))
+        .filter((entry) => entry.at.visible),
+    [rigs, sky]
   );
 
   // Which fields are inside the current view, for lazy stack previews.
@@ -449,6 +477,31 @@ export default function SkyMap({
                   />
                 </g>
               ))}
+          </g>
+        )}
+        {placedRigs.length > 0 && (
+          <g className="sky-rigs" pointerEvents="none">
+            {placedRigs.map(({ rig, at }) => {
+              const r = 8 * textScale;
+              return (
+                <g
+                  key={rig.id}
+                  className={`sky-rig${rig.stale ? ' is-stale' : ''}${rig.exposing ? ' is-exposing' : ''}${rig.source === 'target' ? ' is-inferred' : ''}`}
+                  data-rig={rig.name}
+                  data-source={rig.source ?? undefined}
+                >
+                  <title>{`${rig.name}: ${rig.now}${rig.staleReason ? ` (${rig.staleReason})` : ''}. ${rig.source === 'pointing' ? 'Where its mount reports it points.' : `At the centre of ${rig.targetName}, the target it names; not a reported position.`}`}</title>
+                  <circle cx={at.x} cy={at.y} r={r} vectorEffect="non-scaling-stroke" />
+                  <path
+                    d={`M${at.x - 1.8 * r} ${at.y}H${at.x - 1.1 * r}M${at.x + 1.1 * r} ${at.y}H${at.x + 1.8 * r}M${at.x} ${at.y - 1.8 * r}V${at.y - 1.1 * r}M${at.x} ${at.y + 1.1 * r}V${at.y + 1.8 * r}`}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                  <text x={at.x + 2.1 * r} y={at.y - 1.2 * r} style={{ fontSize: 12 * textScale }}>
+                    {rig.name}{rig.source === 'target' ? ' · at target' : ''}{rig.staleReason ? ` (${rig.staleReason})` : ''}
+                  </text>
+                </g>
+              );
+            })}
           </g>
         )}
       </svg>

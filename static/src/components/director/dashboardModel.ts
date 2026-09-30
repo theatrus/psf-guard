@@ -1,5 +1,20 @@
 import type { DirectorRigStatusView } from '../../api/directorTypes';
 
+/** The phases that count as exposing, as the plugin names them. */
+export const EXPOSING_PHASES = ['exposing', 'imaging', 'capturing'] as const;
+
+/** The reported phase (or state), lower-cased, or '' when none. */
+export function phaseOf(view: DirectorRigStatusView): string {
+  const p = view.status?.payload ?? {};
+  const phase = typeof p.phase === 'string' ? p.phase : typeof p.state === 'string' ? p.state : '';
+  return phase.trim().toLowerCase();
+}
+
+/** A fresh report of one of the exposing phases. */
+export function isExposing(view: DirectorRigStatusView): boolean {
+  return !view.status_stale && (EXPOSING_PHASES as readonly string[]).includes(phaseOf(view));
+}
+
 /** "40 s ago", "12 min ago", "3 h ago", "2 d ago". */
 export function formatAge(ageMs: number): string {
   const s = Math.max(0, Math.round(ageMs / 1000));

@@ -126,43 +126,8 @@
   box-shadow: 0 0 0 2px rgba(255, 107, 107, 0.25);
 }
 
-.live-drawer-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 300;
-  background: rgb(0 0 0 / 45%);
-  display: flex;
-  justify-content: flex-end;
-}
-
-.live-drawer {
-  position: relative;
-  width: min(1100px, 100%);
-  height: 100%;
-  overflow: auto;
-  padding: 16px 20px;
-  background: var(--color-bg-secondary);
-  border-left: 1px solid var(--color-border-primary);
-  box-shadow: -12px 0 32px rgb(0 0 0 / 35%);
-}
-
-.live-drawer-close {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  min-height: 32px;
-  width: 32px;
-  padding: 0;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 6px;
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-  cursor: pointer;
-}
-
-.live-drawer .director-toolbar {
-  margin-top: 0;
-  padding-right: 44px;
+.live-chip[aria-current="page"] {
+  border-color: var(--color-primary);
 }
 
 @media (max-width: 760px) {

@@ -120,10 +120,10 @@ export function useDbProjectTarget() {
   };
 }
 
-/** Query params that belong to the Planning page: which plan's workspace is
- *  open (`plan`, and the older names) and which of its sections. They never
- *  travel to another view. */
-export const PLANNING_PARAMS = ['plan', 'directorProject', 'directorSource', 'directorView', 'directorCatalog'] as const;
+/** Query params that belong to one view and never travel to another: the
+ *  Planning workspace's plan (`plan`, and the older names) and the Sky's
+ *  Live panel (`live`). */
+export const PLANNING_PARAMS = ['plan', 'directorProject', 'directorSource', 'directorView', 'directorCatalog', 'live'] as const;
 
 /** A copy of `search` without the Planning page's own params. */
 export function withoutPlanningParams(search: string): URLSearchParams {
