@@ -19,7 +19,9 @@ use axum::{
     Json,
 };
 use rayon::ThreadPoolBuilder;
-use seiza_background::{BackgroundConfig, BackgroundFit, CorrectionMode, ProtectedRegion};
+use seiza_background::{
+    BackgroundConfig, BackgroundFit, CorrectionMode, FittedModel, ModelConfig, ProtectedRegion,
+};
 use seiza_stacking::{
     combine_lrgb, combine_narrowband, combine_rgb, resample_to_reference, write_color_fits_f32,
     write_processed_image_fits_f32, ColorComposition, ColorCrop, ColorNormalization, ColorOptions,
@@ -40,8 +42,8 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-const STACK_COLOR_CACHE_VERSION: u32 = 13;
-const COLOR_INPUT_CACHE_VERSION: u32 = 3;
+const STACK_COLOR_CACHE_VERSION: u32 = 14;
+const COLOR_INPUT_CACHE_VERSION: u32 = 4;
 const SEIZA_BACKGROUND_VERSION: &str = "0.2.0";
 const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
 const COLOR_BYTES_PER_PIXEL: u64 = 64;
@@ -1850,6 +1852,54 @@ fn fit_channel_background(
     }
 }
 
+/// Whether `fit` already carries the surface `model` names.
+fn fit_uses_model(fit: &BackgroundFit, model: &ModelConfig) -> bool {
+    match (&fit.model, model) {
+        (
+            FittedModel::Polynomial { degree, .. },
+            ModelConfig::Polynomial { degree: wanted, .. },
+        ) => degree == wanted,
+        (FittedModel::RadialBasis { .. }, ModelConfig::RadialBasis { .. }) => true,
+        _ => false,
+    }
+}
+
+/// Refit one channel with the model chosen for every channel.
+///
+/// The refit keeps whatever catalog protection the first fit ended up with,
+/// and keeps its candidate scores so the manifest still shows why the shared
+/// model won.
+fn refit_channel_background(
+    image: &LinearImage,
+    extraction: &StackBackgroundExtraction,
+    protected_regions: Vec<ProtectedRegion>,
+    first: &BackgroundFit,
+    model: &ModelConfig,
+) -> Result<BackgroundFit, seiza_background::Error> {
+    let mut config = extraction.config.clone();
+    config.model = model.clone();
+    config.protected_regions = if first.diagnostics.protected_regions > 0 {
+        protected_regions
+    } else {
+        Vec::new()
+    };
+    let mut fit = seiza_background::fit_background(
+        &image.data,
+        image.width,
+        image.height,
+        image.channels,
+        &config,
+    )?;
+    if let Some(mut selection) = first.diagnostics.model_selection.clone() {
+        selection.selected = match &fit.model {
+            FittedModel::Polynomial { degree, .. } => format!("polynomial_{degree}"),
+            _ => "radial_basis".into(),
+        };
+        fit.diagnostics.model_selection = Some(selection);
+    }
+    Ok(fit)
+}
+
 fn compose_color(
     state: &Arc<AppState>,
     job: &StackColorJob,
@@ -2037,12 +2087,13 @@ fn compose_color(
         .and_then(|processing| processing.background_extraction.as_ref())
     {
         pool.install(|| {
+            let mut fitted = Vec::with_capacity(job.sources.len());
             for source in &job.sources {
                 let frame = if source.role == reference_role {
-                    &mut reference
+                    &reference
                 } else {
                     frames
-                        .get_mut(&source.role)
+                        .get(&source.role)
                         .ok_or_else(|| format!("{} source was not loaded", source.role.label()))?
                 };
                 progress.begin(
@@ -2078,10 +2129,50 @@ fn compose_color(
                     format!("Failed to fit {} background: {error}", source.role.label())
                 })?;
                 progress.advance(StackColorProgressPhase::BackgroundPreparation, 1);
+                fitted.push((source.role, fit, fallback));
+            }
+
+            // Automatic selection runs per channel. Left alone it can curve
+            // one channel and leave another flat, which tints the corners.
+            let fits: Vec<&BackgroundFit> = fitted.iter().map(|(_, fit, _)| fit).collect();
+            let shared = if fits.len() > 1 {
+                seiza_background::select_shared_model(&extraction.config.model, &fits)
+            } else {
+                None
+            };
+
+            for (role, mut fit, fallback) in fitted {
+                let frame = if role == reference_role {
+                    &mut reference
+                } else {
+                    frames
+                        .get_mut(&role)
+                        .ok_or_else(|| format!("{} source was not loaded", role.label()))?
+                };
+                if let Some(shared) = shared.as_ref()
+                    && !fit_uses_model(&fit, shared)
+                {
+                    progress.begin(
+                        StackColorProgressPhase::BackgroundPreparation,
+                        format!("Refitting {} background to match the other channels", role.label()),
+                        Some(role),
+                        None,
+                    );
+                    fit = refit_channel_background(
+                        &frame.image,
+                        extraction,
+                        background_regions.get(&role).cloned().unwrap_or_default(),
+                        &fit,
+                        shared,
+                    )
+                    .map_err(|error| {
+                        format!("Failed to refit {} background: {error}", role.label())
+                    })?;
+                }
                 progress.begin(
                     StackColorProgressPhase::BackgroundPreparation,
-                    format!("Correcting {} background", source.role.label()),
-                    Some(source.role),
+                    format!("Correcting {} background", role.label()),
+                    Some(role),
                     None,
                 );
                 fit.correct_in_place_with_strength(
@@ -2089,27 +2180,20 @@ fn compose_color(
                     extraction.correction_mode,
                     extraction.strength,
                 )
-                .map_err(|error| {
-                    format!(
-                        "Failed to correct {} background: {error}",
-                        source.role.label()
-                    )
-                })?;
+                .map_err(|error| format!("Failed to correct {} background: {error}", role.label()))?;
                 progress.advance(StackColorProgressPhase::BackgroundPreparation, 1);
                 state.stack_previews.update_color(&job.job_id, |current| {
-                    current
-                        .resolved_backgrounds
-                        .insert(source.role, fit.clone());
+                    current.resolved_backgrounds.insert(role, fit.clone());
                     if let Some(reason) = fallback.as_ref() {
                         current
                             .background_protection_fallbacks
-                            .insert(source.role, reason.clone());
+                            .insert(role, reason.clone());
                     }
                 });
                 if let Some(reason) = fallback {
-                    background_protection_fallbacks.insert(source.role, reason);
+                    background_protection_fallbacks.insert(role, reason);
                 }
-                resolved_backgrounds.insert(source.role, fit);
+                resolved_backgrounds.insert(role, fit);
             }
             Ok::<(), String>(())
         })?;
@@ -4157,6 +4241,91 @@ mod tests {
         .unwrap();
         assert!(fallback.is_none());
         assert_eq!(unprotected_fit.diagnostics.protected_regions, 0);
+    }
+
+    #[test]
+    fn color_channels_share_one_background_model() {
+        let (width, height) = (96, 64);
+        // A deterministic ripple stands in for sky noise.
+        let ripple = |x: usize, y: usize| ((x * 7 + y * 13) % 11) as f32 * 2.0e-4;
+        let curved = LinearImage::new(
+            width,
+            height,
+            1,
+            (0..width * height)
+                .map(|index| {
+                    let (x, y) = (index % width, index / width);
+                    let nx = x as f32 / (width - 1) as f32 * 2.0 - 1.0;
+                    let ny = y as f32 / (height - 1) as f32 * 2.0 - 1.0;
+                    0.2 - 0.05 * (nx * nx + ny * ny) + ripple(x, y)
+                })
+                .collect(),
+        )
+        .unwrap();
+        let flat = LinearImage::new(
+            width,
+            height,
+            1,
+            (0..width * height)
+                .map(|index| 0.2 + ripple(index % width, index / width))
+                .collect(),
+        )
+        .unwrap();
+        let extraction = StackBackgroundExtraction {
+            config: BackgroundConfig {
+                model: ModelConfig::Automatic {
+                    max_degree: 2,
+                    ridge: 1.0e-8,
+                    rbf_smoothing: 0.01,
+                    max_control_points: 192,
+                    allow_radial_basis: false,
+                    minimum_improvement: 0.08,
+                },
+                samples_per_axis: 12,
+                sample_radius: Some(1),
+                search_steps: 0,
+                ..BackgroundConfig::default()
+            },
+            correction_mode: CorrectionMode::Subtract,
+            strength: 1.0,
+            protect_catalog_emission: false,
+        };
+        let no_fallback = |_: &str| panic!("unprotected fits need no fallback");
+        let (curved_fit, _) =
+            fit_channel_background(&curved, &extraction, Vec::new(), no_fallback).unwrap();
+        let (flat_fit, _) =
+            fit_channel_background(&flat, &extraction, Vec::new(), no_fallback).unwrap();
+        assert!(matches!(
+            curved_fit.model,
+            FittedModel::Polynomial { degree: 2, .. }
+        ));
+        assert!(matches!(
+            flat_fit.model,
+            FittedModel::Polynomial { degree: 0, .. }
+        ));
+
+        let shared = seiza_background::select_shared_model(
+            &extraction.config.model,
+            &[&curved_fit, &flat_fit],
+        )
+        .unwrap();
+        assert!(fit_uses_model(&curved_fit, &shared));
+        assert!(!fit_uses_model(&flat_fit, &shared));
+
+        let refit =
+            refit_channel_background(&flat, &extraction, Vec::new(), &flat_fit, &shared).unwrap();
+        assert!(fit_uses_model(&refit, &shared));
+        let selection = refit.diagnostics.model_selection.as_ref().unwrap();
+        assert_eq!(selection.selected, "polynomial_2");
+        assert_eq!(
+            selection.candidates,
+            flat_fit
+                .diagnostics
+                .model_selection
+                .as_ref()
+                .unwrap()
+                .candidates
+        );
     }
 
     #[test]

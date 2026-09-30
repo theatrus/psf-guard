@@ -302,6 +302,11 @@
 
 ## Fixed
 
+- Color previews with background extraction no longer tint the corners. The
+  automatic model now picks one background shape for all channels instead of
+  one per channel, which had left some previews green in one corner and
+  magenta in the opposite one.
+
 - The survey picture under the framing view no longer stretches the wrong
   way while you pan and then jumps when the settled tile arrives. It is
   re-projected on the GPU for every frame from the tiles fetched so far,

@@ -5226,9 +5226,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-background"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7de02ad32155f0110b8643ee35e3c2b8259a37c6492230f0a9a10873c902b87a"
+checksum = "a0cf14463327e60f0a05ec0a1d1b615c75770eaf99c1e8b203d459c887b5cf76"
 dependencies = [
  "rayon",
  "seiza-stats",

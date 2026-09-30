@@ -832,6 +832,15 @@ can follow smaller-scale variation, but costs more to apply and can mistake
 real extended emission for sky. Enable it only as an advanced option, or select
 a fixed polynomial or radial-basis model for manual control.
 
+Automatic selection scores every channel, but all channels of one color
+preview get the same surface. PSF Guard averages each candidate's held-out
+error across the channels, picks one model by the same rule, and refits any
+channel whose own choice differed. Correcting one channel with a curve and
+another with a constant tints the corners; on an NGC 7023 RGB stack that
+mismatch left the preview green in one corner and magenta in the opposite
+one. The manifest keeps each channel's candidate scores beside the shared
+choice.
+
 When a channel stack has a fresh pixel-derived plate solve, PSF Guard protects
 large cataloged emission regions from background sampling. It uses closed
 catalog or curated contours when the object catalog supplies them, then falls
