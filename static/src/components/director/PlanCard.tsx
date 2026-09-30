@@ -4,6 +4,7 @@ import { Pencil } from 'lucide-react';
 import type { DirectorPlanRow } from '../../api/directorTypes';
 import PlanThumbnail from './PlanThumbnail';
 import { frames, gradingSplit, percentDone, stage, sumFrames } from './planCardModel';
+import { RigLinks, RigState, type RigActions } from './PlanRow';
 
 interface PlanCardProps {
   row: DirectorPlanRow;
@@ -13,12 +14,13 @@ interface PlanCardProps {
   onRename: () => void;
   /** The arrow that folds the card back to a row. */
   fold?: ReactNode;
+  actions: RigActions;
 }
 
 /** One plan as an Overview-style project card. The headline counts add up
  *  every rig; the Rigs list underneath gives each rig its own bar, since two
  *  rigs shooting one plan each have their own targets and exposure plans. */
-export default function PlanCard({ row, href, canWrite, editing, onRename, fold }: PlanCardProps) {
+export default function PlanCard({ row, href, canWrite, editing, onRename, fold, actions }: PlanCardProps) {
   const name = row.project.name;
   const progress = row.progress;
   const pct = progress ? percentDone(progress) : 0;
@@ -101,6 +103,8 @@ export default function PlanCard({ row, href, canWrite, editing, onRename, fold 
                       <strong>{link.catalog_name}</strong>
                       {link.source_name && link.source_name !== name && <span className="target-state">{link.source_name}</span>}
                       {link.source_row_id === null && <span className="target-state">project row missing</span>}
+                      <RigState link={link} actions={actions} />
+                      <RigLinks link={link} />
                     </span>
                     <span className="target-compact-stats">
                       {link.targets.length === 0 ? 'no target yet' : (

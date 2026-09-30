@@ -139,9 +139,9 @@ describe('Director management', () => {
     // A plan with no database says so where the pills would be.
     expect(screen.getByText('Not linked to any database')).toBeInTheDocument();
     // Closed on every rig that shoots it: behind the Library's archive fold, then one row.
-    expect(screen.queryByText('Closed')).not.toBeInTheDocument();
+    expect(screen.queryByText('Closed', { selector: '.library-pill' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Archived plans/ }));
-    expect(screen.getByText('Closed')).toBeInTheDocument();
+    expect(screen.getByText('Closed', { selector: '.library-pill' })).toBeInTheDocument();
     expect(screen.getByText('Framed in Target Scheduler')).toBeInTheDocument();
     expect(screen.getByText('No dates')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Bare' })).toBeInTheDocument();
@@ -159,6 +159,53 @@ describe('Director management', () => {
     expect(screen.queryAllByTestId('plan-row')).toHaveLength(0);
     fireEvent.click(screen.getByRole('radio', { name: 'Compact' }));
     expect(screen.getAllByTestId('plan-row')).toHaveLength(4);
+  });
+
+  it('narrows the list by state or search in the URL, opens each rig in the Library or the grid, and edits a rig state', async () => {
+    const target = (name: string, desired: number, acquired: number, accepted: number, rejected: number) => ({ name, desired, acquired, accepted, rejected, center: null, rotation_degrees: null });
+    const other = { id: '55555555-5555-4555-8555-555555555555', name: 'RC51', revision: 1 };
+    const puts: { url: string; body: unknown }[] = [];
+    let c925State = 1;
+    mount(true, undefined, [
+      http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list([
+        row(record, { links: [
+          { catalog_slug: 'c925', catalog_name: 'C925', rig, source_project_guid: 'g', source_row_id: 7, source_name: 'M31', source_state: c925State, earliest_capture_s: null, latest_capture_s: null, targets: [target('M31', 72, 40, 36, 3)] },
+          { catalog_slug: 'rc51', catalog_name: 'RC51', rig: other, source_project_guid: 'g', source_row_id: 3, source_name: 'M31', source_state: 2, earliest_capture_s: null, latest_capture_s: null, targets: [target('M31', 10, 12, 10, 2)] },
+        ] }),
+        row({ ...record, id: '33333333-3333-4333-8333-333333333333', name: 'Bare' }),
+        row({ ...record, id: '44444444-4444-4444-8444-444444444444', name: 'Pelican' }, { links: [{ catalog_slug: 'c925', catalog_name: 'C925', rig, source_project_guid: 'p', source_row_id: 9, source_name: 'Pelican', source_state: 1, earliest_capture_s: null, latest_capture_s: null, targets: [target('IC 5070', 40, 40, 40, 0)] }] }),
+      ])))),
+      http.put('/api/db/c925/projects/7', async ({ request }) => { puts.push({ url: new URL(request.url).pathname, body: await request.json() }); c925State = 2; return HttpResponse.json(ok({ updated: true })); }),
+    ]);
+    expect(await screen.findByTestId('plan-family')).toBeInTheDocument();
+    expect(screen.getAllByTestId('plan-row')).toHaveLength(4);
+    // Every rig's project opens in the Library or the image grid from its row.
+    expect(screen.getAllByRole('link', { name: 'Show M31 in the Library' })[0]).toHaveAttribute('href', '/?db=c925&project=7');
+    expect(screen.getAllByRole('link', { name: 'Show M31 images' })[0]).toHaveAttribute('href', '/grid?db=c925&project=7');
+    expect(screen.getByRole('link', { name: 'Show Pelican images' })).toHaveAttribute('href', '/grid?db=c925&project=9');
+    // The filter is URL state: Inactive keeps the plan whose RC51 rig is inactive; No database keeps Bare.
+    fireEvent.change(screen.getByRole('combobox', { name: 'Show plans' }), { target: { value: 'inactive' } });
+    expect(screen.getByTestId('location')).toHaveTextContent('directorShow=inactive');
+    expect(screen.getByTestId('plan-family')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Open Bare' })).not.toBeInTheDocument();
+    expect(screen.getByText('Showing 1 of 3 plans.')).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Show plans' }), { target: { value: 'done' } });
+    expect(screen.getByRole('link', { name: 'Open Pelican' })).toBeInTheDocument();
+    expect(screen.queryByTestId('plan-family')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Show plans' }), { target: { value: 'unlinked' } });
+    expect(screen.getByRole('link', { name: 'Open Bare' })).toBeInTheDocument();
+    expect(screen.getAllByTestId('plan-row')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Show all' }));
+    expect(screen.getByTestId('location')).not.toHaveTextContent('directorShow');
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search plans' }), { target: { value: 'peli' } });
+    expect(screen.getByTestId('location')).toHaveTextContent('directorSearch=peli');
+    expect(screen.getAllByTestId('plan-row')).toHaveLength(1);
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search plans' }), { target: { value: '' } });
+    // With database management, the state pill is a select that writes the rig's project row.
+    fireEvent.change(screen.getByRole('combobox', { name: 'State of M31 in C925' }), { target: { value: '2' } });
+    expect(await screen.findByText('M31 is now Inactive on C925.')).toBeInTheDocument();
+    expect(puts).toEqual([{ url: '/api/db/c925/projects/7', body: { state: 2 } }]);
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'State of M31 in C925' })).toHaveValue('2'));
   });
 
   it('shows each plan with its stage and opens planning at its linked database row', async () => {
