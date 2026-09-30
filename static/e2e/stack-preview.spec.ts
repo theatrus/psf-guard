@@ -275,6 +275,15 @@ test.beforeEach(async ({ request }, testInfo) => {
   });
   dbId = entry.id;
   await waitForCacheReady(request, dbId);
+  // The fixture mixes exposure lengths within a filter. These tests cover
+  // one stack per channel, so both projects choose to stack exposures together.
+  for (const projectId of [1, 2]) {
+    const mixed = await request.put(
+      `/api/db/${encodeURIComponent(dbId)}/projects/${projectId}/processing-settings`,
+      { data: { split_exposure_groups: false } },
+    );
+    expect(mixed.ok()).toBe(true);
+  }
 });
 
 test('inspects exact calibration masters across mono sessions and color channels', async ({ page, request }, testInfo) => {
