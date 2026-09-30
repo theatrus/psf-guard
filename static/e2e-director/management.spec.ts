@@ -43,7 +43,9 @@ test('global Director identities survive reload, conflicts, and narrow viewports
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   await page.screenshot({ path: testInfo.outputPath('director-mobile.png'), fullPage: true });
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
-  // Rigs are a section of the same page; with no databases it offers to add one.
+  // Rig setup lives under Settings › Rigs; with no databases it offers to add one.
+  await page.getByRole('button', { name: 'Rigs', exact: true }).click();
+  await expect(page.getByRole('tab', { name: 'Rigs' })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('heading', { name: 'Rigs' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Add database' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'New rig' })).toHaveCount(0);
@@ -59,6 +61,7 @@ test('a disabled Director has no navigation entry or editable records', async ({
   } }));
   await page.goto('/#/director');
   await expect(page.getByText('Planning is unavailable on this server.')).toBeVisible();
-  await expect(page.getByRole('navigation', { name: 'Views' }).getByRole('button', { name: 'Planning' })).toHaveCount(0);
+  await expect(page.getByRole('navigation', { name: 'Views' }).getByRole('group', { name: 'Plan' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^Live rigs/ })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /New project|New site|New rig/ })).toHaveCount(0);
 });

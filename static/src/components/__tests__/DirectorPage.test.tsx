@@ -250,19 +250,24 @@ describe('Director management', () => {
     expect(screen.getByRole('link', { name: 'Open Bare' })).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('Odd file: has no Target Scheduler project table');
     expect(screen.queryByRole('button', { name: /New project|Rename/ })).not.toBeInTheDocument();
+    // A read-only viewer cannot open Settings, so rigs and templates stay on the page for them.
     expect(await screen.findByText(/Field 42.0′ × 30.0′, 0.41″\/px, camera not reported yet/)).toBeInTheDocument();
     expect(screen.getByText(/Plugin: exposing/)).toBeInTheDocument();
     expect(screen.getByText('Online')).toBeInTheDocument();
     expect(screen.getByText('nothing activated')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Setup C925' })).toBeInTheDocument();
+    expect(screen.queryByText(/are under Settings/)).not.toBeInTheDocument();
     expect(screen.getByTestId('location')).toHaveTextContent('?db=old-catalog&project=123|scope=global');
   });
 
   it('folds the old tab links into the one page while keeping catalog URL state', async () => {
     server.use(http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list([])))));
     mount(true, '/director?db=old-catalog&project=123&directorView=sites');
-    expect(await screen.findByText('C925')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Plans' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Plans' })).toBeInTheDocument();
+    // An editor finds rig setup and templates under Settings; the page points there.
+    expect(screen.getByRole('button', { name: 'Rigs' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Exposure templates' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Setup C925' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'New rig' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Sites' })).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('?db=old-catalog&project=123&directorView=projects|scope=global'));

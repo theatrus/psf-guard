@@ -1,6 +1,7 @@
 # Navigation plan: one Library, Review and Plan groups, Live on the Sky
 
-Status: agreed 2026-09-29, not started. Delete this file once every step
+Status: agreed 2026-09-29. Step 1 shipped (header regroup, Live chip and
+drawer, Rigs and Exposure templates under Settings). Delete this file once every step
 below has shipped and [DIRECTOR.md](../DIRECTOR.md) and
 [SKY_COVERAGE.md](../SKY_COVERAGE.md) describe the result. The reasoning
 sits in [director.md](director.md) under "one list, two groups, Live on the

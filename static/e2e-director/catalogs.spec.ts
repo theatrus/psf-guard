@@ -57,11 +57,15 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     expect(mappings[0].items.find((item: { source_project_guid: string }) => item.source_project_guid === shared).project_id).toBe(mappings[1].items[0].project_id);
     expect(mappings[0].rig.id).not.toBe(mappings[1].rig.id);
 
-    // Setup expands the rig profile in place.
-    await page.getByRole('button', { name: 'Setup C925 data' }).click();
-    await expect(page.getByRole('region', { name: 'Rig profile' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Save rig profile' })).toBeVisible();
-    await page.getByRole('button', { name: 'Setup C925 data' }).click();
+    // Rig setup lives under Settings › Rigs; Setup expands the rig profile in place.
+    await page.getByRole('button', { name: 'Rigs', exact: true }).click();
+    const settings = page.locator('.tauri-settings');
+    await expect(settings.getByRole('tab', { name: 'Rigs' })).toHaveAttribute('aria-selected', 'true');
+    await settings.getByRole('button', { name: 'Setup C925 data' }).click();
+    await expect(settings.getByRole('region', { name: 'Rig profile' })).toBeVisible();
+    await expect(settings.getByRole('button', { name: 'Save rig profile' })).toBeVisible();
+    await settings.getByRole('button', { name: '×' }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
 
     // The workspace shows both databases and each database's own editor.
     await andromeda.getByRole('link', { name: 'Open Andromeda exposures' }).click();

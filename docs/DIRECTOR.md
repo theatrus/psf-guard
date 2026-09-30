@@ -42,7 +42,20 @@ switching are not exposed. Catalog adoption requires the explicit workflow below
 
 ## Management screen
 
-The **Director** entry in the header opens one page with three sections.
+The header carries Planning in two places. The **Plan** group holds a plan
+picker and a **Workspace** button: the picker lists every plan with its rigs
+and progress, follows the project chosen for review to its plan, and a rig
+chip in it hops back to that rig's project in Images; Workspace opens the
+plan in scope. Beside the jobs slot a **Live** chip counts the fleet,
+`2 rigs · 1 exposing`, turns red when a rig that used to talk has gone
+quiet, and opens the Live table in a drawer from any view. The **Planning**
+page itself holds the Live table and the plan list; rig setup and the
+exposure template library are under **Settings › Rigs** and **Settings ›
+Exposure templates**. A read-only viewer cannot open Settings, so for them
+both stay on the Planning page, read only. Choosing a project in the Review
+picker from the Library, Sky or Planning opens Images for it; Planning's own
+URL parameters (`directorProject` and the rest) stay behind when you leave
+Planning, so a plan you had open does not follow you into review.
 
 **Live** is the operator's table of rigs. For each rig it shows the link
 state, from the server's own receipt times of the plugin's calls: *Online*
@@ -73,11 +86,12 @@ project's workspace. **New project** creates an unlinked global
 project; linking a database's projects under that database's setup can also
 create one on the spot.
 
-**Rigs** lists every registered database as a rig: whether planning is
-enabled, its field of view and pixel scale from the rig profile, whether the
-plugin has reported its camera, and the plugin's last live status. **Setup**
-expands the database's planning setup in place: enable planning, the rig
-profile, and the project links. **Library** opens its catalog.
+**Settings › Rigs** lists every registered database as a rig: whether
+planning is enabled, its field of view and pixel scale from the rig profile,
+whether the plugin has reported its camera, and the plugin's last live
+status. **Setup** expands the database's planning setup in place: enable
+planning, the rig profile, and the project links. **Library** opens its
+catalog.
 
 The **workspace** for one project shows its linked databases, each with the
 familiar targets and exposures editor a click away, then **Framing**, **Plan**
@@ -564,8 +578,7 @@ and [plan](../crates/director-meta/src/plan.rs).
 
 ## Exposure template library
 
-**Exposure templates** on the Planning page is Director's own list of
-templates: a name, the filter as the rig calls it, gain, offset, binning,
+**Settings › Exposure templates** is Director's own list of templates: a name, the filter as the rig calls it, gain, offset, binning,
 readout mode and a starting exposure. They belong to no database. A plan may
 bind a rig to one of them where the rig's database has no template for the
 band, and activation writes it into that database under the library's GUID,

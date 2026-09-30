@@ -5,14 +5,17 @@ import './DirectorPage.css';
 import DirectorProjectContext from './DirectorProjectContext';
 import DirectorPlans from './DirectorPlans';
 import ProjectWorkspace from './ProjectWorkspace';
-import DirectorRigs from './DirectorRigs';
 import DirectorDashboard from './DirectorDashboard';
+import { openSettings } from '../../utils/settingsIntent';
+import { useAccess } from '../../auth/access';
+import DirectorRigs from './DirectorRigs';
 import TemplateLibrary from './TemplateLibrary';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
 export default function DirectorPage() {
   const status = useDirectorStatus();
+  const { canWrite } = useAccess();
   const [params, setParams] = useSearchParams();
   const selected = params.get('directorView');
   const available = status.data?.enabled && status.data.protocol_version === 1 && !!status.data.instance_id;
@@ -48,8 +51,14 @@ export default function DirectorPage() {
             <Link to="/">Library</Link>
             <DirectorDashboard />
             <DirectorPlans key={status.data.instance_id!} instanceId={status.data.instance_id!} />
-            <DirectorRigs />
-            <TemplateLibrary />
+            {/* Editors reach rig setup and templates through Settings; a
+                read-only viewer cannot open Settings, so they read them here. */}
+            {canWrite ? <p className="director-muted director-settings-note">
+              Rig setup and the exposure template library are under Settings:{' '}
+              <button type="button" className="director-link-button" onClick={() => openSettings('rigs')}>Rigs</button>
+              {' and '}
+              <button type="button" className="director-link-button" onClick={() => openSettings('templates')}>Exposure templates</button>.
+            </p> : <><DirectorRigs /><TemplateLibrary /></>}
           </>}
       </>}
     </main>
