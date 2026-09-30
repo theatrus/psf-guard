@@ -87,6 +87,8 @@
 .director-plan-list.is-compact { gap: 6px; }
 .plan-row-rig { display: inline-flex; gap: 4px; }
 .director-link-button { padding: 0; border: 0; background: none; color: var(--color-primary); font: inherit; cursor: pointer; text-decoration: underline; }
+/* Inside a Planning panel the page's button rule would dress it as a button. */
+.director-page .director-link-button, .director-page .director-link-button:hover:not(:disabled) { display: inline; min-height: 0; padding: 0; border: 0; background: none; color: var(--color-primary); }
 a.library-planning { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 select.library-pill-state { appearance: auto; border: 0; cursor: pointer; font: inherit; font-size: 12px; }
 select.library-pill-state option { color: var(--color-text-primary); background: var(--color-bg-surface); }

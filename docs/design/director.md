@@ -87,7 +87,7 @@ untested integration requirements unchecked.
 | Project framing wizard | Framing view in the project workspace: survey backgrounds from N.I.N.A.'s HiPS list, name resolution through CDS Sesame, interactive center, angle and zoom, mosaic rows/columns/overlap, per-rig footprints from rig profiles, draft editing with compare-and-set, and a visibility panel with tonight's altitude chart, custom horizon, Moon and darkness like N.I.N.A.'s framing assistant, plus a week of nights per rig. | Reference images with WCS, layer comparison, offline region cache, rotation feasibility per rig. |
 | Catalog discovery | [#498](https://github.com/theatrus/psf-guard/pull/498) merged: operator-scoped read-only project/profile evidence from registered TS-compatible catalogs, with bounded results and invalid/duplicate identity reports. | Discovery does not infer rig ownership or read image history. |
 | Catalog adoption | [#502](https://github.com/theatrus/psf-guard/pull/502) merged explicit durable lineage; [#503](https://github.com/theatrus/psf-guard/pull/503) merged operator preview/apply, exact identity matching, stale-review refusal and interrupted-write recovery. [#506](https://github.com/theatrus/psf-guard/pull/506) merged the reviewed mapping UI and read-only inventory, with real-server browser tests. | Independent forks, historical-image attribution, contribution accounting and acquisition authorization remain separate work. |
-| Operator API and UI | Planning page is a plan list (`GET /plans`: links, framing/plan/activation stage, Open in Planning entry) over a rig list (planning state, optics, last plugin status); reviewed planning links and rig profiles in database settings; the planning workspace holds framing, plan and activation over the Library's existing target/exposure editor. The identity lists and Catalogs tab are retired; old links redirect. Desktop/mobile real-server tests cover two databases contributing to one project and return navigation. | Pairing-code management UI and acquisition control. The Live table shows connectivity, last report, contact ages and assignments per rig. UI tests are not equipment tests. |
+| Operator API and UI | The Library lists plans (`GET /plans`: links, stage, per-rig state and capture dates) as its own rows and families, with plans that have captured nothing in a section below; the header's Plan group picks a plan and opens its workspace at `/plan?plan=<TS GUID or plan id>`, which holds framing, plan and activation over the Library's existing target/exposure editor; rig setup and the template library are Settings tabs; Live is drawn on the Sky with the table under it. The Planning list page, the identity lists and the Catalogs tab are retired; old `/director` links redirect. Desktop/mobile real-server tests cover two databases contributing to one project and return navigation. | Pairing-code management UI and acquisition control. The Live table shows connectivity, last report, contact ages and assignments per rig. UI tests are not equipment tests. |
 | Program delivery | #528 adds `GET /rigs/{rig}/program`, compiling activated rig rows and reported configuration into core Program plus identity links and rig context. Plugin #28 adds bounded, read-only HTTP preview intake with exact scope/configuration/link checks and immutable-identity drift detection. The current commissioning increment adds an atomic, identity-bound durable preview cache; expired history is not renewed authorization. | Immutable issued allocations, explicit filter mapping, progress-preserving refresh and acquisition commissioning. The current compiler response must not yet arm acquisition; see the program-intake audit below. |
 | Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
 | Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. #530 adds server receipt ingestion/contiguous acknowledgements and coalesced status routes; #531 shows reported rig status in Director. The current commissioning increment adds separate scoped pairing and a bounded capture sender with durable, identity-bound cursors, tested against a real local server after a native simulator run. | Preparation feed, production background/status delivery, grade feedback, offline authorization lifecycle, manual/sequence batch reconcile and replacement activation remain missing. |
@@ -315,7 +315,7 @@ mismatched tuple even when the slug exists.
 | `PUT /rigs/{rig}/equipment` | backend, merged | The plugin reports its core `Configuration`, optics, site, horizon and limits into the rig profile with `source: plugin`. The tuple must match the server's `catalog_rig` binding (`403` otherwise); an identical report is a no-op. Activation will later freeze setup revisions from the profile and mark active plans stale when it changes. |
 | `POST /rigs/{rig}/checkin` | backend merged; plugin next | One ledger's `ExecutionEvent` page (≤256, ascending, verbatim) with the held `program_revision`; the reply acknowledges `acknowledged_through` for that ledger, names duplicates and conflicts per sequence, and says `program_changed`. Saved receipts feed `pending` in the next pull. Grade application and replacement-assignment proposals are still open. |
 | `POST /rigs/{rig}/framing-cache` | planned, lower priority | The plugin uploads entries of a rig's own framing cache. Whole-sky imagery no longer needs it: the server reads N.I.N.A.'s downloadable `FramingAssistantCache` sets from `<cache>/director/sky-maps` (`psf-guard sky-maps install`) and renders any view from their tiles (`src/sky_maps.rs`). What remains for the upload is a rig's plate-solved captures. |
-| `POST /rigs/{rig}/status` | backend merged; plugin next | Coalesced live status per session, newest wins, late reports refused; `GET /rigs/status` is the operator view. Loss of it changes connectivity only. The Live table reads these payload fields when present: `phase` (or `state`), `target_name` (or `target`), `operation` with `operation_started_ms`, `wait_reason`, `safety`, `queue_depth`, `errors` (or `error`); send them under those names. |
+| `POST /rigs/{rig}/status` | backend merged; plugin next | Coalesced live status per session, newest wins, late reports refused; `GET /rigs/status` is the operator view. Loss of it changes connectivity only. The Live table reads these payload fields when present: `phase` (or `state`), `target_name` (or `target`), `operation` with `operation_started_ms`, `wait_reason`, `safety`, `queue_depth`, `errors` (or `error`); send them under those names. The Sky's Live view also reads `pointing: { ra_degrees, dec_degrees }`, the mount's current position in ICRS (J2000) **degrees**: right ascension 0–360, not N.I.N.A.'s hours. Convert with the mount's reported `EquatorialSystem`: JNow coordinates go to J2000, J2000 ones pass through. Send it with every report while the mount is connected and leave it out when it is not. Without it the Sky marks the rig at the centre of the Target Scheduler *target* named in `target_name` (the target row, one per mosaic panel, not the project), matched without regard to case among that rig's plan targets, and labels the place as taken from the target. The chip and the Sky count a rig as exposing only for `phase` values `exposing`, `imaging` or `capturing`; send one of those while a light frame is being taken. |
 
 The plugin must not read TS tables from the rig database as its planning
 input and must not call an endpoint before its row above says it exists.
@@ -333,7 +333,7 @@ input and must not call an endpoint before its row above says it exists.
 4. Framing view. Done: `director-core::framing` (gnomonic plane, mosaic
    layout, view-relative corners), framing drafts in meta schema 7 with
    compare-and-set, `POST /framing/preview`, `GET/PUT /projects/{id}/framing`,
-   `GET /rigs/profiles`, and the browser view under Open in Planning: survey
+   `GET /rigs/profiles`, and the browser view in the plan workspace: survey
    image with pan and zoom, panel rig or typed panel size, mosaic grid and
    overlap, rig overlays, and draft save. Still open from the wizard section:
    reference images with WCS, blink or opacity comparison of layers, a
@@ -368,10 +368,13 @@ input and must not call an endpoint before its row above says it exists.
    contact by server receipt time; `GET /rigs/status` lists every bound rig
    with connectivity (`online` within 3 min, `stale` within 30, `offline`,
    `never`), the newest report flagged stale past 10 min, contact ages,
-   assignments and pending receipts; the Planning page opens with the Live
-   table. The plugin's sender for status and check-in is the other side.
+   assignments and pending receipts; the Live table now sits under the Sky's
+   coverage map, where each rig is also drawn where it points. The plugin's
+   sender for status and check-in is the other side.
 
-The Planning page changed with these: the identity lists gave way to a plan
+The Planning page changed with these (it has since been folded into the
+Library, the header and the Sky; see "One list, two groups, Live on the
+Sky" below): the identity lists gave way to a plan
 list across databases (`GET /plans`) over a rig list with live status. Listing
 adopts automatically: every registered database becomes a rig and every
 project row with a GUID becomes a plan, same-GUID rows across databases one
@@ -2584,7 +2587,7 @@ allocation accounting and native assignment delivery are not implemented here.
   review workflows; Director covers planning and acquisition, not their
   replacement. Add rigs as contribution plans without duplicate projects.
   The current UI reuses the existing project/target editor and reviewed mapping
-  APIs with the database-backed rig model. Library -> Open in Planning -> Library
+  APIs with the database-backed rig model. Library -> plan workspace -> Library
   preserves source scope. It is not a framing wizard,
   intent export, downstream-project generator or combined progress implementation.
 - [x] Browser-test navigation from an existing Library project to its Director
@@ -2792,9 +2795,10 @@ this work is taken up, the target model needs, at least:
 Until then a comet is framed as a fixed place at the moment it was looked
 at, and the framing view says so in its marks.
 
-### Later: one list, two groups, Live on the Sky (design note)
+### One list, two groups, Live on the Sky
 
-Decided 2026-09-29, to be built in steps. The Library and the plan list
+Decided 2026-09-29 and built in five steps by 2026-09-30 (#594–#598); the
+user guides describe the result. The Library and the plan list
 now render from the same rows, and the header's Library, Images and
 Sequence tabs were three views of one thing while Planning was a second
 list with a workspace attached. The unit of review is one rig's project,
@@ -2822,16 +2826,67 @@ should say so instead of hiding it:
   phase and target, and today's dashboard as a panel beside the map. A
   header status chip (`2 rigs · 1 exposing`, red when one has gone quiet)
   sits in the existing jobs slot on every view and opens Sky's live panel.
-  The Library's family rows and the Workspace's rig list show their slice
-  of the same status inline.
+  The Library's family rows and the Workspace's rig list were to show their
+  slice of the same status inline; that is not built yet.
 - **Rig setup** and **Exposure templates** move under Settings. They are
   configuration, not daily work.
 
 Grid, Detail, Comparison and Sequence keep the `db` slug in URL state; the
 Library keeps merging databases through `useScopedDbId`; shared links keep
-working through redirects. Order of work: header regroup with the chip and
-the Settings pages; Library absorbs the plan list and `/director` redirects;
-Workspace addressed by family key; Live drawn on the Sky.
+working through redirects.
+
+As built, against this note: the Library lists only projects with frames,
+so plans that have captured nothing wait in their own Library section with
+New plan and rename; the workspace lives at `/plan?plan=<key>`, the key
+being the Target Scheduler GUID the rigs share or the plan id when a GUID
+is not unique (a detach keeps the GUID); the Live chip opens the Sky with a
+rig list beside the map and the table under it, read-only viewers getting
+rigs and templates there; and placing a rig needed the new optional
+`pointing` status field (see the plugin handoff below). The workspace
+page is headed "Plan workspace" and is reached from the Library, the
+header and old links.
+
+### Plugin handoff after the navigation change
+
+The navigation work ("One list, two groups, Live on the Sky", September 2026)
+changed no route under `/api/director/v1`; the plugin's program pull,
+check-in, status and pairing calls are as before. What the plugin work
+should now take into account:
+
+- **Status payload.** `POST /api/director/v1/rigs/{rig}/status` takes the
+  envelope `coordinator_instance_id`, `catalog_id`, `session_id` (new for
+  each acquisition session), `reported_at_ms`, optional `program_revision`,
+  and `status`, which must be a JSON object; `accepted: false` in the reply
+  means a newer report for that session, or a newer session, is already
+  held. See the route table and payload paragraph in
+  [DIRECTOR.md](../DIRECTOR.md#check-in-and-live-status). Inside `status`
+  the Live table reads `phase` (or `state`), `target_name` (or `target`),
+  `operation` with `operation_started_ms`, `wait_reason`, `safety`,
+  `queue_depth` and `errors` (or `error`); the Sky adds `pointing: {
+  ra_degrees, dec_degrees }` in J2000 degrees (RA 0–360, converted by the
+  mount's `EquatorialSystem`), sent whenever the mount is connected.
+  `phase` counts as exposing only as `exposing`, `imaging` or `capturing`.
+  `target_name` is the Target Scheduler target row's name, one per mosaic
+  panel; without `pointing` the Sky infers the rig's place from it and
+  marks the place as inferred. A report over ten minutes old reads "old
+  report" wherever it shows.
+- **Deep links.** A plan's workspace is `/#/plan?plan=<key>` on the PSF
+  Guard server the plugin paired with, where the key is the Target
+  Scheduler project GUID when all rigs share it (true for projects Sync
+  copied); the match ignores case. A plugin that wants an "Open in PSF
+  Guard" link can build it from the project GUID it already holds; the page
+  also resolves any rig's GUID, the plan id, or `<slug>:<project row>`, and
+  rewrites the address to the plan's own key. If a detach has left two
+  plans holding the GUID, the page lists both and asks which. The Library
+  is `/#/`, and Live on the Sky is `/#/sky?live=1`.
+- **Rig identity.** Unchanged: a rig is one registered database with its
+  `psf_guard_catalog_identity`; the status and check-in tuple still carries
+  `coordinator_instance_id` and `catalog_id`, and a mismatch is refused.
+- **Connectivity.** The header's Live chip counts rigs from `GET
+  /rigs/status`; a rig that stops calling turns the chip red after three
+  minutes (`stale`) and reads offline after thirty. Any program pull,
+  check-in or status report counts as contact, so a plugin that only
+  reports status still reads online.
 
 ### Later: review across a multi-rig project (design note)
 

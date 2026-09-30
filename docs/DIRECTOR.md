@@ -1,8 +1,10 @@
 # Director management
 
-Director is experimental. In the header it is the **Planning** page, beside
-the **Library** (the per-database view of images and grading); Director stays
-the name of the plugin, the protocol and the API. This API manages global
+Director is experimental. It has no page of its own: plans live in the
+**Library** beside the projects they shoot, each plan has a **workspace**
+reached from the Library or from the header's **Plan** group, and the rigs
+live on the **Sky** and in **Settings**. Director stays the name of the
+plugin, the protocol and the API. This API manages global
 project, site and rig identities in a separate meta database. Director clients can pair to inspect programs and report
 receipts/status. Pairing does not allocate work or enable acquisition. The NINA
 runtime preview and PSF Guard Sync remain separate.
@@ -13,7 +15,7 @@ Director is on for every server. The meta store is a separate SQLite file
 beside the database registry: `director-meta.sqlite` next to `config.json`,
 or `<registry>.director-meta.sqlite` for a registry with another name, so
 `--registry /tmp/psf-guard-test.json` gets its own store. The desktop app uses
-the same default. A server without `--allow-database-management` runs Planning
+the same default. A server without `--allow-database-management` plans
 read-only over its catalogs: plans, framing and rig profiles can be drafted in
 the meta store, but activation, pushes and Target Scheduler edits are refused
 with `403`, and no table is written into a rig database. Such a catalog is
@@ -42,11 +44,11 @@ switching are not exposed. Catalog adoption requires the explicit workflow below
 
 ## Management screen
 
-Planning lives in the Library and the header; there is no separate list
-page. The **Library** lists every project that has frames, and a plan shot
-by several rigs is an outer pill there with a row per rig. The outer pill
+Plans live in the Library and the header; there is no separate list page.
+The **Library** lists every project that has frames, and a plan shot by
+several rigs is an outer pill there with a row per rig. The outer pill
 carries the plan's stage (Framed, Planned, or Active on N rigs) and a
-Planning button that opens the plan's **workspace**; a project shot by one
+**Plan** button (⚙ on a compact row) that opens the plan's **workspace**; a project shot by one
 rig has that button on its own row and card, and the rows and cards inside
 a family leave it to the outer pill. A state change locks that row's select
 until the database has it. Below the projects, **Plans
@@ -64,17 +66,20 @@ the picker lists every plan with its rigs and progress, follows the project
 chosen for review to its plan, and a rig chip in it hops back to that rig's
 project in Images; **All plans** goes to the Library. Beside the jobs slot a
 **Live** chip counts the fleet, `2 rigs · 1 exposing`, turns red when a rig
-that used to talk has gone quiet, and opens the Live table in a drawer from
-any view. Rig setup and the exposure template library are under **Settings
-› Rigs** and **Settings › Exposure templates**; a read-only viewer cannot
-open Settings, so the Live drawer shows them both, read only. Choosing a
+that used to talk has gone quiet, and opens **Live on the Sky** from any
+view: each reporting rig drawn on the coverage map where it points now, a
+list of the rigs beside the map (choosing one turns the map to it), and the
+full Live table under the map. Rig setup and the exposure template library
+are under **Settings › Rigs** and **Settings › Exposure templates**; a
+read-only viewer cannot open Settings, so Live on the Sky shows them both
+under the table, read only. Choosing a
 project in the Review picker from the Library, Sky or a workspace opens
-Images for it, and Planning's own URL parameter (`plan`) stays behind, so a
+Images for it, and the workspace's own URL parameter (`plan`) stays behind, so a
 plan you had open does not follow you into review.
 
 A workspace lives at `/plan?plan=<key>`. The key is the Target Scheduler
 GUID the plan's rigs share, so the same link opens the same plan on any
-PSF Guard instance that holds those databases. Planning's own plan id names
+PSF Guard instance that holds those databases. Director's own plan id names
 a plan instead when the GUID cannot: a plan with no database, one whose
 rigs carry different GUIDs after an attach, or one whose GUID another plan
 also holds, since a detached project keeps its GUID. Any rig's GUID still
@@ -115,7 +120,7 @@ and **Activation**. A plan with no linked database yet starts its framing
 by looking a name up in the CDS catalogs or by typing a center; activation
 then creates and links the Target Scheduler project in each rig database.
 Its **Library** link goes back with the scope it came from. A project
-Planning has not taken in yet opens a page that finds or starts its plan.
+Director has not taken in yet opens a page that finds or starts its plan.
 
 Sites are no longer edited as their own records; a rig's site lives in its
 rig profile. The identity API for sites remains for the plugin.
@@ -170,13 +175,13 @@ holds two projects in one database, so attaching such a plan is refused.
 
 ### Plans are Library projects
 
-Planning has no list of its own: a plan is its projects in the Library.
+A plan has no list of its own: it is its projects in the Library.
 Rows and cards use the same pills in the same order: the database, Target
 Scheduler's state there (Draft, Active, Inactive, Closed), accepted against
 desired with a bar that reads **Done** once the goal is met, the grading
 split, and the first and last capture with how long ago that was. A plan
 shot by several rigs is an outer pill, **N rigs**, with the plan's total
-progress, its stage and its Planning button, and one row per rig under it,
+progress, its stage and its Plan button, and one row per rig under it,
 since each rig holds its own targets and exposure plans and can be ahead of
 or behind the others. The Compact / Detailed choice is Settings → Review →
 Library.
@@ -184,8 +189,7 @@ Library.
 The **Show** select narrows the Library family by family: Active, Inactive
 or Draft keep a family when any rig has that state; Closed and Done ask for
 every rig; Still to shoot keeps what is neither done nor closed; with
-Planning on, No
-database keeps only plans nothing shoots yet. Closed projects sit in the
+Director on, No database keeps only plans nothing shoots yet. Closed projects sit in the
 archive, which opens when Show or search narrows the list. The search box
 matches project and target names. Both live in the URL (`show`, `q`), a
 "Showing N of M projects" line says how much is hidden, and **Show all**
@@ -370,7 +374,7 @@ plugin profile as a substitute for pairing.
 
 Each database bound to a rig carries one mutable rig profile in the meta
 store: optics, site, horizon, sky quality, altitude and meridian limits, and
-the camera configuration the N.I.N.A. plugin last reported. Planning reads it;
+the camera configuration the N.I.N.A. plugin last reported. Plans read it;
 activation later freezes an immutable setup revision from it. A profile grants
 nothing.
 
@@ -404,7 +408,7 @@ server folds both back to the sensor before offering them. Typed models:
 
 ## Framing view
 
-Open a plan from its Planning button in the Library, or from the header's
+Open a plan from its Plan button in the Library, or from the header's
 plan picker. The workspace is a wide screen:
 **Framing** comes first. The sky takes the width the window has and the
 height left once tonight's visibility strip fits under it, and that column
@@ -721,7 +725,15 @@ Every program pull, check-in and status report is noted as contact with its
 server receipt time, and the Live table derives connectivity from those alone.
 For the status payload the Live table reads `phase` (or `state`),
 `target_name` (or `target`), `operation` with `operation_started_ms`,
-`wait_reason`, `safety`, `queue_depth`, and `errors` (or `error`); the rest is
+`wait_reason`, `safety`, `queue_depth`, and `errors` (or `error`). The Sky
+places a rig from `pointing`, `{ "ra_degrees": …, "dec_degrees": … }` in
+ICRS (J2000) degrees with right ascension 0–360, when the plugin sends it:
+the mount's position now, whatever it is doing. Without it the Sky uses the
+centre of the Target Scheduler target the report names, looked up by name
+among that rig's own plan targets, and draws that place dotted and labelled
+"at target", since it is a guess from the plan rather than a report. A rig
+with neither is listed beside the map but not drawn. The phases `exposing`,
+`imaging` and `capturing` count as exposing. The rest of the payload is
 stored and shown nowhere yet.
 
 ## Visibility

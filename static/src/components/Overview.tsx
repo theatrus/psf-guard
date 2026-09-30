@@ -172,7 +172,7 @@ export default function Overview() {
   // the page that finds or starts its plan.
   // The project clicked becomes the scope, so the workspace opens that
   // database's editor and its back link marks the row in the Library.
-  const openPlanning = (project: WithDb<ProjectOverview>, plan: DirectorPlanRow | null) => {
+  const openPlan = (project: WithDb<ProjectOverview>, plan: DirectorPlanRow | null) => {
     const scope = new URLSearchParams(location.search);
     scope.set('db', project.db_id);
     scope.set('project', String(project.id));
@@ -934,7 +934,7 @@ export default function Overview() {
                     {projectNewImages > 0 && <span className="new-images-badge"><span aria-hidden="true" />{projectNewImages} new</span>}
                     {!project.has_files && <span className="no-files-badge">No Files</span>}
                     {project.files_missing > 0 && <span className="library-pill files-missing">{project.files_missing} missing</span>}
-                    {plans.enabled && !inFamily && <button type="button" className="library-planning" title={plan ? "Open this project's plan workspace" : 'Open this project in Planning'} aria-label={`Open ${project.display_name} in Planning`} onClick={() => openPlanning(project, plan)}>⚙</button>}
+                    {plans.enabled && !inFamily && <button type="button" className="library-planning" title="Open this project's plan: framing, rigs and activation" aria-label={`Open the ${project.display_name} plan`} onClick={() => openPlan(project, plan)}>⚙</button>}
                   </div>
                 );
               }
@@ -985,14 +985,15 @@ export default function Overview() {
                         <button
                           type="button"
                           className="project-settings-button"
+                          aria-label={`Open the ${project.display_name} plan`}
                           title="Open this project's plan: framing, rigs, activation, and its Target Scheduler targets and exposures"
                           onClick={(e) => {
                             e.stopPropagation();
-                            openPlanning(project, plan);
+                            openPlan(project, plan);
                           }}
                         >
                           <span aria-hidden="true">⚙</span>
-                          Planning
+                          Plan
                         </button>
                       )}
                       <button
@@ -1538,7 +1539,7 @@ export default function Overview() {
                   <DbPill name={family.members.map(member => member.db_name).join(' · ')} />
                   <ProgressPill accepted={family.accepted} desired={family.desired} totalImages={family.totalImages} title={`${family.accepted} of ${family.desired} desired frames accepted across the rigs`} />
                   {ago(family.latest, relativeNow) && <span className="library-pill library-pill-dates">{ago(family.latest, relativeNow)}</span>}
-                  {plans.enabled && <button type="button" className="library-planning" title={familyPlan ? "Open this plan's workspace" : 'Open this plan in Planning'} aria-label={`Open the ${family.name} plan`} onClick={() => openPlanning(planMember, familyPlan)}>⚙</button>}
+                  {plans.enabled && <button type="button" className="library-planning" title="Open this plan: framing, rigs and activation" aria-label={`Open the ${family.name} plan`} onClick={() => openPlan(planMember, familyPlan)}>⚙</button>}
                 </div>
                 <div className="library-family-members">{family.members.map(renderProject)}</div>
               </div>

@@ -302,8 +302,8 @@ request to opt out per call.
 
 ## Review and correct the imported plan
 
-Open **Library**, then choose **Planning** on a project. The planning
-workspace opens with that database's **Targets and exposures** expanded under
+Open **Library**, then choose **Plan** on a project (⚙ on a compact row).
+The plan's workspace opens with that database's **Targets and exposures** expanded under
 **Databases**: project state and limits, target coordinates, rotation and ROI,
 shared exposure templates, and each filter plan. With database management enabled, you can edit
 these fields, add plans, or merge and move imported projects and targets when a

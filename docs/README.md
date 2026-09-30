@@ -27,7 +27,6 @@ work. Historical checklists record delivery; they do not track current work.
 - [Data transfer and remote sync](design/data-transfer.md)
 - [Multi-database architecture](design/multi-database.md)
 - [Director: goal-driven acquisition and phased plan](design/director.md)
-- [Navigation plan: one Library, Review and Plan groups, Live on the Sky](design/navigation-plan.md)
 - [Reject archive safety model](design/reject-archive.md)
 
 ## Component-specific guides

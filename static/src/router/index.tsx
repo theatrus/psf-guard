@@ -5,7 +5,8 @@ import MainView from '../components/MainView';
 import Overview from '../components/Overview';
 import SequenceView from '../components/SequenceView';
 import SkyPage from '../components/sky/SkyPage';
-import DirectorPage from '../components/director/DirectorPage';
+import PlanPage from '../components/director/PlanPage';
+import LegacyPlanningRedirect from '../components/director/LegacyPlanningRedirect';
 
 // Create React Query client
 const queryClient = new QueryClient({
@@ -23,9 +24,9 @@ const router = createHashRouter([
     path: "/",
     element: <App />,
     children: [
-      { path: 'plan', element: <DirectorPage /> },
+      { path: 'plan', element: <PlanPage /> },
       // Old Planning links: sent on to their plan or to the Library.
-      { path: 'director', element: <DirectorPage /> },
+      { path: 'director', element: <LegacyPlanningRedirect /> },
       {
         index: true,
         element: <Overview />

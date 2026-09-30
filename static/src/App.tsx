@@ -28,7 +28,7 @@ import './App.css';
 function AppContent() {
   const navigate = useNavigate();
   const location = useLocation();
-  const isOnDirector = isPlanningPath(location.pathname);
+  const isOnPlan = isPlanningPath(location.pathname);
   const { showStats, setShowStats } = useGridState();
   // The review scope: a database, and usually a project, parked in the URL.
   const { dbId } = useDbProjectTarget();
@@ -95,14 +95,14 @@ function AppContent() {
         // If management is disabled and there are no DBs, leave the user on
         // the overview's empty state where they can read the explanation
         // without a modal blocking them.
-        if (!cancelled && !isOnDirector && access.canWrite && !hasValid && managementAllowed && !autoOpened.current) {
+        if (!cancelled && !isOnPlan && access.canWrite && !hasValid && managementAllowed && !autoOpened.current) {
           console.log('No databases configured — opening settings modal');
           autoOpened.current = true;
           setShowSettings(true);
         }
       } catch (error) {
         console.error('Failed to check configuration:', error);
-        if (!cancelled && !isOnDirector && access.canWrite && !autoOpened.current) {
+        if (!cancelled && !isOnPlan && access.canWrite && !autoOpened.current) {
           autoOpened.current = true;
           setShowSettings(true);
         }
@@ -129,7 +129,7 @@ function AppContent() {
       clearTimeout(handle);
       window.removeEventListener(OPEN_SETTINGS_EVENT, openHandler);
     };
-  }, [access.canWrite, isOnDirector]);
+  }, [access.canWrite, isOnPlan]);
 
   // Keyboard shortcut for help
   useHotkeys('?', () => setShowHelp(true), []);
