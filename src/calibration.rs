@@ -7809,7 +7809,9 @@ mod tests {
         let light_path = temp.path().join("light.fits");
         write_test_fits(&light_path, "LIGHT", 1_100);
         let light = crate::commands::import::headers::read_frame_meta(&light_path);
-        let leak = temp.path().join("dark-3.fits");
+        // Catalog paths are canonical (macOS resolves /var to /private/var,
+        // Windows adds a verbatim prefix), so frames are told apart by name.
+        let is_leak = |path: &Path| path.file_name() == Some(std::ffi::OsStr::new("dark-3.fits"));
 
         let mut conn = Connection::open(temp.path().join("catalog.sqlite")).unwrap();
         {
@@ -7835,7 +7837,7 @@ mod tests {
         let leaked = details
             .frames
             .iter()
-            .find(|frame| Path::new(&frame.source_path) == leak)
+            .find(|frame| is_leak(Path::new(&frame.source_path)))
             .unwrap();
         assert_eq!(leaked.dark_level, Some(900.0));
         assert!(
@@ -7849,14 +7851,14 @@ mod tests {
         assert!(details
             .frames
             .iter()
-            .filter(|frame| Path::new(&frame.source_path) != leak)
+            .filter(|frame| !is_leak(Path::new(&frame.source_path)))
             .all(|frame| frame.stray_light.is_none()));
 
         let selected = select_for_light(&conn, &light).unwrap();
         assert_eq!(selected.dark.len(), 3);
         assert_eq!(selected.bias.len(), 1);
         assert_eq!(selected.stray_light.len(), 1);
-        assert_eq!(selected.stray_light[0].source_path, leak);
+        assert!(is_leak(&selected.stray_light[0].source_path));
 
         let export = export_destinations(
             &conn,
@@ -7866,12 +7868,13 @@ mod tests {
             crate::commands::export::ExportLayout::Wbpp,
         )
         .unwrap();
-        assert_eq!(export.stray_light, vec![leak.clone()]);
+        assert_eq!(export.stray_light.len(), 1);
+        assert!(is_leak(&export.stray_light[0]));
         assert!(
             export
                 .items
                 .iter()
-                .all(|(_, frame, _)| frame.source_path != leak),
+                .all(|(_, frame, _)| !is_leak(&frame.source_path)),
             "a WBPP export leaves the leaking dark behind"
         );
         assert_eq!(
