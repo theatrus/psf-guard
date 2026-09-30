@@ -55,7 +55,7 @@ seiza-stretch = "0.2.1"
 # XISF reading. Already in the tree through seiza-stacking, which decodes both
 # containers into the same `seiza_fits::FitsImage`.
 seiza-xisf = "0.2.1"
-seiza-background = "0.2.1"
+seiza-background = "0.3.0"
 seiza-calibration = "0.4.2"
 seiza-deconvolution = "0.1.0"
 seiza-stars = "0.1.1"
