@@ -2735,6 +2735,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "keccak"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8f198d1db720e4940b5a493201d199d9f24f568f8f746bd13706243a2f71598"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.0",
+]
+
+[[package]]
 name = "keyboard-types"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5204,9 +5214,9 @@ dependencies = [
 
 [[package]]
 name = "seiza"
-version = "0.18.13"
+version = "0.18.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b089703cf4f0a4f759e490e563d5c94f3cd9ed00b2ba7b64a10cc887f761e5be"
+checksum = "011e9213759cfec03573eabfff6bfd0c19f5fe595975ae51a69733691e53f27e"
 dependencies = [
  "directories",
  "image",
@@ -5319,9 +5329,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-stacking"
-version = "0.14.0"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2ab78a25efc9d538cd8a5d7274f2860ce00cd87aea57ac0e0ec2127c28f3403"
+checksum = "8fe2b34550e6c20cf3b225d9aa33cf0d368ef7358f473457265ee05a54b42e05"
 dependencies = [
  "rayon",
  "seiza",
@@ -5371,9 +5381,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-xisf"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8bc46f350b99abb68c689aa947c6b805e22675fb69fe799572aa5e6d00b4eb0"
+checksum = "0c6d0eb3750a4d3c7e77cc482988b6ee27d2b6b7bc8ecf88650a89100ddc2fbb"
 dependencies = [
  "flate2",
  "lz4_flex",
@@ -5381,6 +5391,7 @@ dependencies = [
  "seiza-fits",
  "sha1",
  "sha2 0.11.0",
+ "sha3",
  "tempfile",
  "thiserror 2.0.16",
  "zstd",
@@ -5659,6 +5670,16 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
  "digest 0.11.3",
+]
+
+[[package]]
+name = "sha3"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be176f1a57ce4e3d31c1a166222d9768de5954f811601fb7ca06fc8203905ce1"
+dependencies = [
+ "digest 0.11.3",
+ "keccak",
 ]
 
 [[package]]

@@ -1371,6 +1371,11 @@
   white-space: nowrap;
 }
 
+.tauri-settings .calibration-stray-light {
+  background: var(--color-error-alpha-20, rgb(239 68 68 / 18%));
+  color: var(--color-error, #ef4444);
+}
+
 .tauri-settings .calibration-frame-table td strong,
 .tauri-settings .calibration-frame-table td span,
 .tauri-settings .calibration-frame-table td small {
