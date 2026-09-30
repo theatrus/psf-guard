@@ -180,9 +180,9 @@ function AppContent() {
                 className="header-button"
                 aria-current={isOnWorkspace ? 'page' : undefined}
                 disabled={!plan.current}
-                title={plan.current ? `Open the workspace for ${plan.current.project.name}` : 'Choose a project with a plan first'}
+                title={plan.current ? `Plan ${plan.current.project.name}: framing, rigs and activation` : 'Choose a project with a plan first'}
               >
-                Workspace
+                Planning
               </button>
             )}
             <span className="header-scope-divider" aria-hidden="true" />

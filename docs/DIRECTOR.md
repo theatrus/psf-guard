@@ -48,7 +48,7 @@ Plans live in the Library and the header; there is no separate list page.
 The **Library** lists every project that has frames, and a plan shot by
 several rigs is an outer pill there with a row per rig. The outer pill
 carries the plan's stage (Framed, Planned, or Active on N rigs) and a
-**Plan** button (⚙ on a compact row) that opens the plan's **workspace**; a project shot by one
+**Planning** button (⚙ on a compact row) that opens the plan's **workspace**; a project shot by one
 rig has that button on its own row and card, and the rows and cards inside
 a family leave it to the outer pill. A state change locks that row's select
 until the database has it. Below the projects, **Plans
@@ -64,10 +64,12 @@ left out rather than shown as empty.
 The header reads Library, then the **scope**, then Sky. The scope runs from
 the whole to the part: the project picker (a plan shot by several rigs is
 one row there, and the closed picker names it with its rig count), the
-**Workspace** button for that plan, then a switcher for which rig and
+**Planning** button for that plan's workspace, then a switcher for which rig and
 target **Images** and **Sequence** show. For a plan shot by several rigs
 the switcher lists each rig with its targets; for a lone rig it lists the
-project's targets, and with one target it only names the database. Used on
+project's targets, and with one target it is a label, "Rig · target"
+over the database and target, set apart from the buttons since there is
+nothing to choose. Used on
 a workspace, the picker opens the chosen project's workspace; it also lists
 plans no database takes yet, which open straight into theirs. Every view
 button shows the page you are on the same way, filled. Beside the jobs slot a
@@ -187,7 +189,7 @@ Scheduler's state there (Draft, Active, Inactive, Closed), accepted against
 desired with a bar that reads **Done** once the goal is met, the grading
 split, and the first and last capture with how long ago that was. A plan
 shot by several rigs is an outer pill, **N rigs**, with the plan's total
-progress, its stage and its Plan button, and one row per rig under it,
+progress, its stage and its Planning button, and one row per rig under it,
 since each rig holds its own targets and exposure plans and can be ahead of
 or behind the others. The Compact / Detailed choice is Settings → Review →
 Library.
@@ -414,8 +416,8 @@ server folds both back to the sensor before offering them. Typed models:
 
 ## Framing view
 
-Open a plan from its Plan button in the Library, or pick its project in the
-header and choose **Workspace**. The workspace is a wide screen:
+Open a plan from its Planning button in the Library, or pick its project in the
+header and choose **Planning**. The workspace is a wide screen:
 **Framing** comes first. The sky takes the width the window has and the
 height left once tonight's visibility strip fits under it, and that column
 stays put while the form beside it scrolls, so the horizon chart is always

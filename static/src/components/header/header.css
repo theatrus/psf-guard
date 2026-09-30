@@ -25,16 +25,41 @@
   width: auto;
 }
 
-.rig-target-fixed,
-.rig-target-empty {
-  padding: 0 6px;
-  font-size: 0.8rem;
-  color: var(--color-text-secondary);
-  white-space: nowrap;
+/* A fact, not a control: no border or hover, a caption over the value,
+   set into the group's background so it cannot pass for a button. */
+.rig-target-fixed {
+  display: grid;
+  gap: 1px;
+  flex: 0 0 auto;
+  min-width: 8rem;
+  max-width: 18rem;
+  padding: 3px 10px;
+  border-left: 2px solid var(--color-border-secondary);
+  border-radius: 0 4px 4px 0;
+  background: rgb(0 0 0 / 18%);
+  cursor: default;
+  user-select: text;
 }
 
-.rig-target-empty {
+.rig-target-fixed > small {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   color: var(--color-text-hint);
+}
+
+.rig-target-fixed > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+}
+
+.rig-target-fixed.is-empty > span {
+  color: var(--color-text-hint);
+  font-style: italic;
 }
 
 .header-nav .header-button:disabled {
@@ -125,8 +150,10 @@
     max-width: none;
   }
 
-  .rig-target-select {
+  .rig-target-select,
+  .rig-target-fixed {
     flex: 1 1 8rem;
+    max-width: none;
   }
 
   .live-chip .utility-label {

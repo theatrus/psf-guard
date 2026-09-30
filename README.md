@@ -126,7 +126,7 @@ Ctrl/Cmd+Click toggles one frame.
 
 </details>
 
-Each Library project has a **Plan** button that opens its plan's workspace,
+Each Library project has a **Planning** button that opens its plan's workspace,
 which shows the project settings and every target's
 catalog coordinates and exposure plans under **Databases**. The
 inherited Target Scheduler mapping stores RA as decimal hours and Dec as
