@@ -67,7 +67,8 @@ one row there, and the closed picker names it with its rig count), the
 **Planning** button for that plan's workspace, then a switcher for which rig and
 target **Images** and **Sequence** show. For a plan shot by several rigs
 the switcher lists each rig with its targets; for a lone rig it lists the
-project's targets, and with one target it is a label, "Rig · target"
+project's targets (mosaic panels by the part that sets them apart, the
+full name as a tooltip), and with one target it is a label, "Rig · target"
 over the database and target, set apart from the buttons since there is
 nothing to choose. Used on
 a workspace, the picker opens the chosen project's workspace; it also lists

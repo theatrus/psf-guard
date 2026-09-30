@@ -19,10 +19,11 @@
   background: var(--color-border-secondary);
 }
 
+/* Its width follows the chosen option (set inline, 7–24rem). */
 .rig-target-select {
-  flex: 0 1 14rem;
+  flex: 0 0 auto;
   min-width: 7rem;
-  width: auto;
+  max-width: 24rem;
 }
 
 /* A fact, not a control: no border or hover, a caption over the value,
@@ -32,7 +33,7 @@
   gap: 1px;
   flex: 0 0 auto;
   min-width: 8rem;
-  max-width: 18rem;
+  max-width: 26rem;
   padding: 3px 10px;
   border-left: 2px solid var(--color-border-secondary);
   border-radius: 0 4px 4px 0;

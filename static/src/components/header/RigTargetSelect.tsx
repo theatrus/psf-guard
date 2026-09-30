@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useMergedProjects, useMergedTargets } from '../../hooks/useDatabases';
 import { isMergedPath, useDbProjectTarget, withoutPlanningParams } from '../../hooks/useUrlState';
 import { useCurrentPlan } from './useCurrentPlan';
+import { fittedWidth, sharedStart, shortLabel } from './targetLabels';
 import './header.css';
 
 interface Member { db_id: string; db_name: string; id: number }
@@ -76,16 +77,37 @@ export default function RigTargetSelect() {
     }
     setDbProjectTarget(db, project, target);
   };
+  // Each option's full and shown text; mosaic panels drop the start they share.
+  const labels = new Map<string, { full: string; shown: string }>();
+  const groupLabel = new Map<string, string>();
+  for (const member of members) {
+    const own = targetsOf(member);
+    const prefix = sharedStart(own.map(target => target.name));
+    groupLabel.set(`${member.db_id}:${member.id}`, prefix ? `${member.db_name} · ${prefix}` : member.db_name);
+    const all = single ? 'All targets' : `${member.db_name} · all targets`;
+    labels.set(valueOf(member.db_id, member.id, null), { full: prefix ? `${all} (${prefix})` : all, shown: all });
+    for (const target of own) {
+      labels.set(valueOf(member.db_id, member.id, target.id), { full: target.name, shown: shortLabel(target.name, prefix) });
+    }
+  }
   const options = (member: Member) => [
-    <option key="all" value={valueOf(member.db_id, member.id, null)}>{single ? 'All targets' : `${member.db_name} · all targets`}</option>,
-    ...targetsOf(member).map(target => <option key={target.id} value={valueOf(member.db_id, member.id, target.id)}>{target.name}</option>),
-  ];
+    valueOf(member.db_id, member.id, null),
+    ...targetsOf(member).map(target => valueOf(member.db_id, member.id, target.id)),
+  ].map(key => {
+    const label = labels.get(key)!;
+    return <option key={key} value={key} title={label.full}>{label.shown}</option>;
+  });
+  const selected = labels.get(value);
+  // As wide as the chosen option needs, within reason, so a closed select
+  // shows its name whole.
+  const shownText = selected?.shown ?? 'Choose a rig';
   return <select className="compact-select rig-target-select" aria-label="Rig and target" value={value}
+    title={selected?.full} style={{ width: fittedWidth(shownText) }}
     onChange={event => {
       const [db, project, target] = event.target.value.split(':');
       if (db && project) choose(db, Number(project), target ? Number(target) : null);
     }}>
     {!inScope && <option value="" disabled>Choose a rig</option>}
-    {single ? options(members[0]) : members.map(member => <optgroup key={`${member.db_id}:${member.id}`} label={member.db_name}>{options(member)}</optgroup>)}
+    {single ? options(members[0]) : members.map(member => <optgroup key={`${member.db_id}:${member.id}`} label={groupLabel.get(`${member.db_id}:${member.id}`)}>{options(member)}</optgroup>)}
   </select>;
 }
