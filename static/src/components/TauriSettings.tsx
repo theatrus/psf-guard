@@ -12,6 +12,10 @@ import { apiClient } from '../api/client';
 import { useAccess } from '../auth/access';
 import type { SettingsIntent } from '../utils/settingsIntent';
 import ReviewPreferences from './ReviewPreferences';
+import DirectorRigs from './director/DirectorRigs';
+import TemplateLibrary from './director/TemplateLibrary';
+import './director/DirectorPage.css';
+import { useDirectorStatus } from '../hooks/useDirectorStatus';
 import CalibrationMatchingSettings from './CalibrationMatchingSettings';
 import StackAutomationSettings from './StackAutomationSettings';
 import ExportDefaultsSettings from './ExportDefaultsSettings';
@@ -43,7 +47,7 @@ import './TauriSettings.css';
 /**
  * Settings groups unrelated jobs into named tabs so each stays easy to find.
  */
-type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'review' | 'users';
+type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'review' | 'rigs' | 'templates' | 'users';
 
 const DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE =
   '%YEAR%/%TARGET%/%NIGHT%/%TYPE%';
@@ -152,7 +156,9 @@ export default function TauriSettings({
   const [formRemoteUploadTokenCopyState, setFormRemoteUploadTokenCopyState] =
     useState<'idle' | 'copied' | 'failed'>('idle');
   const [showAddForm, setShowAddForm] = useState(false);
-  const [activeTab, setActiveTab] = useState<SettingsTab>('databases');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialIntent === 'rigs' || initialIntent === 'templates' ? initialIntent : 'databases');
+  const director = useDirectorStatus();
+  const planningEnabled = !!director.data?.enabled && director.data.protocol_version === 1;
   // true = "create a brand-new TS database from image folders" flow (no
   // existing .sqlite required; the server bootstraps the full TS schema).
   const [createMode, setCreateMode] = useState(false);
@@ -450,14 +456,15 @@ export default function TauriSettings({
     }
   };
 
-  // Land on the form the caller asked for. This runs once, at mount: App
-  // unmounts the modal when it closes, so re-opening with a fresh intent
-  // mounts a fresh component and the effect fires again.
+  // Land on the form the caller asked for: at mount, and again when a panel
+  // inside the open modal (Settings › Rigs offers "Add database") asks for
+  // another one.
   useEffect(() => {
-    if (initialIntent === 'create') startCreate();
-    if (initialIntent === 'add') void startAdd();
+    if (initialIntent === 'create') { setActiveTab('databases'); startCreate(); }
+    if (initialIntent === 'add') { setActiveTab('databases'); void startAdd(); }
+    if (initialIntent === 'rigs' || initialIntent === 'templates') setActiveTab(initialIntent);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [initialIntent]);
 
   const handlePickDbPath = async () => {
     if (!isTauri) {
@@ -901,13 +908,20 @@ export default function TauriSettings({
     { id: 'setups', label: 'Setups' },
     // Review preferences are stored in this browser, so no gate either.
     { id: 'review', label: 'Review' },
+    // Rig setup and the exposure template library are Planning's configuration.
+    ...(planningEnabled
+      ? ([{ id: 'rigs', label: 'Rigs' }, { id: 'templates', label: 'Exposure templates' }] as const)
+      : []),
     ...(!isTauri && access.status.authentication_required
       ? ([{ id: 'users', label: 'Users' }] as const)
       : []),
   ];
   // Derive rather than store: removing the last database takes the Sync tab
   // away, and the selection has to fall back in the same render.
-  const currentTab = visibleTabs.some((tab) => tab.id === activeTab)
+  // A Planning tab asked for before Planning's status arrives waits for it
+  // rather than flashing Databases.
+  const waitingForPlanning = (activeTab === 'rigs' || activeTab === 'templates') && director.isPending;
+  const currentTab = visibleTabs.some((tab) => tab.id === activeTab) || waitingForPlanning
     ? activeTab
     : 'databases';
 
@@ -1845,6 +1859,11 @@ export default function TauriSettings({
           )}
 
           {currentTab === 'catalogs' && <SeizaCatalogControls />}
+
+          {/* Planning's panels keep Planning's controls; the container adds no padding. */}
+          {currentTab === 'rigs' && <div className="director-page director-embedded"><DirectorRigs /></div>}
+
+          {currentTab === 'templates' && <div className="director-page director-embedded"><TemplateLibrary /></div>}
 
           {currentTab === 'sync' && (
             <>

@@ -120,6 +120,17 @@ export function useDbProjectTarget() {
   };
 }
 
+/** Query params that belong to the Planning page: which plan's workspace is
+ *  open and which of its sections. They never travel to another view. */
+export const PLANNING_PARAMS = ['directorProject', 'directorSource', 'directorView', 'directorCatalog'] as const;
+
+/** A copy of `search` without the Planning page's own params. */
+export function withoutPlanningParams(search: string): URLSearchParams {
+  const next = new URLSearchParams(search);
+  for (const key of PLANNING_PARAMS) next.delete(key);
+  return next;
+}
+
 /** The Overview route, which merges every database instead of scoping to one. */
 export function isOverviewPath(pathname: string): boolean {
   return pathname === '/' || pathname === '/overview';

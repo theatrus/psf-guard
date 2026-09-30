@@ -356,3 +356,12 @@
   in the Library and to its image grid, and on a server with database
   management the state pill is a select that changes the rig's Target
   Scheduler project state in place.
+
+- The header now reads Library, then a **Review** group (the project
+  picker with Images and Sequence) and, with Planning on, a **Plan** group
+  (a plan picker with Workspace), then Sky. Images and Sequence wait until
+  a project or database is chosen; picking one from the Library opens
+  Images for it. A **Live** chip beside the job status counts the rigs and
+  which are exposing, turns red when one has gone quiet, and opens the Live
+  table from any view. Rig setup and the exposure template library moved to
+  Settings › Rigs and Settings › Exposure templates.

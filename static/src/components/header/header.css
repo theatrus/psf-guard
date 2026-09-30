@@ -1,0 +1,206 @@
+/* The header's two labeled groups, the plan picker and the Live chip. The
+   grid that places them is in App.css. */
+
+.header-group {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  padding: 0.12rem 0.3rem 0.12rem 0.5rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  background: var(--color-bg-tertiary);
+}
+
+.header-group-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-hint);
+  white-space: nowrap;
+}
+
+.header-group .project-target-selector.compact {
+  flex: 1 1 18rem;
+  min-width: 0;
+  max-width: 28rem;
+}
+
+.header-group .selector-group.compact label {
+  display: none;
+}
+
+.header-group .header-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.plan-picker {
+  position: relative;
+  flex: 1 1 12rem;
+  min-width: 0;
+  max-width: 18rem;
+}
+
+.plan-picker-popover {
+  width: min(480px, calc(100vw - 24px));
+}
+
+.plan-option {
+  display: grid;
+  gap: 4px;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+
+.plan-option.is-selected {
+  background: var(--color-primary-alpha-10);
+}
+
+.plan-option-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.plan-option-main:hover .plan-option-name {
+  text-decoration: underline;
+}
+
+.plan-option-name {
+  flex: 1 1 8rem;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-option-rigs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.plan-option-rig {
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.plan-option-rig:hover {
+  border-color: var(--color-primary);
+  color: var(--color-text-primary);
+}
+
+.live-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.live-chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-success, #7be495);
+  box-shadow: 0 0 0 2px var(--color-success-alpha-20, rgba(123, 228, 149, 0.2));
+}
+
+.live-chip.is-alert {
+  border-color: var(--color-error, #ff6b6b);
+  color: var(--color-error, #ff6b6b);
+}
+
+.live-chip.is-alert .live-chip-dot {
+  background: var(--color-error, #ff6b6b);
+  box-shadow: 0 0 0 2px rgba(255, 107, 107, 0.25);
+}
+
+.live-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgb(0 0 0 / 45%);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.live-drawer {
+  position: relative;
+  width: min(1100px, 100%);
+  height: 100%;
+  overflow: auto;
+  padding: 16px 20px;
+  background: var(--color-bg-secondary);
+  border-left: 1px solid var(--color-border-primary);
+  box-shadow: -12px 0 32px rgb(0 0 0 / 35%);
+}
+
+.live-drawer-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  min-height: 32px;
+  width: 32px;
+  padding: 0;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+.live-drawer .director-toolbar {
+  margin-top: 0;
+  padding-right: 44px;
+}
+
+@media (max-width: 760px) {
+  .header-group-label {
+    display: none;
+  }
+
+  .header-view-tabs.header-nav {
+    flex-wrap: wrap;
+  }
+
+  .header-nav > .header-button {
+    flex: 1 1 0;
+    min-width: 0;
+    order: 0;
+  }
+
+  .header-nav > .header-group {
+    flex: 1 1 100%;
+    order: 1;
+    padding-left: 0.3rem;
+  }
+
+  .header-group .header-button {
+    flex: 0 0 auto;
+  }
+
+  .header-group .project-target-selector.compact,
+  .header-group .plan-picker {
+    flex: 1 1 0;
+    max-width: none;
+  }
+
+  .live-chip .utility-label {
+    display: none;
+  }
+
+  .live-chip {
+    padding: 0.38rem 0.5rem;
+  }
+}
