@@ -70,7 +70,7 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     await expect(page.getByRole('heading', { name: 'Andromeda exposures' })).toBeVisible();
     await expect(page.getByRole('region', { name: 'Linked databases' }).getByText('C925 data')).toBeVisible();
     await expect(page.getByRole('region', { name: 'Linked databases' }).getByText('Redcat data')).toBeVisible();
-    await page.getByRole('button', { name: /Targets and exposures/ }).first().click();
+    // The outer pill passes the database it opened from, so that editor is already open.
     await expect(page.getByLabel('RA (decimal hours)')).toHaveValue('0.712313');
     await expect(page.getByLabel('Ha desired count')).toHaveValue('40');
     await expect(page.getByRole('region', { name: 'Acquisition plan' })).toBeVisible();
@@ -87,7 +87,8 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     await expect(page.getByRole('heading', { name: 'Andromeda exposures' })).toBeVisible();
     // The database the card came from is already open to its targets.
     await expect(page.getByLabel('RA (decimal hours)')).toHaveValue('0.712313');
-    expect(new URL(page.url().split('#')[1], 'http://test').searchParams.get('directorProject')).toBe(mappings[1].items[0].project_id);
+    // The workspace's address is the Target Scheduler GUID both rigs share.
+    expect(new URL(page.url().split('#')[1], 'http://test').searchParams.get('plan')).toBe(shared.toLowerCase());
     await page.getByRole('main').getByRole('link', { name: 'Library' }).click();
     await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible();
     expect(page.url()).toContain(`dbfilter=${slugs[0]}`);

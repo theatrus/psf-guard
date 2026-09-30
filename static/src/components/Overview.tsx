@@ -9,7 +9,7 @@ import LibraryPlans from './director/LibraryPlans';
 import { stage, stageShort } from './director/planCardModel';
 import type { DirectorPlanRow } from '../api/directorTypes';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Merge } from 'lucide-react';
 import { apiClient } from '../api/client';
 import type {
@@ -88,6 +88,7 @@ function projectKey(dbId: string, projectId: number): string {
 export default function Overview() {
   const color = useColorPreview();
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
   const [projectSort, setProjectSort] = useState<ProjectSort>('recent');
   // Narrows the projects list to one catalog. Lives in URL state (`dbfilter`)
@@ -169,11 +170,13 @@ export default function Overview() {
   };
   // The workspace for a plan, or for a project Planning has not adopted yet
   // the page that finds or starts its plan.
+  // The project clicked becomes the scope, so the workspace opens that
+  // database's editor and its back link marks the row in the Library.
   const openPlanning = (project: WithDb<ProjectOverview>, plan: DirectorPlanRow | null) => {
-    if (plan) { navigate(plans.hrefFor(plan.project.id)); return; }
-    const params = new URLSearchParams({ db: project.db_id, project: String(project.id), directorSource: project.db_id, directorView: 'projects' });
-    if (dbFilter) params.set('dbfilter', dbFilter);
-    navigate(`/director?${params}`);
+    const scope = new URLSearchParams(location.search);
+    scope.set('db', project.db_id);
+    scope.set('project', String(project.id));
+    navigate(plans.hrefFor(plan ?? `${project.db_id}:${project.id}`, scope));
   };
 
   useEffect(() => {

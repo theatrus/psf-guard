@@ -11,6 +11,7 @@ import PlanEditor from './PlanEditor';
 import ActivationPanel from './ActivationPanel';
 import type { FramingSeed } from './framingModel';
 import { retryWhenBusy } from './retry';
+import { withoutPlanningParams } from '../../hooks/useUrlState';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
@@ -47,8 +48,7 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
   const openKey = openSource === undefined
     ? arrival ? `${arrival.catalog_slug}:${arrival.source_project_guid}` : null
     : openSource;
-  const back = new URLSearchParams(params);
-  back.delete('directorProject');
+  const back = withoutPlanningParams(params.toString());
   // Attaching: another plan's database project joins this plan; the other
   // plan is retired. Only databases this plan has no project in yet.
   const client = useQueryClient();

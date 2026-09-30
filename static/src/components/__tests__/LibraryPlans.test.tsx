@@ -50,7 +50,7 @@ describe("The Library's plans with nothing captured yet", () => {
     expect(requests[0]).toEqual(requests[1]);
     expect(requests[0].name).toBe('Sky survey');
     expect(requests[0].id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    expect(await screen.findByRole('link', { name: 'Open Sky survey' })).toHaveAttribute('href', `/director?db=c925&project=3&directorProject=${requests[0].id}`);
+    expect(await screen.findByRole('link', { name: 'Open Sky survey' })).toHaveAttribute('href', `/plan?db=c925&project=3&plan=${requests[0].id}`);
   });
 
   it('keeps a stale rename draft until canceled and reloads the current revision', async () => {

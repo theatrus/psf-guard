@@ -29,7 +29,7 @@ export default function PlanPicker() {
     searchRef.current?.focus();
     return () => { document.removeEventListener('pointerdown', closeOutside); document.removeEventListener('keydown', closeOnEscape); };
   }, [open]);
-  const choose = (row: DirectorPlanRow) => { setOpen(false); setSearch(''); navigate(plan.hrefFor(row.project.id)); };
+  const choose = (row: DirectorPlanRow) => { setOpen(false); setSearch(''); navigate(plan.hrefFor(row)); };
   const review = (slug: string, projectId: number) => {
     setOpen(false); setSearch('');
     const next = withoutPlanningParams(location.search);

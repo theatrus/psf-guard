@@ -54,7 +54,7 @@ describe('Director live dashboard', () => {
     expect(screen.getByText('guider lost the star once')).toBeInTheDocument();
     expect(screen.getByText('5 saved, ungraded')).toBeInTheDocument();
     expect(screen.getByText('rev abcdef01')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Heart Nebula' })).toHaveAttribute('href', `/director?db=redcat&directorProject=${project.id}`);
+    expect(screen.getByRole('link', { name: 'Heart Nebula' })).toHaveAttribute('href', `/plan?db=redcat&plan=${project.id}`);
     // An old report is history, not the present.
     expect(screen.getByText('Offline')).toBeInTheDocument();
     expect(screen.getByText('exposing (stale, reported 50 min ago)')).toBeInTheDocument();

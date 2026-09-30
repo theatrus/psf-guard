@@ -79,7 +79,7 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
   // Nothing to show and nothing to do: stay out of the Library.
   if (!canWrite && shown.length === 0 && !plans.error && !plans.query.data?.warnings.length) return null;
   const item = (row: DirectorPlanRow) => <li key={row.project.id} className="director-plan">
-    <PlanRow row={row} href={plans.hrefFor(row.project.id)} canWrite={canWrite} editing={!!edit} onRename={() => begin({ creating: false, record: row.project })} />
+    <PlanRow row={row} href={plans.hrefFor(row)} canWrite={canWrite} editing={!!edit} onRename={() => begin({ creating: false, record: row.project })} />
     {edit?.record.id === row.project.id && !edit.creating && form}
   </li>;
   return <section className="director-page director-embedded library-plans" aria-label="Plans with nothing captured yet">

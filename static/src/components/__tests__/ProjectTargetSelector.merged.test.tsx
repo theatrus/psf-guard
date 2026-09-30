@@ -28,15 +28,15 @@ function renderAt(route: string) {
 
 describe('ProjectTargetSelector on a merged view', () => {
   it('opens Images for a project chosen from the Library, keeping the rest of the URL', async () => {
-    renderAt('/director?dbfilter=attic&directorShow=active&directorProject=abc&directorView=projects');
+    renderAt('/plan?dbfilter=attic&show=active&plan=abc&directorView=projects');
     const trigger = document.querySelector<HTMLButtonElement>('#scope-select')!;
     await waitFor(() => expect(trigger).not.toBeDisabled());
     fireEvent.click(trigger);
     fireEvent.click(await screen.findByRole('button', { name: /^Sh2 86/, expanded: false }));
     fireEvent.click(await screen.findByRole('button', { name: /All images/ }));
     // Planning's own params stay behind; the rest of the URL comes along.
-    expect(screen.getByTestId('location')).toHaveTextContent('/grid?dbfilter=attic&directorShow=active&db=attic&project=1');
-    expect(screen.getByTestId('location')).not.toHaveTextContent('directorProject');
+    expect(screen.getByTestId('location')).toHaveTextContent('/grid?dbfilter=attic&show=active&db=attic&project=1');
+    expect(screen.getByTestId('location')).not.toHaveTextContent('plan=');
   });
 
   it('refreshes caches only for the database a scoped view shows', async () => {

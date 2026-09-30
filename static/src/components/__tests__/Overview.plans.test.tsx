@@ -28,10 +28,10 @@ const catalogs: Record<string, ReturnType<typeof project>[]> = {
   c925: [project(1, 'Heart Nebula', shared, 2, 5, 40), project(4, 'Draft field', null, 0, 0, 10)],
 };
 
-const link = (slug: string, name: string, row: number): DirectorPlanLink => ({ catalog_slug: slug, catalog_name: name, rig, source_project_guid: 'g', source_row_id: row, source_name: null, source_state: 1, earliest_capture_s: null, latest_capture_s: null, targets: [] });
+const link = (slug: string, name: string, row: number, guid = `guid-${slug}-${row}`): DirectorPlanLink => ({ catalog_slug: slug, catalog_name: name, rig, source_project_guid: guid, source_row_id: row, source_name: null, source_state: 1, earliest_capture_s: null, latest_capture_s: null, targets: [] });
 const plan = (id: string, name: string, links: DirectorPlanLink[], extra: Partial<DirectorPlanRow> = {}): DirectorPlanRow => ({ project: { id, name, revision: 1 }, links, progress: null, framing: null, plan: null, activation: null, ...extra });
 const plans = [
-  plan('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Heart Nebula', [link('redcat', 'RedCat', 1), link('c925', 'C925', 1)], { plan: { revision: 1, objectives: 2, rigs: 2 } }),
+  plan('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Heart Nebula', [link('redcat', 'RedCat', 1, shared), link('c925', 'C925', 1, shared)], { plan: { revision: 1, objectives: 2, rigs: 2 } }),
   plan('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'Pelican', [link('redcat', 'RedCat', 2)], { activation: { revision: 1, applied_at_ms: 1_700_000_000_000, rigs: 1 } as DirectorPlanRow['activation'] }),
   plan('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'Bare', []),
 ];
@@ -72,14 +72,16 @@ describe('the Library with Planning', () => {
     // Members of a family share the outer pill's way to the plan.
     expect(within(family).queryByRole('button', { name: /in Planning$/ })).not.toBeInTheDocument();
     fireEvent.click(within(family).getByRole('button', { name: 'Open the Heart Nebula plan' }));
-    expect(screen.getByTestId('location')).toHaveTextContent('/director?directorProject=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    // The plan's address is the Target Scheduler GUID its rigs share.
+    // The member it was opened from becomes the scope, so the workspace opens that database.
+    expect(screen.getByTestId('location')).toHaveTextContent(new RegExp(`^/plan\\?db=(redcat|c925)&project=1&plan=${shared.toLowerCase()}$`));
   });
 
   it('opens a lone project straight into its workspace and lists the plan nothing shoots', async () => {
     setDisplayPreferences(compact);
     mount('/');
     fireEvent.click(await screen.findByRole('button', { name: 'Open Pelican in Planning' }));
-    expect(screen.getByTestId('location')).toHaveTextContent('/director?directorProject=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
+    expect(screen.getByTestId('location')).toHaveTextContent('/plan?db=redcat&project=2&plan=guid-redcat-2');
   });
 
   it('narrows by Show and search in the URL, family by family', async () => {

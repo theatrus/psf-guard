@@ -380,3 +380,8 @@
   and the search box narrow the Library and stay in the URL, and a row's
   state pill changes the project's Target Scheduler state when the server
   allows database changes. Old Planning links land in the Library.
+
+- A plan's workspace has its own address, `/plan?plan=<key>`. The key is
+  the Target Scheduler GUID the plan's rigs share, so a link opens the same
+  plan on any PSF Guard instance that holds those databases. Old Planning
+  links still land on the right plan or in the Library.

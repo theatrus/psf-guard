@@ -3,23 +3,21 @@ import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { retryWhenBusy } from './retry';
+import { withoutPlanningParams } from '../../hooks/useUrlState';
+import { planHref, planKey } from './planAddress';
 
-/** The Library's "Open in Planning" arrives here with a database and project row;
- *  the plan list knows which plan that row belongs to. */
+/** A database's project row that has no plan yet (`/plan?plan=slug:row`).
+ *  Listing the plans adopts the database, so the row usually finds its plan
+ *  here and moves on; a row without a GUID cannot be planned and says so. */
 export default function DirectorProjectContext({ instanceId, slug, projectId }: {
   instanceId: string; slug: string; projectId: number;
 }) {
   const [params] = useSearchParams();
   const plans = useQuery({ queryKey: ['directorPlans', instanceId], queryFn: apiClient.getDirectorPlans, retry: retryWhenBusy, retryDelay: 700, refetchOnMount: 'always' });
-  const back = new URLSearchParams(params);
-  back.delete('directorView'); back.delete('directorSource'); back.delete('directorCatalog');
+  const back = withoutPlanningParams(params.toString());
+  // Listing the plans takes the database in; once its row has a plan, go there.
   const row = plans.data?.rows.find(entry => entry.links.some(link => link.catalog_slug === slug && link.source_row_id === projectId));
-  if (row) {
-    const next = new URLSearchParams(params);
-    next.delete('directorSource'); next.delete('directorView'); next.delete('directorCatalog');
-    next.set('directorProject', row.project.id);
-    return <Navigate to={`/director?${next}`} replace />;
-  }
+  if (row) return <Navigate to={planHref(planKey(row, plans.data!.rows), params)} replace />;
   return <section aria-label="Project acquisition planning">
     <div className="director-toolbar"><Link to={`/?${back}`}><ArrowLeft size={16} />Library</Link></div>
     {plans.isPending && <p role="status">Finding this project's plan...</p>}

@@ -2,7 +2,8 @@
 
 Status: agreed 2026-09-29. Step 1 shipped (header regroup, Live chip and
 drawer, Rigs and Exposure templates under Settings). Step 2 shipped (the
-Library holds every plan; `/director` without a plan redirects there). Delete this file once every step
+Library holds every plan; `/director` without a plan redirects there).
+Step 3 shipped (the workspace lives at `/plan?plan=<key>`). Delete this file once every step
 below has shipped and [DIRECTOR.md](../DIRECTOR.md) and
 [SKY_COVERAGE.md](../SKY_COVERAGE.md) describe the result. The reasoning
 sits in [director.md](director.md) under "one list, two groups, Live on the
@@ -103,6 +104,13 @@ Library rows.
 Accept when: a Workspace opened from the Library, from the picker and from
 an old `directorProject` link shows the same plan; attach and detach still
 work; the Plan picker's unit tests pass.
+
+As built: the route is `/plan`, and the key is the Target Scheduler GUID
+when every rig shares one, else Planning's plan id (a plan with no
+database, or rigs with different GUIDs after an attach); any rig's GUID
+and `slug:row` also resolve. `/director` forwards old links. The plan
+picker already drew its rows from the Library's pill components after
+step 1.
 
 ### 4. Live on the Sky
 

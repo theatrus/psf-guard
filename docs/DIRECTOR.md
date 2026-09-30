@@ -69,11 +69,26 @@ any view. Rig setup and the exposure template library are under **Settings
 › Rigs** and **Settings › Exposure templates**; a read-only viewer cannot
 open Settings, so the Live drawer shows them both, read only. Choosing a
 project in the Review picker from the Library, Sky or a workspace opens
-Images for it, and Planning's own URL parameters (`directorProject` and the
-rest) stay behind, so a plan you had open does not follow you into review.
-An old `/director` link without a plan lands in the Library with its
-catalog scope; its `directorShow` and `directorSearch` become the Library's
-`show` and `q`.
+Images for it, and Planning's own URL parameter (`plan`) stays behind, so a
+plan you had open does not follow you into review.
+
+A workspace lives at `/plan?plan=<key>`. The key is the Target Scheduler
+GUID the plan's rigs share, so the same link opens the same plan on any
+PSF Guard instance that holds those databases. Planning's own plan id names
+a plan instead when the GUID cannot: a plan with no database, one whose
+rigs carry different GUIDs after an attach, or one whose GUID another plan
+also holds, since a detached project keeps its GUID. Any rig's GUID still
+finds its plan, and `plan=<database>:<row>` finds the plan of a project row
+or says why the row has none yet (a project without a GUID cannot be
+planned). Whatever the address, the page rewrites it to the plan's own key,
+so history and bookmarks stay right. A workspace open when a detach makes
+its GUID ambiguous stays on its plan; a fresh visit to such a GUID lists
+the plans that hold it. An address that names nothing says so and links
+back to the Library. Opening a plan from a Library row carries that row's
+database, so its targets and exposures editor is open on arrival. Old `/director` links forward: `directorProject` to its plan,
+`directorSource` with `project` to that row, and anything else to the
+Library with its scope, `directorShow` and `directorSearch` becoming the
+Library's `show` and `q`.
 
 **Live** is the operator's table of rigs. For each rig it shows the link
 state, from the server's own receipt times of the plugin's calls: *Online*
