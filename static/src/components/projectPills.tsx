@@ -16,6 +16,19 @@ export function StatePill({ state }: { state: number | null | undefined }) {
   return <span className={`library-pill library-pill-state is-state-${state}`}>{stateLabel(state)}</span>;
 }
 
+/** The state as a select, when the user may write the database: choosing
+ *  one writes the project row in Target Scheduler at once. */
+export function StateControl({ state, name, dbName, editable, pending = null, onChange }: { state: number | null | undefined; name: string; dbName: string; editable: boolean; pending?: number | null; onChange: (state: number) => void }) {
+  if (!editable || state === null || state === undefined) return <StatePill state={state} />;
+  // While a write is in flight the select shows the choice and takes no
+  // other: arrow keys on a closed select fire a change per step.
+  const shown = pending ?? state;
+  return <select className={`library-pill library-pill-state is-state-${shown}`} value={shown} aria-label={`State of ${name} in ${dbName}`} disabled={pending !== null}
+    title="Target Scheduler project state in this database" onChange={event => onChange(Number(event.target.value))}>
+    {[0, 1, 2, 3].map(value => <option key={value} value={value}>{stateLabel(value)}</option>)}
+  </select>;
+}
+
 /** Accepted frames against the goal, with a small bar; "Done" once the goal
  *  is met; the image count when there is no goal. */
 export function ProgressPill({ accepted, desired, totalImages, title }: { accepted: number; desired: number; totalImages: number; title?: string }) {

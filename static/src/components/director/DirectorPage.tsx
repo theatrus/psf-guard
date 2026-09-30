@@ -1,37 +1,20 @@
-import { useEffect } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import './DirectorPage.css';
 import DirectorProjectContext from './DirectorProjectContext';
-import DirectorPlans from './DirectorPlans';
 import ProjectWorkspace from './ProjectWorkspace';
-import DirectorDashboard from './DirectorDashboard';
-import { openSettings } from '../../utils/settingsIntent';
-import { useAccess } from '../../auth/access';
-import DirectorRigs from './DirectorRigs';
-import TemplateLibrary from './TemplateLibrary';
+import { libraryHref } from './libraryHref';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
 export default function DirectorPage() {
   const status = useDirectorStatus();
-  const { canWrite } = useAccess();
-  const [params, setParams] = useSearchParams();
-  const selected = params.get('directorView');
+  const [params] = useSearchParams();
   const available = status.data?.enabled && status.data.protocol_version === 1 && !!status.data.instance_id;
   const sourceSlug = params.get('directorSource');
   const workspaceProject = params.get('directorProject');
   const rawProject = params.get('project') ?? '';
   const projectId = /^\d+$/.test(rawProject) && Number.isSafeInteger(Number(rawProject)) ? Number(rawProject) : null;
-  // Older links named tabs; they all land on this one page now.
-  useEffect(() => {
-    if (!available || !selected) return;
-    if (selected !== 'projects') {
-      const next = new URLSearchParams(params);
-      next.set('directorView', 'projects'); next.delete('directorCatalog');
-      setParams(next, { replace: true });
-    }
-  }, [selected, available, params, setParams]);
   return (
     <main className="director-page">
       <header className="director-heading"><h1>Planning</h1><span className="director-preview">Experimental</span></header>
@@ -47,19 +30,7 @@ export default function DirectorPage() {
           ? projectId !== null && sourceSlug === params.get('db')
             ? <DirectorProjectContext key={`${status.data.instance_id}:${sourceSlug}:${projectId}`} instanceId={status.data.instance_id!} slug={sourceSlug} projectId={projectId} />
             : <p role="alert">Invalid project scope. <Link to="/">Library</Link></p>
-          : <>
-            <Link to="/">Library</Link>
-            <DirectorDashboard />
-            <DirectorPlans key={status.data.instance_id!} instanceId={status.data.instance_id!} />
-            {/* Editors reach rig setup and templates through Settings; a
-                read-only viewer cannot open Settings, so they read them here. */}
-            {canWrite ? <p className="director-muted director-settings-note">
-              Rig setup and the exposure template library are under Settings:{' '}
-              <button type="button" className="director-link-button" onClick={() => openSettings('rigs')}>Rigs</button>
-              {' and '}
-              <button type="button" className="director-link-button" onClick={() => openSettings('templates')}>Exposure templates</button>.
-            </p> : <><DirectorRigs /><TemplateLibrary /></>}
-          </>}
+          : <Navigate to={libraryHref(params)} replace />}
       </>}
     </main>
   );

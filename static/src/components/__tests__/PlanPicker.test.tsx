@@ -73,6 +73,6 @@ describe('Plan picker', () => {
     expect(screen.getByTestId('probe')).toHaveTextContent('|none');
     fireEvent.click(trigger);
     fireEvent.click(screen.getByRole('button', { name: /All plans/ }));
-    expect(screen.getByTestId('probe')).toHaveTextContent('/director?dbfilter=c925|none');
+    expect(screen.getByTestId('probe')).toHaveTextContent('/?dbfilter=c925|none');
   });
 });

@@ -370,3 +370,13 @@
   which are exposing, turns red when one has gone quiet, and opens the Live
   table from any view. Rig setup and the exposure template library moved to
   Settings › Rigs and Settings › Exposure templates.
+
+- The Library now holds every plan, and the Planning list page is gone. A
+  plan shot by several rigs shows its stage and a Planning button on its
+  outer pill, a lone project opens its plan from its own row, and plans
+  with nothing captured yet wait in their own section under the projects,
+  where New plan and rename live. A **Show** select (Active, Still to
+  shoot, Done, Draft, Inactive, Closed, and No database with Planning on)
+  and the search box narrow the Library and stay in the URL, and a row's
+  state pill changes the project's Target Scheduler state when the server
+  allows database changes. Old Planning links land in the Library.
