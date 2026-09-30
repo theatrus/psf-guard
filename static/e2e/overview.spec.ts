@@ -53,7 +53,7 @@ test('overview puts projects ahead of a compact catalog summary', async ({
   await expect(newestFrame.getByText('Newest', { exact: true })).toBeVisible();
   await expect(newestFrame).toHaveAttribute('aria-label', /Beta Field/);
   await expect(
-    alphaCard.getByRole('button', { name: 'Planning' })
+    alphaCard.getByRole('button', { name: 'Open the Project Alpha plan' })
   ).toBeVisible();
   await expect(
     alphaCard.getByRole('button', { name: 'Edit project' })

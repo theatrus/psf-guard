@@ -95,7 +95,7 @@ web server for Docker or a NAS, and as a standalone CLI.
 
 PSF Guard reads images in place; it does not copy the FITS library. Image
 folders can stay read-only. The database must be writable to save grades or
-planning changes. See [Import and Planning](docs/IMPORTING.md) for a new
+plan changes. See [Import and plans](docs/IMPORTING.md) for a new
 catalog, or the [documentation index](https://github.com/theatrus/psf-guard/blob/main/docs/README.md) for
 both paths.
 
@@ -126,8 +126,8 @@ Ctrl/Cmd+Click toggles one frame.
 
 </details>
 
-Each Library project has a **Planning** button that opens the project in
-Planning, where the workspace shows the project settings and every target's
+Each Library project has a **Plan** button that opens its plan's workspace,
+which shows the project settings and every target's
 catalog coordinates and exposure plans under **Databases**. The
 inherited Target Scheduler mapping stores RA as decimal hours and Dec as
 degrees. New plans reuse an exact matching profile template or create one with
@@ -227,7 +227,7 @@ guess why every request comes back 403. Neither block needs
 `--allow-database-management`: accepting a sync must not require the grant
 that lets a network caller name server filesystem paths.
 
-The project's **Databases** section in Planning lets you correct imported
+The workspace's **Databases** section lets you correct imported
 names, coordinates, limits, and desired counts. See the
 **[import and planning guide](docs/IMPORTING.md)** for database paths, grouping
 rules, backfill behavior, and CLI commands.

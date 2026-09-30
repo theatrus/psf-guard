@@ -391,3 +391,7 @@
   points now, lists the rigs beside the map (choosing one turns the map to
   it), and shows the full Live table under the timeline. A quiet rig is
   drawn dashed red. The drawer is gone.
+
+- The last of the Planning page is gone: the workspace is headed **Plan workspace**,
+  the Library's project cards offer **Plan** instead of Planning, and old
+  `/director` links still forward to the right place.

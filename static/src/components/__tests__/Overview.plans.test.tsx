@@ -70,7 +70,7 @@ describe('the Library with Planning', () => {
     const family = await screen.findByTestId('library-family');
     expect(await within(family).findByText('Planned')).toBeInTheDocument();
     // Members of a family share the outer pill's way to the plan.
-    expect(within(family).queryByRole('button', { name: /in Planning$/ })).not.toBeInTheDocument();
+    expect(within(family).queryAllByRole('button', { name: /^Open the .* plan$/ })).toHaveLength(1);
     fireEvent.click(within(family).getByRole('button', { name: 'Open the Heart Nebula plan' }));
     // The plan's address is the Target Scheduler GUID its rigs share.
     // The member it was opened from becomes the scope, so the workspace opens that database.
@@ -80,7 +80,7 @@ describe('the Library with Planning', () => {
   it('opens a lone project straight into its workspace and lists the plan nothing shoots', async () => {
     setDisplayPreferences(compact);
     mount('/');
-    fireEvent.click(await screen.findByRole('button', { name: 'Open Pelican in Planning' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open the Pelican plan' }));
     expect(screen.getByTestId('location')).toHaveTextContent('/plan?db=redcat&project=2&plan=guid-redcat-2');
   });
 

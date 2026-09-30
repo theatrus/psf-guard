@@ -98,8 +98,8 @@ split it chose.
 
 ## Live
 
-With Planning on, the **Live** chip in the controls (or the header's Live
-chip, from any view) draws each rig that reports to Planning on the map
+With Director on, the **Live** chip in the controls (or the header's Live
+chip, from any view) draws each rig that reports to Director on the map
 where it points now: a green ring while it exposes, gold while it does
 anything else, dashed red with "(quiet)" when it has stopped talking or
 "(old report)" when it talks but its last status is over ten minutes old.
