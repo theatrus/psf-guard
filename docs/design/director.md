@@ -80,7 +80,7 @@ untested integration requirements unchecked.
 | Shared engine | Merged `crates/director-core`: deterministic selection, program/recipe binding, preparation reducer, conservative altitude/horizon and meridian geometry; shared Rust/.NET fixtures. | Complete observing criteria, production Earth-orientation source, full operation inventory, duration learning and server simulation. |
 | Planning policy inheritance | Prototype engine inputs carry concrete priorities and preparation preferences. | Versioned global defaults, optional site/rig/project overrides, shared-core resolution and provenance UI are not implemented. Concrete input fields are not an inheritance model. |
 | Sidecar and local recovery | Merged `crates/director-ledger` and `crates/director-runtime`: schema-4 journal, capture/preparation outboxes, IPC 8/runtime 0.7.0, one-shot dispatch checks with exact latest-start deadlines, process crash/reopen tests; PSF Guard #464-487 and [#518](https://github.com/theatrus/psf-guard/pull/518). The current commissioning increment delivers capture receipts after restart and retains exact acknowledgements. | Preparation-feed delivery, pruning, grade feedback, assignment replacement and complete operator recovery. |
-| NINA native execution | Plugin [#18](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/18), [#19](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/19), [#22](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/22), [#23](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/23), [#24](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/24) and [#26](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/26) merged: transient native items, target context, complete horizon export, post-hook geometry checks and tested internal TS-style instruction slots with a compatibility matrix. Real nightly OmniSim probes captured three filtered FITS frames with correlated evidence. | Public TS-compatible session container and UI, all trigger/condition/hook contexts, native defaults, full autofocus/guiding/flip/calibration/safety recovery and continuous ownership integration. Probe uses fixture allocations and synthetic orientation evidence, not a server session. |
+| NINA native execution | Transient native items, target context, horizon export, post-hook geometry checks, seven TS-style instruction slots and a public session configuration editor. Native #64 rendering and server-program OmniSim probes cover three filtered FITS captures, session hook cadence, server outage, runtime restart and batch check-in. | Production session admission, all third-party hook contexts, native defaults, full autofocus/guiding/flip/calibration/safety recovery and continuous ownership integration. The probe still uses synthetic safety/orientation and test-only admission, not a production execution lease. |
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
 | Meta storage | Separate schema-14 store on by default beside the registry; separate hashed Director pairing/client records; rig inbox with receipts, cursors and live status; stable preview issuance; mutable rig profiles with optics/site/limits and plugin equipment reports; per-project framing and plan drafts; activation records, UUIDs, reviewed one-to-one database/rig binding, confirmed source project links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. Unambiguous prototype links retain rig IDs. | Conflict-resolution UI for ambiguous prototype rigs, project-level permissions, active revisions, allocation authority and progress projections. |
 | Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492): shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493): schema-3 intent persistence with validated immutable setup references. Plan drafts with an objective editor, per-rig template binding and core exposure defaults. | Depth/FOV/sampling compatibility, per-night feasibility and authoritative allocation remain open. |
@@ -735,7 +735,8 @@ conservative altitude and meridian windows from the resolved program target and
 canonical rig constraints. The N.I.N.A. adapter exports native horizon curves;
 the core does not read rig files. IPC and internal post-hook dispatch bindings
 are merged. Complete preference resolution, production time/orientation inputs,
-the public container and the combined server session remain unverified.
+and the production session owner remain unverified. The public editor and
+server-program simulator path are tested without production arming.
 
 ## Storage and authority
 
@@ -1043,16 +1044,51 @@ require an explicit local operating policy during commissioning; loss of a
 previously required source blocks new acquisition. Remote plans can tighten
 limits but cannot override native safety, flip handling or operator settings.
 
-This is a phase-2 requirement. Merged internal sequence items currently cover
-only a subset; the runtime preview does not expose this production container or
-the default-policy UI.
+This is a phase-2 requirement. Plugin
+[#31](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/31)
+exports a **Director Session
+configuration preview** with the seven named instruction editors, native
+triggers/conditions, grouped local-policy fields and display-only session status.
+Its execution remains blocked before user hooks; exporting the editor does not
+complete the production session gate.
+
+Session options schema 1 records duration and hook/save deadlines; required
+monitor versus attended policy; native horizon versus fixed minimum; altitude
+and meridian bounds; park-on-wait; Director versus sequence ownership for
+startup, slew/center, autofocus, guiding, dither, flip and shutdown; and offline,
+batch check-in and live-status preferences. These are requested policy, not
+equipment authority. Apart from the tested hook deadline, the production owner
+must still connect these fields. Attended policy requires fresh local consent;
+never deserialize it as permission to invent a Safe state.
+
+The internal hook owner snapshots settings, tracks target visits and confirmed
+capture IDs, records monotonic hook durations, and stops after failed/canceled
+boundaries. Waiting for grade assessment does not run target-complete hooks.
+Native exposure instructions inside hooks/trigger runners require an explicit
+reserved-capture adapter and are refused without one. Third-party instructions
+that hide hardware calls still need compatibility testing.
+
+Remaining interface work before this container can acquire:
+
+- Bind profile/vault pairing and the existing rig database to one acquisition
+  owner; prevent preview-runtime, re-pairing and competing-controller races.
+- Supply continuously checked native safety and fresh bounded Earth-orientation
+  evidence. Resolve native horizon/flip constraints without permissive fallbacks.
+- Admit and persist an immutable execution allocation, keeping pending and
+  unresolved attempts across restart/replacement. A program preview is not one.
+- Resolve operation ownership and capability support exactly once; reject
+  unsupported or duplicate native/plugin policies before arming.
+- Feed measured hook/preparation outcomes through a separately identified
+  preparation receipt feed. Capture `/checkin` is not a substitute.
+- Connect the display observations and check-in/status preferences to the
+  production owner, without making server availability a safety dependency.
 
 Director plugin [#26](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/26)
 adds internal seven-slot configuration and one-use native invocations. Cloning,
 JSON persistence, nested target context, inherited triggers/conditions,
 cancellation and failed/skipped child reporting have native tests. See the
 [TS compatibility matrix](https://github.com/theatrus/psf-guard-director-nina-plugin/blob/main/docs/native-capture.md#target-scheduler-compatible-instruction-slots).
-This is not the public container or its UI. The production coordinator still
+The new configuration preview exposes those slots; the production coordinator still
 owns slot cadence, policy ownership, exposure-in-hook admission and safe cleanup.
 In particular, TS's internal `AfterAllTargetsContainer` is labeled **After Each
 Target Instructions**; its name must not be interpreted as a session-end hook.
@@ -1223,7 +1259,7 @@ treat TS tables as the planner's internal schema.
 | --- | --- | --- |
 | Commissioning | Coordinator instance UUID, durable catalog UUID, bound rig UUID, local N.I.N.A. profile binding, permitted projects and scoped credentials. The database slug is a locator, not identity. | Current increment pairs exact coordinator/catalog/rig/profile/client identities with a separate credential store. Only program-read/checkin-write/status-write scopes; no project allocation or acquisition authority. |
 | Assignment check-in | Versioned immutable program, assignment ID/revision/validity, project/contribution/source-project identities, configuration/site/rig revisions, effective policy provenance, and offline authorization/budgets. Validate engine and contract compatibility before activation. | The server compiles a program from database activation; plugin #28 can inspect it and the current increment retains durable preview history. Immutable issuance, refresh/reconciliation and activation remain missing. |
-| Native execution | Rust selects and issues work. N.I.N.A. runs native items in target context with inherited triggers/conditions and the TS-compatible instruction slots. Each newly issued command/reservation has one native invocation. | Internal adapters and simulator loop exist; production session loop, complete options UI and hook lifecycle remain unfinished. |
+| Native execution | Rust selects and issues work. N.I.N.A. runs native items in target context with inherited triggers/conditions and the TS-compatible instruction slots. Each newly issued command/reservation has one native invocation. | Internal adapters, simulator loop, public configuration editor and hook boundary owner exist. Production acquisition admission, native defaults and safety/recovery integration remain unfinished. |
 | Local status | Session/ledger, database/rig/project/target/goal IDs, assignment revision, operation and monotonic elapsed time, wait reason, local safety, connectivity, last successful check-in and queue depth. | Runtime Start/Stop status exists; acquisition session status contract/stream remains to be implemented. |
 | Central reporting | Coalesced live status is separate from durable capture/preparation receipts. Network errors update connectivity only; they do not fail an otherwise authorized local exposure or erase evidence. `POST /rigs/{rig}/status` and `GET /rigs/status` exist, with contact records and the Live table. | Plugin sender. |
 | Batch reconciliation | Bounded independent event pages, exact feed cursors, idempotent acknowledgements, grading/configuration revisions and replacement assignment proposal. Manual, sequencer and automatic check-ins use the same implementation. `POST /rigs/{rig}/checkin` stores pages once and acknowledges contiguous cursors. | Current increment delivers capture pages and persists scoped cursors without deleting journal evidence. Preparation-feed delivery, production entry points, grade application and replacement assignment proposal remain open. |
@@ -1406,9 +1442,9 @@ Keep this separate from the immutable-program selection policy in Rust.
 Delivery order from this audit: fix immutable issuance and activated inputs;
 settle explicit equipment/template mapping; connect read-only plugin intake;
 add acknowledged checkpoint/replacement accounting; then connect the guarded
-production session and familiar TS-compatible container/UI. The seven slot
-helpers are already tested, but do not provide session cadence or automatic
-operation ownership by themselves. Before enabling acquisition, test a real
+production session. The public configuration editor and seven-slot cadence
+owner are now tested; automatic operation ownership remains disconnected.
+Before enabling acquisition, test a real
 server program with the NINA simulators, then repeat through expiry, lost
 network, restart, saved-but-ungraded captures and batch reconnect. Existing
 separate server and simulator tests do not cover this combined gate.
@@ -1872,7 +1908,8 @@ the failure stays in the child process, outside N.I.N.A. The sidecar alone is no
 a plugin. The separate development host bundles this tested executable and has
 passed real N.I.N.A. runtime-lifecycle smoke tests. Signed release provenance and
 full coordinator reconciliation remain gates. Internal native dispatch and local
-journal recovery are implemented; the public session container is not.
+journal recovery are implemented. The public session editor is implemented,
+but its production acquisition entry point remains explicitly blocked.
 The existing Sync plugin is unchanged.
 
 #### Execution program bindings
