@@ -6,11 +6,16 @@
 
 ## Added
 
+- Director's experimental allocation API supports a one-shot executor launch
+  bound to the paired client and local ledger. A retry or lost local database
+  cannot launch the same allocation again. Restart recovery remains a separate,
+  unfinished reconciliation workflow.
+
 - Director's experimental API can admit an immutable first allocation for a
   specific paired client. Retrying or restarting returns the same plan and
   attempt budgets; expiry, re-pairing and changed previews cannot replace it.
-  Admission UI, successor reconciliation and public NINA acquisition remain
-  unfinished.
+  Admission UI and successor reconciliation remain unfinished. The separate
+  Director plugin can opt in to experimental prepared-target acquisition.
 
 - Director program previews retain their identity and validity across retries
   and server restarts, fit the shared geometry core's 24-hour limit, and report

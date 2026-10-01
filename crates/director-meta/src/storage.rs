@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 15;
+const SCHEMA_VERSION: i32 = 16;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -43,6 +43,7 @@ impl MetaStore {
         super::templates::create_table(&tx)?;
         super::program_issue::create_table(&tx)?;
         super::allocation::create_table(&tx)?;
+        create_execution_start(&tx)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         conn.close().map_err(|(_, error)| Error::Sqlite(error))?;
@@ -102,6 +103,9 @@ impl MetaStore {
             }
             if version < 15 {
                 super::allocation::create_table(&tx)?;
+            }
+            if version < 16 {
+                create_execution_start(&tx)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
@@ -165,6 +169,11 @@ fn connect(path: &Path, read_only: bool) -> Result<Connection, Error> {
     let conn = Connection::open_with_flags(path, flags | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
     conn.busy_timeout(Duration::from_secs(5))?;
     Ok(conn)
+}
+
+fn create_execution_start(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch("CREATE TABLE execution_start(rig_id TEXT PRIMARY KEY NOT NULL REFERENCES execution_allocation(rig_id), allocation_id TEXT UNIQUE NOT NULL, ledger_id TEXT UNIQUE NOT NULL, started_at_ms INTEGER NOT NULL);")?;
+    Ok(())
 }
 
 fn validate(conn: &Connection) -> Result<Uuid, Error> {
@@ -257,6 +266,12 @@ fn validate(conn: &Connection) -> Result<Uuid, Error> {
     if version >= 15 {
         conn.prepare("SELECT rig_id,allocation_id,payload FROM execution_allocation LIMIT 0")
             .map_err(|_| Error::CorruptDatabase)?;
+    }
+    if version >= 16 {
+        conn.prepare(
+            "SELECT rig_id,allocation_id,ledger_id,started_at_ms FROM execution_start LIMIT 0",
+        )
+        .map_err(|_| Error::CorruptDatabase)?;
     }
     let id: String = conn.query_row(
         "SELECT instance_id FROM meta WHERE singleton=1",

@@ -48,6 +48,82 @@ fn fixture(path: &std::path::Path) -> (MetaStore, Allocation) {
 }
 
 #[test]
+fn start_is_one_shot_even_after_restart_or_with_the_same_ledger() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let (mut store, a) = fixture(&path);
+    store.admit_allocation(&a).unwrap();
+    let ledger = Uuid::new_v4();
+    assert!(store
+        .start_allocation(a.rig_id, a.allocation_id, Uuid::new_v4(), ledger, 1001)
+        .is_err());
+    store
+        .start_allocation(a.rig_id, a.allocation_id, a.client_id, ledger, 1001)
+        .unwrap();
+    drop(store);
+    let mut store = MetaStore::open(&path).unwrap();
+    for id in [ledger, Uuid::new_v4()] {
+        assert!(matches!(
+            store.start_allocation(a.rig_id, a.allocation_id, a.client_id, id, 1002),
+            Err(Error::Conflict)
+        ));
+    }
+}
+
+#[test]
+fn migration_from_fifteen_preserves_grant_and_enables_only_one_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let (mut store, a) = fixture(&path);
+    store.admit_allocation(&a).unwrap();
+    drop(store);
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("DROP TABLE execution_start; PRAGMA user_version=15;")
+        .unwrap();
+    let mut store = MetaStore::open(&path).unwrap();
+    assert_eq!(store.allocation(a.rig_id).unwrap(), Some(a.clone()));
+    store
+        .start_allocation(a.rig_id, a.allocation_id, a.client_id, Uuid::new_v4(), 1001)
+        .unwrap();
+    assert!(matches!(
+        store.start_allocation(a.rig_id, a.allocation_id, a.client_id, Uuid::new_v4(), 1002),
+        Err(Error::Conflict)
+    ));
+}
+
+#[test]
+fn simultaneous_launches_consume_only_one_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let (mut store, a) = fixture(&path);
+    store.admit_allocation(&a).unwrap();
+    drop(store);
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let handles: Vec<_> = (0..2)
+        .map(|_| {
+            let path = path.clone();
+            let a = a.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let mut store = MetaStore::open(&path).unwrap();
+                barrier.wait();
+                store.start_allocation(a.rig_id, a.allocation_id, a.client_id, Uuid::new_v4(), 1001)
+            })
+        })
+        .collect();
+    let outcomes: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    assert_eq!(outcomes.iter().filter(|r| r.is_ok()).count(), 1);
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|r| matches!(r, Err(Error::Conflict)))
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn allocation_is_immutable_durable_and_revocation_does_not_erase_outstanding_work() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("meta.sqlite");
@@ -115,7 +191,7 @@ fn migration_from_fourteen_preserves_identity_and_rolls_back_failure() {
     let id = store.instance_id();
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("DROP TABLE execution_allocation; PRAGMA user_version=14; CREATE VIEW execution_allocation AS SELECT 1 AS rig_id;").unwrap();
+    conn.execute_batch("DROP TABLE execution_start; DROP TABLE execution_allocation; PRAGMA user_version=14; CREATE VIEW execution_allocation AS SELECT 1 AS rig_id;").unwrap();
     assert!(MetaStore::open(&path).is_err());
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))

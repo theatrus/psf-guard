@@ -98,6 +98,9 @@ pub(in crate::server) async fn authorize(
             *rig
         }
         ["", "director", "v1", "rigs", rig, "checkin" | "status"] if method == Method::POST => *rig,
+        ["", "director", "v1", "rigs", rig, "allocation", "start"] if method == Method::POST => {
+            *rig
+        }
         _ => return Err(denied()),
     };
     let rig = Uuid::parse_str(rig)
@@ -125,7 +128,7 @@ pub(in crate::server) async fn authorize(
     }
     // Existing credentials gain no blanket allocation capability. Only the
     // exact client explicitly selected by an operator may fetch its grant.
-    if path.ends_with("/allocation") {
+    if path.ends_with("/allocation") || path.ends_with("/allocation/start") {
         let allocation = service
             .query(move |store| store.allocation(rig))
             .await
