@@ -80,7 +80,7 @@ untested integration requirements unchecked.
 | Shared engine | Merged `crates/director-core`: deterministic selection, program/recipe binding, preparation reducer, conservative altitude/horizon and meridian geometry; shared Rust/.NET fixtures. | Complete observing criteria, production Earth-orientation source, full operation inventory, duration learning and server simulation. |
 | Planning policy inheritance | Prototype engine inputs carry concrete priorities and preparation preferences. | Versioned global defaults, optional site/rig/project overrides, shared-core resolution and provenance UI are not implemented. Concrete input fields are not an inheritance model. |
 | Sidecar and local recovery | Merged `crates/director-ledger` and `crates/director-runtime`: schema-4 journal, capture/preparation outboxes, IPC 8/runtime 0.7.0, one-shot dispatch checks with exact latest-start deadlines, process crash/reopen tests; PSF Guard #464-487 and [#518](https://github.com/theatrus/psf-guard/pull/518). The current commissioning increment delivers capture receipts after restart and retains exact acknowledgements. | Preparation-feed delivery, pruning, grade feedback, assignment replacement and complete operator recovery. |
-| NINA native execution | Transient native items, target context, horizon export, post-hook geometry checks, seven TS-style instruction slots and a public session configuration editor. Native #64 rendering and server-program OmniSim probes cover three filtered FITS captures, session hook cadence, server outage, runtime restart and batch check-in. | Production session admission, all third-party hook contexts, native defaults, full autofocus/guiding/flip/calibration/safety recovery and continuous ownership integration. The probe still uses synthetic safety/orientation and test-only admission, not a production execution lease. |
+| NINA native execution | Transient native items, target context, horizon export, post-hook geometry checks, seven TS-style instruction slots and a public session configuration editor. Native #64 rendering and server-program OmniSim probes cover three filtered FITS captures, session hook cadence, server outage, runtime restart and batch check-in. Local safety broadcasts/watchdog and dated NINA Earth-orientation cache are now exercised in that probe. | Production session admission, all third-party hook contexts, native defaults, full autofocus/guiding/flip/calibration/safety recovery and continuous ownership integration. Native safety simulation and test-only admission do not constitute a production execution lease. |
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
 | Meta storage | Separate schema-14 store on by default beside the registry; separate hashed Director pairing/client records; rig inbox with receipts, cursors and live status; stable preview issuance; mutable rig profiles with optics/site/limits and plugin equipment reports; per-project framing and plan drafts; activation records, UUIDs, reviewed one-to-one database/rig binding, confirmed source project links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. Unambiguous prototype links retain rig IDs. | Conflict-resolution UI for ambiguous prototype rigs, project-level permissions, active revisions, allocation authority and progress projections. |
 | Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492): shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493): schema-3 intent persistence with validated immutable setup references. Plan drafts with an objective editor, per-rig template binding and core exposure defaults. | Depth/FOV/sampling compatibility, per-night feasibility and authoritative allocation remain open. |
@@ -1072,8 +1072,9 @@ Remaining interface work before this container can acquire:
 
 - Bind profile/vault pairing and the existing rig database to one acquisition
   owner; prevent preview-runtime, re-pairing and competing-controller races.
-- Supply continuously checked native safety and fresh bounded Earth-orientation
-  evidence. Resolve native horizon/flip constraints without permissive fallbacks.
+- Bind the tested local safety interlock and dated Earth-orientation reader to
+  the production owner. Resolve native horizon/flip constraints without
+  permissive fallbacks, and define conditions validity for long operations.
 - Admit and persist an immutable execution allocation, keeping pending and
   unresolved attempts across restart/replacement. A program preview is not one.
 - Resolve operation ownership and capability support exactly once; reject
@@ -1357,9 +1358,10 @@ loopback server/catalog and isolated NINA nightly #64 profile. Its operator-only
 setup reports equipment and activates three one-frame filter goals; the paired
 client pulls and caches that actual program. The harness then stops the server,
 checks that it is unreachable, and exercises native captures, local sidecar
-restart, server restart, receipt delivery and duplicate replay. Synthetic safety
-and Earth-orientation inputs are confined to the simulator. No production
-container or permission to acquire is added by this test.
+restart, server restart, receipt delivery and duplicate replay. Its safety input
+now comes through NINA's built-in safety simulator and its orientation input
+comes from NINA's local IERS cache. No production container or permission to
+acquire is added by this test.
 
 This combined test passed on September 30 with NINA 3.3.0.1064, runtime 0.7.0 /
 IPC 8: three correlated FITS captures, seven native preparation operations,
@@ -1374,13 +1376,51 @@ The next user-facing session must still supply:
 
 - explicit local start/stop and ownership, with a TS-style container and seven
   native instruction slots;
-- real safety and Earth-orientation inputs, safe interruption and recovery;
+- production binding of the tested safety/orientation adapters, safe interruption
+  and recovery;
 - reviewed equipment-report permission for paired clients (currently operator
   only), without granting them general database-management access;
 - capture/preparation accounting before any successor assignment, including
   uncertain work, rejects and images awaiting grading;
 - bounded background check-in and coalesced live status, neither of which may
   block native safety or discard offline receipts.
+
+#### Local evidence increment (September 30)
+
+Plugin [#32](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/32)
+adds two internal native evidence adapters, exercised in the
+isolated nightly host, not yet connected to public acquisition admission:
+
+- The safety interlock binds one profile and monitor. Only device broadcasts
+  renew evidence. A 250 ms local watchdog checks connection, identity and age;
+  unsafe/disconnected/stale evidence cancels the owner. Freshness is three
+  polling intervals, at least five seconds; polling above ten seconds is refused.
+  Cancellation remains latched after Safe returns. Profile changes invalidate
+  even unarmed owners; resumed broadcasts after sleep and clock regression
+  cannot hide a stale interval. Cancellation callbacks cannot block the monitor
+  lock or throw through NINA's broadcast thread.
+- The orientation reader opens NINA's IERS SQLite cache read-only. It requires
+  three consecutive dated rows bracketing an assignment no longer than 24 hours,
+  checks MJD and physical ranges, and converts pole arcseconds to radians.
+  Missing data fails without network access, migration, or zero defaults.
+  IPC 8 has one fixed EOP sample: use the middle row only when observed adjacent
+  drift is at most 2 ms UT1 and 0.01 arcseconds per pole component. This is a daily
+  approximation, not a proof of intra-day error. Retain sample provenance and
+  immutable ledger constraints; time-series interpolation needs a future contract.
+
+The updated server-plan probe uses the built-in NINA safety simulator and actual
+local IERS rows. It retains all three-capture/outage/restart/check-in checks and
+interrupts a running native Wait instruction when the monitor becomes unsafe.
+Safe recovery cannot revive the interrupted owner. All 612 plugin tests passed.
+The smoke guide records the final native evidence path. No new Rust, server or
+frontend behavior is claimed by this documentation update.
+
+Before production use, define the shared core's conditions horizon separately
+from monitor freshness. A fresh Safe observation does not forecast an entire
+long exposure. Keep continuous native cancellation while an operation runs, and
+preserve uncertain captures for recovery. Immutable server execution allocation,
+equipment-report permission, exclusive local ownership, automatic shutdown and
+explicit restart admission remain open. The public container stays blocked.
 
 The historical findings below explain those remaining boundaries; the immutable
 preview, filter fidelity and catalog eligibility defects are corrected above.
