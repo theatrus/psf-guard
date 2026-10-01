@@ -106,7 +106,7 @@ fn schema_ten_migrates_without_changing_coordinator_or_inbox() {
     drop(store);
     let conn = Connection::open(&path).unwrap();
     conn.execute_batch(
-        "DROP TABLE program_issue; DROP TABLE rig_contact; DROP TABLE director_client; DROP TABLE director_pairing; PRAGMA user_version=10;",
+        "DROP TABLE execution_allocation; DROP TABLE program_issue; DROP TABLE rig_contact; DROP TABLE director_client; DROP TABLE director_pairing; PRAGMA user_version=10;",
     )
     .unwrap();
     let store = MetaStore::open(&path).unwrap();
@@ -115,7 +115,7 @@ fn schema_ten_migrates_without_changing_coordinator_or_inbox() {
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        14
+        15
     );
     conn.prepare("SELECT * FROM rig_event").unwrap();
 }

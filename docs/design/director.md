@@ -82,13 +82,13 @@ untested integration requirements unchecked.
 | Sidecar and local recovery | Merged `crates/director-ledger` and `crates/director-runtime`: schema-4 journal, capture/preparation outboxes, IPC 8/runtime 0.7.0, one-shot dispatch checks with exact latest-start deadlines, process crash/reopen tests; PSF Guard #464-487 and [#518](https://github.com/theatrus/psf-guard/pull/518). The current commissioning increment delivers capture receipts after restart and retains exact acknowledgements. | Preparation-feed delivery, pruning, grade feedback, assignment replacement and complete operator recovery. |
 | NINA native execution | Transient native items, target context, horizon export, post-hook geometry checks, seven TS-style instruction slots and a public session configuration editor. Native #64 rendering and server-program OmniSim probes cover three filtered FITS captures, session hook cadence, server outage, runtime restart and batch check-in. Local safety broadcasts/watchdog and dated NINA Earth-orientation cache are now exercised in that probe. | Production session admission, all third-party hook contexts, native defaults, full autofocus/guiding/flip/calibration/safety recovery and continuous ownership integration. Native safety simulation and test-only admission do not constitute a production execution lease. |
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
-| Meta storage | Separate schema-14 store on by default beside the registry; separate hashed Director pairing/client records; rig inbox with receipts, cursors and live status; stable preview issuance; mutable rig profiles with optics/site/limits and plugin equipment reports; per-project framing and plan drafts; activation records, UUIDs, reviewed one-to-one database/rig binding, confirmed source project links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. Unambiguous prototype links retain rig IDs. | Conflict-resolution UI for ambiguous prototype rigs, project-level permissions, active revisions, allocation authority and progress projections. |
+| Meta storage | Separate schema-15 store on by default beside the registry; hashed pairing/client records; rig receipts, cursors and live status; stable previews and immutable first allocations; rig profiles, equipment reports, framing/plan drafts and activations; reviewed database/rig bindings, confirmed source project links, CAS renames, immutable sites/setups, transactional migrations and backup/restore. Unambiguous prototype links retain rig IDs. | Conflict-resolution UI for ambiguous prototype rigs, project-level permissions, active revisions, successor allocation accounting and progress projections. |
 | Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492): shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493): schema-3 intent persistence with validated immutable setup references. Plan drafts with an objective editor, per-rig template binding and core exposure defaults. | Depth/FOV/sampling compatibility, per-night feasibility and authoritative allocation remain open. |
 | Project framing wizard | Framing view in the project workspace: survey backgrounds from N.I.N.A.'s HiPS list, name resolution through CDS Sesame, interactive center, angle and zoom, mosaic rows/columns/overlap, per-rig footprints from rig profiles, draft editing with compare-and-set, and a visibility panel with tonight's altitude chart, custom horizon, Moon and darkness like N.I.N.A.'s framing assistant, plus a week of nights per rig. | Reference images with WCS, layer comparison, offline region cache, rotation feasibility per rig. |
 | Catalog discovery | [#498](https://github.com/theatrus/psf-guard/pull/498) merged: operator-scoped read-only project/profile evidence from registered TS-compatible catalogs, with bounded results and invalid/duplicate identity reports. | Discovery does not infer rig ownership or read image history. |
 | Catalog adoption | [#502](https://github.com/theatrus/psf-guard/pull/502) merged explicit durable lineage; [#503](https://github.com/theatrus/psf-guard/pull/503) merged operator preview/apply, exact identity matching, stale-review refusal and interrupted-write recovery. [#506](https://github.com/theatrus/psf-guard/pull/506) merged the reviewed mapping UI and read-only inventory, with real-server browser tests. | Independent forks, historical-image attribution, contribution accounting and acquisition authorization remain separate work. |
 | Operator API and UI | The Library lists plans (`GET /plans`: links, stage, per-rig state and capture dates) as its own rows and families, with plans that have captured nothing in a section below; the header's scope (one project picker, Workspace, then a rig and target switcher for Images and Sequence) opens a plan's workspace at `/plan?plan=<TS GUID or plan id>`, which holds framing, plan and activation over the Library's existing target/exposure editor; rig setup and the template library are Settings tabs; Live is drawn on the Sky with the table under it. The Planning list page, the identity lists and the Catalogs tab are retired; old `/director` links redirect. Desktop/mobile real-server tests cover two databases contributing to one project and return navigation. | Pairing-code management UI and acquisition control. The Live table shows connectivity, last report, contact ages and assignments per rig. UI tests are not equipment tests. |
-| Program delivery | #528 adds `GET /rigs/{rig}/program`, compiling activated rig rows and reported configuration into core Program plus identity links and rig context. Plugin #28 adds bounded, read-only HTTP preview intake with exact scope/configuration/link checks and immutable-identity drift detection. The current commissioning increment adds an atomic, identity-bound durable preview cache; expired history is not renewed authorization. | Immutable issued allocations, explicit filter mapping, progress-preserving refresh and acquisition commissioning. The current compiler response must not yet arm acquisition; see the program-intake audit below. |
+| Program delivery | #528 adds `GET /rigs/{rig}/program`, compiling activated rig rows and reported configuration into core Program plus identity links and rig context. Plugin #28 adds bounded, read-only preview intake. First-allocation admission now freezes an operator-reviewed snapshot for one paired client/profile; the plugin validates and durably caches it separately from previews. | Admission UI, successor accounting, progress-preserving refresh and acquisition commissioning. A preview remains non-executable; a stored allocation still requires exclusive local ownership, safety and ledger recovery. |
 | Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
 | Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. #530 adds server receipt ingestion/contiguous acknowledgements and coalesced status routes; #531 shows reported rig status in Director. The current commissioning increment adds separate scoped pairing and a bounded capture sender with durable, identity-bound cursors, tested against a real local server after a native simulator run. | Preparation feed, production background/status delivery, grade feedback, offline authorization lifecycle, manual/sequence batch reconcile and replacement activation remain missing. |
 | End-to-end lifecycle | Core, process, native simulator and isolated management HTTP/UI tests exist separately. | No PSF Guard allocation -> real NINA simulator acquisition -> central telemetry/grade -> batch reconciliation/replan test. TS/Sync/Chatstronomy coexistence gates remain open. |
@@ -1418,9 +1418,69 @@ frontend behavior is claimed by this documentation update.
 Before production use, define the shared core's conditions horizon separately
 from monitor freshness. A fresh Safe observation does not forecast an entire
 long exposure. Keep continuous native cancellation while an operation runs, and
-preserve uncertain captures for recovery. Immutable server execution allocation,
+preserve uncertain captures for recovery. Successor allocation accounting,
 equipment-report permission, exclusive local ownership, automatic shutdown and
 explicit restart admission remain open. The public container stays blocked.
+
+#### Immutable first-allocation admission
+
+Meta schema 15 adds a single retained execution allocation per rig. An
+interactive editor (or the explicitly trusted local operator) calls
+`POST /rigs/{rig}/allocation` with `coordinator_instance_id`, `catalog_id`,
+`allocation_id` (caller UUID for retry), `client_id`, and the reviewed
+`preview_revision`. The handler recompiles/checks that revision, verifies the
+live catalog/rig/client/profile binding, and freezes the full envelope. The
+shared core validates the program. The new assignment is named
+`allocation-{allocation_id}`, distinct from the preview ledger identity.
+
+The response has `schema_version: 1`, those scope IDs plus `profile_id`,
+`admitted_at_ms`, `preview_revision`, and `snapshot` (the complete frozen program
+envelope with a new revision). `GET /rigs/{rig}/allocation` takes the same
+coordinator/catalog query parameters as program preview. Both responses are
+`no-store`. Existing pairing credentials receive no blanket allocation grant:
+only the client explicitly selected by the operator can fetch it, using its
+normal bearer token and profile header. Other clients, even a second pairing
+for the same profile, are refused. Paired clients cannot POST admission.
+
+Check-in/status `program_revision` continues to name the source preview revision
+for change hints, not the new allocation snapshot revision. Reports can include
+allocation identity/revision in their status payload, and capture events retain
+the allocated assignment identity. A plan-change hint never replaces a grant.
+
+Admission is transactional and idempotent. An exact retry returns the original
+snapshot even after catalog/preview changes. Any different allocation or client
+conflicts. Expiry, token revocation, re-pairing, restart, backup/restore and grade
+delivery do not remove the record, extend validity, or replenish counters.
+Pre-existing legacy receipt feeds also prevent first admission because their
+outstanding work has not been reconciled. There is deliberately no replacement,
+delete, renewal or successor-allocation endpoint yet. Do not clear this table to
+start another night; implement explicit close/reconciliation first.
+
+The plugin has separate strict allocation intake and an atomic origin/binding/
+client-scoped cache. It checks all identities, configuration, ancestry links,
+size and validity. Cache storage rejects replacement even when the old grant
+expired. Configuration changes do not select a fresh empty cache. HTTP failures,
+especially revocation, never silently fall back to disk. The caller must choose
+offline continuation explicitly under an admitted session's policy; revocation
+cannot retroactively stop a disconnected rig, so validity and local stop rules
+still apply.
+
+This is allocation delivery, not the full production ownership protocol. The
+public container remains blocked. Remaining gates include the operator admission
+UI, paired equipment reporting, one durable local ledger/owner per allocation,
+protection against lost or copied local ledger state, clock continuity, native
+automatic operation policies and uncertain-work reconciliation before a
+successor grant. The simulator now acquires from this issued snapshot, verifies
+its offline cache, and checks that server restart and receipt delivery leave it
+unchanged while the ordinary preview updates its pending counts.
+
+The September 30 native gate passed with NINA 3.3.0.1064, runtime 0.7.0 / IPC 8,
+the schema-15 local server and ASCOM OmniSim: three correlated FITS captures from
+`allocation-4638609a-6b14-4bee-85b9-0ffdd9ec9ba3`, offline ledger restart, six
+acknowledged reservation/save events, unchanged allocation after server restart
+and delivery, correct preview-change hints and latched native safety cancellation.
+The plugin smoke guide holds the evidence path. These are local results, not
+hosted CI or public unattended-acquisition acceptance.
 
 The historical findings below explain those remaining boundaries; the immutable
 preview, filter fidelity and catalog eligibility defects are corrected above.

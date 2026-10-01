@@ -94,7 +94,9 @@ pub(in crate::server) async fn authorize(
         .ok_or_else(denied)?;
     let segments: Vec<_> = path.split('/').collect();
     let rig = match segments.as_slice() {
-        ["", "director", "v1", "rigs", rig, "program"] if method == Method::GET => *rig,
+        ["", "director", "v1", "rigs", rig, "program" | "allocation"] if method == Method::GET => {
+            *rig
+        }
         ["", "director", "v1", "rigs", rig, "checkin" | "status"] if method == Method::POST => *rig,
         _ => return Err(denied()),
     };
@@ -113,6 +115,7 @@ pub(in crate::server) async fn authorize(
     let service = enabled(state).map_err(|e| no_store(e.into_response()))?;
     let hash = hash_token(secret);
     let client = service
+        .clone()
         .query(move |store| store.client_for_token(&hash))
         .await
         .map_err(|e| no_store(e.into_response()))?
@@ -120,15 +123,30 @@ pub(in crate::server) async fn authorize(
     if client.rig_id != rig || client.profile_id != profile {
         return Err(denied());
     }
+    // Existing credentials gain no blanket allocation capability. Only the
+    // exact client explicitly selected by an operator may fetch its grant.
+    if path.ends_with("/allocation") {
+        let allocation = service
+            .query(move |store| store.allocation(rig))
+            .await
+            .map_err(|e| no_store(e.into_response()))?
+            .ok_or_else(denied)?;
+        if allocation.client_id != client.client_id
+            || allocation.profile_id != profile
+            || allocation.catalog_id != client.catalog_id
+        {
+            return Err(denied());
+        }
+    }
     Ok(true)
 }
 
-fn operator(access: &RequestAccess) -> Result<(), Box<Response>> {
+pub(super) fn operator(access: &RequestAccess) -> Result<(), Box<Response>> {
     if access.api_token || access.role != AccessRole::ReadWrite {
         return Err(Box::new(no_store((
             StatusCode::FORBIDDEN,
             Json(ApiResponse::<()>::error(
-                "Director pairing management requires an interactive editor session".into(),
+                "Director client management requires an interactive editor session".into(),
             )),
         ))));
     }
