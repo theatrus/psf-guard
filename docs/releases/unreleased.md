@@ -6,6 +6,12 @@
 
 ## Added
 
+- Director's experimental API can admit an immutable first allocation for a
+  specific paired client. Retrying or restarting returns the same plan and
+  attempt budgets; expiry, re-pairing and changed previews cannot replace it.
+  Admission UI, successor reconciliation and public NINA acquisition remain
+  unfinished.
+
 - Director program previews retain their identity and validity across retries
   and server restarts, fit the shared geometry core's 24-hour limit, and report
   unsupported template settings instead of silently substituting camera values.

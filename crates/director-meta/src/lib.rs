@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, path::Path, time::Duration};
 pub use uuid::Uuid;
 pub mod activation;
+pub mod allocation;
 pub mod catalog;
 pub mod catalog_rig;
 pub mod client;

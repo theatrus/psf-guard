@@ -225,7 +225,7 @@ async fn fixture() -> (TempDir, Arc<AppState>, Router, Uuid, Uuid, Uuid) {
     (dir, state.clone(), router(state), instance, catalog, rig)
 }
 
-async fn credential(
+pub(super) async fn credential(
     app: &Router,
     instance: Uuid,
     catalog: Uuid,
@@ -246,7 +246,7 @@ async fn credential(
     paired["data"].clone()
 }
 
-async fn client_call(
+pub(super) async fn client_call(
     app: &Router,
     method: &str,
     path: &str,

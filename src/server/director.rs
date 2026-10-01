@@ -21,6 +21,7 @@ use std::{
 };
 use tokio::sync::Semaphore;
 mod activation;
+mod allocation;
 mod catalog_adoption;
 mod catalog_discovery;
 mod catalog_rig;
@@ -472,6 +473,10 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .route("/rigs/profiles", get(framing::rig_profiles))
         .route("/catalogs/{slug}/templates", get(plan::templates))
         .route("/rigs/{rig}/program", get(program::pull))
+        .route(
+            "/rigs/{rig}/allocation",
+            get(allocation::get_allocation).post(allocation::admit),
+        )
         .route(
             "/rigs/{rig}/checkin",
             axum::routing::post(checkin::check_in).layer(DefaultBodyLimit::max(
