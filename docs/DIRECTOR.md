@@ -295,8 +295,11 @@ For subsequent requests send `Authorization: Bearer <token>` and exactly one
 exact methods/routes are allowed, for the paired rig:
 
 - `GET /api/director/v1/rigs/{rig_id}/program`
+- `GET /api/director/v1/rigs/{rig_id}/allocation`
+- `POST /api/director/v1/rigs/{rig_id}/allocation/start`
 - `POST /api/director/v1/rigs/{rig_id}/checkin`
 - `POST /api/director/v1/rigs/{rig_id}/status`
+- `POST /api/director/v1/rigs/{rig_id}/equipment-reports`
 
 Their existing coordinator/catalog query or body fields are still required and
 validated. A ledger already reported by one rig cannot accept any sequence from
@@ -304,6 +307,41 @@ another rig, even if that rig has its own valid credential. Equipment registrati
 planning edits and operator-wide status remain
 operator-managed. A profile header asserts the profile context; possession of the
 bearer token remains the authentication proof. It is not equipment attestation.
+
+### Reviewing native equipment evidence
+
+The Director Session's **Report equipment** command submits the connected
+camera, filter mapping and the configuration fingerprint for that session's
+native horizon/meridian policy. Acquisition can remain disabled. The report is
+staged, not applied: it cannot replace equipment setup, activate a plan, create
+an allocation or grant a launch. Existing pairing scopes remain unchanged;
+staging this evidence is limited reporting, not operator authority.
+
+All routes below are relative to `/api/director/v1`:
+
+- Paired `POST /rigs/{rig}/equipment-reports`: strict body fields are
+  `coordinator_instance_id`, `catalog_id`, `report_id` (fresh UUID),
+  `observed_at_ms`, `configuration`, and complete `filter_names`.
+- Operator `GET /rigs/{rig}/equipment-reports`: latest report per live paired
+  client, including its client/catalog/rig/profile tuple, observation and receipt
+  times, and nullable `accepted_revision` / `accepted_from_revision`.
+- Interactive operator `POST /rigs/{rig}/equipment-reports/{client}/accept`:
+  `coordinator_instance_id`, `catalog_id`, `report_id`, `expected_revision`
+  (current rig profile revision, or zero). Returns the saved `RigProfile`.
+
+Acceptance preserves optics, site, horizon, limits, sky quality and Sync peer.
+It compares the exact report UUID and profile revision atomically. A report
+older than fifteen minutes, a changed pairing, or an outstanding allocation is
+refused with `409`; no allocation is replaced or refunded. Older observations
+cannot replace newer reports. Repeating an identical report preserves its
+original receipt time; retrying an acceptance is safe only while that accepted
+profile revision remains current. Revocation removes pending reports, not the
+operator-approved profile. A receipt is not a readiness or acquisition permit.
+
+The review UI is not implemented yet. These endpoints are the handoff for the
+rig setup screen; show the exact paired profile and report age, compare pending
+and active capabilities, and require explicit acceptance. Do not auto-accept
+on refresh, pairing or activation. Keep allocation admission a separate action.
 
 An operator lists nonsecret client records with `GET /rigs/{rig_id}/clients` and
 revokes with `DELETE /rigs/{rig_id}/clients/{client_id}` (both relative to the API
@@ -709,7 +747,7 @@ holds when the network is away.
 | GET | `/rigs/{rig}/program?coordinator_instance_id=&catalog_id=` | The rig's current program. Send `If-None-Match` with the last `ETag` to get `304` when nothing changed. `403` when the coordinator, catalog and rig do not match this server's binding; `422` until the rig has reported its equipment or an activated plan gives it work; `404` when the catalog is not registered here. |
 
 The envelope carries the shared core's `Program` (schema 1): an `Assignment`
-valid for 36 hours from the pull with one goal per activated exposure plan,
+valid for 24 hours from the pull with one goal per activated exposure plan,
 `requested` from the plan's `desired`, `accepted` from the rig database as it
 stands, `attempts_remaining` at one and a half times the frames still owed,
 and every goal eligible for the whole span so the plugin's own geometry adds

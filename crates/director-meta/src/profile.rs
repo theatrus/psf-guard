@@ -230,27 +230,38 @@ impl MetaStore {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if read_named(&tx, Kind::Rig, profile.rig_id)?.is_none() {
-            return Err(Error::NotFound);
+        let next = save_profile(&tx, profile, expected_revision)?;
+        tx.commit()?;
+        Ok(next)
+    }
+}
+
+pub(crate) fn save_profile(
+    conn: &Connection,
+    profile: &RigProfile,
+    expected_revision: u64,
+) -> Result<RigProfile, Error> {
+    validate_profile(profile)?;
+    if read_named(conn, Kind::Rig, profile.rig_id)?.is_none() {
+        return Err(Error::NotFound);
+    }
+    let stored = read_profile(conn, profile.rig_id)?;
+    let current = stored.as_ref().map_or(0, |value| value.revision);
+    if current != expected_revision {
+        return Err(Error::Conflict);
+    }
+    let mut next = profile.clone();
+    next.revision = current;
+    if let Some(stored) = stored {
+        let mut same = stored.clone();
+        same.updated_at_ms = next.updated_at_ms;
+        if same == next {
+            return Ok(stored);
         }
-        let stored = read_profile(&tx, profile.rig_id)?;
-        let current = stored.as_ref().map_or(0, |value| value.revision);
-        if current != expected_revision {
-            return Err(Error::Conflict);
-        }
-        let mut next = profile.clone();
-        next.revision = current;
-        if let Some(stored) = stored {
-            let mut same = stored.clone();
-            same.updated_at_ms = next.updated_at_ms;
-            if same == next {
-                tx.commit()?;
-                return Ok(stored);
-            }
-        }
-        next.revision = current.checked_add(1).ok_or(Error::Conflict)?;
-        let payload = super::configuration::encode(&next)?;
-        tx.execute(
+    }
+    next.revision = current.checked_add(1).ok_or(Error::Conflict)?;
+    let payload = super::configuration::encode(&next)?;
+    conn.execute(
             "INSERT INTO rig_profile(rig_id,revision,payload) VALUES(?1,?2,?3)
              ON CONFLICT(rig_id) DO UPDATE SET revision=excluded.revision, payload=excluded.payload",
             params![
@@ -259,12 +270,10 @@ impl MetaStore {
                 payload
             ],
         )?;
-        tx.commit()?;
-        Ok(next)
-    }
+    Ok(next)
 }
 
-fn read_profile(conn: &Connection, rig: Uuid) -> Result<Option<RigProfile>, Error> {
+pub(crate) fn read_profile(conn: &Connection, rig: Uuid) -> Result<Option<RigProfile>, Error> {
     valid_id(rig)?;
     let row: Option<(i64, Vec<u8>)> = conn
         .query_row(

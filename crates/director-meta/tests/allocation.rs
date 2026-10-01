@@ -79,7 +79,9 @@ fn migration_from_fifteen_preserves_grant_and_enables_only_one_start() {
     drop(store);
     rusqlite::Connection::open(&path)
         .unwrap()
-        .execute_batch("DROP TABLE execution_start; PRAGMA user_version=15;")
+        .execute_batch(
+            "DROP TABLE equipment_report; DROP TABLE execution_start; PRAGMA user_version=15;",
+        )
         .unwrap();
     let mut store = MetaStore::open(&path).unwrap();
     assert_eq!(store.allocation(a.rig_id).unwrap(), Some(a.clone()));
@@ -191,7 +193,7 @@ fn migration_from_fourteen_preserves_identity_and_rolls_back_failure() {
     let id = store.instance_id();
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("DROP TABLE execution_start; DROP TABLE execution_allocation; PRAGMA user_version=14; CREATE VIEW execution_allocation AS SELECT 1 AS rig_id;").unwrap();
+    conn.execute_batch("DROP TABLE equipment_report; DROP TABLE execution_start; DROP TABLE execution_allocation; PRAGMA user_version=14; CREATE VIEW execution_allocation AS SELECT 1 AS rig_id;").unwrap();
     assert!(MetaStore::open(&path).is_err());
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
