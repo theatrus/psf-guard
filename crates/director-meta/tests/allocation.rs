@@ -47,6 +47,155 @@ fn fixture(path: &std::path::Path) -> (MetaStore, Allocation) {
     (store, allocation)
 }
 
+fn commission(
+    store: &mut MetaStore,
+    path: &std::path::Path,
+    a: &mut Allocation,
+) -> psf_guard_director_meta::workload::Policy {
+    use psf_guard_director_meta::profile::{Reported, RigProfile, Source};
+    let project = store
+        .create_project(Uuid::new_v4(), "Automatic M42")
+        .unwrap()
+        .id;
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .execute(
+            "INSERT INTO activation VALUES(?1,1,'{}')",
+            [project.to_string()],
+        )
+        .unwrap();
+    let configuration =
+        serde_json::from_value(a.snapshot["program"]["configuration"].clone()).unwrap();
+    let mut profile = RigProfile::empty(a.rig_id, 1000);
+    profile.configuration = Some(Reported {
+        value: configuration,
+        source: Source::Plugin {},
+        reported_at_ms: 1000,
+    });
+    let profile = store.save_rig_profile(&profile, 0).unwrap();
+    a.snapshot["rig"] = json!({"profile_revision":profile.revision});
+    a.snapshot["links"] = json!([{"project_id":project}]);
+    let policy = psf_guard_director_meta::workload::Policy {
+        rig_id: a.rig_id,
+        catalog_id: a.catalog_id,
+        client_id: a.client_id,
+        profile_id: a.profile_id,
+        profile_revision: profile.revision,
+        configuration_id: "config-1".into(),
+        project_ids: vec![project],
+        enabled: true,
+        revision: 1,
+    };
+    store.save_workload_policy(&policy, 0).unwrap()
+}
+
+fn receipts(
+    a: &Allocation,
+    ledger: Uuid,
+    terminal: &str,
+) -> Vec<psf_guard_director_meta::inbox::Receipt> {
+    ["reserved", terminal].iter().enumerate().map(|(i,state)| {
+        let evidence = match *state { "reserved" => json!({"state":state}), "saved" => json!({"state":state,"image_id":"capture-1","elapsed_ms":10}), _ => json!({"state":state,"reason":"test"}) };
+        psf_guard_director_meta::inbox::Receipt {rig_id:a.rig_id,ledger_id:ledger.to_string(),sequence:i as u64+1,
+            goal_id:"short-ha".into(),capture_id:"capture-1".into(),state:(*state).into(),received_at_ms:1100,
+            payload:json!({"schema_version":1,"ledger_id":ledger,"sequence":i+1,"contract_version":psf_guard_director_core::CONTRACT_VERSION,
+                "engine_version":psf_guard_director_core::ENGINE_VERSION,"assignment_id":a.snapshot["program"]["assignment"]["id"],
+                "assignment_revision":a.snapshot["program"]["assignment"]["revision"],"rig_id":a.rig_id,"configuration_id":"config-1",
+                "attempt":{"capture_id":"capture-1","goal_id":"short-ha","reserved_at_ms":1001,"evidence":evidence}}) }
+    }).collect()
+}
+
+#[test]
+fn automatic_work_retries_seals_and_preserves_spent_authority() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let (mut store, mut a) = fixture(&path);
+    let p = commission(&mut store, &path, &mut a);
+    let first = store.admit_workload(&a, p.revision).unwrap();
+    assert_eq!(store.admit_workload(&a, p.revision).unwrap(), first);
+    let mut b = a.clone();
+    b.allocation_id = Uuid::new_v4();
+    b.snapshot["program"]["assignment"]["id"] = json!(format!("allocation-{}", b.allocation_id));
+    assert!(store.admit_workload(&b, p.revision).is_err());
+    let ledger = Uuid::new_v4();
+    store
+        .start_allocation(a.rig_id, a.allocation_id, a.client_id, ledger, 1002)
+        .unwrap();
+    let rows = receipts(&a, ledger, "saved");
+    store.store_receipts(&rows[..1], 1100).unwrap();
+    assert!(store
+        .release_workload(a.rig_id, a.client_id, a.allocation_id, ledger, 1)
+        .is_err());
+    store.store_receipts(&rows[1..], 1100).unwrap();
+    assert!(store
+        .release_workload(a.rig_id, a.client_id, a.allocation_id, ledger, 1)
+        .is_err());
+    let sealed = store
+        .release_workload(a.rig_id, a.client_id, a.allocation_id, ledger, 2)
+        .unwrap();
+    assert_eq!(
+        store
+            .release_workload(a.rig_id, a.client_id, a.allocation_id, ledger, 2)
+            .unwrap(),
+        sealed
+    );
+    let mut extra = rows[1].clone();
+    extra.sequence = 3;
+    assert!(store.store_receipts(&[extra], 1101).is_err());
+    store.store_receipts(&rows, 1101).unwrap();
+    let mut program = serde_json::from_value(b.snapshot["program"].clone()).unwrap();
+    store.carry_workload_budget(a.rig_id, &mut program).unwrap();
+    assert_eq!(program.assignment.goals[0].attempts_remaining, 1);
+    assert!(store.admit_workload(&b, p.revision).is_err());
+    b.snapshot["program"] = serde_json::to_value(program).unwrap();
+    store.admit_workload(&b, p.revision).unwrap();
+    assert!(store
+        .start_allocation(a.rig_id, a.allocation_id, a.client_id, Uuid::new_v4(), 1102)
+        .is_err());
+    assert!(store
+        .start_allocation(b.rig_id, b.allocation_id, b.client_id, ledger, 1102)
+        .is_err());
+    drop(store);
+    let store = MetaStore::open(&path).unwrap();
+    assert_eq!(
+        store
+            .workload(a.rig_id, a.client_id, a.allocation_id)
+            .unwrap(),
+        Some(sealed)
+    );
+}
+
+#[test]
+fn uncertain_receipts_and_changed_commissioning_cannot_authorize_successors() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let (mut store, mut a) = fixture(&path);
+    let p = commission(&mut store, &path, &mut a);
+    store.admit_workload(&a, p.revision).unwrap();
+    let ledger = Uuid::new_v4();
+    store
+        .start_allocation(a.rig_id, a.allocation_id, a.client_id, ledger, 1002)
+        .unwrap();
+    store
+        .store_receipts(&receipts(&a, ledger, "uncertain"), 1100)
+        .unwrap();
+    assert!(store
+        .release_workload(a.rig_id, a.client_id, a.allocation_id, ledger, 2)
+        .is_err());
+    let mut p2 = p.clone();
+    p2.enabled = false;
+    p2.revision = 2;
+    store.save_workload_policy(&p2, 1).unwrap();
+    assert!(store.save_workload_policy(&p2, 1).is_err());
+    // Revocation leaves both the spent grant and receipt history in place.
+    store.revoke_client(a.rig_id, a.client_id).unwrap();
+    assert!(store.admit_workload(&a, 1).is_err());
+    assert!(store
+        .workload(a.rig_id, a.client_id, a.allocation_id)
+        .unwrap()
+        .is_some());
+}
+
 #[test]
 fn start_is_one_shot_even_after_restart_or_with_the_same_ledger() {
     let dir = tempfile::tempdir().unwrap();
@@ -71,6 +220,33 @@ fn start_is_one_shot_even_after_restart_or_with_the_same_ledger() {
 }
 
 #[test]
+fn schema17_migration_preserves_manual_grant_without_automatic_authority() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let (mut store, a) = fixture(&path);
+    store.admit_allocation(&a).unwrap();
+    let ledger = Uuid::new_v4();
+    store
+        .start_allocation(a.rig_id, a.allocation_id, a.client_id, ledger, 1002)
+        .unwrap();
+    drop(store);
+    let c = rusqlite::Connection::open(&path).unwrap();
+    c.execute_batch(
+        "DROP TABLE workload_budget; DROP TABLE workload_history; DROP TABLE workload_policy; PRAGMA user_version=17;",
+    )
+    .unwrap();
+    let mut store = MetaStore::open(&path).unwrap();
+    assert_eq!(store.allocation(a.rig_id).unwrap(), Some(a.clone()));
+    assert!(store.workload_policy(a.rig_id).unwrap().is_none());
+    assert!(store
+        .release_workload(a.rig_id, a.client_id, a.allocation_id, ledger, 0)
+        .is_err());
+    assert!(store
+        .start_allocation(a.rig_id, a.allocation_id, a.client_id, Uuid::new_v4(), 1003)
+        .is_err());
+}
+
+#[test]
 fn migration_from_fifteen_preserves_grant_and_enables_only_one_start() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("meta.sqlite");
@@ -80,7 +256,7 @@ fn migration_from_fifteen_preserves_grant_and_enables_only_one_start() {
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute_batch(
-            "DROP TABLE equipment_report; DROP TABLE execution_start; PRAGMA user_version=15;",
+            "DROP TABLE workload_budget; DROP TABLE workload_history; DROP TABLE workload_policy; DROP TABLE equipment_report; DROP TABLE execution_start; PRAGMA user_version=15;",
         )
         .unwrap();
     let mut store = MetaStore::open(&path).unwrap();
@@ -193,7 +369,7 @@ fn migration_from_fourteen_preserves_identity_and_rolls_back_failure() {
     let id = store.instance_id();
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("DROP TABLE equipment_report; DROP TABLE execution_start; DROP TABLE execution_allocation; PRAGMA user_version=14; CREATE VIEW execution_allocation AS SELECT 1 AS rig_id;").unwrap();
+    conn.execute_batch("DROP TABLE workload_budget; DROP TABLE workload_history; DROP TABLE workload_policy; DROP TABLE equipment_report; DROP TABLE execution_start; DROP TABLE execution_allocation; PRAGMA user_version=14; CREATE VIEW execution_allocation AS SELECT 1 AS rig_id;").unwrap();
     assert!(MetaStore::open(&path).is_err());
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))

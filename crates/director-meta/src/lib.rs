@@ -21,6 +21,7 @@ pub mod program_issue;
 pub mod project;
 mod storage;
 pub mod templates;
+pub mod workload;
 
 #[derive(Debug)]
 pub enum Error {

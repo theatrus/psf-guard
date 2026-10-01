@@ -40,6 +40,7 @@ mod sky_image;
 mod sky_objects;
 mod sky_search;
 mod templates;
+mod workload;
 
 /// The default store sits beside the registry, like `auth.json`, so a test
 /// registry gets its own meta store and nothing lands in the real config dir.
@@ -493,6 +494,18 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .route(
             "/rigs/{rig}/allocation/start",
             axum::routing::post(allocation::start),
+        )
+        .route(
+            "/rigs/{rig}/workload-policy",
+            get(workload::get_policy).put(workload::commission),
+        )
+        .route(
+            "/rigs/{rig}/workloads/request",
+            axum::routing::post(workload::request),
+        )
+        .route(
+            "/rigs/{rig}/workloads/release",
+            axum::routing::post(workload::release),
         )
         .route(
             "/rigs/{rig}/checkin",

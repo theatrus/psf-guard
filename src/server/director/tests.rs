@@ -17,6 +17,7 @@ mod configuration;
 mod equipment_report;
 mod pairing;
 mod sky_image;
+mod workload;
 
 fn state(dir: &TempDir, enable: bool) -> AppState {
     let mut state = AppState::from_databases(

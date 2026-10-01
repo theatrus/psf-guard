@@ -245,7 +245,7 @@ fn globally_reused_ids_conflict_and_schema_sixteen_upgrades() {
     drop(store);
     Connection::open(dir.path().join("meta.sqlite"))
         .unwrap()
-        .execute_batch("DROP TABLE equipment_report; PRAGMA user_version=16;")
+        .execute_batch("DROP TABLE workload_budget; DROP TABLE workload_history; DROP TABLE workload_policy; DROP TABLE equipment_report; PRAGMA user_version=16;")
         .unwrap();
     let store = MetaStore::open(&dir.path().join("meta.sqlite")).unwrap();
     assert_eq!(store.instance_id(), instance);
@@ -298,7 +298,7 @@ fn failed_schema_seventeen_upgrade_rolls_back() {
     let (dir, store, report) = fixture();
     drop(store);
     let conn = Connection::open(dir.path().join("meta.sqlite")).unwrap();
-    conn.execute_batch("DROP TABLE equipment_report; PRAGMA user_version=16; CREATE VIEW equipment_report AS SELECT 1;").unwrap();
+    conn.execute_batch("DROP TABLE workload_budget; DROP TABLE workload_history; DROP TABLE workload_policy; DROP TABLE equipment_report; PRAGMA user_version=16; CREATE VIEW equipment_report AS SELECT 1;").unwrap();
     assert!(MetaStore::open(&dir.path().join("meta.sqlite")).is_err());
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))

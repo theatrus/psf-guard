@@ -9,6 +9,7 @@ description = "Opt-in coordination identity storage for PSF Guard Director"
 
 [dependencies]
 psf-guard-director-core = { path = "../director-core" }
+psf-guard-director-ledger = { path = "../director-ledger" }
 rusqlite = { version = "0.40", features = ["backup", "bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
