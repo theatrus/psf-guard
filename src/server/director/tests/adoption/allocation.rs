@@ -123,6 +123,52 @@ async fn only_operator_admits_exact_client_and_retries_never_rebuild_or_replace_
         .0,
         StatusCode::UNAUTHORIZED
     );
+    let launch = format!("{route}/start");
+    let start = json!({"coordinator_instance_id":instance,"catalog_id":catalog,
+        "allocation_id":request["allocation_id"],"ledger_id":Uuid::new_v4()});
+    assert_ne!(
+        call(&a.f.app, "POST", &launch, start.clone(), None).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        client_call(
+            &a.f.app,
+            "POST",
+            &launch,
+            start.clone(),
+            other["token"].as_str().unwrap(),
+            Some(profile)
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        client_call(
+            &a.f.app,
+            "POST",
+            &launch,
+            start.clone(),
+            token,
+            Some(profile)
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        client_call(
+            &a.f.app,
+            "POST",
+            &launch,
+            start.clone(),
+            token,
+            Some(profile)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
     // Even losing the source preview cannot rebuild the already committed grant.
     Connection::open(&a.f.state.director.as_ref().unwrap().path)
         .unwrap()

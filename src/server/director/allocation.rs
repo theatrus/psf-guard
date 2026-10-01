@@ -9,6 +9,71 @@ use psf_guard_director_meta::allocation::Allocation;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(super) struct Start {
+    coordinator_instance_id: Uuid,
+    catalog_id: Uuid,
+    allocation_id: Uuid,
+    ledger_id: Uuid,
+}
+
+// Authenticate again in the handler: browser/editor access cannot stand in for
+// the exact executor credential, and revocation is rechecked in the transaction.
+pub(super) async fn start(
+    State(state): State<Arc<AppState>>,
+    Path(rig): Path<Uuid>,
+    headers: axum::http::HeaderMap,
+    Json(input): Json<Start>,
+) -> Response {
+    response(
+        async {
+            let service = enabled(&state)?;
+            if input.coordinator_instance_id != service.instance_id {
+                return Err(Error::WrongRig.into());
+            }
+            let secret = headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.split_once(' '))
+                .filter(|(s, _)| s.eq_ignore_ascii_case("bearer"))
+                .map(|(_, s)| s.trim())
+                .filter(|s| s.starts_with("psfdrc_"))
+                .ok_or(Error::Invalid)?;
+            let hash = crate::auth_registry::hash_token(secret);
+            let profile = headers
+                .get("x-psf-director-profile")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| Uuid::parse_str(v).ok())
+                .ok_or(Error::Invalid)?;
+            service
+                .with_writer(move |store| {
+                    let client = store.client_for_token(&hash)?.ok_or(Error::Invalid)?;
+                    if client.rig_id != rig
+                        || client.catalog_id != input.catalog_id
+                        || client.profile_id != profile
+                    {
+                        return Err(Error::WrongRig.into());
+                    }
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_err(|_| Error::Internal)?
+                        .as_millis();
+                    store.start_allocation(
+                        rig,
+                        input.allocation_id,
+                        client.client_id,
+                        input.ledger_id,
+                        u64::try_from(now).map_err(|_| Error::Internal)?,
+                    )?;
+                    store.allocation(rig)?.ok_or_else(|| Error::Missing.into())
+                })
+                .await
+        }
+        .await,
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Scope {
     coordinator_instance_id: Uuid,
     catalog_id: Uuid,

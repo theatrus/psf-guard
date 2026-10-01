@@ -478,6 +478,10 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             get(allocation::get_allocation).post(allocation::admit),
         )
         .route(
+            "/rigs/{rig}/allocation/start",
+            axum::routing::post(allocation::start),
+        )
+        .route(
             "/rigs/{rig}/checkin",
             axum::routing::post(checkin::check_in).layer(DefaultBodyLimit::max(
                 psf_guard_director_core::MAX_REQUEST_BYTES * 4,

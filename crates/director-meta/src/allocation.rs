@@ -121,6 +121,46 @@ fn read(conn: &Connection, rig: Uuid, instance: Uuid) -> Result<Option<Allocatio
 }
 
 impl MetaStore {
+    /// One-shot launch: even an identical retry is refused because its original
+    /// caller may already be operating offline. No timeout refunds this claim.
+    pub fn start_allocation(
+        &mut self,
+        rig: Uuid,
+        allocation: Uuid,
+        client: Uuid,
+        ledger: Uuid,
+        now: u64,
+    ) -> Result<(), Error> {
+        valid_id(ledger)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let grant = read(&tx, rig, self.instance_id)?.ok_or(Error::Conflict)?;
+        let live: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM director_client WHERE id=?1 AND rig_id=?2)",
+            params![client.to_string(), rig.to_string()],
+            |r| r.get(0),
+        )?;
+        let expires = grant.snapshot["program"]["assignment"]["expires_at_ms"]
+            .as_u64()
+            .ok_or(Error::CorruptDatabase)?;
+        if !live
+            || grant.allocation_id != allocation
+            || grant.client_id != client
+            || now < grant.admitted_at_ms
+            || now >= expires
+        {
+            return Err(Error::Conflict);
+        }
+        let changed = tx.execute("INSERT OR IGNORE INTO execution_start(rig_id,allocation_id,ledger_id,started_at_ms) VALUES(?1,?2,?3,?4)",
+            params![rig.to_string(), allocation.to_string(), ledger.to_string(), i64::try_from(now).map_err(|_| Error::InvalidInput)?])?;
+        if changed != 1 {
+            return Err(Error::Conflict);
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn allocation(&self, rig: Uuid) -> Result<Option<Allocation>, Error> {
         valid_id(rig)?;
         read(&self.connection, rig, self.instance_id)
