@@ -7,6 +7,43 @@ scheduler. See the implementation audit below before treating a capability as
 available to users.
 Last updated: 2026-10-01.
 
+### Operating goal after setup
+
+Commissioning is explicit; routine acquisition is automatic. An operator pairs
+the rig, reviews its equipment/site/horizon and hard limits, permits projects
+and templates, and enables a local operating policy. After that, starting a
+Director Session should not require manually reporting unchanged equipment,
+choosing each target, downloading plans, or admitting every allocation.
+The current prepared-target/manual-admission path is a tested bootstrap, not
+the intended finished workflow.
+
+PSF Guard accepts project workloads expressed as observing goals and compatible
+per-rig contributions. Director submits workload requests and check-ins with
+capabilities, local conditions, available session time and durable progress.
+The coordinator uses the shared Rust planning policy to allocate bounded work
+from eligible active plans. Director uses that same core to choose the next
+target, filter and exposure from its authorized workload, reevaluating after
+real operation delays and at safe boundaries. The C# adapter must not add its
+own priority, filter-selection or scheduling policy.
+
+Shared planning priorities resolve global defaults and site/rig/project
+overrides before scoring feasible work. Site, horizon, weather, equipment
+capabilities, pending captures and learned operation durations remain inputs;
+a higher priority cannot override local safety or hard limits. A workload is
+not a timestamp script, and the coordinator is not a remote hardware controller.
+
+Unchanged commissioned context should refresh automatically during check-in.
+Material equipment, profile, site or hard-limit changes require review under
+a versioned commissioning policy; they must not be silently adopted from a
+client report. Explicit report/review controls remain available for setup,
+diagnostics and exceptions, not as nightly steps.
+
+Automatic workload request, renewal, successor accounting and multi-target
+operation are **not implemented yet**. Phase 2 should deliver this operating
+loop before building out optional manual allocation controls. Existing one-shot
+launch protection stays in place until reviewed successor/recovery contracts
+can preserve outstanding attempts, pending credit and uncertain outcomes.
+
 ### Native equipment review handoff
 
 Meta schema 17 stages one bounded equipment report per paired NINA client.
@@ -977,8 +1014,9 @@ test boundary also requires explicit memory ownership and bounded buffers.
 ## Execution and check-ins
 
 ```text
-Global objectives and rig capabilities
-  -> coordinator allocates bounded goals
+Operator-approved projects and commissioned rig policy
+  -> Director submits workload request / reconciled check-in
+  -> coordinator uses shared planning priorities to allocate bounded goals
   -> Director validates, caches, and acknowledges an assignment
   -> shared engine selects useful local work
   -> Director's adapter executes through supported N.I.N.A. APIs
@@ -986,6 +1024,21 @@ Global objectives and rig capabilities
   -> engine reevaluates at execution boundaries
   -> check-in reconciles progress and revises allocation
 ```
+
+Workload requests are scoped to the commissioned coordinator/catalog/rig/
+profile/client and use stable request identities with idempotent responses.
+They carry versioned configuration/policy evidence and receipt cursors, not
+arbitrary instructions or a client claim to new capture credit. The coordinator
+reserves work atomically before returning a grant; a dropped reply must not
+reserve the same deficit again. Repeated check-ins cannot refresh spent budgets.
+An unchanged current grant may be returned; a successor requires reconciliation
+of the old grant and an explicit transition acknowledged at a safe boundary.
+Exact wire messages remain to be designed and versioned; the current capture
+receipt endpoint alone does not implement workload exchange.
+Requesting work must not let a paired client admit its own grants or bypass
+operator-approved project scope. The coordinator issues grants under the saved
+commissioning policy; local enablement, safety and exclusive ownership still
+govern whether Director may act on them.
 
 An assignment specifies eligible objectives, quantities or other completion
 limits, constraints, approved alternatives, validity, offline policy, and
@@ -1737,6 +1790,15 @@ revision may support collaborative projects with other people and independent
 PSF Guard instances. Do not implement invitations, participant coordination or
 cross-instance exchange as part of the framing wizard or current multi-rig work;
 that needs a separate implementation request. The following are future constraints.
+
+Extend the same project/workload/contribution model used for one owner's rigs,
+not a second collaborative scheduler. Retain coordinator and participant
+identity, immutable grant identity, stable capture identity and assessment
+provenance across the boundary. A participant can offer permitted capacity or
+request work; accepting a shared project does not grant remote control over its
+equipment. Shared-core capability matching and priorities must still respect
+the participant's commissioned local policy. Collaboration APIs and permissions
+remain deferred; do not add cross-instance execution in this increment.
 
 Each participating instance may have its own meta database, but each shared
 project initially has one authoritative coordinator. A remote participant keeps
@@ -2957,10 +3019,17 @@ separate workflow; these mappings alone do not resolve them.
 
 ### Phase 2: single-rig autonomous Director
 
+- [ ] After one-time commissioning, automatically refresh unchanged context,
+  request eligible workloads, acknowledge bounded grants and run an enabled
+  session without per-target or per-allocation operator clicks.
 - [ ] Use the same resolved smart-filter, avoidance and priority policy in
   simulation and acquisition. Test inherited/off/zero values, mixed overrides,
   parent edits, multi-rig scope, hard-limit precedence and offline version parity.
 - [ ] Implement versioned allocation, acknowledgements, checkpoints, and limits.
+- [ ] Renew or replace workloads through reconciled successor grants at safe
+  boundaries. Carry forward pending/accepted/rejected credit, spent attempts,
+  uncertain operations and outstanding offline reservations; do not reset them
+  on a new check-in, process restart or lost response.
 - [x] Implement the local ledger's durable reservation/preparation/outbox
   primitives and crash/reopen tests; these do not include remote acknowledgement.
 - [x] Implement separate scoped Director pairing, durable inspection history and
@@ -2997,6 +3066,12 @@ Run the same complete session with default policies and no optional plugins,
 then with native and compatible plugin hooks (including unsafe/recovery). Test
 safety changes while a hook or nested wait runs and during cleanup. A slow hook
 causes fresh feasibility evaluation, not a duplicated action or stale exposure.
+After initial setup, submit competing active workloads and run the complete
+session without manual target selection or allocation admission. Verify that
+server and sidecar resolve the same policy and priorities, respond to changed
+conditions, and advance to a reconciled successor without double reservation
+or credit. A lost workload reply must not create a second grant; no eligible
+work means a visible bounded wait/check-in, not a fabricated capture or busy loop.
 
 Telemetry/offline gate: watch the rig in central PSF Guard, stop the server,
 continue within an already cached offline allocation, and restart the plugin and
