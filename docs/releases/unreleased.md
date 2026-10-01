@@ -6,6 +6,12 @@
 
 ## Added
 
+- Director's experimental workload API can commission automatic requests for a
+  reviewed rig/client and project scope, release a clean parked session after
+  complete capture delivery, and issue successor work without resetting spent
+  attempts or pending credit. Uncertain work remains blocked for reconciliation;
+  commissioning UI and multi-target execution are still pending.
+
 - Director can receive native equipment reports from paired NINA clients for
   explicit operator review. Accepting a fresh report preserves manual rig setup
   and refuses stale state or outstanding allocations; reporting alone never

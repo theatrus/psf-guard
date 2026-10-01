@@ -80,7 +80,7 @@ pub(super) struct Envelope {
     /// Changes whenever any input changed; also the `ETag`.
     pub(super) revision: String,
     issued_at_ms: u64,
-    program: Program,
+    pub(super) program: Program,
     links: Vec<Link>,
     rig: RigContext,
     /// Goals the plan asked for that this program could not express, by reason.

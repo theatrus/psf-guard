@@ -105,6 +105,11 @@ pub(in crate::server) async fn authorize(
         ["", "director", "v1", "rigs", rig, "allocation", "start"] if method == Method::POST => {
             *rig
         }
+        ["", "director", "v1", "rigs", rig, "workloads", "request" | "release"]
+            if method == Method::POST =>
+        {
+            *rig
+        }
         _ => return Err(denied()),
     };
     let rig = Uuid::parse_str(rig)

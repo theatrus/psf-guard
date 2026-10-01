@@ -300,6 +300,8 @@ exact methods/routes are allowed, for the paired rig:
 - `POST /api/director/v1/rigs/{rig_id}/checkin`
 - `POST /api/director/v1/rigs/{rig_id}/status`
 - `POST /api/director/v1/rigs/{rig_id}/equipment-reports`
+- `POST /api/director/v1/rigs/{rig_id}/workloads/request`
+- `POST /api/director/v1/rigs/{rig_id}/workloads/release`
 
 Their existing coordinator/catalog query or body fields are still required and
 validated. A ledger already reported by one rig cannot accept any sequence from
@@ -916,6 +918,71 @@ the same view works without the network. The server only ever calls the one
 provider with an allowed HiPS identifier and bounded sizes; it is not a URL
 proxy. Imagery is attributed to its survey in the response list and remains a
 composition aid, not evidence of pointing, transparency or coverage.
+
+## Automatic workload policy and exchange
+
+These experimental routes use the existing rig/database identity. Commissioning
+is interactive editor access only; paired credentials and PATs cannot approve
+a policy. The commissioning UI is not implemented yet.
+
+`GET /api/director/v1/rigs/{rig}/workload-policy` returns the policy or null.
+`PUT` on that route uses:
+
+```json
+{
+  "coordinator_instance_id": "<instance UUID>",
+  "expected_revision": 0,
+  "policy": {
+    "rig_id": "<rig UUID>", "catalog_id": "<catalog UUID>",
+    "client_id": "<paired client UUID>", "profile_id": "<NINA profile UUID>",
+    "profile_revision": 2, "configuration_id": "<reviewed configuration ID>",
+    "project_ids": ["<active Director project UUID>"],
+    "enabled": true, "revision": 1
+  }
+}
+```
+
+The new revision must equal `expected_revision + 1`. Up to 128 distinct active
+projects are allowed. A changed reviewed profile/configuration requires a new
+policy. All compiled goals must belong to the allowlist; activating an unrelated
+project does not expand authority. Disabling intake does not erase issued work
+or retroactively stop a disconnected executor.
+
+Paired `POST /rigs/{rig}/workloads/request` takes `coordinator_instance_id`,
+`catalog_id`, a durable `request_id` UUID, `configuration_id`, and
+`execution_mode: "prepared_target_v1"`. This is the only supported intake mode;
+multi-target, rotation and Director-owned centering/dithering requests are
+refused before a new grant is stored. Persist the
+UUID before sending. The response data contains `request_id`, `state`,
+`workload`, and `retry_after_seconds`. `issued` returns a workload containing
+the unchanged allocation envelope, `released: false`, and null `ledger_id` and
+`terminal_sequence`. `waiting` returns null workload and a 30-second retry
+delay; it grants no launch. Retrying a released UUID returns its original
+allocation and terminal ledger/cursor, with state `released`. Only after
+validating that history may a client advance its request UUID. The separate
+`allocation/start` remains one-shot and must never be retried on an ambiguous
+response. An unreleased grant blocks a different request UUID even after expiry.
+
+Paired `POST /rigs/{rig}/workloads/release` takes `coordinator_instance_id`,
+`catalog_id`, `allocation_id`, `ledger_id`, `terminal_sequence`,
+`operations_quiescent: true`, and `parked: true`. These last fields are executor
+attestations, not remote verification of a physical mount. The native client
+must finish hooks, stop dispatch, verify no active preparation or unresolved
+capture, park successfully, and deliver the complete feed before calling.
+The server also validates the consumed launch, exact event identities,
+contiguous feed and settled capture transitions. Release returns the workload
+with `released: true`, the ledger and terminal sequence. Exact retries are
+safe; different terminal proof conflicts. Sealed feeds permit exact duplicates
+but refuse additional events. Failed or uncertain sessions require future
+explicit reconciliation, not this clean-completion path.
+
+Successors preserve spent attempts and pending saved credit. They do not grant
+fresh rejection retries, reset goal caps, accept ungraded images, or refresh
+material equipment changes. The prepared-target plugin still supports one
+target with sequence-owned centering/focus/guiding/flip operations. Multi-target
+automatic execution, grade feedback, budget increases, recovery UI and
+collaboration are unfinished. History stops intake at 4096 grants per rig;
+there is no automatic pruning that could erase outstanding authority.
 
 ## Contention and recovery
 

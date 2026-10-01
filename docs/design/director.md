@@ -38,11 +38,51 @@ a versioned commissioning policy; they must not be silently adopted from a
 client report. Explicit report/review controls remain available for setup,
 diagnostics and exceptions, not as nightly steps.
 
-Automatic workload request, renewal, successor accounting and multi-target
-operation are **not implemented yet**. Phase 2 should deliver this operating
-loop before building out optional manual allocation controls. Existing one-shot
-launch protection stays in place until reviewed successor/recovery contracts
-can preserve outstanding attempts, pending credit and uncertain outcomes.
+The first automatic-workload increment implements commissioned request intake,
+idempotent grants, clean terminal release and carried attempt budgets for the
+prepared-target executor. It does not implement multi-target acquisition,
+inherited policy resolution, grade feedback or crash/uncertain-work recovery.
+Phase 2 must finish those gates. Every grant still has a one-shot launch.
+
+### Automatic workload exchange increment
+
+Meta schema 18 adds an interactive, compare-and-set workload policy and retained
+grant history. Commissioning binds one live client/profile to the existing
+catalog/rig, an exact reviewed rig-profile revision and configuration, and a
+bounded allowlist of active project IDs. The compiler must not add an
+uncommissioned project. Equipment changes require review and recommissioning;
+an enabled plugin cannot self-approve them.
+
+The plugin's opt-in **Automatic workloads** mode
+persists a request UUID before sending it. Paired requests return `issued`,
+`released` history, or `waiting` with bounded backoff. An outstanding grant,
+including an expired or offline one, prevents another grant. Lost replies reuse
+the same UUID; changed snapshots cannot replace a received grant. The shared
+Rust selector continues to choose goals and recipes, not the C# intake loop.
+
+A successful session stops hooks and dispatch, verifies no unresolved capture
+or active preparation, parks, and delivers the entire capture feed before
+terminal release. The executor attests quiescence and parking; the server checks
+the launch ledger, contiguous cursor, exact grant/engine identities and settled
+reservation transitions. Gaps, uncertain outcomes, reused capture IDs, stale
+scope and failed shutdown prevent release. A sealed feed accepts duplicate
+delivery but no later events. A successor retains the first per-goal attempt
+cap minus all reserved attempts; failures also spend authority. Per-goal budget
+totals update atomically with release, avoiding a scan of old grant payloads on
+each request. Saved images
+remain pending, not accepted. History is bounded to 4096 grants per rig without
+automatic authority-erasing pruning.
+
+The prepared-target session can request its next workload without operator
+admission, or wait for quality assessment without recapturing pending credit.
+Offline completion retains the outstanding grant and local evidence; it does
+not silently authorize a successor. Legacy manual allocations cannot use this
+release path. General recovery, preparation-feed reconciliation, rejected-frame
+feedback, additional budget approval and multi-target defaults remain open.
+The commissioning/recovery UI remains a frontend handoff; extend existing rig
+Setup rather than introducing new catalog or rig identities. The exact routes
+and bodies are documented in [Director management](../DIRECTOR.md#automatic-workload-policy-and-exchange).
+Collaboration stays deferred.
 
 ### Native equipment review handoff
 
@@ -103,7 +143,8 @@ Meta schema 16 adds `execution_start`. The paired executor posts
 allocation and ledger UUIDs. Only the selected live client/profile can launch.
 The transaction consumes the allocation's single launch, even if the response
 is lost. Identical retries, another ledger, expiry and process restart cannot
-refund that launch. There is no resume or successor endpoint. Do not delete
+refund that launch. Automatic workloads now have the clean-release successor
+path above, but no crash/uncertain-work resume endpoint. Do not delete
 allocation or launch records to recover a rig.
 
 First launch must be online. After acknowledgement the running session may
@@ -209,16 +250,17 @@ untested integration requirements unchecked.
 | Sidecar and local recovery | Merged `crates/director-ledger` and `crates/director-runtime`: schema-4 journal, capture/preparation outboxes, IPC 8/runtime 0.7.0, one-shot dispatch checks with exact latest-start deadlines, process crash/reopen tests; PSF Guard #464-487 and [#518](https://github.com/theatrus/psf-guard/pull/518). The current commissioning increment delivers capture receipts after restart and retains exact acknowledgements. | Preparation-feed delivery, pruning, grade feedback, assignment replacement and complete operator recovery. |
 | NINA native execution | Public opt-in prepared-target session with one-shot server launch, exclusive local ownership, native safety/watchdog, dated NINA EOP, native unpark/tracking/filter/readout/capture, seven hooks, batch check-in and optional status. Real #64/OmniSim/server tests cover offline RGB captures, replay refusal and Unsafe interruption during exposure. | Automatic multi-target work, all third-party hook contexts, full autofocus/guiding/flip/calibration, restart/resume, duration learning and successor allocation recovery. Arbitrary external equipment clients are not excluded. |
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
-| Meta storage | Separate schema-16 store on by default beside the registry; hashed pairing/client records; rig receipts, cursors and live status; stable previews, immutable first allocations and one-shot ledger-bound launches; rig profiles, equipment reports, framing/plan drafts and activations; reviewed database/rig bindings, confirmed source project links, CAS renames, immutable sites/setups, transactional migrations and backup/restore. Unambiguous prototype links retain rig IDs. | Conflict-resolution UI for ambiguous prototype rigs, project-level permissions, active revisions, successor allocation accounting and progress projections. |
+| Meta storage | Separate schema-18 store on by default beside the registry; hashed pairing/client records; rig receipts, cursors and live status; stable previews, immutable allocations, one-shot ledger-bound launches, commissioning policies, settled workload history and transactional per-goal budgets; rig profiles, equipment reports, framing/plan drafts and activations; reviewed database/rig bindings, confirmed source project links, CAS renames, immutable sites/setups, transactional migrations and backup/restore. Unambiguous prototype links retain rig IDs. | Conflict-resolution UI for ambiguous prototype rigs, project-level permissions, active revisions, uncertain-work recovery and progress projections. |
 | Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492): shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493): schema-3 intent persistence with validated immutable setup references. Plan drafts with an objective editor, per-rig template binding and core exposure defaults. | Depth/FOV/sampling compatibility, per-night feasibility and authoritative allocation remain open. |
 | Project framing wizard | Framing view in the project workspace: survey backgrounds from N.I.N.A.'s HiPS list, name resolution through CDS Sesame, interactive center, angle and zoom, mosaic rows/columns/overlap, per-rig footprints from rig profiles, draft editing with compare-and-set, and a visibility panel with tonight's altitude chart, custom horizon, Moon and darkness like N.I.N.A.'s framing assistant, plus a week of nights per rig. | Reference images with WCS, layer comparison, offline region cache, rotation feasibility per rig. |
 | Catalog discovery | [#498](https://github.com/theatrus/psf-guard/pull/498) merged: operator-scoped read-only project/profile evidence from registered TS-compatible catalogs, with bounded results and invalid/duplicate identity reports. | Discovery does not infer rig ownership or read image history. |
 | Catalog adoption | [#502](https://github.com/theatrus/psf-guard/pull/502) merged explicit durable lineage; [#503](https://github.com/theatrus/psf-guard/pull/503) merged operator preview/apply, exact identity matching, stale-review refusal and interrupted-write recovery. [#506](https://github.com/theatrus/psf-guard/pull/506) merged the reviewed mapping UI and read-only inventory, with real-server browser tests. | Independent forks, historical-image attribution, contribution accounting and acquisition authorization remain separate work. |
 | Operator API and UI | The Library lists plans (`GET /plans`: links, stage, per-rig state and capture dates) as its own rows and families, with plans that have captured nothing in a section below; the header's scope (one project picker, Workspace, then a rig and target switcher for Images and Sequence) opens a plan's workspace at `/plan?plan=<TS GUID or plan id>`, which holds framing, plan and activation over the Library's existing target/exposure editor; rig setup and the template library are Settings tabs; Live is drawn on the Sky with the table under it. The Planning list page, the identity lists and the Catalogs tab are retired; old `/director` links redirect. Desktop/mobile real-server tests cover two databases contributing to one project and return navigation. | Pairing-code management UI and acquisition control. The Live table shows connectivity, last report, contact ages and assignments per rig. UI tests are not equipment tests. |
-| Program delivery | #528 adds `GET /rigs/{rig}/program`, compiling activated rig rows and reported configuration into core Program plus identity links and rig context. Plugin #28 adds bounded, read-only preview intake. First-allocation admission now freezes an operator-reviewed snapshot for one paired client/profile; the plugin validates and durably caches it separately from previews. | Admission UI, successor accounting, progress-preserving refresh and acquisition commissioning. A preview remains non-executable; a stored allocation still requires exclusive local ownership, safety and ledger recovery. |
+| Program delivery | #528 adds `GET /rigs/{rig}/program`, compiling activated rig rows and reported configuration into core Program plus identity links and rig context. Plugin #28 adds bounded, read-only preview intake. Admission freezes a reviewed snapshot for one paired client/profile; the plugin validates and durably caches it separately from previews. | Commissioning/admission UI, uncertain-work recovery and quality feedback. A preview remains non-executable; a stored allocation still requires exclusive local ownership, safety and ledger recovery. |
+| Automatic workload exchange | Interactive CAS policy for the exact reviewed rig/catalog/client/profile/configuration and active project scope; durable paired request IDs, immutable retry results, bounded pending-assessment wait, verified capture-feed terminal release and shared-core carried attempt budgets. The prepared-target public Session requests, parks, seals and waits automatically; a real NINA #64/OmniSim/schema-18 test covers three FITS and six acknowledged events. | Multi-target operation defaults, policy inheritance, grade feedback, uncertain/preparation reconciliation, additional-budget approval, commissioning UI and collaboration. Legacy manual grants cannot silently enter this protocol. |
 | Native catalog schema and TS exchange | Existing PSF Guard/Sync transfer paths are migration references, not the new implementation. Meta and execution stores already use owned schemas. | PSF Guard per-rig catalogs are still TS-shaped. Native catalog schema, import/adapters, explicit TS connections and migration/round-trip gates are planned. |
 | Connected and batch check-in | Local bounded outboxes and durable pending accounting are merged foundations. #530 adds server receipt ingestion/contiguous acknowledgements and coalesced status routes; #531 shows reported rig status in Director. The current commissioning increment adds separate scoped pairing and a bounded capture sender with durable, identity-bound cursors, tested against a real local server after a native simulator run. | Preparation feed, production background/status delivery, grade feedback, offline authorization lifecycle, manual/sequence batch reconcile and replacement activation remain missing. |
-| End-to-end lifecycle | PSF Guard first allocation -> public NINA simulator session -> offline captures -> central batch receipts/status and replay refusal is locally tested, plus Unsafe cancellation. | Central grading -> reconciliation/replan, successor accounting and TS/Sync/Chatstronomy coexistence gates remain open. |
+| End-to-end lifecycle | PSF Guard allocation -> public NINA simulator session -> offline captures -> central batch receipts/status and replay refusal is locally tested, plus Unsafe cancellation. Automatic commissioned intake -> parked clean release -> pending-assessment wait is also locally tested. | Central grading -> reconciliation/replan, uncertain-work recovery, multi-target successors and TS/Sync/Chatstronomy coexistence gates remain open. |
 
 ## Domain model
 
@@ -1595,9 +1637,9 @@ snapshot even after catalog/preview changes. Any different allocation or client
 conflicts. Expiry, token revocation, re-pairing, restart, backup/restore and grade
 delivery do not remove the record, extend validity, or replenish counters.
 Pre-existing legacy receipt feeds also prevent first admission because their
-outstanding work has not been reconciled. There is deliberately no replacement,
-delete, renewal or successor-allocation endpoint yet. Do not clear this table to
-start another night; implement explicit close/reconciliation first.
+outstanding work has not been reconciled. Manual admission still has no delete
+or replacement path. Commissioned automatic workloads use the separate clean
+terminal-release protocol above. Do not clear this table to start another night.
 
 The plugin has separate strict allocation intake and an atomic origin/binding/
 client-scoped cache. It checks all identities, configuration, ancestry links,

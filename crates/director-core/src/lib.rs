@@ -61,6 +61,16 @@ pub struct Goal {
     pub transits: Option<TransitCoverage>,
 }
 
+impl Goal {
+    /// A successor may narrow, never refill, the first authorization for this
+    /// goal. Every reserved attempt counts, regardless of its quality outcome.
+    pub fn carry_attempt_budget(&mut self, initial_limit: u32, spent_attempts: u32) {
+        self.attempts_remaining = self
+            .attempts_remaining
+            .min(initial_limit.saturating_sub(spent_attempts));
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct State {

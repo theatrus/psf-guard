@@ -7,7 +7,7 @@ use psf_guard_director_core::{
 };
 
 // Leave room for the HTTP API wrapper inside the client's 1 MiB response limit.
-const MAX_ALLOCATION_BYTES: usize = 1_048_000;
+pub(crate) const MAX_ALLOCATION_BYTES: usize = 1_048_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -36,7 +36,7 @@ pub(crate) fn create_table(conn: &Connection) -> Result<(), Error> {
 }
 
 impl Allocation {
-    fn validate(&self, instance: Uuid) -> Result<(), Error> {
+    pub(crate) fn validate(&self, instance: Uuid) -> Result<(), Error> {
         for id in [
             self.allocation_id,
             self.catalog_id,
@@ -95,7 +95,11 @@ impl Allocation {
     }
 }
 
-fn read(conn: &Connection, rig: Uuid, instance: Uuid) -> Result<Option<Allocation>, Error> {
+pub(crate) fn read(
+    conn: &Connection,
+    rig: Uuid,
+    instance: Uuid,
+) -> Result<Option<Allocation>, Error> {
     let row: Option<(String, String)> = conn
         .query_row(
             "SELECT allocation_id,payload FROM execution_allocation WHERE rig_id=?1",
@@ -150,6 +154,11 @@ impl MetaStore {
             || now < grant.admitted_at_ms
             || now >= expires
         {
+            return Err(Error::Conflict);
+        }
+        let used_ledger: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM workload_history WHERE json_extract(payload,'$.ledger_id')=?1)", [ledger.to_string()], |r| r.get(0))?;
+        let released: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM workload_history WHERE allocation_id=?1 AND json_extract(payload,'$.released')=1)", [allocation.to_string()], |r| r.get(0))?;
+        if used_ledger || released {
             return Err(Error::Conflict);
         }
         let changed = tx.execute("INSERT OR IGNORE INTO execution_start(rig_id,allocation_id,ledger_id,started_at_ms) VALUES(?1,?2,?3,?4)",

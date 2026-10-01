@@ -163,6 +163,14 @@ impl MetaStore {
         if wrong_owner {
             return Err(Error::Conflict);
         }
+        let sealed: Option<i64> = tx.query_row("SELECT json_extract(payload,'$.terminal_sequence') FROM workload_history WHERE json_extract(payload,'$.ledger_id')=?1", [&ledger], |r| r.get(0)).optional()?;
+        if sealed.is_some_and(|end| {
+            receipts
+                .iter()
+                .any(|r| i64::try_from(r.sequence).map_or(true, |s| s > end))
+        }) {
+            return Err(Error::Conflict);
+        }
         let mut outcomes = Vec::with_capacity(receipts.len());
         for receipt in receipts {
             let payload = payload_ok(&receipt.payload)?;
