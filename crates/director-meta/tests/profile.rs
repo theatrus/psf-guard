@@ -122,4 +122,27 @@ fn invalid_parts_are_refused_before_anything_is_written() {
     });
     assert_eq!(store.save_rig_profile(&good, 0).unwrap().revision, 1);
     assert_eq!(store.rig_profile(rig.id).unwrap().unwrap().revision, 1);
+    for names in [
+        [("unknown".into(), "Ha".into())].into(),
+        [("ha".into(), " ".into())].into(),
+        [("ha".into(), "Ha\n".into())].into(),
+        [("ha".into(), "Ha".into()), ("extra".into(), "Red".into())].into(),
+    ] {
+        good.filter_names = names;
+        assert!(matches!(
+            store.save_rig_profile(&good, 1),
+            Err(Error::InvalidInput)
+        ));
+        assert!(store
+            .rig_profile(rig.id)
+            .unwrap()
+            .unwrap()
+            .filter_names
+            .is_empty());
+    }
+    good.filter_names = [("ha".into(), "H-alpha".into())].into();
+    assert_eq!(
+        store.save_rig_profile(&good, 1).unwrap().filter_names["ha"],
+        "H-alpha"
+    );
 }

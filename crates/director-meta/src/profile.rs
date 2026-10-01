@@ -72,6 +72,10 @@ pub struct RigProfile {
     pub limits: Reported<Limits>,
     /// Only the plugin reports this; operators cannot type a camera's modes.
     pub configuration: Option<Reported<Configuration>>,
+    /// Native filter labels keyed by the exact configuration filter IDs.
+    /// Labels help compile templates; they never replace dispatch identities.
+    #[serde(default)]
+    pub filter_names: std::collections::BTreeMap<String, String>,
     /// The registered Sync peer that holds this rig's database when the rig
     /// runs on another PSF Guard. Activation pushes the plan there. `None`
     /// means the database on this server is the one the rig executes from.
@@ -95,6 +99,7 @@ impl RigProfile {
                 reported_at_ms: now_ms,
             },
             configuration: None,
+            filter_names: Default::default(),
             peer_id: None,
             updated_at_ms: now_ms,
         }
@@ -185,6 +190,21 @@ pub(crate) fn validate_profile(profile: &RigProfile) -> Result<(), Error> {
         }
         validate_configuration(&configuration.value).map_err(|_| Error::InvalidInput)?;
         if parse_id(&configuration.value.rig_id).map_err(|_| Error::InvalidInput)? != profile.rig_id
+        {
+            return Err(Error::InvalidInput);
+        }
+    }
+    if !profile.filter_names.is_empty() {
+        let configuration = profile.configuration.as_ref().ok_or(Error::InvalidInput)?;
+        if profile.filter_names.len() != configuration.value.filters.len()
+            || configuration
+                .value
+                .filters
+                .iter()
+                .any(|f| !profile.filter_names.contains_key(&f.id))
+            || profile.filter_names.values().any(|name| {
+                name.trim().is_empty() || name.len() > 256 || name.chars().any(char::is_control)
+            })
         {
             return Err(Error::InvalidInput);
         }

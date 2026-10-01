@@ -31,7 +31,7 @@ use std::{
 };
 
 /// How long a pulled program stays valid without a fresh pull.
-const VALIDITY: Duration = Duration::from_secs(36 * 3600);
+const VALIDITY: Duration = Duration::from_secs(24 * 3600);
 /// Blocking work the host should expect around one exposure: slew settle,
 /// filter change, dither and download. A planning estimate, not a measurement.
 const OVERHEAD_MS: u64 = 15_000;
@@ -196,7 +196,7 @@ use crate::server::database_context::DatabaseContext;
 /// the pull and by check-in, which only needs the revision to say whether the
 /// plugin should pull again.
 pub(super) fn assemble(
-    store: &MetaStore,
+    store: &mut MetaStore,
     catalogs: &[Arc<DatabaseContext>],
     instance: Uuid,
     rig: Uuid,
@@ -225,12 +225,13 @@ pub(super) fn assemble(
         .get(catalog_id)
         .cloned()
         .ok_or(Error::Missing)?;
-    let connection = super::super::database_context::open_scheduler_connection_with_flags(
+    let mut connection = super::super::database_context::open_scheduler_connection_with_flags(
         FilePath::new(&context.database_path),
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(StoreError::from)?;
     connection.busy_timeout(Duration::from_secs(2))?;
+    let snapshot = connection.transaction()?;
     let mut projects = BTreeMap::new();
     for activation in &activations {
         projects.insert(
@@ -252,7 +253,7 @@ pub(super) fn assemble(
         .collect::<Result<_, StoreError>>()?;
     let saved: BTreeMap<String, u32> = store.saved_captures_by_goal(rig)?.into_iter().collect();
     let built = build(
-        &connection,
+        &snapshot,
         rig,
         binding.catalog,
         &configuration,
@@ -262,24 +263,52 @@ pub(super) fn assemble(
         &plans,
         &saved,
     )?;
+    snapshot.commit()?;
     let now = now_ms();
-    // The revision fingerprints every input; the clock is deliberately left
-    // out so an unchanged program answers 304 on the next pull.
-    let revision = catalog_discovery::digest(
+    if built.goals.is_empty() {
+        return Err(PullError::NotReady(format!(
+            "No executable activated plan for this rig. {}",
+            built.omitted.join("; ")
+        )));
+    }
+    // Persist the validity interval. A retry must return identical content,
+    // while changed inputs or expiry must mint a different assignment identity.
+    let assignment_revision = activations.iter().map(|a| a.revision).max().unwrap_or(1);
+    let fingerprint = catalog_discovery::digest(
         &serde_json::to_vec(&(
-            "program-v1",
+            "program-v2",
+            assignment_revision,
+            VALIDITY.as_millis(),
             &built.goals,
             &built.targets,
             &built.recipes,
             &built.links,
+            &built.bindings,
+            &built.omitted,
             &configuration,
             profile.as_ref().map(|p| p.revision),
         ))
         .map_err(|_| Error::Internal)?,
     );
+    let issue = store.issue_program_preview(
+        rig,
+        catalog_id,
+        &fingerprint,
+        now,
+        VALIDITY.as_millis() as u64,
+    )?;
+    let revision = catalog_discovery::digest(
+        &serde_json::to_vec(&(
+            fingerprint,
+            issue.id,
+            issue.issued_at_ms,
+            issue.expires_at_ms,
+        ))
+        .map_err(|_| Error::Internal)?,
+    );
     let span = Interval {
-        start_ms: now,
-        end_ms: now + VALIDITY.as_millis() as u64,
+        start_ms: issue.issued_at_ms,
+        end_ms: issue.expires_at_ms,
     };
     let goals: Vec<Goal> = built
         .goals
@@ -289,16 +318,11 @@ pub(super) fn assemble(
             ..goal
         })
         .collect();
-    if goals.is_empty() {
-        return Err(PullError::NotReady(
-            "No activated plan gives this rig work yet.".into(),
-        ));
-    }
     let program = Program {
         schema_version: PROGRAM_VERSION,
         assignment: Assignment {
-            id: format!("assignment-{}", &revision[..16]),
-            revision: activations.iter().map(|a| a.revision).max().unwrap_or(1),
+            id: format!("assignment-{}", issue.id),
+            revision: assignment_revision,
             rig_id: rig.to_string(),
             configuration_id: configuration.id.clone(),
             valid_from_ms: span.start_ms,
@@ -337,7 +361,7 @@ pub(super) fn assemble(
         catalog_id,
         rig_id: rig,
         revision,
-        issued_at_ms: now,
+        issued_at_ms: issue.issued_at_ms,
         program,
         links: built.links,
         rig: RigContext {
@@ -363,7 +387,7 @@ pub(super) fn assemble(
 
 /// The current revision only, or `None` when no program can be built yet.
 pub(super) fn current_revision(
-    store: &MetaStore,
+    store: &mut MetaStore,
     catalogs: &[Arc<DatabaseContext>],
     instance: Uuid,
     rig: Uuid,
@@ -426,19 +450,34 @@ fn build(
     };
     let mut targets_seen = BTreeMap::new();
     let mut recipes_seen = BTreeMap::new();
-    let _ = catalog;
     for activation in activations {
-        let Some(entry) = activation.rigs.iter().find(|r| r.rig_id == rig) else {
+        let Some(entry) = activation
+            .rigs
+            .iter()
+            .find(|r| r.rig_id == rig && r.catalog_id == catalog.id)
+        else {
             continue;
         };
         let project = &projects[&activation.project_id];
         let plan = plans.get(&activation.project_id);
+        if plan.is_none_or(|p| p.revision != activation.plan_revision) {
+            built.omitted.push(format!(
+                "{}: planning changed since activation; activate the reviewed plan again",
+                project.name
+            ));
+            continue;
+        }
         for activated in &entry.plans {
             let goal_id = activated.exposureplan_guid.to_string();
-            let Some(row) = read_plan_row(connection, &activated.exposureplan_guid.to_string())?
+            let Some(row) = read_plan_row(
+                connection,
+                &activated.exposureplan_guid.to_string(),
+                &activated.target_guid.to_string(),
+                &entry.project_guid.to_string(),
+            )?
             else {
                 built.omitted.push(format!(
-                    "{}: exposure plan {} no longer exists in the rig database",
+                    "{}: exposure plan {} is missing, inactive, or no longer belongs to its activated target and project",
                     project.name, activated.exposureplan_guid
                 ));
                 continue;
@@ -454,7 +493,7 @@ fn build(
                 read_target(connection, &activated.target_guid.to_string(), rotator)?
             else {
                 built.omitted.push(format!(
-                    "{}: target {} no longer exists in the rig database",
+                    "{}: target {} is missing or has unsupported coordinates/epoch",
                     project.name, activated.target_guid
                 ));
                 continue;
@@ -475,19 +514,30 @@ fn build(
                 .unwrap_or((None, None));
             // The filter the plugin reported that serves this template's filter.
             let wanted = bandpass_for_filter(&row.template_filter).id;
-            let Some(filter) = configuration
+            let names = profile.map(|p| &p.filter_names);
+            let label = |f: &psf_guard_director_core::program::Filter| {
+                names
+                    .and_then(|n| n.get(&f.id))
+                    .cloned()
+                    .unwrap_or_else(|| f.id.clone())
+            };
+            let exact: Vec<_> = configuration
                 .filters
                 .iter()
-                .find(|f| f.id.eq_ignore_ascii_case(&row.template_filter))
-                .or_else(|| {
-                    configuration
-                        .filters
-                        .iter()
-                        .find(|f| bandpass_for_filter(&f.id).id == wanted)
-                })
-            else {
+                .filter(|f| label(f).eq_ignore_ascii_case(&row.template_filter))
+                .collect();
+            let candidates = if exact.is_empty() {
+                configuration
+                    .filters
+                    .iter()
+                    .filter(|f| bandpass_for_filter(&label(f)).id == wanted)
+                    .collect::<Vec<_>>()
+            } else {
+                exact
+            };
+            let [filter] = candidates.as_slice() else {
                 built.omitted.push(format!(
-                    "{}: no reported filter serves template filter '{}' ({})",
+                    "{}: template filter '{}' ({}) needs one unambiguous reported filter",
                     project.name, row.template_filter, wanted
                 ));
                 continue;
@@ -496,38 +546,52 @@ fn build(
             let offset = pick_control(&configuration.offset, row.template_offset);
             let (Ok(gain), Ok(offset)) = (gain, offset) else {
                 built.omitted.push(format!(
-                    "{}: template '{}' leaves gain or offset to the camera default, which the reported camera does not accept; set them in Target Scheduler",
+                    "{}: template '{}' requests unsupported or unspecified gain/offset; review its camera settings",
                     project.name, row.template_filter
                 ));
                 continue;
             };
-            let bin = row.template_bin.unwrap_or(1).max(1) as i16;
+            let bin = i16::try_from(row.template_bin.unwrap_or(1)).ok();
             let binning = configuration
                 .binning_modes
                 .iter()
                 .copied()
-                .find(|mode| mode.x == bin && mode.y == bin)
-                .or_else(|| configuration.binning_modes.first().copied());
+                .find(|mode| Some(mode.x) == bin && Some(mode.y) == bin);
             let Some(binning) = binning else {
                 built.omitted.push(format!(
-                    "{}: the reported camera has no binning modes",
+                    "{}: the template binning is not supported by the reported camera",
                     project.name
                 ));
                 continue;
             };
-            let readout_mode = row
-                .template_readout
-                .filter(|mode| configuration.readout_modes.contains(&(*mode as i16)))
-                .map(|mode| mode as i16)
-                .or_else(|| configuration.readout_modes.first().copied());
+            let readout_mode = match row.template_readout {
+                Some(mode) => i16::try_from(mode)
+                    .ok()
+                    .filter(|mode| configuration.readout_modes.contains(mode)),
+                None if configuration.readout_modes.len() == 1 => {
+                    configuration.readout_modes.first().copied()
+                }
+                None => None,
+            };
             let Some(readout_mode) = readout_mode else {
                 built.omitted.push(format!(
-                    "{}: the reported camera has no readout modes",
+                    "{}: the template readout mode is unsupported or ambiguous",
                     project.name
                 ));
                 continue;
             };
-            let exposure_ms = (row.exposure_seconds * 1000.0).round().max(1.0) as u64;
+            let milliseconds = (row.exposure_seconds * 1000.0).round();
+            if !milliseconds.is_finite()
+                || milliseconds < configuration.exposure_min_ms as f64
+                || milliseconds > configuration.exposure_max_ms as f64
+            {
+                built.omitted.push(format!(
+                    "{}: the template exposure is outside the camera's supported range",
+                    project.name
+                ));
+                continue;
+            }
+            let exposure_ms = milliseconds as u64;
             let recipe_id = format!("recipe-{}", activated.contribution_id);
             let recipe = Recipe {
                 id: recipe_id.clone(),
@@ -620,29 +684,40 @@ fn build(
     Ok(built)
 }
 
-/// A recipe value the reported control accepts: the template's when given
-/// and in range, else the closest edge, else none for an unsupported control.
+/// Never substitute another acquisition setting for an explicit template value.
 fn pick_control(control: &Control, wanted: Option<i32>) -> Result<Option<i32>, ()> {
     match control {
-        Control::Unsupported {} => Ok(None),
+        Control::Unsupported {} => {
+            if wanted.is_none() {
+                Ok(None)
+            } else {
+                Err(())
+            }
+        }
         Control::Range { minimum, maximum } => match wanted {
-            Some(value) => Ok(Some(value.clamp(*minimum, *maximum))),
-            None => Err(()),
+            Some(value) if (*minimum..=*maximum).contains(&value) => Ok(Some(value)),
+            _ => Err(()),
         },
         Control::Values { values } => match wanted {
             Some(value) if values.contains(&value) => Ok(Some(value)),
-            Some(value) => Ok(values.iter().copied().min_by_key(|v| (v - value).abs())),
-            None => Err(()),
+            _ => Err(()),
         },
     }
 }
 
-fn read_plan_row(connection: &Connection, guid: &str) -> rusqlite::Result<Option<PlanRow>> {
+fn read_plan_row(
+    connection: &Connection,
+    guid: &str,
+    target: &str,
+    project: &str,
+) -> rusqlite::Result<Option<PlanRow>> {
     connection
         .query_row(
             "SELECT ep.exposure, ep.desired, ep.accepted, COALESCE(ep.enabled,1), et.filtername, et.gain, et.offset, et.bin, et.readoutmode
-             FROM exposureplan ep JOIN exposuretemplate et ON et.Id = ep.exposureTemplateId WHERE ep.guid = ?1",
-            [guid],
+             FROM exposureplan ep JOIN exposuretemplate et ON et.Id = ep.exposureTemplateId
+             JOIN target t ON t.Id=ep.targetId JOIN project p ON p.Id=t.projectId
+             WHERE ep.guid=?1 AND t.guid=?2 AND p.guid=?3 AND t.active=1 AND p.state=1",
+            [guid, target, project],
             |row| {
                 Ok(PlanRow {
                     exposure_seconds: row.get(0)?,
@@ -667,7 +742,7 @@ fn read_target(
 ) -> rusqlite::Result<Option<Target>> {
     connection
         .query_row(
-            "SELECT name, ra, dec, rotation FROM target WHERE guid = ?1",
+            "SELECT name, ra, dec, rotation FROM target WHERE guid = ?1 AND ra >= 0 AND ra < 24 AND dec >= -90 AND dec <= 90 AND epochcode=2",
             [guid],
             |row| {
                 let name: String = row.get(0)?;
@@ -684,7 +759,7 @@ fn read_target(
                     },
                     icrs_ra_mas: (ra_degrees * f64::from(MAS_PER_DEGREE)).round() as u32
                         % (360 * MAS_PER_DEGREE),
-                    icrs_dec_mas: (dec.clamp(-90.0, 90.0) * f64::from(MAS_PER_DEGREE)).round()
+                    icrs_dec_mas: (dec * f64::from(MAS_PER_DEGREE)).round()
                         as i32,
                     position_angle_mas: if rotator && rotation.is_finite() {
                         Some(
