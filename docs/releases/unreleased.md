@@ -6,6 +6,11 @@
 
 ## Added
 
+- Director can receive native equipment reports from paired NINA clients for
+  explicit operator review. Accepting a fresh report preserves manual rig setup
+  and refuses stale state or outstanding allocations; reporting alone never
+  changes active equipment or grants acquisition. The review UI is still pending.
+
 - Director's experimental allocation API supports a one-shot executor launch
   bound to the paired client and local ledger. A retry or lost local database
   cannot launch the same allocation again. Restart recovery remains a separate,

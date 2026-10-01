@@ -97,7 +97,11 @@ pub(in crate::server) async fn authorize(
         ["", "director", "v1", "rigs", rig, "program" | "allocation"] if method == Method::GET => {
             *rig
         }
-        ["", "director", "v1", "rigs", rig, "checkin" | "status"] if method == Method::POST => *rig,
+        ["", "director", "v1", "rigs", rig, "checkin" | "status" | "equipment-reports"]
+            if method == Method::POST =>
+        {
+            *rig
+        }
         ["", "director", "v1", "rigs", rig, "allocation", "start"] if method == Method::POST => {
             *rig
         }

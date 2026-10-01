@@ -199,7 +199,7 @@ async fn paired_rig_cannot_extend_another_rigs_ledger() {
         .unwrap();
 }
 
-async fn fixture() -> (TempDir, Arc<AppState>, Router, Uuid, Uuid, Uuid) {
+pub(super) async fn fixture() -> (TempDir, Arc<AppState>, Router, Uuid, Uuid, Uuid) {
     let dir = TempDir::new().unwrap();
     let state = Arc::new(state(&dir, true));
     let service = state.director.clone().unwrap();

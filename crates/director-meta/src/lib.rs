@@ -11,6 +11,7 @@ pub mod catalog;
 pub mod catalog_rig;
 pub mod client;
 pub mod configuration;
+pub mod equipment_report;
 pub mod framing;
 pub mod inbox;
 pub mod merge;

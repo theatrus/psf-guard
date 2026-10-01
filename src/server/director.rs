@@ -26,6 +26,7 @@ mod catalog_adoption;
 mod catalog_discovery;
 mod catalog_rig;
 mod checkin;
+mod equipment_report;
 mod feasibility;
 mod framing;
 mod import_drafts;
@@ -443,6 +444,18 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             axum::routing::put(rig_profile::report_equipment).layer(DefaultBodyLimit::max(
                 psf_guard_director_core::MAX_REQUEST_BYTES,
             )),
+        )
+        .route(
+            "/rigs/{rig}/equipment-reports",
+            get(equipment_report::list)
+                .post(equipment_report::submit)
+                .layer(DefaultBodyLimit::max(
+                    psf_guard_director_core::MAX_REQUEST_BYTES,
+                )),
+        )
+        .route(
+            "/rigs/{rig}/equipment-reports/{client}/accept",
+            axum::routing::post(equipment_report::accept),
         )
         .route(
             "/catalogs/{slug}/adoption/preview",

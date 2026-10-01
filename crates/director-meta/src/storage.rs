@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 16;
+const SCHEMA_VERSION: i32 = 17;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -44,6 +44,7 @@ impl MetaStore {
         super::program_issue::create_table(&tx)?;
         super::allocation::create_table(&tx)?;
         create_execution_start(&tx)?;
+        super::equipment_report::create_table(&tx)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         conn.close().map_err(|(_, error)| Error::Sqlite(error))?;
@@ -106,6 +107,9 @@ impl MetaStore {
             }
             if version < 16 {
                 create_execution_start(&tx)?;
+            }
+            if version < 17 {
+                super::equipment_report::create_table(&tx)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
@@ -272,6 +276,10 @@ fn validate(conn: &Connection) -> Result<Uuid, Error> {
             "SELECT rig_id,allocation_id,ledger_id,started_at_ms FROM execution_start LIMIT 0",
         )
         .map_err(|_| Error::CorruptDatabase)?;
+    }
+    if version >= 17 {
+        conn.prepare("SELECT client_id,report_id,payload FROM equipment_report LIMIT 0")
+            .map_err(|_| Error::CorruptDatabase)?;
     }
     let id: String = conn.query_row(
         "SELECT instance_id FROM meta WHERE singleton=1",

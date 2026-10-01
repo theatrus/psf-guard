@@ -5,7 +5,44 @@ complete. Shared-core, durable sidecar and native simulator building blocks are
 merged. The published Director 0.1.0.1 preview is runtime-only, not an acquisition
 scheduler. See the implementation audit below before treating a capability as
 available to users.
-Last updated: 2026-09-30.
+Last updated: 2026-10-01.
+
+### Native equipment review handoff
+
+Meta schema 17 stages one bounded equipment report per paired NINA client.
+The plugin's explicit **Report equipment** session command uses the same native
+snapshot as acquisition, including the session's constraint fingerprint, and
+works without enabling acquisition. Reports are bound to the coordinator,
+catalog/rig, client and native profile; credentials stay in the OS vault.
+Reports cannot grant launch authority or silently replace planning inputs.
+
+The API stages paired `POST /rigs/{rig}/equipment-reports`, lists reports for an
+operator with `GET` on that path, and accepts a reviewed report with interactive
+operator `POST /rigs/{rig}/equipment-reports/{client}/accept`. Acceptance uses
+the exact report UUID and rig-profile compare-and-set revision in one
+transaction. It preserves manual optics, site, horizon, limits, sky quality and
+peer linkage. Stale observations, revoked pairings, changed reports/profiles
+and outstanding allocations fail closed. Reports and acceptance are retry-safe;
+revocation removes reports without erasing accepted setup.
+
+Implemented: staging, transactional acceptance, strict native report transport
+and session command. Not implemented: operator review UI, readiness summary,
+allocation admission UI, successor/recovery reconciliation, automatic optics
+or site commissioning. Frontend integration should extend the existing rig
+Setup editor, not introduce another rig identity or database. Display the
+paired profile and report age, compare current and proposed capabilities, then
+submit explicit acceptance with `expected_revision`. A received or accepted
+report is not an allocation or launch permit. The full wire contract and
+review restrictions live in [Director management](../DIRECTOR.md#reviewing-native-equipment-evidence).
+
+Local acceptance on 2026-10-01 used NINA 3.3.0.1064, ASCOM OmniSim and
+runtime 0.7.0 / IPC 8 with a disposable schema-17 server. Reporting with
+acquisition disabled left active configuration empty; explicit review preserved
+manual optics. The public session then saved three frames, checked in six
+events after an outage and refused replay. A separate public unsafe run
+aborted exposure, parked and stayed stopped after recovery. The plugin smoke
+guide records both evidence paths. This does not complete any phase gate or
+change the published runtime-only preview.
 
 ### Public prepared-target acquisition increment (locally validated)
 
