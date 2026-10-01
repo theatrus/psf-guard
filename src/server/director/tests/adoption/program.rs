@@ -81,8 +81,11 @@ async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment(
     .unwrap();
     let mut configuration = program["configuration"].clone();
     configuration["rig_id"] = json!(a.rig.to_string());
+    configuration["filters"][0]["id"] = json!("filter-2");
+    configuration["offset"] = json!({"support":"range","minimum":0,"maximum":100});
     let (status, reported) = call(&a.f.app, "PUT", &format!("/rigs/{}/equipment", a.rig), json!({
         "coordinator_instance_id": instance, "catalog_id": catalog, "configuration": configuration,
+        "filter_names": {"filter-2":"Ha"},
         "optics": {"sensor_width_px": 6248, "sensor_height_px": 4176, "pixel_size_um": 3.76, "focal_length_mm": 250.0, "aperture_mm": 51.0, "rotation": {"mode":"rotator"}},
         "site": {"latitude_degrees": 34.2, "longitude_degrees": -118.3, "elevation_meters": 400.0},
         "horizon": null, "limits": null, "reported_at_ms": 1_700_000_000_000u64,
@@ -111,7 +114,7 @@ async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment(
     assert!(
         assignment["expires_at_ms"].as_u64().unwrap()
             - assignment["valid_from_ms"].as_u64().unwrap()
-            == 36 * 3600 * 1000
+            == 24 * 3600 * 1000
     );
     let targets = data["program"]["targets"].as_array().unwrap();
     assert_eq!(targets.len(), 2);
@@ -123,7 +126,7 @@ async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment(
     );
     let recipes = data["program"]["recipes"].as_array().unwrap();
     assert_eq!(recipes.len(), 1);
-    assert_eq!(recipes[0]["filter_id"], "ha");
+    assert_eq!(recipes[0]["filter_id"], "filter-2");
     assert_eq!(recipes[0]["exposure_ms"], 300_000);
     assert_eq!(
         recipes[0]["gain"],
@@ -146,10 +149,153 @@ async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment(
     assert_eq!(data["rig"]["site"]["latitude_degrees"], 34.2);
     assert_eq!(data["rig"]["rotation"], json!({"mode":"rotator"}));
 
+    // The actual server output must fit the same geometry core the sidecar
+    // uses, not just the less restrictive program-shape validator.
+    {
+        use psf_guard_director_core::{
+            geometry::{BoundGeometry, Constraints, GoalLimits, RigConstraints},
+            program::{BoundProgram, Program},
+            visibility::{EarthOrientation, Horizon, Site},
+            Safety, State,
+        };
+        let program: Program = serde_json::from_value(data["program"].clone()).unwrap();
+        let assignment = &program.assignment;
+        let state = State {
+            rig_id: assignment.rig_id.clone(),
+            configuration_id: assignment.configuration_id.clone(),
+            now_ms: assignment.valid_from_ms,
+            conditions_valid_until_ms: assignment.expires_at_ms,
+            safety: Safety::Unknown,
+            at_boundary: true,
+            operator_stop: false,
+            meridian_exclusion: psf_guard_director_core::windows::MeridianExclusion {
+                before_ms: 0,
+                after_ms: 0,
+            },
+        };
+        let constraints = Constraints {
+            schema_version: 1,
+            rig: RigConstraints {
+                rig_id: state.rig_id.clone(),
+                configuration_id: state.configuration_id.clone(),
+                revision: 1,
+                site: Site {
+                    latitude_degrees: 34.2,
+                    longitude_degrees: -118.3,
+                    elevation_meters: 400.0,
+                },
+                orientation: EarthOrientation {
+                    ut1_minus_utc_seconds: 0.0,
+                    polar_motion_x_radians: 0.0,
+                    polar_motion_y_radians: 0.0,
+                    valid_from_ms: assignment.valid_from_ms,
+                    valid_until_ms: assignment.expires_at_ms + 1,
+                },
+                horizon: Horizon::FixedMinimum {},
+                minimum_altitude_degrees: 20.0,
+                maximum_altitude_degrees: 89.0,
+                meridian_exclusion: state.meridian_exclusion,
+            },
+            goals: assignment
+                .goals
+                .iter()
+                .map(|g| GoalLimits {
+                    goal_id: g.id.clone(),
+                    minimum_altitude_degrees: 20.0,
+                    maximum_altitude_degrees: 89.0,
+                    horizon_offset_degrees: 0.0,
+                })
+                .collect(),
+        };
+        BoundGeometry::new(
+            BoundProgram::new(program, &state).unwrap(),
+            constraints,
+            &state,
+        )
+        .unwrap();
+    }
+
     // Unchanged inputs answer 304 with the same tag.
     let (status, again, _) = raw_get(&a.f.app, &path, Some(&etag)).await;
     assert_eq!(status, StatusCode::NOT_MODIFIED);
     assert_eq!(again.as_deref(), Some(etag.as_str()));
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    let (_, _, repeated) = raw_get(&a.f.app, &path, None).await;
+    assert_eq!(
+        repeated, body,
+        "unconditional retries must preserve the entire envelope"
+    );
+
+    for (change, restore, reason) in [
+        (
+            "UPDATE exposuretemplate SET gain=101",
+            "UPDATE exposuretemplate SET gain=100",
+            "gain",
+        ),
+        (
+            "UPDATE exposuretemplate SET offset=101",
+            "UPDATE exposuretemplate SET offset=30",
+            "offset",
+        ),
+        (
+            "UPDATE exposuretemplate SET bin=2",
+            "UPDATE exposuretemplate SET bin=1",
+            "binning",
+        ),
+        (
+            "UPDATE exposuretemplate SET bin=65537",
+            "UPDATE exposuretemplate SET bin=1",
+            "binning",
+        ),
+        (
+            "UPDATE exposuretemplate SET readoutmode=65536",
+            "UPDATE exposuretemplate SET readoutmode=-1",
+            "readout",
+        ),
+        (
+            "UPDATE exposureplan SET exposure=0",
+            "UPDATE exposureplan SET exposure=300",
+            "exposure",
+        ),
+        (
+            "UPDATE exposureplan SET exposure=601",
+            "UPDATE exposureplan SET exposure=300",
+            "exposure",
+        ),
+        (
+            "UPDATE target SET active=0",
+            "UPDATE target SET active=1",
+            "inactive",
+        ),
+        (
+            "UPDATE project SET state=2",
+            "UPDATE project SET state=1",
+            "inactive",
+        ),
+        (
+            "UPDATE target SET dec=91",
+            "UPDATE target SET dec=61.45",
+            "target",
+        ),
+        (
+            "UPDATE target SET epochcode=1",
+            "UPDATE target SET epochcode=2",
+            "target",
+        ),
+    ] {
+        a.db.execute(change, []).unwrap();
+        let (status, _, rejected) = raw_get(&a.f.app, &path, None).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{change}: {rejected}"
+        );
+        assert!(
+            rejected["error"].as_str().unwrap().contains(reason),
+            "{rejected}"
+        );
+        a.db.execute(restore, []).unwrap();
+    }
 
     // Progress in the rig database changes the goal and the tag.
     a.db.execute("UPDATE exposureplan SET accepted=10 WHERE Id=(SELECT min(Id) FROM exposureplan WHERE desired=72)", []).unwrap();
@@ -193,4 +339,14 @@ async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment(
         raw_get(&a.f.app, &wrong_rig, None).await.0,
         StatusCode::FORBIDDEN
     );
+    // An unactivated draft edit must not change priorities in an active program.
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut plan = store.plan_draft(a.project).unwrap().unwrap();
+        plan.objectives[0].priority += 1;
+        store.save_plan_draft(&plan, plan.revision).unwrap();
+    }
+    let (status, _, body) = raw_get(&a.f.app, &path, None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body["error"].as_str().unwrap().contains("activate"));
 }

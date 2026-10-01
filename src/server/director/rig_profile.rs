@@ -62,6 +62,8 @@ pub(super) struct EquipmentReport {
     coordinator_instance_id: Uuid,
     catalog_id: Uuid,
     configuration: Configuration,
+    #[serde(default)]
+    filter_names: std::collections::BTreeMap<String, String>,
     optics: Optics,
     site: Option<Site>,
     horizon: Option<Horizon>,
@@ -205,6 +207,7 @@ pub(super) async fn report_equipment(
             let mut next = stored.unwrap_or_else(|| RigProfile::empty(rig, report.reported_at_ms));
             let at = report.reported_at_ms;
             next.configuration = Some(from_plugin(report.configuration, at));
+            next.filter_names = report.filter_names;
             next.optics = Some(from_plugin(report.optics, at));
             if let Some(site) = report.site {
                 next.site = Some(from_plugin(site, at));

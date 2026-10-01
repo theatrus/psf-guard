@@ -5,7 +5,7 @@ complete. Shared-core, durable sidecar and native simulator building blocks are
 merged. The published Director 0.1.0.1 preview is runtime-only, not an acquisition
 scheduler. See the implementation audit below before treating a capability as
 available to users.
-Last updated: 2026-09-26.
+Last updated: 2026-09-30.
 
 This is the tracking document for Director. Update the phase checklist and
 record implementation PRs here as work lands. Keep durable architecture here;
@@ -82,7 +82,7 @@ untested integration requirements unchecked.
 | Sidecar and local recovery | Merged `crates/director-ledger` and `crates/director-runtime`: schema-4 journal, capture/preparation outboxes, IPC 8/runtime 0.7.0, one-shot dispatch checks with exact latest-start deadlines, process crash/reopen tests; PSF Guard #464-487 and [#518](https://github.com/theatrus/psf-guard/pull/518). The current commissioning increment delivers capture receipts after restart and retains exact acknowledgements. | Preparation-feed delivery, pruning, grade feedback, assignment replacement and complete operator recovery. |
 | NINA native execution | Plugin [#18](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/18), [#19](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/19), [#22](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/22), [#23](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/23), [#24](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/24) and [#26](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/26) merged: transient native items, target context, complete horizon export, post-hook geometry checks and tested internal TS-style instruction slots with a compatibility matrix. Real nightly OmniSim probes captured three filtered FITS frames with correlated evidence. | Public TS-compatible session container and UI, all trigger/condition/hook contexts, native defaults, full autofocus/guiding/flip/calibration/safety recovery and continuous ownership integration. Probe uses fixture allocations and synthetic orientation evidence, not a server session. |
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
-| Meta storage | Separate schema-12 store on by default beside the registry; separate hashed Director pairing/client records; rig inbox with receipts, cursors and live status; mutable rig profiles with optics/site/limits and plugin equipment reports; per-project framing and plan drafts; activation records, UUIDs, reviewed one-to-one database/rig binding, confirmed source project links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. Unambiguous prototype links retain rig IDs. | Conflict-resolution UI for ambiguous prototype rigs, project-level permissions, active revisions, allocation authority and progress projections. |
+| Meta storage | Separate schema-14 store on by default beside the registry; separate hashed Director pairing/client records; rig inbox with receipts, cursors and live status; stable preview issuance; mutable rig profiles with optics/site/limits and plugin equipment reports; per-project framing and plan drafts; activation records, UUIDs, reviewed one-to-one database/rig binding, confirmed source project links, CAS renames, immutable sites/setups, transactional migrations and snapshot backup/restore tests. Unambiguous prototype links retain rig IDs. | Conflict-resolution UI for ambiguous prototype rigs, project-level permissions, active revisions, allocation authority and progress projections. |
 | Project intent | [#492](https://github.com/theatrus/psf-guard/pull/492): shared objective/contribution model. [#493](https://github.com/theatrus/psf-guard/pull/493): schema-3 intent persistence with validated immutable setup references. Plan drafts with an objective editor, per-rig template binding and core exposure defaults. | Depth/FOV/sampling compatibility, per-night feasibility and authoritative allocation remain open. |
 | Project framing wizard | Framing view in the project workspace: survey backgrounds from N.I.N.A.'s HiPS list, name resolution through CDS Sesame, interactive center, angle and zoom, mosaic rows/columns/overlap, per-rig footprints from rig profiles, draft editing with compare-and-set, and a visibility panel with tonight's altitude chart, custom horizon, Moon and darkness like N.I.N.A.'s framing assistant, plus a week of nights per rig. | Reference images with WCS, layer comparison, offline region cache, rotation feasibility per rig. |
 | Catalog discovery | [#498](https://github.com/theatrus/psf-guard/pull/498) merged: operator-scoped read-only project/profile evidence from registered TS-compatible catalogs, with bounded results and invalid/duplicate identity reports. | Discovery does not infer rig ownership or read image history. |
@@ -311,8 +311,8 @@ mismatched tuple even when the slug exists.
 
 | Endpoint | Owner | Purpose |
 | --- | --- | --- |
-| `GET /rigs/{rig}/program` | backend, merged | The current program for the rig, built from its activated plans and its reported equipment: core `Assignment` (36 h validity, one goal per activated exposure plan with live `accepted`) and `Program`, `links` joining each goal to its project, objective, contribution, panel, source project GUID, target GUID and exposure plan GUID, `rig` context (site, horizon, limits, rotation) for the plugin's constraints, and `omitted` reasons. `If-None-Match` gives `304`; `422` until equipment is reported or a plan is activated. |
-| `PUT /rigs/{rig}/equipment` | backend, merged | The plugin reports its core `Configuration`, optics, site, horizon and limits into the rig profile with `source: plugin`. The tuple must match the server's `catalog_rig` binding (`403` otherwise); an identical report is a no-op. Activation will later freeze setup revisions from the profile and mark active plans stale when it changes. |
+| `GET /rigs/{rig}/program` | backend | The current preview for the rig, built from its activated plans and reported equipment: core `Assignment` (stable 24 h validity, one goal per eligible activated exposure plan with live `accepted`) and `Program`, `links` joining each goal to its project, objective, contribution, panel, source project GUID, target GUID and exposure plan GUID, `rig` context (site, horizon, limits, rotation), and `omitted` reasons. Unchanged pulls retain exact content across restart. `If-None-Match` gives `304`; `422` until equipment and executable activated work exist. Not an acquisition lease. |
+| `PUT /rigs/{rig}/equipment` | backend, operator-authenticated only | Reports core `Configuration`, optional complete `filter_names` keyed by its filter IDs, optics, site, horizon and limits into the rig profile with `source: plugin`. The tuple must match the server's `catalog_rig` binding (`403` otherwise); an identical report is a no-op. Paired clients do not yet have this write permission. Activation will later freeze setup revisions from the profile and mark active plans stale when it changes. |
 | `POST /rigs/{rig}/checkin` | backend merged; plugin next | One ledger's `ExecutionEvent` page (≤256, ascending, verbatim) with the held `program_revision`; the reply acknowledges `acknowledged_through` for that ledger, names duplicates and conflicts per sequence, and says `program_changed`. Saved receipts feed `pending` in the next pull. Grade application and replacement-assignment proposals are still open. |
 | `POST /rigs/{rig}/framing-cache` | planned, lower priority | The plugin uploads entries of a rig's own framing cache. Whole-sky imagery no longer needs it: the server reads N.I.N.A.'s downloadable `FramingAssistantCache` sets from `<cache>/director/sky-maps` (`psf-guard sky-maps install`) and renders any view from their tiles (`src/sky_maps.rs`). What remains for the upload is a rig's plate-solved captures. |
 | `POST /rigs/{rig}/status` | backend merged; plugin next | Coalesced live status per session, newest wins, late reports refused; `GET /rigs/status` is the operator view. Loss of it changes connectivity only. The Live table reads these payload fields when present: `phase` (or `state`), `target_name` (or `target`), `operation` with `operation_started_ms`, `wait_reason`, `safety`, `queue_depth`, `errors` (or `error`); send them under those names. The Sky's Live view also reads `pointing: { ra_degrees, dec_degrees }`, the mount's current position in ICRS (J2000) **degrees**: right ascension 0–360, not N.I.N.A.'s hours. Convert with the mount's reported `EquatorialSystem`: JNow coordinates go to J2000, J2000 ones pass through. Send it with every report while the mount is connected and leave it out when it is not. Without it the Sky marks the rig at the centre of the Target Scheduler *target* named in `target_name` (the target row, one per mosaic panel, not the project), matched without regard to case among that rig's plan targets, and labels the place as taken from the target. The chip and the Sky count a rig as exposing only for `phase` values `exposing`, `imaging` or `capturing`; send one of those while a light frame is being taken. |
@@ -1281,6 +1281,73 @@ against an isolated PSF Guard instance, including an outage, restart, slow hook,
 unsafe transition and idempotent batch reconnect.
 
 ### Program-intake audit after #528
+
+#### September 30 handoff correction
+
+Tracked in [PSF Guard #606](https://github.com/theatrus/psf-guard/pull/606) and
+[Director plugin #30](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/30).
+
+The server now persists preview issuance in meta schema 14. Identical inputs
+return the same assignment ID, ETag, issuance time, validity and goal windows
+across unconditional pulls and server restarts. A changed input, expired span,
+or clock rollback creates a new preview identity. These are still **previews,
+not execution leases**: automatic replacement and fresh attempt budgets are
+not authorization to open another ledger.
+
+Program validity is 24 hours, matching the geometry core's maximum interval.
+The earlier 36-hour server interval passed program validation but failed the
+sidecar's geometry-open boundary. A regression test now sends actual compiler
+output through `BoundGeometry`, in addition to HTTP and immutable-retry tests.
+
+Equipment reports accept optional `filter_names`, a complete map from exact
+configuration filter IDs to native labels. Legacy reports without it continue
+to use IDs as labels. The compiler requires a unique exact-label or bandpass
+match; it never changes the ID sent back for native dispatch. Incomplete maps,
+unknown IDs and invalid labels are rejected. This does not yet define a saved
+operator-selected mapping between two filters of the same bandpass.
+
+Explicit unsupported camera values are omitted with a reason, never clamped,
+wrapped to a smaller integer, or replaced by the first supported mode. An
+unspecified readout mode is accepted only when there is exactly one mode.
+Candidates must retain their activated catalog/target/project ancestry, active
+target and project state, and valid J2000 coordinates. Editing a plan draft
+after activation suppresses that project's candidates until reviewed activation
+is applied again; it cannot silently change running priorities. Freezing the
+activated metadata would allow the old program to remain available while a
+new draft is edited, and is still follow-on work.
+
+The plugin's opt-in `run-server-plan-smoke.ps1` harness creates a disposable
+loopback server/catalog and isolated NINA nightly #64 profile. Its operator-only
+setup reports equipment and activates three one-frame filter goals; the paired
+client pulls and caches that actual program. The harness then stops the server,
+checks that it is unreachable, and exercises native captures, local sidecar
+restart, server restart, receipt delivery and duplicate replay. Synthetic safety
+and Earth-orientation inputs are confined to the simulator. No production
+container or permission to acquire is added by this test.
+
+This combined test passed on September 30 with NINA 3.3.0.1064, runtime 0.7.0 /
+IPC 8: three correlated FITS captures, seven native preparation operations,
+six inherited exposure hooks, offline sidecar restart, unchanged preview after
+server restart, six acknowledged capture events, duplicate replay without
+duplicate credit, and paired live-status readback. The plugin's focused smoke
+guide records the evidence path. The 69 server Director tests, metadata suite,
+575 plugin tests and focused lint/build checks passed. This is a test-harness
+integration gate, not the public acquisition acceptance gate.
+
+The next user-facing session must still supply:
+
+- explicit local start/stop and ownership, with a TS-style container and seven
+  native instruction slots;
+- real safety and Earth-orientation inputs, safe interruption and recovery;
+- reviewed equipment-report permission for paired clients (currently operator
+  only), without granting them general database-management access;
+- capture/preparation accounting before any successor assignment, including
+  uncertain work, rejects and images awaiting grading;
+- bounded background check-in and coalesced live status, neither of which may
+  block native safety or discard offline receipts.
+
+The historical findings below explain those remaining boundaries; the immutable
+preview, filter fidelity and catalog eligibility defects are corrected above.
 
 Reviewed against PSF Guard `5258e4b` and Director plugin `5715e16` on
 2026-09-27. The planning and database-activation path is now present. The

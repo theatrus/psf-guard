@@ -175,6 +175,7 @@ async fn check_in_stores_receipts_once_acknowledges_cursors_and_status_feeds_the
     .unwrap();
     let mut configuration = program["configuration"].clone();
     configuration["rig_id"] = json!(a.rig.to_string());
+    configuration["offset"] = json!({"support":"range","minimum":0,"maximum":100});
     let (status, _) = call(&a.f.app, "PUT", &format!("/rigs/{}/equipment", a.rig), json!({
         "coordinator_instance_id": instance, "catalog_id": catalog, "configuration": configuration,
         "optics": {"sensor_width_px": 100, "sensor_height_px": 100, "pixel_size_um": 3.76, "focal_length_mm": 250.0, "aperture_mm": null, "rotation": {"mode":"fixed","angle_degrees":0.0}},

@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 13;
+const SCHEMA_VERSION: i32 = 14;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -41,6 +41,7 @@ impl MetaStore {
         super::client::create_tables(&tx)?;
         create_contact_table(&tx)?;
         super::templates::create_table(&tx)?;
+        super::program_issue::create_table(&tx)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         conn.close().map_err(|(_, error)| Error::Sqlite(error))?;
@@ -94,6 +95,9 @@ impl MetaStore {
             }
             if version < 13 {
                 super::templates::create_table(&tx)?;
+            }
+            if version < 14 {
+                super::program_issue::create_table(&tx)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
@@ -240,6 +244,10 @@ fn validate(conn: &Connection) -> Result<Uuid, Error> {
     }
     if version >= 12 {
         conn.prepare("SELECT rig_id,kind,at_ms,detail FROM rig_contact LIMIT 0")
+            .map_err(|_| Error::CorruptDatabase)?;
+    }
+    if version >= 14 {
+        conn.prepare("SELECT rig_id,catalog_id,fingerprint,id,issued_at_ms,expires_at_ms FROM program_issue LIMIT 0")
             .map_err(|_| Error::CorruptDatabase)?;
     }
     let id: String = conn.query_row(

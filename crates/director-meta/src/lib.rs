@@ -15,6 +15,7 @@ pub mod inbox;
 pub mod merge;
 pub mod plan;
 pub mod profile;
+pub mod program_issue;
 pub mod project;
 mod storage;
 pub mod templates;

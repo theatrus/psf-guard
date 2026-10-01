@@ -6,6 +6,12 @@
 
 ## Added
 
+- Director program previews retain their identity and validity across retries
+  and server restarts, fit the shared geometry core's 24-hour limit, and report
+  unsupported template settings instead of silently substituting camera values.
+  Native filter labels can map templates to stable NINA filter IDs; inactive or
+  detached targets and unactivated plan edits cannot become capture candidates.
+
 - The visibility chart marks the target's meridian transit and draws the
   rig's meridian pause as a break in the track; the hours lost to it are
   taken out of the visible time and named in the verdict.
