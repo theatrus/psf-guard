@@ -11,6 +11,7 @@ use std::sync::Arc;
 pub(super) fn integrate(
     group: &PreparedGroup,
     ledger: &[resume::ResumeFrame],
+    weighting: super::StackWeighting,
     plan: &crate::calibration::CalibrationPlan,
     cosmetics: &SessionCosmetics,
     cancel: &Arc<AtomicBool>,
@@ -19,15 +20,11 @@ pub(super) fn integrate(
     let admitted = ledger
         .iter()
         .enumerate()
-        .filter(|(_, frame)| {
-            matches!(
-                frame.decision.disposition.as_str(),
-                "reference" | "accepted"
-            )
-        })
+        .filter(|(_, frame)| frame.admitted())
         .collect::<Vec<_>>();
     let options = BatchStackOptions {
         cancel: Some(Arc::clone(cancel).into()),
+        frame_weights: replay_weights(weighting, &admitted)?,
         ..BatchStackOptions::default()
     };
     seiza_stacking::integrate_registered_frames(admitted.len(), &options, |pass, index| {
@@ -59,6 +56,31 @@ pub(super) fn integrate(
     })
 }
 
+/// The weights the live pass gave each admitted frame, in replay order, or
+/// `None` for an equal-weight stack. Seiza measured them once; replaying with
+/// anything else would publish a different stack from the one the live pass
+/// admitted. A weighted ledger that lacks one is refused rather than mixed.
+fn replay_weights(
+    weighting: super::StackWeighting,
+    admitted: &[(usize, &resume::ResumeFrame)],
+) -> seiza_stacking::Result<Option<Vec<Vec<f32>>>> {
+    if weighting.is_equal() {
+        return Ok(None);
+    }
+    admitted
+        .iter()
+        .map(|(_, frame)| {
+            frame.decision.integration_weight.clone().ok_or_else(|| {
+                seiza_stacking::Error::Stack(format!(
+                    "Image {} has no recorded frame weight; rebuild the stack",
+                    frame.decision.image_id
+                ))
+            })
+        })
+        .collect::<seiza_stacking::Result<Vec<_>>>()
+        .map(Some)
+}
+
 fn prepare_registered_frame(
     mut frame: FitsFrame,
     masters: Option<&CalibrationMasters>,
@@ -87,6 +109,7 @@ fn prepare_registered_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::stack_preview::StackWeighting;
     use seiza_stacking::{
         BayerLayout, FrameDisposition, LiveStacker, NormalizationMap, NormalizationMode,
         RejectionMode, SimilarityTransform, StackOptions,
@@ -271,13 +294,24 @@ mod tests {
     }
 
     fn fixture(directory: &std::path::Path) -> (PreparedGroup, Vec<resume::ResumeFrame>) {
-        let mut frames = Vec::new();
-        let mut ledger = Vec::new();
-        for index in 0..5 {
+        fixture_with(directory, |index| {
             let mut pixels = image(1000.0);
             if index == 0 {
                 pixels.data[40] += 10_000.0;
             }
+            pixels
+        })
+    }
+
+    /// Five frames, the second excluded; `pixels` draws each one.
+    fn fixture_with(
+        directory: &std::path::Path,
+        pixels: impl Fn(i32) -> LinearImage,
+    ) -> (PreparedGroup, Vec<resume::ResumeFrame>) {
+        let mut frames = Vec::new();
+        let mut ledger = Vec::new();
+        for index in 0..5 {
+            let pixels = pixels(index);
             let path = directory.join(format!("{index}.fits"));
             seiza_stacking::write_processed_image_fits_f32(&path, &pixels, &[], &[]).unwrap();
             let source = super::super::PreparedFrame {
@@ -324,6 +358,7 @@ mod tests {
         let result = integrate(
             &group,
             &ledger,
+            crate::server::stack_preview::StackWeighting::Equal,
             &plan,
             &SessionCosmetics::none(plan.sessions.len()),
             &Arc::new(AtomicBool::new(false)),
@@ -346,12 +381,108 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         group.frames[0].source_fingerprint = "changed".into();
         let none = SessionCosmetics::none(plan.sessions.len());
-        let error = integrate(&group, &ledger, &plan, &none, &cancel, |_, _, _| {}).unwrap_err();
+        let error = integrate(
+            &group,
+            &ledger,
+            StackWeighting::Equal,
+            &plan,
+            &none,
+            &cancel,
+            |_, _, _| {},
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("changed during stacking"));
         cancel.store(true, Ordering::Relaxed);
         assert!(matches!(
-            integrate(&group, &ledger, &plan, &none, &cancel, |_, _, _| {}),
+            integrate(
+                &group,
+                &ledger,
+                StackWeighting::Equal,
+                &plan,
+                &none,
+                &cancel,
+                |_, _, _| {}
+            ),
             Err(seiza_stacking::Error::Cancelled)
         ));
+    }
+
+    #[test]
+    fn a_weighted_final_pass_replays_the_weights_the_live_pass_recorded() {
+        let directory = tempfile::tempdir().unwrap();
+        // Frame 1 is excluded, so the admitted frames are 0, 2, 3, and 4.
+        let (group, mut ledger) =
+            fixture_with(directory.path(), |index| image(100.0 + index as f32));
+        for (frame, weight) in ledger.iter_mut().zip([1.0, 9.0, 2.0, 3.0, 4.0]) {
+            if frame.admitted() {
+                frame.decision.integration_weight = Some(vec![weight]);
+            }
+        }
+        // The weights reach Seiza through the checkpoint manifest, so they
+        // must survive its round trip.
+        let ledger: Vec<resume::ResumeFrame> =
+            serde_json::from_slice(&serde_json::to_vec(&ledger).unwrap()).unwrap();
+        let plan = crate::calibration::CalibrationPlan::without_calibration(group.frames.len());
+        let none = SessionCosmetics::none(plan.sessions.len());
+        let cancel = Arc::new(AtomicBool::new(false));
+        let weighted = integrate(
+            &group,
+            &ledger,
+            StackWeighting::Noise,
+            &plan,
+            &none,
+            &cancel,
+            |_, _, _| {},
+        )
+        .unwrap();
+        // (100·1 + 102·2 + 103·3 + 104·4) / 10, not the plain mean 102.25.
+        let expected = (100.0 + 102.0 * 2.0 + 103.0 * 3.0 + 104.0 * 4.0) / 10.0;
+        assert_eq!(weighted.snapshot.accepted_frames, 4);
+        assert!(weighted
+            .snapshot
+            .image
+            .data
+            .iter()
+            .all(|&value| (value - expected).abs() < 1.0e-3));
+        let equal = integrate(
+            &group,
+            &ledger,
+            StackWeighting::Equal,
+            &plan,
+            &none,
+            &cancel,
+            |_, _, _| {},
+        )
+        .unwrap();
+        assert!(equal
+            .snapshot
+            .image
+            .data
+            .iter()
+            .all(|&value| (value - 102.25).abs() < 1.0e-3));
+    }
+
+    #[test]
+    fn a_weighted_final_pass_refuses_a_frame_without_a_weight() {
+        let directory = tempfile::tempdir().unwrap();
+        let (group, mut ledger) = fixture(directory.path());
+        for frame in ledger.iter_mut().filter(|frame| frame.admitted()) {
+            frame.decision.integration_weight = Some(vec![1.0]);
+        }
+        ledger[3].decision.integration_weight = None;
+        let plan = crate::calibration::CalibrationPlan::without_calibration(group.frames.len());
+        let error = integrate(
+            &group,
+            &ledger,
+            StackWeighting::Noise,
+            &plan,
+            &SessionCosmetics::none(plan.sessions.len()),
+            &Arc::new(AtomicBool::new(false)),
+            |_, _, _| {},
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Image 3 has no recorded frame weight"));
     }
 }

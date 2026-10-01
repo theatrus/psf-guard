@@ -472,6 +472,10 @@ export interface StackFrameDecision {
   source_fingerprint: string | null;
   overlap_fraction: number | null;
   integrated_fraction: number | null;
+  /** Per-channel noise measured after normalization; noise-weighted stacks only. */
+  noise_sigma?: number[] | null;
+  /** Per-channel weight in the stack mean; noise-weighted stacks only. The reference weighs 1. */
+  integration_weight?: number[] | null;
 }
 
 export interface SimilarityTransform {
@@ -597,6 +601,12 @@ export interface StackSkyOrientation {
  * `quality` puts the best-graded frames first and asks which are worth keeping.
  */
 export type StackFrameOrder = 'capture' | 'quality';
+
+/**
+ * How a stack weighs its admitted frames. `equal` (default) counts every
+ * frame the same; `noise` weighs each by the inverse of its noise variance.
+ */
+export type StackWeighting = 'equal' | 'noise';
 
 /** One depth on a progressive signal-to-noise curve. */
 export interface SnrPoint {
@@ -748,6 +758,8 @@ export interface StackPreviewJob {
   order?: StackFrameOrder;
   /** Normalized scoring policy used for frame admission. */
   scoring?: StackScoringSettings;
+  /** How every group weighed its frames; absent means equal. */
+  weighting?: StackWeighting;
   groups: StackGroupStatus[];
   error: string | null;
 }
@@ -770,6 +782,8 @@ export interface LatestStackPreviewGroup {
   order?: StackFrameOrder;
   /** Scoring policy used by this artifact; old artifacts used calibrated defaults. */
   scoring?: StackScoringSettings;
+  /** Frame weighting used by this artifact; old artifacts weighed equally. */
+  weighting?: StackWeighting;
   group: StackGroupStatus;
 }
 

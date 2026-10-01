@@ -182,6 +182,45 @@ pub struct StackPreviewRequest {
     /// callers can tell whether a remembered result matches their policy.
     #[serde(default)]
     pub scoring: crate::server::api::ScoringOverrideQuery,
+    /// How much each admitted frame counts toward the mean. `equal`
+    /// (default) weighs every frame the same; `noise` weighs each frame by
+    /// the inverse of its measured noise variance.
+    #[serde(default)]
+    pub weighting: StackWeighting,
+}
+
+/// How a stack weighs its admitted frames.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StackWeighting {
+    /// Every admitted frame counts the same. The only behaviour before
+    /// weighting existed, so records without the field read as this.
+    #[default]
+    Equal,
+    /// Seiza's inverse-noise-variance weights: each frame's noise is
+    /// measured after normalization, the reference weighs 1, and weights are
+    /// clamped to 0.05..=20.
+    Noise,
+}
+
+impl StackWeighting {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Equal => "equal",
+            Self::Noise => "noise",
+        }
+    }
+
+    pub fn is_equal(&self) -> bool {
+        matches!(self, Self::Equal)
+    }
+
+    pub(crate) fn frame_weighting(self) -> seiza_stacking::FrameWeighting {
+        match self {
+            Self::Equal => seiza_stacking::FrameWeighting::Equal,
+            Self::Noise => seiza_stacking::FrameWeighting::inverse_noise_variance(),
+        }
+    }
 }
 
 /// One channel's calibration mode, overriding the request-wide choice.
@@ -273,6 +312,15 @@ pub struct StackFrameDecision {
     pub source_fingerprint: Option<String>,
     pub overlap_fraction: Option<f32>,
     pub integrated_fraction: Option<f32>,
+    /// Per-channel noise Seiza measured on this frame after normalization.
+    /// Present only for an admitted frame of a noise-weighted stack.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub noise_sigma: Option<Vec<f32>>,
+    /// Per-channel weight this frame carried in the stack mean. Present only
+    /// for an admitted frame of a noise-weighted stack; the reference weighs
+    /// 1. The final rejection pass replays with exactly these weights.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integration_weight: Option<Vec<f32>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -400,6 +448,10 @@ pub struct StackPreviewJob {
     /// written before this field existed used the calibrated defaults.
     #[serde(default)]
     pub scoring: StackScoringSettings,
+    /// How every group weighed its frames. Manifests written before this
+    /// field existed weighed them equally.
+    #[serde(default)]
+    pub weighting: StackWeighting,
     pub groups: Vec<StackGroupStatus>,
     pub error: Option<String>,
     /// Built by the automatic refresh rather than asked for. Such a build
@@ -475,6 +527,9 @@ pub struct LatestStackPreviewGroup {
     /// defaults, represented by the type's default value.
     #[serde(default)]
     pub scoring: StackScoringSettings,
+    /// Frame weighting used for this artifact. Old indices weighed equally.
+    #[serde(default)]
+    pub weighting: StackWeighting,
     pub group: StackGroupStatus,
 }
 
@@ -899,6 +954,8 @@ fn rejected_decision(frame: &PreparedFrame, reason: String) -> StackFrameDecisio
         source_fingerprint: Some(frame.source_fingerprint.clone()),
         overlap_fraction: None,
         integrated_fraction: None,
+        noise_sigma: None,
+        integration_weight: None,
     }
 }
 
@@ -1662,6 +1719,12 @@ fn prepare_job(
             }
         }
     }
+    // Likewise only a weighted build enters the id, so every equal-weight job
+    // and its cache keep the id they had before weighting existed.
+    if !request.weighting.is_equal() {
+        hasher.update(b"\0weighting\0");
+        hasher.update(request.weighting.as_str().as_bytes());
+    }
 
     for (index, ((target_id, target_name, filter_name, exposure_group_key), mut entries)) in
         grouped.into_iter().enumerate()
@@ -1862,6 +1925,7 @@ fn prepare_job(
             stacking_version: SEIZA_STACKING_VERSION.into(),
             order: request.order,
             scoring,
+            weighting: request.weighting,
             groups: public_groups,
             error: None,
         },
@@ -2024,6 +2088,8 @@ fn excluded_decision(
         source_fingerprint: None,
         overlap_fraction: None,
         integrated_fraction: None,
+        noise_sigma: None,
+        integration_weight: None,
     }
 }
 
@@ -2157,6 +2223,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
     let database_id = prepared.public.database_id.clone();
     let accepted_only = prepared.public.accepted_only;
     let scoring = prepared.public.scoring;
+    let weighting = prepared.public.weighting;
     let PreparedJob {
         public: _,
         groups,
@@ -2180,6 +2247,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
         north_up,
         accepted_only,
         scoring,
+        weighting,
         order,
         worker_policy: &worker_policy,
         cancel,
@@ -2276,6 +2344,7 @@ struct GroupJob<'a> {
     north_up: bool,
     accepted_only: bool,
     scoring: StackScoringSettings,
+    weighting: StackWeighting,
     order: snr::StackFrameOrder,
     worker_policy: &'a crate::concurrency::WorkerPolicy,
     cancel: &'a Arc<AtomicBool>,
@@ -2296,6 +2365,7 @@ fn run_group(
         north_up,
         accepted_only,
         scoring,
+        weighting,
         order,
         worker_policy,
         cancel,
@@ -2464,6 +2534,7 @@ fn run_group(
         group_exposure_key.as_deref(),
         accepted_only,
         scoring,
+        weighting,
         SEIZA_STACKING_VERSION,
         &calibration_fingerprint,
         order,
@@ -2609,6 +2680,7 @@ fn run_group(
                 let options = StackOptions {
                     normalization: NormalizationMode::Global,
                     cosmetic,
+                    weighting: weighting.frame_weighting(),
                     ..StackOptions::default()
                 };
                 // The reference calibrates with its own session's masters;
@@ -2668,6 +2740,17 @@ fn run_group(
                     source_fingerprint: Some(group.frames[0].source_fingerprint.clone()),
                     overlap_fraction: Some(1.0),
                     integrated_fraction: Some(1.0),
+                    // The reference defines the noise every other weight is
+                    // read against, so it weighs 1 in every channel.
+                    noise_sigma: (!stacker.reference_noise().is_empty())
+                        .then(|| stacker.reference_noise().to_vec()),
+                    integration_weight: (!weighting.is_equal()).then(|| {
+                        let channels = match stacker.reference_noise().len() {
+                            0 => output_channels as usize,
+                            measured => measured,
+                        };
+                        vec![1.0; channels]
+                    }),
                 };
                 state.stack_previews.update(job_id, |job| {
                     let status = &mut job.groups[group.index];
@@ -2730,6 +2813,7 @@ fn run_group(
                     exposure_group_key: group_exposure_key.clone(),
                     accepted_only,
                     scoring,
+                    weighting,
                     calibration_fingerprint: calibration_fingerprint.clone(),
                     order,
                     snr_points: points.to_vec(),
@@ -2906,6 +2990,10 @@ fn run_group(
                                 source_fingerprint: Some(frame.source_fingerprint.clone()),
                                 overlap_fraction: Some(diagnostics.overlap_fraction),
                                 integrated_fraction: Some(diagnostics.integrated_fraction),
+                                noise_sigma: (!diagnostics.noise.is_empty())
+                                    .then(|| diagnostics.noise.clone()),
+                                integration_weight: (!diagnostics.weight.is_empty())
+                                    .then(|| diagnostics.weight.clone()),
                             },
                             false,
                         )
@@ -3058,6 +3146,7 @@ fn run_group(
             let result = final_integration::integrate(
                 &group,
                 &ledger,
+                weighting,
                 &plan,
                 &session_cosmetics,
                 cancel,
@@ -3418,6 +3507,7 @@ fn persist_latest_groups_with_exposures(
             cache_version: job.cache_version,
             order: job.order,
             scoring: job.scoring,
+            weighting: job.weighting,
             group,
         };
         if let Some(existing) = latest.groups.iter_mut().find(|existing| {
@@ -3759,6 +3849,7 @@ mod tests {
             stacking_version: SEIZA_STACKING_VERSION.into(),
             order: snr::StackFrameOrder::Capture,
             scoring: StackScoringSettings::default(),
+            weighting: Default::default(),
             groups,
             error: None,
         }
@@ -4107,6 +4198,7 @@ mod tests {
             calibration_overrides: Vec::new(),
             order: snr::StackFrameOrder::Capture,
             scoring: Default::default(),
+            weighting: Default::default(),
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
@@ -4118,6 +4210,7 @@ mod tests {
             calibration_overrides: Vec::new(),
             order: snr::StackFrameOrder::Capture,
             scoring: Default::default(),
+            weighting: Default::default(),
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
@@ -4129,6 +4222,7 @@ mod tests {
             calibration_overrides: Vec::new(),
             order: snr::StackFrameOrder::Capture,
             scoring: Default::default(),
+            weighting: Default::default(),
         })
         .is_ok());
     }
@@ -4144,6 +4238,7 @@ mod tests {
             calibration: CalibrationMode::Auto,
             order: snr::StackFrameOrder::Capture,
             scoring: Default::default(),
+            weighting: Default::default(),
             calibration_overrides: vec![CalibrationOverride {
                 target_id: 7,
                 filter_name: "Ha".into(),
@@ -4276,6 +4371,7 @@ mod tests {
             cache_version: STACK_PREVIEW_CACHE_VERSION,
             order: snr::StackFrameOrder::Capture,
             scoring: StackScoringSettings::default(),
+            weighting: Default::default(),
             group: ready_group(10, "B", 1),
         };
         let mut legacy = current.clone();
@@ -4304,26 +4400,78 @@ mod tests {
             cache_version: STACK_PREVIEW_CACHE_VERSION,
             order: snr::StackFrameOrder::Capture,
             scoring: StackScoringSettings::default(),
+            weighting: Default::default(),
             group: ready_group(10, "B", 1),
         };
         let mut serialized = serde_json::to_value(current).unwrap();
         serialized.as_object_mut().unwrap().remove("order");
         serialized.as_object_mut().unwrap().remove("scoring");
 
+        serialized.as_object_mut().unwrap().remove("weighting");
+
         let restored: LatestStackPreviewGroup = serde_json::from_value(serialized).unwrap();
 
         assert_eq!(restored.order, snr::StackFrameOrder::Capture);
         assert_eq!(restored.scoring, StackScoringSettings::default());
+        assert_eq!(restored.weighting, StackWeighting::Equal);
     }
 
     #[test]
     fn an_old_job_defaults_to_calibrated_scoring() {
         let mut serialized = serde_json::to_value(completed_job("legacy", Vec::new())).unwrap();
         serialized.as_object_mut().unwrap().remove("scoring");
+        serialized.as_object_mut().unwrap().remove("weighting");
 
         let restored: StackPreviewJob = serde_json::from_value(serialized).unwrap();
 
         assert_eq!(restored.scoring, StackScoringSettings::default());
+        assert_eq!(restored.weighting, StackWeighting::Equal);
+    }
+
+    #[test]
+    fn only_noise_weighting_enters_the_job_id() {
+        let directory = tempfile::tempdir().unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        conn.execute_batch("INSERT INTO project(Id,name,profileId,guid) VALUES(1,'Project','profile','project-one');
+            INSERT INTO target(Id,name,projectId,active,ra,dec,epochcode,rotation,roi,guid)
+                VALUES(1,'Target',1,1,10,20,0,0,100,'target-one');").unwrap();
+        for id in 1..=3 {
+            conn.execute("INSERT INTO acquiredimage(Id,projectId,targetId,gradingStatus,metadata,acquireddate,filtername)
+                VALUES(?1,1,1,1,'{}',?1,'Ha')", rusqlite::params![id]).unwrap();
+        }
+        let mut ctx = DatabaseContext::new_for_test(conn);
+        ctx.cache_dir_path = directory.path().to_path_buf();
+        ctx.cache_dir = directory.path().to_string_lossy().into_owned();
+        let ctx = Arc::new(ctx);
+        let job = |extra: serde_json::Value| {
+            let mut body = serde_json::json!({"image_ids":[1,2,3],"calibration":"off"});
+            body.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            prepare_job(&ctx, 1, &serde_json::from_value(body).unwrap()).unwrap()
+        };
+        let omitted = job(serde_json::json!({}));
+        let equal = job(serde_json::json!({"weighting":"equal"}));
+        let noise = job(serde_json::json!({"weighting":"noise"}));
+        // An equal-weight build keeps the id, and so the cache, it had
+        // before weighting existed.
+        assert_eq!(omitted.public.job_id, equal.public.job_id);
+        assert_eq!(omitted.public.weighting, StackWeighting::Equal);
+        assert_ne!(noise.public.job_id, equal.public.job_id);
+        assert_eq!(noise.public.weighting, StackWeighting::Noise);
+    }
+
+    #[test]
+    fn noise_weighting_asks_seiza_for_inverse_noise_variance() {
+        assert_eq!(
+            StackWeighting::Equal.frame_weighting(),
+            seiza_stacking::FrameWeighting::Equal
+        );
+        assert_eq!(
+            StackWeighting::Noise.frame_weighting(),
+            seiza_stacking::FrameWeighting::inverse_noise_variance()
+        );
     }
 
     #[test]
@@ -4360,6 +4508,7 @@ mod tests {
             cache_version: STACK_PREVIEW_CACHE_VERSION,
             order: snr::StackFrameOrder::Capture,
             scoring: StackScoringSettings::default(),
+            weighting: Default::default(),
             group: ready_group(10, "B", 1),
         };
         let mut north_up = source_frame.clone();

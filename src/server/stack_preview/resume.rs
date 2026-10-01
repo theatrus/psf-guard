@@ -15,7 +15,7 @@
 //! dimensions, configuration, checksum — when it reopens it.
 
 use super::snr;
-use super::{StackFrameDecision, StackScoringSettings};
+use super::{StackFrameDecision, StackScoringSettings, StackWeighting};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
@@ -57,6 +57,11 @@ pub(super) struct ResumeManifest {
     /// Checkpoints from before this field existed used calibrated defaults.
     #[serde(default)]
     pub scoring: StackScoringSettings,
+    /// How the accumulator weighed its frames. Checkpoints from before this
+    /// field existed weighed them equally. A weighted accumulator cannot be
+    /// extended by an equal-weight build, nor the other way round.
+    #[serde(default)]
+    pub weighting: StackWeighting,
     pub calibration_fingerprint: String,
     /// The order the frames were pushed in. Only a capture-order stack is
     /// ever resumed, but the checkpoint records what it was so an older one
@@ -187,6 +192,7 @@ pub(super) fn load(
     exposure_group_key: Option<&str>,
     accepted_only: bool,
     scoring: StackScoringSettings,
+    weighting: StackWeighting,
     stacking_version: &str,
     calibration_fingerprint: &str,
     order: snr::StackFrameOrder,
@@ -235,6 +241,15 @@ pub(super) fn load(
     if manifest.scoring != scoring {
         return ResumeDecision::Fresh(Some("the scoring policy changed"));
     }
+    if manifest.weighting != weighting {
+        return ResumeDecision::Fresh(Some("the frame weighting changed"));
+    }
+    // The final rejection pass replays each admitted frame with the weight
+    // the live pass gave it. A weighted ledger missing one cannot be
+    // replayed faithfully, so it is rebuilt rather than mixed.
+    if !weighting.is_equal() && !ledger_has_weights(&manifest.frames) {
+        return ResumeDecision::Fresh(Some("the checkpoint lacks frame weights"));
+    }
     if manifest.calibration_fingerprint != calibration_fingerprint {
         return ResumeDecision::Fresh(Some("calibration changed"));
     }
@@ -264,6 +279,22 @@ pub(super) fn load(
         context_path,
         manifest,
     }))
+}
+
+/// Whether every admitted frame in a ledger carries its integration weight.
+pub(super) fn ledger_has_weights(frames: &[ResumeFrame]) -> bool {
+    frames
+        .iter()
+        .filter(|frame| frame.admitted())
+        .all(|frame| frame.decision.integration_weight.is_some())
+}
+
+impl ResumeFrame {
+    /// Whether this frame reached the accumulator: the reference or an
+    /// accepted frame.
+    pub(super) fn admitted(&self) -> bool {
+        matches!(self.decision.disposition.as_str(), "reference" | "accepted")
+    }
 }
 
 /// Persist a settled group's checkpoint: the manifest first to a temporary
@@ -322,6 +353,8 @@ mod tests {
             source_fingerprint: Some(fingerprint.into()),
             overlap_fraction: None,
             integrated_fraction: None,
+            noise_sigma: None,
+            integration_weight: None,
         }
     }
 
@@ -336,6 +369,7 @@ mod tests {
             exposure_group_key: None,
             accepted_only: false,
             scoring: StackScoringSettings::default(),
+            weighting: StackWeighting::Equal,
             calibration_fingerprint: "cal-1".into(),
             frames,
         }
@@ -407,6 +441,7 @@ mod tests {
             None,
             false,
             StackScoringSettings::default(),
+            StackWeighting::Equal,
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -487,6 +522,7 @@ mod tests {
             None,
             false,
             StackScoringSettings::default(),
+            StackWeighting::Equal,
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -556,6 +592,7 @@ mod tests {
             None,
             false,
             StackScoringSettings::default(),
+            StackWeighting::Equal,
             "test",
             "cal-1",
             snr::StackFrameOrder::Quality,
@@ -581,6 +618,7 @@ mod tests {
             None,
             false,
             StackScoringSettings::default(),
+            StackWeighting::Equal,
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -621,6 +659,7 @@ mod tests {
             None,
             false,
             StackScoringSettings::default(),
+            StackWeighting::Equal,
             "test",
             "cal-2",
             snr::StackFrameOrder::Capture,
@@ -645,6 +684,7 @@ mod tests {
             None,
             false,
             changed,
+            StackWeighting::Equal,
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -652,6 +692,102 @@ mod tests {
         );
 
         assert_eq!(decision.fresh_reason(), Some("the scoring policy changed"));
+    }
+
+    #[test]
+    fn changed_frame_weighting_rebuilds_from_scratch() {
+        let cache = tempfile::tempdir().unwrap();
+        store(cache.path(), &manifest(vec![frame(1, "f1")]));
+        let decision = load(
+            cache.path(),
+            "db",
+            7,
+            "Ha",
+            None,
+            false,
+            StackScoringSettings::default(),
+            StackWeighting::Noise,
+            "test",
+            "cal-1",
+            snr::StackFrameOrder::Capture,
+            &[(1, "f1", 300.0), (2, "f2", 300.0)],
+        );
+
+        assert_eq!(decision.fresh_reason(), Some("the frame weighting changed"));
+    }
+
+    fn load_weighted(cache_root: &Path) -> ResumeDecision {
+        load(
+            cache_root,
+            "db",
+            7,
+            "Ha",
+            None,
+            false,
+            StackScoringSettings::default(),
+            StackWeighting::Noise,
+            "test",
+            "cal-1",
+            snr::StackFrameOrder::Capture,
+            &[(1, "f1", 300.0), (2, "f2", 300.0), (3, "f3", 300.0)],
+        )
+    }
+
+    #[test]
+    fn a_weighted_checkpoint_resumes_with_its_frame_weights() {
+        let cache = tempfile::tempdir().unwrap();
+        let mut reference = frame(1, "f1");
+        reference.decision.disposition = "reference".into();
+        reference.decision.integration_weight = Some(vec![1.0, 1.0, 1.0]);
+        reference.decision.noise_sigma = Some(vec![2.0, 2.5, 3.0]);
+        let mut accepted = frame(2, "f2");
+        accepted.decision.integration_weight = Some(vec![0.25, 0.5, 4.0]);
+        accepted.decision.noise_sigma = Some(vec![4.0, 3.5, 1.5]);
+        let mut weighted = manifest(vec![reference, accepted]);
+        weighted.weighting = StackWeighting::Noise;
+        store(cache.path(), &weighted);
+
+        let state = load_weighted(cache.path())
+            .state()
+            .expect("a weighted build extends a weighted checkpoint");
+        assert_eq!(state.manifest.weighting, StackWeighting::Noise);
+        let frames = &state.manifest.frames;
+        assert_eq!(
+            frames[0].decision.integration_weight,
+            Some(vec![1.0, 1.0, 1.0])
+        );
+        assert_eq!(
+            frames[1].decision.integration_weight,
+            Some(vec![0.25, 0.5, 4.0])
+        );
+        assert_eq!(frames[1].decision.noise_sigma, Some(vec![4.0, 3.5, 1.5]));
+    }
+
+    #[test]
+    fn a_weighted_checkpoint_missing_a_frame_weight_rebuilds_from_scratch() {
+        let cache = tempfile::tempdir().unwrap();
+        let mut reference = frame(1, "f1");
+        reference.decision.disposition = "reference".into();
+        reference.decision.integration_weight = Some(vec![1.0]);
+        // Accepted, but its weight was never recorded.
+        let accepted = frame(2, "f2");
+        let mut weighted = manifest(vec![reference, accepted]);
+        weighted.weighting = StackWeighting::Noise;
+        store(cache.path(), &weighted);
+
+        assert_eq!(
+            load_weighted(cache.path()).fresh_reason(),
+            Some("the checkpoint lacks frame weights")
+        );
+    }
+
+    #[test]
+    fn checkpoint_without_weighting_weighed_frames_equally() {
+        let recorded = manifest(vec![frame(1, "f1")]);
+        let mut legacy = serde_json::to_value(&recorded).unwrap();
+        legacy.as_object_mut().unwrap().remove("weighting");
+        let restored: ResumeManifest = serde_json::from_value(legacy).unwrap();
+        assert_eq!(restored.weighting, StackWeighting::Equal);
     }
 
     #[test]
@@ -696,6 +832,7 @@ mod tests {
             None,
             false,
             StackScoringSettings::default(),
+            StackWeighting::Equal,
             "newer",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -743,6 +880,7 @@ mod tests {
             None,
             false,
             StackScoringSettings::default(),
+            StackWeighting::Equal,
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -766,6 +904,7 @@ mod tests {
             None,
             true,
             StackScoringSettings::default(),
+            StackWeighting::Equal,
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -832,6 +971,7 @@ mod tests {
                 key,
                 false,
                 StackScoringSettings::default(),
+                StackWeighting::Equal,
                 "test",
                 "cal-1",
                 snr::StackFrameOrder::Capture,

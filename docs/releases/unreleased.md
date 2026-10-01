@@ -24,6 +24,12 @@
   scores lower than frames with the same exposure, from any night. Existing
   frames need a quality scan with **Force** to gain it.
 
+- Stack previews can weight frames by noise: turn on **Weight frames by
+  noise** and quieter frames count for more, while frames shot through
+  moonlight or haze count for less. Each frame's weight appears in the
+  frame decisions table. `psf-guard stack-snr --weight-by-noise` does the
+  same from the command line.
+
 - The visibility chart marks the target's meridian transit and draws the
   rig's meridian pause as a break in the track; the hours lost to it are
   taken out of the visible time and named in the verdict.

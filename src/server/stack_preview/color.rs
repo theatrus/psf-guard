@@ -3492,6 +3492,7 @@ mod tests {
             accepted_only: false,
             order: crate::server::stack_preview::snr::StackFrameOrder::Capture,
             scoring: crate::server::stack_preview::StackScoringSettings::default(),
+            weighting: Default::default(),
             created_unix_seconds: 10,
             cache_version: super::super::STACK_PREVIEW_CACHE_VERSION,
             group: StackGroupStatus {

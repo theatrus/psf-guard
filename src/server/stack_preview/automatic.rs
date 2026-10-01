@@ -555,6 +555,7 @@ pub(super) fn refresh_request(
         calibration_overrides: calibration_overrides.into_values().collect(),
         order: newest.order,
         scoring: scoring_overrides(&newest.scoring),
+        weighting: newest.weighting,
     })
 }
 
@@ -826,6 +827,7 @@ mod tests {
             "created_unix_seconds": created,
             "cache_version": super::super::STACK_PREVIEW_CACHE_VERSION,
             "order": "capture",
+            "weighting": if filter == "G" { "noise" } else { "equal" },
             "scoring": {"penalty_satellite": 0.5, "penalty_pointing": 1.0, "penalty_temporal": 1.0, "hfr_reject_above": 3.0, "star_count_reject_below": null},
             "group": {
                 "index": 0, "target_id": target_id, "target_name": "T", "filter_name": filter,
@@ -869,6 +871,7 @@ mod tests {
         // The newest card's policies carry the request.
         assert!(request.accepted_only, "the G card at 12 was accepted-only");
         assert!(request.north_up);
+        assert_eq!(request.weighting, super::super::StackWeighting::Noise);
         assert_eq!(request.scoring.penalty_satellite, Some(0.5));
         assert_eq!(request.scoring.hfr_reject_above, Some(3.0));
         assert_eq!(request.scoring.star_count_reject_below, None);

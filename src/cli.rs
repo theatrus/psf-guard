@@ -769,6 +769,11 @@ pub enum Commands {
         /// Worker threads for the star detection a quality order needs
         #[arg(long)]
         threads: Option<usize>,
+
+        /// Weight each frame by the inverse of its noise variance, relative
+        /// to the first frame, instead of weighing every frame the same
+        #[arg(long)]
+        weight_by_noise: bool,
     },
 
     /// Screen FITS frames for occlusion, clouds, pointing and cached satellite risk

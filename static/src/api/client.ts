@@ -93,6 +93,7 @@ import type { GuidFillReport, GuidReport,
   StackPreviewJob,
   CalibrationMode,
   StackFrameOrder,
+  StackWeighting,
   ArtifactSearchJob,
   ReferenceRegion,
   LatestStackPreviews,
@@ -1604,6 +1605,8 @@ export const apiClient = {
       scoring?: PenaltyScaleParams;
       /** How to calibrate the lights: auto (default), on (forced), or off. */
       calibration?: CalibrationMode;
+      /** Frame weighting: equal (default) or noise (inverse noise variance). */
+      weighting?: StackWeighting;
       /** Per-channel exceptions to `calibration`, by target and filter. */
       calibration_overrides?: Array<{
         target_id: number;
