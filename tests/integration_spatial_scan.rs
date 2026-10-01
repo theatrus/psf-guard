@@ -154,6 +154,9 @@ fn stored_entry(image_id: i32, filename: &str, dead: f64, bg_spread: f64) -> Sto
         bg_cell_spread: bg_spread,
         bg_cell_max_dev: bg_spread,
         median_adu: 1500.0,
+        sky_noise_adu: None,
+        zero_point: None,
+        zero_point_version: 0,
         computed_at: 0,
         catalog: psf_guard::photometry::FrameCatalog::default(),
         star_cell_counts: star_dead_cells

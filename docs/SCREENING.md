@@ -74,6 +74,27 @@ transparency still detects that loss. Missing signals receive no weight.
 Fresh spatial, photometric, and plate-solve results add pixel evidence when a
 quality scan has run.
 
+Capture software rarely records an SNR, so a quality scan measures one from
+the frame's photometric zero point: the catalog magnitude of a star that
+gives one ADU per second. The scan measures up to 80 of the brightest
+unsaturated stars in a wide aperture (five times the frame's HFR, with a sky
+annulus from six to eight), judging saturation on the raw pixels because a
+deep frame clips hundreds of its brightest stars. After the plate solve it
+places Gaia stars with the frame's own solution, matches them to the measured
+stars, and takes the median of magnitude plus 2.5·log10(flux per second).
+The SNR is the flux that zero point promises divided by the pixel-to-pixel
+sky noise.
+
+Cloud, haze and dew lower the zero point, and a brighter sky raises the
+noise, so the SNR falls with either. Soft focus does not move it: a wide
+aperture holds a star's light whatever its size, which HFR already scores. The
+zero point needs no reference frame, so different nights and both sides of a
+meridian flip compare directly; scoring still compares it only between frames
+of the same exposure and settings. It needs a fresh plate solve and a Gaia star
+catalog. A Tycho-2 catalog mixes two bands and is not used. A value in the image
+metadata is used as recorded. Frames scanned before this measurement existed
+have no SNR until the next quality scan with **Force** set.
+
 A low relative score alone does not name a fault or recommend rejection. The
 UI labels catalog-only results as **Catalog-relative score** and says which
 comparison produced them. A frame gets a cause such as clouds, obstruction,

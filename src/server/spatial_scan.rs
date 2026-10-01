@@ -49,6 +49,20 @@ pub struct StoredSpatialMetrics {
     pub bg_cell_spread: f64,
     pub bg_cell_max_dev: f64,
     pub median_adu: f64,
+    /// Robust sky noise in ADU: the frame's normal-equivalent median absolute
+    /// deviation. Absent on entries computed before it was kept; a re-scan
+    /// fills it.
+    #[serde(default)]
+    pub sky_noise_adu: Option<f64>,
+    /// Photometric zero point from the frame's fresh plate solve and its
+    /// aperture-measured stars. Filled after the astrometry stage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zero_point: Option<crate::zero_point::ZeroPoint>,
+    /// [`crate::zero_point::ZERO_POINT_ALGORITHM_VERSION`] of the last
+    /// attempt, successful or not, so a frame that cannot be measured is not
+    /// queued again by every scan. Zero before any attempt.
+    #[serde(default)]
+    pub zero_point_version: u32,
     /// Epoch seconds when computed.
     pub computed_at: i64,
     /// Brightest detected stars (positions + ADU flux) for cross-frame
@@ -89,6 +103,57 @@ pub struct StoredSpatialMetrics {
 /// Stars kept per stored catalog: matching quality saturates well below full
 /// catalog size, and this keeps spatial_metrics.json compact.
 pub const STORED_CATALOG_STARS: usize = 300;
+
+/// Detected stars whose raw peak reaches this fraction of the frame's
+/// brightest pixel are treated as saturated: a clipped core loses light, and
+/// how much it loses grows with the seeing.
+const SATURATION_FRACTION: f64 = 0.8;
+/// Brightest unsaturated stars measured per frame for photometry.
+const PHOTOMETRY_STARS: usize = 80;
+/// Aperture radius and sky annulus, in multiples of the frame's HFR. Five
+/// HFR holds nearly all of a star's light whatever the seeing; a fixed-shape
+/// PSF fit did not (on NGC 7023 frames a β = 4 Moffat caught 7% less than
+/// the aperture on sharp stars and 5% more on soft ones).
+const APERTURE_HFR: f64 = 5.0;
+const ANNULUS_INNER_HFR: f64 = 6.0;
+const ANNULUS_OUTER_HFR: f64 = 8.0;
+/// Edge of the central square the sky noise is measured in. Pixel noise
+/// varies little across a frame, and a crop keeps the scan's memory flat.
+const NOISE_CROP_PX: usize = 1024;
+
+impl StoredSpatialMetrics {
+    /// Stars with an aperture flux, for zero-point matching.
+    pub fn measured_stars(&self) -> Vec<crate::zero_point::MeasuredStar> {
+        self.catalog
+            .stars
+            .iter()
+            .filter_map(|star| {
+                star.aperture_flux
+                    .map(|flux_adu| crate::zero_point::MeasuredStar {
+                        x: star.x,
+                        y: star.y,
+                        flux_adu,
+                    })
+            })
+            .collect()
+    }
+
+    /// The frame's signal-to-noise ratio for a star of zero magnitude: the
+    /// ADU per second its zero point promises, over the sky noise.
+    ///
+    /// Clouds, haze and dew lower the zero point; a brighter sky raises the
+    /// noise. Both come from this frame alone, so frames from different
+    /// nights and sides of a meridian flip compare directly. Scoring compares
+    /// it only between frames of the same exposure and settings. `None`
+    /// without a zero point or a measured noise.
+    pub fn signal_to_noise(&self) -> Option<f64> {
+        let zero_point = self.zero_point?;
+        let noise = self
+            .sky_noise_adu
+            .filter(|noise| noise.is_finite() && *noise > 0.0)?;
+        Some(10_f64.powf(0.4 * zero_point.magnitude) / noise)
+    }
+}
 
 /// The Target Scheduler database records star count and HFR from N.I.N.A.'s
 /// fast detector. Rescans must use the same detector family so sequence
@@ -425,6 +490,158 @@ pub fn finalize_scan(store: &RwLock<SpatialMetricsStore>) {
     s.progress.finished_at = Some(chrono::Utc::now().timestamp());
 }
 
+/// Brightest raw pixel within `radius` of a detected star.
+///
+/// The detector's own peak is read on the stretched detection image, where
+/// nearly every star sits at full scale, so saturation has to be judged on the
+/// raw pixels.
+fn raw_peak(fits: &FitsImage, x: f64, y: f64, radius: usize) -> u16 {
+    let (cx, cy) = (x.round().max(0.0) as usize, y.round().max(0.0) as usize);
+    let mut peak = 0;
+    for row in cy.saturating_sub(radius)..(cy + radius + 1).min(fits.height) {
+        for column in cx.saturating_sub(radius)..(cx + radius + 1).min(fits.width) {
+            peak = peak.max(fits.data[row * fits.width + column]);
+        }
+    }
+    peak
+}
+
+/// Measure the brightest unsaturated detected stars in a wide aperture with a
+/// local sky annulus. Returns flux in ADU by index into `stars`.
+///
+/// A deep frame saturates hundreds of its brightest stars, so the measured
+/// ones can come from far down the detection list. Stars whose annulus runs
+/// off the frame are skipped.
+fn measure_unsaturated_stars(
+    fits: &FitsImage,
+    stars: &[crate::nina_star_detection::DetectedStar],
+    frame_max: f64,
+    frame_hfr: f64,
+) -> HashMap<usize, f64> {
+    if !(frame_hfr.is_finite() && frame_hfr > 0.0) {
+        return HashMap::new();
+    }
+    let guard = frame_max * SATURATION_FRACTION;
+    let mut candidates: Vec<usize> = (0..stars.len())
+        .filter(|&index| stars[index].flux > 0.0)
+        .filter(|&index| {
+            let (x, y) = stars[index].position;
+            let radius = (stars[index].hfr * 1.5).ceil().max(2.0) as usize;
+            f64::from(raw_peak(fits, x, y, radius)) < guard
+        })
+        .collect();
+    candidates.sort_by(|&a, &b| stars[b].flux.total_cmp(&stars[a].flux));
+    let aperture = (APERTURE_HFR * frame_hfr).max(4.0);
+    let inner = (ANNULUS_INNER_HFR * frame_hfr).max(aperture + 1.0);
+    let outer = (ANNULUS_OUTER_HFR * frame_hfr).max(inner + 2.0);
+    candidates
+        .into_iter()
+        .take(PHOTOMETRY_STARS)
+        .filter_map(|index| {
+            let (x, y) = stars[index].position;
+            let flux = aperture_flux(fits, x, y, aperture, inner, outer)? / fits.raw_scale;
+            (flux.is_finite() && flux > 0.0).then_some((index, flux))
+        })
+        .collect()
+}
+
+/// Sum within `aperture` pixels of `(x, y)` minus the median of the
+/// `inner..outer` annulus, in stored units. `None` near the frame edge.
+fn aperture_flux(
+    fits: &FitsImage,
+    x: f64,
+    y: f64,
+    aperture: f64,
+    inner: f64,
+    outer: f64,
+) -> Option<f64> {
+    let reach = outer.ceil() as usize + 1;
+    let (cx, cy) = (x.round(), y.round());
+    if cx < reach as f64
+        || cy < reach as f64
+        || cx + reach as f64 >= fits.width as f64
+        || cy + reach as f64 >= fits.height as f64
+    {
+        return None;
+    }
+    let (cx, cy) = (cx as usize, cy as usize);
+    let mut sum = 0.0;
+    let mut pixels = 0usize;
+    let mut sky = Vec::new();
+    for row in cy - reach..=cy + reach {
+        for column in cx - reach..=cx + reach {
+            let distance = (column as f64 - x).hypot(row as f64 - y);
+            let value = f64::from(fits.data[row * fits.width + column]);
+            if distance <= aperture {
+                sum += value;
+                pixels += 1;
+            } else if distance > inner && distance <= outer {
+                sky.push(value);
+            }
+        }
+    }
+    if sky.len() < 16 {
+        return None;
+    }
+    sky.sort_by(f64::total_cmp);
+    let background = sky[sky.len() / 2];
+    Some(sum - background * pixels as f64)
+}
+
+/// Pixel-to-pixel sky noise in ADU, measured by Seiza on the central crop.
+fn sky_noise_adu(fits: &FitsImage) -> Option<f64> {
+    let width = fits.width.min(NOISE_CROP_PX);
+    let height = fits.height.min(NOISE_CROP_PX);
+    let (x0, y0) = ((fits.width - width) / 2, (fits.height - height) / 2);
+    let mut samples = Vec::with_capacity(width * height);
+    for row in y0..y0 + height {
+        let start = row * fits.width + x0;
+        samples.extend(
+            fits.data[start..start + width]
+                .iter()
+                .map(|&value| (f64::from(value) / fits.raw_scale) as f32),
+        );
+    }
+    let image = seiza_stacking::LinearImage::new(width, height, 1, samples).ok()?;
+    let noise = f64::from(*seiza_stacking::frame_noise(&image)?.first()?);
+    (noise.is_finite() && noise > 0.0).then_some(noise)
+}
+
+impl StoredSpatialMetrics {
+    /// Whether a zero point should be attempted: the entry has measured stars
+    /// and no attempt by the current algorithm.
+    pub fn wants_zero_point(&self) -> bool {
+        self.zero_point_version != crate::zero_point::ZERO_POINT_ALGORITHM_VERSION
+            && self
+                .catalog
+                .stars
+                .iter()
+                .any(|star| star.aperture_flux.is_some())
+    }
+}
+
+/// Store zero-point attempts (with their result, if any) and persist the
+/// store once.
+pub fn record_zero_points(
+    store: &RwLock<SpatialMetricsStore>,
+    cache_dir: &Path,
+    attempts: &[(i32, Option<crate::zero_point::ZeroPoint>)],
+) {
+    if attempts.is_empty() {
+        return;
+    }
+    {
+        let mut s = store.write().unwrap();
+        for (image_id, zero_point) in attempts {
+            if let Some(entry) = s.metrics.get_mut(image_id) {
+                entry.zero_point = *zero_point;
+                entry.zero_point_version = crate::zero_point::ZERO_POINT_ALGORITHM_VERSION;
+            }
+        }
+    }
+    persist(store, cache_dir);
+}
+
 fn compute_one(
     item: &ScanWorkItem,
     config: &SpatialAnalysisConfig,
@@ -446,19 +663,30 @@ fn compute_one(
     // N.I.N.A. measures each accepted star on the full-resolution original.
     // Convert its background-subtracted aperture flux from stored units to
     // physical ADU for cross-frame photometry.
-    let catalog = FrameCatalog {
-        stars: result
-            .star_list
-            .iter()
-            .filter(|s| s.flux > 0.0)
-            .map(|s| CatalogStar {
-                x: s.position.0,
-                y: s.position.1,
-                flux: s.flux / fits.raw_scale,
-            })
-            .collect(),
-    }
-    .truncated(STORED_CATALOG_STARS);
+    let aperture_fluxes =
+        measure_unsaturated_stars(&fits, &result.star_list, stats.max, result.average_hfr);
+    let mut stars: Vec<CatalogStar> = result
+        .star_list
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.flux > 0.0)
+        .map(|(index, s)| CatalogStar {
+            x: s.position.0,
+            y: s.position.1,
+            flux: s.flux / fits.raw_scale,
+            aperture_flux: aperture_fluxes.get(&index).copied(),
+        })
+        .collect();
+    // Keep the brightest for cross-frame matching, and every measured star:
+    // in a deep frame the brightest are saturated, so the measured ones sit
+    // further down the list.
+    stars.sort_by(|a, b| b.flux.total_cmp(&a.flux));
+    let mut rank = 0;
+    stars.retain(|star| {
+        rank += 1;
+        rank <= STORED_CATALOG_STARS || star.aperture_flux.is_some()
+    });
+    let catalog = FrameCatalog { stars };
 
     let calibration = PixelCalibration {
         adu_offset: fits.raw_min + fits.bzero,
@@ -486,6 +714,9 @@ fn compute_one(
         bg_cell_spread: spatial.bg_cell_spread,
         bg_cell_max_dev: spatial.bg_cell_max_dev,
         median_adu: fits.stored_to_adu(stats.median),
+        sky_noise_adu: sky_noise_adu(&fits),
+        zero_point: None,
+        zero_point_version: 0,
         computed_at: chrono::Utc::now().timestamp(),
         catalog,
         star_cell_counts: spatial.star_cell_counts,
@@ -660,6 +891,149 @@ mod tests {
         })
     }
 
+    /// A 200×200 frame at sky 1,000 with a Gaussian star of the given
+    /// sigma and total flux at (100, 100), and a clipped star at (40, 40).
+    fn frame_with_star(sigma: f64, total: f64) -> FitsImage {
+        let (width, height) = (200, 200);
+        let mut data = vec![0_u16; width * height];
+        for y in 0..height {
+            for x in 0..width {
+                let r2 = (x as f64 - 100.0).powi(2) + (y as f64 - 100.0).powi(2);
+                let star = total / (2.0 * std::f64::consts::PI * sigma * sigma)
+                    * (-r2 / (2.0 * sigma * sigma)).exp();
+                let clipped = if (x as f64 - 40.0).hypot(y as f64 - 40.0) < 3.0 {
+                    60_000.0
+                } else {
+                    0.0
+                };
+                data[y * width + x] = (1_000.0 + star + clipped).round().min(65_535.0) as u16;
+            }
+        }
+        FitsImage {
+            width,
+            height,
+            data,
+            raw_min: 0.0,
+            raw_scale: 1.0,
+            bzero: 0.0,
+        }
+    }
+
+    #[test]
+    fn aperture_flux_holds_a_star_whatever_the_seeing() {
+        for sigma in [1.5, 2.5, 3.5] {
+            let fits = frame_with_star(sigma, 50_000.0);
+            let hfr = sigma * 1.1774;
+            let flux = aperture_flux(
+                &fits,
+                100.0,
+                100.0,
+                APERTURE_HFR * hfr,
+                ANNULUS_INNER_HFR * hfr,
+                ANNULUS_OUTER_HFR * hfr,
+            )
+            .unwrap();
+            assert!(
+                (flux - 50_000.0).abs() / 50_000.0 < 0.01,
+                "sigma {sigma}: {flux}"
+            );
+        }
+        let fits = frame_with_star(2.0, 50_000.0);
+        assert!(aperture_flux(&fits, 5.0, 100.0, 10.0, 12.0, 16.0).is_none());
+    }
+
+    #[test]
+    fn saturated_stars_are_not_measured() {
+        let fits = frame_with_star(2.0, 50_000.0);
+        let star = |x: f64, y: f64, flux: f64| crate::nina_star_detection::DetectedStar {
+            hfr: 2.4,
+            position: (x, y),
+            average_brightness: 0.0,
+            max_brightness: 65_530.0,
+            background: 1_000.0,
+            flux,
+        };
+        let stars = [star(40.0, 40.0, 900_000.0), star(100.0, 100.0, 50_000.0)];
+        let measured = measure_unsaturated_stars(&fits, &stars, 65_535.0, 2.4);
+        assert!(!measured.contains_key(&0), "the clipped star is left out");
+        assert!(
+            (measured[&1] - 50_000.0).abs() < 500.0,
+            "{:?}",
+            measured.get(&1)
+        );
+    }
+
+    #[test]
+    fn signal_to_noise_follows_the_zero_point_and_the_sky() {
+        let mut frame = entry(1, "a.fits");
+        assert_eq!(frame.signal_to_noise(), None);
+        frame.zero_point = Some(crate::zero_point::ZeroPoint {
+            magnitude: 20.0,
+            stars: 40,
+            spread: 0.03,
+            version: crate::zero_point::ZERO_POINT_ALGORITHM_VERSION,
+        });
+        assert_eq!(frame.signal_to_noise(), None, "no noise measured");
+        frame.sky_noise_adu = Some(10.0);
+        let clear = frame.signal_to_noise().unwrap();
+        assert!((clear - 1.0e8 / 10.0).abs() / clear < 1e-9);
+
+        // A quarter-magnitude of haze and a brighter sky both lower it.
+        let mut hazy = frame.clone();
+        hazy.zero_point.as_mut().unwrap().magnitude = 19.75;
+        assert!(hazy.signal_to_noise().unwrap() < clear * 0.8);
+        let mut bright = frame.clone();
+        bright.sky_noise_adu = Some(12.0);
+        assert!(bright.signal_to_noise().unwrap() < clear);
+    }
+
+    #[test]
+    fn scan_signal_to_noise_fills_the_scoring_dimension() {
+        let mut frame = entry(7, "light.fits");
+        frame.sky_noise_adu = Some(10.0);
+        frame.zero_point = Some(crate::zero_point::ZeroPoint {
+            magnitude: 20.0,
+            stars: 40,
+            spread: 0.03,
+            version: crate::zero_point::ZERO_POINT_ALGORITHM_VERSION,
+        });
+        let store = std::sync::Arc::new(store_with(vec![frame]));
+        let metadata = r#"{"FileName":"C:\\data\\light.fits"}"#;
+        let mut metrics =
+            crate::sequence_analysis::extract_metrics_from_metadata(7, metadata, None);
+        assert_eq!(metrics.snr, None);
+        crate::server::handlers::merge_spatial_metrics(&mut metrics, &store, metadata, None);
+        assert_eq!(metrics.snr, Some(1.0e7));
+
+        // A value the capture software recorded wins.
+        let mut recorded = crate::sequence_analysis::extract_metrics_from_metadata(
+            7,
+            r#"{"FileName":"light.fits","SNR":42.0}"#,
+            None,
+        );
+        crate::server::handlers::merge_spatial_metrics(&mut recorded, &store, metadata, None);
+        assert_eq!(recorded.snr, Some(42.0));
+    }
+
+    #[test]
+    fn a_zero_point_is_attempted_once_per_algorithm_version() {
+        let mut frame = entry(1, "a.fits");
+        assert!(!frame.wants_zero_point(), "nothing measured");
+        frame.catalog.stars.push(crate::photometry::CatalogStar {
+            x: 1.0,
+            y: 1.0,
+            flux: 10.0,
+            aperture_flux: Some(10.0),
+        });
+        assert!(frame.wants_zero_point());
+        let store = store_with(vec![frame]);
+        let cache = tempfile::tempdir().unwrap();
+        record_zero_points(&store, cache.path(), &[(1, None)]);
+        let after = store.read().unwrap().metrics[&1].clone();
+        assert!(!after.wants_zero_point(), "a failed attempt is remembered");
+        assert_eq!(after.zero_point, None);
+    }
+
     fn entry(image_id: i32, filename: &str) -> StoredSpatialMetrics {
         StoredSpatialMetrics {
             image_id,
@@ -674,6 +1048,9 @@ mod tests {
             bg_cell_spread: 0.05,
             bg_cell_max_dev: 0.04,
             median_adu: 1500.0,
+            sky_noise_adu: None,
+            zero_point: None,
+            zero_point_version: 0,
             computed_at: 0,
             catalog: crate::photometry::FrameCatalog::default(),
             star_cell_counts: vec![],

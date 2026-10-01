@@ -18,6 +18,12 @@
   Native filter labels can map templates to stable NINA filter IDs; inactive or
   detached targets and unactivated plan edits cannot become capture candidates.
 
+- Quality scans now measure each frame's photometric zero point against Gaia
+  stars and its sky noise, so SNR takes its place in the quality score beside
+  star count and HFR. A frame dimmed by haze or shot under a brighter sky
+  scores lower than frames with the same exposure, from any night. Existing
+  frames need a quality scan with **Force** to gain it.
+
 - The visibility chart marks the target's meridian transit and draws the
   rig's meridian pause as a break in the track; the hours lost to it are
   taken out of the visible time and named in the verdict.

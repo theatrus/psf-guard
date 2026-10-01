@@ -716,6 +716,7 @@ fn detect_stars(
                         x: s.position.0,
                         y: s.position.1,
                         flux: s.flux / fits.raw_scale,
+                        aperture_flux: None,
                     })
                     .collect(),
             };
@@ -741,6 +742,7 @@ fn detect_stars(
                         x: s.position.0,
                         y: s.position.1,
                         flux: s.flux / fits.raw_scale,
+                        aperture_flux: None,
                     })
                     .collect(),
             };
