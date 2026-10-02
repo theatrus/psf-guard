@@ -67,6 +67,9 @@ static ENABLED: AtomicBool = AtomicBool::new(false);
 static ARRIVAL_DELAY_MINUTES: AtomicU32 = AtomicU32::new(DEFAULT_ARRIVAL_DELAY_MINUTES);
 static GRADE_DELAY_MINUTES: AtomicU32 = AtomicU32::new(DEFAULT_GRADE_DELAY_MINUTES);
 static BUILD_NEW_CHANNELS: AtomicBool = AtomicBool::new(false);
+/// Stamps every touch, so a refresh that replaces one that just ran never
+/// reuses its predecessor's stamp.
+static TOUCHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// A channel with no stack yet is built only when one of its frames was
 /// captured this recently, so turning the option on does not stack a whole
 /// old catalog at once.
@@ -176,7 +179,7 @@ pub struct ScheduledRefresh {
     pub project_id: Option<i32>,
     pub reason: RefreshReason,
     pub due_in_seconds: u64,
-    /// Changes with every touch.
+    /// Changes with every touch, and is never reused.
     pub touches: u64,
 }
 
@@ -192,8 +195,8 @@ struct Pending {
     due_at: Instant,
     first_touched: Instant,
     reason: RefreshReason,
-    /// Counts touches, so what the refresh expects to do is worked out once
-    /// per change rather than on every look at the queue.
+    /// The latest touch's stamp, so what the refresh expects to do is worked
+    /// out once per change rather than on every look at the queue.
     touches: u64,
 }
 
@@ -248,7 +251,7 @@ impl AutomaticStackRefresh {
             reason,
             touches: 0,
         });
-        entry.touches += 1;
+        entry.touches = TOUCHES.fetch_add(1, Ordering::Relaxed) + 1;
         if entry.reason.settles_like(reason) {
             // A further touch lets the stream settle, but never past the
             // cap from the stream's first touch.
@@ -611,15 +614,34 @@ async fn refresh_project(
         if let Some(existing) = state.stack_previews.get(&job_id)
             && matches!(
                 existing.state,
-                StackJobState::Queued | StackJobState::Running | StackJobState::Completed
+                StackJobState::Queued | StackJobState::Running
             )
         {
             continue;
         }
-        if let Ok(bytes) = std::fs::read(manifest_path(&prepared.cache_root, &job_id))
-            && let Ok(existing) = serde_json::from_slice::<StackPreviewJob>(&bytes)
-            && existing.state == StackJobState::Completed
-        {
+        // A build of these exact frames already finished, perhaps before
+        // the card moved on to another: the card points at it again and its
+        // color follows, as when a person's build matches one.
+        let finished = state
+            .stack_previews
+            .get(&job_id)
+            .filter(|existing| existing.state == StackJobState::Completed)
+            .or_else(|| {
+                std::fs::read(manifest_path(&prepared.cache_root, &job_id))
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<StackPreviewJob>(&bytes).ok())
+                    .filter(|existing| existing.state == StackJobState::Completed)
+            });
+        if let Some(existing) = finished {
+            let state = Arc::clone(state);
+            let ctx = Arc::clone(ctx);
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Err(error) = state.stack_previews.persist_latest(&ctx, &existing) {
+                    tracing::warn!("could not point the card back at a finished build: {error}");
+                }
+                compose_colors_after(&state, &ctx, &existing);
+            })
+            .await;
             continue;
         }
         prepared.public.automatic = true;
@@ -656,22 +678,38 @@ async fn refresh_project(
     })
 }
 
+/// A channel's identity within its database, for telling refreshes that
+/// would stack the same thing apart from ones that only share a name.
+fn claim_key(project_id: i32, key: &StackChannelKey) -> String {
+    format!(
+        "{project_id}\0{}\0{}\0{}",
+        key.target_id,
+        key.filter_name,
+        key.exposure_group_key.as_deref().unwrap_or("")
+    )
+}
+
 /// How long a waiting refresh's expected channels are trusted between
 /// touches: frames can change without one, such as a quality scan.
 const EXPECTED_TTL: Duration = Duration::from_secs(60);
 
-type ExpectedKey = (String, Option<i32>, u64);
-type ExpectedCache = HashMap<ExpectedKey, (Instant, Vec<String>)>;
+type ExpectedKey = (String, Option<i32>, u64, bool);
+type ExpectedCache = HashMap<ExpectedKey, (Instant, Vec<(String, String)>)>;
 static EXPECTED: std::sync::LazyLock<Mutex<ExpectedCache>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// The channels a waiting refresh expects to restack or stack for the first
-/// time, for the header's queue. Empty when it expects to do nothing.
-pub(super) fn expected_channels(ctx: &DatabaseContext, refresh: &ScheduledRefresh) -> Vec<String> {
+/// time, for the header's queue, as (key, name). Empty when it expects to
+/// do nothing.
+pub(super) fn expected_channels(
+    ctx: &DatabaseContext,
+    refresh: &ScheduledRefresh,
+) -> Vec<(String, String)> {
     let key = (
         refresh.database_id.clone(),
         refresh.project_id,
         refresh.touches,
+        BUILD_NEW_CHANNELS.load(Ordering::Relaxed),
     );
     if let Some((at, channels)) = EXPECTED.lock().unwrap().get(&key)
         && at.elapsed() < EXPECTED_TTL
@@ -705,9 +743,10 @@ pub(super) fn expected_channels(ctx: &DatabaseContext, refresh: &ScheduledRefres
 pub(super) struct RefreshPlan {
     pub request: StackPreviewRequest,
     pub channels: Vec<StackChannelKey>,
-    /// People's names for the channels whose frames or grades moved since
-    /// their stack, then the ones with no stack yet.
-    pub expected: Vec<String>,
+    /// The channels whose frames or grades moved since their stack, then the
+    /// ones with no stack yet: each with a key unique within its database
+    /// and the name people read.
+    pub expected: Vec<(String, String)>,
 }
 
 /// Plan a project's refresh: its stacked channels over the frames it holds
@@ -783,6 +822,19 @@ pub(super) fn plan_refresh(
             )
         })
         .collect::<HashMap<_, _>>();
+    let mut request = refresh_request(&latest, &[]).unwrap_or_else(|| StackPreviewRequest {
+        image_ids: Vec::new(),
+        accepted_only: false,
+        force: false,
+        north_up: false,
+        calibration: crate::calibration::CalibrationMode::Auto,
+        calibration_overrides: Vec::new(),
+        order: Default::default(),
+        scoring: Default::default(),
+        method: None,
+        color_defaults: None,
+        channel: None,
+    });
     let recent_since = chrono::Utc::now().timestamp() - NEW_CHANNEL_WINDOW_DAYS * 86_400;
     let mut channels = Vec::new();
     let mut restack = Vec::new();
@@ -797,20 +849,28 @@ pub(super) fn plan_refresh(
                     .map(|image| (image.id, image.grading_status))
                     .collect::<HashSet<_>>();
                 if &now != built {
-                    restack.push(name);
+                    restack.push((claim_key(project_id, key), name));
                 }
             }
             None if build_new => {
+                // As the build will count them: accepted frames only when the
+                // project's cards stack only those, else anything not rejected.
                 let usable = frames
                     .iter()
-                    .filter(|image| image.grading_status != 2)
+                    .filter(|image| {
+                        if request.accepted_only {
+                            image.grading_status == 1
+                        } else {
+                            image.grading_status != 2
+                        }
+                    })
                     .count();
                 let recent = frames
                     .iter()
                     .any(|image| image.acquired_date.is_some_and(|at| at >= recent_since));
                 if usable >= 2 && recent {
                     channels.push(key.clone());
-                    fresh.push(format!("{name} (new)"));
+                    fresh.push((claim_key(project_id, key), format!("{name} (new)")));
                 }
             }
             None => {}
@@ -830,19 +890,6 @@ pub(super) fn plan_refresh(
         .filter(|(image, _, _)| targets.contains(&image.target_id))
         .map(|(image, _, _)| image.id)
         .collect::<Vec<_>>();
-    let mut request = refresh_request(&latest, &[]).unwrap_or_else(|| StackPreviewRequest {
-        image_ids: Vec::new(),
-        accepted_only: false,
-        force: false,
-        north_up: false,
-        calibration: crate::calibration::CalibrationMode::Auto,
-        calibration_overrides: Vec::new(),
-        order: Default::default(),
-        scoring: Default::default(),
-        method: None,
-        color_defaults: None,
-        channel: None,
-    });
     request.image_ids = image_ids;
     restack.extend(fresh);
     Ok(Some(RefreshPlan {
@@ -1288,6 +1335,12 @@ mod tests {
         });
         let plan = plan_refresh(&ctx, 1).unwrap().expect("R is followed");
         assert!(plan.expected.is_empty(), "{:?}", plan.expected);
+        let names = |plan: &RefreshPlan| {
+            plan.expected
+                .iter()
+                .map(|(_, name)| name.clone())
+                .collect::<Vec<_>>()
+        };
         assert_eq!(plan.channels.len(), 1);
 
         // A new R frame, and R is due to restack.
@@ -1300,7 +1353,7 @@ mod tests {
                 .unwrap();
         }
         let plan = plan_refresh(&ctx, 1).unwrap().unwrap();
-        assert_eq!(plan.expected, ["T · R"]);
+        assert_eq!(names(&plan), ["T · R"]);
 
         // With new channels on, G's recent frames are stacked too; B's old
         // ones are left alone.
@@ -1310,7 +1363,7 @@ mod tests {
             ..AutomationPolicy::default()
         });
         let plan = plan_refresh(&ctx, 1).unwrap().unwrap();
-        assert_eq!(plan.expected, ["T · R", "T · G (new)"]);
+        assert_eq!(names(&plan), ["T · R", "T · G (new)"]);
         assert_eq!(plan.channels.len(), 2);
         // Every frame of the target goes in, so each channel's siblings vote
         // on the pier-side mapping.

@@ -1823,11 +1823,15 @@ fn name_scheduled(
         .into_iter()
         .filter_map(|refresh| {
             let ctx = state.get_database(&refresh.database_id)?;
-            let channels = automatic::expected_channels(&ctx, &refresh);
-            let fresh = channels
+            let expected = automatic::expected_channels(&ctx, &refresh);
+            let fresh = expected
                 .iter()
-                .filter(|channel| claimed.insert((refresh.database_id.clone(), (*channel).clone())))
+                .filter(|(key, _)| claimed.insert((refresh.database_id.clone(), key.clone())))
                 .count();
+            let channels = expected
+                .into_iter()
+                .map(|(_, name)| name)
+                .collect::<Vec<_>>();
             (fresh > 0).then_some((refresh, channels))
         })
         .map(|(refresh, channels)| {

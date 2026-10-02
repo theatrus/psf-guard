@@ -593,16 +593,23 @@ again; the rest are cache hits.
 
 **Also stack channels that have no stack yet** goes further: a channel with
 two or more frames that are not rejected, one of them captured in the last
-seven days, is stacked on the next refresh too, with the project's settings,
+seven days, is stacked on the next refresh too, with the settings of the
+project's other cards (for a project with none: every frame that is not
+rejected, capture order, and the default scoring, since your scoring
+preferences live in the browser),
 so frames that arrive are stacked before anyone opens the project. Older
 channels are left alone, so turning it on does not stack a whole catalog. A
 first stack this way gets no first color preview; once one is composed, it
 follows its channels.
 
 The header's queue lists a waiting refresh only when it expects to stack
-something, and names the channels: *Restacks NGC 7331 · R, NGC 7331 · Ha
-(new) · after new frames · starts in 4 min*. A refresh that would find only
-cache hits is not shown. The guess compares each channel's frames and grades
+something. Its line names the database, the project and why it is waiting
+(*after new frames*), then the channels (*Restacks NGC 7331 · R, NGC 7331 ·
+Ha (new)*), with when it starts in the corner (*in 4 min*). A refresh that
+would find only cache hits is not shown, nor one whose channels an earlier
+refresh of the same database already covers. When a refresh finds an older
+finished build of the same frames, the card points back at it instead of
+stacking again. The guess compares each channel's frames and grades
 with its stack, so a refresh after a quality scan may still restack a channel
 it did not name; it then shows in the queue as that channel's build.
 
