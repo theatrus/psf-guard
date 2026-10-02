@@ -531,6 +531,10 @@ pub struct StackAutomationSettings {
     /// recommended method.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<crate::server::stack_preview::StackMethod>,
+    /// Automatic refreshes also stack channels with no stack yet; absent
+    /// means only the channels already stacked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_new_channels: Option<bool>,
 }
 
 impl StackAutomationSettings {
@@ -544,6 +548,9 @@ impl StackAutomationSettings {
             grade_delay_minutes: self
                 .grade_delay_minutes
                 .unwrap_or(defaults.grade_delay_minutes),
+            build_new_channels: self
+                .build_new_channels
+                .unwrap_or(defaults.build_new_channels),
         }
     }
 }

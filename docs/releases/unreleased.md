@@ -241,6 +241,13 @@
 
 ## Changed
 
+- Automatic refresh restacks only the channels whose frames or grades
+  changed, as one build per channel; after a Build stacks it no longer
+  restacked every channel. The header's queue lists a waiting refresh only
+  when it expects to stack something, and names those channels. A new option,
+  **Also stack channels that have no stack yet**, stacks channels as their
+  frames arrive, for channels with a frame from the last seven days.
+
 - **Build stacks** queues one build per channel, so the header's queue lists
   each channel on its own; a channel already built as asked comes back at
   once. Once a target's last channel is in, its color

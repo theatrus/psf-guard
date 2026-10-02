@@ -208,7 +208,7 @@ pub struct StackPreviewRequest {
 
 /// One channel of a request: a target, a filter, and an exposure group when
 /// the project splits them.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct StackChannelKey {
     pub target_id: i32,
     pub filter_name: String,
@@ -729,6 +729,10 @@ pub struct ScheduledRefreshView {
     /// `arrival`, `sync` or `grade`.
     pub reason: automatic::RefreshReason,
     pub due_in_seconds: u64,
+    /// The channels it expects to restack, then the ones it will stack for
+    /// the first time, as people read them. A refresh that expects to do
+    /// nothing is not listed.
+    pub channels: Vec<String>,
 }
 
 fn channel_label(target_name: &str, filter_name: &str) -> String {
@@ -1811,9 +1815,22 @@ fn name_scheduled(
     state: &AppState,
     scheduled: Vec<automatic::ScheduledRefresh>,
 ) -> Vec<ScheduledRefreshView> {
+    // Soonest first: a later refresh whose channels an earlier one of the
+    // same database already restacks would find nothing left, so it is not
+    // listed either.
+    let mut claimed: HashSet<(String, String)> = HashSet::new();
     scheduled
         .into_iter()
-        .map(|refresh| {
+        .filter_map(|refresh| {
+            let ctx = state.get_database(&refresh.database_id)?;
+            let channels = automatic::expected_channels(&ctx, &refresh);
+            let fresh = channels
+                .iter()
+                .filter(|channel| claimed.insert((refresh.database_id.clone(), (*channel).clone())))
+                .count();
+            (fresh > 0).then_some((refresh, channels))
+        })
+        .map(|(refresh, channels)| {
             let ctx = state.get_database(&refresh.database_id);
             let project_name = match (&ctx, refresh.project_id) {
                 (Some(ctx), Some(project_id)) => ctx.db().lock().ok().and_then(|conn| {
@@ -1835,6 +1852,7 @@ fn name_scheduled(
                 project_name,
                 reason: refresh.reason,
                 due_in_seconds: refresh.due_in_seconds,
+                channels,
             }
         })
         .collect()
@@ -2273,10 +2291,15 @@ fn prepare_job(
     let Some(channel) = &request.channel else {
         return prepare_whole(ctx, project_id, request, None).map(|(job, _)| job);
     };
-    prepare_channels(ctx, project_id, request, Some(channel))?
-        .pop()
-        .map(|(_, job)| job)
-        .ok_or_else(|| AppError::BadRequest("No image in this request is in that channel".into()))
+    prepare_channels(
+        ctx,
+        project_id,
+        request,
+        Some(std::slice::from_ref(channel)),
+    )?
+    .pop()
+    .map(|(_, job)| job)
+    .ok_or_else(|| AppError::BadRequest("No image in this request is in that channel".into()))
 }
 
 /// What one group hashes to, so its build can stand alone: the shared
@@ -2294,17 +2317,19 @@ fn hex_digest(hasher: Sha256) -> String {
     text
 }
 
-/// The request split into one build per channel, each with its siblings'
-/// reference frames for the pier-side vote. Their image ids and source
-/// fingerprints are part of each build's identity, since they can change
-/// which way an unsolved channel faces. With `only`, just that channel,
-/// even when it has too few frames to stack; without it, channels with too
-/// few frames come back together in one build that settles at once.
+/// The request split into one build per channel, each with the reference
+/// frames of the same target's other channels for the pier-side vote.
+/// Their image ids and source fingerprints are part of each build's
+/// identity, since they can change which way an unsolved channel faces;
+/// only the same target's channels count, so a build is the same whether
+/// the request covered the project or that target. With `only`, just those
+/// channels, even ones with too few frames to stack; without it, channels
+/// with too few frames come back together in one build that settles at once.
 fn prepare_channels(
     ctx: &Arc<DatabaseContext>,
     project_id: i32,
     request: &StackPreviewRequest,
-    only: Option<&StackChannelKey>,
+    only: Option<&[StackChannelKey]>,
 ) -> Result<Vec<(StackPreviewRequest, PreparedJob)>, AppError> {
     let mut whole_request = request.clone();
     whole_request.channel = None;
@@ -2318,6 +2343,10 @@ fn prepare_channels(
         .groups
         .iter()
         .map(|group| group.frames.first().cloned())
+        .collect::<Vec<_>>();
+    let targets = identities
+        .iter()
+        .map(|identity| identity.key.target_id)
         .collect::<Vec<_>>();
     let PreparedJob {
         public,
@@ -2336,7 +2365,7 @@ fn prepare_channels(
         .zip(0..)
     {
         if let Some(only) = only
-            && only != &identity.key
+            && !only.contains(&identity.key)
         {
             continue;
         }
@@ -2347,7 +2376,9 @@ fn prepare_channels(
         let peers = peer_frames
             .iter()
             .enumerate()
-            .filter(|(other, _)| *other != position && buildable[*other])
+            .filter(|(other, _)| {
+                *other != position && buildable[*other] && targets[*other] == identity.key.target_id
+            })
             .filter_map(|(_, frame)| frame.clone())
             .collect::<Vec<_>>();
         let mut hasher = Sha256::new();
@@ -2403,7 +2434,7 @@ fn prepare_whole(
     ctx: &Arc<DatabaseContext>,
     project_id: i32,
     request: &StackPreviewRequest,
-    fingerprint_only: Option<&StackChannelKey>,
+    fingerprint_only: Option<&[StackChannelKey]>,
 ) -> Result<(PreparedJob, Vec<GroupIdentity>), AppError> {
     let flat_star_masking = crate::calibration::flat_star_masking_enabled();
     let scoring = StackScoringSettings::from_overrides(&request.scoring);
@@ -2657,8 +2688,10 @@ fn prepare_whole(
         if frames.len() > 1 && request.order == snr::StackFrameOrder::Capture {
             frames[1..].sort_by_key(|frame| (frame.acquired_date.unwrap_or(0), frame.image_id));
         }
-        let fingerprinted = fingerprint_only
-            .is_none_or(|key| key.matches(target_id, &filter_name, exposure_group_key.as_deref()));
+        let fingerprinted = fingerprint_only.is_none_or(|keys| {
+            keys.iter()
+                .any(|key| key.matches(target_id, &filter_name, exposure_group_key.as_deref()))
+        });
         if !frames.is_empty() && fingerprinted {
             let directory_tree = ctx.get_directory_tree().map_err(AppError::db)?;
             let conn = ctx.db();
@@ -5129,7 +5162,7 @@ mod tests {
         assert_eq!(split[0].1.public.job_id, whole.public.job_id);
         // Asked by name, a channel with too few frames still comes back,
         // as itself.
-        let named = prepare_channels(&ctx, 1, &request, Some(&oiii)).unwrap();
+        let named = prepare_channels(&ctx, 1, &request, Some(std::slice::from_ref(&oiii))).unwrap();
         assert_eq!(named.len(), 1);
         assert_eq!(named[0].0.channel.as_ref(), Some(&oiii));
         assert_eq!(named[0].1.public.job_id, first.public.job_id);

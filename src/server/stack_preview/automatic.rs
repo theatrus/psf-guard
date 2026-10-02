@@ -13,16 +13,18 @@
 //!
 //! A refresh asks for exactly what the cards remember: the same targets and
 //! channels, the same Accepted-only policy, order, scoring, and calibration
-//! choices, over the project's current frames. The job identity covers the
-//! frames and their grades, so a refresh that would rebuild nothing new is a
-//! cache hit and starts no work. After a mono refresh finishes, the color
-//! previews composed from its channels are recomposed the same way.
+//! choices, over the project's current frames, one build per channel as a
+//! person's Build stacks makes them. The job identity covers the frames and
+//! their grades, so a channel that would rebuild nothing new is a cache hit
+//! and starts no work. With new channels on, channels with no stack yet and
+//! a recent frame are stacked too. Color follows each target's last channel.
 
 use super::color::{self, StackColorJob, StackColorRequest};
 use super::{
     current_latest_stacks, current_project_latest_stacks, enqueue_job, latest_path, manifest_path,
-    prepare_job, read_latest_indices, validate_request, CalibrationOverride, LatestStackPreviews,
-    StackJobState, StackPreviewJob, StackPreviewRequest, StackScoringSettings, MAX_REMEMBERED_JOBS,
+    prepare_channels, read_latest_indices, validate_request, CalibrationOverride,
+    LatestStackPreviews, StackChannelKey, StackGroupState, StackJobState, StackPreviewJob,
+    StackPreviewRequest, StackScoringSettings,
 };
 use crate::db::Database;
 use crate::models::AcquiredImage;
@@ -64,6 +66,11 @@ const BUSY_RETRY: Duration = Duration::from_secs(30);
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static ARRIVAL_DELAY_MINUTES: AtomicU32 = AtomicU32::new(DEFAULT_ARRIVAL_DELAY_MINUTES);
 static GRADE_DELAY_MINUTES: AtomicU32 = AtomicU32::new(DEFAULT_GRADE_DELAY_MINUTES);
+static BUILD_NEW_CHANNELS: AtomicBool = AtomicBool::new(false);
+/// A channel with no stack yet is built only when one of its frames was
+/// captured this recently, so turning the option on does not stack a whole
+/// old catalog at once.
+pub const NEW_CHANNEL_WINDOW_DAYS: i64 = 7;
 
 /// What the operator chose, process-wide.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +78,9 @@ pub struct AutomationPolicy {
     pub enabled: bool,
     pub arrival_delay_minutes: u32,
     pub grade_delay_minutes: u32,
+    /// Also stack channels that have no stack yet, as their frames arrive.
+    #[serde(default)]
+    pub build_new_channels: bool,
 }
 
 impl Default for AutomationPolicy {
@@ -79,6 +89,7 @@ impl Default for AutomationPolicy {
             enabled: false,
             arrival_delay_minutes: DEFAULT_ARRIVAL_DELAY_MINUTES,
             grade_delay_minutes: DEFAULT_GRADE_DELAY_MINUTES,
+            build_new_channels: false,
         }
     }
 }
@@ -86,6 +97,7 @@ impl Default for AutomationPolicy {
 /// Apply a policy for every refresh this process schedules from now on.
 pub fn configure(policy: AutomationPolicy) {
     ENABLED.store(policy.enabled, Ordering::Relaxed);
+    BUILD_NEW_CHANNELS.store(policy.build_new_channels, Ordering::Relaxed);
     ARRIVAL_DELAY_MINUTES.store(
         policy.arrival_delay_minutes.clamp(1, MAX_DELAY_MINUTES),
         Ordering::Relaxed,
@@ -115,6 +127,7 @@ pub fn policy() -> AutomationPolicy {
         enabled: ENABLED.load(Ordering::Relaxed),
         arrival_delay_minutes: ARRIVAL_DELAY_MINUTES.load(Ordering::Relaxed),
         grade_delay_minutes: GRADE_DELAY_MINUTES.load(Ordering::Relaxed),
+        build_new_channels: BUILD_NEW_CHANNELS.load(Ordering::Relaxed),
     }
 }
 
@@ -163,6 +176,8 @@ pub struct ScheduledRefresh {
     pub project_id: Option<i32>,
     pub reason: RefreshReason,
     pub due_in_seconds: u64,
+    /// Changes with every touch.
+    pub touches: u64,
 }
 
 /// One project, or every followed project of one database.
@@ -177,6 +192,9 @@ struct Pending {
     due_at: Instant,
     first_touched: Instant,
     reason: RefreshReason,
+    /// Counts touches, so what the refresh expects to do is worked out once
+    /// per change rather than on every look at the queue.
+    touches: u64,
 }
 
 /// The refreshes waiting to run.
@@ -228,7 +246,9 @@ impl AutomaticStackRefresh {
             due_at: now + delay,
             first_touched: now,
             reason,
+            touches: 0,
         });
+        entry.touches += 1;
         if entry.reason.settles_like(reason) {
             // A further touch lets the stream settle, but never past the
             // cap from the stream's first touch.
@@ -290,6 +310,7 @@ impl AutomaticStackRefresh {
                 project_id: key.project_id,
                 reason: entry.reason,
                 due_in_seconds: entry.due_at.saturating_duration_since(now).as_secs(),
+                touches: entry.touches,
             })
             .collect::<Vec<_>>();
         scheduled.sort_by(|left, right| {
@@ -340,6 +361,7 @@ impl AutomaticStackRefresh {
             due_at,
             first_touched: now,
             reason: refresh.reason,
+            touches: 0,
         });
         entry.due_at = entry.due_at.min(due_at);
     }
@@ -498,9 +520,29 @@ fn followed_projects(ctx: &DatabaseContext) -> Vec<i32> {
                 }
             })
             .collect();
+    if BUILD_NEW_CHANNELS.load(Ordering::Relaxed) {
+        projects.extend(projects_with_recent_frames(ctx));
+    }
     projects.sort_unstable();
     projects.dedup();
     projects
+}
+
+/// Projects with a frame captured inside the new-channel window: the only
+/// ones a refresh may start stacking from nothing.
+fn projects_with_recent_frames(ctx: &DatabaseContext) -> Vec<i32> {
+    let since = chrono::Utc::now().timestamp() - NEW_CHANNEL_WINDOW_DAYS * 86_400;
+    let conn = ctx.db();
+    let Ok(conn) = conn.lock() else {
+        return Vec::new();
+    };
+    conn.prepare("SELECT DISTINCT projectId FROM acquiredimage WHERE acquireddate >= ?1")
+        .and_then(|mut statement| {
+            statement
+                .query_map([since], |row| row.get::<_, i32>(0))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .unwrap_or_default()
 }
 
 fn read_latest(
@@ -528,82 +570,286 @@ async fn refresh_project(
     project_id: i32,
     reason: RefreshReason,
 ) -> Result<RefreshOutcome, AppError> {
-    let Some(latest) = read_latest(ctx, project_id)? else {
-        return Ok(RefreshOutcome::Skipped(
-            "no remembered stack previews".into(),
-        ));
-    };
-    if latest.groups.is_empty() {
-        return Ok(RefreshOutcome::Skipped(
-            "no remembered stack previews".into(),
-        ));
-    }
-    let images: Vec<AcquiredImage> = {
-        let conn = ctx.db();
-        let conn = conn.lock().map_err(AppError::db)?;
-        Database::new(&conn)
-            .get_images_by_project_id(project_id)
-            .map_err(AppError::db)?
-            .into_iter()
-            .map(|(image, _, _)| image)
-            .collect()
-    };
-    let Some(request) = refresh_request(&latest, &images) else {
-        return Ok(RefreshOutcome::Skipped(
-            "the remembered channels have fewer than two frames".into(),
-        ));
-    };
-    validate_request(&request)?;
-    let ctx_for_prepare = Arc::clone(ctx);
-    let request_for_prepare = request.clone();
-    let mut prepared = tokio::task::spawn_blocking(move || {
-        prepare_job(&ctx_for_prepare, project_id, &request_for_prepare)
+    let ctx_for_plan = Arc::clone(ctx);
+    let planned = tokio::task::spawn_blocking(move || {
+        let Some(plan) = plan_refresh(&ctx_for_plan, project_id)? else {
+            return Ok::<_, AppError>(None);
+        };
+        validate_request(&plan.request)?;
+        // One build per channel, the same builds a person's Build stacks
+        // makes, so a refresh after it is a cache hit for what did not
+        // change and restacks only what did.
+        let channels = prepare_channels(
+            &ctx_for_plan,
+            project_id,
+            &plan.request,
+            Some(&plan.channels),
+        )?;
+        Ok(Some(channels))
     })
     .await
     .map_err(|error| {
         AppError::InternalError(format!("Stack preparation task failed: {error}"))
     })??;
-    let job_id = prepared.public.job_id.clone();
-    // The identity covers frames, grades, scores, and calibration: a
-    // request that matches the cards already built starts nothing.
-    if let Some(existing) = state.stack_previews.get(&job_id)
-        && matches!(
-            existing.state,
-            StackJobState::Queued | StackJobState::Running | StackJobState::Completed
-        )
-    {
-        return Ok(RefreshOutcome::Unchanged);
+    let Some(channels) = planned else {
+        return Ok(RefreshOutcome::Skipped(
+            "no stacked channel, and no new one to build".into(),
+        ));
+    };
+    let mut started = 0;
+    for (request, mut prepared) in channels {
+        // A channel with too few frames has nothing to stack yet.
+        if prepared
+            .public
+            .groups
+            .iter()
+            .all(|group| group.state == StackGroupState::Skipped)
+        {
+            continue;
+        }
+        let job_id = prepared.public.job_id.clone();
+        if let Some(existing) = state.stack_previews.get(&job_id)
+            && matches!(
+                existing.state,
+                StackJobState::Queued | StackJobState::Running | StackJobState::Completed
+            )
+        {
+            continue;
+        }
+        if let Ok(bytes) = std::fs::read(manifest_path(&prepared.cache_root, &job_id))
+            && let Ok(existing) = serde_json::from_slice::<StackPreviewJob>(&bytes)
+            && existing.state == StackJobState::Completed
+        {
+            continue;
+        }
+        prepared.public.automatic = true;
+        if !state.stack_previews.insert(prepared.public.clone()) {
+            break;
+        }
+        tracing::info!(
+            db = %ctx.id,
+            project_id,
+            job_id,
+            "Refreshing {} after {}",
+            prepared
+                .public
+                .groups
+                .first()
+                .map(|group| super::channel_label(&group.target_name, &group.filter_name))
+                .unwrap_or_default(),
+            reason.label(),
+        );
+        let origin = super::journal::JournaledStackJob::mono(
+            &ctx.id,
+            project_id,
+            &request,
+            &prepared.public,
+            true,
+        );
+        enqueue_job(Arc::clone(state), prepared, origin);
+        started += 1;
     }
-    if let Ok(bytes) = std::fs::read(manifest_path(&prepared.cache_root, &job_id))
-        && let Ok(existing) = serde_json::from_slice::<StackPreviewJob>(&bytes)
-        && existing.state == StackJobState::Completed
-    {
-        return Ok(RefreshOutcome::Unchanged);
-    }
-    prepared.public.automatic = true;
-    if !state.stack_previews.insert(prepared.public.clone()) {
-        return Ok(RefreshOutcome::Skipped(format!(
-            "{MAX_REMEMBERED_JOBS} stack preview jobs are already active"
-        )));
-    }
-    tracing::info!(
-        db = %ctx.id,
-        project_id,
-        job_id,
-        "Refreshing stack previews after {} ({} frames across {} channels)",
-        reason.label(),
-        request.image_ids.len(),
-        latest.groups.len()
+    Ok(if started > 0 {
+        RefreshOutcome::Started
+    } else {
+        RefreshOutcome::Unchanged
+    })
+}
+
+/// How long a waiting refresh's expected channels are trusted between
+/// touches: frames can change without one, such as a quality scan.
+const EXPECTED_TTL: Duration = Duration::from_secs(60);
+
+type ExpectedKey = (String, Option<i32>, u64);
+type ExpectedCache = HashMap<ExpectedKey, (Instant, Vec<String>)>;
+static EXPECTED: std::sync::LazyLock<Mutex<ExpectedCache>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The channels a waiting refresh expects to restack or stack for the first
+/// time, for the header's queue. Empty when it expects to do nothing.
+pub(super) fn expected_channels(ctx: &DatabaseContext, refresh: &ScheduledRefresh) -> Vec<String> {
+    let key = (
+        refresh.database_id.clone(),
+        refresh.project_id,
+        refresh.touches,
     );
-    let origin = super::journal::JournaledStackJob::mono(
-        &ctx.id,
+    if let Some((at, channels)) = EXPECTED.lock().unwrap().get(&key)
+        && at.elapsed() < EXPECTED_TTL
+    {
+        return channels.clone();
+    }
+    let projects = match refresh.project_id {
+        Some(project_id) => vec![project_id],
+        None => followed_projects(ctx),
+    };
+    let channels = projects
+        .into_iter()
+        .filter_map(|project_id| match plan_refresh(ctx, project_id) {
+            Ok(plan) => plan,
+            Err(error) => {
+                tracing::debug!(db = %ctx.id, project_id, "could not plan a refresh: {error:?}");
+                None
+            }
+        })
+        .flat_map(|plan| plan.expected)
+        .collect::<Vec<_>>();
+    let mut cache = EXPECTED.lock().unwrap();
+    cache.retain(|_, (at, _)| at.elapsed() < EXPECTED_TTL);
+    cache.insert(key, (Instant::now(), channels.clone()));
+    channels
+}
+
+/// What a refresh of one project asks for: the channels it stacks, the
+/// request that names their frames, and which of them it expects to restack
+/// or build for the first time, for the header's queue.
+pub(super) struct RefreshPlan {
+    pub request: StackPreviewRequest,
+    pub channels: Vec<StackChannelKey>,
+    /// People's names for the channels whose frames or grades moved since
+    /// their stack, then the ones with no stack yet.
+    pub expected: Vec<String>,
+}
+
+/// Plan a project's refresh: its stacked channels over the frames it holds
+/// now, and, with new channels on, every channel with no stack yet whose
+/// frames include one captured inside the window. `None` when there is
+/// nothing to stack.
+pub(super) fn plan_refresh(
+    ctx: &DatabaseContext,
+    project_id: i32,
+) -> Result<Option<RefreshPlan>, AppError> {
+    let latest = read_latest(ctx, project_id)?.unwrap_or_else(|| LatestStackPreviews {
+        schema_version: 1,
+        database_id: ctx.id.clone(),
         project_id,
-        &request,
-        &prepared.public,
-        true,
-    );
-    enqueue_job(Arc::clone(state), prepared, origin);
-    Ok(RefreshOutcome::Started)
+        updated_unix_seconds: 0,
+        groups: Vec::new(),
+    });
+    let build_new = BUILD_NEW_CHANNELS.load(Ordering::Relaxed);
+    if latest.groups.is_empty() && !build_new {
+        return Ok(None);
+    }
+    let (images, exposure_groups) = {
+        let conn = ctx.db();
+        let conn = conn.lock().map_err(AppError::db)?;
+        let images = Database::new(&conn)
+            .get_images_by_project_id(project_id)
+            .map_err(AppError::db)?;
+        let groups = crate::server::exposure_groups::cached_project_groups(ctx, &conn, project_id)?;
+        (images, groups)
+    };
+    let key_of = |image: &AcquiredImage| StackChannelKey {
+        target_id: image.target_id,
+        filter_name: image.filter_name.clone(),
+        exposure_group_key: exposure_groups
+            .by_image
+            .get(&image.id)
+            .map(|group| group.key.clone()),
+    };
+    let mut current: BTreeMap<StackChannelKey, Vec<&AcquiredImage>> = BTreeMap::new();
+    let mut names: HashMap<StackChannelKey, String> = HashMap::new();
+    for (image, _, target_name) in &images {
+        let key = key_of(image);
+        names.entry(key.clone()).or_insert_with(|| {
+            let mut name = super::channel_label(target_name, &image.filter_name);
+            if let Some(group) = exposure_groups.by_image.get(&image.id) {
+                name.push_str(" · ");
+                name.push_str(&group.label);
+            }
+            name
+        });
+        current.entry(key).or_default().push(image);
+    }
+    let remembered = latest
+        .groups
+        .iter()
+        .map(|entry| {
+            (
+                StackChannelKey {
+                    target_id: entry.group.target_id,
+                    filter_name: entry.group.filter_name.clone(),
+                    exposure_group_key: entry
+                        .group
+                        .exposure_group
+                        .as_ref()
+                        .map(|group| group.key.clone()),
+                },
+                entry
+                    .group
+                    .input_images
+                    .iter()
+                    .map(|image| (image.image_id, image.grading_status))
+                    .collect::<HashSet<_>>(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let recent_since = chrono::Utc::now().timestamp() - NEW_CHANNEL_WINDOW_DAYS * 86_400;
+    let mut channels = Vec::new();
+    let mut restack = Vec::new();
+    let mut fresh = Vec::new();
+    for (key, frames) in &current {
+        let name = names.get(key).cloned().unwrap_or_default();
+        match remembered.get(key) {
+            Some(built) => {
+                channels.push(key.clone());
+                let now = frames
+                    .iter()
+                    .map(|image| (image.id, image.grading_status))
+                    .collect::<HashSet<_>>();
+                if &now != built {
+                    restack.push(name);
+                }
+            }
+            None if build_new => {
+                let usable = frames
+                    .iter()
+                    .filter(|image| image.grading_status != 2)
+                    .count();
+                let recent = frames
+                    .iter()
+                    .any(|image| image.acquired_date.is_some_and(|at| at >= recent_since));
+                if usable >= 2 && recent {
+                    channels.push(key.clone());
+                    fresh.push(format!("{name} (new)"));
+                }
+            }
+            None => {}
+        }
+    }
+    if channels.is_empty() {
+        return Ok(None);
+    }
+    let targets = channels
+        .iter()
+        .map(|key| key.target_id)
+        .collect::<HashSet<_>>();
+    // Every frame of the targets involved, so each channel's siblings vote on
+    // the pier-side mapping as they do in a person's build.
+    let image_ids = images
+        .iter()
+        .filter(|(image, _, _)| targets.contains(&image.target_id))
+        .map(|(image, _, _)| image.id)
+        .collect::<Vec<_>>();
+    let mut request = refresh_request(&latest, &[]).unwrap_or_else(|| StackPreviewRequest {
+        image_ids: Vec::new(),
+        accepted_only: false,
+        force: false,
+        north_up: false,
+        calibration: crate::calibration::CalibrationMode::Auto,
+        calibration_overrides: Vec::new(),
+        order: Default::default(),
+        scoring: Default::default(),
+        method: None,
+        color_defaults: None,
+        channel: None,
+    });
+    request.image_ids = image_ids;
+    restack.extend(fresh);
+    Ok(Some(RefreshPlan {
+        request,
+        channels,
+        expected: restack,
+    }))
 }
 
 /// The request that rebuilds what a project's cards remember, over the
@@ -629,7 +875,8 @@ pub(super) fn refresh_request(
         .collect();
     image_ids.sort_unstable();
     image_ids.dedup();
-    if image_ids.len() < 2 {
+    // With no images given, only the settings are wanted.
+    if image_ids.len() < 2 && !images.is_empty() {
         return None;
     }
     // Each card keeps its own calibration choice; the request carries the
@@ -822,6 +1069,7 @@ mod tests {
             enabled: true,
             arrival_delay_minutes: arrival,
             grade_delay_minutes: grade,
+            build_new_channels: false,
         });
         guard
     }
@@ -985,6 +1233,89 @@ mod tests {
                 }))
             }
         })
+    }
+
+    #[test]
+    fn a_waiting_refresh_names_only_the_channels_it_will_stack() {
+        let _guard = POLICY_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let directory = tempfile::tempdir().unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        conn.execute_batch("INSERT INTO project(Id,name,profileId,guid) VALUES(1,'Project','profile','project-one');
+            INSERT INTO target(Id,name,projectId,active,ra,dec,epochcode,rotation,roi,guid)
+                VALUES(1,'T',1,1,10,20,0,0,100,'target-one');
+            CREATE TABLE psf_guard_project_processing(project_key TEXT PRIMARY KEY,split_exposure_groups INTEGER NOT NULL,split_chosen INTEGER);
+            INSERT INTO psf_guard_project_processing VALUES('guid:project-one',0,1);").unwrap();
+        let now = chrono::Utc::now().timestamp();
+        let long_ago = now - 400 * 86_400;
+        // R was stacked from frames 1 and 2; G never was, and its frames are
+        // recent; B never was, and its frames are old.
+        for (id, filter, at) in [
+            (1, "R", long_ago),
+            (2, "R", long_ago),
+            (3, "G", now),
+            (4, "G", now),
+            (5, "B", long_ago),
+            (6, "B", long_ago),
+        ] {
+            conn.execute("INSERT INTO acquiredimage(Id,projectId,targetId,gradingStatus,metadata,acquireddate,filtername)
+                VALUES(?1,1,1,1,'{}',?2,?3)", rusqlite::params![id, at, filter]).unwrap();
+        }
+        let mut ctx = DatabaseContext::new_for_test(conn);
+        ctx.cache_dir_path = directory.path().to_path_buf();
+        ctx.cache_dir = directory.path().to_string_lossy().into_owned();
+        let ctx = Arc::new(ctx);
+        let mut stacked = remembered(1, "R", 10, crate::calibration::CalibrationMode::Auto, true);
+        stacked["group"]["input_images"] = serde_json::json!([
+            {"image_id": 1, "grading_status": 1},
+            {"image_id": 2, "grading_status": 1}
+        ]);
+        let latest = serde_json::json!({
+            "schema_version": 1, "database_id": ctx.id, "project_id": 1, "updated_unix_seconds": 5,
+            "groups": [stacked]
+        });
+        let path = latest_path(&ctx.cache_dir_path, 1);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_vec(&latest).unwrap()).unwrap();
+
+        // R is current: the refresh would only find cache hits, so it
+        // expects nothing and the queue does not list it.
+        configure(AutomationPolicy {
+            enabled: true,
+            ..AutomationPolicy::default()
+        });
+        let plan = plan_refresh(&ctx, 1).unwrap().expect("R is followed");
+        assert!(plan.expected.is_empty(), "{:?}", plan.expected);
+        assert_eq!(plan.channels.len(), 1);
+
+        // A new R frame, and R is due to restack.
+        {
+            let db = ctx.db();
+            db.lock()
+                .unwrap()
+                .execute("INSERT INTO acquiredimage(Id,projectId,targetId,gradingStatus,metadata,acquireddate,filtername)
+                    VALUES(7,1,1,1,'{}',?1,'R')", [now])
+                .unwrap();
+        }
+        let plan = plan_refresh(&ctx, 1).unwrap().unwrap();
+        assert_eq!(plan.expected, ["T · R"]);
+
+        // With new channels on, G's recent frames are stacked too; B's old
+        // ones are left alone.
+        configure(AutomationPolicy {
+            enabled: true,
+            build_new_channels: true,
+            ..AutomationPolicy::default()
+        });
+        let plan = plan_refresh(&ctx, 1).unwrap().unwrap();
+        assert_eq!(plan.expected, ["T · R", "T · G (new)"]);
+        assert_eq!(plan.channels.len(), 2);
+        // Every frame of the target goes in, so each channel's siblings vote
+        // on the pier-side mapping.
+        assert_eq!(plan.request.image_ids.len(), 7);
+        configure(AutomationPolicy::default());
     }
 
     #[test]

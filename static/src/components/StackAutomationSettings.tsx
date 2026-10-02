@@ -32,6 +32,7 @@ export default function StackAutomationSettings() {
       automatic_previews: boolean;
       arrival_delay_minutes: number;
       grade_delay_minutes: number;
+      build_new_channels: boolean;
     }) => apiClient.updateStackAutomationSettings(update),
     onSuccess: (updated) => {
       queryClient.setQueryData(['stack-automation-settings'], updated);
@@ -58,11 +59,14 @@ export default function StackAutomationSettings() {
   const arrival = validMinutes(arrivalDraft);
   const grade = validMinutes(gradeDraft);
 
-  const persist = (next: Partial<Pick<Settings, 'automatic_previews' | 'arrival_delay_minutes' | 'grade_delay_minutes'>>) =>
+  const persist = (
+    next: Partial<Pick<Settings, 'automatic_previews' | 'arrival_delay_minutes' | 'grade_delay_minutes' | 'build_new_channels'>>
+  ) =>
     save.mutate({
       automatic_previews: current.automatic_previews,
       arrival_delay_minutes: current.arrival_delay_minutes,
       grade_delay_minutes: current.grade_delay_minutes,
+      build_new_channels: current.build_new_channels,
       ...next,
     });
   // A delay commits when its field is left with a valid value that differs
@@ -153,6 +157,24 @@ export default function StackAutomationSettings() {
             onBlur={commitGrade}
             onKeyDown={commitOnEnter(commitGrade)}
           />
+        </label>
+        <label className="review-preference">
+          <input
+            type="checkbox"
+            checked={current.build_new_channels}
+            disabled={!current.automatic_previews}
+            onChange={(event) => persist({ build_new_channels: event.target.checked })}
+          />
+          <span>
+            Also stack channels that have no stack yet
+            <small>
+              Frames that arrive are stacked before you open the project: a
+              channel with two or more frames that are not rejected, one of
+              them captured in the last {current.new_channel_window_days} days,
+              is stacked with the project's settings. Older channels are left
+              alone, so turning this on does not stack a whole catalog.
+            </small>
+          </span>
         </label>
         {(arrival === null || grade === null) && (
           <p className="error-text">

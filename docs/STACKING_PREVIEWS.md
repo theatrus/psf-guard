@@ -586,8 +586,25 @@ targets and channels, the same Accepted-only policy, order, scoring, and
 per-channel calibration choices, over the frames the project holds now. It uses
 the server's current stacking method, so a method change reaches the next
 refresh. Its color previews are composed again afterwards, as after any
-build (see [Color previews from channel stacks](#color-previews-from-channel-stacks)). A refresh whose inputs and
-grades match the cards already built is a cache hit and starts nothing.
+build (see [Color previews from channel stacks](#color-previews-from-channel-stacks)). Like **Build stacks**, it
+queues one build per channel, the same builds a person's Build stacks makes,
+so after either one only the channels whose frames or grades changed stack
+again; the rest are cache hits.
+
+**Also stack channels that have no stack yet** goes further: a channel with
+two or more frames that are not rejected, one of them captured in the last
+seven days, is stacked on the next refresh too, with the project's settings,
+so frames that arrive are stacked before anyone opens the project. Older
+channels are left alone, so turning it on does not stack a whole catalog. A
+first stack this way gets no first color preview; once one is composed, it
+follows its channels.
+
+The header's queue lists a waiting refresh only when it expects to stack
+something, and names the channels: *Restacks NGC 7331 · R, NGC 7331 · Ha
+(new) · after new frames · starts in 4 min*. A refresh that would find only
+cache hits is not shown. The guess compares each channel's frames and grades
+with its stack, so a refresh after a quality scan may still restack a channel
+it did not name; it then shows in the queue as that channel's build.
 
 What queues a refresh, and how long it waits first:
 
@@ -612,8 +629,8 @@ minutes at most), and the stopped build's checkpoint resumes when its project
 comes back for a refresh a few minutes later. Starting the very build the
 refresh is already running simply makes it yours. The header's background
 jobs queue marks automatic builds `automatic`. A refresh follows only the
-cards the grid shows, never a project without remembered previews, and never
-changes the calibration library, grades, or files. Target merges, exposure
+cards the grid shows and, with new channels on, projects with recent frames,
+and never changes the calibration library, grades, or files. Target merges, exposure
 moves, and peer pulls count as syncs.
 
 An automatic build uses the background share of the processor, 25% of the

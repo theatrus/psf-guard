@@ -895,6 +895,12 @@ export interface ScheduledRefresh {
   project_name: string | null;
   reason: 'arrival' | 'sync' | 'grade';
   due_in_seconds: number;
+  /**
+   * The channels it expects to restack, then the ones it will stack for the
+   * first time (marked "(new)"). The server lists no refresh that expects
+   * to do nothing.
+   */
+  channels?: string[];
 }
 
 export interface StackActivity {
@@ -1463,6 +1469,10 @@ export interface StackAutomationSettings {
   default_arrival_delay_minutes: number;
   default_grade_delay_minutes: number;
   max_delay_minutes: number;
+  /** Refreshes also stack channels with no stack yet, once a frame is recent. */
+  build_new_channels: boolean;
+  /** How recent, in days. */
+  new_channel_window_days: number;
 }
 
 /** How hard WBPP works at local normalization: its own presets. */

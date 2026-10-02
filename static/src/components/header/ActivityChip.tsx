@@ -87,7 +87,7 @@ function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowCont
           {item.queued
             ? waiting
               ? `queued · ${item.position! + 1}`
-              : item.kind === 'automatic' ? 'waiting' : 'queued'
+              : item.state ?? (item.kind === 'automatic' ? 'waiting' : 'queued')
             : item.percent != null ? `${Math.round(item.percent)}%` : 'working'}
         </span>
       </div>
