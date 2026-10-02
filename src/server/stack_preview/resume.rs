@@ -15,7 +15,7 @@
 //! dimensions, configuration, checksum — when it reopens it.
 
 use super::snr;
-use super::{StackFrameDecision, StackScoringSettings, StackWeighting};
+use super::{StackFrameDecision, StackMethod, StackScoringSettings};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
@@ -57,11 +57,10 @@ pub(super) struct ResumeManifest {
     /// Checkpoints from before this field existed used calibrated defaults.
     #[serde(default)]
     pub scoring: StackScoringSettings,
-    /// How the accumulator weighed its frames. Checkpoints from before this
-    /// field existed weighed them equally. A weighted accumulator cannot be
-    /// extended by an equal-weight build, nor the other way round.
-    #[serde(default)]
-    pub weighting: StackWeighting,
+    /// How the accumulator integrated its frames. Only a build whose method
+    /// accumulates the same way can extend it; the final pass may differ.
+    #[serde(default = "StackMethod::classic")]
+    pub method: StackMethod,
     pub calibration_fingerprint: String,
     /// The order the frames were pushed in. Only a capture-order stack is
     /// ever resumed, but the checkpoint records what it was so an older one
@@ -192,7 +191,7 @@ pub(super) fn load(
     exposure_group_key: Option<&str>,
     accepted_only: bool,
     scoring: StackScoringSettings,
-    weighting: StackWeighting,
+    method: StackMethod,
     stacking_version: &str,
     calibration_fingerprint: &str,
     order: snr::StackFrameOrder,
@@ -241,13 +240,13 @@ pub(super) fn load(
     if manifest.scoring != scoring {
         return ResumeDecision::Fresh(Some("the scoring policy changed"));
     }
-    if manifest.weighting != weighting {
-        return ResumeDecision::Fresh(Some("the frame weighting changed"));
+    if !manifest.method.same_accumulator(&method) {
+        return ResumeDecision::Fresh(Some("the stacking method changed"));
     }
     // The final rejection pass replays each admitted frame with the weight
     // the live pass gave it. A weighted ledger missing one cannot be
     // replayed faithfully, so it is rebuilt rather than mixed.
-    if !weighting.is_equal() && !ledger_has_weights(&manifest.frames) {
+    if !method.weighting.is_equal() && !ledger_has_weights(&manifest.frames) {
         return ResumeDecision::Fresh(Some("the checkpoint lacks frame weights"));
     }
     if manifest.calibration_fingerprint != calibration_fingerprint {
@@ -369,7 +368,7 @@ mod tests {
             exposure_group_key: None,
             accepted_only: false,
             scoring: StackScoringSettings::default(),
-            weighting: StackWeighting::Equal,
+            method: StackMethod::classic(),
             calibration_fingerprint: "cal-1".into(),
             frames,
         }
@@ -441,7 +440,7 @@ mod tests {
             None,
             false,
             StackScoringSettings::default(),
-            StackWeighting::Equal,
+            StackMethod::classic(),
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -522,7 +521,7 @@ mod tests {
             None,
             false,
             StackScoringSettings::default(),
-            StackWeighting::Equal,
+            StackMethod::classic(),
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -592,7 +591,7 @@ mod tests {
             None,
             false,
             StackScoringSettings::default(),
-            StackWeighting::Equal,
+            StackMethod::classic(),
             "test",
             "cal-1",
             snr::StackFrameOrder::Quality,
@@ -618,7 +617,7 @@ mod tests {
             None,
             false,
             StackScoringSettings::default(),
-            StackWeighting::Equal,
+            StackMethod::classic(),
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -659,7 +658,7 @@ mod tests {
             None,
             false,
             StackScoringSettings::default(),
-            StackWeighting::Equal,
+            StackMethod::classic(),
             "test",
             "cal-2",
             snr::StackFrameOrder::Capture,
@@ -684,7 +683,7 @@ mod tests {
             None,
             false,
             changed,
-            StackWeighting::Equal,
+            StackMethod::classic(),
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -706,14 +705,21 @@ mod tests {
             None,
             false,
             StackScoringSettings::default(),
-            StackWeighting::Noise,
+            noise_method(),
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
             &[(1, "f1", 300.0), (2, "f2", 300.0)],
         );
 
-        assert_eq!(decision.fresh_reason(), Some("the frame weighting changed"));
+        assert_eq!(decision.fresh_reason(), Some("the stacking method changed"));
+    }
+
+    fn noise_method() -> StackMethod {
+        StackMethod {
+            weighting: crate::server::stack_preview::StackWeighting::Noise,
+            ..StackMethod::classic()
+        }
     }
 
     fn load_weighted(cache_root: &Path) -> ResumeDecision {
@@ -725,7 +731,7 @@ mod tests {
             None,
             false,
             StackScoringSettings::default(),
-            StackWeighting::Noise,
+            noise_method(),
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -744,13 +750,13 @@ mod tests {
         accepted.decision.integration_weight = Some(vec![0.25, 0.5, 4.0]);
         accepted.decision.noise_sigma = Some(vec![4.0, 3.5, 1.5]);
         let mut weighted = manifest(vec![reference, accepted]);
-        weighted.weighting = StackWeighting::Noise;
+        weighted.method = noise_method();
         store(cache.path(), &weighted);
 
         let state = load_weighted(cache.path())
             .state()
             .expect("a weighted build extends a weighted checkpoint");
-        assert_eq!(state.manifest.weighting, StackWeighting::Noise);
+        assert_eq!(state.manifest.method, noise_method());
         let frames = &state.manifest.frames;
         assert_eq!(
             frames[0].decision.integration_weight,
@@ -772,7 +778,7 @@ mod tests {
         // Accepted, but its weight was never recorded.
         let accepted = frame(2, "f2");
         let mut weighted = manifest(vec![reference, accepted]);
-        weighted.weighting = StackWeighting::Noise;
+        weighted.method = noise_method();
         store(cache.path(), &weighted);
 
         assert_eq!(
@@ -782,12 +788,38 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_without_weighting_weighed_frames_equally() {
+    fn checkpoint_without_a_method_used_the_classic_one() {
         let recorded = manifest(vec![frame(1, "f1")]);
         let mut legacy = serde_json::to_value(&recorded).unwrap();
-        legacy.as_object_mut().unwrap().remove("weighting");
+        legacy.as_object_mut().unwrap().remove("method");
         let restored: ResumeManifest = serde_json::from_value(legacy).unwrap();
-        assert_eq!(restored.weighting, StackWeighting::Equal);
+        assert_eq!(restored.method, StackMethod::classic());
+    }
+
+    #[test]
+    fn a_draft_checkpoint_extends_into_a_full_build_and_back() {
+        // The final pass runs after the accumulator is complete, so it is
+        // the one part of the method a checkpoint does not care about.
+        let cache = tempfile::tempdir().unwrap();
+        let mut draft = manifest(vec![frame(1, "f1")]);
+        draft.method.final_pass = crate::server::stack_preview::StackFinalPass::Draft;
+        store(cache.path(), &draft);
+        let decision = load(
+            cache.path(),
+            "db",
+            7,
+            "Ha",
+            None,
+            false,
+            StackScoringSettings::default(),
+            StackMethod::classic(),
+            "test",
+            "cal-1",
+            snr::StackFrameOrder::Capture,
+            &[(1, "f1", 300.0), (2, "f2", 300.0)],
+        );
+        assert_eq!(decision.fresh_reason(), None);
+        assert!(decision.state().is_some());
     }
 
     #[test]
@@ -832,7 +864,7 @@ mod tests {
             None,
             false,
             StackScoringSettings::default(),
-            StackWeighting::Equal,
+            StackMethod::classic(),
             "newer",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -880,7 +912,7 @@ mod tests {
             None,
             false,
             StackScoringSettings::default(),
-            StackWeighting::Equal,
+            StackMethod::classic(),
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -904,7 +936,7 @@ mod tests {
             None,
             true,
             StackScoringSettings::default(),
-            StackWeighting::Equal,
+            StackMethod::classic(),
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -971,7 +1003,7 @@ mod tests {
                 key,
                 false,
                 StackScoringSettings::default(),
-                StackWeighting::Equal,
+                StackMethod::classic(),
                 "test",
                 "cal-1",
                 snr::StackFrameOrder::Capture,

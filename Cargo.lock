@@ -5215,9 +5215,9 @@ dependencies = [
 
 [[package]]
 name = "seiza"
-version = "0.18.19"
+version = "0.18.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72b09111525c5f7e2f395ea51bc9831a14d793e47826705d3327f743323e21f2"
+checksum = "ec3eca7116c3620e57a4abdbaf3febe623969a3e6842ad01c2362c498ef05060"
 dependencies = [
  "directories",
  "image",
@@ -5291,9 +5291,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-fits"
-version = "0.2.2"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96da9f0d675870e540417cb4c0268ae6f8b0841f16131b9cd39fb6a21f653a8f"
+checksum = "ffdd290d89a261593ca4d876c01dd1f8249ec61795c30fec77cd77f3af96827e"
 dependencies = [
  "multiversion",
  "seiza-stretch",
@@ -5330,10 +5330,11 @@ dependencies = [
 
 [[package]]
 name = "seiza-stacking"
-version = "0.18.0"
+version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "690d4007569eae8d2c92e6c718e2710f9ae099393a5dafdca49a2c7d7bd1a8b7"
+checksum = "75c581273fec4928494f335979557b2d33299f4fc6ad91952dd90d8c14c9018a"
 dependencies = [
+ "multiversion",
  "postcard",
  "rayon",
  "seiza",

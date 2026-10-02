@@ -93,7 +93,8 @@ import type { GuidFillReport, GuidReport,
   StackPreviewJob,
   CalibrationMode,
   StackFrameOrder,
-  StackWeighting,
+  StackMethod,
+  StackMethodSettings,
   ArtifactSearchJob,
   ReferenceRegion,
   LatestStackPreviews,
@@ -629,6 +630,25 @@ export const apiClient = {
     const { data } =
       await apiInstance.get<ApiResponse<StackAutomationSettings>>('/settings/stacking');
     if (!data.data) throw new Error(data.error || 'Failed to get stack settings');
+    return data.data;
+  },
+
+  getStackMethod: async (): Promise<StackMethodSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<StackMethodSettings>>(
+      '/settings/stacking/method'
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to load the stacking method');
+    return data.data;
+  },
+
+  updateStackMethod: async (method: StackMethod): Promise<StackMethodSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<StackMethodSettings>>(
+      '/settings/stacking/method',
+      method
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to save the stacking method');
     return data.data;
   },
 
@@ -1605,8 +1625,8 @@ export const apiClient = {
       scoring?: PenaltyScaleParams;
       /** How to calibrate the lights: auto (default), on (forced), or off. */
       calibration?: CalibrationMode;
-      /** Frame weighting: equal (default) or noise (inverse noise variance). */
-      weighting?: StackWeighting;
+      /** How the frames integrate; omitted uses the server's stacking method. */
+      method?: StackMethod;
       /** Per-channel exceptions to `calibration`, by target and filter. */
       calibration_overrides?: Array<{
         target_id: number;

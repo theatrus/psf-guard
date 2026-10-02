@@ -1,14 +1,33 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
-import type { StackFrameDecision, StackWeighting } from '../../api/types';
+import type { StackFrameDecision, StackMethod } from '../../api/types';
+import { OPEN_SETTINGS_EVENT, settingsIntentOf } from '../../utils/settingsIntent';
 import StackPreviewPanel from '../StackPreviewPanel';
 
-const WEIGHTING_KEY = 'psf-guard.stack-frame-weighting';
+const recommended: StackMethod = {
+  normalization: 'local_background',
+  weighting: 'noise',
+  registration: 'quadratic',
+  interpolation: 'lanczos3',
+  bayer_drizzle: false,
+  reference: 'auto',
+  final_pass: 'reintegrate',
+};
+
+const classic: StackMethod = {
+  normalization: 'global',
+  weighting: 'equal',
+  registration: 'similarity',
+  interpolation: 'bilinear',
+  bayer_drizzle: false,
+  reference: 'best_graded',
+  final_pass: 'reintegrate',
+};
 
 const images = [
   { id: 1, target_id: 42, target_name: 'Sh2 86', filter_name: 'Ha', grading_status: 1 },
@@ -53,9 +72,10 @@ function decision(
   };
 }
 
-function mockLatest(weighting: StackWeighting | undefined, frames: StackFrameDecision[] = []) {
+function mockLatest(built: StackMethod | undefined, frames: StackFrameDecision[] = [], current: StackMethod = recommended) {
   let submitted: Record<string, unknown> | undefined;
   server.use(
+    http.get('/api/settings/stacking/method', () => ok({ method: current, recommended, classic })),
     http.get('/api/stack-activity', () => ok({ schema_version: 1, active: [] })),
     http.get('/api/db/:dbId/projects/:projectId/stack-previews/latest', () => ok({
       schema_version: 2,
@@ -69,7 +89,7 @@ function mockLatest(weighting: StackWeighting | undefined, frames: StackFrameDec
         created_unix_seconds: 90,
         cache_version: 13,
         order: 'capture',
-        ...(weighting ? { weighting } : {}),
+        ...(built ? { method: built } : {}),
         group: {
           index: 0,
           target_id: 42,
@@ -137,45 +157,55 @@ function renderPanel() {
   );
 }
 
-afterEach(() => window.localStorage.removeItem(WEIGHTING_KEY));
-
-describe('StackPreviewPanel frame weighting', () => {
-  it('is off by default and treats an old artifact as equally weighted', async () => {
-    const submitted = mockLatest(undefined);
+describe('StackPreviewPanel stacking method', () => {
+  it('names the server method, leaves it to the server, and keeps a matching build current', async () => {
+    const submitted = mockLatest(recommended);
     const view = renderPanel();
-    const toggle = await screen.findByRole('checkbox', { name: 'Weight frames by noise' });
-    expect(toggle).not.toBeChecked();
+    expect(await screen.findByRole('button', { name: 'Recommended' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /weight frames/i })).toBeNull();
     await waitFor(() =>
       expect(view.container.querySelector('.stack-preview-card'))
         .toHaveAttribute('data-outdated', 'false')
     );
 
     await userEvent.click(screen.getByRole('button', { name: 'Rebuild current set' }));
-    await waitFor(() => expect(submitted()?.weighting).toBe('equal'));
+    await waitFor(() => expect(submitted()).toBeDefined());
+    expect(submitted()).not.toHaveProperty('method');
+    expect(submitted()).not.toHaveProperty('weighting');
   });
 
-  it('sends noise weighting, remembers it, and marks an equal build stale', async () => {
-    const submitted = mockLatest('equal');
+  it('marks a build made with another method out of date', async () => {
+    mockLatest(classic);
     const view = renderPanel();
     await waitFor(() =>
-      expect(view.container.querySelector('.stack-preview-card'))
-        .toHaveAttribute('data-outdated', 'false')
-    );
-
-    await userEvent.click(screen.getByRole('checkbox', { name: 'Weight frames by noise' }));
-    expect(window.localStorage.getItem(WEIGHTING_KEY)).toBe('noise');
-    await waitFor(() =>
       expect(view.container.querySelector('.stack-preview-outdated'))
-        .toHaveTextContent('Out of date — frame weighting changed')
+        .toHaveTextContent('Out of date — stacking method changed')
     );
+  });
 
-    await userEvent.click(screen.getByRole('button', { name: 'Rebuild current set' }));
-    await waitFor(() => expect(submitted()?.weighting).toBe('noise'));
+  it('calls a recommended method without the final pass a draft', async () => {
+    const draft = { ...recommended, final_pass: 'draft' as const };
+    mockLatest(draft, [], draft);
+    renderPanel();
+    expect(await screen.findByRole('button', { name: 'Draft' })).toBeInTheDocument();
+  });
+
+  it('opens the Stacking settings from the method name', async () => {
+    mockLatest(recommended);
+    renderPanel();
+    const intents: Array<string | null> = [];
+    const listen = (event: Event) => intents.push(settingsIntentOf(event));
+    window.addEventListener(OPEN_SETTINGS_EVENT, listen);
+    try {
+      await userEvent.click(await screen.findByRole('button', { name: 'Recommended' }));
+    } finally {
+      window.removeEventListener(OPEN_SETTINGS_EVENT, listen);
+    }
+    expect(intents).toEqual(['stacking']);
   });
 
   it('shows each frame weight for a noise-weighted build', async () => {
-    window.localStorage.setItem(WEIGHTING_KEY, 'noise');
-    mockLatest('noise', [
+    mockLatest(recommended, [
       decision(1, 'reference', [1], [2.0]),
       decision(2, 'accepted', [0.25], [4.0]),
     ]);
@@ -183,9 +213,6 @@ describe('StackPreviewPanel frame weighting', () => {
     await waitFor(() =>
       expect(view.container.querySelector('.stack-frame-table-wrap table')).not.toBeNull()
     );
-    expect(view.container.querySelector('.stack-preview-card'))
-      .toHaveAttribute('data-outdated', 'false');
-    expect(screen.getByRole('checkbox', { name: 'Weight frames by noise' })).toBeChecked();
     const table = view.container.querySelector('.stack-frame-table-wrap table') as HTMLElement;
     expect(within(table).getByRole('columnheader', { name: 'Weight' })).toBeInTheDocument();
     const weights = [...table.querySelectorAll('.stack-frame-weight')].map(
@@ -196,12 +223,26 @@ describe('StackPreviewPanel frame weighting', () => {
   });
 
   it('leaves the weight column out of an equally weighted build', async () => {
-    mockLatest('equal', [decision(1, 'reference'), decision(2, 'accepted')]);
+    mockLatest(classic, [decision(1, 'reference'), decision(2, 'accepted')], classic);
     const view = renderPanel();
     await waitFor(() =>
       expect(view.container.querySelector('.stack-frame-table-wrap table')).not.toBeNull()
     );
     const table = view.container.querySelector('.stack-frame-table-wrap table') as HTMLElement;
     expect(within(table).queryByRole('columnheader', { name: 'Weight' })).toBeNull();
+  });
+
+  it('marks a stack from before the method out of date, keeping its frame weights', async () => {
+    mockLatest(undefined, [
+      decision(1, 'reference', [1], [2.0]),
+      decision(2, 'accepted', [0.5], [3.0]),
+    ]);
+    const view = renderPanel();
+    await waitFor(() =>
+      expect(view.container.querySelector('.stack-preview-outdated'))
+        .toHaveTextContent('Out of date — built before the stacking method could be chosen')
+    );
+    const table = view.container.querySelector('.stack-frame-table-wrap table') as HTMLElement;
+    expect(within(table).getByRole('columnheader', { name: 'Weight' })).toBeInTheDocument();
   });
 });

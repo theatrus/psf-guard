@@ -603,10 +603,35 @@ export interface StackSkyOrientation {
 export type StackFrameOrder = 'capture' | 'quality';
 
 /**
- * How a stack weighs its admitted frames. `equal` (default) counts every
- * frame the same; `noise` weighs each by the inverse of its noise variance.
+ * How a stack weighs its admitted frames. `noise` (default) weighs each by
+ * the inverse of its noise variance; `equal` counts every frame the same.
  */
-export type StackWeighting = 'equal' | 'noise';
+export type StackWeighting = 'noise' | 'equal';
+
+/**
+ * How a stack integrates its frames. One server-wide choice, edited on the
+ * Stacking settings page; every job and artifact records the one it used.
+ */
+export interface StackMethod {
+  normalization: 'local_background' | 'global' | 'local';
+  weighting: StackWeighting;
+  registration: 'quadratic' | 'affine' | 'similarity';
+  interpolation: 'lanczos3' | 'bilinear';
+  /** Integrate a Bayer frame's photosites rather than demosaiced pixels. */
+  bayer_drizzle: boolean;
+  /** `auto` is Seiza's choice from each frame's stars and sky. */
+  reference: 'auto' | 'best_graded';
+  /** `draft` publishes the live stack without the final rejection pass. */
+  final_pass: 'reintegrate' | 'draft';
+}
+
+export interface StackMethodSettings {
+  method: StackMethod;
+  /** Seiza's recommended method, the default. */
+  recommended: StackMethod;
+  /** What PSF Guard did before the method could be chosen. */
+  classic: StackMethod;
+}
 
 /** One depth on a progressive signal-to-noise curve. */
 export interface SnrPoint {
@@ -758,8 +783,8 @@ export interface StackPreviewJob {
   order?: StackFrameOrder;
   /** Normalized scoring policy used for frame admission. */
   scoring?: StackScoringSettings;
-  /** How every group weighed its frames; absent means equal. */
-  weighting?: StackWeighting;
+  /** How every group integrated its frames. */
+  method?: StackMethod;
   groups: StackGroupStatus[];
   error: string | null;
 }
@@ -782,8 +807,8 @@ export interface LatestStackPreviewGroup {
   order?: StackFrameOrder;
   /** Scoring policy used by this artifact; old artifacts used calibrated defaults. */
   scoring?: StackScoringSettings;
-  /** Frame weighting used by this artifact; old artifacts weighed equally. */
-  weighting?: StackWeighting;
+  /** How this artifact integrated its frames. */
+  method?: StackMethod;
   group: StackGroupStatus;
 }
 

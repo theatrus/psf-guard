@@ -739,6 +739,10 @@ async fn run_server_internal(
             get(stack_settings::get_stack_settings).put(stack_settings::update_stack_settings),
         )
         .route(
+            "/settings/stacking/method",
+            get(stack_settings::get_stack_method).put(stack_settings::update_stack_method),
+        )
+        .route(
             "/processing-setups",
             get(processing_setups::list_setups).post(processing_setups::save_setup),
         )

@@ -3535,6 +3535,30 @@
   white-space: nowrap;
 }
 
+.stack-preview-method {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.stack-preview-method button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-primary);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.stack-preview-method button:hover {
+  color: var(--color-text);
+}
+
 .stack-preview-calibration-mode {
   display: inline-flex;
   align-items: center;
