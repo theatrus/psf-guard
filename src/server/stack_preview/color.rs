@@ -959,12 +959,7 @@ pub async fn start_stack_color(
             "At most {MAX_REMEMBERED_JOBS} color preview jobs may be active at once"
         )));
     }
-    let origin = super::journal::JournaledStackJob::Color {
-        database_id: ctx.id.clone(),
-        project_id,
-        automatic: false,
-        request: request.clone(),
-    };
+    let origin = super::journal::JournaledStackJob::color(&ctx.id, project_id, &request, false);
     enqueue_color_job(Arc::clone(&state), prepared, origin);
     Ok(Json(ApiResponse::success(response)))
 }
@@ -1703,7 +1698,8 @@ pub(super) fn enqueue_color_job(
         }
         // Only a composition a person asked for outranks pre-generation and
         // quality scans; an automatic one is background work like them.
-        let guard = (!prepared.public.automatic).then(|| state.begin_interactive_job());
+        let guard =
+            (!state.stack_previews.is_automatic(&job_id)).then(|| state.begin_interactive_job());
         let state_for_job = Arc::clone(&state);
         let job_id_for_job = job_id.clone();
         let result = tokio::task::spawn_blocking(move || {
@@ -2031,7 +2027,7 @@ fn compose_color(
     let budget = crate::concurrency::plan_workers(
         None,
         &policy,
-        super::job_priority(job.automatic),
+        super::job_priority(state.stack_previews.is_automatic(&job.job_id)),
         Some(pixels),
     );
     let pool = ThreadPoolBuilder::new()

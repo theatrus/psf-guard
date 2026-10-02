@@ -108,8 +108,10 @@ order, **×** takes a run out, and **Stop** ends the running one after asking
 once. Those controls need write access and a server that allows database
 management, like the dialog. `GET /api/wbpp/activity` reports the same, and
 `POST /api/wbpp/queue/{queue_id}/move` with `{"position": n}` (0 is next)
-moves a waiting run. The queue lives in the server process, so a
-restart drops it along with the run under way. Opening the dialog on the
+moves a waiting run. The queue survives a restart through the job journal
+(see [Stack previews](STACKING_PREVIEWS.md#after-a-restart)): waiting runs keep
+their order, and a run the restart cut off is shown as stopped, to start
+again by hand. Opening the dialog on the
 project that is running shows that run; from another project's dialog,
 **Show that run** does the same.
 

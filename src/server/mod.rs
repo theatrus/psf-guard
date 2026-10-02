@@ -348,6 +348,9 @@ async fn run_server_internal(
     // hours; browser reloads only read this cache through the API.
     state.update_notices.start_refresh_loop();
 
+    // For the job journal's last write at shutdown; the router takes `state`.
+    let journal_state = Arc::clone(&state);
+
     // Remembered stack previews follow the catalog when the operator asked
     // for that; the scheduler idles otherwise.
     crate::server::stack_preview::automatic::spawn(Arc::clone(&state));
@@ -982,12 +985,43 @@ async fn run_server_internal(
                 .await?;
         }
         None => {
-            axum::serve(listener, app).await?;
+            // Ctrl+C and a service manager's SIGTERM end the server cleanly,
+            // so the job journal gets its last word.
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    stop_signal().await;
+                    tracing::info!("🛑 Stop signal received");
+                })
+                .await?;
         }
     }
 
+    // The queue as it stands, for the next start.
+    crate::server::stack_preview::journal::write_now(&journal_state);
     tracing::info!("🛑 Server shutdown completed");
     Ok(())
+}
+
+/// Ctrl+C, or SIGTERM where there is one.
+async fn stop_signal() {
+    let interrupt = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = interrupt => {}
+        _ = terminate => {}
+    }
 }
 
 pub async fn run_server_with_shutdown(

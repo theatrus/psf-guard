@@ -579,17 +579,36 @@ cores by default, while a build you start uses the interactive share, 50%.
 ### After a restart
 
 The queue survives a restart. PSF Guard keeps a job journal beside the
-database registry (`<registry>.jobs.json`): stack and color builds queued or
+database registry (`<registry>.jobs.json`), rewritten a few seconds after the
+queue changes and once more when the server stops cleanly (Ctrl+C, SIGTERM,
+or quitting the desktop app). It holds stack and color builds queued or
 running, in the order they would run, automatic refreshes still settling with
-their due times, and the WBPP line, including a run the restart cut off. On
-start it puts them back: each build is prepared again from the catalog as it
-is now, so one whose project or frames are gone is skipped with a note in the
-log, and a build that finished just before the restart is not repeated. A
-build cut off part way resumes from its checkpoint where it can. With
-automatic previews on, every database is also checked once after the usual
-settling delay, so frames that arrived while the server was down still reach
-their stacks; a check that finds nothing new starts nothing. A server without
-a registry keeps no journal.
+their due times, and the WBPP line.
+
+On start PSF Guard puts them back before the automatic scheduler may start
+anything:
+
+- Each build is prepared again from the catalog as it is now. One whose
+  database is gone, or that finished before the restart, is skipped with a
+  note in the log; a forced rebuild still runs. One that cannot be prepared
+  yet, because its disk is not mounted, is retried every minute for half an
+  hour and stays in the journal meanwhile.
+- A build cut off part way resumes from its checkpoint where it can. A build
+  cut off by two restarts in a row is not started a third time, since it is
+  the likelier cause of the restarts.
+- A build you adopted from the automatic refresh comes back as yours.
+- Settling refreshes keep their due times, or run at once if those passed.
+- Waiting WBPP runs keep their order. A WBPP run the restart cut off is not
+  started again on its own, because it would begin from nothing after every
+  restart: its database shows it as stopped by the restart, to start again
+  when you are ready. If its PixInsight outlived the server, nothing else
+  starts in PixInsight until that process ends.
+
+With automatic previews on, every database is also checked once after the
+usual settling delay, so frames that arrived while the server was down still
+reach their stacks; a check that finds nothing new starts nothing. One entry
+the journal can no longer read, after an upgrade, is dropped on its own. A
+server without a registry keeps no journal.
 
 ## Processor use
 

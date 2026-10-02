@@ -124,11 +124,15 @@ pub struct WbppRunStore {
 }
 
 impl WbppRunStore {
-    /// The request of the run under way, if one is.
-    pub fn running_request(&self) -> Option<StartWbppRunRequest> {
+    /// The request and PixInsight's pid of the run under way, if one is.
+    pub fn running_request(&self) -> Option<(StartWbppRunRequest, Option<u32>)> {
         self.progress
             .running
-            .then(|| self.request.clone())
+            .then(|| {
+                self.request
+                    .clone()
+                    .map(|request| (request, self.progress.pid))
+            })
             .flatten()
     }
 }
@@ -701,6 +705,70 @@ pub async fn start_wbpp_run(
     Ok(Json(ApiResponse::success(status(
         &state, &ctx, started, None,
     ))))
+}
+
+/// Whether the process group a run started is still alive. PixInsight runs
+/// in a group of its own and can outlive the server that started it.
+fn group_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        // SAFETY: signal 0 only asks whether the group exists.
+        unsafe { libc::kill(-(pid as i32), 0) == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+/// A run a restart cut off is not started again on its own: hours of work
+/// would begin from nothing after every restart, and a deploy-on-merge host
+/// would never finish one. It shows on its database as stopped by the
+/// restart, to start again by hand. If its PixInsight outlived the server,
+/// the slot stays taken until that process ends, so nothing else starts
+/// beside it.
+pub(crate) fn record_cut_off(
+    state: &Arc<AppState>,
+    db_id: &str,
+    request: &StartWbppRunRequest,
+    pid: Option<u32>,
+) {
+    let Some(ctx) = state.get_database(db_id) else {
+        return;
+    };
+    let still_running = pid.is_some_and(group_alive);
+    record_failed_launch(
+        &ctx.wbpp_run,
+        scope_of(request),
+        request.project_id,
+        if still_running {
+            "A server restart lost track of this run; its PixInsight is still working and \
+             nothing else starts until it ends. Start the run again to collect its masters."
+                .into()
+        } else {
+            "A server restart stopped this run. Start it again when you are ready.".into()
+        },
+    );
+    tracing::info!(
+        "🔭 WBPP run for db={db_id} ({}) was cut off by a restart{}",
+        scope_of(request),
+        if still_running {
+            "; its PixInsight is still running"
+        } else {
+            ""
+        }
+    );
+    if let (true, Some(pid)) = (still_running, pid)
+        && let Some(claim) = SlotClaim::take(state)
+    {
+        tokio::spawn(async move {
+            while group_alive(pid) {
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            }
+            drop(claim);
+        });
+    }
 }
 
 /// Put runs the job journal kept back in line, next first, and let the

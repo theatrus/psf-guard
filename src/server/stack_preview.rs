@@ -902,7 +902,13 @@ impl StackPreviewManager {
             })
             .collect::<Vec<_>>();
         entries.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-        entries.into_iter().map(|(_, _, origin)| origin).collect()
+        entries
+            .into_iter()
+            .map(|(rank, _, mut origin)| {
+                origin.set_running(rank.0 == 0);
+                origin
+            })
+            .collect()
     }
 
     /// Ask a queued or running job to stop. Returns false when the job is not
@@ -929,6 +935,28 @@ impl StackPreviewManager {
         if let Some(job) = self.color_jobs.lock().unwrap().get_mut(job_id) {
             job.automatic = false;
         }
+        // A restart brings it back as the person's too.
+        if let Some(origin) = self.origins.lock().unwrap().get_mut(job_id) {
+            origin.set_automatic(false);
+        }
+    }
+
+    /// Whether a build is the automatic refresh's, read now: a person can
+    /// adopt it while it waits or runs, and it then takes their share.
+    pub(super) fn is_automatic(&self, job_id: &str) -> bool {
+        self.jobs
+            .lock()
+            .unwrap()
+            .get(job_id)
+            .map(|job| job.automatic)
+            .or_else(|| {
+                self.color_jobs
+                    .lock()
+                    .unwrap()
+                    .get(job_id)
+                    .map(|job| job.automatic)
+            })
+            .unwrap_or(false)
     }
 
     /// Stop every automatic build so an interactive one gets the worker.
@@ -2466,7 +2494,8 @@ fn enqueue_job(state: Arc<AppState>, prepared: PreparedJob, origin: journal::Jou
         }
         // Only a build a person asked for outranks pre-generation and
         // quality scans; an automatic refresh is background work like them.
-        let guard = (!prepared.public.automatic).then(|| state.begin_interactive_job());
+        let guard =
+            (!state.stack_previews.is_automatic(&job_id)).then(|| state.begin_interactive_job());
         let state_for_job = Arc::clone(&state);
         let cancel_for_job = Arc::clone(&cancel);
         let result = tokio::task::spawn_blocking(move || {
@@ -2554,7 +2583,6 @@ fn reference_anchors(
 /// Put Seiza's choice of reference at the front of every group that will
 /// stack. Scores come from the cache where they can; a group where no frame
 /// scores keeps its best-graded reference and says so.
-#[allow(clippy::too_many_arguments)]
 fn choose_references(
     state: &Arc<AppState>,
     job_id: &str,
@@ -2562,7 +2590,6 @@ fn choose_references(
     groups: &mut [PreparedGroup],
     order: snr::StackFrameOrder,
     worker_policy: &crate::concurrency::WorkerPolicy,
-    priority: crate::concurrency::Priority,
     cancel: &Arc<AtomicBool>,
 ) {
     for group in groups.iter_mut().filter(|group| group.frames.len() >= 2) {
@@ -2572,7 +2599,7 @@ fn choose_references(
         let budget = crate::concurrency::plan_workers(
             None,
             worker_policy,
-            priority,
+            job_priority(state.stack_previews.is_automatic(job_id)),
             crate::concurrency::probe_frame_pixels(&group.frames[0].path),
         );
         let pool = match ThreadPoolBuilder::new()
@@ -2641,7 +2668,6 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
     let scoring = prepared.public.scoring;
     // Every job this process prepares records its method.
     let method = prepared.public.method.unwrap_or_default();
-    let priority = job_priority(prepared.public.automatic);
     let PreparedJob {
         public: _,
         mut groups,
@@ -2663,7 +2689,6 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
         method,
         order,
         worker_policy: &worker_policy,
-        priority,
         cancel,
     };
     let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2677,7 +2702,6 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
                 &mut groups,
                 order,
                 &worker_policy,
-                priority,
                 cancel,
             );
         }
@@ -2780,7 +2804,6 @@ struct GroupJob<'a> {
     method: StackMethod,
     order: snr::StackFrameOrder,
     worker_policy: &'a crate::concurrency::WorkerPolicy,
-    priority: crate::concurrency::Priority,
     cancel: &'a Arc<AtomicBool>,
 }
 
@@ -2802,9 +2825,11 @@ fn run_group(
         method,
         order,
         worker_policy,
-        priority,
         cancel,
     } = job;
+    // Read for each channel: a build adopted part way takes the person's
+    // share from its next channel on.
+    let priority = job_priority(state.stack_previews.is_automatic(job_id));
     let weighting = method.weighting;
     let available_memory = crate::concurrency::available_memory_bytes();
     let reference_path = &group

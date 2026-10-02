@@ -48,6 +48,17 @@ pub const MAX_DELAY_MINUTES: u32 = 24 * 60;
 const MAX_DEFERRALS: u32 = 4;
 /// How often the scheduler looks for due refreshes.
 const TICK: Duration = Duration::from_secs(15);
+/// Granularity of journaled due times, in seconds.
+const JOURNAL_DUE_STEP: i64 = 30;
+
+/// False until the job journal has been restored, so the scheduler cannot
+/// queue a refresh ahead of the builds that were waiting before a restart.
+static READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Let the scheduler start refreshes.
+pub fn mark_ready() {
+    READY.store(true, Ordering::Relaxed);
+}
 /// How long a due refresh waits when the stacker or the user is busy.
 const BUSY_RETRY: Duration = Duration::from_secs(30);
 
@@ -303,7 +314,11 @@ impl AutomaticStackRefresh {
                 database_id: key.database_id.clone(),
                 project_id: key.project_id,
                 reason: entry.reason,
-                due_unix: wall + entry.due_at.saturating_duration_since(now).as_secs() as i64,
+                // Rounded, so a settling refresh does not rewrite the
+                // journal every few seconds as the clock moves.
+                due_unix: (wall + entry.due_at.saturating_duration_since(now).as_secs() as i64)
+                    .div_euclid(JOURNAL_DUE_STEP)
+                    * JOURNAL_DUE_STEP,
             })
             .collect()
     }
@@ -371,6 +386,9 @@ pub fn spawn(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
 }
 
 async fn tick(state: &Arc<AppState>) {
+    if !READY.load(Ordering::Relaxed) {
+        return;
+    }
     let now = Instant::now();
     let due = state.auto_stacks.ordered_due(now);
     if due.is_empty() {
@@ -734,12 +752,8 @@ pub(super) fn recompose_colors(
             "Recomposing the {} color preview after an automatic refresh",
             previous.label
         );
-        let origin = super::journal::JournaledStackJob::Color {
-            database_id: ctx.id.clone(),
-            project_id: job.project_id,
-            automatic: true,
-            request: request.clone(),
-        };
+        let origin =
+            super::journal::JournaledStackJob::color(&ctx.id, job.project_id, &request, true);
         color::enqueue_color_job(Arc::clone(state), prepared, origin);
     }
 }

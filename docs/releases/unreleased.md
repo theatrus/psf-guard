@@ -12,11 +12,12 @@
 
 ## Added
 
-- The job queue survives a restart: stack and color builds, automatic
-  refreshes still settling, and the WBPP line (with a run the restart cut off)
-  come back in order. With automatic previews on, every database is checked
-  once after a start, so frames that arrived while the server was down still
-  reach their stacks.
+- The job queue survives a restart: stack and color builds and automatic
+  refreshes still settling come back in order, and waiting WBPP runs keep
+  their place. A WBPP run the restart cut off shows as stopped rather than
+  starting again from nothing. With automatic previews on, every database is
+  checked once after a start, so frames that arrived while the server was
+  down still reach their stacks.
 
 - **Settings → Stacking → Processor use** sets the share of cores for work
   you wait on and for background work, without a restart. Automatic stack
