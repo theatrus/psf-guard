@@ -374,6 +374,12 @@
 
 ## Fixed
 
+- A queued WBPP run no longer vanishes from the line when its turn comes while
+  its database is busy; it keeps its place at the head. Two WBPP starts that
+  arrive together, or a start that races the line, can no longer launch two
+  PixInsights at once: the server claims its one PixInsight slot in a single
+  step.
+
 - Darks that caught stray light, such as dawn through an open roof, no longer
   reach stack masters or WBPP exports. PSF Guard measures each dark once in
   the background, marks one that sits well above its matching darks, and
