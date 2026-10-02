@@ -74,6 +74,8 @@ static TOUCHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 /// frames was captured this recently, so turning the option on does not
 /// stack a whole old catalog at once.
 pub const DEFAULT_NEW_CHANNEL_WINDOW_DAYS: u32 = 7;
+/// The longest window: past ten years, choose any age.
+pub const MAX_NEW_CHANNEL_WINDOW_DAYS: u32 = 3650;
 /// The window a person chose, in days; 0 takes channels of any age.
 static NEW_CHANNEL_WINDOW_DAYS: AtomicU32 = AtomicU32::new(DEFAULT_NEW_CHANNEL_WINDOW_DAYS);
 
@@ -120,7 +122,12 @@ impl Default for AutomationPolicy {
 pub fn configure(policy: AutomationPolicy) {
     ENABLED.store(policy.enabled, Ordering::Relaxed);
     BUILD_NEW_CHANNELS.store(policy.build_new_channels, Ordering::Relaxed);
-    NEW_CHANNEL_WINDOW_DAYS.store(policy.new_channel_window_days, Ordering::Relaxed);
+    NEW_CHANNEL_WINDOW_DAYS.store(
+        policy
+            .new_channel_window_days
+            .min(MAX_NEW_CHANNEL_WINDOW_DAYS),
+        Ordering::Relaxed,
+    );
     ARRIVAL_DELAY_MINUTES.store(
         policy.arrival_delay_minutes.clamp(1, MAX_DELAY_MINUTES),
         Ordering::Relaxed,
@@ -524,6 +531,17 @@ enum RefreshOutcome {
 /// now, under the project's current exposure grouping. Cards kept aside for
 /// the other grouping are not followed.
 fn followed_projects(ctx: &DatabaseContext) -> Vec<i32> {
+    let mut projects = stacked_projects(ctx);
+    if BUILD_NEW_CHANNELS.load(Ordering::Relaxed) {
+        projects.extend(projects_with_recent_frames(ctx));
+    }
+    projects.sort_unstable();
+    projects.dedup();
+    projects
+}
+
+/// Projects whose cards this database shows now.
+fn stacked_projects(ctx: &DatabaseContext) -> Vec<i32> {
     let mut projects: Vec<i32> =
         read_latest_indices::<LatestStackPreviews>(&ctx.cache_dir_path.join("stack-previews"))
             .into_iter()
@@ -544,9 +562,6 @@ fn followed_projects(ctx: &DatabaseContext) -> Vec<i32> {
                 }
             })
             .collect();
-    if BUILD_NEW_CHANNELS.load(Ordering::Relaxed) {
-        projects.extend(projects_with_recent_frames(ctx));
-    }
     projects.sort_unstable();
     projects.dedup();
     projects
@@ -556,15 +571,20 @@ fn followed_projects(ctx: &DatabaseContext) -> Vec<i32> {
 /// project with a frame when any age will do: the only ones a refresh may
 /// start stacking from nothing.
 fn projects_with_recent_frames(ctx: &DatabaseContext) -> Vec<i32> {
-    let since = new_channel_since().unwrap_or(i64::MIN);
+    let since = new_channel_since();
     let conn = ctx.db();
     let Ok(conn) = conn.lock() else {
         return Vec::new();
     };
-    conn.prepare("SELECT DISTINCT projectId FROM acquiredimage WHERE acquireddate >= ?1")
+    // Any age takes frames with no capture date too, as the plan does.
+    let query = match since {
+        Some(_) => "SELECT DISTINCT projectId FROM acquiredimage WHERE acquireddate >= ?1",
+        None => "SELECT DISTINCT projectId FROM acquiredimage WHERE ?1 IS NOT NULL",
+    };
+    conn.prepare(query)
         .and_then(|mut statement| {
             statement
-                .query_map([since], |row| row.get::<_, i32>(0))?
+                .query_map([since.unwrap_or(0)], |row| row.get::<_, i32>(0))?
                 .collect::<Result<Vec<_>, _>>()
         })
         .unwrap_or_default()
@@ -711,6 +731,9 @@ fn claim_key(project_id: i32, key: &StackChannelKey) -> String {
     )
 }
 
+/// The most projects a whole-database refresh's guess plans.
+const EXPECTED_MAX_PROJECTS: usize = 25;
+
 /// How long a waiting refresh's expected channels are trusted between
 /// touches: frames can change without one, such as a quality scan.
 const EXPECTED_TTL: Duration = Duration::from_secs(60);
@@ -727,10 +750,13 @@ pub(super) fn expected_channels(
     ctx: &DatabaseContext,
     refresh: &ScheduledRefresh,
 ) -> Vec<(String, String)> {
+    // A whole-database refresh is touched by every arrival, so its guess
+    // is kept a minute however often that happens; one project's is cheap
+    // to redo on each touch.
     let key = (
         refresh.database_id.clone(),
         refresh.project_id,
-        refresh.touches,
+        refresh.project_id.map_or(0, |_| refresh.touches),
         BUILD_NEW_CHANNELS.load(Ordering::Relaxed),
         NEW_CHANNEL_WINDOW_DAYS.load(Ordering::Relaxed),
     );
@@ -739,9 +765,17 @@ pub(super) fn expected_channels(
     {
         return channels.clone();
     }
+    // For a whole database, the guess plans only projects already stacked,
+    // and not too many: it runs while the header asks what is queued, on the
+    // database's shared connection. New channels elsewhere still stack when
+    // the refresh runs, and show then as their own builds.
     let projects = match refresh.project_id {
         Some(project_id) => vec![project_id],
-        None => followed_projects(ctx),
+        None => {
+            let mut projects = stacked_projects(ctx);
+            projects.truncate(EXPECTED_MAX_PROJECTS);
+            projects
+        }
     };
     let channels = projects
         .into_iter()

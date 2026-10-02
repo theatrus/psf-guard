@@ -5,10 +5,9 @@
 use crate::db_registry::{DbRegistry, StackAutomationSettings};
 use crate::server::api::ApiResponse;
 use crate::server::handlers::{require_registry_path, AppError};
-use crate::server::stack_preview::automatic::{self, AutomationPolicy, MAX_DELAY_MINUTES};
-
-/// Ten years: past that, choose any age.
-const MAX_NEW_CHANNEL_WINDOW_DAYS: u32 = 3650;
+use crate::server::stack_preview::automatic::{
+    self, AutomationPolicy, MAX_DELAY_MINUTES, MAX_NEW_CHANNEL_WINDOW_DAYS,
+};
 use crate::server::stack_preview::{method, StackMethod};
 use crate::server::state::AppState;
 use axum::{extract::State, Json};

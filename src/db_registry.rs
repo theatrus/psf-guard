@@ -570,9 +570,11 @@ impl StackAutomationSettings {
             build_new_channels: self
                 .build_new_channels
                 .unwrap_or(defaults.build_new_channels),
+            // Clamped, so a hand-edited value cannot block every save.
             new_channel_window_days: self
                 .new_channel_window_days
-                .unwrap_or(defaults.new_channel_window_days),
+                .unwrap_or(defaults.new_channel_window_days)
+                .min(crate::server::stack_preview::automatic::MAX_NEW_CHANNEL_WINDOW_DAYS),
         }
     }
 }

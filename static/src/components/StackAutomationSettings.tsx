@@ -241,8 +241,8 @@ export default function StackAutomationSettings() {
           <span>
             Also stack old channels, of any age
             <small>
-              No cutoff: the next refresh stacks every channel in every
-              database that has none yet, which on a large catalog keeps the
+              No cutoff: each database's next refresh stacks every channel
+              there that has none yet, which on a large catalog keeps the
               stacker busy for a long while. Background work yields to
               anything you start.
             </small>
