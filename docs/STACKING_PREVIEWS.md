@@ -1,6 +1,7 @@
 # Project stack previews
 
-PSF Guard can build an on-demand integration directly from the image grid.
+PSF Guard can build an on-demand integration of a project's frames in the
+**Stacks** view, beside **Images** and **Sequence** in the header.
 This is a fast visual answer to “what does this project/channel look like so
 far?”, with the grading and registration evidence kept beside the result. It
 can apply cataloged calibration data, but it remains a quick-look result rather
@@ -10,15 +11,17 @@ than a final-processing workflow.
 
 ## Build a preview
 
-Open one project in the image grid and choose **Build stack previews** to build
+Open one project in **Stacks** and choose **Build stack previews** to build
 every current target/channel group, or **Build channel** on one card to test
 only that group. Once a result exists, the corresponding actions become
 **Rebuild current set** and **Rebuild channel**. An individual rebuild replaces
 only that channel's remembered result; the other channel cards remain intact.
 
-- A multi-selection of two or more images is the input when one exists.
-- Otherwise the current visible set is used, including the status, channel,
-  date, target, and search filters shown above the grid.
+- Every frame of the project, or of the target chosen in the header, is the
+  input.
+- To stack a hand-picked set, select two or more images in **Images** and
+  press **Stack selected**: Stacks opens with that set, and **Stack every
+  image instead** goes back to the whole project.
 - The server always separates inputs by exact catalog target and
   filter/channel. It never combines different targets or filters.
 - **Accepted only** removes Pending frames. By default both Accepted and usable
@@ -26,11 +29,11 @@ only that channel's remembered result; the other channel cards remain intact.
 
 ### Separate exposure lengths
 
-**Separate exposure groups** in a project's image grid keeps short exposures
+**Separate exposure groups**, at the top of **Stacks** and in **Images**, keeps short exposures
 apart from substantially longer ones. It is on by default: normalization
 matches each frame's noise, not its signal, so a 120 s frame stacked with
 300 s frames carries well under half their signal and dims the result. Turn
-it off in a project's image grid to mix them; the choice is saved for that
+it off to mix them; the choice is saved for that
 project in this database, and a project that never chose follows the default.
 It does not change Target Scheduler templates or exposure plans.
 
@@ -283,9 +286,38 @@ do the same from scripts; `GET /api/stack-activity` lists builds running first,
 then the line in order, each waiting one with its `queue_position`, and the
 settling automatic refreshes under `scheduled`.
 `POST /api/stack-activity/scheduled/run-now` and `/scheduled/skip` take
-`{"database_id": …, "project_id": …}`. Reopening the project grid re-attaches the stack panels to the
+`{"database_id": …, "project_id": …}`. Reopening **Stacks** re-attaches the stack panels to the
 running job, so leaving the page and coming back restores the live per-card
 progress instead of an idle panel.
+
+## Stacks made by WBPP
+
+A WBPP run started from PSF Guard ends by taking its master lights in as
+stacks. **WBPP stacks**, below PSF Guard's own in **Stacks**, shows each one
+with a preview and its FITS, and the **Combine channel stacks** section offers
+it as a channel source marked *WBPP*: choose, for example, L, R, G and B from
+WBPP and PSF Guard composes the color preview, with the same background,
+stretch and processing as for its own stacks. **Take in the last run** does the
+same for the project's last run when it finished before this feature or its
+import failed. It reads only that run's folder, and it needs database
+management, like starting a run.
+
+- One master per filter and exposure is taken: without drizzle first, since
+  drizzle changes the scale and color composition aligns channels of one
+  scale, then cropped. A drizzled master is taken when it is the only one.
+- WBPP groups frames by filter, exposure and binning, not by target. Masters
+  are tied to a target only when a project's run covered one: a run for one
+  target of the project, or for a project with one target. A run across
+  several targets mixes them, and its masters are not taken in.
+- WBPP records no frame count in a master, so its cards say *WBPP master*
+  instead.
+- WBPP stacks live in their own index, `wbpp-project-<id>.json`, so they never
+  replace PSF Guard's stack of the same channel. A newer master for the same
+  target, filter and exposure replaces the older one there.
+- A color preview built from WBPP channels is kept apart from one built from
+  PSF Guard's stacks of the same filters, and a rebuilt PSF Guard stack never
+  takes a WBPP channel's place in a remembered preview.
+- A master that cannot be read is listed as skipped and the rest go in.
 
 ## Stop a build
 
@@ -948,7 +980,7 @@ parse, so a setup that saves is a setup a build can use.
 
 The whole **Stack previews** panel collapses from its title, like the detail
 sections inside it, and stays collapsed across reloads. The result cards also
-follow the grid's thumbnail-size slider: from 600&nbsp;px up they widen to one
+follow the thumbnail size set in **Images**: from 600&nbsp;px up they widen to one
 full-width column, and below that they keep the two-column layout — zooming
 out never makes a stack preview smaller. A collapsed panel
 shows how many remembered channels it is holding, or that a build is running;
@@ -957,7 +989,7 @@ the header's background jobs chip keeps reporting progress either way.
 ## Color previews from channel stacks
 
 Once one target has completed mono stacks for **L/R/G/B** or **H-alpha/OIII**,
-the grid adds a **Combine channel stacks** section. Color generation is a
+Stacks adds a **Combine channel stacks** section. Color generation is a
 separate on-demand job: rebuilding or changing a color palette never changes
 the mono integrations or their admission evidence.
 

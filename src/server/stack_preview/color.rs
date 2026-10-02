@@ -369,6 +369,9 @@ pub struct StackColorSource {
     pub group_index: usize,
     pub artifact_revision: String,
     pub accepted_frames: usize,
+    /// WBPP made this channel's stack; it records no frame count.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wbpp: bool,
     /// Integrated exposure of the channel stack, in seconds. `None` on a
     /// color artifact composed before the total was recorded.
     #[serde(default)]
@@ -1395,8 +1398,9 @@ fn select_sources(
 }
 
 fn source_family_key(sources: &[StackColorSource]) -> String {
+    let wbpp = sources.iter().any(|source| source.wbpp);
     // Preserve the pre-grouping latest identity for legacy unsplit projects.
-    if sources.iter().all(|source| source.exposure_group.is_none()) {
+    if !wbpp && sources.iter().all(|source| source.exposure_group.is_none()) {
         return String::new();
     }
     let families = sources
@@ -1414,7 +1418,19 @@ fn source_family_key(sources: &[StackColorSource]) -> String {
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let bytes = serde_json::to_vec(&families).expect("color source families are serializable");
+    // A WBPP master and PSF Guard's stack of the same filter are different
+    // families, so neither composite replaces the other. Keys without WBPP
+    // channels stay as they were.
+    let bytes = if wbpp {
+        let origins = sources
+            .iter()
+            .map(|source| (source.role, source.wbpp))
+            .collect::<BTreeMap<_, _>>();
+        serde_json::to_vec(&("wbpp-origin", &families, &origins))
+    } else {
+        serde_json::to_vec(&families)
+    }
+    .expect("color source families are serializable");
     let mut key = String::with_capacity(64);
     for byte in Sha256::digest(bytes) {
         write!(&mut key, "{byte:02x}").expect("writing to a String cannot fail");
@@ -2948,14 +2964,19 @@ fn load_latest_stacks(
             if latest.database_id != ctx.id || latest.project_id != project_id {
                 return Err(AppError::NotFound);
             }
-            super::current_project_latest_stacks(ctx, project_id, latest)
+            let mut latest = super::current_project_latest_stacks(ctx, project_id, latest)?;
+            // WBPP's stacks are channel sources too.
+            latest
+                .groups
+                .extend(super::wbpp_stacks::load_index(ctx, project_id).groups);
+            Ok(latest)
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(LatestStackPreviews {
             schema_version: 1,
             database_id: ctx.id.clone(),
             project_id,
             updated_unix_seconds: 0,
-            groups: Vec::new(),
+            groups: super::wbpp_stacks::load_index(ctx, project_id).groups,
         }),
         Err(error) => Err(AppError::InternalError(format!(
             "Failed to read latest stack preview index: {error}"
@@ -3041,15 +3062,17 @@ fn collect_sources(
             .push(StackColorSource {
                 role,
                 filter_name: entry.group.filter_name.clone(),
-                label: entry.group.exposure_group.as_ref().map_or_else(
-                    || entry.group.filter_name.clone(),
-                    |group| format!("{} ({})", entry.group.filter_name, group.label),
-                ),
+                label: match (&entry.wbpp, &entry.group.exposure_group) {
+                    (Some(_), _) => format!("{} (WBPP)", entry.group.filter_name),
+                    (None, Some(group)) => format!("{} ({})", entry.group.filter_name, group.label),
+                    (None, None) => entry.group.filter_name.clone(),
+                },
                 exposure_group: entry.group.exposure_group.clone(),
                 job_id: entry.job_id.clone(),
                 group_index: entry.group.index,
                 artifact_revision: entry.artifact_revision.clone(),
                 accepted_frames: entry.group.accepted_frames,
+                wbpp: entry.wbpp.is_some(),
                 total_exposure_seconds: Some(entry.group.total_exposure_seconds),
                 reference_image_id: entry.group.reference_image_id,
                 sky_orientation: entry.group.sky_orientation.clone(),
@@ -3502,6 +3525,7 @@ mod tests {
             order: crate::server::stack_preview::snr::StackFrameOrder::Capture,
             scoring: crate::server::stack_preview::StackScoringSettings::default(),
             method: Default::default(),
+            wbpp: None,
             created_unix_seconds: 10,
             cache_version: super::super::STACK_PREVIEW_CACHE_VERSION,
             group: StackGroupStatus {
@@ -4009,6 +4033,17 @@ mod tests {
         let sources = select_sources(&targets[&7], &request).unwrap();
         assert_eq!(sources.len(), 3);
         assert_eq!(source_family_key(&sources), "");
+
+        // The same filters from WBPP are another family, so a WBPP composite
+        // and PSF Guard's own never replace each other.
+        let mut wbpp = sources.clone();
+        for source in &mut wbpp {
+            source.wbpp = true;
+        }
+        let wbpp_key = source_family_key(&wbpp);
+        assert_ne!(wbpp_key, "");
+        wbpp[0].wbpp = false;
+        assert_ne!(source_family_key(&wbpp), wbpp_key);
     }
 
     #[test]
@@ -4437,6 +4472,7 @@ mod tests {
             group_index: 0,
             artifact_revision: format!("revision-{index}"),
             accepted_frames: 4,
+            wbpp: false,
             total_exposure_seconds: Some(1200.0),
             reference_image_id: Some(index as i32 + 1),
             sky_orientation: Some(stack_orientation(

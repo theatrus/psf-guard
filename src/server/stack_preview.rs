@@ -19,6 +19,7 @@ mod reference;
 mod resume;
 pub mod snr;
 pub mod stretch;
+pub mod wbpp_stacks;
 
 use axum::{
     body::Body,
@@ -505,6 +506,9 @@ pub struct LatestStackPreviewGroup {
     /// written before the method could be chosen, with Seiza 0.18.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<StackMethod>,
+    /// Set when WBPP made this stack and PSF Guard only took it in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wbpp: Option<wbpp_stacks::WbppStackSource>,
     pub group: StackGroupStatus,
 }
 
@@ -1041,6 +1045,10 @@ impl StackPreviewManager {
             }
         }
         for latest in read_latest_indices::<LatestStackPreviews>(&cache_root.join("stack-previews"))
+            .into_iter()
+            .chain(wbpp_stacks::read_wbpp_indices(
+                &cache_root.join("stack-previews"),
+            ))
         {
             for group in latest.groups {
                 mono_job_ids.insert(group.job_id);
@@ -1671,6 +1679,69 @@ pub async fn cancel_stack_activity_job(
         ));
     }
     Ok(get_stack_activity(State(state)).await)
+}
+
+/// `GET /api/db/{db}/projects/{project}/stack-previews/wbpp` — the stacks
+/// WBPP made for this project and PSF Guard took in.
+pub async fn get_wbpp_stacks(
+    ctx: DbContext,
+    Path((_db_id, project_id)): Path<(String, i32)>,
+) -> Json<ApiResponse<LatestStackPreviews>> {
+    Json(ApiResponse::success(wbpp_stacks::load_index(
+        &ctx, project_id,
+    )))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportWbppStacksRequest {
+    /// The target the masters belong to; omitted takes the run's own target,
+    /// or the project's only target.
+    #[serde(default)]
+    pub target_id: Option<i32>,
+}
+
+/// `POST /api/db/{db}/projects/{project}/stack-previews/wbpp/import` — take
+/// this project's last WBPP run in as stacks. A run that finishes in PSF
+/// Guard is taken in on its own; this covers one that finished before this
+/// feature or whose import failed. Only the run's own folder is read.
+pub async fn import_wbpp_stacks(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, project_id)): Path<(String, i32)>,
+    Json(request): Json<ImportWbppStacksRequest>,
+) -> Result<Json<ApiResponse<wbpp_stacks::WbppImport>>, AppError> {
+    crate::server::handlers::require_database_management_allowed(&state)?;
+    let (output_dir, last_target) = {
+        let store = ctx.wbpp_run.read().unwrap();
+        if store.progress.output_dir.is_empty() {
+            return Err(AppError::BadRequest(
+                "No WBPP run to take stacks from".into(),
+            ));
+        }
+        if store.progress.project_id != Some(project_id) {
+            return Err(AppError::BadRequest(
+                "The last WBPP run was for another project".into(),
+            ));
+        }
+        (
+            std::path::PathBuf::from(&store.progress.output_dir),
+            crate::server::wbpp_run::last_target(&store),
+        )
+    };
+    let ctx = Arc::clone(&ctx.0);
+    let target_id = request.target_id.or(last_target);
+    tokio::task::spawn_blocking(move || {
+        let target = {
+            let conn = ctx.db();
+            let conn = conn.lock().map_err(|error| error.to_string())?;
+            wbpp_stacks::run_target(&conn, project_id, target_id)?
+        };
+        wbpp_stacks::import_masters(&ctx, project_id, target, &output_dir)
+    })
+    .await
+    .map_err(|error| AppError::InternalError(error.to_string()))?
+    .map_err(AppError::BadRequest)
+    .map(|outcome| Json(ApiResponse::success(outcome)))
 }
 
 pub async fn get_latest_stack_previews(
@@ -4012,6 +4083,7 @@ fn persist_latest_groups_with_exposures(
             order: job.order,
             scoring: job.scoring,
             method: job.method,
+            wbpp: None,
             group,
         };
         if let Some(existing) = latest.groups.iter_mut().find(|existing| {
@@ -4948,6 +5020,7 @@ mod tests {
             order: snr::StackFrameOrder::Capture,
             scoring: StackScoringSettings::default(),
             method: Default::default(),
+            wbpp: None,
             group: ready_group(10, "B", 1),
         };
         let mut legacy = current.clone();
@@ -4977,6 +5050,7 @@ mod tests {
             order: snr::StackFrameOrder::Capture,
             scoring: StackScoringSettings::default(),
             method: Default::default(),
+            wbpp: None,
             group: ready_group(10, "B", 1),
         };
         let mut serialized = serde_json::to_value(current).unwrap();
@@ -5095,6 +5169,7 @@ mod tests {
             order: snr::StackFrameOrder::Capture,
             scoring: StackScoringSettings::default(),
             method: Default::default(),
+            wbpp: None,
             group: ready_group(10, "B", 1),
         };
         let mut north_up = source_frame.clone();

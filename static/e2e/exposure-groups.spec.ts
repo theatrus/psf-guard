@@ -109,7 +109,8 @@ test('persists project exposure grouping and separates mono and color choices', 
   const mixed = await request.put(settingsPath, { data: { split_exposure_groups: false } });
   expect(mixed.ok()).toBe(true);
   await page.setViewportSize({ width: 1440, height: 1050 });
-  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=2&groupingMode=filter`);
+  // The toggle sits with the stacks it decides; Images groups by it too.
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2&groupingMode=filter`);
   const toggle = page.getByRole('checkbox', { name: 'Separate exposure groups' });
   await expect(toggle).toBeEnabled();
   await expect(toggle).not.toBeChecked();
@@ -182,8 +183,11 @@ test('persists project exposure grouping and separates mono and color choices', 
   await page.screenshot({ path: testInfo.outputPath('exposure-stack-cards-desktop.png'), fullPage: false });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.locator('.app-main').evaluate((element) => { element.scrollTop = 0; });
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=2&groupingMode=filter`);
   await expect(page.locator('.grid-stats')).toContainText('6 groups');
   expect(await page.locator('.grid-stats').evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2&groupingMode=filter`);
+  await expect(page.locator('.stack-preview-card')).toHaveCount(6);
   await page.screenshot({ path: testInfo.outputPath('exposure-groups-mobile.png'), fullPage: false });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(await page.locator('.app-main').evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);

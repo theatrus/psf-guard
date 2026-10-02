@@ -252,7 +252,7 @@ test('multi-select stays active without changing the toolbar height', async ({ p
   const actions = page.locator('.selection-action-bar');
   await expect(actions).toBeVisible();
   await expect(actions).toContainText('2 selected');
-  await expect(page.locator('.stack-preview-heading p')).toContainText('2 selected images');
+  await expect(actions.getByRole('button', { name: 'Stack selected' })).toBeEnabled();
 
   const after = await controls.boundingBox();
   expect(after).not.toBeNull();
@@ -266,6 +266,14 @@ test('multi-select stays active without changing the toolbar height', async ({ p
   await cards.nth(2).click({ modifiers: ['Shift'] });
   await expect(actions).toContainText('3 selected');
   await expect(page.locator('.image-card-wrapper.multi-selected')).toHaveCount(3);
+
+  // A selection travels to Stacks as the set to stack.
+  await actions.getByRole('button', { name: 'Stack selected' }).click();
+  await expect(page).toHaveURL(/#\/stacks\?/);
+  await expect(page.locator('.stacks-selection')).toContainText('3 images selected in Images');
+  await expect(page.locator('.stack-preview-heading p')).toContainText('3 selected images');
+  await page.getByRole('button', { name: 'Stack every image instead' }).click();
+  await expect(page.locator('.stacks-selection')).toHaveCount(0);
 });
 
 test('Grid Shift-click selects a range from a plain-click anchor', async ({ page }) => {

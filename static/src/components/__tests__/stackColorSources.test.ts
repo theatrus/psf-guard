@@ -142,6 +142,7 @@ describe('color source selection', () => {
   it('matches saved families by role, raw filter, and group, not current revision or label', () => {
     expect(sameColorSourceFamily(source('short'), source('short', 'new'))).toBe(true);
     expect(sameColorSourceFamily(source('short'), source('long'))).toBe(false);
+    expect(sameColorSourceFamily(source('short'), { ...source('short'), wbpp: true })).toBe(false);
     expect(sameColorSourceFamily(source('short'), { ...source('short'), filter_name: 'Ha' })).toBe(false);
     expect(sameColorSourceFamily(source('short'), { ...source('short'), role: 'green' })).toBe(false);
   });

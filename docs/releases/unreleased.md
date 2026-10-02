@@ -16,6 +16,12 @@
 
 ## Added
 
+- **Stacks** sits beside **Images** and **Sequence** in the header and holds
+  the stack previews, which used to sit above the image grid. It stacks every
+  frame of the project or target in scope; **Stack selected** in Images opens
+  it with a hand-picked set. Stacks that WBPP makes are taken in there too,
+  and PSF Guard composes their color preview from the channels you choose.
+
 - The job queue survives a restart: stack and color builds and automatic
   refreshes still settling come back in order, and waiting WBPP runs keep
   their place. A WBPP run the restart cut off shows as stopped rather than

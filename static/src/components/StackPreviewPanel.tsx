@@ -45,7 +45,9 @@ interface StackPreviewPanelProps {
   dbId: string;
   projectId: number;
   images: StackCandidateImage[];
-  selectionSource: 'selected' | 'visible';
+  /** `scope`: every frame in the project or target, as the Stacks view
+   *  passes them. */
+  selectionSource: 'selected' | 'visible' | 'scope';
   /** The grid's thumbnail size; large zooms widen the result cards too. */
   imageSize?: number;
   onOpenImage: (imageId: number) => void;
@@ -649,7 +651,8 @@ export default function StackPreviewPanel({
   const queuedBuilds = unfinishedJobs.length;
   const buildLabel = latest.data?.groups.length ? 'Build current set' : 'Build stack previews';
   const error = startError ?? stopError ?? statusError ?? latest.error;
-  const sourceText = selectionSource === 'selected' ? 'selected' : 'visible';
+  const sourceText =
+    selectionSource === 'selected' ? 'selected' : selectionSource === 'scope' ? '' : 'visible';
   // A failed stop — "that build already finished" — belongs to the build the
   // user was stopping, not to the next one they start.
   const beginAll = (force: boolean) => {
@@ -803,7 +806,7 @@ export default function StackPreviewPanel({
             </h2>
             {!collapsed && (
               <p>
-                Register and integrate the {stableImageIds.length} {sourceText} images by exact
+                Register and integrate the {stableImageIds.length}{sourceText ? ` ${sourceText}` : ''} images by exact
                 target and channel. Rejected and quality-regrade frames are left out automatically.
               </p>
             )}

@@ -16,7 +16,6 @@ import FilterControls, { type FilterOptions } from './FilterControls';
 import { availableFlags, matchesFlagFilter } from '../utils/flagFilter';
 import StatsDashboard from './StatsDashboard';
 import UndoRedoToolbar from './UndoRedoToolbar';
-import StackPreviewPanel from './StackPreviewPanel';
 import ProjectExposureGrouping from './ProjectExposureGrouping';
 import ThumbnailSizeControl from './ThumbnailSizeControl';
 import { QualityScanButton } from './QualityScanControl';
@@ -248,15 +247,6 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   // Determine if we're in multi-project mode
   const isMultiProjectMode = projectId === null;
 
-  // A multi-selection is an explicit stacking set. A single highlighted image
-  // is normal grid navigation, so fall back to the complete visible set.
-  const stackCandidates = useMemo(() => {
-    const selectedVisible = filteredImages.filter((image) => selectedImages.has(image.id));
-    if (selectedVisible.length >= 2) {
-      return { images: selectedVisible, source: 'selected' as const };
-    }
-    return { images: filteredImages, source: 'visible' as const };
-  }, [filteredImages, selectedImages]);
   
   // Group images based on selected mode
   const imageGroups = useMemo(() => {
@@ -1003,6 +993,20 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                   {selectedImages.size} selected
                 </div>
                 <div className="batch-buttons">
+                  {/* Stacks lives beside Images; a selection travels there
+                      as the set to stack. */}
+                  <button
+                    type="button"
+                    className="action-button stack"
+                    disabled={selectedImages.size <= 1 || projectId == null}
+                    onClick={() =>
+                      navigate(`/stacks?${searchParams.toString()}`, {
+                        state: { stackImageIds: [...selectedImages] },
+                      })
+                    }
+                  >
+                    Stack selected
+                  </button>
                   <button
                     className="action-button accept"
                     disabled={selectedImages.size <= 1 || !grading.canWrite}
@@ -1042,17 +1046,6 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
           </div>
         </div>
 
-        {dbId && projectId !== null && projectId !== undefined && (
-          <StackPreviewPanel
-            dbId={dbId}
-            projectId={projectId}
-            images={stackCandidates.images}
-            selectionSource={stackCandidates.source}
-            imageSize={imageSize}
-            onOpenImage={navigateToDetail}
-            targetId={targetId}
-          />
-        )}
 
         {showStats && (
           <div id="grid-stats-dashboard">

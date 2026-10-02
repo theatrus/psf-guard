@@ -149,6 +149,15 @@ skipped, one with a different size is left alone and named in the
 outcome. Only the `master/` files are copied; the calibrated and
 registered frames stay in the run folder.
 
+### See the stacks and their color in PSF Guard
+
+When a run for a project ends, PSF Guard takes its master lights in as
+stacks: they show under **WBPP stacks** in the project's **Stacks** view, and
+PSF Guard composes their color preview there, from the channels you choose.
+See [Stacks made by WBPP](STACKING_PREVIEWS.md#stacks-made-by-wbpp). A run
+across several targets of one project is not taken in, because WBPP
+integrates the targets together.
+
 ## What can go wrong
 
 - **PixInsight not found.** The settings panel lists where it looked. Name

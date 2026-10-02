@@ -92,6 +92,9 @@ pub struct WbppRunProgress {
     /// The project the run stacked, when it was a project, so a save can
     /// remember its folder.
     pub project_id: Option<i32>,
+    /// The target the run was for, when it was for one.
+    #[serde(default)]
+    pub target_id: Option<i32>,
     /// The masters' save below the database's process directory: what was
     /// asked for at the start, and how it went.
     pub publish: Option<PublishOutcome>,
@@ -121,6 +124,11 @@ pub struct WbppRunStore {
     /// What the run under way was asked for, so the job journal can start it
     /// again after a restart cut it off.
     request: Option<StartWbppRunRequest>,
+}
+
+/// The target of the database's last run, when it had one.
+pub(crate) fn last_target(store: &WbppRunStore) -> Option<i32> {
+    store.progress.target_id
 }
 
 impl WbppRunStore {
@@ -840,11 +848,13 @@ async fn launch(
     let output_dir = work_dir.join(OUTPUT_DIRECTORY);
     let free_bytes = pixinsight::free_bytes(&root);
     let project_id = req.project_id;
+    let target_id = req.target_id;
     update(&store, |progress| {
         progress.work_dir = work_dir.display().to_string();
         progress.output_dir = output_dir.display().to_string();
         progress.free_bytes_at_start = free_bytes;
         progress.project_id = project_id;
+        progress.target_id = target_id;
     });
 
     let options = ExportOptions {
@@ -861,6 +871,7 @@ async fn launch(
     let extra = req.extra_params.clone();
 
     tokio::spawn(async move {
+        let import_output = output_dir.clone();
         let outcome = run(
             job_ctx.clone(),
             job_store.clone(),
@@ -907,6 +918,7 @@ async fn launch(
             })
             .await;
         }
+        let complete = matches!(outcome, Ok("complete"));
         match outcome {
             Ok(stage) => finish(&job_store, stage, None),
             Err(error) => {
@@ -917,6 +929,40 @@ async fn launch(
         // PixInsight is free: letting go of the slot hands it to the next
         // run in line.
         drop(claim);
+        // The masters become stacks in the Stacks view, where PSF Guard
+        // composes their color preview. The run is already finished and the
+        // slot free, so decoding masters holds up neither.
+        if let (true, Some(project_id)) = (complete, project_id) {
+            let import_ctx = job_ctx.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let target = {
+                    let conn = import_ctx.db();
+                    let Ok(conn) = conn.lock() else { return };
+                    crate::server::stack_preview::wbpp_stacks::run_target(&conn, project_id, target_id)
+                };
+                let result = target.and_then(|target| {
+                    crate::server::stack_preview::wbpp_stacks::import_masters(
+                        &import_ctx,
+                        project_id,
+                        target,
+                        &import_output,
+                    )
+                });
+                match result {
+                    Ok(outcome) => tracing::info!(
+                        "🔭 WBPP masters taken in as stacks for db={} project={project_id}: {} new, {} skipped",
+                        import_ctx.id,
+                        outcome.imported.len(),
+                        outcome.skipped.len()
+                    ),
+                    Err(reason) => tracing::info!(
+                        "🔭 WBPP masters for db={} project={project_id} not taken in as stacks: {reason}",
+                        import_ctx.id
+                    ),
+                }
+            })
+            .await;
+        }
     });
 
     Ok(true)
