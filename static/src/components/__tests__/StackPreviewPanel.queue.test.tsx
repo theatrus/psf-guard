@@ -117,6 +117,40 @@ describe('StackPreviewPanel exposure groups', () => {
 });
 
 describe('StackPreviewPanel manual queue', () => {
+  it('queues one build per channel, each carrying the color defaults', async () => {
+    const bodies: Array<{ image_ids: number[]; color_defaults?: { input_stretches: Record<string, unknown> } }> = [];
+    const jobs: Record<string, unknown> = {};
+    server.use(
+      http.get('/api/stack-activity', () => ok({ schema_version: 1, active: [] })),
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/latest', () => ok({ groups: [] })),
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/color', () => ok({ targets: [], jobs: [] })),
+      http.post('/api/db/:dbId/projects/:projectId/stack-previews', async ({ request }) => {
+        const body = (await request.json()) as (typeof bodies)[number];
+        bodies.push(body);
+        const filter = body.image_ids.includes(1) ? 'Ha' : 'OIII';
+        const started = job(`job-${filter}`, 100 + bodies.length, bodies.length === 1 ? 'running' : 'queued', [
+          group(0, filter, bodies.length === 1 ? 'running' : 'queued', body.image_ids),
+        ]);
+        jobs[`job-${filter}`] = started;
+        return ok(started);
+      }),
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/:jobId', ({ params }) =>
+        ok(jobs[params.jobId as string])
+      ),
+    );
+    render(<StackPreviewPanel dbId="test" projectId={1} images={images}
+      selectionSource="visible" onOpenImage={() => undefined} />, { wrapper: wrapper() });
+    await userEvent.click(await screen.findByRole('button', { name: 'Build stacks' }));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies.map((body) => body.image_ids)).toEqual([[1, 2], [3, 4]]);
+    for (const body of bodies) {
+      expect(Object.keys(body.color_defaults?.input_stretches ?? {})).toEqual(
+        expect.arrayContaining(['luminance', 'red', 'green', 'blue', 'ha', 'oiii', 'sii'])
+      );
+    }
+    expect((await screen.findAllByText('running')).length).toBeGreaterThan(0);
+  });
+
   it('keeps other channels buildable and shows both queued builds', async () => {
     const jobs: Record<string, unknown> = {};
     server.use(

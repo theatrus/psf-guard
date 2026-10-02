@@ -12,8 +12,10 @@ than a final-processing workflow.
 ## Build a preview
 
 Open one project in **Stacks** and choose **Build stacks** to build
-every current target/channel group, or **Build channel** on one card to test
-only that group. Once a result exists, the corresponding actions become
+every target/channel group, or **Build channel** on one card to test only that
+group. **Build stacks** queues one build per channel, so the header's queue
+lists each channel on its own; **Build current set** queues only the channels
+that are new or out of date, and is off when every channel is current. Once a result exists, the corresponding actions become
 **Rebuild current set** and **Rebuild channel**. An individual rebuild replaces
 only that channel's remembered result; the other channel cards remain intact.
 
@@ -578,9 +580,8 @@ A refresh rebuilds exactly what the project's cards remember: the same
 targets and channels, the same Accepted-only policy, order, scoring, and
 per-channel calibration choices, over the frames the project holds now. It uses
 the server's current stacking method, so a method change reaches the next
-refresh. Any
-color preview composed from a rebuilt channel is recomposed afterwards with
-its kind, palette, crop, and processing unchanged. A refresh whose inputs and
+refresh. Its color previews are composed again afterwards, as after any
+build (see [Color previews from channel stacks](#color-previews-from-channel-stacks)). A refresh whose inputs and
 grades match the cards already built is a cache hit and starts nothing.
 
 What queues a refresh, and how long it waits first:
@@ -1009,8 +1010,20 @@ the header's background jobs chip keeps reporting progress either way.
 
 Once one target has completed mono stacks for **L/R/G/B** or **H-alpha/OIII**,
 Stacks adds a **Combine channel stacks** section. Color generation is a
-separate on-demand job: rebuilding or changing a color palette never changes
-the mono integrations or their admission evidence.
+separate job: rebuilding or changing a color palette never changes the mono
+integrations or their admission evidence.
+
+Color follows the channels in the queue. Once a build leaves none of a
+target's channels waiting, every color preview composed for that target
+before is composed again from the newest stack of each of its channels, with
+its kind, palette, crop and processing unchanged; one whose channels did not
+change is left alone. Each channel keeps its family: its filter, exposure
+group, and whether WBPP or PSF Guard made it. A target with no color preview
+yet gets its first one after a build started here: LRGB when it has L, R, G
+and B, else RGB, else the first narrowband palette its channels allow, with
+the display pipeline the color cards start from. A role with two of PSF
+Guard's own stacks, such as two exposure groups of R, is a choice left to
+you. Automatic refreshes compose only what was composed before.
 
 - **RGB** requires one Red, Green, and Blue stack in its exposure band.
 - **LRGB** requires one Luminance, Red, Green, and Blue stack in its exposure band.

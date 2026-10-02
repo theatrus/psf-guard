@@ -1663,6 +1663,12 @@ export const apiClient = {
         exposure_group_key?: string;
         calibration: CalibrationMode;
       }>;
+      /**
+       * The display pipeline a target's first color preview gets once this
+       * build leaves none of its channels waiting. Omitted, the server only
+       * rebuilds the color previews already composed for the target.
+       */
+      color_defaults?: StackColorProcessing;
     }
   ): Promise<StackPreviewJob> => {
     const apiInstance = await getApi();

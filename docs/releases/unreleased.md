@@ -241,6 +241,13 @@
 
 ## Changed
 
+- **Build stacks** queues one build per channel, so the header's queue lists
+  each channel on its own, and **Build current set** queues only the channels
+  that are new or out of date. Once a target's last channel is in, its color
+  previews are composed again from the new stacks, after builds started by
+  hand as well as automatic ones, and a target with no color preview yet gets
+  its first: LRGB, else RGB, else narrowband.
+
 - **Stacks** can run WBPP: **Stack in WBPP** sits beside **Build stacks** and
   shows the run's state; the run's masters show as stacks as soon as it ends,
   and **Take in the last run** appears only when that failed. A **Card size**

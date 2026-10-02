@@ -191,6 +191,11 @@ pub struct StackPreviewRequest {
     /// method, set on the Stacking settings page.
     #[serde(default)]
     pub method: Option<StackMethod>,
+    /// The display pipeline a target's first color preview gets once this
+    /// build leaves none of its channels waiting. Omitted, a build only
+    /// rebuilds the color previews already composed for the target.
+    #[serde(default)]
+    pub color_defaults: Option<color::StackColorProcessing>,
 }
 
 /// One channel's calibration mode, overriding the request-wide choice.
@@ -438,6 +443,9 @@ pub struct StackPreviewJob {
     pub method: Option<StackMethod>,
     pub groups: Vec<StackGroupStatus>,
     pub error: Option<String>,
+    /// See [`StackPreviewRequest::color_defaults`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_defaults: Option<color::StackColorProcessing>,
     /// Built by the automatic refresh rather than asked for. Such a build
     /// steps aside for one the user starts.
     #[serde(default)]
@@ -1191,6 +1199,30 @@ impl StackPreviewManager {
         }
         jobs.insert(job.job_id.clone(), job);
         true
+    }
+
+    /// Whether another queued or running build still has channels of this
+    /// target to stack, so color for it should wait for that build.
+    fn target_still_building(
+        &self,
+        database_id: &str,
+        project_id: i32,
+        target_id: i32,
+        finished_job: &str,
+    ) -> bool {
+        self.jobs.lock().unwrap().values().any(|job| {
+            job.job_id != finished_job
+                && job.database_id == database_id
+                && job.project_id == project_id
+                && matches!(job.state, StackJobState::Queued | StackJobState::Running)
+                && job.groups.iter().any(|group| {
+                    group.target_id == target_id
+                        && matches!(
+                            group.state,
+                            StackGroupState::Queued | StackGroupState::Running
+                        )
+                })
+        })
     }
 
     fn update(&self, job_id: &str, update: impl FnOnce(&mut StackPreviewJob)) {
@@ -2435,6 +2467,7 @@ fn prepare_job(
             method: Some(method),
             groups: public_groups,
             error: None,
+            color_defaults: request.color_defaults.clone(),
         },
         groups: prepared_groups,
         cache_root: ctx.cache_dir_path.clone(),
@@ -2930,13 +2963,13 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
     {
         tracing::warn!("Failed to persist latest stack preview index: {error}");
     }
-    // The color previews composed from these channels follow the refresh.
+    // Color follows the channels: once no build is left for a target, its
+    // color previews are composed again from the newest channel stacks.
     if let Some(job) = state.stack_previews.get(&job_id)
-        && job.automatic
         && job.state == StackJobState::Completed
         && let Some(ctx) = state.get_database(&database_id)
     {
-        automatic::recompose_colors(state, &ctx, &job);
+        automatic::compose_colors_after(state, &ctx, &job);
     }
     state.stack_previews.prune_cache(&cache_root);
 }
@@ -4533,6 +4566,7 @@ mod tests {
             method: Default::default(),
             groups,
             error: None,
+            color_defaults: None,
         }
     }
 
@@ -4815,6 +4849,29 @@ mod tests {
     }
 
     #[test]
+    fn color_waits_while_another_build_still_stacks_the_target() {
+        let manager = StackPreviewManager::new();
+        let mut red = ready_group(42, "R", 0);
+        red.state = StackGroupState::Queued;
+        let mut waiting = completed_job("waiting-red", vec![red]);
+        waiting.state = StackJobState::Queued;
+        assert!(manager.insert(waiting));
+        assert!(manager.insert(completed_job("done-green", vec![ready_group(42, "G", 0)])));
+
+        let database = "db-test";
+        let still = |target| manager.target_still_building(database, 7, target, "done-green");
+        assert!(still(42), "R is still waiting to stack for target 42");
+        assert!(!still(43), "nothing waits for another target");
+        // The waiting build itself does not hold its own color back.
+        assert!(!manager.target_still_building(database, 7, 42, "waiting-red"));
+        manager.update("waiting-red", |job| {
+            job.state = StackJobState::Completed;
+            job.groups[0].state = StackGroupState::Ready;
+        });
+        assert!(!still(42));
+    }
+
+    #[test]
     fn the_calibration_share_only_grows_across_masters() {
         let progress = |build, fraction| crate::calibration::MasterBuildProgress {
             kind: crate::calibration::CalibrationKind::Dark,
@@ -5040,6 +5097,7 @@ mod tests {
             order: snr::StackFrameOrder::Capture,
             scoring: Default::default(),
             method: Default::default(),
+            color_defaults: None,
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
@@ -5052,6 +5110,7 @@ mod tests {
             order: snr::StackFrameOrder::Capture,
             scoring: Default::default(),
             method: Default::default(),
+            color_defaults: None,
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
@@ -5064,6 +5123,7 @@ mod tests {
             order: snr::StackFrameOrder::Capture,
             scoring: Default::default(),
             method: Default::default(),
+            color_defaults: None,
         })
         .is_ok());
     }
@@ -5086,6 +5146,7 @@ mod tests {
                 exposure_group_key: None,
                 calibration: CalibrationMode::Off,
             }],
+            color_defaults: None,
         };
         assert_eq!(request.calibration_for(7, "Ha", None), CalibrationMode::Off);
         assert_eq!(

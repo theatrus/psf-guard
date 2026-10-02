@@ -18,12 +18,14 @@ import type {
   StackMethod,
   StackScoringSettings,
   StackStretchPreview,
+  StackColorRole,
 } from '../api/types';
 import StackPreviewInspector from './StackPreviewInspector';
 import CalibrationMasterButton from './CalibrationMasterInspector';
 import StackSnrCurve from './StackSnrCurve';
 import StackColorPreviewPanel from './StackColorPreviewPanel';
 import { colorSourceKey } from './stackColorSources';
+import { defaultColorProcessing } from './stackColorProcessing';
 import StackStretchControls from './StackStretchControls';
 import { isSkyOriented } from './stackOrientation';
 import { useAccess } from '../auth/access';
@@ -58,6 +60,10 @@ interface StackPreviewPanelProps {
    *  from the project's other targets (a mosaic's other panels) stay out. */
   targetId?: number | null;
 }
+
+/** Every color role, so the server can narrow the person's default color
+ *  pipeline to whichever composite a target's channels make. */
+const ALL_COLOR_ROLES: StackColorRole[] = ['luminance', 'red', 'green', 'blue', 'ha', 'oiii', 'sii'];
 
 /** A result card's width when the page does not choose one. */
 export const DEFAULT_STACK_CARD_SIZE = 550;
@@ -447,13 +453,18 @@ export default function StackPreviewPanel({
     variables: startVariables,
     reset: resetStart,
   } = useMutation({
-    mutationFn: (variables: {
+    // One job per channel, posted in order, so the queue shows each channel
+    // as its own build; the server composes color once a target's last
+    // channel is in.
+    mutationFn: async (variables: {
       force: boolean;
-      imageIds: number[];
+      batches: number[][];
       operationKey: string;
-    }) =>
-      apiClient.startStackPreviews(dbId, projectId, {
-        image_ids: variables.imageIds,
+    }) => {
+      const jobs: StackPreviewJob[] = [];
+      for (const imageIds of variables.batches) {
+        jobs.push(await apiClient.startStackPreviews(dbId, projectId, {
+        image_ids: imageIds,
         accepted_only: acceptedOnly,
         force: variables.force,
         order: frameOrder,
@@ -470,14 +481,21 @@ export default function StackPreviewPanel({
             exposure_group_key: channel.exposureGroup?.key,
             calibration: channelOverride(channel.key)!,
           })),
-      }),
-    onSuccess: (job) => {
-      queryClient.setQueryData(stackJobQueryKey(dbId, projectId, job.job_id), job);
-      setWatchedJobIds((current) =>
-        current.includes(job.job_id) ? current : [...current, job.job_id]
-      );
+        color_defaults: defaultColorProcessing(ALL_COLOR_ROLES),
+        }));
+      }
+      return jobs;
+    },
+    onSuccess: (jobs) => {
+      for (const job of jobs) {
+        queryClient.setQueryData(stackJobQueryKey(dbId, projectId, job.job_id), job);
+      }
+      setWatchedJobIds((current) => [
+        ...current,
+        ...jobs.map((job) => job.job_id).filter((jobId) => !current.includes(jobId)),
+      ]);
       queryClient.invalidateQueries({ queryKey: STACK_ACTIVITY_QUERY_KEY });
-      if (terminalStates.has(job.state)) {
+      if (jobs.some((job) => terminalStates.has(job.state))) {
         queryClient.invalidateQueries({ queryKey: latestStackQueryKey(dbId, projectId) });
       }
     },
@@ -655,18 +673,28 @@ export default function StackPreviewPanel({
   // user was stopping, not to the next one they start.
   const beginAll = (force: boolean) => {
     resetStop();
-    startStack({ force, imageIds: stableImageIds, operationKey: 'all' });
+    // Every channel on a rebuild; otherwise the ones not built or out of
+    // date, so a current channel is not stacked again.
+    const batches = [...currentChannels.values()]
+      .filter((channel) => channel.images.length >= 2 && (force || channelNeedsBuild(channel.key)))
+      .map((channel) => channel.images.map((image) => image.id));
+    if (batches.length > 0) startStack({ force, batches, operationKey: 'all' });
   };
   const beginChannel = (channel: ChannelInput, force: boolean) => {
     resetStop();
     startStack({
       force,
-      imageIds: channel.images.map((image) => image.id),
+      batches: [channel.images.map((image) => image.id)],
       operationKey: channel.key,
     });
   };
 
-  const staleCount = displayKeys.filter((key) => {
+  const channelArtifactBuilt = (key: string) => {
+    const activeEntry = activeByChannel.get(key);
+    return (activeEntry && activeEntry.group.state === 'ready') || latestByChannel.has(key);
+  };
+  const channelNeedsBuild = (key: string) => !channelArtifactBuilt(key) || channelStale(key);
+  function channelStale(key: string): boolean {
     const activeEntry = activeByChannel.get(key);
     const latestEntry = latestByChannel.get(key);
     const artifact =
@@ -703,7 +731,11 @@ export default function StackPreviewPanel({
           currentMethod
         ) !== null
       : false;
-  }).length;
+  }
+  const staleCount = displayKeys.filter(channelStale).length;
+  const anyToBuild = [...currentChannels.values()].some(
+    (channel) => channel.images.length >= 2 && channelNeedsBuild(channel.key)
+  );
   const outdatedSourceKeys = useMemo(() => {
     const sourceKeys = new Set<string>();
     for (const entry of latest.data?.groups ?? []) {
@@ -876,8 +908,14 @@ export default function StackPreviewPanel({
             <button
               className="stack-preview-build"
               type="button"
-              disabled={!canCompute || startPending || stableImageIds.length < 2}
-              title={canCompute ? undefined : 'This account can view cached stacks but cannot build them.'}
+              disabled={!canCompute || startPending || stableImageIds.length < 2 || !anyToBuild}
+              title={
+                !canCompute
+                  ? 'This account can view cached stacks but cannot build them.'
+                  : !anyToBuild && stableImageIds.length >= 2
+                    ? 'Every channel is up to date. Rebuild current set stacks them again.'
+                    : 'Queues one build per channel that is new or out of date; color follows each target’s last channel.'
+              }
               onClick={() => beginAll(false)}
             >
               {startPending && startVariables?.operationKey === 'all' ? 'Queueing…' : buildLabel}
