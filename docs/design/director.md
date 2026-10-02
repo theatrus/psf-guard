@@ -1415,9 +1415,9 @@ Partially implemented phase-2 work: the Rust policy and separate durable recover
 store are exposed through opt-in IPC 9 and the managed plugin client, but are not
 wired into native N.I.N.A. acquisition.
 They do not yet protect real acquisition or enable automatic recovery. The current
-native safety owner still cancels acquisition, attempts park and stays stopped
-after Safe returns. Extend it with this session policy using local evidence while
-disconnected from PSF Guard.
+native safety owner cancels acquisition, parks only with independent enclosure
+clearance, and stays stopped after Safe/Open returns. Extend it with this session
+policy using local evidence while disconnected from PSF Guard.
 
 #### Implemented recovery foundation
 
@@ -1547,9 +1547,27 @@ separate unsafe abort/park/no-restart run passed. These tests kept recovery
 disabled and do not prove native recovery dispatch. Exact evidence lives in the
 plugin's `docs/nina-smoke-test.md`.
 
-The next native increment needs separate commissioned enclosure/motion evidence:
-the existing safety monitor does not establish roof clearance. It must also keep
-one persistent per-rig recovery directory across allocations, admit an explicit
+Plugin [#41](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/41)
+supplies independent local motion
+clearance for ordinary acquisition and shutdown. The Session requires an explicit
+operator choice: open air (no configured or connected dome), or a fully-open
+NINA enclosure. Old sequences default to unconfigured and cannot acquire until
+reviewed. A cached registration callback is not fresh evidence. Closed/closing,
+opening, stale, unknown/error, disconnected or changed-device evidence cancels
+the owner; reopening cannot revive it. Without clearance, cleanup requests
+slew-stop and tracking-off instead of park. Stop failures propagate and no
+replacement mount/profile receives cleanup commands. This is sampled evidence,
+not a physical observatory interlock, and Director does not operate the shutter.
+
+Real NINA #64/ASCOM OmniSim/local-server tests cover enclosure closure during an
+offline exposure while weather remains safe: exposure abort, mount stop,
+blocked park and no restart after reopening. A separate Unsafe test retains park
+for a commissioned open-air setup. Native editor screenshots cover 640/1000 px;
+742 plugin tests cover freshness, clock/profile/device changes, cancellation,
+failed stop and clearance loss during park. Evidence is in the plugin smoke guide.
+
+The next native recovery increment must keep one persistent per-rig recovery
+directory across allocations, admit an explicit
 observing night, prevent downgrade after commissioning, classify local quality
 evidence, and bind original suggestions to one-shot native checks. UI work must
 not offer an enabled recovery policy before that acquisition path is tested.
@@ -3496,6 +3514,11 @@ separate workflow; these mappings alone do not resolve them.
 - [x] Adopt runtime 0.9.0 / IPC 9 and a strict managed recovery client in plugin
   #40. Verify real-sidecar quality/stop/replay and existing full-stack acquisition
   with recovery disabled. This does not enable native recovery or Session controls.
+- [x] Add an explicit local enclosure policy and independent fresh native dome
+  clearance. Gate acquisition/park, stop slew/tracking on lost clearance and
+  retain the interrupted owner's stop latch after reopening. Test actual shutter
+  closure during an offline exposure and weather-unsafe open-air park separately.
+  This is not yet the persistent night-stop or automatic recovery policy.
 - [ ] Integrate [quality holds and session stop](#quality-holds-equipment-failures-and-session-stop)
   in the plugin through the versioned contract, local evidence classification,
   native bounded probes, Session controls and explicit resume authority.
