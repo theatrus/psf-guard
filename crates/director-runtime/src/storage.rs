@@ -150,6 +150,9 @@ pub enum Operation {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StorageReply {
+    RecoveryBlocked {
+        code: crate::recovery::Error,
+    },
     /// IPC 8: both dispatch checks return the exact input state's time and an
     /// inclusive latest start. A non-Acquire decision always has a null bound.
     /// Hosts must include elapsed IPC/hook time and recheck native safety before
@@ -217,6 +220,40 @@ pub enum StorageReply {
     Error {
         code: StorageError,
     },
+}
+
+impl Operation {
+    pub(crate) fn acquisition_state_mut(&mut self) -> Option<&mut State> {
+        match self {
+            Self::CheckGeometryPendingDispatch { state, .. }
+            | Self::CheckGeometryCaptureDispatch { state, .. }
+            | Self::EvaluateGeometry { state, .. }
+            | Self::BeginGeometryPreparation { state, .. }
+            | Self::AdvanceGeometryPreparation { state, .. }
+            | Self::ReserveGeometryPrepared { state, .. }
+            | Self::Evaluate { state }
+            | Self::BeginProgramPreparation { state, .. }
+            | Self::AdvanceProgramPreparation { state, .. }
+            | Self::ReserveProgramPrepared { state, .. }
+            | Self::Reserve { state, .. }
+            | Self::BeginPreparation { state, .. }
+            | Self::AdvancePreparation { state, .. }
+            | Self::ReservePrepared { state, .. } => Some(state),
+            Self::OpenGeometry { .. }
+            | Self::Open { .. }
+            | Self::OpenProgram { .. }
+            | Self::CaptureBinding { .. }
+            | Self::Record { .. }
+            | Self::Attempt { .. }
+            | Self::Events { .. }
+            | Self::CompletePreparation { .. }
+            | Self::Preparation { .. }
+            | Self::ActivePreparation {}
+            | Self::ClosePreparation { .. }
+            | Self::PreparationEvents { .. }
+            | Self::UnresolvedAttempt {} => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]

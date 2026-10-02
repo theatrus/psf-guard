@@ -1412,7 +1412,7 @@ filter without capturing a blocked recipe.
 ### Quality holds, equipment failures and session stop
 
 Partially implemented phase-2 work: the Rust policy and separate durable recovery
-store described below exist, but are not wired into runtime IPC or N.I.N.A.
+store are exposed through opt-in IPC 9, but are not wired into N.I.N.A.
 They do not yet protect real acquisition or enable automatic recovery. The current
 native safety owner still cancels acquisition, attempts park and stays stopped
 after Safe returns. Extend it with this session policy using local evidence while
@@ -1422,9 +1422,9 @@ disconnected from PSF Guard.
 
 `director_core::recovery` supplies a pure, versioned session state machine;
 `director_ledger::recovery::SessionStore` persists it in an owned SQLite database
-outside allocation-specific run directories. These are internal Rust APIs, not
-new runtime IPC commands or server endpoints. The existing capture ledger,
-allocation authority, public plugin and Sync behavior are unchanged.
+outside allocation-specific run directories. IPC 9 exposes these internal APIs
+as described below; there are no new server endpoints. The existing capture
+ledger schema, allocation authority, public plugin and Sync behavior are unchanged.
 
 - An explicit rig/configuration/night identity and frozen policy bind each
   session. States are acquiring, holding, recovering, stopping and stopped.
@@ -1454,16 +1454,16 @@ allocation authority, public plugin and Sync behavior are unchanged.
   its scheduled end. A different night requires the previous one to be stopped
   and nonoverlapping. `begin_night` is an explicit admission primitive, never an
   automatic response to a changed allocation or date. Bounded `events` pages
-  retain evidence for later batch delivery; no delivery/acknowledgement API exists
-  for this stream yet.
+  retain evidence for later batch delivery; IPC provides local pages, but no
+  central delivery/acknowledgement API exists for this stream yet.
 
 Host integration must use one fixed per-rig store, load it before any equipment
 operation and stop dispatch on storage, clock or validation errors. Persist
 before acting. `newly_applied: true` means committed input, **not** a dispatch
 permit: safety/deadline preemption may have selected a different transition.
 Readback, duplicate receipts and surviving in-flight attempts never issue work.
-The forthcoming IPC must expose exact newly issued operation identity and fence
-it through the existing native owner and capture/preparation ledger. Before
+IPC now exposes exact newly issued operation identity; the native integration
+must fence it through the existing owner and capture/preparation ledger. Before
 recovery or park, cancel/reconcile active work and recheck fresh enclosure,
 safety, geometry, allocation and local ownership. Unknown motion prevents
 recovery/parking; `Acquiring` alone never grants ordinary equipment permission.
@@ -1472,7 +1472,62 @@ No policy defaults or Session editor controls are commissioned by this increment
 Deterministic core/store tests cover hysteresis, changing context/reference,
 unknown/stale evidence, bounded failures, cumulative budgets, clock reversal,
 restart during recovery/park, duplicate input, competing writers, wrong scope,
-corrupt state, journal paging and nonoverlapping new-night admission. Browser,
+corrupt state, journal paging and nonoverlapping new-night admission.
+
+#### Recovery IPC and native handoff
+
+Runtime **0.9.0 / IPC 9** adds recovery contract **1**. The planning engine stays
+0.3.0 / contract 2. Old IPC/runtime handshakes fail before opening a database.
+The public plugin remains pinned to its existing 0.8.0 artifact; do not replace
+that executable alone. Adopt the new runtime, hash pin, wire client and native
+integration together in a later reviewed plugin increment.
+
+The verified launcher may pass `--recovery-directory <absolute-per-rig-directory>`
+after `--state-directory <absolute-allocation-directory>`. Both must already exist
+and be different directories. Recovery owns `director-recovery.lock` and
+`recovery.sqlite`; the per-rig lease excludes another allocation process and is
+held through blocking SQLite work. Paths never arrive through IPC. `ready`
+reports explicit `recovery_enabled` and `recovery_version`. Recovery remains
+opt-in so existing preview/test flows do not silently adopt a policy. The native
+integration must always supply the same persistent per-rig directory once
+commissioned, fail if it is missing, and prohibit a launch-mode downgrade.
+
+The new command is `{"type":"recovery","operation":{"recovery_version":1,
+"operation":{...}}}`. Replies use `type: recovery` and a typed `response`:
+
+| Operation | Reply and boundary |
+|---|---|
+| `open`: identity, policy, now_ms | `opened`: created, record. Explicit night admission; identical reopen restores state. Never issues equipment work. |
+| `current` | `current`: required nullable record. Readback only, including surviving in-flight attempts. |
+| `apply`: durable request | `applied`: newly_applied, record, required nullable issued. The request includes night/configuration/event identity, expected revision, time, current safety/motion conditions and a typed event. |
+| `events`: night_id, after, limit | `events`: ordered evidence and next_cursor. Limit 1-16; return a complete prefix fitting one frame, never skip a large record. No remote acknowledgement or dispatch authority. |
+
+`issued` is a `probe` or `park` with exact attempt ID and deadline. It is present
+only for the newly committed corresponding transition, never for replay,
+readback, timeout or safety-preempted input. Even this receipt is not permission
+to move hardware: the native owner must validate the full record identity and
+policy revision, reconcile active work, and enforce current safety/enclosure,
+allocation and geometry checks. Lost issuance replies require reconciliation,
+not resending an action from persisted state. Errors have typed scope, conflict,
+phase, clock, evidence and storage codes; malformed protocol closes the pipe.
+
+When recovery is enabled, the sidecar gates every ledger evaluation, preparation
+advance, reservation and dispatch check. An admitted acquiring state and fresh
+recorded Safe/motion-permitted conditions are required. It rejects mismatched
+configurations, stale/backwards time and hold/stop states, and narrows the
+planner's validity to the observing-night end so the complete operation must
+fit. Opening/readback/completion stay available to settle interrupted work.
+Stateless evaluation is disabled in this mode. Recovery probes do not bypass
+this science gate; their separate native preparation/authority path is pending.
+The native owner must submit current safety/enclosure observations before
+acquisition checks and on changes during active work, not only update the
+ordinary ledger state. Its independent watchdog remains responsible for prompt
+cancellation when the sidecar is stalled, disconnected or unavailable.
+
+Portable tests cover version/scope refusal, replay, gate freshness, journal frame
+bounds and successor-allocation blocking. The Windows process harness tests real
+pipes, exclusive recovery ownership, process death after probe/park issuance and
+restart without redispatch. These are not N.I.N.A. equipment tests. Browser,
 server-loop and real N.I.N.A. recovery simulator gates remain unimplemented.
 
 #### Remaining acquisition integration
@@ -3408,10 +3463,14 @@ separate workflow; these mappings alone do not resolve them.
   Director and plugin actions. Validate missing required devices/safety sources.
 - [x] Add the internal shared-core recovery states and separate durable per-rig
   store: cooldown/hysteresis, cumulative probe/hold/failure budgets, persisted
-  night-stop latches, duplicate refusal and restart tests. Not connected to IPC
-  or native acquisition; this is not a shipped quality-recovery feature.
+  night-stop latches, duplicate refusal and restart tests. This is not a shipped
+  quality-recovery feature.
+- [x] Expose opt-in recovery contract 1 through runtime 0.9.0 / IPC 9, with
+  one-shot issuance receipts, local journal pages, a separate per-rig lease and
+  durable acquisition gating. Validate pipe restart and replay in real Windows
+  processes; the public plugin has not adopted this runtime yet.
 - [ ] Integrate [quality holds and session stop](#quality-holds-equipment-failures-and-session-stop)
-  through versioned observations/decisions, local evidence classification,
+  in the plugin through the versioned contract, local evidence classification,
   native bounded probes, Session controls and explicit resume authority.
 - [ ] Enforce commissioned enclosure-aware abort/park/stop through one native
   shutdown owner. Test roof closure, repeated guide/slew failures, blocked/failed

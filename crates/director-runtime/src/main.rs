@@ -6,13 +6,14 @@ mod windows_host {
 
     pub async fn run() -> Result<(), &'static str> {
         let args: Vec<_> = std::env::args().skip(1).collect();
-        if !matches!(args.len(), 4 | 6)
+        if !matches!(args.len(), 4 | 6 | 8)
             || args[0] != "--pipe"
             || args[2] != "--parent-pid"
-            || (args.len() == 6 && args[4] != "--state-directory")
+            || (args.len() >= 6 && args[4] != "--state-directory")
+            || (args.len() == 8 && args[6] != "--recovery-directory")
         {
             return Err(
-                "usage: psf-guard-director-runtime --pipe <local-pipe-name> --parent-pid <pid> [--state-directory <absolute-directory>]",
+                "usage: psf-guard-director-runtime --pipe <local-pipe-name> --parent-pid <pid> [--state-directory <absolute-directory> [--recovery-directory <absolute-per-rig-directory>]]",
             );
         }
         let Some(suffix) = args[1].strip_prefix("psf-guard-director-") else {
@@ -52,7 +53,7 @@ mod windows_host {
             return Err("control pipe parent identity mismatch");
         }
         // Do not touch storage until the process peer is verified.
-        let storage = if args.len() == 6 {
+        let storage = if args.len() >= 6 {
             Some(
                 psf_guard_director_runtime::storage::Storage::acquire_for_startup(
                     std::path::Path::new(&args[5]),
@@ -71,7 +72,20 @@ mod windows_host {
         } else {
             None
         };
-        psf_guard_director_runtime::serve_with_storage(pipe, storage)
+        let recovery = if args.len() == 8 {
+            let directory = std::path::Path::new(&args[7]);
+            if directory.canonicalize().ok() == std::path::Path::new(&args[5]).canonicalize().ok() {
+                return Err("recovery requires a separate per-rig directory");
+            }
+            Some(
+                psf_guard_director_runtime::recovery::Storage::acquire_for_startup(directory)
+                    .await
+                    .map_err(|_| "recovery storage unavailable")?,
+            )
+        } else {
+            None
+        };
+        psf_guard_director_runtime::serve_with_recovery(pipe, storage, recovery)
             .await
             .map_err(|_| "control protocol failed")
     }

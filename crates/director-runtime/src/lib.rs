@@ -7,8 +7,9 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time::timeout;
 
+pub mod recovery;
 pub mod storage;
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_FRAME_BYTES: usize = psf_guard_director_core::MAX_REQUEST_BYTES + 4096;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -37,6 +38,9 @@ pub enum Command {
         request: Box<serde_json::value::RawValue>,
     },
     Ledger {
+        operation: Box<serde_json::value::RawValue>,
+    },
+    Recovery {
         operation: Box<serde_json::value::RawValue>,
     },
     Ping,
@@ -85,12 +89,17 @@ impl<'de> Deserialize<'de> for Command {
                 request: evaluation.request,
             });
         }
-        if tag.r#type == "ledger" {
+        if tag.r#type == "ledger" || tag.r#type == "recovery" {
             let operation: LedgerOperation =
                 serde_json::from_str(raw.get()).map_err(serde::de::Error::custom)?;
-            debug_assert_eq!(operation.r#type, "ledger");
-            return Ok(Self::Ledger {
-                operation: operation.operation,
+            return Ok(if operation.r#type == "ledger" {
+                Self::Ledger {
+                    operation: operation.operation,
+                }
+            } else {
+                Self::Recovery {
+                    operation: operation.operation,
+                }
             });
         }
         let control: Control = serde_json::from_str(raw.get()).map_err(serde::de::Error::custom)?;
@@ -130,12 +139,17 @@ pub enum ResultMessage {
         contract_version: u32,
         rig_id: String,
         storage_enabled: bool,
+        recovery_enabled: bool,
+        recovery_version: u32,
     },
     Decision {
         response: Response,
     },
     Ledger {
         response: storage::StorageReply,
+    },
+    Recovery {
+        response: recovery::Reply,
     },
     Pong,
     Stopped,
@@ -249,8 +263,16 @@ pub async fn serve<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S) -> Result<(
 }
 
 pub async fn serve_with_storage<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: S,
+    storage: Option<storage::Storage>,
+) -> Result<(), ProtocolError> {
+    serve_with_recovery(stream, storage, None).await
+}
+
+pub async fn serve_with_recovery<S: AsyncRead + AsyncWrite + Unpin>(
     mut stream: S,
     mut storage: Option<storage::Storage>,
+    mut recovery: Option<recovery::Storage>,
 ) -> Result<(), ProtocolError> {
     let Some(hello) = receive(&mut stream, HANDSHAKE_TIMEOUT).await? else {
         return Ok(());
@@ -292,6 +314,8 @@ pub async fn serve_with_storage<S: AsyncRead + AsyncWrite + Unpin>(
             contract_version,
             rig_id: rig_id.clone(),
             storage_enabled: storage.is_some(),
+            recovery_enabled: recovery.is_some(),
+            recovery_version: recovery::CONTRACT_VERSION,
         },
     )
     .await?;
@@ -330,7 +354,7 @@ pub async fn serve_with_storage<S: AsyncRead + AsyncWrite + Unpin>(
             Command::Evaluate { request } => {
                 // Once durable accounting is active, caller-supplied progress
                 // must not bypass the ledger's pending work and attempt budget.
-                if storage.as_ref().is_some_and(storage::Storage::is_open) {
+                if storage.as_ref().is_some_and(storage::Storage::is_open) || recovery.is_some() {
                     return Err(ProtocolError::UntrackedEvaluation);
                 }
                 // Invalid planning input remains a core error response, distinct
@@ -352,12 +376,30 @@ pub async fn serve_with_storage<S: AsyncRead + AsyncWrite + Unpin>(
                         },
                     }
                 } else {
-                    let operation = serde_json::from_str(operation.get())
+                    let mut operation = serde_json::from_str(operation.get())
                         .map_err(|_| ProtocolError::InvalidMessage)?;
                     ResultMessage::Ledger {
-                        response: storage::execute(&mut storage, operation, &rig_id).await?,
+                        response: match recovery::gate(&mut recovery, &mut operation, &rig_id)
+                            .await?
+                        {
+                            Ok(()) => storage::execute(&mut storage, operation, &rig_id).await?,
+                            Err(code) => storage::StorageReply::RecoveryBlocked { code },
+                        },
                     }
                 }
+            }
+            Command::Recovery { operation } => {
+                let response = if operation.get().len() > psf_guard_director_core::MAX_REQUEST_BYTES
+                {
+                    recovery::Reply::Error {
+                        code: recovery::Error::InvalidInput,
+                    }
+                } else {
+                    let request = serde_json::from_str(operation.get())
+                        .map_err(|_| ProtocolError::InvalidMessage)?;
+                    recovery::execute(&mut recovery, request, &rig_id).await?
+                };
+                ResultMessage::Recovery { response }
             }
         };
         reply(&mut stream, &hello.session_id, message.request_id, payload).await?;
@@ -371,6 +413,8 @@ mod geometry_tests;
 mod preparation_tests;
 #[cfg(test)]
 mod program_tests;
+#[cfg(test)]
+mod recovery_tests;
 #[cfg(test)]
 mod storage_tests;
 #[cfg(test)]
