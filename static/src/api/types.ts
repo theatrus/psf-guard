@@ -703,15 +703,16 @@ export interface FinalPassProgress {
   frames: number;
 }
 
-/** The calibration master a channel is building, by frame read. */
+/** The calibration master a channel is building, as Seiza reports it. */
 export interface MasterBuildProgress {
   kind: 'bias' | 'dark' | 'dark_flat' | 'flat';
   filter?: string | null;
-  /** The frame being read in this pass, from 1. */
-  frame: number;
-  frames: number;
-  pass: number;
-  passes: number;
+  stage: 'read' | 'reread' | 'integrate' | 'combine';
+  /** Steps of the stage finished: frames, or tiles while a flat combines. */
+  done: number;
+  total: number;
+  /** How far through this build, 0 to 1. It only grows. */
+  fraction: number;
   /** Which build this is for the channel, from 1; a flat retry counts. */
   build?: number;
 }

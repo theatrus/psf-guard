@@ -42,33 +42,31 @@ const MASTER_NAMES: Record<MasterBuildProgress['kind'], string> = {
   flat: 'flat',
 };
 
-/** Frame reads finished, of all a master build needs, as the server counts them. */
-export function masterBuildReads(progress: MasterBuildProgress): [number, number] {
-  const total = progress.frames * progress.passes;
-  const done = Math.max(0, progress.pass - 1) * progress.frames + Math.max(0, progress.frame - 1);
-  return [Math.min(total, done), total];
-}
-
 /**
  * How far a channel's calibration has got, 0 to 1, without knowing how many
  * masters it will build: each build covers half of what is left, so the share
  * only grows. Matches the server.
  */
 export function masterBuildShare(progress: MasterBuildProgress): number {
-  const [done, total] = masterBuildReads(progress);
-  const read = total > 0 ? done / total : 0;
   const left = 0.5 ** (Math.max(progress.build ?? 1, 1) - 1);
-  return 1 - left * (1 - 0.5 * read);
+  return 1 - left * (1 - 0.5 * Math.min(1, Math.max(0, progress.fraction)));
 }
 
+const STAGE_STEPS: Record<MasterBuildProgress['stage'], string> = {
+  read: 'reading frame',
+  reread: 'rereading kept frame',
+  integrate: 'integrating frame',
+  combine: 'combining tile',
+};
+
 /**
- * `master flat L · frame 12/40`, with the pass for a bias or dark, which
- * reads its frames twice. Matches the header queue's wording.
+ * `master flat L · reading frame 12/40`, or `master dark · integrating frame
+ * 3/8`. Matches the header queue's wording.
  */
 export function masterBuildLabel(progress: MasterBuildProgress): string {
   const filter = (progress.kind === 'flat' || progress.kind === 'dark_flat') && progress.filter
     ? ` ${progress.filter}`
     : '';
-  const pass = progress.passes > 1 ? ` · pass ${progress.pass}/${progress.passes}` : '';
-  return `master ${MASTER_NAMES[progress.kind]}${filter}${pass} · frame ${progress.frame}/${progress.frames}`;
+  const step = Math.min(progress.done + 1, progress.total);
+  return `master ${MASTER_NAMES[progress.kind]}${filter} · ${STAGE_STEPS[progress.stage]} ${step}/${progress.total}`;
 }

@@ -3,7 +3,7 @@ import { formatIntegration, totalIntegration } from '../utils/integrationTime';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import { openSettings } from '../utils/settingsIntent';
-import { masterBuildLabel, masterBuildReads, stackGroupPercent } from '../utils/stackProgress';
+import { masterBuildLabel, stackGroupPercent } from '../utils/stackProgress';
 import { STACK_METHOD_QUERY_KEY, methodName, sameMethod } from '../utils/stackMethod';
 import type {
   CalibrationMode,
@@ -1267,8 +1267,8 @@ export default function StackPreviewPanel({
                         role="progressbar"
                         aria-label={`${targetName} ${channelLabel(filterName, exposureGroup)} stack progress`}
                         aria-valuemin={0}
-                        aria-valuemax={masterBuild ? masterBuildReads(masterBuild)[1] : eligibleFrames}
-                        aria-valuenow={masterBuild ? masterBuildReads(masterBuild)[0] : processedFrames}
+                        aria-valuemax={masterBuild ? masterBuild.total : eligibleFrames}
+                        aria-valuenow={masterBuild ? masterBuild.done : processedFrames}
                         aria-valuetext={masterBuild ? `Building ${masterBuildLabel(masterBuild)}` : undefined}
                       >
                         <span style={{ width: `${progressPercentage}%` }} />

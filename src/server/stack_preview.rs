@@ -394,7 +394,13 @@ pub struct StackGroupStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_pass: Option<FinalPassProgress>,
     /// The calibration master being built for this channel, while one is.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// A value this build cannot read, such as the older shape a stopped
+    /// build saved, reads as none rather than failing the whole manifest.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_master_progress"
+    )]
     pub calibration_progress: Option<crate::calibration::MasterBuildProgress>,
     pub error: Option<String>,
     #[serde(default)]
@@ -557,8 +563,18 @@ impl FinalPassProgress {
 /// each eligible frame once, and a final pass three more times per admitted
 /// frame. Until the final pass starts its size is estimated from the
 /// eligible frames, so the share only steps forward when frames drop out.
-/// `Master flat L · frame 12/40`, with the pass for a bias or dark, which
-/// reads its frames twice.
+/// `Master flat L · reading frame 12/40`, or `Master dark · integrating
+/// frame 3/8`: the master, Seiza's stage, and the step under way.
+fn lenient_master_progress<'de, D>(
+    deserializer: D,
+) -> Result<Option<crate::calibration::MasterBuildProgress>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value(value).ok()))
+}
+
 fn master_progress_label(progress: &crate::calibration::MasterBuildProgress) -> String {
     use crate::calibration::CalibrationKind;
     let mut label = format!(
@@ -578,10 +594,15 @@ fn master_progress_label(progress: &crate::calibration::MasterBuildProgress) -> 
         label.push(' ');
         label.push_str(filter);
     }
-    if progress.passes > 1 {
-        label.push_str(&format!(" · pass {}/{}", progress.pass, progress.passes));
-    }
-    label.push_str(&format!(" · frame {}/{}", progress.frame, progress.frames));
+    use crate::calibration::MasterBuildStage;
+    let what = match progress.stage {
+        MasterBuildStage::Read => "reading frame",
+        MasterBuildStage::Reread => "rereading kept frame",
+        MasterBuildStage::Integrate => "integrating frame",
+        MasterBuildStage::Combine => "combining tile",
+    };
+    let step = (progress.done + 1).min(progress.total);
+    label.push_str(&format!(" · {what} {step}/{}", progress.total));
     label
 }
 
@@ -2854,6 +2875,10 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
             });
             let anchor = anchors.get(&group.index).copied().flatten();
             let result = run_group(state, &group_job, group.clone(), anchor);
+            state.stack_previews.update(&job_id, |job| {
+                // However the channel ended, it is no longer building masters.
+                job.groups[group.index].calibration_progress = None;
+            });
             state.stack_previews.update(&job_id, |job| match result {
                 Ok(GroupOutcome::Built) => {
                     job.groups[group.index].state = StackGroupState::Ready;
@@ -4743,57 +4768,70 @@ mod tests {
         job.groups[0].calibration_progress = Some(crate::calibration::MasterBuildProgress {
             kind: crate::calibration::CalibrationKind::Dark,
             filter: Some("L".into()),
-            frame: 4,
-            frames: 20,
-            pass: 2,
-            passes: 2,
+            stage: crate::calibration::MasterBuildStage::Integrate,
+            done: 3,
+            total: 20,
+            fraction: 0.575,
             build: 1,
         });
         let entry = mono_activity(&job);
         assert_eq!(entry.detail, "Building calibration masters");
-        // The first master has read 23 of 40 frames: about half of the half
+        // The first master is a little past half way: about half of the half
         // of the calibration share the first build covers.
         assert_eq!((entry.processed_units, entry.total_units), (2, 50));
         assert_eq!(
             entry.progress_label.as_deref(),
-            Some("Master dark · pass 2/2 · frame 4/20")
+            Some("Master dark · integrating frame 4/20")
         );
         job.groups[0].calibration_progress = Some(crate::calibration::MasterBuildProgress {
             kind: crate::calibration::CalibrationKind::Flat,
             filter: Some("L".into()),
-            frame: 7,
-            frames: 30,
-            pass: 1,
-            passes: 1,
+            stage: crate::calibration::MasterBuildStage::Read,
+            done: 6,
+            total: 30,
+            fraction: 0.14,
             build: 3,
         });
         let entry = mono_activity(&job);
         assert_eq!(
             entry.progress_label.as_deref(),
-            Some("Master flat L · frame 7/30")
+            Some("Master flat L · reading frame 7/30")
         );
         // A third build starts with three quarters of the share behind it.
         assert_eq!((entry.processed_units, entry.total_units), (7, 50));
     }
 
     #[test]
+    fn a_saved_channel_with_the_old_master_progress_still_loads() {
+        let mut value = serde_json::to_value(ready_group(42, "Ha", 1)).unwrap();
+        value["calibration_progress"] = serde_json::json!({
+            "kind": "dark", "frame": 3, "frames": 8, "pass": 2, "passes": 2, "build": 1
+        });
+        let group: StackGroupStatus = serde_json::from_value(value.clone()).unwrap();
+        assert!(group.calibration_progress.is_none());
+        value["calibration_progress"] = serde_json::Value::Null;
+        let group: StackGroupStatus = serde_json::from_value(value).unwrap();
+        assert!(group.calibration_progress.is_none());
+    }
+
+    #[test]
     fn the_calibration_share_only_grows_across_masters() {
-        let progress = |build, pass, frame| crate::calibration::MasterBuildProgress {
+        let progress = |build, fraction| crate::calibration::MasterBuildProgress {
             kind: crate::calibration::CalibrationKind::Dark,
             filter: None,
-            frame,
-            frames: 8,
-            pass,
-            passes: 2,
+            stage: crate::calibration::MasterBuildStage::Read,
+            done: 0,
+            total: 8,
+            fraction,
             build,
         };
         let mut last = 0.0;
         for build in 1..=4 {
-            for (pass, frame) in [(1, 1), (1, 8), (2, 1), (2, 8)] {
-                let share = progress(build, pass, frame).share();
+            for fraction in [0.0, 0.3, 0.5, 1.0] {
+                let share = progress(build, fraction).share();
                 assert!(
                     share >= last,
-                    "build {build} pass {pass} frame {frame}: {share} < {last}"
+                    "build {build} at {fraction}: {share} < {last}"
                 );
                 assert!(share < 1.0);
                 last = share;
