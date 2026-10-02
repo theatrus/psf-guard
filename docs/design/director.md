@@ -1339,6 +1339,117 @@ rather than letting Director and a TS sequence operate the same equipment.
 Optional TS import/catalog compatibility remains a public contract,
 including stable GUIDs, schema variation, grade values, and RA unit conversion.
 
+### Quality holds, equipment failures and session stop
+
+Planned phase-2 behavior; this section does not describe a shipped recovery
+policy. The current native safety owner cancels acquisition, attempts park and
+stays stopped after Safe returns. Extend it with a durable shared-core session
+policy that also handles poor acquisition quality and equipment failures. It
+must work with local evidence while disconnected from PSF Guard.
+
+The core chooses among acquiring, holding, probing recovery, stopping and
+stopped. Record a typed cause, evidence, affected scope, first/last occurrence,
+policy revision, retry budget, earliest retry and terminal stop reason. Safety
+preempts quality recovery. A hold blocks new science reservations in its scope
+and does not mark goals complete, reject images or release unresolved capture authority.
+Operator stop and **Park and stop** are available from every nonterminal state.
+**Stop for the night** persists across reconnect, plugin restart and workload
+renewal; identify the observing session/night explicitly, not by UTC midnight.
+Restart must restore the latch before any equipment operation. A new session
+requires fresh admission and safety checks; reconnecting or receiving work
+cannot clear it.
+
+| Cause | Local response | Recovery |
+|---|---|---|
+| Corroborated cloud/transparency loss or sustained poor frames | Finish the current exposure by default, retain its evidence, then hold acquisition; configurable immediate abort for severe loss | Wait for the configured cooldown, then perform bounded recovery probes; require sustained good evidence before resuming |
+| Guide loss, failed settling, autofocus or centering | Cancel dependent work and record whether the native operation stopped cleanly | Allow only configured, bounded recovery for a known outcome; repeated failures hold or park and stop |
+| Slew failure, unknown mount state or uncertain operation completion | Stop dispatch and reconcile the actual device state | No blind repeated slew or implicit retry; park only when the commissioned mount/enclosure policy permits it |
+| Required safety monitor Unsafe, disconnected or stale; enclosure closing/closed | Immediately block dispatch and cancel exposure, guiding and other active work through native APIs | Execute the commissioned shutdown policy and latch stopped; Safe/Open alone never restarts the interrupted owner |
+| Hold deadline, recovery budget or latest useful observing time reached | End recovery attempts and execute configured shutdown | Stop for the session/night, or explicit operator recovery |
+
+Quality observations must identify the rig/configuration, target, filter,
+exposure/binning, capture ID, observation time, source and algorithm revision.
+Reuse PSF Guard's [screening evidence](../SCREENING.md) and
+[statistical grading](../STATISTICAL_GRADING.md) concepts: transparency, spatial
+obstruction, star counts and tracking/focus evidence. Compare compatible frames
+and retain a known-good reference. A target/filter/exposure change must not
+look like a sudden cloud; a long bad run must not become recovery merely
+because a rolling baseline adapted. Missing metrics are unknown, not bad or
+good. A single low star count, no-solve or final rejection is insufficient to
+infer clouds. Separate sky-wide evidence from target-local obstruction or
+focus/tracking problems so the scheduler does not cycle every target through
+the same failure. Only independently feasible work may continue when a hold
+is explicitly scoped to one target.
+
+Local lightweight evidence supplies the immediate loop. Delayed central
+analysis can reinforce or correct its interpretation, with age and identity
+checks; an old grade cannot pause or resume unrelated current work. Server
+loss alone is not cloud evidence. When required quality evidence is missing
+or stale, use an explicit commissioned policy (continue with unknown quality
+or hold); never wait indefinitely for an online grader. Image grading and
+accepted/pending goal accounting remain separate from session control.
+
+Expose grouped **Quality**, **Failure recovery** and **Shutdown** policy in the
+existing Session editor, with effective inherited values and local overrides.
+Quality supports disabled/monitor-only, timed pause, and park-and-stop modes;
+show bad/good evidence thresholds, minimum samples, cooldown, maximum total
+hold, probe count and latest resume time. Initial values to validate in
+simulators are a 10-minute cooldown, at most three recovery probes, and a
+45-minute total hold before park-and-stop. Good-evidence hysteresis must be
+stricter than merely waiting out the timer. These are proposed defaults, not
+universal cloud thresholds or permission to weaken hardware safety.
+
+Recovery probes need explicit local authority, operation deadlines and separate
+bounded accounting. They may require unpark, slew/center and guiding; refresh
+constraints before each step. Probe frames retain provenance and do not count
+as accepted science automatically. If the mount is parked or the roof is closed,
+do not take a probe until the enclosure/safety contract permits the complete
+setup. Timer expiry only permits evaluation of recovery. Resume needs fresh
+safe evidence, a valid allocation and local ownership, reconciled operations,
+and a new core decision after setup. No exposure may outlive its geometry,
+meridian or session deadline.
+
+Count consecutive and total failures by operation/device as well as by target.
+Cap nested native/plugin retries and total elapsed recovery time so changing
+targets or creating a successor workload cannot reset the budget. A known
+recoverable guide failure may permit one configured restart/settle attempt;
+unknown results require reconciliation. Preserve uncertainty and spent attempts
+across restart. Clear consecutive failure counters only after verified recovery;
+retain session totals until an explicitly admitted new session. An HTTP check-in
+or new command ID resets neither budget.
+
+Commission enclosure interlocks per rig: closing/closed/motion-permitted signals,
+who owns closure, whether park-before-close is required, and which shutdown
+actions remain permitted if closure has already begun. Check these interlocks
+before startup/unpark as well as throughout acquisition. Never infer clearance
+from a generic Unsafe flag. A closing roof must not trigger repeated slews,
+unparks or guide restarts. Where mount motion is prohibited or its clearance is
+unknown, abort/stop through the supported device path and surface the blocked
+park explicitly. Where park is permitted, issue it once with a deadline and
+verify the result. A failed park remains a visible terminal failure; do not
+claim the rig is safe or repeatedly move it. Hardware enclosure interlocks
+remain independent of Director.
+
+Use the existing native lifecycle and one shutdown owner for Director defaults
+and compatible unsafe hooks. Deduplicate repeated Unsafe/roof/failure events,
+preempt recovery waits, and keep bounded cleanup alive after sequence
+cancellation. A local watchdog enforces safety even if the core or server is
+unavailable. Status must show the cause, evidence age, cooldown remaining,
+probe/retry budget and actual mount/enclosure state. Journal transitions and
+operation outcomes for batch check-in; central live status shows freshness and
+cannot remotely clear a local safety/stop latch.
+
+Implement in this order: shared-core states and persisted budgets/latches;
+versioned observation/decision contracts; native stop/park/enclosure enforcement
+and Session controls; local quality evidence and bounded probes; then central
+reinforcement and monitoring. Add deterministic tests for false cloud signals,
+baseline drift, repeated failures, stale/out-of-order evidence, timer/clock and
+restart behavior. Real NINA simulator gates must inject cloud recovery and
+persistent cloud, guide/slew failures, Unsafe during exposure/setup/wait/cleanup,
+roof closure with motion allowed/prohibited, park timeout, flapping safety and
+server outage. Assert bounded attempts, no duplicate shutdown, no automatic
+restart after a terminal stop, and no capture outside current authorization.
+
 ### Chatstronomy interoperability
 
 Retain Chatstronomy's existing TS integration and provide equivalent Director
@@ -3150,6 +3261,12 @@ separate workflow; these mappings alone do not resolve them.
 - [ ] Ship capability-aware default operation policies through native N.I.N.A.
   without optional plugins. Expose policy ownership and prevent duplicate native,
   Director and plugin actions. Validate missing required devices/safety sources.
+- [ ] Implement [quality holds and session stop](#quality-holds-equipment-failures-and-session-stop)
+  in the shared core: local evidence, cooldown/hysteresis, bounded probes and
+  failure budgets, persisted night-stop latches and explicit resume authority.
+- [ ] Enforce commissioned enclosure-aware abort/park/stop through one native
+  shutdown owner. Test roof closure, repeated guide/slew failures, blocked/failed
+  parking and safety flapping in real N.I.N.A. simulator sessions while offline.
 - [ ] Prove explicit TS/Sync coexistence and the optional Chatstronomy adapter.
 - [ ] Implement the shared-core operation state machine and the TS-style native
   container/options contract. Test configured trigger order and frequency,
