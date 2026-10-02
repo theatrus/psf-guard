@@ -11,8 +11,9 @@ describe('header fit', () => {
   });
 
   it('needs a little room to spare before a stacked header goes back to one row', () => {
-    expect(needsStacking({ ...widths, available: 1318 }, true)).toBe(true);
-    expect(needsStacking({ ...widths, available: 1322 }, true)).toBe(false);
+    // 16px of slack: 1314 needed, so 1330 is the narrowest that unstacks.
+    expect(needsStacking({ ...widths, available: 1329 }, true)).toBe(true);
+    expect(needsStacking({ ...widths, available: 1330 }, true)).toBe(false);
   });
 
   it('stacks when a long target name widens the views', () => {

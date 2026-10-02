@@ -694,7 +694,6 @@
   grid-template-areas:
     "brand utilities"
     "nav nav";
-  padding: 0.5rem 0.8rem;
 }
 
 .app-header.is-stacked .header-scope {
@@ -703,7 +702,7 @@
 
 /* On one row nothing in the views shrinks: a strip that does not fit
    overflows instead, which is what tells the header to stack. */
-@media (min-width: 761px) {
+@media (min-width: 760.01px) {
   .app-header:not(.is-stacked) .header-nav > *,
   .app-header:not(.is-stacked) .header-nav .header-group > * {
     flex-shrink: 0;

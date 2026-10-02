@@ -749,7 +749,7 @@ test('Grid starts target quality analysis and keeps progress in the global heade
   await expect(queue).toContainText('Analyzing quality');
   await expect(queue).toContainText('Solving 1/3 frames');
 
-  // The open queue lies over the views; moving the pointer away puts it
+  // The open queue can lie over the views; moving the pointer away puts it
   // away. (Escape does too, but only while the chip has focus.)
   await page.mouse.move(10, 600);
   await expect(queue).toBeHidden();
