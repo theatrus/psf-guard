@@ -1087,11 +1087,11 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
                 );
                 continue;
             }
-            // The cache volume is over its limit with nothing left to cull:
-            // writing more previews would only fill it.
-            if cache_budget::over_limit() {
+            // The cache volume is near its limit: previews made now would be
+            // culled by the next pass and made again by the next scan.
+            if !cache_budget::room_for_previews(&ctx.cache_dir_path) {
                 tracing::debug!(
-                    "⏸️ Pre-generation paused (db={}): the cache volume is over its limit",
+                    "⏸️ Pre-generation paused (db={}): the cache volume is near its limit",
                     ctx.id
                 );
                 continue;
@@ -1151,6 +1151,12 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
                 // Yield mid-cycle: stop dispatching new work as soon as an
                 // interactive job appears; already-running tasks drain.
                 if state.interactive_job_active() {
+                    yielded_early = true;
+                    break;
+                }
+                // And as soon as the volume nears its limit, so one scan
+                // cannot write a whole catalog past it.
+                if !cache_budget::room_for_previews(&ctx.cache_dir_path) {
                     yielded_early = true;
                     break;
                 }

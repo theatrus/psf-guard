@@ -718,15 +718,23 @@ whole volume, other files included, that may be used, as `df` counts it.
 Every five minutes, and right after the limit is changed, PSF Guard reads
 each cache volume. When one is over the limit it deletes image previews,
 annotated previews and star lists, least recently viewed first, until the
-volume is two points under, sparing any viewed in the last quarter hour.
+volume is two points under, sparing any viewed in the last quarter hour
+(viewing a cached preview or star list marks it as used, every few minutes
+at most).
 If that is not enough it deletes stack resume checkpoints a day old or more.
 Stacks, color previews, WBPP stacks and calibration masters are never
 deleted: they take minutes to hours to make, while a preview comes back the
-next time someone opens the image. Viewing a cached preview marks it as used,
-because many mounts, NFS among them, do not record reads.
+next time someone opens the image. PSF Guard records use itself because many
+mounts, NFS among them, do not record reads.
 
-A volume still over the limit once nothing more may go is reported in red,
-and background preview pre-generation waits until there is room again. 100%
+Background preview pre-generation stops two points under the limit, where a
+cull would clear to, and checks before every image, so it never makes
+previews the next pass would delete and the next scan make again. Previews
+someone opens are still made. A volume still over the limit once nothing
+more may go is reported in red. The cache's sizes in Settings are measured
+at most hourly, and after a cull. On a file system that keeps snapshots,
+deleted previews free no space until the snapshot goes, so each pass culls
+further until none are left. 100%
 turns culling off. Changing the limit needs database management. Windows
 servers do not read their volumes, so the limit does not apply there.
 

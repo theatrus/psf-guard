@@ -17,10 +17,11 @@
 
 use crate::server::state::AppState;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 /// The limit when nobody has chosen one.
 pub const DEFAULT_MAX_VOLUME_PERCENT: u8 = 90;
@@ -35,14 +36,23 @@ const RECENT: Duration = Duration::from_secs(15 * 60);
 const CHECKPOINT_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 /// How often the volume is read.
 const PASS_INTERVAL: Duration = Duration::from_secs(5 * 60);
-/// How often serving a preview moves its access time.
-const TOUCH_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// How often serving a preview moves its access time: well inside
+/// [`RECENT`], so a preview on someone's screen always reads as recent.
+const TOUCH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+/// How long a volume's cache sizes are trusted: walking a large cache over
+/// NFS is slow, and only Settings shows them.
+const SIZES_TTL: Duration = Duration::from_secs(60 * 60);
 /// Image previews, culled first. Each is one file below the category.
 const PREVIEW_CATEGORIES: [&str; 3] = ["previews", "annotated", "stars"];
 
 static MAX_VOLUME_PERCENT: AtomicU8 = AtomicU8::new(DEFAULT_MAX_VOLUME_PERCENT);
-static OVER_LIMIT: AtomicBool = AtomicBool::new(false);
 static LAST: Mutex<Vec<VolumeReport>> = Mutex::new(Vec::new());
+/// One pass at a time: two reading the same volume would each cull the
+/// whole excess.
+static PASS: Mutex<()> = Mutex::new(());
+/// Each volume's cache sizes, by device, with when they were measured.
+static SIZES: std::sync::LazyLock<Mutex<HashMap<u64, (Instant, CacheSizes)>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Apply the registry's choice.
 pub fn configure(settings: Option<&crate::db_registry::StorageSettings>) {
@@ -57,10 +67,22 @@ pub fn max_volume_percent() -> u8 {
     MAX_VOLUME_PERCENT.load(Ordering::Relaxed)
 }
 
-/// True when the last pass left a volume over the limit with nothing more
-/// it may cull, so background work that writes previews should wait.
-pub fn over_limit() -> bool {
-    OVER_LIMIT.load(Ordering::Relaxed)
+/// Whether background work may write previews into this cache: its volume
+/// must sit below the band a cull clears, so pre-generation never makes
+/// previews the next pass would delete. A preview someone opens is made
+/// either way. True when there is no limit or the volume cannot be read.
+pub fn room_for_previews(cache_dir: &Path) -> bool {
+    let limit = max_volume_percent();
+    if limit >= 100 {
+        return true;
+    }
+    volume_usage(cache_dir).is_none_or(|usage| room_at(usage, limit))
+}
+
+/// Below the band a cull clears: the cull stops two points under the limit,
+/// so writing stops there too.
+fn room_at(usage: Usage, limit: u8) -> bool {
+    usage.percent() < f64::from(limit) - HEADROOM_PERCENT
 }
 
 /// What the last pass found on each cache volume.
@@ -91,6 +113,17 @@ pub struct VolumeReport {
     /// Still over the limit with nothing left that may be culled.
     pub over_limit: bool,
     pub checked_unix: i64,
+}
+
+/// Mark a cached preview as just used, so it is culled last, off the async
+/// runtime: on NFS a metadata call can wait on the network.
+pub fn note_served_soon(path: &Path) {
+    if !cfg!(unix) {
+        // Nothing is culled where volumes cannot be read.
+        return;
+    }
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || note_served(&path));
 }
 
 /// Mark a cached preview as just used, so it is culled last.
@@ -126,17 +159,14 @@ pub async fn run(state: Arc<AppState>) {
     }
 }
 
-/// Keep a pass's findings for Settings and for the work that waits on them.
+/// Keep a pass's findings for Settings.
 pub fn record(reports: Vec<VolumeReport>) {
-    OVER_LIMIT.store(
-        reports.iter().any(|report| report.over_limit),
-        Ordering::Relaxed,
-    );
     *LAST.lock().unwrap() = reports;
 }
 
 /// One pass over every volume: read it, cull if it is over, report.
 pub fn pass(state: &AppState) -> Vec<VolumeReport> {
+    let _one_at_a_time = PASS.lock().unwrap_or_else(|poison| poison.into_inner());
     let limit = max_volume_percent();
     let mut volumes: Vec<(u64, Vec<(String, PathBuf)>)> = Vec::new();
     for ctx in state.all_databases() {
@@ -151,11 +181,11 @@ pub fn pass(state: &AppState) -> Vec<VolumeReport> {
     }
     volumes
         .into_iter()
-        .filter_map(|(_, caches)| report_volume(&caches, limit))
+        .filter_map(|(device, caches)| report_volume(device, &caches, limit))
         .collect()
 }
 
-fn report_volume(caches: &[(String, PathBuf)], limit: u8) -> Option<VolumeReport> {
+fn report_volume(device: u64, caches: &[(String, PathBuf)], limit: u8) -> Option<VolumeReport> {
     let first = &caches.first()?.1;
     let mut usage = volume_usage(first)?;
     let mut culled_files = 0;
@@ -173,7 +203,9 @@ fn report_volume(caches: &[(String, PathBuf)], limit: u8) -> Option<VolumeReport
                 if need == 0 {
                     break;
                 }
-                if remove(&candidate.path) {
+                // Every file of the candidate goes, even after one fails.
+                let removed = candidate.paths.iter().filter(|path| remove(path)).count();
+                if removed > 0 {
                     culled_files += 1;
                     freed_bytes += candidate.bytes;
                     need = need.saturating_sub(candidate.bytes);
@@ -189,10 +221,26 @@ fn report_volume(caches: &[(String, PathBuf)], limit: u8) -> Option<VolumeReport
         }
         usage = volume_usage(first).unwrap_or(usage);
     }
-    let mut sizes = CacheSizes::default();
-    for (_, cache) in caches {
-        sizes.add(cache);
-    }
+    // Measured again after a cull, else at most hourly.
+    let sizes = {
+        let cached = SIZES
+            .lock()
+            .unwrap()
+            .get(&device)
+            .filter(|(at, _)| culled_files == 0 && at.elapsed() < SIZES_TTL)
+            .map(|(_, sizes)| *sizes);
+        cached.unwrap_or_else(|| {
+            let mut sizes = CacheSizes::default();
+            for (_, cache) in caches {
+                sizes.add(cache);
+            }
+            SIZES
+                .lock()
+                .unwrap()
+                .insert(device, (Instant::now(), sizes));
+            sizes
+        })
+    };
     let over_limit = limit < 100 && usage.percent() > f64::from(limit);
     if over_limit {
         tracing::warn!(
@@ -218,8 +266,9 @@ fn report_volume(caches: &[(String, PathBuf)], limit: u8) -> Option<VolumeReport
     })
 }
 
+/// What a cull removes together: one preview, or a checkpoint's files.
 struct Candidate {
-    path: PathBuf,
+    paths: Vec<PathBuf>,
     bytes: u64,
     last_used: SystemTime,
 }
@@ -248,7 +297,7 @@ fn preview_candidates(caches: &[(String, PathBuf)], now: SystemTime) -> Vec<Cand
                     continue;
                 }
                 candidates.push(Candidate {
-                    path: entry.path(),
+                    paths: vec![entry.path()],
                     bytes: metadata.len(),
                     last_used,
                 });
@@ -261,10 +310,12 @@ fn preview_candidates(caches: &[(String, PathBuf)], now: SystemTime) -> Vec<Cand
 
 /// Stack resume checkpoints a day old or more, oldest first: they only
 /// save work if a stopped build resumes, and the stack they lead to is kept.
+/// A checkpoint's files (its context and its manifest) go together.
 fn checkpoint_candidates(caches: &[(String, PathBuf)], now: SystemTime) -> Vec<Candidate> {
-    let mut candidates = Vec::new();
+    let mut groups: HashMap<PathBuf, Candidate> = HashMap::new();
     for (_, cache) in caches {
-        let Ok(entries) = std::fs::read_dir(cache.join("stack-previews").join("resume")) else {
+        let directory = cache.join("stack-previews").join("resume");
+        let Ok(entries) = std::fs::read_dir(&directory) else {
             continue;
         };
         for entry in entries.flatten() {
@@ -272,20 +323,26 @@ fn checkpoint_candidates(caches: &[(String, PathBuf)], now: SystemTime) -> Vec<C
             let Ok(metadata) = entry.metadata() else {
                 continue;
             };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let stem = name.split('.').next().unwrap_or(&name).to_string();
             let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-            if now
-                .duration_since(modified)
-                .is_ok_and(|age| age < CHECKPOINT_AGE)
-            {
-                continue;
-            }
-            candidates.push(Candidate {
-                bytes: tree_bytes(&path),
-                path,
+            let group = groups.entry(directory.join(stem)).or_insert(Candidate {
+                paths: Vec::new(),
+                bytes: 0,
                 last_used: modified,
             });
+            group.bytes += tree_bytes(&path);
+            group.last_used = group.last_used.max(modified);
+            group.paths.push(path);
         }
     }
+    let mut candidates = groups
+        .into_values()
+        .filter(|group| {
+            now.duration_since(group.last_used)
+                .is_ok_and(|age| age >= CHECKPOINT_AGE)
+        })
+        .collect::<Vec<_>>();
     candidates.sort_by_key(|candidate| candidate.last_used);
     candidates
 }
@@ -306,7 +363,7 @@ fn remove(path: &Path) -> bool {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 struct CacheSizes {
     previews: u64,
     stacks: u64,
@@ -458,8 +515,7 @@ mod tests {
         let names = candidates
             .iter()
             .map(|candidate| {
-                candidate
-                    .path
+                candidate.paths[0]
                     .file_name()
                     .unwrap()
                     .to_string_lossy()
@@ -474,6 +530,46 @@ mod tests {
         sizes.add(cache.path());
         assert_eq!(sizes.previews, 3000);
         assert_eq!(sizes.stacks, 5000);
+    }
+
+    #[test]
+    fn pre_generation_stops_where_the_cull_would_start_clearing() {
+        let at = |percent: u64| Usage {
+            total: 100,
+            used: percent,
+            available: 100 - percent,
+        };
+        assert!(room_at(at(80), 90));
+        // 88% is inside the band the cull clears down to (two points under
+        // 90%), so previews written now would only be culled again.
+        assert!(!room_at(at(88), 90));
+        assert!(!room_at(at(95), 90));
+    }
+
+    #[test]
+    fn a_checkpoints_files_are_culled_together_once_a_day_old() {
+        let cache = tempfile::tempdir().unwrap();
+        let resume = cache.path().join("stack-previews").join("resume");
+        std::fs::create_dir_all(&resume).unwrap();
+        let old = SystemTime::now() - Duration::from_secs(3 * 86_400);
+        for name in ["aaa.seiza-stack", "aaa.json", "bbb.seiza-stack", "bbb.json"] {
+            let path = resume.join(name);
+            std::fs::write(&path, vec![0u8; 100]).unwrap();
+            if name.starts_with("aaa") {
+                std::fs::File::options()
+                    .write(true)
+                    .open(&path)
+                    .unwrap()
+                    .set_times(std::fs::FileTimes::new().set_modified(old))
+                    .unwrap();
+            }
+        }
+        let caches = vec![("Rig".to_string(), cache.path().to_path_buf())];
+        let candidates = checkpoint_candidates(&caches, SystemTime::now());
+        // Only the old checkpoint, both of its files in one candidate.
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].paths.len(), 2);
+        assert_eq!(candidates[0].bytes, 200);
     }
 
     #[test]

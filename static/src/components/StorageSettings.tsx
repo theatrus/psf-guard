@@ -93,7 +93,7 @@ export default function StorageSettings({ canManage }: { canManage: boolean }) {
   }
   const current = settings.data;
   const commit = () => {
-    if (draft !== current.max_volume_percent) save.mutate(draft);
+    if (!save.isPending && draft !== current.max_volume_percent) save.mutate(draft);
   };
 
   return (
@@ -110,7 +110,8 @@ export default function StorageSettings({ canManage }: { canManage: boolean }) {
       ) : (
         current.volumes.map((volume) => <VolumeUse key={volume.path} volume={volume} />)
       )}
-      <fieldset className="calibration-settings-group" disabled={!canManage || save.isPending}>
+      {/* Not disabled while saving: that would take the slider out of a keyboard user's hands. */}
+      <fieldset className="calibration-settings-group" disabled={!canManage}>
         <div className="review-preference worker-share">
           <span>
             <span className="stack-method-label">
@@ -131,8 +132,12 @@ export default function StorageSettings({ canManage }: { canManage: boolean }) {
             value={draft}
             aria-label="Most of the cache volume to use, in percent"
             onChange={(event) => setDraft(Number(event.target.value))}
+            // Saved when let go, on Enter, or on leaving it: each save also
+            // checks the volume, so not on every arrow press.
             onPointerUp={commit}
-            onKeyUp={commit}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') commit();
+            }}
             onBlur={commit}
           />
         </div>

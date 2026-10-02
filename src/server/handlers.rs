@@ -4577,7 +4577,7 @@ async fn serve_cached_png(
 ) -> Result<Response, AppError> {
     // The cache culls least recently used previews first when its volume
     // fills, so a preview someone looks at is marked as used.
-    crate::server::cache_budget::note_served(cache_path);
+    crate::server::cache_budget::note_served_soon(cache_path);
     let metadata = tokio::fs::metadata(cache_path)
         .await
         .map_err(|_| AppError::InternalError("Failed to read cache".to_string()))?;
@@ -5441,6 +5441,7 @@ pub async fn get_image_stars(
         if let Ok(cached_data) = tokio::fs::read_to_string(&cache_path).await
             && let Ok(mut response) = serde_json::from_str::<StarDetectionResponse>(&cached_data)
         {
+            crate::server::cache_budget::note_served_soon(&cache_path);
             // The tilt analysis is derived, cheap, and versionless: compute
             // it on serve rather than trusting what an older build cached.
             if let (Some(width), Some(height)) = (response.width, response.height) {
