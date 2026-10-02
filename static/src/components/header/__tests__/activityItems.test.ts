@@ -5,7 +5,7 @@ import type {
   SpatialScanStatus,
   StackActivityEntry,
 } from '../../../api/types';
-import { activityItems, summarize } from '../activityItems';
+import { activityItems, lineLengths, summarize } from '../activityItems';
 
 function scan(processed: number, total: number, stage = 'astrometry'): SpatialScanStatus {
   return {
@@ -44,12 +44,13 @@ function stack(
   state: 'running' | 'queued',
   processed = 0,
   total = 0,
-  automatic = false
+  automatic = false,
+  queuePosition: number | null = null
 ): StackActivityEntry {
   return {
     kind: 'mono', job_id: jobId, database_id: 'db-a', project_id: 1, state,
     label: `M44 · ${jobId}`, detail: 'registering', processed_units: processed,
-    total_units: total, created_unix_seconds: 1, automatic,
+    total_units: total, created_unix_seconds: 1, automatic, queue_position: queuePosition,
   };
 }
 
@@ -112,5 +113,79 @@ describe('header activity items', () => {
     );
     expect(summarize(items)).toEqual({ count: 3, queued: 1, percent: 65 });
     expect(summarize([])).toEqual({ count: 0, queued: 0, percent: null });
+  });
+
+  it('orders the stack line as the server does and carries each place', () => {
+    const items = activityItems([], [
+      stack('late', 'queued', 0, 0, false, 1),
+      stack('run', 'running', 1, 3),
+      stack('next', 'queued', 0, 0, false, 0),
+    ]);
+    expect(items.map((item) => item.scope)).toEqual(['M44 · run', 'M44 · next', 'M44 · late']);
+    expect(items.map((item) => item.position)).toEqual([undefined, 0, 1]);
+    expect(items[1].control).toEqual({ kind: 'stack', jobId: 'next' });
+  });
+
+  it('lists WBPP runs under way and waiting, each with what it can do', () => {
+    const items = activityItems([], [], {
+      running: [{
+        db_id: 'a', db_name: 'Askar', scope: 'project Bubble', stage: 'running',
+        wbpp_stage: 'Image Integration', wbpp_steps: 7, started_at: 1,
+      }],
+      queued: [
+        { id: 'q3', db_id: 'b', db_name: 'Redcat', scope: 'target IC 447', project_id: 2, target_id: 9, position: 1, queued_at: 2 },
+        { id: 'q4', db_id: 'a', db_name: 'Askar', scope: 'project Heart', project_id: 3, target_id: null, position: 2, queued_at: 3 },
+      ],
+    });
+    expect(items[0]).toMatchObject({
+      title: 'WBPP',
+      scope: 'Askar · project Bubble',
+      detail: 'Running in PixInsight · Image Integration · 7 steps done',
+      queued: false,
+      percent: null,
+      control: { kind: 'wbpp-running', dbId: 'a' },
+    });
+    expect(items[2]).toMatchObject({
+      queued: true,
+      position: 1,
+      control: { kind: 'wbpp-queued', dbId: 'a', queueId: 'q4' },
+    });
+    expect(lineLengths(items)).toEqual({ stack: 0, wbpp: 2 });
+  });
+
+  it('shows the final pass in words and lists refreshes still settling', () => {
+    const running = { ...stack('R', 'running', 21, 34), progress_label: 'Rejecting transients · pass 2/3 · frame 3/8' };
+    const color = { ...stack('C', 'running', 1, 4), kind: 'color' as const };
+    const items = activityItems([], [running, color], undefined, [
+      {
+        database_id: 'a', database_name: 'Askar', project_id: 7, project_name: 'Heart',
+        reason: 'arrival', due_in_seconds: 170,
+      },
+      {
+        database_id: 'a', database_name: 'Askar', project_id: null, project_name: null,
+        reason: 'grade', due_in_seconds: 5,
+      },
+    ]);
+    expect(items[0]).toMatchObject({
+      detail: 'Rejecting transients · pass 2/3 · frame 3/8',
+      percent: (21 / 34) * 100,
+      stoppable: true,
+    });
+    // A running color composition finishes once it starts.
+    expect(items[1]).toMatchObject({ title: 'Composing color', stoppable: false });
+    expect(items[2]).toMatchObject({
+      kind: 'automatic',
+      title: 'Automatic refresh',
+      scope: 'Askar · Heart',
+      detail: 'After new frames · starts in 3 min',
+      queued: true,
+      control: { kind: 'scheduled', dbId: 'a', projectId: 7 },
+    });
+    expect(items[3]).toMatchObject({
+      scope: 'Askar · every followed project',
+      detail: 'After grade changes · starting now',
+    });
+    // Settling refreshes are not in a line a person reorders.
+    expect(lineLengths(items)).toEqual({ stack: 0, wbpp: 0 });
   });
 });

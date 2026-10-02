@@ -26,25 +26,33 @@ function scanProgress(running: boolean, processed: number, errors = 0) {
   };
 }
 
-function stack(jobId: string, state: 'running' | 'queued', processed = 0, total = 0): StackActivityEntry {
+function stack(
+  jobId: string,
+  state: 'running' | 'queued',
+  processed = 0,
+  total = 0,
+  queuePosition: number | null = null
+): StackActivityEntry {
   return {
     kind: 'mono', job_id: jobId, database_id: 'askar', project_id: 1, state,
     label: `Alpha M44 · ${jobId}`, detail: 'registering', processed_units: processed,
-    total_units: total, created_unix_seconds: 1,
+    total_units: total, created_unix_seconds: 1, queue_position: queuePosition,
   };
 }
 
 function mockServer({
   scan = () => scanProgress(false, 0),
   stacks = () => [] as StackActivityEntry[],
+  scheduled = () => [] as unknown[],
 }: {
   scan?: () => unknown;
   stacks?: () => StackActivityEntry[];
+  scheduled?: () => unknown[];
 }) {
   server.use(
     http.get('/api/databases', () => ok([{ id: 'askar', name: 'Askar', database_path: '/x.sqlite' }])),
     http.get('/api/db/:dbId/analysis/quality-scan', () => ok(scan())),
-    http.get('/api/stack-activity', () => ok({ schema_version: 1, active: stacks() }))
+    http.get('/api/stack-activity', () => ok({ schema_version: 1, active: stacks(), scheduled: scheduled() }))
   );
 }
 
@@ -190,5 +198,105 @@ describe('ActivityChip', () => {
     } finally {
       document.removeEventListener('keydown', listen);
     }
+  });
+
+  it('moves a waiting build, removes one, and stops a running one after asking', async () => {
+    const calls: string[] = [];
+    mockServer({
+      stacks: () => [
+        stack('R', 'running', 1, 4),
+        stack('B', 'queued', 0, 0, 0),
+        stack('G', 'queued', 0, 0, 1),
+      ],
+    });
+    server.use(
+      http.post('/api/stack-activity/:jobId/move', async ({ params, request }) => {
+        calls.push(`move ${params.jobId} ${JSON.stringify(await request.json())}`);
+        return ok({ schema_version: 1, active: [] });
+      }),
+      http.post('/api/stack-activity/:jobId/cancel', ({ params }) => {
+        calls.push(`cancel ${params.jobId}`);
+        return ok({ schema_version: 1, active: [] });
+      })
+    );
+    renderChip();
+    await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+
+    // The first in line cannot go earlier, nor the last later.
+    expect(within(list).getByRole('button', { name: 'Run Stacking: Alpha M44 · B earlier' })).toBeDisabled();
+    expect(within(list).getByRole('button', { name: 'Run Stacking: Alpha M44 · G later' })).toBeDisabled();
+    await userEvent.click(within(list).getByRole('button', { name: 'Run Stacking: Alpha M44 · G earlier' }));
+    await waitFor(() => expect(calls).toEqual(['move G {"position":0}']));
+
+    await userEvent.click(within(list).getByRole('button', { name: 'Remove Stacking: Alpha M44 · B from the line' }));
+    await waitFor(() => expect(calls).toContain('cancel B'));
+
+    await userEvent.click(within(list).getByRole('button', { name: 'Stop Stacking: Alpha M44 · R' }));
+    expect(calls).not.toContain('cancel R');
+    await userEvent.click(within(list).getByRole('button', { name: 'Stop it' }));
+    await waitFor(() => expect(calls).toContain('cancel R'));
+  });
+
+  it('shows WBPP runs, and leaves their controls to a server that manages databases', async () => {
+    mockServer({});
+    let management = false;
+    server.use(
+      http.get('/api/info', () => ok({ version: 'test', allow_database_management: management })),
+      http.get('/api/wbpp/activity', () => ok({
+        running: [{
+          db_id: 'askar', db_name: 'Askar', scope: 'project Bubble', stage: 'running',
+          wbpp_stage: 'Calibration', wbpp_steps: 2, started_at: 1,
+        }],
+        queued: [],
+      }))
+    );
+    const view = renderChip();
+    await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+    expect(list).toHaveTextContent('Askar · project Bubble');
+    expect(list).toHaveTextContent('Running in PixInsight · Calibration · 2 steps done');
+    expect(within(list).queryByRole('button', { name: /Stop WBPP/ })).toBeNull();
+
+    view.unmount();
+    management = true;
+    renderChip();
+    await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
+    expect(await screen.findByRole('button', { name: 'Stop WBPP: Askar · project Bubble' })).toBeInTheDocument();
+  });
+
+  it('lists a settling automatic refresh to run now or skip, without a spinning ring', async () => {
+    const calls: string[] = [];
+    mockServer({
+      scheduled: () => [{
+        database_id: 'askar', database_name: 'Askar', project_id: 7, project_name: 'Heart',
+        reason: 'arrival', due_in_seconds: 240,
+      }],
+    });
+    server.use(
+      http.post('/api/stack-activity/scheduled/:action', async ({ params, request }) => {
+        calls.push(`${params.action} ${JSON.stringify(await request.json())}`);
+        return ok({ schema_version: 1, active: [], scheduled: [] });
+      })
+    );
+    renderChip();
+    const chip = await screen.findByRole('button', { name: /Background jobs/ });
+    expect(chip).toHaveTextContent('1 job');
+    expect(chip.querySelector('.activity-ring.is-indeterminate')).toBeNull();
+    await userEvent.click(chip);
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+    expect(list).toHaveTextContent('Automatic refresh');
+    expect(list).toHaveTextContent('After new frames · starts in 4 min');
+    await userEvent.click(within(list).getByRole('button', { name: 'Run Automatic refresh: Askar · Heart now' }));
+    await waitFor(() => expect(calls).toEqual(['run-now {"database_id":"askar","project_id":7}']));
+  });
+
+  it('offers no Stop on a running color composition', async () => {
+    mockServer({ stacks: () => [{ ...stack('C', 'running', 1, 4), kind: 'color' }] });
+    renderChip();
+    await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+    expect(list).toHaveTextContent('Composing color');
+    expect(within(list).queryByRole('button', { name: /^Stop / })).toBeNull();
   });
 });

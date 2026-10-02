@@ -94,6 +94,7 @@ import type { GuidFillReport, GuidReport,
   CalibrationMode,
   StackFrameOrder,
   StackMethod,
+  WbppActivity,
   StackMethodSettings,
   ArtifactSearchJob,
   ReferenceRegion,
@@ -1675,6 +1676,66 @@ export const apiClient = {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<StackActivity>>('/stack-activity');
     return data.data ?? { schema_version: 1, active: [] };
+  },
+
+  /** Move a waiting stack build to `position` in the line (0 is next). */
+  moveStackJob: async (jobId: string, position: number): Promise<StackActivity> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<StackActivity>>(
+      `/stack-activity/${encodeURIComponent(jobId)}/move`,
+      { position }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to move the build');
+    return data.data;
+  },
+
+  /** Stop a mono or color stack build, waiting or running. */
+  cancelStackJob: async (jobId: string): Promise<StackActivity> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<StackActivity>>(
+      `/stack-activity/${encodeURIComponent(jobId)}/cancel`
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to stop the build');
+    return data.data;
+  },
+
+  /** Drop a waiting automatic refresh. */
+  skipScheduledRefresh: async (databaseId: string, projectId: number | null): Promise<StackActivity> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<StackActivity>>(
+      '/stack-activity/scheduled/skip',
+      { database_id: databaseId, project_id: projectId }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to skip the refresh');
+    return data.data;
+  },
+
+  /** Start a waiting automatic refresh at the scheduler's next look. */
+  runScheduledRefreshNow: async (databaseId: string, projectId: number | null): Promise<StackActivity> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<StackActivity>>(
+      '/stack-activity/scheduled/run-now',
+      { database_id: databaseId, project_id: projectId }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to start the refresh');
+    return data.data;
+  },
+
+  getWbppActivity: async (): Promise<WbppActivity> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<WbppActivity>>('/wbpp/activity');
+    return data.data ?? { running: [], queued: [] };
+  },
+
+  /** Move a waiting WBPP run to `position` in the line (0 is next). */
+  moveQueuedWbppRun: async (queueId: string, position: number): Promise<WbppActivity> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<WbppActivity>>(
+      `/wbpp/queue/${encodeURIComponent(queueId)}/move`,
+      { position }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to move the queued run');
+    return data.data;
   },
 
   getLatestStackPreviews: async (

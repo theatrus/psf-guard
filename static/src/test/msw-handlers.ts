@@ -285,6 +285,14 @@ export const handlers = [
       status: 'ready',
     })
   ),
+  http.get('/api/wbpp/activity', () =>
+    HttpResponse.json({
+      success: true,
+      data: { running: [], queued: [] },
+      error: null,
+      status: 'ready',
+    })
+  ),
   http.get('/api/stack-activity', () =>
     HttpResponse.json({
       success: true,

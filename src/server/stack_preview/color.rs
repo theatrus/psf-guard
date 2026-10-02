@@ -1670,16 +1670,18 @@ fn composition_label(
 }
 
 pub(super) fn enqueue_color_job(state: Arc<AppState>, prepared: PreparedColorJob) {
-    let permit = Arc::clone(&state.stack_previews.permit);
     let job_id = prepared.public.job_id.clone();
     // A composition can be stopped while it waits for the worker; once it
     // runs it finishes, which is minutes at most.
     let cancel = state.stack_previews.track_cancel(&job_id);
+    state.stack_previews.join_line(&job_id);
     tokio::spawn(async move {
-        let Ok(_permit) = permit.acquire_owned().await else {
+        let permit = state.stack_previews.wait_turn(&job_id, &cancel).await;
+        if permit.is_none() && !cancel.load(std::sync::atomic::Ordering::Relaxed) {
             state.stack_previews.forget_cancel(&job_id);
             return;
-        };
+        }
+        let _permit = permit;
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             state.stack_previews.update_color(&job_id, |job| {
                 job.state = StackJobState::Cancelled;
@@ -3498,6 +3500,7 @@ mod tests {
             group: StackGroupStatus {
                 snr: None,
                 snr_url: None,
+                final_pass: None,
                 index,
                 target_id: 7,
                 target_name: "Color target".into(),

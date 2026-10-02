@@ -145,6 +145,16 @@ impl RefreshReason {
     }
 }
 
+/// A refresh waiting for its frames or grades to settle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ScheduledRefresh {
+    pub database_id: String,
+    /// `None` refreshes every followed project of the database.
+    pub project_id: Option<i32>,
+    pub reason: RefreshReason,
+    pub due_in_seconds: u64,
+}
+
 /// One project, or every followed project of one database.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RefreshKey {
@@ -255,6 +265,46 @@ impl AutomaticStackRefresh {
                 .then_with(|| left.project_id.cmp(&right.project_id))
         });
         due
+    }
+
+    /// The refreshes waiting to run, soonest first, for the header's queue.
+    pub fn scheduled(&self) -> Vec<ScheduledRefresh> {
+        let now = Instant::now();
+        let mut scheduled = self
+            .pending
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(key, entry)| ScheduledRefresh {
+                database_id: key.database_id.clone(),
+                project_id: key.project_id,
+                reason: entry.reason,
+                due_in_seconds: entry.due_at.saturating_duration_since(now).as_secs(),
+            })
+            .collect::<Vec<_>>();
+        scheduled.sort_by(|left, right| {
+            left.due_in_seconds
+                .cmp(&right.due_in_seconds)
+                .then_with(|| left.database_id.cmp(&right.database_id))
+                .then_with(|| left.project_id.cmp(&right.project_id))
+        });
+        scheduled
+    }
+
+    /// Drop one waiting refresh. False when nothing waits under that key.
+    pub fn skip(&self, key: &RefreshKey) -> bool {
+        self.pending.lock().unwrap().remove(key).is_some()
+    }
+
+    /// Make one waiting refresh due now; the next tick starts it.
+    pub fn run_now(&self, key: &RefreshKey) -> bool {
+        match self.pending.lock().unwrap().get_mut(key) {
+            Some(entry) => {
+                entry.due_at = Instant::now();
+                true
+            }
+            None => false,
+        }
     }
 
     /// How many refreshes wait, for status and tests.
@@ -719,6 +769,37 @@ mod tests {
             grade_delay_minutes: grade,
         });
         guard
+    }
+
+    #[test]
+    fn a_waiting_refresh_is_listed_skipped_or_brought_forward() {
+        let _guard = POLICY_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        configure(AutomationPolicy {
+            enabled: true,
+            ..AutomationPolicy::default()
+        });
+        let refresh = AutomaticStackRefresh::default();
+        refresh.touch_projects("db-a", [7, 8], RefreshReason::Arrival);
+        refresh.touch_projects("db-a", [9], RefreshReason::Grade);
+        let scheduled = refresh.scheduled();
+        assert_eq!(scheduled.len(), 3);
+        // Arrivals settle sooner than grades, so they lead.
+        assert_eq!(scheduled[2].project_id, Some(9));
+        assert_eq!(scheduled[2].reason, RefreshReason::Grade);
+        let key = |project| RefreshKey {
+            database_id: "db-a".into(),
+            project_id: Some(project),
+        };
+        assert!(refresh.skip(&key(8)));
+        assert!(!refresh.skip(&key(8)));
+        assert!(refresh.run_now(&key(9)));
+        let scheduled = refresh.scheduled();
+        assert_eq!(scheduled[0].project_id, Some(9));
+        assert_eq!(scheduled[0].due_in_seconds, 0);
+        assert_eq!(refresh.ordered_due(Instant::now()).len(), 1);
+        configure(AutomationPolicy::default());
     }
 
     #[test]

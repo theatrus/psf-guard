@@ -292,7 +292,49 @@
   color: var(--color-text-secondary);
 }
 
+.activity-row-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.activity-row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.25rem;
+}
+
+.activity-row-actions button {
+  min-width: 1.6rem;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 4px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+
+.activity-row-actions button:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-text-primary);
+}
+
+.activity-row-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.activity-row-actions .activity-row-stop:hover:not(:disabled) {
+  border-color: var(--color-error, #ff6b6b);
+  color: var(--color-error, #ff6b6b);
+}
+
 .activity-row-detail {
+  min-width: 0;
   font-size: 0.74rem;
   color: var(--color-text-muted, #999);
 }
