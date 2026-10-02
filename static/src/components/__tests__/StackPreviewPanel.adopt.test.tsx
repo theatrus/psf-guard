@@ -214,13 +214,13 @@ describe('StackPreviewPanel job adoption', () => {
       ...runningGroup,
       phase: 'calibration',
       processed_frames: 0,
-      calibration_progress: { kind: 'flat', filter: 'Ha', frame: 7, frames: 24, pass: 1, passes: 1 },
+      calibration_progress: { kind: 'flat', filter: 'Ha', stage: 'read', done: 6, total: 24, fraction: 0.25 },
     };
     server.use(
       http.get('/api/stack-activity', () => ok({ schema_version: 1, active: [{
         kind: 'mono', job_id: 'job-cal', database_id: 'test', project_id: 1, state: 'running',
         label: 'Sh2 86 · Ha', detail: 'Building calibration masters', processed_units: 0, total_units: 2,
-        created_unix_seconds: 100, progress_label: 'Master flat Ha · frame 7/24',
+        created_unix_seconds: 100, progress_label: 'Master flat Ha · reading frame 7/24',
       }] })),
       http.get('/api/db/:dbId/projects/:projectId/stack-previews/latest', () => ok({
         schema_version: 1, database_id: 'test', project_id: 1, updated_unix_seconds: 0, groups: [],
@@ -240,12 +240,12 @@ describe('StackPreviewPanel job adoption', () => {
       { wrapper: wrapper() }
     );
 
-    expect(await screen.findAllByText('Building master flat Ha · frame 7/24')).not.toHaveLength(0);
+    expect(await screen.findAllByText('Building master flat Ha · reading frame 7/24')).not.toHaveLength(0);
     const bar = screen.getByRole('progressbar', { name: /Sh2 86 Ha stack progress/i });
-    // Six reads finished; the seventh is under way.
+    // Six frames read; the seventh is under way.
     expect(bar).toHaveAttribute('aria-valuenow', '6');
     expect(bar).toHaveAttribute('aria-valuemax', '24');
-    // The first build, a quarter read, fills an eighth of the calibration
+    // The first build, a quarter done, fills an eighth of the calibration
     // share, which is half of this two-frame channel's work.
     expect(bar.querySelector('span')).toHaveStyle({ width: '6.25%' });
   });

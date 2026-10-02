@@ -15,15 +15,15 @@ describe('stack progress', () => {
   });
 
   it('grows through the calibration share while masters build', () => {
-    const dark = { kind: 'dark' as const, frame: 5, frames: 20, pass: 2, passes: 2, build: 1 };
+    const dark = { kind: 'dark' as const, stage: 'integrate' as const, done: 4, total: 20, fraction: 0.6, build: 1 };
     const building = { ...group, processed_frames: 0, phase: 'calibration', calibration_progress: dark };
-    // 24 of 40 reads finished: 0.3 of the share, 3 of 50 units.
+    // The first build at 0.6 fills 0.3 of the share: 3 of 50 units.
     expect(stackGroupPercent(building, undefined)).toBeCloseTo(6, 5);
-    expect(masterBuildLabel(dark)).toBe('master dark · pass 2/2 · frame 5/20');
-    expect(masterBuildLabel({ kind: 'flat', filter: 'Ha', frame: 3, frames: 30, pass: 1, passes: 1 }))
-      .toBe('master flat Ha · frame 3/30');
+    expect(masterBuildLabel(dark)).toBe('master dark · integrating frame 5/20');
+    expect(masterBuildLabel({ kind: 'flat', filter: 'Ha', stage: 'combine', done: 2, total: 8, fraction: 0.8 }))
+      .toBe('master flat Ha · combining tile 3/8');
     // A later build starts from where the earlier ones left the share.
-    const next = { ...building, calibration_progress: { ...dark, build: 2, pass: 1, frame: 1 } };
+    const next = { ...building, calibration_progress: { ...dark, build: 2, stage: 'read' as const, done: 0, fraction: 0 } };
     expect(stackGroupPercent(next, undefined)).toBeGreaterThan(stackGroupPercent(building, undefined));
     // Once stacking starts the share is settled.
     expect(stackGroupPercent({ ...building, phase: 'stacking' }, undefined)).toBeCloseTo(20, 5);
