@@ -12,8 +12,8 @@ internal sealed class RuntimeSession : IAsyncDisposable
     internal const int MaxFrameBytes = 262144 + 4096;
     internal const string EngineVersion = "0.3.0";
     internal const int ContractVersion = 2;
-    internal const int ProtocolVersion = 8;
-    internal const string RuntimeVersion = "0.8.0";
+    internal const int ProtocolVersion = 9;
+    internal const string RuntimeVersion = "0.9.0";
     private readonly NamedPipeServerStream pipe;
     private readonly Process process;
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -33,7 +33,8 @@ internal sealed class RuntimeSession : IAsyncDisposable
 
     internal static async Task<RuntimeSession> StartAsync(string executable, string rigId,
         Action<int> started, string engineVersion = EngineVersion, uint? parentOverride = null,
-        string? storageDirectory = null, string runtimeVersion = RuntimeVersion)
+        string? storageDirectory = null, string runtimeVersion = RuntimeVersion,
+        string? recoveryDirectory = null)
     {
         var pipeName = $"psf-guard-director-{Guid.NewGuid():N}";
         var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1,
@@ -56,6 +57,11 @@ internal sealed class RuntimeSession : IAsyncDisposable
             {
                 info.ArgumentList.Add("--state-directory");
                 info.ArgumentList.Add(storageDirectory);
+            }
+            if (recoveryDirectory is not null)
+            {
+                info.ArgumentList.Add("--recovery-directory");
+                info.ArgumentList.Add(recoveryDirectory);
             }
             process = Process.Start(info) ?? throw new IOException("Sidecar did not start.");
             started(process.Id);
@@ -82,7 +88,9 @@ internal sealed class RuntimeSession : IAsyncDisposable
                 result["engine_version"]?.GetValue<string>() != EngineVersion ||
                 result["contract_version"]?.GetValue<int>() != ContractVersion ||
                 result["rig_id"]?.GetValue<string>() != rigId ||
-                result["storage_enabled"]?.GetValue<bool>() != (storageDirectory is not null))
+                result["storage_enabled"]?.GetValue<bool>() != (storageDirectory is not null) ||
+                result["recovery_enabled"]?.GetValue<bool>() != (recoveryDirectory is not null) ||
+                result["recovery_version"]?.GetValue<int>() != 1)
                 throw new InvalidDataException("Sidecar handshake identity/version mismatch.");
             session.ready = true;
             return session;
@@ -117,6 +125,7 @@ internal sealed class RuntimeSession : IAsyncDisposable
             {
                 "evaluate" => "decision",
                 "ledger" => "ledger",
+                "recovery" => "recovery",
                 "ping" => "pong",
                 "shutdown" => "stopped",
                 _ => throw new InvalidDataException("Unsupported host request.")
