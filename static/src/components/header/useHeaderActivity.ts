@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import type {
@@ -78,54 +78,75 @@ export function useHeaderActivity() {
   // for every view, so its queries are refreshed as a whole.
   const busyIds = perDb.filter(busy).map((db) => db.dbId).sort().join('|');
   const previousBusy = useRef<string[]>([]);
-  const scanErrors = useMemo(
-    () => new Map(perDb.map((db) => [db.dbId, db.scan?.progress])),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- rebuilt when the busy set changes, which is when it is read.
-    [busyIds]
-  );
-  const [finished, setFinished] = useState<FinishedNote | null>(null);
-  const finishedTimer = useRef<number | null>(null);
   useEffect(() => {
     const now = busyIds ? busyIds.split('|') : [];
     const done = previousBusy.current.filter((id) => !now.includes(id));
     previousBusy.current = now;
     for (const id of done) queryClient.invalidateQueries({ queryKey: ['db', id] });
-    if (done.length === 0) return;
-    const failed = done
-      .map((id) => scanErrors.get(id))
-      .find((progress) => progress && !progress.running && progress.errors > 0);
-    if (finishedTimer.current != null) window.clearTimeout(finishedTimer.current);
-    setFinished({
-      errors: !!failed,
-      message: failed
-        ? `${failed.errors} frame${failed.errors === 1 ? '' : 's'} failed${failed.last_error ? `: ${failed.last_error}` : ''}`
-        : undefined,
-    });
+  }, [busyIds, queryClient]);
+
+  // Frame errors belong to a scan this header saw running. The server keeps
+  // the last scan's counts until the next one starts, so a database that
+  // merely finished a refresh must not report yesterday's errors.
+  const scanningIds = perDb
+    .filter((db) => db.scan?.progress.running || db.backfill?.progress.running)
+    .map((db) => db.dbId)
+    .sort()
+    .join('|');
+  const previousScanning = useRef<string[]>([]);
+  const [scanError, setScanError] = useState<FinishedNote | null>(null);
+  const scanErrorRef = useRef(scanError);
+  scanErrorRef.current = scanError;
+  useEffect(() => {
+    const now = scanningIds ? scanningIds.split('|') : [];
+    const ended = previousScanning.current.filter((id) => !now.includes(id));
+    previousScanning.current = now;
+    for (const id of ended) {
+      const db = perDb.find((entry) => entry.dbId === id);
+      const progress = db?.scan?.progress;
+      if (db && progress && !progress.running && progress.errors > 0) {
+        const note = {
+          errors: true,
+          message: `${db.dbName}: ${progress.errors} frame${progress.errors === 1 ? '' : 's'} failed${
+            progress.last_error ? ` — ${progress.last_error}` : ''
+          }`,
+        };
+        // The finish effect below may run in this same commit, before the
+        // state lands, when the scan was the last job.
+        scanErrorRef.current = note;
+        setScanError(note);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- read when the scanning set changes, which is when a scan ends.
+  }, [scanningIds]);
+
+  // When the whole queue empties, the chip says so for a moment, with any
+  // scan errors it has been holding; then it leaves and forgets them.
+  const [finished, setFinished] = useState<FinishedNote | null>(null);
+  const finishedTimer = useRef<number | null>(null);
+  const previousCount = useRef(summary.count);
+  useEffect(() => {
+    const before = previousCount.current;
+    previousCount.current = summary.count;
+    if (summary.count > 0) {
+      if (finishedTimer.current != null) {
+        window.clearTimeout(finishedTimer.current);
+        finishedTimer.current = null;
+      }
+      setFinished(null);
+      return;
+    }
+    if (before === 0) return;
+    setFinished(scanErrorRef.current ?? { errors: false });
     finishedTimer.current = window.setTimeout(() => {
       setFinished(null);
+      setScanError(null);
       finishedTimer.current = null;
     }, FINISHED_MS);
-  }, [busyIds, queryClient, scanErrors]);
+  }, [summary.count]);
   useEffect(() => () => {
     if (finishedTimer.current != null) window.clearTimeout(finishedTimer.current);
   }, []);
 
-  // Stack builds have no per-database finish here: their panels refresh
-  // themselves. A finished build still earns the "Done" note.
-  const stackCount = stacks.length;
-  const previousStacks = useRef(stackCount);
-  useEffect(() => {
-    const before = previousStacks.current;
-    previousStacks.current = stackCount;
-    if (before > 0 && stackCount === 0 && !busyIds) {
-      if (finishedTimer.current != null) window.clearTimeout(finishedTimer.current);
-      setFinished((current) => current ?? { errors: false });
-      finishedTimer.current = window.setTimeout(() => {
-        setFinished(null);
-        finishedTimer.current = null;
-      }, FINISHED_MS);
-    }
-  }, [stackCount, busyIds]);
-
-  return { items, summary, finished: summary.count > 0 ? null : finished };
+  return { items, summary, finished, scanError };
 }

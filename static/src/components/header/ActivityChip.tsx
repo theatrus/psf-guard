@@ -62,7 +62,7 @@ function ActivityRow({ item }: { item: ActivityItem }) {
  * refresh, quality scan and stack build, running or queued, on any database.
  */
 export default function ActivityChip() {
-  const { items, summary, finished } = useHeaderActivity();
+  const { items, summary, finished, scanError } = useHeaderActivity();
   const [pinned, setPinned] = useState(false);
   const [hovered, setHovered] = useState(false);
   const closeTimer = useRef<number | null>(null);
@@ -74,7 +74,8 @@ export default function ActivityChip() {
     if (closeTimer.current != null) window.clearTimeout(closeTimer.current);
   }, []);
 
-  // A pinned list closes on a click elsewhere or Escape.
+  // A pinned list closes on a click elsewhere. Escape is handled on the
+  // chip itself, so it never takes the key from the view underneath.
   useEffect(() => {
     if (!open) return;
     const onPointer = (event: PointerEvent) => {
@@ -83,18 +84,8 @@ export default function ActivityChip() {
         setHovered(false);
       }
     };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setPinned(false);
-        setHovered(false);
-      }
-    };
     document.addEventListener('pointerdown', onPointer);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('pointerdown', onPointer);
-      document.removeEventListener('keydown', onKey);
-    };
+    return () => document.removeEventListener('pointerdown', onPointer);
   }, [open]);
 
   // Nothing left to show: forget the pin, so the next job starts closed.
@@ -105,11 +96,22 @@ export default function ActivityChip() {
     }
   }, [summary.count]);
 
-  if (summary.count === 0 && !finished) return null;
+  // Always mounted, so a screen reader hears when work ends or fails.
+  const announcement = finished
+    ? finished.errors
+      ? `Background jobs finished with errors. ${finished.message ?? ''}`
+      : 'Background jobs finished.'
+    : scanError?.message
+      ? `A quality scan finished with errors. ${scanError.message}`
+      : '';
+  const live = <span className="activity-live" aria-live="polite">{announcement}</span>;
+
+  if (summary.count === 0 && !finished) return live;
 
   if (summary.count === 0 && finished) {
     return (
-      <div className="activity-chip-slot" aria-live="polite">
+      <div className="activity-chip-slot">
+        {live}
         <span
           className={`header-button utility-button activity-chip is-finished${finished.errors ? ' has-errors' : ''}`}
           title={finished.message}
@@ -128,6 +130,7 @@ export default function ActivityChip() {
     percent != null ? `${percent}% done` : 'Working',
     `${running} running`,
     summary.queued > 0 ? `${summary.queued} queued` : '',
+    scanError ? 'a quality scan had errors' : '',
   ].filter(Boolean).join(', ');
 
   const hover = (inside: boolean) => {
@@ -145,12 +148,20 @@ export default function ActivityChip() {
       className="activity-chip-slot"
       onPointerEnter={(event) => event.pointerType === 'mouse' && hover(true)}
       onPointerLeave={(event) => event.pointerType === 'mouse' && hover(false)}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && open) {
+          event.stopPropagation();
+          setPinned(false);
+          setHovered(false);
+        }
+      }}
     >
+      {live}
       <button
         type="button"
-        className="header-button utility-button activity-chip"
+        className={`header-button utility-button activity-chip${scanError ? ' has-errors' : ''}`}
         aria-expanded={open}
-        aria-controls={listId}
+        aria-controls={open ? listId : undefined}
         aria-label={`Background jobs: ${label}`}
         // The first click keeps the list open after the pointer leaves; the
         // second closes it.
@@ -167,6 +178,7 @@ export default function ActivityChip() {
           if (!wrapper.current?.contains(event.relatedTarget as Node)) hover(false);
         }}
       >
+        {scanError && <span className="activity-chip-mark" aria-hidden="true" title={scanError.message}>!</span>}
         <ProgressRing percent={summary.percent} />
         {percent != null && <span className="activity-chip-percent">{percent}%</span>}
         <span className="activity-chip-count">{jobs}</span>
@@ -179,6 +191,11 @@ export default function ActivityChip() {
               {running} running{summary.queued > 0 ? ` · ${summary.queued} queued` : ''}
             </span>
           </div>
+          {scanError && (
+            <p className="activity-error" role="note">
+              A quality scan finished with errors. {scanError.message}
+            </p>
+          )}
           <ul className="activity-list">
             {items.map((item) => <ActivityRow key={item.key} item={item} />)}
           </ul>

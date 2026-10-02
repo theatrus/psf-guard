@@ -259,7 +259,7 @@ A build belongs to the server, not to the page that started it. The header's
 background jobs chip counts it for as long as any mono or color build is
 queued or running, in every view and in every database. The chip shows only
 the overall progress and the number of jobs. Hover, focus or click it to open
-the queue: each build names its target and channel and its frame counts, and
+the queue: each build names its target and channel and how far it has got, and
 waiting builds say `queued`. Catalog refreshes and quality scans share the
 same chip. Reopening the project grid re-attaches the stack panels to the
 running job, so leaving the page and coming back restores the live per-card

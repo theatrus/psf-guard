@@ -62,7 +62,9 @@ describe('ActivityChip', () => {
     const view = renderChip();
     // Give every status query a chance to answer.
     await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
-    expect(view.container).toBeEmptyDOMElement();
+    // Only the empty live region stays, for announcements.
+    expect(view.container.querySelector('.activity-chip')).toBeNull();
+    expect(view.container).toHaveTextContent('');
   });
 
   it('shows the overall progress and job count, and the queue on hover', async () => {
@@ -123,8 +125,70 @@ describe('ActivityChip', () => {
     const done = await screen.findByText('Finished with errors', {}, { timeout: 3000 });
     expect(done.closest('.activity-chip')).toHaveAttribute(
       'title',
-      expect.stringContaining('2 frames failed: no stars found')
+      expect.stringContaining('Askar: 2 frames failed — no stars found')
     );
     await waitFor(() => expect(screen.queryByText('Finished with errors')).toBeNull(), { timeout: 4000 });
+  });
+
+  it("does not report an old scan's errors when other work finishes", async () => {
+    let building = true;
+    // The server keeps the last scan's counts until the next scan starts.
+    mockServer({
+      scan: () => scanProgress(false, 10, 3),
+      stacks: () => (building ? [stack('R', 'running', 1, 3)] : []),
+    });
+    renderChip();
+    await screen.findByRole('button', { name: /Background jobs/ });
+    building = false;
+    expect(await screen.findByText('Done', {}, { timeout: 7000 })).toBeInTheDocument();
+    expect(screen.queryByText('Finished with errors')).toBeNull();
+  }, 10_000);
+
+  it('holds scan errors on the busy chip until the rest of the queue ends', async () => {
+    let scanning = true;
+    let building = true;
+    mockServer({
+      scan: () => (scanning ? scanProgress(true, 9) : scanProgress(false, 10, 2)),
+      stacks: () => (building ? [stack('R', 'running', 1, 3)] : []),
+    });
+    renderChip();
+    const chip = await screen.findByRole('button', { name: /Background jobs/ });
+    await waitFor(() => expect(chip).toHaveTextContent('2 jobs'));
+    scanning = false;
+    await waitFor(() => expect(chip).toHaveAccessibleName(/a quality scan had errors/), { timeout: 3000 });
+    expect(chip).toHaveTextContent('1 job');
+    await userEvent.hover(chip);
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+    expect(within(list).getByRole('note')).toHaveTextContent('Askar: 2 frames failed — no stars found');
+    // A screen reader hears it too.
+    expect(document.querySelector('.activity-live')).toHaveTextContent('A quality scan finished with errors');
+
+    await userEvent.unhover(chip);
+    building = false;
+    expect(await screen.findByText('Finished with errors', {}, { timeout: 7000 })).toBeInTheDocument();
+  }, 12_000);
+
+  it('leaves Escape to the view unless the chip has focus', async () => {
+    mockServer({ stacks: () => [stack('R', 'running', 1, 4)] });
+    renderChip();
+    const chip = await screen.findByRole('button', { name: /Background jobs/ });
+    const heard: string[] = [];
+    const listen = (event: KeyboardEvent) => heard.push(event.key);
+    document.addEventListener('keydown', listen);
+    try {
+      await userEvent.hover(chip);
+      await screen.findByRole('region', { name: 'Background jobs' });
+      (document.activeElement as HTMLElement | null)?.blur();
+      await userEvent.keyboard('{Escape}');
+      expect(heard).toEqual(['Escape']);
+      expect(screen.getByRole('region', { name: 'Background jobs' })).toBeInTheDocument();
+
+      chip.focus();
+      await userEvent.keyboard('{Escape}');
+      expect(heard).toEqual(['Escape']);
+      expect(screen.queryByRole('region', { name: 'Background jobs' })).toBeNull();
+    } finally {
+      document.removeEventListener('keydown', listen);
+    }
   });
 });

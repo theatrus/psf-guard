@@ -151,6 +151,33 @@
   font-weight: 700;
 }
 
+.activity-chip.has-errors:not(.is-finished) .activity-chip-mark {
+  color: var(--color-warning);
+}
+
+.activity-error {
+  margin: 0 0 0.45rem;
+  padding: 0.4rem 0.55rem;
+  border-left: 3px solid var(--color-warning);
+  border-radius: 4px;
+  background: var(--color-warning-alpha-20);
+  font-size: 0.78rem;
+  color: var(--color-text-primary);
+}
+
+/* Heard, not seen. */
+.activity-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .activity-ring {
   flex: 0 0 auto;
   transform: rotate(-90deg);
@@ -364,11 +391,15 @@
     gap: 0.3rem;
   }
 
-  /* The chip sits near the right edge, so the queue spans the screen
-     under the header's first row instead of hanging off to the left. */
+  /* The chip sits near the right edge, so the queue spans the header's
+     width under its first row instead of hanging off to the left. Placed
+     against the header, it scrolls away with it. */
+  .activity-chip-slot {
+    position: static;
+  }
+
   .activity-popover {
-    position: fixed;
-    top: 52px;
+    top: 3rem;
     left: 16px;
     right: 16px;
     width: auto;
