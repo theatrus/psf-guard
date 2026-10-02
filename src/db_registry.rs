@@ -550,6 +550,10 @@ pub struct StackAutomationSettings {
     /// means only the channels already stacked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_new_channels: Option<bool>,
+    /// How far back a new channel's frames may reach, in days; 0 takes any
+    /// age. Absent uses the default week.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_channel_window_days: Option<u32>,
 }
 
 impl StackAutomationSettings {
@@ -566,6 +570,9 @@ impl StackAutomationSettings {
             build_new_channels: self
                 .build_new_channels
                 .unwrap_or(defaults.build_new_channels),
+            new_channel_window_days: self
+                .new_channel_window_days
+                .unwrap_or(defaults.new_channel_window_days),
         }
     }
 }

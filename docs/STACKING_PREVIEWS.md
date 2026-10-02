@@ -592,13 +592,18 @@ so after either one only the channels whose frames or grades changed stack
 again; the rest are cache hits.
 
 **Also stack channels that have no stack yet** goes further: a channel with
-two or more frames that are not rejected, one of them captured in the last
-seven days, is stacked on the next refresh too, with the settings of the
+two or more usable frames, one of them captured recently enough, is stacked
+on the next refresh too, with the settings of the
 project's other cards (for a project with none: every frame that is not
 rejected, capture order, and the default scoring, since your scoring
 preferences live in the browser),
-so frames that arrive are stacked before anyone opens the project. Older
-channels are left alone, so turning it on does not stack a whole catalog. A
+so frames that arrive are stacked before anyone opens the project. **A new
+channel needs a frame from the last (days)** sets how recent (a week by
+default); older channels are left alone, so turning it on does not stack a
+whole catalog. **Also stack old channels, of any age** drops the cutoff: the
+next refresh then stacks every channel without a stack in every database,
+which on a large catalog keeps the stacker busy for a long while, as
+background work that yields to anything you start. A
 first stack this way gets no first color preview; once one is composed, it
 follows its channels.
 

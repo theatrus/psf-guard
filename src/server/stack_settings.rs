@@ -6,6 +6,9 @@ use crate::db_registry::{DbRegistry, StackAutomationSettings};
 use crate::server::api::ApiResponse;
 use crate::server::handlers::{require_registry_path, AppError};
 use crate::server::stack_preview::automatic::{self, AutomationPolicy, MAX_DELAY_MINUTES};
+
+/// Ten years: past that, choose any age.
+const MAX_NEW_CHANNEL_WINDOW_DAYS: u32 = 3650;
 use crate::server::stack_preview::{method, StackMethod};
 use crate::server::state::AppState;
 use axum::{extract::State, Json};
@@ -27,7 +30,9 @@ pub struct StackSettingsResponse {
     /// Automatic refreshes also stack channels with no stack yet, once one
     /// of their frames is recent.
     pub build_new_channels: bool,
-    pub new_channel_window_days: i64,
+    /// Days back a new channel's frames may reach; 0 takes any age.
+    pub new_channel_window_days: u32,
+    pub default_new_channel_window_days: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -41,6 +46,9 @@ pub struct UpdateStackSettingsRequest {
     /// Omitted keeps the current choice.
     #[serde(default)]
     pub build_new_channels: Option<bool>,
+    /// Omitted keeps the current window; 0 takes any age.
+    #[serde(default)]
+    pub new_channel_window_days: Option<u32>,
 }
 
 fn response(policy: AutomationPolicy) -> StackSettingsResponse {
@@ -53,7 +61,8 @@ fn response(policy: AutomationPolicy) -> StackSettingsResponse {
         default_grade_delay_minutes: defaults.grade_delay_minutes,
         max_delay_minutes: MAX_DELAY_MINUTES,
         build_new_channels: policy.build_new_channels,
-        new_channel_window_days: automatic::NEW_CHANNEL_WINDOW_DAYS,
+        new_channel_window_days: policy.new_channel_window_days,
+        default_new_channel_window_days: automatic::DEFAULT_NEW_CHANNEL_WINDOW_DAYS,
     }
 }
 
@@ -93,7 +102,15 @@ fn requested_policy(
         build_new_channels: request
             .build_new_channels
             .unwrap_or(current.build_new_channels),
+        new_channel_window_days: request
+            .new_channel_window_days
+            .unwrap_or(current.new_channel_window_days),
     };
+    if policy.new_channel_window_days > MAX_NEW_CHANNEL_WINDOW_DAYS {
+        return Err(AppError::BadRequest(format!(
+            "the new-channel window must be at most {MAX_NEW_CHANNEL_WINDOW_DAYS} days, or 0 for any age"
+        )));
+    }
     for (label, minutes) in [
         ("arrival", policy.arrival_delay_minutes),
         ("grade", policy.grade_delay_minutes),
@@ -119,6 +136,9 @@ fn stored(policy: AutomationPolicy, method: StackMethod) -> Option<StackAutomati
             .then_some(policy.grade_delay_minutes),
         method: (method != StackMethod::default()).then_some(method),
         build_new_channels: policy.build_new_channels.then_some(true),
+        new_channel_window_days: (policy.new_channel_window_days
+            != defaults.new_channel_window_days)
+            .then_some(policy.new_channel_window_days),
     })
 }
 
@@ -309,6 +329,7 @@ mod tests {
             arrival_delay_minutes: 5,
             grade_delay_minutes: 30,
             build_new_channels: false,
+            new_channel_window_days: 7,
         };
         let entry = stored(chosen, StackMethod::default()).expect("a chosen policy is stored");
         assert_eq!(entry.method, None, "the recommended method is not written");
@@ -329,6 +350,7 @@ mod tests {
             grade_delay_minutes: None,
             method: None,
             build_new_channels: None,
+            new_channel_window_days: None,
         };
         let policy = requested_policy(
             &UpdateStackSettingsRequest {
@@ -336,6 +358,7 @@ mod tests {
                 arrival_delay_minutes: None,
                 grade_delay_minutes: Some(45),
                 build_new_channels: None,
+                new_channel_window_days: None,
             },
             Some(&current),
         )
@@ -349,6 +372,7 @@ mod tests {
                 arrival_delay_minutes: Some(0),
                 grade_delay_minutes: None,
                 build_new_channels: None,
+                new_channel_window_days: None,
             },
             None,
         )
@@ -359,6 +383,7 @@ mod tests {
                 arrival_delay_minutes: None,
                 grade_delay_minutes: Some(MAX_DELAY_MINUTES + 1),
                 build_new_channels: None,
+                new_channel_window_days: None,
             },
             None,
         )
