@@ -9,7 +9,7 @@
 use std::{
     collections::VecDeque,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Mutex,
     },
 };
@@ -48,6 +48,10 @@ pub struct QueuedRunSummary {
 pub struct WbppQueue {
     entries: Mutex<VecDeque<QueuedRun>>,
     next_id: AtomicU64,
+    /// PixInsight's one slot, server-wide. Claimed in one step before a run
+    /// starts and released when it ends, so two starts that arrive together,
+    /// or a start racing the line, cannot both launch PixInsight.
+    slot: AtomicBool,
 }
 
 impl WbppQueue {
@@ -76,6 +80,24 @@ impl WbppQueue {
     /// The next run to start, removed from the line.
     pub fn pop_front(&self) -> Option<QueuedRun> {
         self.entries.lock().unwrap().pop_front()
+    }
+
+    /// Put a run that could not start yet back at the head of the line,
+    /// with its id and place unchanged.
+    pub fn push_front(&self, run: QueuedRun) {
+        self.entries.lock().unwrap().push_front(run);
+    }
+
+    /// Claim PixInsight's slot. False when a run already holds it.
+    pub fn try_claim(&self) -> bool {
+        self.slot
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Give the slot back: the run ended, or a claimed start did not launch.
+    pub fn release(&self) {
+        self.slot.store(false, Ordering::Release);
     }
 
     /// Take one database's queued run out of the line.
@@ -227,5 +249,26 @@ mod tests {
         assert!(!queue.move_to("q99", 0));
         assert_eq!(queue.all()[0].0, "a");
         assert_eq!(queue.all()[0].1.position, 1);
+    }
+
+    #[test]
+    fn the_slot_is_claimed_once_and_a_run_goes_back_to_the_head() {
+        let queue = WbppQueue::default();
+        assert!(queue.try_claim());
+        assert!(!queue.try_claim(), "a second start waits");
+        queue.release();
+        assert!(queue.try_claim());
+
+        let (first, _) = queue.push("a", "project 1".into(), request(1), 1);
+        let (second, _) = queue.push("a", "project 2".into(), request(2), 2);
+        let popped = queue.pop_front().unwrap();
+        assert_eq!(popped.id, first);
+        queue.push_front(popped);
+        let order = queue
+            .all()
+            .into_iter()
+            .map(|(_, run)| run.id)
+            .collect::<Vec<_>>();
+        assert_eq!(order, vec![first, second]);
     }
 }

@@ -641,8 +641,10 @@ pub async fn start_wbpp_run(
     }
 
     // One PixInsight at a time, server-wide: a start while any run is under
-    // way joins the line and starts on its own when that run ends.
-    if any_run_active(&state) {
+    // way joins the line and starts on its own when that run ends. The slot
+    // is claimed in one step, before anything awaits.
+    let claimed = !any_run_active(&state) && state.wbpp_queue.try_claim();
+    if !claimed {
         if let Some(existing) = state.wbpp_queue.find_same(&ctx.id, &req) {
             return Ok(Json(ApiResponse::success(status(
                 &state,
@@ -668,7 +670,14 @@ pub async fn start_wbpp_run(
         ))));
     }
 
-    let started = launch(Arc::clone(&state), ctx.0.clone(), req).await?;
+    let launched = launch(Arc::clone(&state), ctx.0.clone(), req).await;
+    if !matches!(launched, Ok(true)) {
+        // Nothing started, so the slot goes back, and a run that queued
+        // while this start held it gets its turn.
+        state.wbpp_queue.release();
+        tokio::spawn(drain_queue(Arc::clone(&state)));
+    }
+    let started = launched?;
     Ok(Json(ApiResponse::success(status(
         &state, &ctx, started, None,
     ))))
@@ -800,6 +809,7 @@ async fn launch(
             }
         }
         // PixInsight is free: the next run in line takes it.
+        job_state.wbpp_queue.release();
         tokio::spawn(drain_queue(job_state));
     });
 
@@ -808,32 +818,49 @@ async fn launch(
 
 /// Start the next queued run, skipping past any that cannot start (its
 /// database gone, PixInsight missing) and recording why on that database.
-/// Boxed because a run's end schedules this again.
+/// The slot is claimed before a run leaves the line and given back on every
+/// path that does not start one. Boxed because a run's end schedules this
+/// again.
 fn drain_queue(state: Arc<AppState>) -> Pin<Box<dyn Future<Output = ()> + Send>> {
     Box::pin(async move {
-        while let Some(next) = state.wbpp_queue.pop_front() {
+        loop {
+            if state.wbpp_queue.is_empty() {
+                return;
+            }
+            // Another run holds PixInsight; its end drains again.
+            if any_run_active(&state) || !state.wbpp_queue.try_claim() {
+                return;
+            }
+            let Some(next) = state.wbpp_queue.pop_front() else {
+                state.wbpp_queue.release();
+                return;
+            };
             let Some(ctx) = state.get_database(&next.db_id) else {
                 tracing::info!(
                     "🔭 Queued WBPP run {} dropped: database {} is gone",
                     next.scope,
                     next.db_id
                 );
+                state.wbpp_queue.release();
                 continue;
             };
             let scope = next.scope.clone();
             let project_id = next.project_id;
-            match launch(Arc::clone(&state), ctx.clone(), next.request).await {
+            match launch(Arc::clone(&state), ctx.clone(), next.request.clone()).await {
                 Ok(true) => {
                     tracing::info!("🔭 Queued WBPP run for db={} ({scope}) started", ctx.id);
                     return;
                 }
                 Ok(false) => {
-                    // Someone started a run on this database by hand in the
-                    // meantime; that run's end will drain again.
+                    // The database already has a run under way. This one
+                    // keeps its place at the head of the line, and that
+                    // run's end drains again.
                     tracing::info!(
                         "🔭 Queued WBPP run for db={} ({scope}) waits: the database is busy",
                         ctx.id
                     );
+                    state.wbpp_queue.push_front(next);
+                    state.wbpp_queue.release();
                     return;
                 }
                 Err(error) => {
@@ -852,6 +879,7 @@ fn drain_queue(state: Arc<AppState>) -> Pin<Box<dyn Future<Output = ()> + Send>>
                         ctx.id
                     );
                     record_failed_launch(&ctx.wbpp_run, scope, project_id, message);
+                    state.wbpp_queue.release();
                 }
             }
         }
@@ -1384,6 +1412,34 @@ mod tests {
             scope_label: Some(label.into()),
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn a_start_racing_a_claimed_slot_queues_and_the_line_keeps_it() {
+        let (state, ctx) = state_with_management();
+        // A run has claimed PixInsight but has not marked its database yet:
+        // the window two starts used to slip through together.
+        assert!(state.wbpp_queue.try_claim());
+        let queued = start_wbpp_run(
+            State(Arc::clone(&state)),
+            DbContext(ctx.0.clone()),
+            Json(request(3, "IC 447")),
+        )
+        .await
+        .unwrap()
+        .0
+        .data
+        .unwrap();
+        assert!(!queued.started);
+        assert!(queued.queue_id.is_some(), "it waits rather than launching");
+
+        // While the slot is held, a drain leaves the line as it is.
+        drain_queue(Arc::clone(&state)).await;
+        assert_eq!(state.wbpp_queue.len(), 1);
+        assert!(
+            !state.wbpp_queue.try_claim(),
+            "the drain did not take or drop the slot"
+        );
     }
 
     #[tokio::test]
