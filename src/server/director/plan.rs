@@ -20,6 +20,7 @@ pub(super) struct Template {
     pub(super) bin: Option<i32>,
     pub(super) readout_mode: Option<i32>,
     pub(super) default_exposure: f64,
+    pub(super) moon: psf_guard_director_core::moon::MoonPolicy,
     pub(super) bandpass: Bandpass,
 }
 
@@ -136,9 +137,68 @@ pub(super) fn read_templates(connection: &Connection) -> Result<Vec<Template>, E
             bin: bin.filter(|value| *value > 0),
             readout_mode: readout_mode.filter(|value| *value >= 0),
             default_exposure: exposure.filter(|value| *value > 0.0).unwrap_or(60.0),
+            moon: read_moon_policy(connection, id).map_err(StoreError::from)?,
         });
     }
     Ok(templates)
+}
+
+pub(super) fn read_moon_policy(
+    connection: &Connection,
+    id: i64,
+) -> rusqlite::Result<psf_guard_director_core::moon::MoonPolicy> {
+    let columns = connection
+        .prepare("PRAGMA table_info(exposuretemplate)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let values = [
+        ("moonavoidanceenabled", "0"),
+        ("moonavoidanceseparation", "60"),
+        ("moonavoidancewidth", "7"),
+        ("moonrelaxscale", "0"),
+        ("moonrelaxminaltitude", "-15"),
+        ("moonrelaxmaxaltitude", "5"),
+        ("moondownenabled", "0"),
+    ]
+    .map(|(name, default)| {
+        if columns
+            .iter()
+            .any(|column| column.eq_ignore_ascii_case(name))
+        {
+            format!("COALESCE({name}, {default})")
+        } else {
+            default.to_owned()
+        }
+    });
+    let policy = connection.query_row(
+        &format!(
+            "SELECT {} FROM exposuretemplate WHERE Id=?1",
+            values.join(",")
+        ),
+        [id],
+        |row| {
+            Ok(psf_guard_director_core::moon::MoonPolicy {
+                enabled: row.get::<_, i64>(0)? != 0,
+                separation_degrees: row.get(1)?,
+                width_days: row.get(2)?,
+                relax_degrees_per_degree: row.get(3)?,
+                relax_min_altitude_degrees: row.get(4)?,
+                relax_max_altitude_degrees: row.get(5)?,
+                moon_down: row.get::<_, i64>(6)? != 0,
+            })
+        },
+    )?;
+    policy.validate().map_err(|_| {
+        rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Real,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid exposure template Moon avoidance settings",
+            )),
+        )
+    })?;
+    Ok(policy)
 }
 
 #[derive(Serialize)]

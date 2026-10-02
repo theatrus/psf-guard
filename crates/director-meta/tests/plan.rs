@@ -29,6 +29,7 @@ fn plan(project: Uuid, rig: Uuid) -> PlanDraft {
                 offset: Some(30),
                 bin: Some(1),
                 readout_mode: None,
+                moon: None,
             },
             exposure_seconds: 300.0,
             panel_ids: vec![],

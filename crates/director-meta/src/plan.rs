@@ -45,6 +45,8 @@ pub struct TemplateChoice {
     pub bin: Option<i32>,
     #[serde(deserialize_with = "Option::deserialize")]
     pub readout_mode: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moon: Option<psf_guard_director_core::moon::MoonPolicy>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -155,6 +157,10 @@ pub(crate) fn validate_plan(plan: &PlanDraft) -> Result<(), Error> {
             || template.filter_name.is_empty()
             || template.template_id.is_some_and(|id| id <= 0)
             || template.bin.is_some_and(|bin| bin <= 0)
+            || template
+                .moon
+                .as_ref()
+                .is_some_and(|policy| policy.validate().is_err())
         {
             return Err(Error::InvalidInput);
         }

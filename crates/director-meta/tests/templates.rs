@@ -18,8 +18,29 @@ fn template(name: &str, filter: &str) -> ExposureTemplate {
         bin: Some(1),
         readout_mode: None,
         default_exposure_seconds: 300.0,
+        moon: None,
         updated_at_ms: 1,
     }
+}
+
+#[test]
+fn moon_settings_survive_storage_and_invalid_updates_do_not_replace_them() {
+    let path = scratch();
+    let mut store = MetaStore::create(&path).unwrap();
+    let mut value = template("OIII", "OIII");
+    value.moon = Some(psf_guard_director_core::moon::MoonPolicy {
+        enabled: true,
+        separation_degrees: 90.0,
+        ..Default::default()
+    });
+    let stored = store.save_template(&value, 0).unwrap();
+    assert_eq!(store.template(value.id).unwrap().unwrap().moon, value.moon);
+    value.moon.as_mut().unwrap().width_days = 0.0;
+    assert!(matches!(
+        store.save_template(&value, stored.revision),
+        Err(Error::InvalidInput)
+    ));
+    assert_eq!(store.template(value.id).unwrap().unwrap(), stored);
 }
 
 #[test]

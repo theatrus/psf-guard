@@ -1343,10 +1343,12 @@ including stable GUIDs, schema variation, grade values, and RA unit conversion.
 
 Required phase-2 work. Moon avoidance belongs in the existing exposure
 template/recipe settings and must participate in local smart-filter selection.
-The current scheduler view reads TS template Moon fields and the night preview
-shows lunar geometry, but Director's executable `Recipe` does not carry or
-enforce this policy yet. A Moon chart or retained source field is not proof of
-acquisition enforcement.
+The first implementation carries explicit template policies into immutable
+recipes and enforces conservative lunar windows in the shared geometry engine.
+It includes TS import/activation, template editing, executor capability gates
+and a lunar-only wait reason. See [current behavior](../DIRECTOR.md#exposure-moon-rules).
+This does not complete the inheritance, configurable preference weights or
+detailed diagnostics below. A Moon chart alone is not acquisition enforcement.
 
 Add a **Moon avoidance** group alongside filter, exposure and gain. Support
 inherit, explicit off, and a custom policy, displaying the effective values and
@@ -3309,6 +3311,17 @@ separate workflow; these mappings alone do not resolve them.
   to exposure template/recipe settings, preserve TS rules and enforce them in
   shared-core selection and native dispatch. Gate on offline and mixed-filter
   parity tests, including waits when every recipe is Moon-blocked.
+  Explicit template policy, TS mapping, local lunar windows, capability gates
+  and parked waits are the first increment. Inheritance, weighted preferences,
+  detailed reasons and full phase-2 acceptance remain open.
+- [x] Deliver the explicit-template Moon increment end to end: library editor,
+  TS import/activation, immutable recipes, shared local lunar windows, v2
+  capability gates and parked waits. Verified with NINA 3.3.0.1064 / OmniSim:
+  priority-100 blocked recipe skipped, three eligible captures across two
+  targets during server outage, parked native wait, reconnect delivery and
+  replay refusal. Connected automatic intake/release also passed with enabled
+  lunar rules. Inheritance, detailed diagnostics and deterministic Moon-rise
+  during slow native setup remain part of the unchecked full acceptance above.
 - [ ] Implement versioned allocation, acknowledgements, checkpoints, and limits.
 - [ ] Renew or replace workloads through reconciled successor grants at safe
   boundaries. Carry forward pending/accepted/rejected credit, spent attempts,

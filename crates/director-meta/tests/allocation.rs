@@ -166,6 +166,40 @@ fn automatic_work_retries_seals_and_preserves_spent_authority() {
 }
 
 #[test]
+fn old_engine_terminal_receipts_are_accepted_only_for_non_lunar_programs() {
+    for lunar in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("meta.sqlite");
+        let (mut store, mut a) = fixture(&path);
+        if lunar {
+            a.snapshot["program"]["recipes"][0]["moon"] =
+                serde_json::to_value(psf_guard_director_core::moon::MoonPolicy {
+                    enabled: true,
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        let policy = commission(&mut store, &path, &mut a);
+        store.admit_workload(&a, policy.revision).unwrap();
+        let ledger = Uuid::new_v4();
+        store
+            .start_allocation(a.rig_id, a.allocation_id, a.client_id, ledger, 1002)
+            .unwrap();
+        let mut rows = receipts(&a, ledger, "saved");
+        for row in &mut rows {
+            row.payload["engine_version"] = json!("0.2.0");
+        }
+        store.store_receipts(&rows, 1100).unwrap();
+        assert_eq!(
+            store
+                .release_workload(a.rig_id, a.client_id, a.allocation_id, ledger, 2)
+                .is_ok(),
+            !lunar
+        );
+    }
+}
+
+#[test]
 fn uncertain_receipts_and_changed_commissioning_cannot_authorize_successors() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("meta.sqlite");

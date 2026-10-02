@@ -124,6 +124,7 @@ pub(super) async fn activated() -> Activated {
                             offset: Some(30),
                             bin: Some(1),
                             readout_mode: None,
+                            moon: None,
                         },
                         exposure_seconds: 300.0,
                         panel_ids: vec![],
@@ -739,6 +740,14 @@ async fn a_library_template_is_written_into_the_rig_database_under_its_own_guid(
             template_guid: Some(library),
             template_id: None,
             name: "Ha 600 library".into(),
+            moon: Some(psf_guard_director_core::moon::MoonPolicy {
+                enabled: true,
+                separation_degrees: 80.0,
+                width_days: 9.0,
+                relax_degrees_per_degree: 2.0,
+                moon_down: true,
+                ..Default::default()
+            }),
             filter_name: "Ha".into(),
             gain: Some(200),
             offset: Some(50),
@@ -750,7 +759,19 @@ async fn a_library_template_is_written_into_the_rig_database_under_its_own_guid(
         store.save_plan_draft(&plan, revision).unwrap();
     }
     let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
-    for _ in 0..2 {
+    for iteration in 0..4 {
+        if iteration == 2 {
+            let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+            let mut plan = store.plan_draft(a.project).unwrap().unwrap();
+            plan.contributions[0]
+                .template
+                .moon
+                .as_mut()
+                .unwrap()
+                .separation_degrees = 90.0;
+            let revision = plan.revision;
+            store.save_plan_draft(&plan, revision).unwrap();
+        }
         let (status, preview) = call(
             &a.f.app,
             "POST",
@@ -775,11 +796,13 @@ async fn a_library_template_is_written_into_the_rig_database_under_its_own_guid(
         assert_eq!(status, StatusCode::OK, "{applied}");
         assert_eq!(
             count("SELECT count(*) FROM exposuretemplate"),
-            2,
-            "the rig's own template plus the library's, once"
+            if iteration < 2 { 2 } else { 3 },
+            "changed Moon settings clone a shared template once"
         );
         assert_eq!(count(&format!("SELECT count(*) FROM exposuretemplate WHERE guid='{library}' AND name='Ha 600 library' AND filtername='Ha' AND gain=200 AND offset=50 AND bin=2 AND profileId='profile-a'")), 1);
-        assert_eq!(count(&format!("SELECT count(*) FROM exposureplan WHERE exposure=600.0 AND exposureTemplateId=(SELECT Id FROM exposuretemplate WHERE guid='{library}')")), 2);
+        assert_eq!(count(&format!("SELECT count(*) FROM exposuretemplate WHERE guid='{library}' AND moonavoidanceenabled=1 AND moonavoidanceseparation=80 AND moonavoidancewidth=9 AND moonrelaxscale=2 AND moondownenabled=1")), 1);
+        let separation = if iteration < 2 { 80 } else { 90 };
+        assert_eq!(count(&format!("SELECT count(*) FROM exposureplan WHERE exposure=600.0 AND exposureTemplateId IN (SELECT Id FROM exposuretemplate WHERE moonavoidanceseparation={separation})")), 2);
     }
 }
 

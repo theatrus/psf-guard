@@ -237,6 +237,13 @@ impl Ledger {
     /// Bind the exact observing program at creation. Existing unbound ledgers
     /// cannot be upgraded into programs; their original evidence stays unbound.
     pub fn open_program(path: &Path, program: Program, state: State) -> Result<Self, Error> {
+        if program
+            .recipes
+            .iter()
+            .any(|r| r.moon.as_ref().is_some_and(|p| p.enabled))
+        {
+            return Err(Error::ConflictingEvidence);
+        }
         let bound = BoundProgram::new(program, &state).map_err(Error::Program)?;
         Self::open_internal(
             path,
@@ -349,7 +356,11 @@ impl Ledger {
             [],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )?;
-        if contract != CONTRACT_VERSION || engine != ENGINE_VERSION {
+        let legacy_compatible = engine == "0.2.0"
+            && program
+                .as_ref()
+                .is_none_or(|p| p.snapshot().recipes.iter().all(|r| r.moon.is_none()));
+        if contract != CONTRACT_VERSION || (engine != ENGINE_VERSION && !legacy_compatible) {
             return Err(Error::UnsupportedEngine);
         }
         if uuid::Uuid::parse_str(&ledger_id).is_err() {

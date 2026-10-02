@@ -25,6 +25,8 @@ pub struct ExposureTemplate {
     pub readout_mode: Option<i32>,
     /// The exposure a plan starts from when this template is chosen.
     pub default_exposure_seconds: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moon: Option<psf_guard_director_core::moon::MoonPolicy>,
     pub updated_at_ms: u64,
 }
 
@@ -56,6 +58,10 @@ pub(crate) fn validate_template(template: &ExposureTemplate) -> Result<(), Error
         || template.default_exposure_seconds <= 0.0
         || template.default_exposure_seconds > 86_400.0
         || template.updated_at_ms > MAX_TIME_MS
+        || template
+            .moon
+            .as_ref()
+            .is_some_and(|policy| policy.validate().is_err())
     {
         return Err(Error::InvalidInput);
     }

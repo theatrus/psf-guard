@@ -420,6 +420,7 @@ struct PlanRow {
     template_offset: Option<i32>,
     template_bin: Option<i32>,
     template_readout: Option<i32>,
+    template_moon: psf_guard_director_core::moon::MoonPolicy,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -602,6 +603,7 @@ fn build(
                 offset,
                 readout_mode,
                 dither_override: None,
+                moon: row.template_moon.enabled.then_some(row.template_moon),
             };
             match recipes_seen.get(&recipe_id) {
                 Some(existing) if *existing != recipe => {
@@ -713,7 +715,7 @@ fn read_plan_row(
 ) -> rusqlite::Result<Option<PlanRow>> {
     connection
         .query_row(
-            "SELECT ep.exposure, ep.desired, ep.accepted, COALESCE(ep.enabled,1), et.filtername, et.gain, et.offset, et.bin, et.readoutmode
+            "SELECT ep.exposure, ep.desired, ep.accepted, COALESCE(ep.enabled,1), et.filtername, et.gain, et.offset, et.bin, et.readoutmode, et.Id
              FROM exposureplan ep JOIN exposuretemplate et ON et.Id = ep.exposureTemplateId
              JOIN target t ON t.Id=ep.targetId JOIN project p ON p.Id=t.projectId
              WHERE ep.guid=?1 AND t.guid=?2 AND p.guid=?3 AND t.active=1 AND p.state=1",
@@ -729,6 +731,7 @@ fn read_plan_row(
                     template_offset: row.get::<_, Option<i32>>(6)?.filter(|v| *v >= 0),
                     template_bin: row.get(7)?,
                     template_readout: row.get::<_, Option<i32>>(8)?.filter(|v| *v >= 0),
+                    template_moon: super::plan::read_moon_policy(connection, row.get(9)?)?,
                 })
             },
         )

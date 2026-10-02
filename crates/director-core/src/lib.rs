@@ -10,6 +10,7 @@ pub mod dispatch;
 pub mod ephemeris;
 pub mod framing;
 pub mod geometry;
+pub mod moon;
 pub mod night;
 pub mod optics;
 pub mod preparation;

@@ -357,7 +357,9 @@ impl MetaStore {
                 || e.assignment_revision != program.assignment.revision
                 || e.configuration_id != program.configuration.id
                 || e.contract_version != psf_guard_director_core::CONTRACT_VERSION
-                || e.engine_version != psf_guard_director_core::ENGINE_VERSION
+                || (e.engine_version != psf_guard_director_core::ENGINE_VERSION
+                    && !(e.engine_version == "0.2.0"
+                        && program.recipes.iter().all(|r| r.moon.is_none())))
                 || e.attempt.reserved_at_ms < program.assignment.valid_from_ms
                 || e.attempt.reserved_at_ms >= program.assignment.expires_at_ms
                 || !program

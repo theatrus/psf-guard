@@ -60,6 +60,7 @@ fn program() -> Program {
             offset: Some(20),
             readout_mode: 2,
             dither_override: Some(0),
+            moon: None,
         }],
         bindings: vec![Binding {
             goal_id: "goal".into(),

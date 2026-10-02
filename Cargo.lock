@@ -4243,7 +4243,7 @@ dependencies = [
 
 [[package]]
 name = "psf-guard-director-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "serde",
@@ -4287,7 +4287,7 @@ dependencies = [
 
 [[package]]
 name = "psf-guard-director-runtime"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "psf-guard-director-core",
  "psf-guard-director-ledger",
