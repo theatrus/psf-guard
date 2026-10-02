@@ -394,7 +394,13 @@ pub struct StackGroupStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_pass: Option<FinalPassProgress>,
     /// The calibration master being built for this channel, while one is.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// A value this build cannot read, such as the older shape a stopped
+    /// build saved, reads as none rather than failing the whole manifest.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_master_progress"
+    )]
     pub calibration_progress: Option<crate::calibration::MasterBuildProgress>,
     pub error: Option<String>,
     #[serde(default)]
@@ -559,6 +565,16 @@ impl FinalPassProgress {
 /// eligible frames, so the share only steps forward when frames drop out.
 /// `Master flat L · reading frame 12/40`, or `Master dark · integrating
 /// frame 3/8`: the master, Seiza's stage, and the step under way.
+fn lenient_master_progress<'de, D>(
+    deserializer: D,
+) -> Result<Option<crate::calibration::MasterBuildProgress>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value(value).ok()))
+}
+
 fn master_progress_label(progress: &crate::calibration::MasterBuildProgress) -> String {
     use crate::calibration::CalibrationKind;
     let mut label = format!(
@@ -2859,6 +2875,10 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
             });
             let anchor = anchors.get(&group.index).copied().flatten();
             let result = run_group(state, &group_job, group.clone(), anchor);
+            state.stack_previews.update(&job_id, |job| {
+                // However the channel ended, it is no longer building masters.
+                job.groups[group.index].calibration_progress = None;
+            });
             state.stack_previews.update(&job_id, |job| match result {
                 Ok(GroupOutcome::Built) => {
                     job.groups[group.index].state = StackGroupState::Ready;
@@ -4779,6 +4799,19 @@ mod tests {
         );
         // A third build starts with three quarters of the share behind it.
         assert_eq!((entry.processed_units, entry.total_units), (7, 50));
+    }
+
+    #[test]
+    fn a_saved_channel_with_the_old_master_progress_still_loads() {
+        let mut value = serde_json::to_value(ready_group(42, "Ha", 1)).unwrap();
+        value["calibration_progress"] = serde_json::json!({
+            "kind": "dark", "frame": 3, "frames": 8, "pass": 2, "passes": 2, "build": 1
+        });
+        let group: StackGroupStatus = serde_json::from_value(value.clone()).unwrap();
+        assert!(group.calibration_progress.is_none());
+        value["calibration_progress"] = serde_json::Value::Null;
+        let group: StackGroupStatus = serde_json::from_value(value).unwrap();
+        assert!(group.calibration_progress.is_none());
     }
 
     #[test]
