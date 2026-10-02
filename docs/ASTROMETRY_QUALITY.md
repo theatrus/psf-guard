@@ -11,8 +11,8 @@ be matched to the sky.
 ## Run a quality scan
 
 Choose a catalog target in the **Images** or **Sequence Analysis** view and
-press **Analyze Quality**. The fixed header reports live progress even if you
-change views. The background job runs two stages, then refreshes the sequence
+press **Analyze Quality**. The header's background jobs chip reports live
+progress even if you change views. The background job runs two stages, then refreshes the sequence
 scores:
 
 1. spatial and photometric screening for clouds, occlusion, transparency, and
