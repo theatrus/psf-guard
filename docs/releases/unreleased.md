@@ -252,7 +252,8 @@
   restacked every channel. The header's queue lists a waiting refresh only
   when it expects to stack something, and names those channels. A new option,
   **Also stack channels that have no stack yet**, stacks channels as their
-  frames arrive, for channels with a frame from the last seven days.
+  frames arrive, for channels with a frame from the last week by default; the
+  window is set in days, or dropped to stack old channels of any age.
 
 - **Build stacks** queues one build per channel, so the header's queue lists
   each channel on its own; a channel already built as asked comes back at

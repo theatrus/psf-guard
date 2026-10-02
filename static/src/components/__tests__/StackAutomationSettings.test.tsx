@@ -15,7 +15,7 @@ function wrapper() {
   };
 }
 
-const current = (enabled: boolean, arrival = 5, grade = 15, buildNew = false) => ({
+const current = (enabled: boolean, arrival = 5, grade = 15, buildNew = false, windowDays = 7) => ({
   success: true,
   data: {
     automatic_previews: enabled,
@@ -25,7 +25,8 @@ const current = (enabled: boolean, arrival = 5, grade = 15, buildNew = false) =>
     default_grade_delay_minutes: 15,
     max_delay_minutes: 1440,
     build_new_channels: buildNew,
-    new_channel_window_days: 7,
+    new_channel_window_days: windowDays,
+    default_new_channel_window_days: 7,
   },
   error: null,
 });
@@ -63,6 +64,7 @@ describe('StackAutomationSettings', () => {
         arrival_delay_minutes: 5,
         grade_delay_minutes: 15,
         build_new_channels: false,
+        new_channel_window_days: 7,
       })
     );
     // The response is the new truth: the delays become editable.
@@ -91,6 +93,7 @@ describe('StackAutomationSettings', () => {
         arrival_delay_minutes: 5,
         grade_delay_minutes: 30,
         build_new_channels: false,
+        new_channel_window_days: 7,
       })
     );
     await waitFor(() => expect(grade).toHaveValue(30));
@@ -122,6 +125,7 @@ describe('StackAutomationSettings', () => {
         arrival_delay_minutes: 10,
         grade_delay_minutes: 15,
         build_new_channels: false,
+        new_channel_window_days: 7,
       })
     );
   });
@@ -138,7 +142,6 @@ describe('StackAutomationSettings', () => {
     render(<StackAutomationSettings />, { wrapper: wrapper() });
     const option = await screen.findByRole('checkbox', { name: /Also stack channels that have no stack yet/ });
     expect(option).toBeEnabled();
-    expect(screen.getByText(/captured in the last 7 days/)).toBeInTheDocument();
     fireEvent.click(option);
     await waitFor(() =>
       expect(saved).toEqual({
@@ -146,8 +149,42 @@ describe('StackAutomationSettings', () => {
         arrival_delay_minutes: 5,
         grade_delay_minutes: 15,
         build_new_channels: true,
+        new_channel_window_days: 7,
       })
     );
     await waitFor(() => expect(option).toBeChecked());
+  });
+
+  it('sets how far back a new channel may reach, or any age', async () => {
+    const saved: unknown[] = [];
+    let state = current(true, 5, 15, true, 7);
+    server.use(
+      http.get('/api/settings/stacking', () => HttpResponse.json(state)),
+      http.put('/api/settings/stacking', async ({ request }) => {
+        const body = (await request.json()) as { new_channel_window_days: number };
+        saved.push(body);
+        state = current(true, 5, 15, true, body.new_channel_window_days);
+        return HttpResponse.json(state);
+      })
+    );
+    render(<StackAutomationSettings />, { wrapper: wrapper() });
+    const days = await screen.findByLabelText("Days back a new channel's frames may reach");
+    expect(days).toHaveValue(7);
+    fireEvent.change(days, { target: { value: '30' } });
+    fireEvent.blur(days);
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0]).toMatchObject({ new_channel_window_days: 30 });
+
+    const anyAge = screen.getByRole('checkbox', { name: /Also stack old channels, of any age/ });
+    fireEvent.click(anyAge);
+    await waitFor(() => expect(saved).toHaveLength(2));
+    expect(saved[1]).toMatchObject({ new_channel_window_days: 0 });
+    await waitFor(() => expect(anyAge).toBeChecked());
+    // The days are set aside, not lost: unticking brings 30 back.
+    expect(days).toBeDisabled();
+    expect(days).toHaveValue(30);
+    fireEvent.click(anyAge);
+    await waitFor(() => expect(saved).toHaveLength(3));
+    expect(saved[2]).toMatchObject({ new_channel_window_days: 30 });
   });
 });

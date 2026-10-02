@@ -1471,8 +1471,9 @@ export interface StackAutomationSettings {
   max_delay_minutes: number;
   /** Refreshes also stack channels with no stack yet, once a frame is recent. */
   build_new_channels: boolean;
-  /** How recent, in days. */
+  /** How recent, in days; 0 takes channels of any age. */
   new_channel_window_days: number;
+  default_new_channel_window_days: number;
 }
 
 /** How hard WBPP works at local normalization: its own presets. */

@@ -20,10 +20,18 @@ export default function StackAutomationSettings() {
   // parser; each commits when its field is left.
   const [arrivalDraft, setArrivalDraft] = useState('');
   const [gradeDraft, setGradeDraft] = useState('');
+  // The new-channel window, in days; shown as the last finite one while any
+  // age is chosen, so unticking it brings that back.
+  const [windowDraft, setWindowDraft] = useState('');
   useEffect(() => {
     if (settings.data) {
       setArrivalDraft(String(settings.data.arrival_delay_minutes));
       setGradeDraft(String(settings.data.grade_delay_minutes));
+      setWindowDraft((previous) =>
+        settings.data.new_channel_window_days > 0
+          ? String(settings.data.new_channel_window_days)
+          : previous || String(settings.data.default_new_channel_window_days)
+      );
     }
   }, [settings.data]);
 
@@ -33,6 +41,7 @@ export default function StackAutomationSettings() {
       arrival_delay_minutes: number;
       grade_delay_minutes: number;
       build_new_channels: boolean;
+      new_channel_window_days: number;
     }) => apiClient.updateStackAutomationSettings(update),
     onSuccess: (updated) => {
       queryClient.setQueryData(['stack-automation-settings'], updated);
@@ -58,17 +67,38 @@ export default function StackAutomationSettings() {
   };
   const arrival = validMinutes(arrivalDraft);
   const grade = validMinutes(gradeDraft);
+  const anyAge = current.new_channel_window_days === 0;
+  const windowDays = (() => {
+    const days = windowDraft.trim() === '' ? NaN : Number(windowDraft);
+    return Number.isInteger(days) && days >= 1 && days <= 3650 ? days : null;
+  })();
 
   const persist = (
-    next: Partial<Pick<Settings, 'automatic_previews' | 'arrival_delay_minutes' | 'grade_delay_minutes' | 'build_new_channels'>>
+    next: Partial<
+      Pick<
+        Settings,
+        | 'automatic_previews'
+        | 'arrival_delay_minutes'
+        | 'grade_delay_minutes'
+        | 'build_new_channels'
+        | 'new_channel_window_days'
+      >
+    >
   ) =>
     save.mutate({
       automatic_previews: current.automatic_previews,
       arrival_delay_minutes: current.arrival_delay_minutes,
       grade_delay_minutes: current.grade_delay_minutes,
       build_new_channels: current.build_new_channels,
+      new_channel_window_days: current.new_channel_window_days,
       ...next,
     });
+  const commitWindow = () => {
+    if (windowDays === null) setWindowDraft(String(current.new_channel_window_days || current.default_new_channel_window_days));
+    else if (!anyAge && windowDays !== current.new_channel_window_days) {
+      persist({ new_channel_window_days: windowDays });
+    }
+  };
   // A delay commits when its field is left with a valid value that differs
   // from what the server holds; an invalid one snaps back.
   const commitArrival = () => {
@@ -169,10 +199,52 @@ export default function StackAutomationSettings() {
             Also stack channels that have no stack yet
             <small>
               Frames that arrive are stacked before you open the project: a
-              channel with two or more frames that are not rejected, one of
-              them captured in the last {current.new_channel_window_days} days,
-              is stacked with the project's settings. Older channels are left
-              alone, so turning this on does not stack a whole catalog.
+              channel with two or more usable frames, one of them recent
+              enough, is stacked with the project's settings.
+            </small>
+          </span>
+        </label>
+        <label className="review-preference">
+          <span>
+            A new channel needs a frame from the last (days)
+            <small>
+              Days back from today. Older channels are left alone, so turning
+              stacking on does not stack a whole catalog. Default{' '}
+              {current.default_new_channel_window_days}.
+            </small>
+          </span>
+          <input
+            type="number"
+            min={1}
+            max={3650}
+            step={1}
+            value={windowDraft}
+            aria-label="Days back a new channel's frames may reach"
+            aria-invalid={!anyAge && windowDays === null}
+            disabled={!current.automatic_previews || !current.build_new_channels || anyAge}
+            onChange={(event) => setWindowDraft(event.target.value)}
+            onBlur={commitWindow}
+            onKeyDown={commitOnEnter(commitWindow)}
+          />
+        </label>
+        <label className="review-preference">
+          <input
+            type="checkbox"
+            checked={anyAge}
+            disabled={!current.automatic_previews || !current.build_new_channels}
+            onChange={(event) =>
+              persist({
+                new_channel_window_days: event.target.checked ? 0 : windowDays ?? current.default_new_channel_window_days,
+              })
+            }
+          />
+          <span>
+            Also stack old channels, of any age
+            <small>
+              No cutoff: each database's next refresh stacks every channel
+              there that has none yet, which on a large catalog keeps the
+              stacker busy for a long while. Background work yields to
+              anything you start.
             </small>
           </span>
         </label>
