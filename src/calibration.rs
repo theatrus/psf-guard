@@ -54,7 +54,9 @@ pub const MASTER_CACHE_VERSION: u32 = 3;
 const MIN_MASTER_FRAMES: usize = 2;
 const MAX_MASTER_FRAMES: usize = 64;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum CalibrationKind {
     Bias,
@@ -2465,10 +2467,11 @@ pub fn resolve_or_build_masters(
     )
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct CalibrationBuildSettings {
     pinned_pedestal: Option<f32>,
     flat_star_masking: bool,
+    watch: MasterBuildWatch,
 }
 
 /// [`resolve_or_build_masters`] with a previously fitted pedestal carried
@@ -2661,6 +2664,7 @@ fn resolve_or_build_masters_pinned(
             inputs,
             master_recording_blocker.as_deref(),
             settings.flat_star_masking,
+            &settings.watch,
             cancel,
         ) {
             // The integrator reads the headers, so it catches what selection
@@ -3108,6 +3112,7 @@ pub fn resolve_or_build_master_plan(
             mode,
             pinned,
             flat_star_masking: flat_star_masking_enabled(),
+            watch: MasterBuildWatch::default(),
         },
     )
 }
@@ -3116,6 +3121,83 @@ pub(crate) struct CalibrationPlanOptions<'a> {
     pub mode: CalibrationMode,
     pub pinned: &'a [CalibrationSessionDetail],
     pub flat_star_masking: bool,
+    pub watch: MasterBuildWatch,
+}
+
+/// Where a master build has got to, for a stack card. Seiza checks for a
+/// stop before it reads each input frame, so counting those checks counts
+/// the reads: a bias or dark master reads every frame twice, a flat master
+/// once before it combines them.
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+pub struct MasterBuildProgress {
+    pub kind: CalibrationKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
+    /// The frame being read in this pass, from 1.
+    pub frame: usize,
+    pub frames: usize,
+    pub pass: usize,
+    pub passes: usize,
+}
+
+impl MasterBuildProgress {
+    /// Frame reads finished, of all the build needs. The frame being read
+    /// is not counted, so a flat being combined after its last read is not
+    /// shown as done.
+    pub fn reads(&self) -> (usize, usize) {
+        let total = self.frames * self.passes;
+        (
+            ((self.pass - 1) * self.frames + self.frame - 1).min(total),
+            total,
+        )
+    }
+}
+
+/// What watches a stack's master builds: a report of each frame read, and a
+/// stop that reaches into a build rather than waiting for it to finish.
+#[derive(Clone, Default)]
+pub(crate) struct MasterBuildWatch {
+    pub report: Option<std::sync::Arc<dyn Fn(MasterBuildProgress) + Send + Sync>>,
+    pub stop: Option<std::sync::Arc<AtomicBool>>,
+}
+
+impl MasterBuildWatch {
+    fn signal(
+        &self,
+        kind: CalibrationKind,
+        filter: Option<String>,
+        frames: usize,
+    ) -> Option<seiza_stacking::CancelSignal> {
+        if (self.report.is_none() && self.stop.is_none()) || frames == 0 {
+            return None;
+        }
+        let passes = if kind == CalibrationKind::Flat { 1 } else { 2 };
+        let reads = std::sync::atomic::AtomicUsize::new(0);
+        let report = self.report.clone();
+        let stop = self.stop.clone();
+        Some(seiza_stacking::CancelSignal::new(move || {
+            let read = reads.fetch_add(1, Ordering::Relaxed);
+            if let Some(report) = &report {
+                // A dark set that loses frames to stray light reads the
+                // rest once more; past the expected reads the count holds.
+                let (pass, frame) = if read < frames * passes {
+                    (read / frames + 1, read % frames + 1)
+                } else {
+                    (passes, frames)
+                };
+                report(MasterBuildProgress {
+                    kind,
+                    filter: filter.clone(),
+                    frame,
+                    frames,
+                    pass,
+                    passes,
+                });
+            }
+            stop.as_ref()
+                .is_some_and(|stop| stop.load(Ordering::Relaxed))
+        }))
+    }
 }
 
 pub(crate) fn resolve_or_build_master_plan_with_options(
@@ -3130,6 +3212,7 @@ pub(crate) fn resolve_or_build_master_plan_with_options(
         mode,
         pinned,
         flat_star_masking,
+        watch,
     } = options;
     if mode == CalibrationMode::Off {
         let (masters, applied) = calibration_off();
@@ -3192,6 +3275,7 @@ pub(crate) fn resolve_or_build_master_plan_with_options(
             CalibrationBuildSettings {
                 pinned_pedestal,
                 flat_star_masking,
+                watch: watch.clone(),
             },
         )?;
         sessions.push(CalibrationSession { masters, applied });
@@ -3633,6 +3717,7 @@ struct MasterBuildContext<'a, 'b> {
     inputs: &'a MasterInputs<'b>,
     recording_blocker: Option<&'a str>,
     flat_star_masking: bool,
+    watch: &'a MasterBuildWatch,
 }
 
 fn build_master_once(
@@ -3647,6 +3732,7 @@ fn build_master_once(
         inputs,
         recording_blocker,
         flat_star_masking,
+        watch,
     } = *context;
     // Reduce to the frames that can actually combine (one temperature, one
     // flat session). The master's content hash below covers exactly this
@@ -3810,6 +3896,11 @@ fn build_master_once(
         // the selection; this catches the ones not measured yet.
         dark_level_screening: matches!(kind, CalibrationKind::Dark | CalibrationKind::DarkFlat)
             .then(seiza_stacking::DarkLevelScreening::default),
+        cancel: watch.signal(
+            kind,
+            frames.iter().find_map(|frame| frame.filter.clone()),
+            frames.len(),
+        ),
         ..Default::default()
     };
     let paths = frames
@@ -3956,6 +4047,7 @@ fn build_master(
     inputs: MasterInputs<'_>,
     recording_blocker: Option<&str>,
     flat_star_masking: bool,
+    watch: &MasterBuildWatch,
     cancel: Option<&AtomicBool>,
 ) -> Result<Option<BuiltMaster>> {
     let context = MasterBuildContext {
@@ -3965,6 +4057,7 @@ fn build_master(
         inputs: &inputs,
         recording_blocker,
         flat_star_masking,
+        watch,
     };
     let build = |candidates: &[CalibrationFrame], allow_memo: bool| {
         build_master_once(&context, candidates, allow_memo)
@@ -6831,6 +6924,94 @@ mod tests {
         for (path, original) in sources.iter().zip(original_bytes) {
             assert_eq!(std::fs::read(path).unwrap(), original);
         }
+    }
+
+    #[test]
+    fn a_master_build_reports_each_frame_read_and_stops_inside_the_build() {
+        let _policy = POLICY_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let mut metadata = Vec::new();
+        for index in 0..3 {
+            let path = temp.path().join(format!("bias-{index}.fits"));
+            write_test_fits(&path, "BIAS", 100 + index * 2);
+            metadata.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        let light_path = temp.path().join("light.fits");
+        write_test_fits(&light_path, "LIGHT", 1_100);
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &metadata, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        let build = |cache: &Path, stop_at: Option<usize>| {
+            let reports = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let stop = std::sync::Arc::new(AtomicBool::new(false));
+            let watch = MasterBuildWatch {
+                report: Some({
+                    let reports = std::sync::Arc::clone(&reports);
+                    let stop = std::sync::Arc::clone(&stop);
+                    std::sync::Arc::new(move |progress: MasterBuildProgress| {
+                        let mut reports = reports.lock().unwrap();
+                        reports.push(progress);
+                        if Some(reports.len()) == stop_at {
+                            stop.store(true, Ordering::Relaxed);
+                        }
+                    })
+                }),
+                stop: Some(std::sync::Arc::clone(&stop)),
+            };
+            let plan = resolve_or_build_master_plan_with_options(
+                &conn,
+                cache,
+                std::slice::from_ref(&light_path),
+                None,
+                Some(&stop),
+                CalibrationPlanOptions {
+                    mode: CalibrationMode::Auto,
+                    pinned: &[],
+                    flat_star_masking: false,
+                    watch,
+                },
+            );
+            let reports = reports.lock().unwrap().clone();
+            (plan, reports)
+        };
+
+        // A bias reads its three frames twice, and each read is reported.
+        let (plan, reports) = build(&temp.path().join("cache"), None);
+        assert!(plan.unwrap().applied.bias_master.is_some());
+        let reads = reports
+            .iter()
+            .map(|progress| (progress.kind, progress.pass, progress.frame))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            reads,
+            [(1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3)].map(|(pass, frame)| (
+                CalibrationKind::Bias,
+                pass,
+                frame
+            ))
+        );
+        assert!(reports
+            .iter()
+            .all(|progress| progress.frames == 3 && progress.passes == 2));
+        assert_eq!(reports.last().unwrap().reads(), (5, 6));
+
+        // A stop asked for during the second read ends the build there.
+        let stopped_cache = temp.path().join("stopped");
+        let (plan, reports) = build(&stopped_cache, Some(2));
+        assert!(plan.is_err());
+        assert_eq!(reports.len(), 2);
+        let written = std::fs::read_dir(stopped_cache.join("calibration-masters"))
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|entry| entry.file_name().to_string_lossy().ends_with(".fits"))
+                    .count()
+            })
+            .unwrap_or(0);
+        assert_eq!(written, 0);
     }
 
     #[test]

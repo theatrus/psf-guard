@@ -393,6 +393,9 @@ pub struct StackGroupStatus {
     /// above are complete by then, so this is what still moves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_pass: Option<FinalPassProgress>,
+    /// The calibration master being built for this channel, while one is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calibration_progress: Option<crate::calibration::MasterBuildProgress>,
     pub error: Option<String>,
     #[serde(default)]
     pub calibration: crate::calibration::AppliedCalibration,
@@ -554,6 +557,34 @@ impl FinalPassProgress {
 /// each eligible frame once, and a final pass three more times per admitted
 /// frame. Until the final pass starts its size is estimated from the
 /// eligible frames, so the share only steps forward when frames drop out.
+/// `Master flat L · frame 12/40`, with the pass for a bias or dark, which
+/// reads its frames twice.
+fn master_progress_label(progress: &crate::calibration::MasterBuildProgress) -> String {
+    use crate::calibration::CalibrationKind;
+    let mut label = format!(
+        "Master {}",
+        match progress.kind {
+            CalibrationKind::Bias => "bias",
+            CalibrationKind::Dark => "dark",
+            CalibrationKind::DarkFlat => "dark flat",
+            CalibrationKind::Flat => "flat",
+        }
+    );
+    if matches!(
+        progress.kind,
+        CalibrationKind::Flat | CalibrationKind::DarkFlat
+    ) && let Some(filter) = &progress.filter
+    {
+        label.push(' ');
+        label.push_str(filter);
+    }
+    if progress.passes > 1 {
+        label.push_str(&format!(" · pass {}/{}", progress.pass, progress.passes));
+    }
+    label.push_str(&format!(" · frame {}/{}", progress.frame, progress.frames));
+    label
+}
+
 fn group_work(group: &StackGroupStatus, reintegrates: bool) -> (usize, usize) {
     let live = group.eligible_frames;
     let estimate = if reintegrates && live >= 3 {
@@ -678,13 +709,26 @@ fn mono_activity(job: &StackPreviewJob) -> StackActivityEntry {
     let (processed_units, total_units) = job
         .groups
         .iter()
-        .map(|group| group_work(group, reintegrates))
+        .map(|group| match &group.calibration_progress {
+            // While a channel builds a master, its share follows that
+            // master's frame reads; the label names which master.
+            Some(master)
+                if group.state == StackGroupState::Running && group.phase == "calibration" =>
+            {
+                master.reads()
+            }
+            _ => group_work(group, reintegrates),
+        })
         .fold((0, 0), |(done, total), (group_done, group_total)| {
             (done + group_done, total + group_total)
         });
     // What a person reads: frames while registering, then where the final
     // pass is.
     let progress_label = pending.and_then(|group| match group.final_pass {
+        _ if group.state == StackGroupState::Running && group.phase == "calibration" => group
+            .calibration_progress
+            .as_ref()
+            .map(master_progress_label),
         Some(pass) if group.state == StackGroupState::Running => Some(format!(
             "Rejecting transients · pass {}/{} · frame {}/{}",
             pass.pass, pass.passes, pass.frame, pass.frames
@@ -2305,6 +2349,7 @@ fn prepare_job(
             snr: None,
             snr_url: None,
             final_pass: None,
+            calibration_progress: None,
             error: (eligible_frames < 2).then(|| "Fewer than two eligible FITS frames".to_string()),
             calibration: crate::calibration::AppliedCalibration::default(),
             input_images,
@@ -2955,6 +3000,21 @@ fn run_group(
     // session and stacks exactly as before.
     let calibration_mode = group.calibration;
     let flat_star_masking = group.flat_star_masking;
+    // Each frame a master build reads moves the card, and a stop reaches
+    // into the build instead of waiting for it.
+    let watch = {
+        let state = Arc::clone(state);
+        let job_id = job_id.to_string();
+        let index = group.index;
+        crate::calibration::MasterBuildWatch {
+            report: Some(Arc::new(move |progress| {
+                state.stack_previews.update(&job_id, |job| {
+                    job.groups[index].calibration_progress = Some(progress);
+                });
+            })),
+            stop: Some(Arc::clone(cancel)),
+        }
+    };
     let calibration_started = std::time::Instant::now();
     let plan = pool.install(move || {
         crate::calibration::resolve_or_build_master_plan_with_options(
@@ -2967,6 +3027,7 @@ fn run_group(
                 mode: calibration_mode,
                 pinned: &[],
                 flat_star_masking,
+                watch,
             },
         )
     });
@@ -3033,6 +3094,7 @@ fn run_group(
     state.stack_previews.update(job_id, |job| {
         let status = &mut job.groups[group.index];
         status.calibration = applied_calibration;
+        status.calibration_progress = None;
         status.phase = "stacking".into();
     });
     let (group_target_id, group_filter_name, group_exposure_key) = state
@@ -4401,6 +4463,7 @@ mod tests {
             snr: None,
             snr_url: None,
             final_pass: None,
+            calibration_progress: None,
             error: None,
             calibration: crate::calibration::AppliedCalibration::default(),
             input_images: vec![StackInputImage {
@@ -4646,6 +4709,46 @@ mod tests {
         assert_eq!(
             entry.progress_label.as_deref(),
             Some("Rejecting transients · pass 2/3 · frame 3/8")
+        );
+    }
+
+    #[test]
+    fn a_master_build_names_itself_and_its_frame_in_the_queue() {
+        let mut group = ready_group(42, "L", 1);
+        group.eligible_frames = 10;
+        group.state = StackGroupState::Running;
+        group.phase = "calibration".into();
+        let mut job = completed_job("masters", vec![group]);
+        job.state = StackJobState::Running;
+        assert_eq!(mono_activity(&job).progress_label, None);
+
+        job.groups[0].calibration_progress = Some(crate::calibration::MasterBuildProgress {
+            kind: crate::calibration::CalibrationKind::Dark,
+            filter: Some("L".into()),
+            frame: 4,
+            frames: 20,
+            pass: 2,
+            passes: 2,
+        });
+        let entry = mono_activity(&job);
+        assert_eq!(entry.detail, "Building calibration masters");
+        // 23 of 40 dark reads finished; the frames still to stack wait.
+        assert_eq!((entry.processed_units, entry.total_units), (23, 40));
+        assert_eq!(
+            entry.progress_label.as_deref(),
+            Some("Master dark · pass 2/2 · frame 4/20")
+        );
+        job.groups[0].calibration_progress = Some(crate::calibration::MasterBuildProgress {
+            kind: crate::calibration::CalibrationKind::Flat,
+            filter: Some("L".into()),
+            frame: 7,
+            frames: 30,
+            pass: 1,
+            passes: 1,
+        });
+        assert_eq!(
+            mono_activity(&job).progress_label.as_deref(),
+            Some("Master flat L · frame 7/30")
         );
     }
 

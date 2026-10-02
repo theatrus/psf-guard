@@ -241,6 +241,11 @@
 
 ## Changed
 
+- Building calibration masters shows its progress. The stack card and the
+  header queue name the master being built and the frame it is reading, and
+  the bar moves with it instead of sitting still for minutes. **Stop** now
+  ends a master build part way instead of waiting for it to finish.
+
 - The header keeps the views on its first row whenever they fit beside the
   brand and the utilities, and gives them a row of their own only when they
   do not, rather than below a fixed 1500 px. The **Stats** switch moved from

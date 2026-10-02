@@ -322,10 +322,9 @@ management, like starting a run.
 ## Stop a build
 
 **Stop** appears beside the build buttons while a build is queued or running.
-The stop takes effect between frames, between channels, and between
-calibration masters, so it lands within one frame's work rather than instantly.
-Building a single master runs inside Seiza and finishes before the stop is
-seen; that is a first build of a night's calibration set, not the usual case.
+The stop takes effect between frames, between channels, and between the
+frames a calibration master reads, so it lands within one frame's work rather
+than instantly. A master stopped part way writes nothing.
 Nothing partial is published: a channel that stops before its FITS and preview
 are written leaves no artifact, and the card says the channel was stopped.
 Channels that already finished keep their previews and are remembered as usual.
@@ -696,6 +695,15 @@ Before Seiza registers the reference, PSF Guard matches the light against the
 calibration library in the same database. It builds and caches sigma-clipped
 masters from two or more matching inputs, then supplies the bias, dark, and
 flat masters to Seiza. Raw CFA data is calibrated before debayering.
+
+While masters build, the card and the header queue name the master and the
+frame it is reading, for example *Building master dark · pass 2/2 · frame
+5/8*, and the bar follows that master's reads. A bias or dark master reads its
+frames twice, a flat once before Seiza combines them. Seiza reports no
+progress of its own: PSF Guard counts the stop checks it makes before each
+read. When Seiza sets frames aside, for stray light or a header mismatch, its
+second pass is shorter or it reads the rest once more, and the count can sit
+on its last frame for a while.
 
 The card reports the calibration phase, input counts, whether a complete or
 partial set was applied, and missing-file or coverage warnings. The stack job

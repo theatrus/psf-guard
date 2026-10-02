@@ -209,6 +209,45 @@ describe('StackPreviewPanel job adoption', () => {
     expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
   });
 
+  it('names the master being built and moves the bar with its frames', async () => {
+    const building = {
+      ...runningGroup,
+      phase: 'calibration',
+      processed_frames: 0,
+      calibration_progress: { kind: 'flat', filter: 'Ha', frame: 7, frames: 24, pass: 1, passes: 1 },
+    };
+    server.use(
+      http.get('/api/stack-activity', () => ok({ schema_version: 1, active: [{
+        kind: 'mono', job_id: 'job-cal', database_id: 'test', project_id: 1, state: 'running',
+        label: 'Sh2 86 · Ha', detail: 'Building calibration masters', processed_units: 0, total_units: 2,
+        created_unix_seconds: 100, progress_label: 'Master flat Ha · frame 7/24',
+      }] })),
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/latest', () => ok({
+        schema_version: 1, database_id: 'test', project_id: 1, updated_unix_seconds: 0, groups: [],
+      })),
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/color', () => ok({
+        schema_version: 1, database_id: 'test', project_id: 1, targets: [], jobs: [],
+      })),
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/job-cal', () => ok({
+        schema_version: 2, job_id: 'job-cal', database_id: 'test', project_id: 1, state: 'running',
+        accepted_only: false, created_unix_seconds: 100, artifact_revision: 'rev-cal', cache_version: 7,
+        stacking_version: '0.2.0', groups: [building], error: null,
+      })),
+    );
+
+    render(
+      <StackPreviewPanel dbId="test" projectId={1} images={images} selectionSource="visible" onOpenImage={() => undefined} />,
+      { wrapper: wrapper() }
+    );
+
+    expect(await screen.findAllByText('Building master flat Ha · frame 7/24')).not.toHaveLength(0);
+    const bar = screen.getByRole('progressbar', { name: /Sh2 86 Ha stack progress/i });
+    // Six reads finished; the seventh is under way.
+    expect(bar).toHaveAttribute('aria-valuenow', '6');
+    expect(bar).toHaveAttribute('aria-valuemax', '24');
+    expect(bar.querySelector('span')).toHaveStyle({ width: '25%' });
+  });
+
   it('drops a finished build for one that is still running', async () => {
     let activity: unknown[] = [];
     const readyGroup = {
