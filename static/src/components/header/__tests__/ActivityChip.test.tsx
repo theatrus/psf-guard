@@ -286,9 +286,25 @@ describe('ActivityChip', () => {
     await userEvent.click(chip);
     const list = await screen.findByRole('region', { name: 'Background jobs' });
     expect(list).toHaveTextContent('Automatic refresh');
-    expect(list).toHaveTextContent('After new frames · starts in 4 min');
-    await userEvent.click(within(list).getByRole('button', { name: 'Run Automatic refresh: Askar · Heart now' }));
+    expect(list).toHaveTextContent('Askar · Heart · after new frames');
+    expect(list).toHaveTextContent('in 4 min');
+    await userEvent.click(within(list).getByRole('button', { name: 'Run Automatic refresh: Askar · Heart · after new frames now' }));
     await waitFor(() => expect(calls).toEqual(['run-now {"database_id":"askar","project_id":7}']));
+  });
+
+  it('names the channels a waiting refresh will stack', async () => {
+    mockServer({
+      scheduled: () => [{
+        database_id: 'askar', database_name: 'Askar', project_id: 7, project_name: 'Heart',
+        reason: 'arrival', due_in_seconds: 240,
+        channels: ['Heart · R', 'Heart · G', 'Heart · B', 'Heart · L', 'Heart · Ha (new)'],
+      }],
+    });
+    renderChip();
+    await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+    expect(list).toHaveTextContent('Restacks Heart · R, Heart · G, Heart · B +2 more');
+    expect(list).toHaveTextContent('in 4 min');
   });
 
   it('offers no Stop on a running color composition', async () => {

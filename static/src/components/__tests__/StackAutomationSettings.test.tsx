@@ -15,7 +15,7 @@ function wrapper() {
   };
 }
 
-const current = (enabled: boolean, arrival = 5, grade = 15) => ({
+const current = (enabled: boolean, arrival = 5, grade = 15, buildNew = false) => ({
   success: true,
   data: {
     automatic_previews: enabled,
@@ -24,6 +24,8 @@ const current = (enabled: boolean, arrival = 5, grade = 15) => ({
     default_arrival_delay_minutes: 5,
     default_grade_delay_minutes: 15,
     max_delay_minutes: 1440,
+    build_new_channels: buildNew,
+    new_channel_window_days: 7,
   },
   error: null,
 });
@@ -60,6 +62,7 @@ describe('StackAutomationSettings', () => {
         automatic_previews: true,
         arrival_delay_minutes: 5,
         grade_delay_minutes: 15,
+        build_new_channels: false,
       })
     );
     // The response is the new truth: the delays become editable.
@@ -87,6 +90,7 @@ describe('StackAutomationSettings', () => {
         automatic_previews: true,
         arrival_delay_minutes: 5,
         grade_delay_minutes: 30,
+        build_new_channels: false,
       })
     );
     await waitFor(() => expect(grade).toHaveValue(30));
@@ -117,7 +121,33 @@ describe('StackAutomationSettings', () => {
         automatic_previews: true,
         arrival_delay_minutes: 10,
         grade_delay_minutes: 15,
+        build_new_channels: false,
       })
     );
+  });
+
+  it('saves the new-channel option, which waits on the switch', async () => {
+    let saved: unknown = null;
+    server.use(
+      http.get('/api/settings/stacking', () => HttpResponse.json(current(true))),
+      http.put('/api/settings/stacking', async ({ request }) => {
+        saved = await request.json();
+        return HttpResponse.json(current(true, 5, 15, true));
+      })
+    );
+    render(<StackAutomationSettings />, { wrapper: wrapper() });
+    const option = await screen.findByRole('checkbox', { name: /Also stack channels that have no stack yet/ });
+    expect(option).toBeEnabled();
+    expect(screen.getByText(/captured in the last 7 days/)).toBeInTheDocument();
+    fireEvent.click(option);
+    await waitFor(() =>
+      expect(saved).toEqual({
+        automatic_previews: true,
+        arrival_delay_minutes: 5,
+        grade_delay_minutes: 15,
+        build_new_channels: true,
+      })
+    );
+    await waitFor(() => expect(option).toBeChecked());
   });
 });

@@ -40,6 +40,8 @@ export interface ActivityItem {
   control?: ActivityControl;
   /** Whether Stop can end it while it runs. A color composition cannot. */
   stoppable?: boolean;
+  /** What the state corner says of a waiting job, such as when it starts. */
+  state?: string;
 }
 
 export interface DatabaseActivity {
@@ -203,7 +205,13 @@ const REFRESH_REASONS: Record<ScheduledRefresh['reason'], string> = {
 function startsIn(seconds: number): string {
   if (seconds <= 15) return 'starting now';
   const minutes = Math.ceil(seconds / 60);
-  return `starts in ${minutes} min`;
+  return `in ${minutes} min`;
+}
+
+/** `T · R, T · G (new) +2 more`: what a waiting refresh will stack. */
+function channelsText(channels: string[]): string {
+  const shown = channels.slice(0, 3).join(', ');
+  return channels.length > 3 ? `${shown} +${channels.length - 3} more` : shown;
 }
 
 function scheduledItems(scheduled: ScheduledRefresh[]): ActivityItem[] {
@@ -215,8 +223,10 @@ function scheduledItems(scheduled: ScheduledRefresh[]): ActivityItem[] {
       refresh.project_id == null
         ? 'every followed project'
         : refresh.project_name ?? `project ${refresh.project_id}`
-    }`,
-    detail: `After ${REFRESH_REASONS[refresh.reason]} · ${startsIn(refresh.due_in_seconds)}`,
+    } · after ${REFRESH_REASONS[refresh.reason]}`,
+    detail: refresh.channels?.length ? `Restacks ${channelsText(refresh.channels)}` : 'Restacks what changed',
+    hint: refresh.channels?.join('\n'),
+    state: startsIn(refresh.due_in_seconds),
     queued: true,
     percent: null,
     automatic: true,

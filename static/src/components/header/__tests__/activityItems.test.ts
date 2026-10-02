@@ -176,14 +176,16 @@ describe('header activity items', () => {
     expect(items[2]).toMatchObject({
       kind: 'automatic',
       title: 'Automatic refresh',
-      scope: 'Askar · Heart',
-      detail: 'After new frames · starts in 3 min',
+      scope: 'Askar · Heart · after new frames',
+      detail: 'Restacks what changed',
+      state: 'in 3 min',
       queued: true,
       control: { kind: 'scheduled', dbId: 'a', projectId: 7 },
     });
     expect(items[3]).toMatchObject({
-      scope: 'Askar · every followed project',
-      detail: 'After grade changes · starting now',
+      scope: 'Askar · every followed project · after grade changes',
+      detail: 'Restacks what changed',
+      state: 'starting now',
     });
     // Settling refreshes are not in a line a person reorders.
     expect(lineLengths(items)).toEqual({ stack: 0, wbpp: 0 });

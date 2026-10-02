@@ -24,6 +24,10 @@ pub struct StackSettingsResponse {
     pub default_arrival_delay_minutes: u32,
     pub default_grade_delay_minutes: u32,
     pub max_delay_minutes: u32,
+    /// Automatic refreshes also stack channels with no stack yet, once one
+    /// of their frames is recent.
+    pub build_new_channels: bool,
+    pub new_channel_window_days: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -34,6 +38,9 @@ pub struct UpdateStackSettingsRequest {
     pub arrival_delay_minutes: Option<u32>,
     #[serde(default)]
     pub grade_delay_minutes: Option<u32>,
+    /// Omitted keeps the current choice.
+    #[serde(default)]
+    pub build_new_channels: Option<bool>,
 }
 
 fn response(policy: AutomationPolicy) -> StackSettingsResponse {
@@ -45,6 +52,8 @@ fn response(policy: AutomationPolicy) -> StackSettingsResponse {
         default_arrival_delay_minutes: defaults.arrival_delay_minutes,
         default_grade_delay_minutes: defaults.grade_delay_minutes,
         max_delay_minutes: MAX_DELAY_MINUTES,
+        build_new_channels: policy.build_new_channels,
+        new_channel_window_days: automatic::NEW_CHANNEL_WINDOW_DAYS,
     }
 }
 
@@ -81,6 +90,9 @@ fn requested_policy(
         grade_delay_minutes: request
             .grade_delay_minutes
             .unwrap_or(current.grade_delay_minutes),
+        build_new_channels: request
+            .build_new_channels
+            .unwrap_or(current.build_new_channels),
     };
     for (label, minutes) in [
         ("arrival", policy.arrival_delay_minutes),
@@ -106,6 +118,7 @@ fn stored(policy: AutomationPolicy, method: StackMethod) -> Option<StackAutomati
         grade_delay_minutes: (policy.grade_delay_minutes != defaults.grade_delay_minutes)
             .then_some(policy.grade_delay_minutes),
         method: (method != StackMethod::default()).then_some(method),
+        build_new_channels: policy.build_new_channels.then_some(true),
     })
 }
 
@@ -295,6 +308,7 @@ mod tests {
             enabled: true,
             arrival_delay_minutes: 5,
             grade_delay_minutes: 30,
+            build_new_channels: false,
         };
         let entry = stored(chosen, StackMethod::default()).expect("a chosen policy is stored");
         assert_eq!(entry.method, None, "the recommended method is not written");
@@ -314,12 +328,14 @@ mod tests {
             arrival_delay_minutes: Some(10),
             grade_delay_minutes: None,
             method: None,
+            build_new_channels: None,
         };
         let policy = requested_policy(
             &UpdateStackSettingsRequest {
                 automatic_previews: false,
                 arrival_delay_minutes: None,
                 grade_delay_minutes: Some(45),
+                build_new_channels: None,
             },
             Some(&current),
         )
@@ -332,6 +348,7 @@ mod tests {
                 automatic_previews: true,
                 arrival_delay_minutes: Some(0),
                 grade_delay_minutes: None,
+                build_new_channels: None,
             },
             None,
         )
@@ -341,6 +358,7 @@ mod tests {
                 automatic_previews: true,
                 arrival_delay_minutes: None,
                 grade_delay_minutes: Some(MAX_DELAY_MINUTES + 1),
+                build_new_channels: None,
             },
             None,
         )
