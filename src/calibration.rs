@@ -3138,16 +3138,33 @@ pub struct MasterBuildProgress {
     pub frames: usize,
     pub pass: usize,
     pub passes: usize,
+    /// Which build this is for the channel, from 1; a flat retry counts.
+    #[serde(default)]
+    pub build: usize,
 }
 
 impl MasterBuildProgress {
+    /// How far the channel's calibration has got, 0 to 1, without knowing
+    /// how many masters it will build: each build covers half of what is
+    /// left, so the share only grows, and stacking settles it at 1.
+    pub fn share(&self) -> f64 {
+        let (done, total) = self.reads();
+        let read = if total == 0 {
+            0.0
+        } else {
+            done as f64 / total as f64
+        };
+        let left = 0.5_f64.powi(self.build.max(1) as i32 - 1);
+        1.0 - left * (1.0 - 0.5 * read)
+    }
+
     /// Frame reads finished, of all the build needs. The frame being read
     /// is not counted, so a flat being combined after its last read is not
     /// shown as done.
     pub fn reads(&self) -> (usize, usize) {
         let total = self.frames * self.passes;
         (
-            ((self.pass - 1) * self.frames + self.frame - 1).min(total),
+            (self.pass.saturating_sub(1) * self.frames + self.frame.saturating_sub(1)).min(total),
             total,
         )
     }
@@ -3159,6 +3176,8 @@ impl MasterBuildProgress {
 pub(crate) struct MasterBuildWatch {
     pub report: Option<std::sync::Arc<dyn Fn(MasterBuildProgress) + Send + Sync>>,
     pub stop: Option<std::sync::Arc<AtomicBool>>,
+    /// Builds started so far, shared by every clone of the watch.
+    pub builds: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl MasterBuildWatch {
@@ -3172,6 +3191,7 @@ impl MasterBuildWatch {
             return None;
         }
         let passes = if kind == CalibrationKind::Flat { 1 } else { 2 };
+        let build = self.builds.fetch_add(1, Ordering::Relaxed) + 1;
         let reads = std::sync::atomic::AtomicUsize::new(0);
         let report = self.report.clone();
         let stop = self.stop.clone();
@@ -3192,6 +3212,7 @@ impl MasterBuildWatch {
                     frames,
                     pass,
                     passes,
+                    build,
                 });
             }
             stop.as_ref()
@@ -4106,7 +4127,10 @@ fn build_master(
     // master. Only this set's frames are offered, so the trim cannot slide
     // onto another session while the card speaks of leaving frames out.
     if stable >= MIN_MASTER_FRAMES && stable * 2 >= used {
-        stop_requested(cancel)?;
+        if let Err(stop) = stop_requested(cancel) {
+            discard_attempt(first);
+            return Err(stop);
+        }
         let rest: Vec<CalibrationFrame> = first
             .used
             .iter()
@@ -4117,7 +4141,15 @@ fn build_master(
             })
             .cloned()
             .collect();
-        if let Some(trimmed) = retry(&rest) {
+        let trimmed = retry(&rest);
+        // A stop that lands inside the retry ends the build with no verdict:
+        // neither master is published or remembered.
+        if let Err(stop) = stop_requested(cancel) {
+            trimmed.into_iter().for_each(discard_attempt);
+            discard_attempt(first);
+            return Err(stop);
+        }
+        if let Some(trimmed) = trimmed {
             if trimmed.drifting().is_empty() && !trimmed.memo {
                 set_aside_master(&context, first);
                 let note = format!(
@@ -4134,8 +4166,17 @@ fn build_master(
     // The set disagrees with itself: the next set takes its place when
     // there is one. Everything shot around this set goes with it: the
     // frames the clusterer dropped from the same noon saw the same window.
-    stop_requested(cancel)?;
-    if let Some(other) = retry(&without(&same_session_as(&first.used, frames))) {
+    if let Err(stop) = stop_requested(cancel) {
+        discard_attempt(first);
+        return Err(stop);
+    }
+    let other = retry(&without(&same_session_as(&first.used, frames)));
+    if let Err(stop) = stop_requested(cancel) {
+        other.into_iter().for_each(discard_attempt);
+        discard_attempt(first);
+        return Err(stop);
+    }
+    if let Some(other) = other {
         if other.drifting().is_empty() && !other.memo {
             let note = format!(
                 "The nearest {} disagree with each other at {feature_pixels} pixels ({spots}); \
@@ -4248,6 +4289,20 @@ fn publish_master(
 /// and its record stays as a memo of the judgement so the next selection of
 /// the same frames reaches the replacement without reading a flat. A cache
 /// hit or memo belongs to another selection and is left alone.
+/// Drop an attempt a stop cut off before any verdict: its staged file goes
+/// and nothing is recorded.
+fn discard_attempt(attempt: BuiltAttempt) {
+    if let Some(staged) = attempt.staged
+        && let Err(error) = std::fs::remove_file(&staged.file)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(
+            "could not remove stopped master {}: {error}",
+            staged.file.display()
+        );
+    }
+}
+
 fn set_aside_master(context: &MasterBuildContext<'_, '_>, attempt: BuiltAttempt) {
     let BuiltAttempt {
         master,
@@ -6960,6 +7015,7 @@ mod tests {
                     })
                 }),
                 stop: Some(std::sync::Arc::clone(&stop)),
+                ..Default::default()
             };
             let plan = resolve_or_build_master_plan_with_options(
                 &conn,
@@ -9224,6 +9280,59 @@ mod tests {
             1,
             "the first attempt must be set aside"
         );
+    }
+
+    #[test]
+    fn a_stop_during_a_flat_retry_publishes_nothing_and_leaves_no_file() {
+        // The six flats disagree, so the build tries again with the four that
+        // agree. A stop that lands in that retry must not fall back to the
+        // first master: nothing is recorded and no staged file stays behind.
+        let temp = tempfile::tempdir().unwrap();
+        let (conn, cache, light) =
+            spotted_flat_library(&temp, 6, |index| if index < 4 { 0.5 } else { 1.0 }, 0);
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let watch = MasterBuildWatch {
+            report: Some({
+                let stop = std::sync::Arc::clone(&stop);
+                std::sync::Arc::new(move |progress: MasterBuildProgress| {
+                    if progress.kind == CalibrationKind::Flat && progress.frames == 4 {
+                        stop.store(true, Ordering::Relaxed);
+                    }
+                })
+            }),
+            stop: Some(std::sync::Arc::clone(&stop)),
+            ..Default::default()
+        };
+        let plan = resolve_or_build_master_plan_with_options(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light),
+            None,
+            Some(&stop),
+            CalibrationPlanOptions {
+                mode: CalibrationMode::Auto,
+                pinned: &[],
+                flat_star_masking: false,
+                watch,
+            },
+        );
+        assert!(stop.load(Ordering::Relaxed), "the retry must have started");
+        // The flat is the last master, so the plan may come back without it;
+        // the stack sees its stop flag next and stops the channel.
+        if let Ok(plan) = &plan {
+            assert!(plan.applied.flat_master.is_none());
+        }
+        assert_eq!(flat_master_count(&conn), 0);
+        let left = std::fs::read_dir(cache.join("calibration-masters"))
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .filter(|name| name.starts_with("flat-"))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        assert!(left.is_empty(), "a stopped flat build left {left:?}");
     }
 
     #[test]

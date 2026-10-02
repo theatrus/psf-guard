@@ -245,7 +245,9 @@ describe('StackPreviewPanel job adoption', () => {
     // Six reads finished; the seventh is under way.
     expect(bar).toHaveAttribute('aria-valuenow', '6');
     expect(bar).toHaveAttribute('aria-valuemax', '24');
-    expect(bar.querySelector('span')).toHaveStyle({ width: '25%' });
+    // The first build, a quarter read, fills an eighth of the calibration
+    // share, which is half of this two-frame channel's work.
+    expect(bar.querySelector('span')).toHaveStyle({ width: '6.25%' });
   });
 
   it('drops a finished build for one that is still running', async () => {

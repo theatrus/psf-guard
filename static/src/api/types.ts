@@ -712,6 +712,8 @@ export interface MasterBuildProgress {
   frames: number;
   pass: number;
   passes: number;
+  /** Which build this is for the channel, from 1; a flat retry counts. */
+  build?: number;
 }
 
 export interface StackGroupStatus {

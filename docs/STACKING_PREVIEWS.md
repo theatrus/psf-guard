@@ -698,8 +698,11 @@ flat masters to Seiza. Raw CFA data is calibrated before debayering.
 
 While masters build, the card and the header queue name the master and the
 frame it is reading, for example *Building master dark · pass 2/2 · frame
-5/8*, and the bar follows that master's reads. A bias or dark master reads its
-frames twice, a flat once before Seiza combines them. Seiza reports no
+5/8*. A bias or dark master reads its frames twice, a flat once before Seiza
+combines them. Calibration weighs as much as one pass over the channel's
+frames in the bar and in the queue's percent. The number of masters is not
+known ahead, so each build fills half of what is left of that share as it
+reads: the bar only moves forward, and stacking settles the rest. Seiza reports no
 progress of its own: PSF Guard counts the stop checks it makes before each
 read. When Seiza sets frames aside, for stray light or a header mismatch, its
 second pass is shorter or it reads the rest once more, and the count can sit

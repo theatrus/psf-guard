@@ -592,12 +592,36 @@ fn group_work(group: &StackGroupStatus, reintegrates: bool) -> (usize, usize) {
     } else {
         0
     };
+    // Matching and building calibration masters weighs as one pass over the
+    // frames. It is settled once the channel is past it, whether masters
+    // were built, found in the cache, or not wanted.
+    let calibration = live;
+    let calibrated = match group.state {
+        StackGroupState::Queued => 0,
+        StackGroupState::Running if group.phase == "calibration" => group
+            .calibration_progress
+            .as_ref()
+            .map_or(0, |master| (master.share() * calibration as f64) as usize),
+        _ => calibration,
+    };
     match (group.state, group.final_pass) {
         (StackGroupState::Skipped, _) => (0, 0),
-        (StackGroupState::Ready, Some(pass)) => (live + pass.total(), live + pass.total()),
-        (StackGroupState::Ready, None) => (live + estimate, live + estimate),
-        (_, Some(pass)) => (live + pass.done().min(pass.total()), live + pass.total()),
-        (_, None) => (group.processed_frames.min(live), live + estimate),
+        (StackGroupState::Ready, Some(pass)) => {
+            let total = calibration + live + pass.total();
+            (total, total)
+        }
+        (StackGroupState::Ready, None) => {
+            let total = calibration + live + estimate;
+            (total, total)
+        }
+        (_, Some(pass)) => (
+            calibrated + live + pass.done().min(pass.total()),
+            calibration + live + pass.total(),
+        ),
+        (_, None) => (
+            calibrated + group.processed_frames.min(live),
+            calibration + live + estimate,
+        ),
     }
 }
 
@@ -709,16 +733,7 @@ fn mono_activity(job: &StackPreviewJob) -> StackActivityEntry {
     let (processed_units, total_units) = job
         .groups
         .iter()
-        .map(|group| match &group.calibration_progress {
-            // While a channel builds a master, its share follows that
-            // master's frame reads; the label names which master.
-            Some(master)
-                if group.state == StackGroupState::Running && group.phase == "calibration" =>
-            {
-                master.reads()
-            }
-            _ => group_work(group, reintegrates),
-        })
+        .map(|group| group_work(group, reintegrates))
         .fold((0, 0), |(done, total), (group_done, group_total)| {
             (done + group_done, total + group_total)
         });
@@ -3013,6 +3028,7 @@ fn run_group(
                 });
             })),
             stop: Some(Arc::clone(cancel)),
+            ..Default::default()
         }
     };
     let calibration_started = std::time::Instant::now();
@@ -4686,9 +4702,10 @@ mod tests {
         group.eligible_frames = 10;
         group.processed_frames = 4;
         group.state = StackGroupState::Running;
-        // Registering: 4 of 10 frames, with 30 final reads still to come.
-        assert_eq!(group_work(&group, true), (4, 40));
-        assert_eq!(group_work(&group, false), (4, 10));
+        // Calibration settled, then 4 of 10 frames registered, with 30
+        // final reads still to come.
+        assert_eq!(group_work(&group, true), (14, 50));
+        assert_eq!(group_work(&group, false), (14, 20));
         // The live pass is done and pass 2 has read 3 of 8 admitted frames.
         group.processed_frames = 10;
         group.final_pass = Some(FinalPassProgress {
@@ -4697,15 +4714,15 @@ mod tests {
             frame: 3,
             frames: 8,
         });
-        assert_eq!(group_work(&group, true), (21, 34));
+        assert_eq!(group_work(&group, true), (31, 44));
         group.state = StackGroupState::Ready;
-        assert_eq!(group_work(&group, true), (34, 34));
+        assert_eq!(group_work(&group, true), (44, 44));
 
         let mut job = completed_job("final", vec![group]);
         job.state = StackJobState::Running;
         job.groups[0].state = StackGroupState::Running;
         let entry = mono_activity(&job);
-        assert_eq!((entry.processed_units, entry.total_units), (21, 34));
+        assert_eq!((entry.processed_units, entry.total_units), (31, 44));
         assert_eq!(
             entry.progress_label.as_deref(),
             Some("Rejecting transients · pass 2/3 · frame 3/8")
@@ -4716,6 +4733,7 @@ mod tests {
     fn a_master_build_names_itself_and_its_frame_in_the_queue() {
         let mut group = ready_group(42, "L", 1);
         group.eligible_frames = 10;
+        group.processed_frames = 0;
         group.state = StackGroupState::Running;
         group.phase = "calibration".into();
         let mut job = completed_job("masters", vec![group]);
@@ -4729,11 +4747,13 @@ mod tests {
             frames: 20,
             pass: 2,
             passes: 2,
+            build: 1,
         });
         let entry = mono_activity(&job);
         assert_eq!(entry.detail, "Building calibration masters");
-        // 23 of 40 dark reads finished; the frames still to stack wait.
-        assert_eq!((entry.processed_units, entry.total_units), (23, 40));
+        // The first master has read 23 of 40 frames: about half of the half
+        // of the calibration share the first build covers.
+        assert_eq!((entry.processed_units, entry.total_units), (2, 50));
         assert_eq!(
             entry.progress_label.as_deref(),
             Some("Master dark · pass 2/2 · frame 4/20")
@@ -4745,11 +4765,40 @@ mod tests {
             frames: 30,
             pass: 1,
             passes: 1,
+            build: 3,
         });
+        let entry = mono_activity(&job);
         assert_eq!(
-            mono_activity(&job).progress_label.as_deref(),
+            entry.progress_label.as_deref(),
             Some("Master flat L · frame 7/30")
         );
+        // A third build starts with three quarters of the share behind it.
+        assert_eq!((entry.processed_units, entry.total_units), (7, 50));
+    }
+
+    #[test]
+    fn the_calibration_share_only_grows_across_masters() {
+        let progress = |build, pass, frame| crate::calibration::MasterBuildProgress {
+            kind: crate::calibration::CalibrationKind::Dark,
+            filter: None,
+            frame,
+            frames: 8,
+            pass,
+            passes: 2,
+            build,
+        };
+        let mut last = 0.0;
+        for build in 1..=4 {
+            for (pass, frame) in [(1, 1), (1, 8), (2, 1), (2, 8)] {
+                let share = progress(build, pass, frame).share();
+                assert!(
+                    share >= last,
+                    "build {build} pass {pass} frame {frame}: {share} < {last}"
+                );
+                assert!(share < 1.0);
+                last = share;
+            }
+        }
     }
 
     #[tokio::test]
@@ -4893,8 +4942,10 @@ mod tests {
         assert_eq!(entry.project_id, 7);
         assert_eq!(entry.label, "Target 42 · Ha +1 more");
         assert_eq!(entry.detail, "Registering frames");
-        assert_eq!(entry.processed_units, 1);
-        assert_eq!(entry.total_units, 4);
+        // Each channel weighs its calibration and its two frames; the running
+        // one is past calibration and has one frame.
+        assert_eq!(entry.processed_units, 3);
+        assert_eq!(entry.total_units, 8);
     }
 
     #[test]
@@ -4913,8 +4964,9 @@ mod tests {
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].label, "Target 42 · OIII");
         assert_eq!(active[0].detail, "Building calibration masters");
-        assert_eq!(active[0].processed_units, 2);
-        assert_eq!(active[0].total_units, 4);
+        // The ready channel counts in full; the other is still calibrating.
+        assert_eq!(active[0].processed_units, 4);
+        assert_eq!(active[0].total_units, 8);
     }
 
     #[test]
