@@ -1580,6 +1580,44 @@ API or planning contract changes are required for this local adapter policy.
 This does not yet commission the persistent observing-night recovery policy or
 authorize automatic resume, repeated guide/slew recovery, or shutter movement.
 
+Plugin [PR #43](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/43)
+adds live/deferred capture delivery, a settings
+button, a native **Director Check In** instruction and prior-run delivery at
+session start. New runs persist their original allocation, geometry, initial
+state and ledger identity before launch. Check-in reopens the exact ledger
+through the shared runtime for reporting only, including after expiry or a
+change to current equipment. It never requests a launch/reservation or operates
+equipment. The acquisition lease excludes concurrent acquisition; use the
+instruction before/after the Session, not inside its target hooks. All paths
+reuse bounded capture pages and the existing durable acknowledgement cursor.
+
+Automatic workloads persist clean completion only after native parking and
+verification of no unresolved capture/preparation. A delayed check-in can then
+confirm the old terminal release idempotently without advancing a newer local
+request. Normal intake reconciles that released history before seeking fresh
+work. Aborted/uncertain runs cannot use check-in as restart authority. Live
+status is independent: backfilled captures or release confirmation must not be
+displayed as current mount state or as a fresh historical operation. The local
+session duration also bounds its initial backlog delivery.
+
+No new server endpoint is needed for this increment. Existing scoped capture
+check-in and workload release endpoints accept the original ledger/cursor;
+release confirms the workload's recorded terminal parked/quiescent boundary,
+not a new live rig observation. Scope remains exact origin, coordinator,
+catalog, rig, profile and paired client. Re-pairing does not silently transfer
+another client's history. Old prototype runs without the new archive record
+need explicit reconciliation. Image uploads, grade/revision pull, timing and
+recovery journals, persistent observing-night admission and automatic operation
+defaults are not delivered by this capture-only increment.
+
+Validation used the packaged plugin and runtime 0.9.0 / IPC 9 with native NINA
+3.3.0.1064, ASCOM OmniSim and an isolated PSF Guard server. Deferred multi-target
+capture, offline automatic completion followed by batch release, and the normal
+live/offline Moon-avoidance path passed. Repeated check-in sends no duplicate
+events; the original allocation still cannot launch again. All 771 plugin tests,
+packaging, format and manifest checks passed. Native Session/settings screenshots
+were reviewed. Exact run evidence is in the plugin's `docs/nina-smoke-test.md`.
+
 The next native recovery increment must keep one persistent per-rig recovery
 directory across allocations, admit an explicit
 observing night, prevent downgrade after commissioning, classify local quality
@@ -3511,6 +3549,11 @@ separate workflow; these mappings alone do not resolve them.
 - [ ] Add one resumable batch check-in path used by manual settings controls,
   sequence actions, periodic checkpoints and end-of-session reconciliation.
   Report counters/cursors and keep image uploads independent.
+- [x] Deliver the capture-only increment of that path: live/deferred mode,
+  settings check-in/cancel, native Check In action, previous-run delivery at
+  session start, original-ledger reopening, resumable bounded pages and deferred
+  clean workload release. No hardware replay or historical live-status replay.
+  Grade/revision, timing and recovery journal reconciliation remain open above.
 - [ ] Support the full native item/condition/trigger hook contract, including
   unsafe/recovery, nested waits, cancellation and cleanup; publish the tested
   compatibility matrix, including third-party safety actions.
