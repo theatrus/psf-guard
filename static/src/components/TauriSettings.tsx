@@ -20,6 +20,7 @@ import CalibrationMatchingSettings from './CalibrationMatchingSettings';
 import StackAutomationSettings from './StackAutomationSettings';
 import StackMethodSettings from './StackMethodSettings';
 import WorkerShareSettings from './WorkerShareSettings';
+import StorageSettings from './StorageSettings';
 import ExportDefaultsSettings from './ExportDefaultsSettings';
 import AstroBinSettings from './AstroBinSettings';
 import PixInsightSettings from './PixInsightSettings';
@@ -1894,6 +1895,7 @@ export default function TauriSettings({
               <StackMethodSettings />
               <StackAutomationSettings />
               <WorkerShareSettings />
+              <StorageSettings canManage={managementAllowed} />
             </div>
           )}
 

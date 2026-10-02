@@ -4575,6 +4575,9 @@ async fn serve_cached_png(
     cache_path: &std::path::Path,
     request_headers: &HeaderMap,
 ) -> Result<Response, AppError> {
+    // The cache culls least recently used previews first when its volume
+    // fills, so a preview someone looks at is marked as used.
+    crate::server::cache_budget::note_served(cache_path);
     let metadata = tokio::fs::metadata(cache_path)
         .await
         .map_err(|_| AppError::InternalError("Failed to read cache".to_string()))?;

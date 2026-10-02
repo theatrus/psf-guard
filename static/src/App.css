@@ -7481,3 +7481,67 @@
   color: var(--text-muted, #aab);
   border: 1px dashed currentColor;
 }
+
+/* Disk use: one meter per cache volume, with the limit marked on it. */
+.storage-volume {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.75rem 0;
+}
+
+.storage-volume-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.storage-volume-head code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.storage-volume-bar {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--color-bg-tertiary);
+}
+
+.storage-volume-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--color-primary);
+}
+
+.storage-volume-bar span.is-over {
+  background: var(--color-error);
+}
+
+.storage-volume-bar i {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  background: var(--color-warning);
+}
+
+.storage-volume-breakdown {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.storage-volume-note {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.storage-volume-note.is-error,
+.storage-volume-head .is-over {
+  color: var(--color-error);
+}

@@ -706,6 +706,33 @@ image set, an image is
 accepted/rejected/pended, or the **Accepted only** policy changes. A failed
 rebuild never replaces the last successful result.
 
+## Disk use
+
+Each database caches below the server's cache folder (`--cache-dir`): stacks,
+color previews, WBPP stacks, calibration masters, and image previews.
+Settings → Stacking → **Disk use** shows the volume each cache sits on, how
+full it is, and how much the cache holds of each kind.
+
+**Most of the volume to use** (90% by default) is the highest share of the
+whole volume, other files included, that may be used, as `df` counts it.
+Every five minutes, and right after the limit is changed, PSF Guard reads
+each cache volume. When one is over the limit it deletes image previews,
+annotated previews and star lists, least recently viewed first, until the
+volume is two points under, sparing any viewed in the last quarter hour.
+If that is not enough it deletes stack resume checkpoints a day old or more.
+Stacks, color previews, WBPP stacks and calibration masters are never
+deleted: they take minutes to hours to make, while a preview comes back the
+next time someone opens the image. Viewing a cached preview marks it as used,
+because many mounts, NFS among them, do not record reads.
+
+A volume still over the limit once nothing more may go is reported in red,
+and background preview pre-generation waits until there is room again. 100%
+turns culling off. Changing the limit needs database management. Windows
+servers do not read their volumes, so the limit does not apply there.
+
+To give stacks more room, point `--cache-dir` at a larger volume, such as a
+network share.
+
 ## Inspect calibration masters
 
 Choose **Masters** on a completed mono or color stack to inspect the bias,

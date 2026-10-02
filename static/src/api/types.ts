@@ -2936,3 +2936,33 @@ export interface GuidGap { table: string; missing: number; total: number }
 export interface GuidReport { tables: GuidGap[]; missing: number; writable: boolean }
 /** What a fill did: rows given a GUID, and the copy taken first (none when nothing was missing). */
 export interface GuidFillReport { tables: GuidGap[]; filled: number; backup_path: string | null }
+
+/** One volume holding database caches, as the last disk check found it. */
+export interface CacheVolumeReport {
+  path: string;
+  databases: string[];
+  total_bytes: number;
+  used_bytes: number;
+  /** As `df` reports it. */
+  used_percent: number;
+  max_percent: number;
+  /** Image previews, annotated previews and star lists: culled first. */
+  preview_bytes: number;
+  /** Stacks, color previews, WBPP stacks and their checkpoints. */
+  stack_bytes: number;
+  calibration_bytes: number;
+  other_bytes: number;
+  culled_files: number;
+  freed_bytes: number;
+  /** Still over the limit with no previews left to cull. */
+  over_limit: boolean;
+  checked_unix: number;
+}
+
+export interface StorageSettings {
+  /** 100 turns culling off. */
+  max_volume_percent: number;
+  default_max_volume_percent: number;
+  min_max_volume_percent: number;
+  volumes: CacheVolumeReport[];
+}
