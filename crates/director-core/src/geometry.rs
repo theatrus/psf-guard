@@ -70,6 +70,8 @@ pub struct BoundGeometry {
     source: BoundProgram,
     constraints: Constraints,
     windows: BTreeMap<String, Vec<Interval>>,
+    non_lunar_windows: BTreeMap<String, Vec<Interval>>,
+    priorities: BTreeMap<String, u32>,
 }
 
 impl BoundGeometry {
@@ -122,6 +124,7 @@ impl BoundGeometry {
             end_ms: assignment.expires_at_ms,
         };
         let mut windows = BTreeMap::new();
+        let mut non_lunar_windows = BTreeMap::new();
         let mut cache: Vec<(String, AltitudeLimits, Vec<Interval>)> = vec![];
         for (goal, allocated) in assignment.goals.iter().zip(permitted) {
             let resolved = source.resolve(&goal.id).map_err(Error::Program)?;
@@ -168,12 +171,66 @@ impl BoundGeometry {
                 cache.push((resolved.target.id.clone(), limits, computed));
                 &cache.last().unwrap().2
             };
-            windows.insert(goal.id.clone(), intersect(&allocated, computed)?);
+            let mut eligible = intersect(&allocated, computed)?;
+            non_lunar_windows.insert(goal.id.clone(), eligible.clone());
+            if let Some(policy) = &resolved.recipe.moon {
+                let lunar = crate::moon::moon_windows(
+                    policy,
+                    IcrsPosition {
+                        ra_degrees: f64::from(resolved.target.icrs_ra_mas)
+                            / f64::from(MAS_PER_DEGREE),
+                        dec_degrees: f64::from(resolved.target.icrs_dec_mas)
+                            / f64::from(MAS_PER_DEGREE),
+                    },
+                    constraints.rig.site,
+                    constraints.rig.orientation,
+                    span,
+                )
+                .map_err(Error::Geometry)?;
+                eligible = intersect(&eligible, &lunar)?;
+            }
+            windows.insert(goal.id.clone(), eligible);
+        }
+        // Preserve objective priority first, then prefer Moon-sensitive work
+        // among eligible equal-priority recipes. Compact ranks avoid overflow.
+        let mut keys = BTreeMap::new();
+        for goal in &assignment.goals {
+            let recipe = source.resolve(&goal.id).map_err(Error::Program)?.recipe;
+            let aversion = recipe
+                .moon
+                .as_ref()
+                .map_or(Ok(0.0), |p| p.aversion())
+                .map_err(|_| Error::InvalidConstraints)?;
+            keys.insert(goal.id.clone(), (goal.priority, aversion.to_bits()));
+        }
+        let ordered: std::collections::BTreeSet<_> = keys.values().copied().collect();
+        let ranks: BTreeMap<_, _> = ordered
+            .into_iter()
+            .enumerate()
+            .map(|(rank, key)| (key, rank as u32))
+            .collect();
+        let mut priorities: BTreeMap<String, u32> = keys
+            .into_iter()
+            .map(|(id, key)| (id, ranks[&key]))
+            .collect();
+        if !source
+            .snapshot()
+            .recipes
+            .iter()
+            .any(|r| r.moon.as_ref().is_some_and(|p| p.enabled))
+        {
+            priorities = assignment
+                .goals
+                .iter()
+                .map(|g| (g.id.clone(), g.priority))
+                .collect();
         }
         Ok(Self {
             source,
             constraints,
             windows,
+            non_lunar_windows,
+            priorities,
         })
     }
 
@@ -197,7 +254,24 @@ impl BoundGeometry {
             return Ok(original);
         }
         self.check_current(request, current)?;
-        crate::evaluate(&self.narrow(request)?).map_err(Error::Planning)
+        let narrowed = self.narrow(request)?;
+        let result = crate::evaluate(&narrowed).map_err(Error::Planning)?;
+        if matches!(&result, Decision::CheckIn { reason } if reason == "no_authorized_feasible_work")
+        {
+            let mut without_moon = narrowed;
+            for goal in &mut without_moon.assignment.goals {
+                goal.eligible_windows = self.non_lunar_windows[&goal.id].clone();
+            }
+            if matches!(
+                crate::evaluate(&without_moon).map_err(Error::Planning)?,
+                Decision::Acquire { .. }
+            ) {
+                return Ok(Decision::Wait {
+                    reason: "moon_avoidance".into(),
+                });
+            }
+        }
+        Ok(result)
     }
 
     fn check_current(&self, request: &Request, current: &Constraints) -> Result<(), Error> {
@@ -229,6 +303,7 @@ impl BoundGeometry {
         let mut narrowed = request.clone();
         for goal in &mut narrowed.assignment.goals {
             goal.eligible_windows = self.windows[&goal.id].clone();
+            goal.priority = self.priorities[&goal.id];
         }
         Ok(narrowed)
     }

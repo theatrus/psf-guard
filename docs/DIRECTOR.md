@@ -9,6 +9,38 @@ project, site and rig identities in a separate meta database. Director clients c
 receipts/status. Pairing does not allocate work or enable acquisition. The NINA
 runtime preview and PSF Guard Sync remain separate.
 
+## Exposure Moon Rules
+
+Expand **Moon** in the exposure template library to enable per-filter avoidance.
+The stored policy includes full-Moon separation (degrees), half-width (whole
+days, 1 to 14), Moon-down-only eligibility and altitude relaxation. Disabling
+avoidance preserves its saved values. Imported TS templates retain their rules;
+activation writes the rules into rig templates. Changing a shared template's
+rules creates a separate rig template instead of changing other plans.
+
+The shared engine excludes blocked recipes before choosing a target. Objective
+priority wins among eligible work; equal-priority work prefers the more
+Moon-sensitive recipe. When only lunar restrictions block the remaining work,
+the core returns `moon_avoidance`; the NINA session waits and, with Park on Wait,
+parks. The immutable grant carries these rules for disconnected execution.
+Automatic work requests need `prepared_target_v2` or `local_sequence_v2` for
+enabled lunar policies. Older modes are refused, including request retries.
+
+The formula follows Target Scheduler's `MoonAvoidanceExpert` at
+`17b36a4f8580c687ad18f8b94127d7ca1a2a702e`: Lorentzian separation versus days from
+full Moon, linear altitude relaxation of separation and width, and the
+configured upper relaxation altitude as the Moon-down boundary (not necessarily
+zero degrees). Missing legacy columns use TS defaults: off, 60 degrees, 7 days,
+zero relaxation, -15/5 degree bounds and Moon-down off. Invalid saved rules are
+reported instead of silently ignored.
+
+Execution intersects the allocated windows, horizon/meridian limits and lunar
+windows for the entire preparation/exposure interval. Minute cells use shared
+ephemerides with a conservative parallax/model/motion margin and a half-day
+phase guard. These margins can defer work near a boundary. This is not precise
+lunar occultation planning. Inherited global/site/rig/project policies,
+adjustable soft-preference weights and detailed lunar telemetry are still pending.
+
 ## Where the store lives
 
 Director is on for every server. The meta store is a separate SQLite file

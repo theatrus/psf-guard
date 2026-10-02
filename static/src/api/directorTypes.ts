@@ -196,6 +196,15 @@ export type DirectorCutoutResult =
   | { state: 'failed'; error: string };
 
 export interface DirectorBandpass { id: string; name: string; kind: 'broadband' | 'narrowband' }
+export interface DirectorMoonPolicy {
+  enabled: boolean;
+  separation_degrees: number;
+  width_days: number;
+  relax_degrees_per_degree: number;
+  relax_min_altitude_degrees: number;
+  relax_max_altitude_degrees: number;
+  moon_down: boolean;
+}
 export interface DirectorTemplate {
   id: number;
   guid: string | null;
@@ -207,6 +216,7 @@ export interface DirectorTemplate {
   bin: number | null;
   readout_mode: number | null;
   default_exposure: number;
+  moon?: DirectorMoonPolicy;
   bandpass: DirectorBandpass;
 }
 export interface DirectorTemplateList { catalog_slug: string; catalog_name: string; rig: DirectorIdentity | null; templates: DirectorTemplate[] }
@@ -222,6 +232,7 @@ export interface DirectorLibraryTemplate {
   bin: number | null;
   readout_mode: number | null;
   default_exposure_seconds: number;
+  moon?: DirectorMoonPolicy;
   updated_at_ms: number;
   bandpass: DirectorBandpass;
 }
@@ -236,6 +247,7 @@ export interface DirectorTemplateChoice {
   offset: number | null;
   bin: number | null;
   readout_mode: number | null;
+  moon?: DirectorMoonPolicy;
 }
 export interface DirectorContribution {
   id: string;

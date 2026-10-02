@@ -1,5 +1,9 @@
 # Unreleased
 
+- Set per-filter Moon avoidance in Director exposure templates. The shared
+  planner skips blocked recipes, preserves Target Scheduler lunar settings and
+  lets capable NINA sessions wait parked when only Moon restrictions block work.
+
 - Allow Director executors to request bounded multi-target workloads for local
   priority scheduling, while preserving the original prepared-target mode and
   the same commissioning, launch, budget and release checks.

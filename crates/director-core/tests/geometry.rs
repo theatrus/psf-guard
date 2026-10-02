@@ -100,6 +100,80 @@ fn compile(
     )
 }
 
+#[test]
+fn moon_blocked_high_priority_recipe_yields_to_eligible_work() {
+    let (mut program, mut request, mut constraints) = fixture();
+    let mut next = program.assignment.goals[0].clone();
+    next.id = "other".into();
+    next.priority = 0;
+    program.assignment.goals[0].priority = u32::MAX;
+    program.assignment.goals.push(next);
+    let mut recipe = program.recipes[0].clone();
+    recipe.id = "other-recipe".into();
+    program.recipes.push(recipe);
+    program.bindings.push(program::Binding {
+        goal_id: "other".into(),
+        target_id: "target".into(),
+        recipe_id: "other-recipe".into(),
+    });
+    let mut limit = constraints.goals[0].clone();
+    limit.goal_id = "other".into();
+    constraints.goals.push(limit);
+    program.recipes[0].moon = Some(moon::MoonPolicy {
+        enabled: true,
+        separation_degrees: 180.0,
+        width_days: 14.0,
+        ..Default::default()
+    });
+    request.assignment = program.assignment.clone();
+    let geometry = compile(program.clone(), &request, constraints.clone()).unwrap();
+    assert!(geometry.windows("goal").unwrap().is_empty());
+    assert!(
+        matches!(geometry.evaluate(&request, &constraints).unwrap(), Decision::Acquire { goal_id, .. } if goal_id == "other")
+    );
+    program.recipes[1].moon = program.recipes[0].moon.clone();
+    let blocked = compile(program, &request, constraints.clone()).unwrap();
+    assert!(matches!(
+        blocked.evaluate(&request, &constraints).unwrap(),
+        Decision::Wait { reason } if reason == "moon_avoidance"
+    ));
+}
+
+#[test]
+fn equal_priority_sensitive_filter_wins_without_overriding_objective_priority() {
+    let (mut program, mut request, mut constraints) = fixture();
+    let mut next = program.assignment.goals[0].clone();
+    next.id = "sensitive".into();
+    program.assignment.goals.push(next);
+    let mut recipe = program.recipes[0].clone();
+    recipe.id = "sensitive-recipe".into();
+    recipe.moon = Some(moon::MoonPolicy {
+        enabled: true,
+        separation_degrees: 1.0,
+        ..Default::default()
+    });
+    program.recipes.push(recipe);
+    program.bindings.push(program::Binding {
+        goal_id: "sensitive".into(),
+        target_id: "target".into(),
+        recipe_id: "sensitive-recipe".into(),
+    });
+    let mut limit = constraints.goals[0].clone();
+    limit.goal_id = "sensitive".into();
+    constraints.goals.push(limit);
+    request.assignment = program.assignment.clone();
+    let geometry = compile(program.clone(), &request, constraints.clone()).unwrap();
+    assert!(
+        matches!(geometry.evaluate(&request, &constraints).unwrap(), Decision::Acquire { goal_id, .. } if goal_id == "sensitive")
+    );
+    program.assignment.goals[0].priority = u32::MAX;
+    request.assignment = program.assignment.clone();
+    let geometry = compile(program, &request, constraints.clone()).unwrap();
+    assert!(
+        matches!(geometry.evaluate(&request, &constraints).unwrap(), Decision::Acquire { goal_id, .. } if goal_id == "goal")
+    );
+}
+
 fn local(program: &Program) -> LocalState {
     LocalState {
         configuration: program.configuration.clone(),

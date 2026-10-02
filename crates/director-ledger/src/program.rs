@@ -63,7 +63,7 @@ pub(super) fn verify(
 }
 
 /// Saved binding and capture evidence, never a dispatch permit or a retry grant.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CaptureBinding {
     pub ledger: LedgerInfo,

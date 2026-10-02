@@ -66,6 +66,7 @@ fn project() -> Project {
                     offset: None,
                     readout_mode: 0,
                     dither_override: None,
+                    moon: None,
                 },
                 required_accepted_frames: frames,
             });

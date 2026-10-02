@@ -2,6 +2,24 @@ use super::pairing::{client_call, credential, fixture};
 use super::*;
 
 #[test]
+fn moon_rules_require_a_capable_executor_even_on_historical_requests() {
+    use crate::server::director::workload::ExecutionMode;
+    let mut p: psf_guard_director_core::program::Program = serde_json::from_str(include_str!(
+        "../../../../crates/director-core/tests/fixtures/execution-program.json"
+    ))
+    .unwrap();
+    p.configuration.enable_slew_center = false;
+    p.recipes[0].moon = Some(psf_guard_director_core::moon::MoonPolicy {
+        enabled: true,
+        ..Default::default()
+    });
+    assert!(ExecutionMode::PreparedTargetV1.validate(&p).is_err());
+    assert!(ExecutionMode::LocalSequenceV1.validate(&p).is_err());
+    assert!(ExecutionMode::PreparedTargetV2.validate(&p).is_ok());
+    assert!(ExecutionMode::LocalSequenceV2.validate(&p).is_ok());
+}
+
+#[test]
 fn prepared_executor_rejects_unsupported_work_before_admission() {
     let mut p: psf_guard_director_core::program::Program = serde_json::from_str(include_str!(
         "../../../../crates/director-core/tests/fixtures/execution-program.json"

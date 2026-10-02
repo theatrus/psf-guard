@@ -1,19 +1,21 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Copy, Plus, Trash2 } from 'lucide-react';
+import { Check, Copy, Moon, Plus, Trash2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorLibraryTemplate, DirectorTemplate } from '../../api/directorTypes';
 import { retryWhenBusy } from './retry';
 import { newId } from './planModel';
+import MoonSettings from './MoonSettings';
+import { moonProblem } from './moonPolicy';
 import './TemplateLibrary.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Template request failed';
 type Draft = Omit<DirectorLibraryTemplate, 'bandpass'>;
 const blank = (): Draft => ({ id: newId(), revision: 0, name: '', filter_name: '', gain: null, offset: null, bin: 1, readout_mode: null, default_exposure_seconds: 120, updated_at_ms: 0 });
-const fromRig = (template: DirectorTemplate): Draft => ({ id: newId(), revision: 0, name: template.name, filter_name: template.filter_name, gain: template.gain, offset: template.offset, bin: template.bin, readout_mode: template.readout_mode, default_exposure_seconds: template.default_exposure > 0 ? template.default_exposure : 120, updated_at_ms: 0 });
+const fromRig = (template: DirectorTemplate): Draft => ({ id: newId(), revision: 0, name: template.name, filter_name: template.filter_name, gain: template.gain, offset: template.offset, bin: template.bin, readout_mode: template.readout_mode, default_exposure_seconds: template.default_exposure > 0 ? template.default_exposure : 120, moon: template.moon, updated_at_ms: 0 });
 const numberOrNull = (value: string): number | null => { const parsed = Number(value); return value.trim() === '' || !Number.isFinite(parsed) ? null : Math.round(parsed); };
-const same = (a: Draft, b: Draft) => a.name === b.name && a.filter_name === b.filter_name && a.gain === b.gain && a.offset === b.offset && a.bin === b.bin && a.readout_mode === b.readout_mode && a.default_exposure_seconds === b.default_exposure_seconds;
+const same = (a: Draft, b: Draft) => a.name === b.name && a.filter_name === b.filter_name && a.gain === b.gain && a.offset === b.offset && a.bin === b.bin && a.readout_mode === b.readout_mode && a.default_exposure_seconds === b.default_exposure_seconds && JSON.stringify(a.moon) === JSON.stringify(b.moon);
 
 /** Director's exposure template library: settings any rig can shoot with.
  *  Rows are edited in place and saved one at a time; a rig's own templates
@@ -25,6 +27,7 @@ export default function TemplateLibrary() {
   const rigs = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false });
   const rigList = useMemo(() => rigs.data ?? [], [rigs.data]);
   const [copyFrom, setCopyFrom] = useState('');
+  const [moonEditor, setMoonEditor] = useState<string | null>(null);
   const rigTemplates = useQueries({ queries: rigList.map(rig => ({ queryKey: ['directorTemplates', rig.catalog_slug], queryFn: () => apiClient.getDirectorTemplates(rig.catalog_slug), enabled: rig.catalog_slug === copyFrom, retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false })) });
   const source = rigList.findIndex(rig => rig.catalog_slug === copyFrom);
   const copyable: DirectorTemplate[] = source >= 0 ? rigTemplates[source]?.data?.templates ?? [] : [];
@@ -70,7 +73,7 @@ export default function TemplateLibrary() {
     if (!draft.name.trim()) return 'Name the template.';
     if (!draft.filter_name.trim()) return 'Name the filter as the rig does.';
     if (!(draft.default_exposure_seconds > 0)) return 'The exposure must be above zero seconds.';
-    return null;
+    return moonProblem(draft.moon);
   };
   return <section aria-label="Exposure template library" className="director-records template-library">
     <div className="director-toolbar"><h2>Exposure templates</h2>
@@ -96,12 +99,12 @@ export default function TemplateLibrary() {
     </div>}
     {rows.length === 0 && !library.isPending && <p className="director-muted">No library templates yet.</p>}
     {rows.length > 0 && <div className="director-table-scroll"><table className="template-table">
-      <thead><tr><th>Name</th><th>Filter</th><th>Band</th><th>Gain</th><th>Offset</th><th>Bin</th><th>Readout</th><th>Exposure</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Filter</th><th>Band</th><th>Gain</th><th>Offset</th><th>Bin</th><th>Readout</th><th>Exposure</th><th>Moon</th><th></th></tr></thead>
       <tbody>{rows.map(row => {
         const stored = saved.find(t => t.id === row.id);
         const dirty = !stored || !same(row, stored);
         const trouble = problemWith(row);
-        return <tr key={row.id} className={dirty ? 'is-dirty' : undefined}>
+        return <Fragment key={row.id}><tr className={dirty ? 'is-dirty' : undefined}>
           <td><input aria-label="Template name" value={row.name} maxLength={256} disabled={!canWrite} onChange={event => edit(row.id, { name: event.target.value })} /></td>
           <td><input aria-label="Template filter" value={row.filter_name} maxLength={128} placeholder="Ha, L, OIII" disabled={!canWrite} onChange={event => edit(row.id, { filter_name: event.target.value })} /></td>
           <td className="director-muted">{stored && !dirty ? `${stored.bandpass.name}${stored.bandpass.kind === 'narrowband' ? ' (narrowband)' : ''}` : '—'}</td>
@@ -111,13 +114,16 @@ export default function TemplateLibrary() {
           <td><input aria-label="Template readout mode" type="number" min={0} step={1} value={row.readout_mode ?? ''} disabled={!canWrite} onChange={event => edit(row.id, { readout_mode: numberOrNull(event.target.value) })} /></td>
           <td><span className="plan-goal"><input aria-label="Template exposure seconds" type="number" min={1} step="any" value={row.default_exposure_seconds} disabled={!canWrite} onChange={event => edit(row.id, { default_exposure_seconds: Number(event.target.value) })} /><small>s</small></span></td>
           <td className="template-actions">
+            <button type="button" aria-label={`Moon settings for ${row.name || 'template'}`} title="Moon avoidance" aria-expanded={moonEditor === row.id} onClick={() => setMoonEditor(moonEditor === row.id ? null : row.id)}><Moon size={16} />{row.moon?.enabled ? `${row.moon.separation_degrees}°` : 'Off'}</button>
+          </td>
+          <td className="template-actions">
             {canWrite && dirty && <button type="button" aria-label={`Save ${row.name || 'template'}`} title={trouble ?? 'Save'} disabled={!!trouble || save.isPending} onClick={() => save.mutate(row)}><Check size={16} /></button>}
             {canWrite && dirty && stored && <button type="button" aria-label={`Drop changes to ${stored.name}`} title="Drop changes" onClick={() => forget(row.id)}>Undo</button>}
             {canWrite && (stored
               ? <button type="button" aria-label={`Remove ${stored.name}`} title="Remove from the library" disabled={remove.isPending} onClick={() => remove.mutate(stored)}><Trash2 size={16} /></button>
               : <button type="button" aria-label="Discard new template" title="Discard" onClick={() => forget(row.id)}><Trash2 size={16} /></button>)}
           </td>
-        </tr>;
+        </tr>{moonEditor === row.id && <tr><td colSpan={10}><MoonSettings value={row.moon} disabled={!canWrite || save.isPending} onChange={moon => edit(row.id, { moon })} /></td></tr>}</Fragment>;
       })}</tbody>
     </table></div>}
     {notice && <p role="status">{notice}</p>}

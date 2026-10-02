@@ -95,7 +95,7 @@ pub struct Configuration {
     pub dither_every: u32,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Recipe {
     pub id: String,
@@ -110,6 +110,9 @@ pub struct Recipe {
     pub readout_mode: i16,
     #[serde(deserialize_with = "Option::deserialize")]
     pub dither_override: Option<u32>,
+    /// Absent in legacy programs. Older executors reject this extra field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moon: Option<crate::moon::MoonPolicy>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -120,7 +123,7 @@ pub struct Binding {
     pub recipe_id: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Program {
     pub schema_version: u32,
@@ -297,6 +300,14 @@ impl BoundProgram {
         local: LocalState,
         estimates: Estimates,
     ) -> Result<Preparation, Error> {
+        if self
+            .program
+            .recipes
+            .iter()
+            .any(|r| r.moon.as_ref().is_some_and(|p| p.enabled))
+        {
+            return Err(Error::InvalidLocalState);
+        }
         self.validate_projection(&request.assignment)?;
         Preparation::new(
             id,
@@ -468,6 +479,10 @@ pub(crate) fn validate_recipe_shape(recipe: &Recipe) -> Result<(), Error> {
         || recipe.readout_mode < 0
         || recipe.gain.is_some_and(|value| value < 0)
         || recipe.offset.is_some_and(|value| value < 0)
+        || recipe
+            .moon
+            .as_ref()
+            .is_some_and(|policy| policy.validate().is_err())
     {
         return Err(Error::InvalidRecipe);
     }

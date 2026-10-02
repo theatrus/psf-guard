@@ -36,7 +36,7 @@ export function libraryFor(bandpassId: string, library: DirectorLibraryTemplate[
 /** A library template as a plan binds to it: by its library GUID and its
  *  settings, with no row id, since the rig database has no such row yet. */
 export function libraryChoice(template: DirectorLibraryTemplate): DirectorTemplateChoice {
-  return { template_guid: template.id, template_id: null, name: template.name, filter_name: template.filter_name, gain: template.gain, offset: template.offset, bin: template.bin, readout_mode: template.readout_mode };
+  return { template_guid: template.id, template_id: null, name: template.name, filter_name: template.filter_name, gain: template.gain, offset: template.offset, bin: template.bin, readout_mode: template.readout_mode, moon: template.moon };
 }
 
 export function newLibraryContribution(objective: DirectorObjective, rig: DirectorRigProfileSummary, template: DirectorLibraryTemplate): DirectorContribution {
@@ -65,7 +65,7 @@ export function templatesFor(bandpassId: string, templates: DirectorTemplate[]):
 }
 
 export function choiceFrom(template: DirectorTemplate): DirectorTemplateChoice {
-  return { template_guid: template.guid, template_id: template.id, name: template.name, filter_name: template.filter_name, gain: template.gain, offset: template.offset, bin: template.bin, readout_mode: template.readout_mode };
+  return { template_guid: template.guid, template_id: template.id, name: template.name, filter_name: template.filter_name, gain: template.gain, offset: template.offset, bin: template.bin, readout_mode: template.readout_mode, moon: template.moon };
 }
 
 /** The template's own default when it has one, else the rig's for the band kind. */

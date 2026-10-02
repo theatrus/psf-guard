@@ -376,6 +376,7 @@ pub(super) fn import_from_catalog(
                     offset: template.offset,
                     bin: template.bin,
                     readout_mode: template.readout_mode,
+                    moon: Some(template.moon.clone()),
                 },
                 exposure_seconds: exposure,
                 panel_ids: vec![],

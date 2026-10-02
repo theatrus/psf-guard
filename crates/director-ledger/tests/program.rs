@@ -65,6 +65,7 @@ fn program() -> Program {
             offset: None,
             readout_mode: 0,
             dither_override: None,
+            moon: None,
         }],
         bindings: vec![Binding {
             goal_id: "short-ha".into(),
@@ -90,6 +91,42 @@ fn local() -> LocalState {
 
 fn open(path: &Path) -> Ledger {
     Ledger::open_program(path, program(), request().state).unwrap()
+}
+
+#[test]
+fn prior_engine_program_ledgers_reopen_without_weakening_identity_checks() {
+    let root = TempDir::new().unwrap();
+    let path = root.path().join("ledger.sqlite");
+    drop(open(&path));
+    let db = Connection::open(&path).unwrap();
+    db.execute("UPDATE allocation SET engine_version='0.2.0'", [])
+        .unwrap();
+    drop(open(&path));
+    let mut changed = program();
+    changed.recipes[0].gain = Some(41);
+    assert!(matches!(
+        Ledger::open_program(&path, changed, request().state),
+        Err(Error::AssignmentMismatch)
+    ));
+    db.execute("UPDATE allocation SET engine_version='0.1.0'", [])
+        .unwrap();
+    assert!(matches!(
+        Ledger::open_program(&path, program(), request().state),
+        Err(Error::UnsupportedEngine)
+    ));
+}
+
+#[test]
+fn moon_program_cannot_open_a_non_geometry_ledger() {
+    let root = TempDir::new().unwrap();
+    let mut program = program();
+    program.recipes[0].moon = Some(psf_guard_director_core::moon::MoonPolicy {
+        enabled: true,
+        ..Default::default()
+    });
+    assert!(
+        Ledger::open_program(&root.path().join("ledger.sqlite"), program, request().state).is_err()
+    );
 }
 fn begin(ledger: &mut Ledger) {
     ledger

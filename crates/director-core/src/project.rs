@@ -21,7 +21,7 @@ pub struct Objective {
     pub priority: u32,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Contribution {
     pub id: String,
@@ -39,7 +39,7 @@ pub struct Contribution {
     pub required_accepted_frames: u32,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Project {
     pub schema_version: u32,

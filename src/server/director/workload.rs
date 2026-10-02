@@ -90,6 +90,8 @@ pub(super) struct Request {
 pub(super) enum ExecutionMode {
     PreparedTargetV1,
     LocalSequenceV1,
+    PreparedTargetV2,
+    LocalSequenceV2,
 }
 
 pub(super) fn supports_prepared_target(p: &psf_guard_director_core::program::Program) -> bool {
@@ -107,19 +109,25 @@ pub(super) fn supports_local_sequence(p: &psf_guard_director_core::program::Prog
 }
 
 impl ExecutionMode {
-    fn validate(
+    pub(super) fn validate(
         &self,
         p: &psf_guard_director_core::program::Program,
     ) -> Result<(), program::PullError> {
+        let moon_required = p
+            .recipes
+            .iter()
+            .any(|r| r.moon.as_ref().is_some_and(|m| m.enabled));
         let supported = match self {
-            Self::PreparedTargetV1 => supports_prepared_target(p),
-            Self::LocalSequenceV1 => supports_local_sequence(p),
+            Self::PreparedTargetV1 => !moon_required && supports_prepared_target(p),
+            Self::LocalSequenceV1 => !moon_required && supports_local_sequence(p),
+            Self::PreparedTargetV2 => supports_prepared_target(p),
+            Self::LocalSequenceV2 => supports_local_sequence(p),
         };
         if supported {
             Ok(())
         } else {
             Err(program::PullError::NotReady(
-                "The workload exceeds the executor mode's target/rotation or sequence-owned preparation capabilities. No new workload was issued.".into(),
+                "The workload exceeds the executor mode's target/rotation, Moon avoidance or sequence-owned preparation capabilities. No new workload was issued.".into(),
             ))
         }
     }

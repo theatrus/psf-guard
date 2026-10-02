@@ -1381,6 +1381,13 @@ fn resolve_template(
     contribution: &Contribution,
 ) -> Result<i64, RigError> {
     let choice = &contribution.template;
+    let moon_matches = |id| -> Result<bool, RigError> {
+        Ok(match &choice.moon {
+            None => true,
+            Some(wanted) => super::plan::read_moon_policy(tx, id)? == *wanted,
+        })
+    };
+    let mut guid_used = false;
     if let Some(id) = choice.template_id {
         let found: Option<String> = tx
             .query_row(
@@ -1389,7 +1396,9 @@ fn resolve_template(
                 |row| row.get(0),
             )
             .optional()?;
-        if found.is_some_and(|filter| filter.eq_ignore_ascii_case(&choice.filter_name)) {
+        if found.is_some_and(|filter| filter.eq_ignore_ascii_case(&choice.filter_name))
+            && moon_matches(id)?
+        {
             return Ok(id);
         }
     }
@@ -1401,8 +1410,10 @@ fn resolve_template(
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
+        guid_used = found.is_some();
         if let Some((id, filter)) = found
             && filter.eq_ignore_ascii_case(&choice.filter_name)
+            && moon_matches(id)?
         {
             return Ok(id);
         }
@@ -1411,20 +1422,25 @@ fn resolve_template(
     let offset = choice.offset.unwrap_or(-1);
     let bin = choice.bin.unwrap_or(1);
     let readout = choice.readout_mode.unwrap_or(-1);
-    let existing: Option<i64> = tx
-        .query_row(
+    let existing: Vec<i64> = tx
+        .prepare(
             "SELECT Id FROM exposuretemplate
              WHERE profileId = ?1 AND filtername = ?2
                AND IFNULL(gain, -1) = ?3 AND IFNULL(offset, -1) = ?4
                AND IFNULL(bin, 1) = ?5 AND IFNULL(readoutmode, -1) = ?6
-             ORDER BY Id LIMIT 1",
+             ORDER BY Id LIMIT 512",
+        )?
+        .query_map(
             params![profile_id, choice.filter_name, gain, offset, bin, readout],
             |row| row.get(0),
-        )
-        .optional()?;
-    if let Some(id) = existing {
-        return Ok(id);
+        )?
+        .collect::<Result<_, _>>()?;
+    for id in existing {
+        if moon_matches(id)? {
+            return Ok(id);
+        }
     }
+    let moon = choice.moon.clone().unwrap_or_default();
     tx.execute(
         "INSERT INTO exposuretemplate (
             profileId, name, filtername, gain, offset, bin, readoutmode,
@@ -1432,7 +1448,7 @@ fn resolve_template(
             moonavoidancewidth, maximumhumidity, defaultexposure,
             moonrelaxscale, moonrelaxmaxaltitude, moonrelaxminaltitude,
             moondownenabled, ditherevery, minutesOffset, guid
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 0, 60, 7, 0, ?8, 0, 5, -15, 0, -1, 0, ?9)",
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?10, ?11, ?12, 0, ?8, ?13, ?14, ?15, ?16, -1, 0, ?9)",
         params![
             profile_id,
             if choice.name.is_empty() {
@@ -1450,8 +1466,12 @@ fn resolve_template(
             // so a second activation, and Sync, know it for the same one.
             choice
                 .template_guid
+                .filter(|_| !guid_used)
                 .map(|guid| guid.to_string())
                 .unwrap_or_else(new_guid),
+            i64::from(moon.enabled), moon.separation_degrees, moon.width_days,
+            moon.relax_degrees_per_degree, moon.relax_max_altitude_degrees,
+            moon.relax_min_altitude_degrees, i64::from(moon.moon_down),
         ],
     )?;
     Ok(tx.last_insert_rowid())

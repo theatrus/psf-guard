@@ -26,7 +26,7 @@ foreach (var fixturePath in args.Skip(1))
         var bytes = System.Text.Encoding.UTF8.GetBytes(input.ToJsonString());
         var output = Native.Evaluate(bytes);
         var response = JsonNode.Parse(output)!.AsObject();
-        if (response["contract_version"]!.GetValue<int>() != 2 || response["engine_version"]!.GetValue<string>() != "0.2.0")
+        if (response["contract_version"]!.GetValue<int>() != 2 || response["engine_version"]!.GetValue<string>() != "0.3.0")
         {
             throw new InvalidOperationException("Unexpected planning contract or engine version.");
         }

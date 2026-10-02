@@ -47,6 +47,24 @@ function mount(canWrite = true) {
 }
 
 describe('Template library', () => {
+  it('saves Moon settings, validates thresholds and retains values when disabled', async () => {
+    const { saves } = fixture(); mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Moon settings for Lum 90' }));
+    fireEvent.click(screen.getByLabelText('Enable Moon avoidance'));
+    fireEvent.change(screen.getByLabelText(/Separation at full Moon/), { target: { value: '95' } });
+    fireEvent.click(screen.getByLabelText('Moon must be down'));
+    fireEvent.change(screen.getByLabelText(/Half-separation width/), { target: { value: '0' } });
+    expect(screen.getByRole('button', { name: 'Save Lum 90' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/Half-separation width/), { target: { value: '8' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Lum 90' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0]).toMatchObject({ moon: { enabled: true, separation_degrees: 95, width_days: 8, moon_down: true } });
+    await screen.findByText('Saved Lum 90.');
+    fireEvent.click(screen.getByLabelText('Enable Moon avoidance'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Lum 90' }));
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(saves[1]).toMatchObject({ moon: { enabled: false, separation_degrees: 95, width_days: 8, moon_down: true } });
+  });
   it('lists, edits, adds, copies from a rig and removes templates, each with its revision', async () => {
     const { saves, deletes } = fixture(); mount();
     const name = await screen.findByDisplayValue('Lum 90');
@@ -86,5 +104,7 @@ describe('Template library', () => {
     fixture(); mount(false);
     expect(await screen.findByDisplayValue('Lum 90')).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'New template' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Moon settings for Lum 90' }));
+    expect(screen.getByLabelText('Enable Moon avoidance')).toBeDisabled();
   });
 });
