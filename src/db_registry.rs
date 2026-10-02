@@ -492,6 +492,10 @@ pub struct StackAutomationSettings {
     /// default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grade_delay_minutes: Option<u32>,
+    /// How stack previews integrate their frames; absent uses Seiza's
+    /// recommended method.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<crate::server::stack_preview::StackMethod>,
 }
 
 impl StackAutomationSettings {

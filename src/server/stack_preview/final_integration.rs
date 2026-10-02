@@ -11,7 +11,7 @@ use std::sync::Arc;
 pub(super) fn integrate(
     group: &PreparedGroup,
     ledger: &[resume::ResumeFrame],
-    weighting: super::StackWeighting,
+    method: super::StackMethod,
     plan: &crate::calibration::CalibrationPlan,
     cosmetics: &SessionCosmetics,
     cancel: &Arc<AtomicBool>,
@@ -24,7 +24,7 @@ pub(super) fn integrate(
         .collect::<Vec<_>>();
     let options = BatchStackOptions {
         cancel: Some(Arc::clone(cancel).into()),
-        frame_weights: replay_weights(weighting, &admitted)?,
+        frame_weights: replay_weights(method.weighting, &admitted)?,
         ..BatchStackOptions::default()
     };
     seiza_stacking::integrate_registered_frames(admitted.len(), &options, |pass, index| {
@@ -45,7 +45,13 @@ pub(super) fn integrate(
         let session = plan.assignments[source_index];
         let masters = (!record.calibration_bypassed).then_some(&plan.sessions[session].masters);
         let cosmetic = cosmetics.for_frame(session, record.calibration_bypassed);
-        let image = prepare_registered_frame(frame, masters, cosmetic, mapping)?;
+        let image = prepare_registered_frame(
+            frame,
+            masters,
+            cosmetic,
+            mapping,
+            method.seiza_interpolation(),
+        )?;
         if super::source_fingerprint(&source.path) != source.source_fingerprint {
             return Err(seiza_stacking::Error::Stack(format!(
                 "Image {} changed while being read; rebuild the stack",
@@ -86,6 +92,7 @@ fn prepare_registered_frame(
     masters: Option<&CalibrationMasters>,
     cosmetic: Option<ImpulseFilterOptions>,
     mapping: &RegisteredFrameMapping,
+    interpolation: seiza_stacking::Interpolation,
 ) -> seiza_stacking::Result<LinearImage> {
     if let Some(masters) = masters {
         masters.validate_light_frame(&frame)?;
@@ -95,7 +102,9 @@ fn prepare_registered_frame(
         seiza_stacking::suppress_impulses(&mut frame.image, frame.bayer, &cosmetic)?;
     }
     let frame = frame.into_prepared()?;
-    mapping.extract_region(
+    // Through the recorded warp, when registration fitted one, and with the
+    // live pass's resampling.
+    mapping.extract_region_with(
         &frame.image,
         ReferenceRegion {
             x: 0,
@@ -103,13 +112,15 @@ fn prepare_registered_frame(
             width: mapping.reference_width(),
             height: mapping.reference_height(),
         },
+        interpolation,
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::stack_preview::StackWeighting;
+    use crate::server::stack_preview::{StackMethod, StackWeighting};
+    use seiza_stacking::Interpolation;
     use seiza_stacking::{
         BayerLayout, FrameDisposition, LiveStacker, NormalizationMap, NormalizationMode,
         RejectionMode, SimilarityTransform, StackOptions,
@@ -142,13 +153,27 @@ mod tests {
             Some(&masters),
             Some(ImpulseFilterOptions::default()),
             &mapping,
+            Interpolation::Bilinear,
         )
         .unwrap();
         assert!(corrected.data.iter().all(|&value| value == 90.0));
-        let calibrated =
-            prepare_registered_frame(frame(raw.clone()), Some(&masters), None, &mapping).unwrap();
+        let calibrated = prepare_registered_frame(
+            frame(raw.clone()),
+            Some(&masters),
+            None,
+            &mapping,
+            Interpolation::Bilinear,
+        )
+        .unwrap();
         assert_eq!(calibrated.data[40], 7990.0);
-        let bypassed = prepare_registered_frame(frame(raw.clone()), None, None, &mapping).unwrap();
+        let bypassed = prepare_registered_frame(
+            frame(raw.clone()),
+            None,
+            None,
+            &mapping,
+            Interpolation::Bilinear,
+        )
+        .unwrap();
         assert_eq!(bypassed.data, raw.data);
     }
 
@@ -165,7 +190,9 @@ mod tests {
             NormalizationMap::identity(&raw),
         )
         .unwrap();
-        let registered = prepare_registered_frame(frame(raw), None, None, &mapping).unwrap();
+        let registered =
+            prepare_registered_frame(frame(raw), None, None, &mapping, Interpolation::Bilinear)
+                .unwrap();
         assert!(registered
             .data
             .chunks(9)
@@ -254,13 +281,19 @@ mod tests {
             Some(&masters),
             cosmetic,
             &live.reference_mapping(),
+            Interpolation::Bilinear,
         )
         .unwrap();
         assert_eq!(prepared.channels, 3);
         assert_eq!(prepared.data, live.snapshot().unwrap().image.data);
-        let uncorrected =
-            prepare_registered_frame(reference, Some(&masters), None, &live.reference_mapping())
-                .unwrap();
+        let uncorrected = prepare_registered_frame(
+            reference,
+            Some(&masters),
+            None,
+            &live.reference_mapping(),
+            Interpolation::Bilinear,
+        )
+        .unwrap();
         assert!(
             uncorrected
                 .data
@@ -276,9 +309,14 @@ mod tests {
         assert!(diagnostics.transform.translation_x.abs() > 1.0);
         assert!((diagnostics.normalization_mean_gain - 1.0).abs() > 0.1);
         assert!(diagnostics.normalization_mean_offset.abs() > 10.0);
-        let registered =
-            prepare_registered_frame(source, Some(&masters), cosmetic, &diagnostics.mapping)
-                .unwrap();
+        let registered = prepare_registered_frame(
+            source,
+            Some(&masters),
+            cosmetic,
+            &diagnostics.mapping,
+            Interpolation::Bilinear,
+        )
+        .unwrap();
         assert!(registered.data.iter().any(|value| value.is_nan()));
         let snapshot = live.snapshot().unwrap();
         for (index, (&reference, &source)) in prepared.data.iter().zip(&registered.data).enumerate()
@@ -358,7 +396,7 @@ mod tests {
         let result = integrate(
             &group,
             &ledger,
-            crate::server::stack_preview::StackWeighting::Equal,
+            StackMethod::classic(),
             &plan,
             &SessionCosmetics::none(plan.sessions.len()),
             &Arc::new(AtomicBool::new(false)),
@@ -369,7 +407,8 @@ mod tests {
         assert_eq!(result.snapshot.image.data, vec![1000.0; 81]);
         assert_eq!(result.snapshot.coverage[40], 3);
         assert_eq!(result.frames[0].integrated_samples, 80);
-        assert_eq!(progress.len(), 8);
+        // Three passes over the four admitted frames.
+        assert_eq!(progress.len(), 12);
         assert!(progress.iter().all(|(_, _, count)| *count == 4));
     }
 
@@ -384,7 +423,7 @@ mod tests {
         let error = integrate(
             &group,
             &ledger,
-            StackWeighting::Equal,
+            StackMethod::classic(),
             &plan,
             &none,
             &cancel,
@@ -397,7 +436,7 @@ mod tests {
             integrate(
                 &group,
                 &ledger,
-                StackWeighting::Equal,
+                StackMethod::classic(),
                 &plan,
                 &none,
                 &cancel,
@@ -428,7 +467,10 @@ mod tests {
         let weighted = integrate(
             &group,
             &ledger,
-            StackWeighting::Noise,
+            StackMethod {
+                weighting: StackWeighting::Noise,
+                ..StackMethod::classic()
+            },
             &plan,
             &none,
             &cancel,
@@ -447,7 +489,7 @@ mod tests {
         let equal = integrate(
             &group,
             &ledger,
-            StackWeighting::Equal,
+            StackMethod::classic(),
             &plan,
             &none,
             &cancel,
@@ -474,7 +516,10 @@ mod tests {
         let error = integrate(
             &group,
             &ledger,
-            StackWeighting::Noise,
+            StackMethod {
+                weighting: StackWeighting::Noise,
+                ..StackMethod::classic()
+            },
             &plan,
             &SessionCosmetics::none(plan.sessions.len()),
             &Arc::new(AtomicBool::new(false)),

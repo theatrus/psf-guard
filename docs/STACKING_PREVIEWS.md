@@ -68,46 +68,90 @@ databases, so full-frame accumulator buffers cannot multiply unexpectedly.
 Cards are capped at two columns on wide displays so the inspection preview does
 not become excessively wide.
 
-### Weight frames by noise
+### Stacking method
 
-By default every admitted frame counts the same toward the stack mean.
-Turn on **Weight frames by noise** to let quieter frames count for more.
-The choice is off by default and is remembered across reloads, like the
-calibration mode.
+**Settings → Stacking → Stacking method** sets how every stack preview on the
+server integrates its frames. The default is **Recommended**, the Seiza
+stacking command line's defaults. On a 98-frame M45 night these gave
+sharper stars and higher SNR than WBPP. On 16 H-alpha frames of Sh2 230 in
+PSF Guard they cut the sky's block-to-block variation by a third, shrank the
+median star, and doubled Seiza's star-signal score over Classic. **Draft** is the same method without
+the final pass. **Classic** is what PSF Guard did before the method could be
+chosen. Any single choice can also be changed on its own.
 
-Seiza measures each frame's pixel-scale noise, per channel, on the
-calibrated frame before resampling, and scales it by the frame's
-normalization gain, so all frames are compared in the units they are stacked
-in. A frame's weight is `(reference noise / frame noise)²`, so the reference
-frame weighs 1 and a frame twice as noisy as the reference weighs 0.25.
-Weights are clamped to 0.05–20, so no single frame can vanish or take over.
+| Choice | Recommended | Others |
+|---|---|---|
+| Final pass | Reintegrate | Draft |
+| Normalization | Local background | Global, Local |
+| Frame weights | By noise | Equal |
+| Reference frame | Chosen by Seiza | Best graded |
+| Registration | Quadratic | Affine, Similarity |
+| Resampling | Lanczos-3 | Bilinear |
+| Bayer drizzle | Off | On |
 
-It helps most within one exposure length whose frames were shot under
-changing conditions: a rising Moon, twilight at either end of the night,
-haze, or thin cloud that brightened the sky or dimmed the target without
-failing the frame. It is not a way to blend different exposure lengths;
-**Separate exposure groups**, on by default, keeps those apart.
+- **Final pass.** Reintegrate reads every admitted frame three more times and
+  rejects outliers against all the others. A satellite trail in the reference
+  or in the first few frames, which online rejection cannot revisit, is
+  removed too. Draft publishes the live stack as it stands. It is much faster,
+  but such a trail can survive. A Draft checkpoint extends into a full build,
+  and back, because the final pass runs after the accumulator is complete.
+- **Normalization.** Local background keeps one gain per frame and per
+  channel, measured from star photometry, and matches each 256-pixel tile's
+  background to the reference's with a smoothed grid of offsets. Frames whose
+  sky gradients differ then leave no seams at their edges. Global fits one gain
+  and one offset per frame. Local fits a gain per tile too, which a tile of
+  cloud or nebula can push far enough to reject the frame.
+- **Frame weights.** By noise lets quieter frames count for more. Seiza measures
+  each frame's noise per channel after calibration and scales it by the
+  frame's gain. A frame's weight is `(reference noise / frame noise)²`, so the
+  reference weighs 1 and a frame twice as noisy weighs 0.25. Weights are
+  clamped to 0.05–20. Expand **Frame decisions** on a weighted card to see each
+  frame's weight; hover one to see the noise it came from. Weighting does not
+  blend exposure lengths: **Separate exposure groups**, on by default, keeps
+  those apart.
+- **Reference frame.** The reference fixes the stack's grid and, under local
+  background normalization, the background every frame is matched to. Chosen
+  by Seiza scores every frame on a half-resolution luminance by its brightest
+  unsaturated stars against its sky noise, which poor seeing, trailing, haze
+  and twilight all lower. Among frames within 70% of the best it takes the
+  flattest sky. Scoring reads each frame once more before stacking. The card
+  shows `Choosing a reference` while it runs. Scores are cached by source
+  fingerprint, so a rebuild reads only new frames, and the same frames always
+  choose the same reference. Best graded uses PSF Guard's quality grade, as
+  before. A group where no frame can be scored falls back to it and says so.
+- **Registration.** Quadratic and Affine fit a polynomial through up to 2 000
+  paired stars after the similarity fit. Quadratic follows a wide field's lens
+  distortion, which turns against the sky after a meridian flip. A frame with
+  too few paired stars keeps the similarity.
+- **Resampling.** Lanczos-3 gives sharper stars and clamps the negative lobes
+  where they would ring. Bilinear is faster.
+- **Bayer drizzle.** Each registered pixel takes only the nearest photosite, in
+  its own color, so nothing is interpolated. Each channel then sees a third to
+  a quarter of the samples. It pays only when frames are dithered by several
+  pixels; with little movement it lowers SNR. Color frames are otherwise
+  demosaiced with VNG.
 
-Expand **Frame decisions** on a weighted card to see each frame's weight,
-one value per channel; hover a weight to see the noise it came from. The
-final transient-rejection pass replays every frame with the weight the live
-pass recorded, so noise is measured once and the published stack uses the
-same weights that admitted it.
+The final pass replays PSF Guard's ledger of admitted frames with the
+registration, warp, resampling, normalization and weights the live pass
+recorded. Seiza 0.19's own reintegration refits each frame's background
+against the mean of the best frames instead. On a 14-frame Sh2 230 night that
+mean carried a corner gradient into the whole stack, a gradient the live stack
+did not have, so PSF Guard keeps the live pass's backgrounds. The replay cannot
+fill the photosites Bayer drizzle left empty, so a drizzle stack publishes its
+live stack, which Seiza does fill, and its card says so.
 
-Changing the setting marks existing cards **Out of date — frame weighting
-changed**. Only a weighted build adds the setting to its job id, so an
-equal-weight build hashes exactly as it did before the option existed. A resume
-checkpoint records its weighting, and a build with the other setting starts
-over and says `Full restack: the frame weighting changed`. A weighted
-checkpoint that lacks a frame's weight is also rebuilt rather than replayed
-with made-up weights. Weighted checkpoints use a newer Seiza context format
-that older PSF Guard releases cannot reopen; an older release rebuilds from
-scratch instead.
+A change applies to the next build, automatic refreshes included. Cards built
+another way show **Out of date — stacking method changed**. The whole method
+enters the job id, and a resume checkpoint records it. A build whose method
+accumulates differently starts over and says `Full restack: the stacking
+method changed`.
 
-API callers send `"weighting": "noise"` in the build request; `"equal"` is the
-default. Jobs and the latest index record `weighting`, and each admitted frame
-of a weighted build records `integration_weight` and `noise_sigma`, one value
-per channel.
+API callers may send `"method": {…}` in the build request; fields left out take
+the recommended value, and a request without it uses the server's method.
+`GET` and `PUT /api/settings/stacking/method` read and set the server's method.
+Jobs and the latest index record `method`, and each admitted frame of a
+weighted build records `integration_weight` and `noise_sigma`, one value per
+channel.
 
 ### Queue builds by hand
 
@@ -129,7 +173,7 @@ reference — beside a ledger of every frame it integrated or turned away. A
 later build of the same target and channel whose frame set only grew reopens
 that checkpoint and registers just the new frames. The card marks restored
 work as `resumed` in its frame counter. Final transient rejection still reads
-every admitted frame twice using the saved registration mappings; it does not
+every admitted frame three times using the saved registration mappings; it does not
 repeat star detection or registration. Adding a night therefore avoids the
 old frames' registration cost, but still needs their source files for the
 completed integration.
@@ -140,7 +184,8 @@ dimensions, configuration, and payload checksum before continuing. The
 checkpoint is only reused when it is provably an ancestor of the request:
 every recorded frame must still be requested with an identical source
 fingerprint, and the calibration set, Accepted-only policy, scoring policy,
-frame weighting, stacking order, and pipeline version must match. Removing a frame, regrading
+stacking method, stacking order, and pipeline version must match. Only the
+final pass may differ. Removing a frame, regrading
 one in place, changing calibration or scoring, or upgrading Seiza rebuilds
 from scratch — and when a checkpoint existed but could not be extended, the
 card says why (`Full restack: the scoring policy changed`), so a slow rebuild
@@ -371,9 +416,9 @@ psf-guard stack-snr /path/to/lights --order quality --csv curve.csv --json curve
 psf-guard stack-snr /path/to/lights --weight-by-noise
 ```
 
-`--weight-by-noise` applies the same inverse-noise weights as the panel
-option, relative to the first frame, and prints each frame's weight and
-noise.
+`--weight-by-noise` applies the same inverse-noise weights as the stacking
+method's **By noise**, relative to the first frame, and prints each frame's
+weight and noise. The command otherwise keeps the classic method.
 
 It stacks the frames raw — calibration lives in the catalog, and a folder has
 none to match against — and prints the curve and its reading. Its quality order
@@ -461,12 +506,14 @@ frame their channels were built in.
 
 Once a project's previews have been built, PSF Guard can keep them current on
 its own. Turn on **Rebuild stack previews on their own** under Settings →
-Setups → Stack previews. It applies to every database on the server and is
+Stacking → Stack previews. It applies to every database on the server and is
 off by default.
 
 A refresh rebuilds exactly what the project's cards remember: the same
-targets and channels, the same Accepted-only policy, order, scoring, frame
-weighting, and per-channel calibration choices, over the frames the project holds now. Any
+targets and channels, the same Accepted-only policy, order, scoring, and
+per-channel calibration choices, over the frames the project holds now. It uses
+the server's current stacking method, so a method change reaches the next
+refresh. Any
 color preview composed from a rebuilt channel is recomposed afterwards with
 its kind, palette, crop, and processing unchanged. A refresh whose inputs and
 grades match the cards already built is a cache hit and starts nothing.
@@ -602,15 +649,17 @@ over Max HFR stays out. Each artifact records those preferences;
 changing them marks the existing preview out of date and gives the rebuild a
 separate cache identity.
 
-The highest-scoring remaining frame becomes the immutable reference. The other
+The reference is the frame the stacking method picks: Seiza's choice by
+default, or the highest-scoring remaining frame. It stays fixed. The other
 eligible frames are offered to Seiza in acquisition order. Seiza decodes the
-linear FITS samples, debayers when required, performs global normalization,
+linear FITS samples, debayers when required, normalizes as the method says,
 registers each source to the reference, applies its overlap/RMS/scale/rotation
 admission gates, and accumulates accepted samples with online delta-sigma
 rejection.
 
 Before publishing a stack with at least three admitted frames, PSF Guard
-reintegrates them with Seiza's two-pass, leave-one-out rejection. Each sample
+reintegrates them with Seiza's three-pass, leave-one-out rejection, unless the
+method is Draft. Each sample
 is tested against the other frames, so a bright satellite or aircraft trail
 in the reference or early warm-up frames is no longer permanently admitted.
 Small-sample predictive thresholds avoid excessive rejection of ordinary
@@ -1090,7 +1139,10 @@ immutable cached response for the rebuilt output.
   is not a final science product.
 - Color is a visual channel combination, not photometric or
   spectrophotometric calibration. There is no custom mixing matrix UI,
-  mosaic, drizzle, or cross-target integration. RC-Astro star removal runs on
+  mosaic, or cross-target integration, and no drizzle beyond Bayer drizzle.
+- Color frames are demosaiced with VNG. Seiza also offers MHC and bilinear,
+  but PSF Guard's own replay cannot yet choose a demosaic, so the setting
+  waits for Seiza to expose one. RC-Astro star removal runs on
   mono stacks or linear color inputs, not on an already-stretched composite.
 - Deconvolution requires a user-supplied FWHM and one circular Gaussian PSF for
   the whole channel. It does not estimate a PSF, vary it across the field, or

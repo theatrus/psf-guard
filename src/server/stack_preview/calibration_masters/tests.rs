@@ -203,7 +203,7 @@ impl Fixture {
             stacking_version: super::super::SEIZA_STACKING_VERSION.into(),
             order: super::super::snr::StackFrameOrder::Capture,
             scoring: super::super::StackScoringSettings::default(),
-            weighting: Default::default(),
+            method: Default::default(),
             groups: vec![group],
             error: None,
         };

@@ -12,7 +12,9 @@ pub mod color;
 mod execution;
 mod final_integration;
 mod janitor;
+pub mod method;
 pub mod rc_astro;
+mod reference;
 mod resume;
 pub mod snr;
 pub mod stretch;
@@ -51,6 +53,7 @@ use crate::server::exposure_groups::{ExposureGroup, ProjectExposureGroups};
 use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
+pub use method::{StackFinalPass, StackMethod, StackReference, StackWeighting};
 
 pub const SEIZA_STACKING_VERSION: &str = seiza_stacking::VERSION;
 /// Bump whenever stack admission, rendering, or persisted artifact semantics
@@ -182,45 +185,10 @@ pub struct StackPreviewRequest {
     /// callers can tell whether a remembered result matches their policy.
     #[serde(default)]
     pub scoring: crate::server::api::ScoringOverrideQuery,
-    /// How much each admitted frame counts toward the mean. `equal`
-    /// (default) weighs every frame the same; `noise` weighs each frame by
-    /// the inverse of its measured noise variance.
+    /// How the frames integrate. Omitted uses the server's stacking
+    /// method, set on the Stacking settings page.
     #[serde(default)]
-    pub weighting: StackWeighting,
-}
-
-/// How a stack weighs its admitted frames.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StackWeighting {
-    /// Every admitted frame counts the same. The only behaviour before
-    /// weighting existed, so records without the field read as this.
-    #[default]
-    Equal,
-    /// Seiza's inverse-noise-variance weights: each frame's noise is
-    /// measured after normalization, the reference weighs 1, and weights are
-    /// clamped to 0.05..=20.
-    Noise,
-}
-
-impl StackWeighting {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Equal => "equal",
-            Self::Noise => "noise",
-        }
-    }
-
-    pub fn is_equal(&self) -> bool {
-        matches!(self, Self::Equal)
-    }
-
-    pub(crate) fn frame_weighting(self) -> seiza_stacking::FrameWeighting {
-        match self {
-            Self::Equal => seiza_stacking::FrameWeighting::Equal,
-            Self::Noise => seiza_stacking::FrameWeighting::inverse_noise_variance(),
-        }
-    }
+    pub method: Option<StackMethod>,
 }
 
 /// One channel's calibration mode, overriding the request-wide choice.
@@ -448,10 +416,10 @@ pub struct StackPreviewJob {
     /// written before this field existed used the calibrated defaults.
     #[serde(default)]
     pub scoring: StackScoringSettings,
-    /// How every group weighed its frames. Manifests written before this
-    /// field existed weighed them equally.
-    #[serde(default)]
-    pub weighting: StackWeighting,
+    /// How every group integrated its frames. Manifests written before this
+    /// field existed used the classic method.
+    #[serde(default = "StackMethod::classic")]
+    pub method: StackMethod,
     pub groups: Vec<StackGroupStatus>,
     pub error: Option<String>,
     /// Built by the automatic refresh rather than asked for. Such a build
@@ -527,9 +495,10 @@ pub struct LatestStackPreviewGroup {
     /// defaults, represented by the type's default value.
     #[serde(default)]
     pub scoring: StackScoringSettings,
-    /// Frame weighting used for this artifact. Old indices weighed equally.
-    #[serde(default)]
-    pub weighting: StackWeighting,
+    /// How this artifact integrated its frames. Old indices used the
+    /// classic method.
+    #[serde(default = "StackMethod::classic")]
+    pub method: StackMethod,
     pub group: StackGroupStatus,
 }
 
@@ -1689,6 +1658,7 @@ fn prepare_job(
     let mut public_groups = Vec::new();
     let mut prepared_groups = Vec::new();
     let artifact_revision = new_artifact_revision();
+    let method = request.method.unwrap_or_else(method::current);
     let mut hasher = Sha256::new();
     if exposure_groups.settings.split_exposure_groups {
         hasher.update(b"exposure-groups-v1\0");
@@ -1719,12 +1689,10 @@ fn prepare_job(
             }
         }
     }
-    // Likewise only a weighted build enters the id, so every equal-weight job
-    // and its cache keep the id they had before weighting existed.
-    if !request.weighting.is_equal() {
-        hasher.update(b"\0weighting\0");
-        hasher.update(request.weighting.as_str().as_bytes());
-    }
+    // The Seiza version above already changed every id when the method
+    // became a choice, so the whole method enters every id.
+    hasher.update(b"\0method\0");
+    hasher.update(method.fingerprint().as_bytes());
 
     for (index, ((target_id, target_name, filter_name, exposure_group_key), mut entries)) in
         grouped.into_iter().enumerate()
@@ -1925,7 +1893,7 @@ fn prepare_job(
             stacking_version: SEIZA_STACKING_VERSION.into(),
             order: request.order,
             scoring,
-            weighting: request.weighting,
+            method,
             groups: public_groups,
             error: None,
         },
@@ -2218,15 +2186,85 @@ fn reference_anchors(
         .collect()
 }
 
+/// Put Seiza's choice of reference at the front of every group that will
+/// stack. Scores come from the cache where they can; a group where no frame
+/// scores keeps its best-graded reference and says so.
+fn choose_references(
+    state: &Arc<AppState>,
+    job_id: &str,
+    cache_root: &FsPath,
+    groups: &mut [PreparedGroup],
+    order: snr::StackFrameOrder,
+    worker_policy: &crate::concurrency::WorkerPolicy,
+    cancel: &Arc<AtomicBool>,
+) {
+    for group in groups.iter_mut().filter(|group| group.frames.len() >= 2) {
+        if cancel.load(Ordering::Relaxed) {
+            return;
+        }
+        let budget = crate::concurrency::plan_workers(
+            None,
+            worker_policy,
+            crate::concurrency::Priority::Interactive,
+            crate::concurrency::probe_frame_pixels(&group.frames[0].path),
+        );
+        let pool = match ThreadPoolBuilder::new()
+            .num_threads(budget.workers)
+            .thread_name(|index| format!("stack-reference-{index}"))
+            .build()
+        {
+            Ok(pool) => pool,
+            Err(error) => {
+                tracing::warn!("Reference scoring pool: {error}");
+                continue;
+            }
+        };
+        let index = group.index;
+        let Some(scores) =
+            reference::scores(&group.frames, cache_root, &pool, cancel, |done, count| {
+                state.stack_previews.update(job_id, |job| {
+                    job.groups[index].phase = format!("Choosing a reference: frame {done}/{count}");
+                });
+            })
+        else {
+            return;
+        };
+        match reference::choose(&scores) {
+            Some(chosen) => {
+                let image_id = group.frames[chosen].image_id;
+                reference::reorder(&mut group.frames, chosen, order);
+                state.stack_previews.update(job_id, |job| {
+                    job.groups[index].reference_image_id = Some(image_id);
+                });
+            }
+            None => state.stack_previews.update(job_id, |job| {
+                add_note(
+                    &mut job.groups[index].resume_note,
+                    "No frame could be scored as a reference; the best-graded frame is the reference",
+                );
+            }),
+        }
+    }
+}
+
+/// Add a sentence to a card's note without losing what is already there.
+fn add_note(note: &mut Option<String>, sentence: &str) {
+    *note = Some(match note.take() {
+        Some(previous) if previous.contains(sentence) => previous,
+        Some(previous) => format!("{previous}. {sentence}"),
+        None => sentence.to_string(),
+    });
+}
+
 fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool>) {
     let job_id = prepared.public.job_id.clone();
     let database_id = prepared.public.database_id.clone();
     let accepted_only = prepared.public.accepted_only;
     let scoring = prepared.public.scoring;
-    let weighting = prepared.public.weighting;
+    let method = prepared.public.method;
     let PreparedJob {
         public: _,
-        groups,
+        mut groups,
         cache_root,
         north_up,
         order,
@@ -2235,11 +2273,6 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
         job.state = StackJobState::Running;
     });
     let worker_policy = state.worker_policy();
-    // Read every reference frame's orientation before the first stack is
-    // built. A channel that was never solved has to borrow the pier-to-sky
-    // mapping from one that was, and it cannot do that from a decision taken
-    // after its own. Headers only, so this costs no pixel reads.
-    let anchors = reference_anchors(state, &database_id, &groups);
     let group_job = GroupJob {
         database_id: &database_id,
         job_id: &job_id,
@@ -2247,12 +2280,30 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
         north_up,
         accepted_only,
         scoring,
-        weighting,
+        method,
         order,
         worker_policy: &worker_policy,
         cancel,
     };
     let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // The reference decides the anchors below, so it is chosen first. A
+        // stop while scoring falls through to the loop, which sees it.
+        if method.reference == StackReference::Auto {
+            choose_references(
+                state,
+                &job_id,
+                &cache_root,
+                &mut groups,
+                order,
+                &worker_policy,
+                cancel,
+            );
+        }
+        // Read every reference frame's orientation before the first stack is
+        // built. A channel that was never solved has to borrow the pier-to-sky
+        // mapping from one that was, and it cannot do that from a decision taken
+        // after its own. Headers only, so this costs no pixel reads.
+        let anchors = reference_anchors(state, &database_id, &groups);
         for group in groups {
             if group.frames.len() < 2 {
                 continue;
@@ -2344,7 +2395,7 @@ struct GroupJob<'a> {
     north_up: bool,
     accepted_only: bool,
     scoring: StackScoringSettings,
-    weighting: StackWeighting,
+    method: StackMethod,
     order: snr::StackFrameOrder,
     worker_policy: &'a crate::concurrency::WorkerPolicy,
     cancel: &'a Arc<AtomicBool>,
@@ -2356,7 +2407,7 @@ fn run_group(
     group: PreparedGroup,
     anchor: Option<(bool, &'static str)>,
 ) -> Result<GroupOutcome, String> {
-    use seiza_stacking::{FrameDisposition, LiveStacker, NormalizationMode, StackOptions};
+    use seiza_stacking::{FrameDisposition, LiveStacker};
 
     let &GroupJob {
         database_id,
@@ -2365,11 +2416,12 @@ fn run_group(
         north_up,
         accepted_only,
         scoring,
-        weighting,
+        method,
         order,
         worker_policy,
         cancel,
     } = job;
+    let weighting = method.weighting;
     let available_memory = crate::concurrency::available_memory_bytes();
     let reference_path = &group
         .frames
@@ -2534,7 +2586,7 @@ fn run_group(
         group_exposure_key.as_deref(),
         accepted_only,
         scoring,
-        weighting,
+        method,
         SEIZA_STACKING_VERSION,
         &calibration_fingerprint,
         order,
@@ -2547,13 +2599,17 @@ fn run_group(
             "Full restack: {reason}"
         );
         state.stack_previews.update(job_id, |job| {
-            job.groups[group.index].resume_note = Some(format!("Full restack: {reason}"));
+            add_note(
+                &mut job.groups[group.index].resume_note,
+                &format!("Full restack: {reason}"),
+            );
         });
     }
     let checkpoint = decision.state();
     let reference_frame = crate::image_io::open_linear_frame(&group.frames[0].path)
         .map_err(|error| error.to_string())?;
-    let output_channels = if reference_frame.bayer.is_some() {
+    let reference_is_bayer = reference_frame.bayer.is_some();
+    let output_channels = if reference_is_bayer {
         3_u64
     } else {
         reference_frame.image.channels as u64
@@ -2677,12 +2733,7 @@ fn run_group(
                 // cannot reject them statistically. The spatial impulse
                 // filter is the remaining defense; when any session has a
                 // dark, the dark does the job with real measurements.
-                let options = StackOptions {
-                    normalization: NormalizationMode::Global,
-                    cosmetic,
-                    weighting: weighting.frame_weighting(),
-                    ..StackOptions::default()
-                };
+                let options = method.stack_options(cosmetic);
                 // The reference calibrates with its own session's masters;
                 // later sessions swap theirs in per batch.
                 //
@@ -2813,7 +2864,7 @@ fn run_group(
                     exposure_group_key: group_exposure_key.clone(),
                     accepted_only,
                     scoring,
-                    weighting,
+                    method,
                     calibration_fingerprint: calibration_fingerprint.clone(),
                     order,
                     snr_points: points.to_vec(),
@@ -2901,6 +2952,13 @@ fn run_group(
     // but nobody reads a hundred rows to learn that six frames shared
     // one cause.
     let mut calibration_rejections: Vec<String> = Vec::new();
+    // Whose masters the stacker holds, and whether that session stacks raw.
+    // A fresh stack holds the reference's; a resumed one holds whatever its
+    // checkpoint stored, so its first batch swaps. A batch also ends at each
+    // depth the curve is measured at, and swapping in the masters already
+    // held would only validate them again and add a set to Seiza's ledger.
+    let mut active_masters: Option<(usize, bool)> =
+        (start_depth == 1).then(|| (plan.assignments[0], ledger[0].calibration_bypassed));
     let mut batch_start = 0usize;
     while batch_start < pending.len() && !cancelled {
         let session = plan.assignments[pending[batch_start].0];
@@ -2928,7 +2986,11 @@ fn run_group(
         // so and why. Forced calibration keeps the hard error: the user
         // explicitly asked for these masters.
         let mut calibration_bypassed = false;
-        if let Err(error) =
+        if let Some((active, bypassed)) = active_masters
+            && active == session
+        {
+            calibration_bypassed = bypassed;
+        } else if let Err(error) =
             pool.install(|| stacker.set_calibration(plan.sessions[session].masters.clone()))
         {
             if group.calibration == crate::calibration::CalibrationMode::On {
@@ -2953,6 +3015,7 @@ fn run_group(
                 });
             });
         }
+        active_masters = Some((session, calibration_bypassed));
         let mut consumed = 0usize;
         // The coordinator stays outside Rayon; Seiza submits CPU work to
         // this pool and commits outcomes in source order.
@@ -3130,13 +3193,49 @@ fn run_group(
     }
     pool.install(|| {
         let reference_headers = stacker.reference_headers().to_vec();
-        let snapshot = stacker.into_snapshot().map_err(|error| error.to_string())?;
-        let accepted_frames = snapshot.accepted_frames;
-        let rejected_frames = snapshot.rejected_frames;
-        let integrated = if accepted_frames >= 3 {
-            // The online checkpoint remains useful for admission and the depth
-            // curve. Release its buffers before revisiting early transients.
-            drop(snapshot);
+        let accepted_frames = stacker.view().accepted_frames;
+        let rejected_frames = stacker.view().rejected_frames;
+        let set_phase = |phase: String| {
+            state.stack_previews.update(job_id, |job| {
+                job.groups[group.index].phase = phase;
+            });
+        };
+        let report_pass = |pass: seiza_stacking::BatchStackPass, index: usize, count: usize| {
+            let pass = match pass {
+                seiza_stacking::BatchStackPass::Estimate => 1,
+                seiza_stacking::BatchStackPass::Refine => 2,
+                seiza_stacking::BatchStackPass::Integrate => 3,
+            };
+            set_phase(format!(
+                "Rejecting transients: pass {pass}/3, frame {}/{count}",
+                index + 1
+            ));
+        };
+        // The final pass replays PSF Guard's ledger, keeping each frame's
+        // background matched to the reference the live pass chose. Seiza
+        // 0.19's own reintegration refits those backgrounds against the mean
+        // of the best frames instead; on a 14-frame Sh2 230 night that mean
+        // carried a corner gradient into the whole stack, a gradient the
+        // live stack did not have. Seiza's command line does the same.
+        let reintegrate = method.final_pass == StackFinalPass::Reintegrate && accepted_frames >= 3;
+        let reintegrate = if reintegrate && method.bayer_drizzle && reference_is_bayer {
+            // Only Seiza can fill the photosites no frame reached, and it
+            // does so in the live stack.
+            state.stack_previews.update(job_id, |job| {
+                add_note(
+                    &mut job.groups[group.index].resume_note,
+                    "Final pass skipped: PSF Guard cannot yet replay a Bayer drizzle, so this is \
+                     the live stack",
+                );
+            });
+            false
+        } else {
+            reintegrate
+        };
+        let integrated = if reintegrate {
+            // The live accumulator is no longer needed. Release it before
+            // revisiting early transients.
+            drop(stacker);
             tracing::info!(
                 job_id,
                 group_index = group.index,
@@ -3146,22 +3245,11 @@ fn run_group(
             let result = final_integration::integrate(
                 &group,
                 &ledger,
-                weighting,
+                method,
                 &plan,
                 &session_cosmetics,
                 cancel,
-                |pass, index, count| {
-                    let pass = match pass {
-                        seiza_stacking::BatchStackPass::Estimate => 1,
-                        seiza_stacking::BatchStackPass::Integrate => 2,
-                    };
-                    state.stack_previews.update(job_id, |job| {
-                        job.groups[group.index].phase = format!(
-                            "Rejecting transients: pass {pass}/2, frame {}/{count}",
-                            index + 1
-                        );
-                    });
-                },
+                report_pass,
             );
             let result = match result {
                 Ok(result) => result,
@@ -3195,7 +3283,10 @@ fn run_group(
             );
             result.snapshot.image
         } else {
-            snapshot.image
+            stacker
+                .into_snapshot()
+                .map_err(|error| error.to_string())?
+                .image
         };
         if cancel.load(Ordering::Relaxed) {
             return Ok(GroupOutcome::Cancelled);
@@ -3507,7 +3598,7 @@ fn persist_latest_groups_with_exposures(
             cache_version: job.cache_version,
             order: job.order,
             scoring: job.scoring,
-            weighting: job.weighting,
+            method: job.method,
             group,
         };
         if let Some(existing) = latest.groups.iter_mut().find(|existing| {
@@ -3849,7 +3940,7 @@ mod tests {
             stacking_version: SEIZA_STACKING_VERSION.into(),
             order: snr::StackFrameOrder::Capture,
             scoring: StackScoringSettings::default(),
-            weighting: Default::default(),
+            method: Default::default(),
             groups,
             error: None,
         }
@@ -4198,7 +4289,7 @@ mod tests {
             calibration_overrides: Vec::new(),
             order: snr::StackFrameOrder::Capture,
             scoring: Default::default(),
-            weighting: Default::default(),
+            method: Default::default(),
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
@@ -4210,7 +4301,7 @@ mod tests {
             calibration_overrides: Vec::new(),
             order: snr::StackFrameOrder::Capture,
             scoring: Default::default(),
-            weighting: Default::default(),
+            method: Default::default(),
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
@@ -4222,7 +4313,7 @@ mod tests {
             calibration_overrides: Vec::new(),
             order: snr::StackFrameOrder::Capture,
             scoring: Default::default(),
-            weighting: Default::default(),
+            method: Default::default(),
         })
         .is_ok());
     }
@@ -4238,7 +4329,7 @@ mod tests {
             calibration: CalibrationMode::Auto,
             order: snr::StackFrameOrder::Capture,
             scoring: Default::default(),
-            weighting: Default::default(),
+            method: Default::default(),
             calibration_overrides: vec![CalibrationOverride {
                 target_id: 7,
                 filter_name: "Ha".into(),
@@ -4371,7 +4462,7 @@ mod tests {
             cache_version: STACK_PREVIEW_CACHE_VERSION,
             order: snr::StackFrameOrder::Capture,
             scoring: StackScoringSettings::default(),
-            weighting: Default::default(),
+            method: Default::default(),
             group: ready_group(10, "B", 1),
         };
         let mut legacy = current.clone();
@@ -4400,36 +4491,36 @@ mod tests {
             cache_version: STACK_PREVIEW_CACHE_VERSION,
             order: snr::StackFrameOrder::Capture,
             scoring: StackScoringSettings::default(),
-            weighting: Default::default(),
+            method: Default::default(),
             group: ready_group(10, "B", 1),
         };
         let mut serialized = serde_json::to_value(current).unwrap();
         serialized.as_object_mut().unwrap().remove("order");
         serialized.as_object_mut().unwrap().remove("scoring");
 
-        serialized.as_object_mut().unwrap().remove("weighting");
+        serialized.as_object_mut().unwrap().remove("method");
 
         let restored: LatestStackPreviewGroup = serde_json::from_value(serialized).unwrap();
 
         assert_eq!(restored.order, snr::StackFrameOrder::Capture);
         assert_eq!(restored.scoring, StackScoringSettings::default());
-        assert_eq!(restored.weighting, StackWeighting::Equal);
+        assert_eq!(restored.method, StackMethod::classic());
     }
 
     #[test]
     fn an_old_job_defaults_to_calibrated_scoring() {
         let mut serialized = serde_json::to_value(completed_job("legacy", Vec::new())).unwrap();
         serialized.as_object_mut().unwrap().remove("scoring");
-        serialized.as_object_mut().unwrap().remove("weighting");
+        serialized.as_object_mut().unwrap().remove("method");
 
         let restored: StackPreviewJob = serde_json::from_value(serialized).unwrap();
 
         assert_eq!(restored.scoring, StackScoringSettings::default());
-        assert_eq!(restored.weighting, StackWeighting::Equal);
+        assert_eq!(restored.method, StackMethod::classic());
     }
 
     #[test]
-    fn only_noise_weighting_enters_the_job_id() {
+    fn the_whole_method_enters_the_job_id() {
         let directory = tempfile::tempdir().unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         crate::ts_schema::apply_schema(&conn).unwrap();
@@ -4452,14 +4543,18 @@ mod tests {
             prepare_job(&ctx, 1, &serde_json::from_value(body).unwrap()).unwrap()
         };
         let omitted = job(serde_json::json!({}));
-        let equal = job(serde_json::json!({"weighting":"equal"}));
-        let noise = job(serde_json::json!({"weighting":"noise"}));
-        // An equal-weight build keeps the id, and so the cache, it had
-        // before weighting existed.
-        assert_eq!(omitted.public.job_id, equal.public.job_id);
-        assert_eq!(omitted.public.weighting, StackWeighting::Equal);
-        assert_ne!(noise.public.job_id, equal.public.job_id);
-        assert_eq!(noise.public.weighting, StackWeighting::Noise);
+        let recommended = job(serde_json::json!({"method": StackMethod::default()}));
+        let draft = job(serde_json::json!({"method": {"final_pass": "draft"}}));
+        let equal = job(serde_json::json!({"method": {"weighting": "equal"}}));
+        // Without a method the request takes the server's, which defaults to
+        // Seiza's recommended one.
+        assert_eq!(omitted.public.method, StackMethod::default());
+        assert_eq!(omitted.public.job_id, recommended.public.job_id);
+        // Even the final pass alone makes another artifact.
+        assert_ne!(draft.public.job_id, recommended.public.job_id);
+        assert_eq!(draft.public.method.final_pass, StackFinalPass::Draft);
+        assert_ne!(equal.public.job_id, recommended.public.job_id);
+        assert_eq!(equal.public.method.weighting, StackWeighting::Equal);
     }
 
     #[test]
@@ -4508,7 +4603,7 @@ mod tests {
             cache_version: STACK_PREVIEW_CACHE_VERSION,
             order: snr::StackFrameOrder::Capture,
             scoring: StackScoringSettings::default(),
-            weighting: Default::default(),
+            method: Default::default(),
             group: ready_group(10, "B", 1),
         };
         let mut north_up = source_frame.clone();

@@ -88,6 +88,11 @@ pub fn configure(policy: AutomationPolicy) {
 
 /// The registry's stored choice, or the default when it stores none.
 pub fn configure_from_registry(settings: Option<&crate::db_registry::StackAutomationSettings>) {
+    super::method::configure(
+        settings
+            .and_then(|settings| settings.method)
+            .unwrap_or_default(),
+    );
     configure(
         settings
             .map(|settings| settings.policy())
@@ -555,7 +560,8 @@ pub(super) fn refresh_request(
         calibration_overrides: calibration_overrides.into_values().collect(),
         order: newest.order,
         scoring: scoring_overrides(&newest.scoring),
-        weighting: newest.weighting,
+        // The server's current method, so a settings change reaches the next refresh.
+        method: None,
     })
 }
 
@@ -871,7 +877,10 @@ mod tests {
         // The newest card's policies carry the request.
         assert!(request.accepted_only, "the G card at 12 was accepted-only");
         assert!(request.north_up);
-        assert_eq!(request.weighting, super::super::StackWeighting::Noise);
+        assert_eq!(
+            request.method, None,
+            "a refresh takes the server's current method"
+        );
         assert_eq!(request.scoring.penalty_satellite, Some(0.5));
         assert_eq!(request.scoring.hfr_reject_above, Some(3.0));
         assert_eq!(request.scoring.star_count_reject_below, None);

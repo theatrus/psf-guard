@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatIntegration, totalIntegration } from '../utils/integrationTime';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
+import { openSettings } from '../utils/settingsIntent';
+import { STACK_METHOD_QUERY_KEY, methodName, sameMethod } from '../utils/stackMethod';
 import type {
   CalibrationMode,
   ExposureGroup,
@@ -12,7 +14,7 @@ import type {
   StackInputImage,
   StackFrameOrder,
   StackPreviewJob,
-  StackWeighting,
+  StackMethod,
   StackScoringSettings,
   StackStretchPreview,
 } from '../api/types';
@@ -75,7 +77,8 @@ interface StackArtifact {
   acceptedOnly: boolean;
   order: StackFrameOrder;
   scoring: StackScoringSettings;
-  weighting: StackWeighting;
+  /** Absent only from records older than the method. */
+  method?: StackMethod;
   group: StackGroupStatus;
 }
 
@@ -123,21 +126,6 @@ function readCalibrationMode(): CalibrationMode {
     return stored === 'on' || stored === 'off' ? stored : 'auto';
   } catch {
     return 'auto';
-  }
-}
-
-/**
- * Whether the next build weighs frames by their noise. Remembered across
- * reloads like the calibration mode: it is a lasting choice about how
- * someone wants their stacks made, not a one-off question like the order.
- */
-const WEIGHTING_KEY = 'psf-guard.stack-frame-weighting';
-
-function readWeighting(): StackWeighting {
-  try {
-    return window.localStorage.getItem(WEIGHTING_KEY) === 'noise' ? 'noise' : 'equal';
-  } catch {
-    return 'equal';
   }
 }
 
@@ -249,8 +237,8 @@ function staleReason(
   frameOrder: StackFrameOrder,
   builtScoring: StackScoringSettings,
   scoring: StackScoringSettings,
-  builtWeighting: StackWeighting,
-  weighting: StackWeighting
+  builtMethod: StackMethod | undefined,
+  currentMethod: StackMethod | undefined
 ): string | null {
   if (!current) return 'Out of date — this channel is not in the current input';
   if (inputImages.length === 0) return 'Out of date — rebuild required';
@@ -278,8 +266,9 @@ function staleReason(
   if (!sameScoring(scoringPreferencesOf(builtScoring), scoringPreferencesOf(scoring))) {
     return 'Out of date — scoring settings changed';
   }
-  if (builtWeighting !== weighting) {
-    return 'Out of date — frame weighting changed';
+  // Until the server's method has loaded there is nothing to compare.
+  if (builtMethod && currentMethod && !sameMethod(builtMethod, currentMethod)) {
+    return 'Out of date — stacking method changed';
   }
   return null;
 }
@@ -294,7 +283,7 @@ function artifactFromLatest(latest: LatestStackPreviewGroup | undefined): StackA
     acceptedOnly: latest.accepted_only,
     order: latest.order ?? 'capture',
     scoring: builtScoringSettings(latest.scoring),
-    weighting: latest.weighting ?? 'equal',
+    method: latest.method,
     group: latest.group,
   };
 }
@@ -355,15 +344,13 @@ export default function StackPreviewPanel({
       // Keep the in-memory preference even when it cannot be persisted.
     }
   };
-  const [weighting, setWeighting] = useState<StackWeighting>(readWeighting);
-  const chooseWeighting = (next: StackWeighting) => {
-    setWeighting(next);
-    try {
-      window.localStorage.setItem(WEIGHTING_KEY, next);
-    } catch {
-      // Keep the in-memory preference even when it cannot be persisted.
-    }
-  };
+  // The server's stacking method, set on the Stacking settings page. Builds
+  // use it on the server; the panel reads it to mark stacks built otherwise.
+  const stackMethod = useQuery({
+    queryKey: STACK_METHOD_QUERY_KEY,
+    queryFn: apiClient.getStackMethod,
+  });
+  const currentMethod = stackMethod.data?.method;
   const [calibrationMode, setCalibrationMode] = useState<CalibrationMode>(readCalibrationMode);
   const chooseCalibrationMode = (mode: CalibrationMode) => {
     setCalibrationMode(mode);
@@ -456,7 +443,6 @@ export default function StackPreviewPanel({
         accepted_only: acceptedOnly,
         force: variables.force,
         order: frameOrder,
-        weighting,
         // Frame exclusion keys off reject recommendations, so the stack
         // must score with the same shared preferences as every other
         // surface — a satellite penalty of 0 keeps trailed frames in.
@@ -621,7 +607,7 @@ export default function StackPreviewPanel({
       acceptedOnly: entry.job.accepted_only,
       order: entry.job.order ?? 'capture',
       scoring: builtScoringSettings(entry.job.scoring),
-      weighting: entry.job.weighting ?? 'equal',
+      method: entry.job.method,
       group: entry.group,
     } : artifactFromLatest(latestByChannel.get(key));
     return [key, artifact] as const;
@@ -674,7 +660,7 @@ export default function StackPreviewPanel({
             acceptedOnly: activeEntry.job.accepted_only,
             order: activeEntry.job.order ?? 'capture',
             scoring: builtScoringSettings(activeEntry.job.scoring),
-            weighting: activeEntry.job.weighting ?? 'equal',
+            method: activeEntry.job.method,
             group: activeEntry.group,
           }
         : latestEntry
@@ -682,7 +668,7 @@ export default function StackPreviewPanel({
               acceptedOnly: latestEntry.accepted_only,
               order: latestEntry.order ?? 'capture',
               scoring: builtScoringSettings(latestEntry.scoring),
-              weighting: latestEntry.weighting ?? 'equal',
+              method: latestEntry.method,
               group: latestEntry.group,
             }
           : undefined;
@@ -698,8 +684,8 @@ export default function StackPreviewPanel({
           frameOrder,
           artifact.scoring,
           currentScoring,
-          artifact.weighting,
-          weighting
+          artifact.method,
+          currentMethod
         ) !== null
       : false;
   }).length;
@@ -719,8 +705,8 @@ export default function StackPreviewPanel({
           frameOrder,
           builtScoringSettings(entry.scoring),
           currentScoring,
-          entry.weighting ?? 'equal',
-          weighting
+          entry.method,
+          currentMethod
         )
       ) {
         sourceKeys.add(colorSourceKey({
@@ -739,7 +725,7 @@ export default function StackPreviewPanel({
     currentChannels,
     frameOrder,
     currentScoring,
-    weighting,
+    currentMethod,
     latest.data,
   ]);
   const colorSourceRevision = useMemo(
@@ -819,24 +805,17 @@ export default function StackPreviewPanel({
               />
               Accepted only
             </label>
-            <label
-              className="stack-preview-checkbox stack-preview-weighting"
-              title={
-                'Let quieter frames count for more. Each frame is weighted by the inverse ' +
-                'of its noise variance, measured after normalization, relative to the ' +
-                'reference frame, which weighs 1. Weights stay between 0.05 and 20. Helps ' +
-                'when frames of one exposure length were shot under changing sky ' +
-                'brightness or transparency.'
-              }
-            >
-              <input
-                type="checkbox"
-                checked={weighting === 'noise'}
-                disabled={running}
-                onChange={(event) => chooseWeighting(event.target.checked ? 'noise' : 'equal')}
-              />
-              Weight frames by noise
-            </label>
+            <span className="stack-preview-method">
+              Method:{' '}
+              <button
+                type="button"
+                className="link-button"
+                title="Change how stacks integrate their frames in Settings, Stacking"
+                onClick={() => openSettings('stacking')}
+              >
+                {currentMethod ? methodName(currentMethod, stackMethod.data) : '…'}
+              </button>
+            </span>
             <label
               className="stack-preview-calibration-mode"
               title={
@@ -985,8 +964,8 @@ export default function StackPreviewPanel({
                       frameOrder,
                       artifact.scoring,
                       currentScoring,
-                      artifact.weighting,
-                      weighting
+                      artifact.method,
+                      currentMethod
                     )
                   : null;
                 const groupBusy =
@@ -1337,7 +1316,7 @@ export default function StackPreviewPanel({
                                   <th>Quality</th>
                                   <th>Decision</th>
                                   <th>Registration</th>
-                                  {artifact.weighting === 'noise' && (
+                                  {artifact.method?.weighting === 'noise' && (
                                     <th title="Weight in the stack mean, per channel. The reference weighs 1.">
                                       Weight
                                     </th>
@@ -1351,7 +1330,7 @@ export default function StackPreviewPanel({
                                     <td>{frame.quality_score?.toFixed(2) ?? '—'}</td>
                                     <td title={frame.reason ?? undefined}>{frame.disposition}</td>
                                     <td>{frame.reason || registrationSummary(frame)}</td>
-                                    {artifact.weighting === 'noise' && (
+                                    {artifact.method?.weighting === 'noise' && (
                                       <td
                                         className="stack-frame-weight"
                                         title={frame.noise_sigma?.length

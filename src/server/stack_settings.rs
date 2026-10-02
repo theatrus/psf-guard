@@ -1,10 +1,12 @@
-//! Process-wide automatic stack preview settings, persisted in the registry
-//! and applied to the scheduler without a restart.
+//! Process-wide stack preview settings, persisted in the registry and applied
+//! without a restart: the automatic refresh policy, and the method every
+//! stack integrates its frames with.
 
 use crate::db_registry::{DbRegistry, StackAutomationSettings};
 use crate::server::api::ApiResponse;
 use crate::server::handlers::{require_registry_path, AppError};
 use crate::server::stack_preview::automatic::{self, AutomationPolicy, MAX_DELAY_MINUTES};
+use crate::server::stack_preview::{method, StackMethod};
 use crate::server::state::AppState;
 use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
@@ -93,17 +95,24 @@ fn requested_policy(
     Ok(policy)
 }
 
-/// The registry entry for a policy: nothing at all when it is the default,
-/// so a registry that only ever held defaults stays clean.
-fn stored(policy: AutomationPolicy) -> Option<StackAutomationSettings> {
+/// The registry entry for a policy and a method: nothing at all when both
+/// are the defaults, so a registry that only ever held defaults stays clean.
+fn stored(policy: AutomationPolicy, method: StackMethod) -> Option<StackAutomationSettings> {
     let defaults = AutomationPolicy::default();
-    (policy != defaults).then_some(StackAutomationSettings {
+    (policy != defaults || method != StackMethod::default()).then_some(StackAutomationSettings {
         automatic_previews: policy.enabled.then_some(true),
         arrival_delay_minutes: (policy.arrival_delay_minutes != defaults.arrival_delay_minutes)
             .then_some(policy.arrival_delay_minutes),
         grade_delay_minutes: (policy.grade_delay_minutes != defaults.grade_delay_minutes)
             .then_some(policy.grade_delay_minutes),
+        method: (method != StackMethod::default()).then_some(method),
     })
+}
+
+fn stored_method(settings: Option<&StackAutomationSettings>) -> StackMethod {
+    settings
+        .and_then(|settings| settings.method)
+        .unwrap_or_default()
 }
 
 /// PUT /api/settings/stacking
@@ -116,7 +125,7 @@ pub async fn update_stack_settings(
     let mut registry = DbRegistry::load_or_init(&path)
         .map_err(|error| AppError::InternalError(error.to_string()))?;
     let policy = requested_policy(&request, registry.stacking.as_ref())?;
-    registry.stacking = stored(policy);
+    registry.stacking = stored(policy, stored_method(registry.stacking.as_ref()));
     registry
         .save(&path)
         .map_err(|error| AppError::InternalError(error.to_string()))?;
@@ -127,19 +136,83 @@ pub async fn update_stack_settings(
     Ok(Json(ApiResponse::success(response(policy))))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StackMethodResponse {
+    /// What new stacks use now.
+    pub method: StackMethod,
+    /// Seiza's recommended method, the default.
+    pub recommended: StackMethod,
+    /// What PSF Guard did before the method could be chosen.
+    pub classic: StackMethod,
+}
+
+fn method_response(method: StackMethod) -> StackMethodResponse {
+    StackMethodResponse {
+        method,
+        recommended: StackMethod::default(),
+        classic: StackMethod::classic(),
+    }
+}
+
+/// GET /api/settings/stacking/method
+pub async fn get_stack_method(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<StackMethodResponse>>, AppError> {
+    let method = match require_registry_path(&state) {
+        Ok(path) => stored_method(
+            DbRegistry::load_or_init(&path)
+                .map_err(|error| AppError::InternalError(error.to_string()))?
+                .stacking
+                .as_ref(),
+        ),
+        Err(_) => method::current(),
+    };
+    Ok(Json(ApiResponse::success(method_response(method))))
+}
+
+/// PUT /api/settings/stacking/method
+///
+/// Applies to stacks started from now on, including automatic refreshes.
+/// Stacks already built keep the method they record, and show as out of date
+/// beside the new one.
+pub async fn update_stack_method(
+    State(state): State<Arc<AppState>>,
+    Json(method): Json<StackMethod>,
+) -> Result<Json<ApiResponse<StackMethodResponse>>, AppError> {
+    let path = require_registry_path(&state)?;
+    let _registry_guard = state.registry_write.lock().await;
+    let mut registry = DbRegistry::load_or_init(&path)
+        .map_err(|error| AppError::InternalError(error.to_string()))?;
+    let policy = registry
+        .stacking
+        .as_ref()
+        .map(|settings| settings.policy())
+        .unwrap_or_default();
+    registry.stacking = stored(policy, method);
+    registry
+        .save(&path)
+        .map_err(|error| AppError::InternalError(error.to_string()))?;
+    method::configure(method);
+    Ok(Json(ApiResponse::success(method_response(method))))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn a_default_policy_is_not_written_and_a_chosen_one_round_trips() {
-        assert_eq!(stored(AutomationPolicy::default()), None);
+        assert_eq!(
+            stored(AutomationPolicy::default(), StackMethod::default()),
+            None
+        );
         let chosen = AutomationPolicy {
             enabled: true,
             arrival_delay_minutes: 5,
             grade_delay_minutes: 30,
         };
-        let entry = stored(chosen).expect("a chosen policy is stored");
+        let entry = stored(chosen, StackMethod::default()).expect("a chosen policy is stored");
+        assert_eq!(entry.method, None, "the recommended method is not written");
         assert_eq!(entry.automatic_previews, Some(true));
         assert_eq!(
             entry.arrival_delay_minutes, None,
@@ -155,6 +228,7 @@ mod tests {
             automatic_previews: Some(true),
             arrival_delay_minutes: Some(10),
             grade_delay_minutes: None,
+            method: None,
         };
         let policy = requested_policy(
             &UpdateStackSettingsRequest {
@@ -186,5 +260,24 @@ mod tests {
             None,
         )
         .is_err());
+    }
+
+    #[test]
+    fn a_chosen_method_is_stored_alone_and_survives_a_policy_change() {
+        let draft = StackMethod {
+            final_pass: crate::server::stack_preview::StackFinalPass::Draft,
+            ..StackMethod::default()
+        };
+        let entry = stored(AutomationPolicy::default(), draft).expect("a chosen method is stored");
+        assert_eq!(entry.automatic_previews, None);
+        assert_eq!(entry.method, Some(draft));
+        // The automation route rebuilds the entry; the method rides along.
+        let policy = AutomationPolicy {
+            enabled: true,
+            ..AutomationPolicy::default()
+        };
+        let rebuilt = stored(policy, stored_method(Some(&entry))).unwrap();
+        assert_eq!(rebuilt.method, Some(draft));
+        assert_eq!(stored_method(None), StackMethod::default());
     }
 }

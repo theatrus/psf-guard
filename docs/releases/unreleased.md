@@ -40,11 +40,18 @@
   scores lower than frames with the same exposure, from any night. Existing
   frames need a quality scan with **Force** to gain it.
 
-- Stack previews can weight frames by noise: turn on **Weight frames by
-  noise** and quieter frames count for more, while frames shot through
-  moonlight or haze count for less. Each frame's weight appears in the
-  frame decisions table. `psf-guard stack-snr --weight-by-noise` does the
-  same from the command line.
+- A new **Stacking** page in Settings sets how stack previews integrate
+  their frames. It defaults to Seiza 0.19's recommended method: local
+  background normalization with no frame-edge seams, frames weighted by
+  their noise, a reference chosen from each frame's stars and sky, quadratic
+  registration for lens distortion, and Lanczos-3 resampling. **Draft** skips
+  the final rejection pass for a quick look, and **Classic** keeps the old
+  method. Bayer drizzle is there for dithered color frames. The weighting
+  checkbox has left the stack panel, which now names the method in use and
+  marks stacks built another way out of date. Automatic previews moved to the
+  same page. `psf-guard stack-snr --weight-by-noise` weighs frames from the
+  command line. Stacks built before the upgrade show as out of date until
+  they are rebuilt.
 
 - The visibility chart marks the target's meridian transit and draws the
   rig's meridian pause as a break in the track; the hours lost to it are
