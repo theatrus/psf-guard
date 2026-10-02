@@ -19,6 +19,7 @@ function fixture() {
     http.get('/api/director/v1/templates', () => HttpResponse.json(ok(library))),
     http.put('/api/director/v1/templates/:id', async ({ request, params }) => {
       const body = await request.json() as Record<string, unknown>;
+      expect(body).not.toHaveProperty('bandpass');
       saves.push(body);
       const saved = { ...body, revision: Number(body.revision) + 1, bandpass: { id: 'h_alpha', name: 'H-alpha', kind: 'narrowband' } } as DirectorLibraryTemplate;
       const index = library.findIndex(t => t.id === params.id);

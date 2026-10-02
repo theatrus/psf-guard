@@ -14,7 +14,7 @@
 .template-table .plan-goal { display: inline-flex; align-items: center; gap: 4px; }
 .template-actions { white-space: nowrap; }
 .template-actions button { min-height: 30px; padding: 4px 8px; margin-right: 4px; }
-.template-moon { border: 0; margin: 8px 0; padding: 8px 0; }
+.template-moon { border: 0; margin: 8px 0; padding: 8px 0; width: min(880px, calc(100vw - 112px)); max-width: 100%; min-width: 0; box-sizing: border-box; position: sticky; left: 0; }
 .template-moon legend { font-weight: 600; }
 .template-moon > label { display: inline-flex; align-items: center; gap: 6px; margin: 0 20px 12px 0; }
 .template-table .template-moon input[type="checkbox"] { width: auto; min-width: 0; }

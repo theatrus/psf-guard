@@ -10,7 +10,11 @@ test('exposure Moon policy saves, survives reload and retains disabled values', 
   } });
   expect(created.ok()).toBeTruthy();
   const open = async () => {
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    // A new empty server opens Settings automatically.
+    const alreadyOpen = await page.getByRole('tab', { name: 'Exposure templates', exact: true })
+      .waitFor({ state: 'visible', timeout: 2000 }).then(() => true, () => false);
+    if (!alreadyOpen)
+      await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('tab', { name: 'Exposure templates', exact: true }).click();
     await page.getByRole('button', { name: `Moon settings for ${name}`, exact: true }).click();
     return page.getByRole('group', { name: 'Moon avoidance', exact: true });
@@ -33,6 +37,8 @@ test('exposure Moon policy saves, survives reload and retains disabled values', 
     await page.screenshot({ path: testInfo.outputPath('moon-desktop.png') });
     await page.setViewportSize({ width: 390, height: 844 });
     await group.scrollIntoViewIfNeeded();
+    expect(await group.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(await group.evaluate(element => element.getBoundingClientRect().width)).toBeLessThan(300);
     await page.screenshot({ path: testInfo.outputPath('moon-mobile.png') });
     await group.getByRole('checkbox', { name: 'Enable Moon avoidance' }).uncheck();
     await page.getByRole('button', { name: `Save ${name}`, exact: true }).click();

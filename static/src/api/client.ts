@@ -359,7 +359,15 @@ export const apiClient = {
 
   saveDirectorLibraryTemplate: async (template: Omit<DirectorLibraryTemplate, 'bandpass'>): Promise<DirectorLibraryTemplate> => {
     const api = await getApi();
-    const { data } = await api.put<ApiResponse<DirectorLibraryTemplate>>(`/director/v1/templates/${encodeURIComponent(template.id)}`, template);
+    // Read models also carry a derived bandpass; never send it to the strict draft API.
+    const payload = {
+      id: template.id, revision: template.revision, name: template.name,
+      filter_name: template.filter_name, gain: template.gain, offset: template.offset,
+      bin: template.bin, readout_mode: template.readout_mode,
+      default_exposure_seconds: template.default_exposure_seconds,
+      moon: template.moon, updated_at_ms: template.updated_at_ms,
+    };
+    const { data } = await api.put<ApiResponse<DirectorLibraryTemplate>>(`/director/v1/templates/${encodeURIComponent(template.id)}`, payload);
     if (!data.data) throw new Error(data.error || 'Failed to save the template');
     return data.data;
   },
