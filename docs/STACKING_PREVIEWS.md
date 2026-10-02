@@ -572,6 +572,60 @@ cards the grid shows, never a project without remembered previews, and never
 changes the calibration library, grades, or files. Target merges, exposure
 moves, and peer pulls count as syncs.
 
+An automatic build uses the background share of the processor, 25% of the
+cores by default, while a build you start uses the interactive share, 50%.
+**Settings → Stacking → Processor use** sets both; see below.
+
+### After a restart
+
+The queue survives a restart. PSF Guard keeps a job journal beside the
+database registry (`<registry>.jobs.json`), rewritten a few seconds after the
+queue changes and once more when the server stops cleanly (Ctrl+C, SIGTERM,
+or quitting the desktop app). It holds stack and color builds queued or
+running, in the order they would run, automatic refreshes still settling with
+their due times, and the WBPP line.
+
+On start PSF Guard puts them back before the automatic scheduler may start
+anything:
+
+- Each build is prepared again from the catalog as it is now. One whose
+  database is gone, or that finished before the restart, is skipped with a
+  note in the log; a forced rebuild still runs. One that cannot be prepared
+  yet, because its disk is not mounted, is retried every minute for half an
+  hour and stays in the journal meanwhile.
+- A build cut off part way resumes from its checkpoint where it can. A build
+  cut off by two restarts in a row is not started a third time, since it is
+  the likelier cause of the restarts.
+- A build you adopted from the automatic refresh comes back as yours.
+- Settling refreshes keep their due times, or run at once if those passed.
+- Waiting WBPP runs keep their order. A WBPP run the restart cut off is not
+  started again on its own, because it would begin from nothing after every
+  restart: its database shows it as stopped by the restart, to start again
+  when you are ready. If its PixInsight outlived the server, nothing else
+  starts in PixInsight until that process ends.
+
+With automatic previews on, every database is also checked once after the
+usual settling delay, so frames that arrived while the server was down still
+reach their stacks; a check that finds nothing new starts nothing. One entry
+the journal can no longer read, after an upgrade, is dropped on its own. A
+server without a registry keeps no journal.
+
+## Processor use
+
+**Settings → Stacking → Processor use** sets how many cores each kind of work
+may use, as a share of the logical cores:
+
+- **Work you wait on**: stack builds you start, quality scans, and previews
+  being looked at. Default 50%, or the server config's `scan_worker_ratio`.
+- **Background work**: automatic stack refreshes, preview pre-generation, and
+  quality backfill. Default 25%, or `background_worker_ratio`.
+
+A share chosen here is kept in the registry and wins over the config file;
+**Use the default** goes back to the file's value. A change applies to work
+that starts after it. Memory can lower the count further: a pool never holds
+more frames than half the free memory allows. `GET` and `PUT
+/api/settings/workers` read and set the shares; `null` means the default.
+
 ## Cached results
 
 PSF Guard remembers the last successful preview for every target/channel in the

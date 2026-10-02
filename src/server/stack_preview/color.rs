@@ -235,7 +235,7 @@ impl StackNarrowbandPalette {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StackColorRequest {
     pub target_id: i32,
     pub kind: StackColorKind,
@@ -959,7 +959,8 @@ pub async fn start_stack_color(
             "At most {MAX_REMEMBERED_JOBS} color preview jobs may be active at once"
         )));
     }
-    enqueue_color_job(Arc::clone(&state), prepared);
+    let origin = super::journal::JournaledStackJob::color(&ctx.id, project_id, &request, false);
+    enqueue_color_job(Arc::clone(&state), prepared, origin);
     Ok(Json(ApiResponse::success(response)))
 }
 
@@ -1669,11 +1670,16 @@ fn composition_label(
     }
 }
 
-pub(super) fn enqueue_color_job(state: Arc<AppState>, prepared: PreparedColorJob) {
+pub(super) fn enqueue_color_job(
+    state: Arc<AppState>,
+    prepared: PreparedColorJob,
+    origin: super::journal::JournaledStackJob,
+) {
     let job_id = prepared.public.job_id.clone();
     // A composition can be stopped while it waits for the worker; once it
     // runs it finishes, which is minutes at most.
     let cancel = state.stack_previews.track_cancel(&job_id);
+    state.stack_previews.remember_origin(&job_id, origin);
     state.stack_previews.join_line(&job_id);
     tokio::spawn(async move {
         let permit = state.stack_previews.wait_turn(&job_id, &cancel).await;
@@ -1692,7 +1698,8 @@ pub(super) fn enqueue_color_job(state: Arc<AppState>, prepared: PreparedColorJob
         }
         // Only a composition a person asked for outranks pre-generation and
         // quality scans; an automatic one is background work like them.
-        let guard = (!prepared.public.automatic).then(|| state.begin_interactive_job());
+        let guard =
+            (!state.stack_previews.is_automatic(&job_id)).then(|| state.begin_interactive_job());
         let state_for_job = Arc::clone(&state);
         let job_id_for_job = job_id.clone();
         let result = tokio::task::spawn_blocking(move || {
@@ -2020,7 +2027,7 @@ fn compose_color(
     let budget = crate::concurrency::plan_workers(
         None,
         &policy,
-        crate::concurrency::Priority::Interactive,
+        super::job_priority(state.stack_previews.is_automatic(&job.job_id)),
         Some(pixels),
     );
     let pool = ThreadPoolBuilder::new()

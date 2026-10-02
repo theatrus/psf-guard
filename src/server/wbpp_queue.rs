@@ -176,6 +176,11 @@ impl WbppQueue {
             .collect()
     }
 
+    /// Every queued run with its request, next first, for the job journal.
+    pub fn journal_entries(&self) -> Vec<QueuedRun> {
+        self.entries.lock().unwrap().iter().cloned().collect()
+    }
+
     pub fn len(&self) -> usize {
         self.entries.lock().unwrap().len()
     }

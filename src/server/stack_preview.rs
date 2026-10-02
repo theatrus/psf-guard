@@ -12,6 +12,7 @@ pub mod color;
 mod execution;
 mod final_integration;
 mod janitor;
+pub mod journal;
 pub mod method;
 pub mod rc_astro;
 mod reference;
@@ -148,7 +149,7 @@ const MAX_REMEMBERED_JOBS: usize = 64;
 const PREVIEW_MAX_DIMENSION: u32 = 2400;
 const STACK_BYTES_PER_OUTPUT_SAMPLE: u64 = 96;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StackPreviewRequest {
     pub image_ids: Vec<i32>,
     #[serde(default)]
@@ -192,7 +193,7 @@ pub struct StackPreviewRequest {
 }
 
 /// One channel's calibration mode, overriding the request-wide choice.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalibrationOverride {
     pub target_id: i32,
     #[serde(default)]
@@ -751,6 +752,9 @@ pub struct StackPreviewManager {
     waiting: Mutex<Vec<String>>,
     /// Wakes waiting builds when the line changes or one is stopped.
     turn: tokio::sync::Notify,
+    /// What each queued or running build was asked for, so the job journal
+    /// can put it back after a restart. Kept as long as its stop flag.
+    origins: Mutex<HashMap<String, journal::JournaledStackJob>>,
 }
 
 impl StackPreviewManager {
@@ -764,6 +768,7 @@ impl StackPreviewManager {
             permit: Arc::new(Semaphore::new(1)),
             waiting: Mutex::new(Vec::new()),
             turn: tokio::sync::Notify::new(),
+            origins: Mutex::new(HashMap::new()),
         }
     }
 
@@ -856,6 +861,54 @@ impl StackPreviewManager {
 
     fn forget_cancel(&self, job_id: &str) {
         self.cancels.lock().unwrap().remove(job_id);
+        self.origins.lock().unwrap().remove(job_id);
+    }
+
+    fn remember_origin(&self, job_id: &str, origin: journal::JournaledStackJob) {
+        self.origins
+            .lock()
+            .unwrap()
+            .insert(job_id.to_string(), origin);
+    }
+
+    /// Every build still queued or running, as it was asked for, in the
+    /// order it will run: running first, then the line.
+    pub fn journal_entries(&self) -> Vec<journal::JournaledStackJob> {
+        let origins = self.origins.lock().unwrap().clone();
+        let running = |job_id: &str| {
+            self.jobs
+                .lock()
+                .unwrap()
+                .get(job_id)
+                .map(|job| job.state == StackJobState::Running)
+                .or_else(|| {
+                    self.color_jobs
+                        .lock()
+                        .unwrap()
+                        .get(job_id)
+                        .map(|job| job.state == StackJobState::Running)
+                })
+                .unwrap_or(false)
+        };
+        let mut entries = origins
+            .into_iter()
+            .map(|(job_id, origin)| {
+                let rank = if running(&job_id) {
+                    (0, 0)
+                } else {
+                    (1, self.line_position(&job_id).unwrap_or(usize::MAX))
+                };
+                (rank, job_id, origin)
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+        entries
+            .into_iter()
+            .map(|(rank, _, mut origin)| {
+                origin.set_running(rank.0 == 0);
+                origin
+            })
+            .collect()
     }
 
     /// Ask a queued or running job to stop. Returns false when the job is not
@@ -882,6 +935,28 @@ impl StackPreviewManager {
         if let Some(job) = self.color_jobs.lock().unwrap().get_mut(job_id) {
             job.automatic = false;
         }
+        // A restart brings it back as the person's too.
+        if let Some(origin) = self.origins.lock().unwrap().get_mut(job_id) {
+            origin.set_automatic(false);
+        }
+    }
+
+    /// Whether a build is the automatic refresh's, read now: a person can
+    /// adopt it while it waits or runs, and it then takes their share.
+    pub(super) fn is_automatic(&self, job_id: &str) -> bool {
+        self.jobs
+            .lock()
+            .unwrap()
+            .get(job_id)
+            .map(|job| job.automatic)
+            .or_else(|| {
+                self.color_jobs
+                    .lock()
+                    .unwrap()
+                    .get(job_id)
+                    .map(|job| job.automatic)
+            })
+            .unwrap_or(false)
     }
 
     /// Stop every automatic build so an interactive one gets the worker.
@@ -1407,7 +1482,8 @@ pub async fn start_stack_previews(
             "At most {MAX_REMEMBERED_JOBS} stack preview jobs may be active at once"
         )));
     }
-    enqueue_job(Arc::clone(&state), prepared);
+    let origin = journal::JournaledStackJob::mono(&ctx.id, project_id, &request, &response, false);
+    enqueue_job(Arc::clone(&state), prepared, origin);
     Ok(Json(ApiResponse::success(response)))
 }
 
@@ -2391,8 +2467,11 @@ fn source_fingerprint(path: &FsPath) -> String {
     output
 }
 
-fn enqueue_job(state: Arc<AppState>, prepared: PreparedJob) {
+fn enqueue_job(state: Arc<AppState>, prepared: PreparedJob, origin: journal::JournaledStackJob) {
     let cancel = state.stack_previews.track_cancel(&prepared.public.job_id);
+    state
+        .stack_previews
+        .remember_origin(&prepared.public.job_id, origin);
     state.stack_previews.join_line(&prepared.public.job_id);
     tokio::spawn(async move {
         let job_id = prepared.public.job_id.clone();
@@ -2415,7 +2494,8 @@ fn enqueue_job(state: Arc<AppState>, prepared: PreparedJob) {
         }
         // Only a build a person asked for outranks pre-generation and
         // quality scans; an automatic refresh is background work like them.
-        let guard = (!prepared.public.automatic).then(|| state.begin_interactive_job());
+        let guard =
+            (!state.stack_previews.is_automatic(&job_id)).then(|| state.begin_interactive_job());
         let state_for_job = Arc::clone(&state);
         let cancel_for_job = Arc::clone(&cancel);
         let result = tokio::task::spawn_blocking(move || {
@@ -2519,7 +2599,7 @@ fn choose_references(
         let budget = crate::concurrency::plan_workers(
             None,
             worker_policy,
-            crate::concurrency::Priority::Interactive,
+            job_priority(state.stack_previews.is_automatic(job_id)),
             crate::concurrency::probe_frame_pixels(&group.frames[0].path),
         );
         let pool = match ThreadPoolBuilder::new()
@@ -2568,6 +2648,17 @@ fn add_note(note: &mut Option<String>, sentence: &str) {
         Some(previous) => format!("{previous}. {sentence}"),
         None => sentence.to_string(),
     });
+}
+
+/// The core share a build may use: a person's build takes the interactive
+/// share, and an automatic refresh the background share, like the other
+/// work nobody is waiting on.
+pub(super) fn job_priority(automatic: bool) -> crate::concurrency::Priority {
+    if automatic {
+        crate::concurrency::Priority::Background
+    } else {
+        crate::concurrency::Priority::Interactive
+    }
 }
 
 fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool>) {
@@ -2736,6 +2827,9 @@ fn run_group(
         worker_policy,
         cancel,
     } = job;
+    // Read for each channel: a build adopted part way takes the person's
+    // share from its next channel on.
+    let priority = job_priority(state.stack_previews.is_automatic(job_id));
     let weighting = method.weighting;
     let available_memory = crate::concurrency::available_memory_bytes();
     let reference_path = &group
@@ -2746,7 +2840,7 @@ fn run_group(
     let budget = crate::concurrency::plan_workers(
         None,
         worker_policy,
-        crate::concurrency::Priority::Interactive,
+        priority,
         crate::concurrency::probe_frame_pixels(reference_path),
     );
     let threads = execution::ThreadBudget::from_total(budget.workers);

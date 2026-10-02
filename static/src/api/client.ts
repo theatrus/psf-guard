@@ -96,6 +96,7 @@ import type { GuidFillReport, GuidReport,
   StackMethod,
   WbppActivity,
   StackMethodSettings,
+  WorkerSettings,
   ArtifactSearchJob,
   ReferenceRegion,
   LatestStackPreviews,
@@ -639,6 +640,24 @@ export const apiClient = {
     const { data } =
       await apiInstance.get<ApiResponse<StackAutomationSettings>>('/settings/stacking');
     if (!data.data) throw new Error(data.error || 'Failed to get stack settings');
+    return data.data;
+  },
+
+  getWorkerSettings: async (): Promise<WorkerSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<WorkerSettings>>('/settings/workers');
+    if (!data.data) throw new Error(data.error || 'Failed to load the processor shares');
+    return data.data;
+  },
+
+  /** `null` goes back to the server config file's share. */
+  updateWorkerSettings: async (update: {
+    interactive_ratio: number | null;
+    background_ratio: number | null;
+  }): Promise<WorkerSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<WorkerSettings>>('/settings/workers', update);
+    if (!data.data) throw new Error(data.error || 'Failed to save the processor shares');
     return data.data;
   },
 

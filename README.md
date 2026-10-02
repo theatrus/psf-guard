@@ -925,9 +925,11 @@ psf-guard server --config psf-guard.toml
 port = 3000
 host = "0.0.0.0"
 # Optional: fraction of CPU cores for parallel work (both default sensibly).
-# Interactive jobs (occlusion scans, on-demand previews) get scan_worker_ratio;
-# background pre-generation gets background_worker_ratio and pauses entirely
-# while an interactive job runs.
+# Interactive jobs (occlusion scans, on-demand previews, stack builds you
+# start) get scan_worker_ratio; background work (pre-generation, automatic
+# stack refreshes) gets background_worker_ratio, and pre-generation pauses
+# while an interactive job runs. Settings → Stacking → Processor use can
+# override both without a restart.
 #scan_worker_ratio = 0.5
 #background_worker_ratio = 0.25
 

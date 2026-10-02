@@ -1842,6 +1842,41 @@
   gap: 0 1.5rem;
 }
 
+.worker-share {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(8rem, 14rem);
+  align-items: center;
+}
+
+.worker-share .link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-primary);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.worker-share input[type="range"] {
+  width: 100%;
+}
+
+.worker-share-value {
+  margin-left: 0.5rem;
+  color: var(--color-primary);
+  font-size: 0.8rem;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 640px) {
+  .worker-share {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .stack-method-preset-buttons {
   display: flex;
   flex-wrap: wrap;

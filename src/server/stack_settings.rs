@@ -196,6 +196,91 @@ pub async fn update_stack_method(
     Ok(Json(ApiResponse::success(method_response(method))))
 }
 
+/// How much of the processor background work may take.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct WorkerSettingsResponse {
+    /// In effect now, 0.05–1.
+    pub interactive_ratio: f64,
+    pub background_ratio: f64,
+    /// The server config file's values, which "default" goes back to.
+    pub default_interactive_ratio: f64,
+    pub default_background_ratio: f64,
+    pub logical_cores: usize,
+}
+
+fn worker_response(state: &AppState) -> WorkerSettingsResponse {
+    let policy = state.worker_policy();
+    let base = state.configured_worker_policy();
+    WorkerSettingsResponse {
+        interactive_ratio: policy.interactive_ratio,
+        background_ratio: policy.background_ratio,
+        default_interactive_ratio: base.interactive_ratio,
+        default_background_ratio: base.background_ratio,
+        logical_cores: crate::concurrency::logical_cores(),
+    }
+}
+
+/// GET /api/settings/workers
+pub async fn get_worker_settings(
+    State(state): State<Arc<AppState>>,
+) -> Json<ApiResponse<WorkerSettingsResponse>> {
+    Json(ApiResponse::success(worker_response(&state)))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateWorkerSettingsRequest {
+    /// `null` goes back to the config file's share.
+    pub interactive_ratio: Option<f64>,
+    pub background_ratio: Option<f64>,
+}
+
+/// The registry entry for a request: a share equal to the config file's is
+/// not written, so changing the file later still reaches it.
+fn stored_workers(
+    request: &UpdateWorkerSettingsRequest,
+    base: crate::concurrency::WorkerPolicy,
+) -> Result<Option<crate::db_registry::WorkerSettings>, AppError> {
+    let check = |label: &str, ratio: Option<f64>, default: f64| match ratio {
+        Some(ratio) if !(0.05..=1.0).contains(&ratio) || !ratio.is_finite() => Err(
+            AppError::BadRequest(format!("the {label} share must be between 5% and 100%")),
+        ),
+        Some(ratio) if (ratio - default).abs() < 1e-9 => Ok(None),
+        other => Ok(other),
+    };
+    let settings = crate::db_registry::WorkerSettings {
+        interactive_ratio: check(
+            "interactive",
+            request.interactive_ratio,
+            base.interactive_ratio,
+        )?,
+        background_ratio: check(
+            "background",
+            request.background_ratio,
+            base.background_ratio,
+        )?,
+    };
+    Ok((settings != crate::db_registry::WorkerSettings::default()).then_some(settings))
+}
+
+/// PUT /api/settings/workers — applies to every pool sized from now on;
+/// work already running keeps the threads it has.
+pub async fn update_worker_settings(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<UpdateWorkerSettingsRequest>,
+) -> Result<Json<ApiResponse<WorkerSettingsResponse>>, AppError> {
+    let path = require_registry_path(&state)?;
+    let workers = stored_workers(&request, state.configured_worker_policy())?;
+    let _registry_guard = state.registry_write.lock().await;
+    let mut registry = DbRegistry::load_or_init(&path)
+        .map_err(|error| AppError::InternalError(error.to_string()))?;
+    registry.workers = workers;
+    registry
+        .save(&path)
+        .map_err(|error| AppError::InternalError(error.to_string()))?;
+    state.apply_worker_settings(registry.workers.as_ref());
+    Ok(Json(ApiResponse::success(worker_response(&state))))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,5 +364,29 @@ mod tests {
         let rebuilt = stored(policy, stored_method(Some(&entry))).unwrap();
         assert_eq!(rebuilt.method, Some(draft));
         assert_eq!(stored_method(None), StackMethod::default());
+    }
+
+    #[test]
+    fn a_share_equal_to_the_config_file_is_not_stored_and_nonsense_is_refused() {
+        let base = crate::concurrency::WorkerPolicy::default();
+        let request = |interactive, background| UpdateWorkerSettingsRequest {
+            interactive_ratio: interactive,
+            background_ratio: background,
+        };
+        assert_eq!(stored_workers(&request(None, None), base).unwrap(), None);
+        assert_eq!(
+            stored_workers(&request(Some(base.interactive_ratio), None), base).unwrap(),
+            None
+        );
+        let chosen = stored_workers(&request(Some(0.75), Some(0.1)), base)
+            .unwrap()
+            .unwrap();
+        assert_eq!(chosen.interactive_ratio, Some(0.75));
+        assert_eq!(chosen.background_ratio, Some(0.1));
+        let applied = chosen.apply(base);
+        assert_eq!(applied.interactive_ratio, 0.75);
+        assert_eq!(applied.background_ratio, 0.1);
+        assert!(stored_workers(&request(Some(0.0), None), base).is_err());
+        assert!(stored_workers(&request(None, Some(1.5)), base).is_err());
     }
 }
