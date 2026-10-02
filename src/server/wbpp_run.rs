@@ -1110,6 +1110,95 @@ pub async fn remove_queued_wbpp_run(
     ))))
 }
 
+/// A WBPP run under way, for the header's queue.
+#[derive(Debug, Clone, Serialize)]
+pub struct WbppActiveRun {
+    pub db_id: String,
+    pub db_name: String,
+    pub scope: String,
+    /// PSF Guard's stage: `planning`, `running`, `publishing`.
+    pub stage: String,
+    /// WBPP's own step, from its log.
+    pub wbpp_stage: Option<String>,
+    pub wbpp_steps: usize,
+    pub started_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WbppQueuedActivity {
+    pub db_id: String,
+    pub db_name: String,
+    #[serde(flatten)]
+    pub run: crate::server::wbpp_queue::QueuedRunSummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WbppActivity {
+    pub running: Vec<WbppActiveRun>,
+    /// The whole line, next first.
+    pub queued: Vec<WbppQueuedActivity>,
+}
+
+/// `GET /api/wbpp/activity` — WBPP runs under way and waiting, on every
+/// database, for the header's background jobs.
+pub async fn get_wbpp_activity(
+    State(state): State<Arc<AppState>>,
+) -> Json<ApiResponse<WbppActivity>> {
+    let databases = state.all_databases();
+    let name_of = |db_id: &str| {
+        databases
+            .iter()
+            .find(|ctx| ctx.id == db_id)
+            .map(|ctx| ctx.name.clone())
+            .unwrap_or_else(|| db_id.to_string())
+    };
+    let running = databases
+        .iter()
+        .filter_map(|ctx| {
+            let store = ctx.wbpp_run.read().unwrap();
+            store.progress.running.then(|| WbppActiveRun {
+                db_id: ctx.id.clone(),
+                db_name: ctx.name.clone(),
+                scope: store.progress.scope.clone(),
+                stage: store.progress.stage.clone(),
+                wbpp_stage: store.progress.wbpp_stage.clone(),
+                wbpp_steps: store.progress.wbpp_steps,
+                started_at: store.progress.started_at,
+            })
+        })
+        .collect();
+    let queued = state
+        .wbpp_queue
+        .all()
+        .into_iter()
+        .map(|(db_id, run)| WbppQueuedActivity {
+            db_name: name_of(&db_id),
+            db_id,
+            run,
+        })
+        .collect();
+    Json(ApiResponse::success(WbppActivity { running, queued }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MoveQueuedRunRequest {
+    /// Place in the line, 0 next.
+    pub position: usize,
+}
+
+/// `POST /api/wbpp/queue/{queue_id}/move` — change when a waiting run starts.
+pub async fn move_queued_wbpp_run(
+    State(state): State<Arc<AppState>>,
+    AxumPath(queue_id): AxumPath<String>,
+    Json(request): Json<MoveQueuedRunRequest>,
+) -> Result<Json<ApiResponse<WbppActivity>>, AppError> {
+    require_database_management_allowed(&state)?;
+    if !state.wbpp_queue.move_to(&queue_id, request.position) {
+        return Err(AppError::NotFound);
+    }
+    Ok(get_wbpp_activity(State(state)).await)
+}
+
 /// `DELETE /api/db/{db_id}/wbpp/runs/current` — stop the run.
 pub async fn cancel_wbpp_run(
     State(state): State<Arc<AppState>>,

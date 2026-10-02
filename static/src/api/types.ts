@@ -836,6 +836,8 @@ export interface StackActivityEntry {
   created_unix_seconds: number;
   /** Started by the automatic refresh, not by a person. */
   automatic?: boolean;
+  /** Place in the line of waiting builds, 0 next; null once running. */
+  queue_position?: number | null;
 }
 
 export interface StackActivity {
@@ -1519,6 +1521,29 @@ export interface WbppQueuedRun {
   /** 1 is next. */
   position: number;
   queued_at: number;
+}
+
+/** A WBPP run under way, for the header's queue. */
+export interface WbppActiveRun {
+  db_id: string;
+  db_name: string;
+  scope: string;
+  stage: string;
+  wbpp_stage: string | null;
+  wbpp_steps: number;
+  started_at: number | null;
+}
+
+export interface WbppQueuedActivity extends WbppQueuedRun {
+  db_id: string;
+  db_name: string;
+}
+
+/** WBPP runs under way and waiting, on every database. */
+export interface WbppActivity {
+  running: WbppActiveRun[];
+  /** The whole line, next first. */
+  queued: WbppQueuedActivity[];
 }
 
 export interface WbppRunStatus {

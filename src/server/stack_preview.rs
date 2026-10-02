@@ -538,6 +538,9 @@ pub struct StackActivityEntry {
     /// Started by the automatic refresh, not by a person.
     #[serde(default)]
     pub automatic: bool,
+    /// Place in the line of waiting builds, 0 next; `None` once running.
+    #[serde(default)]
+    pub queue_position: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -627,6 +630,7 @@ fn mono_activity(job: &StackPreviewJob) -> StackActivityEntry {
         total_units,
         created_unix_seconds: job.created_unix_seconds,
         automatic: job.automatic,
+        queue_position: None,
     }
 }
 
@@ -652,6 +656,7 @@ fn color_activity(job: &color::StackColorJob) -> StackActivityEntry {
         total_units,
         created_unix_seconds: job.created_unix_seconds,
         automatic: job.automatic,
+        queue_position: None,
     }
 }
 
@@ -665,6 +670,12 @@ pub struct StackPreviewManager {
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     latest_write: Mutex<()>,
     permit: Arc<Semaphore>,
+    /// Builds waiting for the worker, in the order they will get it. Only the
+    /// first one competes for the permit, so this order, not arrival, decides
+    /// what runs next, and a person can change it.
+    waiting: Mutex<Vec<String>>,
+    /// Wakes waiting builds when the line changes or one is stopped.
+    turn: tokio::sync::Notify,
 }
 
 impl StackPreviewManager {
@@ -676,7 +687,82 @@ impl StackPreviewManager {
             cancels: Mutex::new(HashMap::new()),
             latest_write: Mutex::new(()),
             permit: Arc::new(Semaphore::new(1)),
+            waiting: Mutex::new(Vec::new()),
+            turn: tokio::sync::Notify::new(),
         }
+    }
+
+    /// Put a build at the back of the line. Called when it is queued, before
+    /// its task starts, so the line keeps the order builds were asked for.
+    fn join_line(&self, job_id: &str) {
+        self.waiting.lock().unwrap().push(job_id.to_string());
+    }
+
+    fn leave_line(&self, job_id: &str) {
+        self.waiting
+            .lock()
+            .unwrap()
+            .retain(|waiting| waiting != job_id);
+        self.turn.notify_waiters();
+    }
+
+    /// Wait until this build is first in line and the worker is free. `None`
+    /// when it was stopped while waiting, or the worker has shut down; either
+    /// way it has left the line.
+    async fn wait_turn(
+        &self,
+        job_id: &str,
+        cancel: &AtomicBool,
+    ) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        loop {
+            let notified = self.turn.notified();
+            tokio::pin!(notified);
+            // Registered before the line is read, so a change between the
+            // read and the wait still wakes this build.
+            notified.as_mut().enable();
+            if cancel.load(Ordering::Relaxed) {
+                self.leave_line(job_id);
+                return None;
+            }
+            let first = self.waiting.lock().unwrap().first().cloned();
+            if first.as_deref() != Some(job_id) {
+                notified.await;
+                continue;
+            }
+            // First in line: take the worker, unless the line changes while
+            // it is busy, in which case look again.
+            tokio::select! {
+                permit = Arc::clone(&self.permit).acquire_owned() => {
+                    self.leave_line(job_id);
+                    return permit.ok();
+                }
+                _ = &mut notified => continue,
+            }
+        }
+    }
+
+    /// Move a waiting build to `position` in the line (0 is next), clamped to
+    /// the line. False when the build is not waiting.
+    pub fn move_in_line(&self, job_id: &str, position: usize) -> bool {
+        {
+            let mut waiting = self.waiting.lock().unwrap();
+            let Some(index) = waiting.iter().position(|waiting| waiting == job_id) else {
+                return false;
+            };
+            let entry = waiting.remove(index);
+            let position = position.min(waiting.len());
+            waiting.insert(position, entry);
+        }
+        self.turn.notify_waiters();
+        true
+    }
+
+    fn line_position(&self, job_id: &str) -> Option<usize> {
+        self.waiting
+            .lock()
+            .unwrap()
+            .iter()
+            .position(|waiting| waiting == job_id)
     }
 
     pub fn get(&self, job_id: &str) -> Option<StackPreviewJob> {
@@ -704,6 +790,8 @@ impl StackPreviewManager {
             return false;
         };
         flag.store(true, Ordering::Relaxed);
+        // A build still waiting sees it at once and leaves the line.
+        self.turn.notify_waiters();
         true
     }
 
@@ -768,9 +856,20 @@ impl StackPreviewManager {
                     .map(color_activity),
             );
         }
+        for entry in &mut active {
+            entry.queue_position = self.line_position(&entry.job_id);
+        }
+        // Running work first, then the line in the order it will run, then
+        // anything between the two, oldest first.
         active.sort_by(|left, right| {
-            left.created_unix_seconds
-                .cmp(&right.created_unix_seconds)
+            let rank = |entry: &StackActivityEntry| match (entry.state, entry.queue_position) {
+                (StackJobState::Running, _) => (0, 0),
+                (_, Some(position)) => (1, position),
+                _ => (2, 0),
+            };
+            rank(left)
+                .cmp(&rank(right))
+                .then_with(|| left.created_unix_seconds.cmp(&right.created_unix_seconds))
                 .then_with(|| left.job_id.cmp(&right.job_id))
         });
         active
@@ -1286,6 +1385,42 @@ pub async fn get_stack_activity(
         schema_version: 1,
         active: state.stack_previews.active(),
     }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MoveStackJobRequest {
+    /// Place in the line of waiting builds, 0 next.
+    pub position: usize,
+}
+
+/// `POST /api/stack-activity/{job_id}/move` — change when a waiting build runs.
+pub async fn move_stack_job(
+    State(state): State<Arc<AppState>>,
+    Path(job_id): Path<String>,
+    Json(request): Json<MoveStackJobRequest>,
+) -> Result<Json<ApiResponse<StackActivity>>, AppError> {
+    validate_job_id(&job_id)?;
+    if !state.stack_previews.move_in_line(&job_id, request.position) {
+        return Err(AppError::BadRequest(
+            "This build is not waiting; only a waiting build can move".into(),
+        ));
+    }
+    Ok(get_stack_activity(State(state)).await)
+}
+
+/// `POST /api/stack-activity/{job_id}/cancel` — stop a mono or color build
+/// from any view, waiting or running.
+pub async fn cancel_stack_activity_job(
+    State(state): State<Arc<AppState>>,
+    Path(job_id): Path<String>,
+) -> Result<Json<ApiResponse<StackActivity>>, AppError> {
+    validate_job_id(&job_id)?;
+    if !state.stack_previews.request_cancel(&job_id) {
+        return Err(AppError::BadRequest(
+            "This build has already finished".into(),
+        ));
+    }
+    Ok(get_stack_activity(State(state)).await)
 }
 
 pub async fn get_latest_stack_previews(
@@ -2082,16 +2217,19 @@ fn source_fingerprint(path: &FsPath) -> String {
 }
 
 fn enqueue_job(state: Arc<AppState>, prepared: PreparedJob) {
-    let permit = Arc::clone(&state.stack_previews.permit);
     let cancel = state.stack_previews.track_cancel(&prepared.public.job_id);
+    state.stack_previews.join_line(&prepared.public.job_id);
     tokio::spawn(async move {
         let job_id = prepared.public.job_id.clone();
-        let Ok(_permit) = permit.acquire_owned().await else {
+        // Stack jobs run one at a time, so a job can wait here for minutes,
+        // in the line's order. A cancel during that wait means the work
+        // never starts.
+        let permit = state.stack_previews.wait_turn(&job_id, &cancel).await;
+        if permit.is_none() && !cancel.load(Ordering::Relaxed) {
             state.stack_previews.forget_cancel(&job_id);
             return;
-        };
-        // Stack jobs run one at a time, so a job can wait here for minutes.
-        // A cancel during that wait means the work never starts.
+        }
+        let _permit = permit;
         if cancel.load(Ordering::Relaxed) {
             state.stack_previews.update(&job_id, |job| {
                 cancel_unfinished_groups(job);
@@ -4131,6 +4269,45 @@ mod tests {
         assert_eq!(unsplit.public.groups.len(), 1);
         assert!(unsplit.public.groups[0].exposure_group.is_none());
         assert_ne!(unsplit.public.job_id, subset.public.job_id);
+    }
+
+    #[tokio::test]
+    async fn the_line_decides_which_waiting_build_runs_next() {
+        let manager = Arc::new(StackPreviewManager::new());
+        // Something holds the worker while three builds line up.
+        let busy = Arc::clone(&manager.permit).acquire_owned().await.unwrap();
+        let started = Arc::new(Mutex::new(Vec::new()));
+        let mut tasks = Vec::new();
+        for job in ["a", "b", "c"] {
+            let cancel = manager.track_cancel(job);
+            manager.join_line(job);
+            let manager = Arc::clone(&manager);
+            let started = Arc::clone(&started);
+            tasks.push(tokio::spawn(async move {
+                if let Some(permit) = manager.wait_turn(job, &cancel).await {
+                    started.lock().unwrap().push(job);
+                    drop(permit);
+                }
+            }));
+        }
+        tokio::task::yield_now().await;
+        assert_eq!(manager.line_position("c"), Some(2));
+        // The person moves c to the front and stops a.
+        assert!(manager.move_in_line("c", 0));
+        assert!(manager.request_cancel("a"));
+        assert!(!manager.move_in_line("never-queued", 0));
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert_eq!(
+            manager.line_position("a"),
+            None,
+            "a stopped build leaves the line"
+        );
+        drop(busy);
+        for task in tasks {
+            task.await.unwrap();
+        }
+        assert_eq!(*started.lock().unwrap(), vec!["c", "b"]);
+        assert!(manager.waiting.lock().unwrap().is_empty());
     }
 
     #[test]

@@ -118,6 +118,42 @@ impl WbppQueue {
             .collect()
     }
 
+    /// Move a queued run to `position` in the line (0 is next), clamped to
+    /// the line. False when no such run is waiting.
+    pub fn move_to(&self, id: &str, position: usize) -> bool {
+        let mut entries = self.entries.lock().unwrap();
+        let Some(index) = entries.iter().position(|entry| entry.id == id) else {
+            return false;
+        };
+        let entry = entries.remove(index).expect("index came from the line");
+        let position = position.min(entries.len());
+        entries.insert(position, entry);
+        true
+    }
+
+    /// Every queued run, with its database and place in the line.
+    pub fn all(&self) -> Vec<(String, QueuedRunSummary)> {
+        self.entries
+            .lock()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                (
+                    entry.db_id.clone(),
+                    QueuedRunSummary {
+                        id: entry.id.clone(),
+                        scope: entry.scope.clone(),
+                        project_id: entry.project_id,
+                        target_id: entry.target_id,
+                        position: index + 1,
+                        queued_at: entry.queued_at,
+                    },
+                )
+            })
+            .collect()
+    }
+
     pub fn len(&self) -> usize {
         self.entries.lock().unwrap().len()
     }
@@ -170,5 +206,26 @@ mod tests {
         );
         assert_eq!(queue.pop_front().map(|run| run.id), Some(a));
         assert_eq!(queue.len(), 1);
+    }
+
+    #[test]
+    fn a_queued_run_moves_within_the_line() {
+        let queue = WbppQueue::default();
+        let (first, _) = queue.push("a", "project 1".into(), request(1), 1);
+        let (second, _) = queue.push("b", "project 2".into(), request(2), 2);
+        let (third, _) = queue.push("a", "project 3".into(), request(3), 3);
+        assert!(queue.move_to(&third, 0));
+        let order = queue
+            .all()
+            .into_iter()
+            .map(|(_, run)| run.id)
+            .collect::<Vec<_>>();
+        assert_eq!(order, vec![third.clone(), first.clone(), second.clone()]);
+        // Past the end goes last; an unknown id moves nothing.
+        assert!(queue.move_to(&third, 99));
+        assert_eq!(queue.all().last().unwrap().1.id, third);
+        assert!(!queue.move_to("q99", 0));
+        assert_eq!(queue.all()[0].0, "a");
+        assert_eq!(queue.all()[0].1.position, 1);
     }
 }

@@ -102,7 +102,13 @@ PixInsight is busy with, and its button reads **Queue stacking**. A queued
 run starts on its own when the running one ends, with the settings it was
 queued with, whatever the first run's outcome. The Library lists runs in
 line with their place; **×** takes one out, and so does **Remove from
-queue** in its dialog. The queue lives in the server process, so a
+queue** in its dialog. The header's background jobs chip lists the run under
+way and the whole line, on every database. There **↑** and **↓** change the
+order, **×** takes a run out, and **Stop** ends the running one after asking
+once. Those controls need write access and a server that allows database
+management, like the dialog. `GET /api/wbpp/activity` reports the same, and
+`POST /api/wbpp/queue/{queue_id}/move` with `{"position": n}` (0 is next)
+moves a waiting run. The queue lives in the server process, so a
 restart drops it along with the run under way. Opening the dialog on the
 project that is running shows that run; from another project's dialog,
 **Show that run** does the same.

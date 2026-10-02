@@ -1,6 +1,10 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import type { ActivityItem } from './activityItems';
-import { useHeaderActivity } from './useHeaderActivity';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { apiClient } from '../../api/client';
+import { useAccess } from '../../auth/access';
+import { STACK_ACTIVITY_QUERY_KEY } from '../../hooks/useStackActivity';
+import { lineLengths, type ActivityControl, type ActivityItem, type ActivityQueue } from './activityItems';
+import { useHeaderActivity, WBPP_ACTIVITY_QUERY_KEY } from './useHeaderActivity';
 import './header.css';
 
 /** How long the list stays after the pointer leaves, so it can be reached. */
@@ -30,13 +34,45 @@ function ProgressRing({ percent }: { percent: number | null }) {
   );
 }
 
-function ActivityRow({ item }: { item: ActivityItem }) {
+type ActivityAction =
+  | { type: 'move'; control: ActivityControl; position: number }
+  | { type: 'stop'; control: ActivityControl };
+
+function runAction(action: ActivityAction): Promise<unknown> {
+  const { control } = action;
+  if (action.type === 'move') {
+    if (control.kind === 'stack') return apiClient.moveStackJob(control.jobId, action.position);
+    if (control.kind === 'wbpp-queued') return apiClient.moveQueuedWbppRun(control.queueId, action.position);
+    return Promise.resolve();
+  }
+  if (control.kind === 'stack') return apiClient.cancelStackJob(control.jobId);
+  if (control.kind === 'wbpp-running') return apiClient.cancelWbppRun(control.dbId);
+  return apiClient.removeQueuedWbppRun(control.dbId, control.queueId);
+}
+
+interface RowControls {
+  /** Whether this person may change this row's line. */
+  allowed: (item: ActivityItem) => boolean;
+  run: (action: ActivityAction) => void;
+  busy: boolean;
+  lengths: Record<ActivityQueue, number>;
+}
+
+function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowControls }) {
+  const [confirming, setConfirming] = useState(false);
+  const control = item.control;
+  const allowed = !!control && controls.allowed(item);
+  const waiting = item.position != null && !!item.queue;
+  const last = item.queue ? controls.lengths[item.queue] - 1 : 0;
+  const name = `${item.title}: ${item.scope}`;
   return (
     <li className={`activity-row${item.queued ? ' is-queued' : ''}`} title={item.hint}>
       <div className="activity-row-head">
         <span className="activity-row-title">{item.title}</span>
         <span className="activity-row-state">
-          {item.queued ? 'queued' : item.percent != null ? `${Math.round(item.percent)}%` : 'working'}
+          {item.queued
+            ? waiting ? `queued · ${item.position! + 1}` : 'queued'
+            : item.percent != null ? `${Math.round(item.percent)}%` : 'working'}
         </span>
       </div>
       <div className="activity-row-scope">
@@ -51,7 +87,75 @@ function ActivityRow({ item }: { item: ActivityItem }) {
           />
         </div>
       )}
-      <div className="activity-row-detail">{item.detail}</div>
+      <div className="activity-row-foot">
+        <div className="activity-row-detail">{item.detail}</div>
+        {allowed && control && (
+          <div className="activity-row-actions">
+            {waiting && (
+              <>
+                <button
+                  type="button"
+                  aria-label={`Run ${name} earlier`}
+                  title="Earlier"
+                  disabled={controls.busy || item.position === 0}
+                  onClick={() => controls.run({ type: 'move', control, position: item.position! - 1 })}
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Run ${name} later`}
+                  title="Later"
+                  disabled={controls.busy || item.position === last}
+                  onClick={() => controls.run({ type: 'move', control, position: item.position! + 1 })}
+                >
+                  ↓
+                </button>
+              </>
+            )}
+            {item.queued ? (
+              <button
+                type="button"
+                className="activity-row-stop"
+                aria-label={`Remove ${name} from the line`}
+                title="Remove from the line"
+                disabled={controls.busy}
+                onClick={() => controls.run({ type: 'stop', control })}
+              >
+                ✕
+              </button>
+            ) : confirming ? (
+              <>
+                <button
+                  type="button"
+                  className="activity-row-stop"
+                  disabled={controls.busy}
+                  onClick={() => {
+                    setConfirming(false);
+                    controls.run({ type: 'stop', control });
+                  }}
+                >
+                  Stop it
+                </button>
+                <button type="button" onClick={() => setConfirming(false)}>
+                  Keep
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="activity-row-stop"
+                aria-label={`Stop ${name}`}
+                disabled={controls.busy}
+                // Stopping running work loses it, so it asks once.
+                onClick={() => setConfirming(true)}
+              >
+                Stop
+              </button>
+            )}
+          </div>
+        )}
+      </div>
     </li>
   );
 }
@@ -63,6 +167,20 @@ function ActivityRow({ item }: { item: ActivityItem }) {
  */
 export default function ActivityChip() {
   const { items, summary, finished, scanError } = useHeaderActivity();
+  const access = useAccess();
+  const { data: serverInfo } = useQuery({
+    queryKey: ['serverInfo'],
+    queryFn: apiClient.getServerInfo,
+    staleTime: 5 * 60 * 1000,
+  });
+  const queryClient = useQueryClient();
+  const action = useMutation({
+    mutationFn: runAction,
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: STACK_ACTIVITY_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: WBPP_ACTIVITY_QUERY_KEY });
+    },
+  });
   const [pinned, setPinned] = useState(false);
   const [hovered, setHovered] = useState(false);
   const closeTimer = useRef<number | null>(null);
@@ -122,6 +240,21 @@ export default function ActivityChip() {
       </div>
     );
   }
+
+  // Stack builds are anyone's who can write; WBPP runs also need the
+  // server's database management, as on the run dialog.
+  const controls: RowControls = {
+    allowed: (item) =>
+      access.canWrite
+      && (item.control?.kind === 'stack' || !!serverInfo?.allow_database_management),
+    run: (next) => {
+      // A control was used, so the list stays open after the pointer leaves.
+      setPinned(true);
+      action.mutate(next);
+    },
+    busy: action.isPending,
+    lengths: lineLengths(items),
+  };
 
   const jobs = `${summary.count} job${summary.count === 1 ? '' : 's'}`;
   const percent = summary.percent == null ? null : Math.round(summary.percent);
@@ -196,8 +329,11 @@ export default function ActivityChip() {
               A quality scan finished with errors. {scanError.message}
             </p>
           )}
+          {action.isError && (
+            <p className="activity-error" role="alert">{(action.error as Error).message}</p>
+          )}
           <ul className="activity-list">
-            {items.map((item) => <ActivityRow key={item.key} item={item} />)}
+            {items.map((item) => <ActivityRow key={item.key} item={item} controls={controls} />)}
           </ul>
         </div>
       )}

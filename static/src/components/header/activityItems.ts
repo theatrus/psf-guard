@@ -3,12 +3,22 @@ import type {
   QualityBackfillStatus,
   SpatialScanStatus,
   StackActivityEntry,
+  WbppActivity,
 } from '../../api/types';
+
+/** What a row can do: stop its job, and move it in its line. */
+export type ActivityControl =
+  | { kind: 'stack'; jobId: string }
+  | { kind: 'wbpp-running'; dbId: string }
+  | { kind: 'wbpp-queued'; dbId: string; queueId: string };
+
+/** The two lines a person can reorder. Each runs one job at a time. */
+export type ActivityQueue = 'stack' | 'wbpp';
 
 /** One piece of background work the header reports. */
 export interface ActivityItem {
   key: string;
-  kind: 'refresh' | 'quality' | 'stack';
+  kind: 'refresh' | 'quality' | 'stack' | 'wbpp';
   /** What is happening: "Stacking", "Analyzing quality". */
   title: string;
   /** What it happens to: a database, or a target and channel. */
@@ -21,6 +31,11 @@ export interface ActivityItem {
   automatic?: boolean;
   /** The full current path or file, for a tooltip. */
   hint?: string;
+  /** The line this job runs in, when it has one. */
+  queue?: ActivityQueue;
+  /** Place among the waiting jobs of its line, 0 next. */
+  position?: number;
+  control?: ActivityControl;
 }
 
 export interface DatabaseActivity {
@@ -112,6 +127,9 @@ function stackItem(entry: StackActivityEntry): ActivityItem {
   const unit = entry.kind === 'mono' ? 'frames' : 'steps';
   const queued = entry.state === 'queued';
   return {
+    queue: 'stack',
+    position: queued ? entry.queue_position ?? undefined : undefined,
+    control: { kind: 'stack', jobId: entry.job_id },
     key: `stack:${entry.job_id}`,
     kind: 'stack',
     title: entry.kind === 'mono' ? 'Stacking' : 'Composing color',
@@ -128,10 +146,50 @@ function stackItem(entry: StackActivityEntry): ActivityItem {
   };
 }
 
-/** Every job the header reports, running work before queued work. */
+const WBPP_STAGES: Record<string, string> = {
+  planning: 'Planning the run',
+  running: 'Running in PixInsight',
+  publishing: 'Saving masters',
+};
+
+function wbppItems(wbpp: WbppActivity | undefined): ActivityItem[] {
+  if (!wbpp) return [];
+  const running = wbpp.running.map((run): ActivityItem => ({
+    key: `wbpp:${run.db_id}`,
+    kind: 'wbpp',
+    title: 'WBPP',
+    scope: `${run.db_name} · ${run.scope}`,
+    detail: [
+      WBPP_STAGES[run.stage] ?? run.stage,
+      run.wbpp_stage,
+      run.wbpp_steps > 0 ? `${run.wbpp_steps} steps done` : '',
+    ].filter(Boolean).join(' · '),
+    queued: false,
+    percent: null,
+    queue: 'wbpp',
+    control: { kind: 'wbpp-running', dbId: run.db_id },
+  }));
+  const queued = wbpp.queued.map((run, index): ActivityItem => ({
+    key: `wbpp-queued:${run.id}`,
+    kind: 'wbpp',
+    title: 'WBPP',
+    scope: `${run.db_name} · ${run.scope}`,
+    detail: 'Waiting for the run ahead',
+    queued: true,
+    percent: null,
+    queue: 'wbpp',
+    position: index,
+    control: { kind: 'wbpp-queued', dbId: run.db_id, queueId: run.id },
+  }));
+  return [...running, ...queued];
+}
+
+/** Every job the header reports: each line's running work, then its waiting
+ *  work in the order it will run. */
 export function activityItems(
   databases: DatabaseActivity[],
-  stacks: StackActivityEntry[]
+  stacks: StackActivityEntry[],
+  wbpp?: WbppActivity
 ): ActivityItem[] {
   const items: ActivityItem[] = [];
   for (const db of databases) {
@@ -139,12 +197,23 @@ export function activityItems(
     const quality = qualityItem(db);
     if (quality) items.push(quality);
   }
-  // Running builds before queued ones; the server lists each group oldest first.
+  // The server lists builds running first, then the line in order.
   const ordered = [...stacks].sort(
     (left, right) => Number(left.state === 'queued') - Number(right.state === 'queued')
+      || (left.queue_position ?? Infinity) - (right.queue_position ?? Infinity)
   );
   items.push(...ordered.map(stackItem));
+  items.push(...wbppItems(wbpp));
   return items;
+}
+
+/** How many jobs wait in each line, for the move buttons' limits. */
+export function lineLengths(items: ActivityItem[]): Record<ActivityQueue, number> {
+  const lengths: Record<ActivityQueue, number> = { stack: 0, wbpp: 0 };
+  for (const item of items) {
+    if (item.queue && item.position != null) lengths[item.queue] += 1;
+  }
+  return lengths;
 }
 
 export interface ActivitySummary {

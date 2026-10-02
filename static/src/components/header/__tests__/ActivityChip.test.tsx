@@ -26,11 +26,17 @@ function scanProgress(running: boolean, processed: number, errors = 0) {
   };
 }
 
-function stack(jobId: string, state: 'running' | 'queued', processed = 0, total = 0): StackActivityEntry {
+function stack(
+  jobId: string,
+  state: 'running' | 'queued',
+  processed = 0,
+  total = 0,
+  queuePosition: number | null = null
+): StackActivityEntry {
   return {
     kind: 'mono', job_id: jobId, database_id: 'askar', project_id: 1, state,
     label: `Alpha M44 · ${jobId}`, detail: 'registering', processed_units: processed,
-    total_units: total, created_unix_seconds: 1,
+    total_units: total, created_unix_seconds: 1, queue_position: queuePosition,
   };
 }
 
@@ -190,5 +196,70 @@ describe('ActivityChip', () => {
     } finally {
       document.removeEventListener('keydown', listen);
     }
+  });
+
+  it('moves a waiting build, removes one, and stops a running one after asking', async () => {
+    const calls: string[] = [];
+    mockServer({
+      stacks: () => [
+        stack('R', 'running', 1, 4),
+        stack('B', 'queued', 0, 0, 0),
+        stack('G', 'queued', 0, 0, 1),
+      ],
+    });
+    server.use(
+      http.post('/api/stack-activity/:jobId/move', async ({ params, request }) => {
+        calls.push(`move ${params.jobId} ${JSON.stringify(await request.json())}`);
+        return ok({ schema_version: 1, active: [] });
+      }),
+      http.post('/api/stack-activity/:jobId/cancel', ({ params }) => {
+        calls.push(`cancel ${params.jobId}`);
+        return ok({ schema_version: 1, active: [] });
+      })
+    );
+    renderChip();
+    await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+
+    // The first in line cannot go earlier, nor the last later.
+    expect(within(list).getByRole('button', { name: 'Run Stacking: Alpha M44 · B earlier' })).toBeDisabled();
+    expect(within(list).getByRole('button', { name: 'Run Stacking: Alpha M44 · G later' })).toBeDisabled();
+    await userEvent.click(within(list).getByRole('button', { name: 'Run Stacking: Alpha M44 · G earlier' }));
+    await waitFor(() => expect(calls).toEqual(['move G {"position":0}']));
+
+    await userEvent.click(within(list).getByRole('button', { name: 'Remove Stacking: Alpha M44 · B from the line' }));
+    await waitFor(() => expect(calls).toContain('cancel B'));
+
+    await userEvent.click(within(list).getByRole('button', { name: 'Stop Stacking: Alpha M44 · R' }));
+    expect(calls).not.toContain('cancel R');
+    await userEvent.click(within(list).getByRole('button', { name: 'Stop it' }));
+    await waitFor(() => expect(calls).toContain('cancel R'));
+  });
+
+  it('shows WBPP runs, and leaves their controls to a server that manages databases', async () => {
+    mockServer({});
+    let management = false;
+    server.use(
+      http.get('/api/info', () => ok({ version: 'test', allow_database_management: management })),
+      http.get('/api/wbpp/activity', () => ok({
+        running: [{
+          db_id: 'askar', db_name: 'Askar', scope: 'project Bubble', stage: 'running',
+          wbpp_stage: 'Calibration', wbpp_steps: 2, started_at: 1,
+        }],
+        queued: [],
+      }))
+    );
+    const view = renderChip();
+    await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+    expect(list).toHaveTextContent('Askar · project Bubble');
+    expect(list).toHaveTextContent('Running in PixInsight · Calibration · 2 steps done');
+    expect(within(list).queryByRole('button', { name: /Stop WBPP/ })).toBeNull();
+
+    view.unmount();
+    management = true;
+    renderChip();
+    await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
+    expect(await screen.findByRole('button', { name: 'Stop WBPP: Askar · project Bubble' })).toBeInTheDocument();
   });
 });

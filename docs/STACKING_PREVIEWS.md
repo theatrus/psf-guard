@@ -260,8 +260,17 @@ background jobs chip counts it for as long as any mono or color build is
 queued or running, in every view and in every database. The chip shows only
 the overall progress and the number of jobs. Hover, focus or click it to open
 the queue: each build names its target and channel and how far it has got, and
-waiting builds say `queued`. Catalog refreshes and quality scans share the
-same chip. Reopening the project grid re-attaches the stack panels to the
+waiting builds say `queued` with their place in line. Catalog refreshes,
+quality scans and WBPP runs share the same chip.
+
+Builds wait in a line of their own, and the line, not the order they were
+asked for, decides what runs next. In the queue, **↑** and **↓** move a
+waiting build, **×** takes it out of the line, and **Stop** ends the running
+build after asking once. Mono and color builds share the line. These controls
+need write access. `POST /api/stack-activity/{job_id}/move` with
+`{"position": n}` (0 is next) and `POST /api/stack-activity/{job_id}/cancel`
+do the same from scripts; `GET /api/stack-activity` lists builds running first,
+then the line in order, each waiting one with its `queue_position`. Reopening the project grid re-attaches the stack panels to the
 running job, so leaving the page and coming back restores the live per-card
 progress instead of an idle panel.
 

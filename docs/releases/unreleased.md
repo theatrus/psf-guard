@@ -6,6 +6,10 @@
 
 ## Added
 
+- The header's background jobs queue can change the order of waiting stack
+  builds and WBPP runs, take one out of the line, and stop the running job
+  after asking once. WBPP runs from every database now appear there too.
+
 - Director's experimental workload API can commission automatic requests for a
   reviewed rig/client and project scope, release a clean parked session after
   complete capture delivery, and issue successor work without resetting spent
