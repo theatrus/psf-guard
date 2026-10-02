@@ -12,6 +12,7 @@ use std::{fmt, path::Path, time::Duration};
 pub mod geometry;
 pub mod preparation;
 pub mod program;
+pub mod recovery;
 use psf_guard_director_core::geometry::{BoundGeometry, Constraints};
 use psf_guard_director_core::program::{BoundProgram, Program};
 

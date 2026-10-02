@@ -1411,11 +1411,71 @@ filter without capturing a blocked recipe.
 
 ### Quality holds, equipment failures and session stop
 
-Planned phase-2 behavior; this section does not describe a shipped recovery
-policy. The current native safety owner cancels acquisition, attempts park and
-stays stopped after Safe returns. Extend it with a durable shared-core session
-policy that also handles poor acquisition quality and equipment failures. It
-must work with local evidence while disconnected from PSF Guard.
+Partially implemented phase-2 work: the Rust policy and separate durable recovery
+store described below exist, but are not wired into runtime IPC or N.I.N.A.
+They do not yet protect real acquisition or enable automatic recovery. The current
+native safety owner still cancels acquisition, attempts park and stays stopped
+after Safe returns. Extend it with this session policy using local evidence while
+disconnected from PSF Guard.
+
+#### Implemented recovery foundation
+
+`director_core::recovery` supplies a pure, versioned session state machine;
+`director_ledger::recovery::SessionStore` persists it in an owned SQLite database
+outside allocation-specific run directories. These are internal Rust APIs, not
+new runtime IPC commands or server endpoints. The existing capture ledger,
+allocation authority, public plugin and Sync behavior are unchanged.
+
+- An explicit rig/configuration/night identity and frozen policy bind each
+  session. States are acquiring, holding, recovering, stopping and stopped.
+  The current implementation conservatively holds the whole session; target-only
+  bypass and an evidence classifier remain future work.
+- Typed, preclassified observations carry capture/context/reference identity and
+  timestamps. Only consecutive compatible corroborated-poor samples can pause;
+  recovery needs independent confirmed-good probes against the same reference.
+  Unknown is neither poor nor good. The caller must classify actual evidence;
+  neither a rejected grade nor low star count alone is a corroborated verdict.
+- Cooldown, maximum cumulative hold time, cumulative probe count, operation
+  deadlines and latest resume time bound recovery. Verified recovery resets the
+  matching operation/device consecutive-failure counter, not nightly totals.
+  Changing targets or workloads cannot reset these budgets. Slew, capture and
+  unknown-completion failures stop rather than retry.
+- Unsafe/unknown safety and prohibited enclosure motion preempt recovery.
+  Motion clearance is independent of generic safety. A configured park gets
+  at most one persisted attempt and a deadline; blocked, failed and uncertain
+  shutdowns remain distinct from a verified parked result. No timer, new work,
+  reconnect or Safe event clears a stop latch.
+- Immediate SQLite transactions use revision compare-and-swap, bounded event
+  records and durable evidence/attempt identities. Exact request retries return
+  current state with `newly_applied: false`; new request IDs cannot count the
+  same capture/failure twice or reissue a native attempt. Snapshot integrity,
+  schema, scope and structural validation fail closed.
+- Reopening the same night restores its immutable policy and latch, even after
+  its scheduled end. A different night requires the previous one to be stopped
+  and nonoverlapping. `begin_night` is an explicit admission primitive, never an
+  automatic response to a changed allocation or date. Bounded `events` pages
+  retain evidence for later batch delivery; no delivery/acknowledgement API exists
+  for this stream yet.
+
+Host integration must use one fixed per-rig store, load it before any equipment
+operation and stop dispatch on storage, clock or validation errors. Persist
+before acting. `newly_applied: true` means committed input, **not** a dispatch
+permit: safety/deadline preemption may have selected a different transition.
+Readback, duplicate receipts and surviving in-flight attempts never issue work.
+The forthcoming IPC must expose exact newly issued operation identity and fence
+it through the existing native owner and capture/preparation ledger. Before
+recovery or park, cancel/reconcile active work and recheck fresh enclosure,
+safety, geometry, allocation and local ownership. Unknown motion prevents
+recovery/parking; `Acquiring` alone never grants ordinary equipment permission.
+No policy defaults or Session editor controls are commissioned by this increment.
+
+Deterministic core/store tests cover hysteresis, changing context/reference,
+unknown/stale evidence, bounded failures, cumulative budgets, clock reversal,
+restart during recovery/park, duplicate input, competing writers, wrong scope,
+corrupt state, journal paging and nonoverlapping new-night admission. Browser,
+server-loop and real N.I.N.A. recovery simulator gates remain unimplemented.
+
+#### Remaining acquisition integration
 
 The core chooses among acquiring, holding, probing recovery, stopping and
 stopped. Record a typed cause, evidence, affected scope, first/last occurrence,
@@ -3346,9 +3406,13 @@ separate workflow; these mappings alone do not resolve them.
 - [ ] Ship capability-aware default operation policies through native N.I.N.A.
   without optional plugins. Expose policy ownership and prevent duplicate native,
   Director and plugin actions. Validate missing required devices/safety sources.
-- [ ] Implement [quality holds and session stop](#quality-holds-equipment-failures-and-session-stop)
-  in the shared core: local evidence, cooldown/hysteresis, bounded probes and
-  failure budgets, persisted night-stop latches and explicit resume authority.
+- [x] Add the internal shared-core recovery states and separate durable per-rig
+  store: cooldown/hysteresis, cumulative probe/hold/failure budgets, persisted
+  night-stop latches, duplicate refusal and restart tests. Not connected to IPC
+  or native acquisition; this is not a shipped quality-recovery feature.
+- [ ] Integrate [quality holds and session stop](#quality-holds-equipment-failures-and-session-stop)
+  through versioned observations/decisions, local evidence classification,
+  native bounded probes, Session controls and explicit resume authority.
 - [ ] Enforce commissioned enclosure-aware abort/park/stop through one native
   shutdown owner. Test roof closure, repeated guide/slew failures, blocked/failed
   parking and safety flapping in real N.I.N.A. simulator sessions while offline.
