@@ -287,7 +287,7 @@ describe('StackPreviewPanel stop', () => {
       { wrapper: wrapper() }
     );
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Build stack previews' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Build stacks' }));
 
     const stop = await screen.findByRole('button', { name: 'Stop' });
     await userEvent.click(stop);
@@ -329,7 +329,7 @@ describe('StackPreviewPanel stop', () => {
       { wrapper: wrapper() }
     );
 
-    await screen.findByRole('button', { name: 'Build stack previews' });
+    await screen.findByRole('button', { name: 'Build stacks' });
     expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
   });
 });

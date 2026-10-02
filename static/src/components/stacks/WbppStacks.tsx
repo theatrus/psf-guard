@@ -19,9 +19,10 @@ function treatment(entry: LatestStackPreviewGroup): string {
 }
 
 /**
- * The stacks WBPP made for this project. A run that finishes in PSF Guard is
- * taken in on its own; **Take in the last run** covers one that finished
- * before, or after a restart. PSF Guard composes their color in the color
+ * The stacks WBPP made for this project. A run started from **Stack in WBPP**
+ * is taken in when it ends; **Take in the last run** appears only while this
+ * project's last run has finished, for one that ended before PSF Guard took
+ * runs in or whose import failed. PSF Guard composes their color in the color
  * section above, where each appears as a channel marked WBPP.
  */
 export default function WbppStacks({
@@ -29,12 +30,15 @@ export default function WbppStacks({
   projectId,
   targetId,
   canImport,
+  lastRunFinished = false,
 }: {
   dbId: string;
   projectId: number;
   targetId?: number | null;
   /** Taking a run in writes files, so it needs database management. */
   canImport: boolean;
+  /** This project's last WBPP run finished with masters to take in. */
+  lastRunFinished?: boolean;
 }) {
   const queryClient = useQueryClient();
   const stacks = useQuery({
@@ -64,7 +68,7 @@ export default function WbppStacks({
             channel marked WBPP.
           </p>
         </div>
-        {canImport && (
+        {canImport && lastRunFinished && (
           <button
             type="button"
             className="toolbar-button"
@@ -88,8 +92,9 @@ export default function WbppStacks({
       )}
       {stacks.isLoading ? null : entries.length === 0 ? (
         <p className="muted">
-          No WBPP stacks yet. Stack this project in WBPP from the Library, and its master lights show
-          here when the run ends.
+          {canImport
+            ? 'No WBPP stacks yet. Choose Stack in WBPP above, and its master lights show here when the run ends.'
+            : 'No WBPP stacks yet.'}
         </p>
       ) : (
         <ul className="wbpp-stack-grid">

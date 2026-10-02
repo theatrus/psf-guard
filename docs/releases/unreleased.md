@@ -241,6 +241,12 @@
 
 ## Changed
 
+- **Stacks** can run WBPP: **Stack in WBPP** sits beside **Build stacks** and
+  shows the run's state, and **Take in the last run** appears only once this
+  project has a finished run. A **Size** control sets how wide the stack and
+  color cards are, in place of the Images thumbnail size they used to follow.
+  The page says *stacks* rather than *stack previews*.
+
 - Building calibration masters shows its progress. The stack card and the
   header queue name the master being built, what Seiza is doing with it
   (reading, integrating, or combining a flat), and the frame or tile under

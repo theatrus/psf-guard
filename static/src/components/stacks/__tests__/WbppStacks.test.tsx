@@ -33,12 +33,18 @@ function entry(targetId: number, target: string, filter: string, drizzle = false
   };
 }
 
-function renderSection(targetId: number | null = null, canImport = true) {
+function renderSection(targetId: number | null = null, canImport = true, lastRunFinished = true) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
-  return render(<WbppStacks dbId="test" projectId={1} targetId={targetId} canImport={canImport} />, { wrapper: Wrapper });
+  return render(<WbppStacks
+      dbId="test"
+      projectId={1}
+      targetId={targetId}
+      canImport={canImport}
+      lastRunFinished={lastRunFinished}
+    />, { wrapper: Wrapper });
 }
 
 describe('WbppStacks', () => {
@@ -58,6 +64,17 @@ describe('WbppStacks', () => {
     expect(screen.queryByText('Panel 2 · L')).toBeNull();
     expect(screen.getByText('75 s subs · drizzled · cropped')).toBeInTheDocument();
     expect(screen.getAllByRole('link', { name: 'FITS' })).toHaveLength(2);
+  });
+
+  it('offers no import until this project has a finished run', async () => {
+    server.use(
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/wbpp', () =>
+        ok({ schema_version: 1, database_id: 'test', project_id: 1, updated_unix_seconds: 1, groups: [] })
+      )
+    );
+    renderSection(null, true, false);
+    expect(await screen.findByText(/Choose Stack in WBPP above/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Take in the last run' })).toBeNull();
   });
 
   it('offers no import without database management', async () => {

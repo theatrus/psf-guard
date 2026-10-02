@@ -3687,6 +3687,7 @@
 
 .stack-preview-build,
 .stack-preview-rebuild,
+.stack-preview-wbpp,
 .stack-preview-stop {
   padding: 0.48rem 0.8rem;
   border-radius: 5px;
@@ -3704,6 +3705,29 @@
   color: var(--color-text-primary);
   background: var(--color-bg-tertiary);
   border-color: var(--color-bg-quaternary);
+}
+
+/* Another way to stack the same frames, so it sits with the build buttons
+   and reads as a second action. Its colour follows the run, as in the
+   Library. */
+.stack-preview-wbpp {
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-bg-quaternary);
+}
+
+.stack-preview-wbpp.wbpp-state-running,
+.stack-preview-wbpp.wbpp-state-queued {
+  color: var(--color-primary);
+  border-color: var(--color-primary-alpha-50);
+}
+
+.stack-preview-wbpp.wbpp-state-done {
+  color: var(--color-success);
+}
+
+.stack-preview-wbpp.wbpp-state-error {
+  color: var(--color-error);
 }
 
 /* Stopping a build is destructive of work in flight, so it reads as a
@@ -3792,12 +3816,14 @@
   border-color: var(--color-primary-alpha-50);
 }
 
+/* Cards are the page's card size wide, as many to a row as fit, and the
+   rows sit centred; a card never overflows a narrow screen. */
 .stack-preview-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, min(100%, var(--stack-card-size, 550px)));
+  justify-content: center;
   gap: 1rem;
   width: 100%;
-  max-width: 1600px;
   margin: 0 auto;
 }
 
@@ -3806,12 +3832,6 @@
   background: var(--color-bg-primary);
   border: 1px solid var(--color-bg-tertiary);
   border-radius: 8px;
-}
-
-.stack-preview-card:only-child {
-  grid-column: 1 / -1;
-  width: calc(50% - 0.5rem);
-  justify-self: center;
 }
 
 .stack-preview-card.outdated {
@@ -4426,20 +4446,11 @@
 
 .stack-color-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, min(100%, var(--stack-card-size, 550px)));
+  justify-content: center;
   gap: 1rem;
   width: 100%;
-  max-width: 1600px;
   margin: 0 auto;
-}
-
-/* At large grid zooms the result cards follow: one column, full width. The
-   cards never get narrower than the two-column layout — zooming out only
-   returns them to it. */
-.stack-preview-panel[data-wide] .stack-preview-grid,
-.stack-preview-panel[data-wide] .stack-color-grid {
-  grid-template-columns: minmax(0, 1fr);
-  max-width: none;
 }
 
 .stack-color-card {
@@ -5788,11 +5799,6 @@
   .stack-preview-grid,
   .stack-color-grid {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .stack-preview-card:only-child {
-    grid-column: auto;
-    width: 100%;
   }
 }
 

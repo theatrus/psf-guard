@@ -11,7 +11,7 @@ than a final-processing workflow.
 
 ## Build a preview
 
-Open one project in **Stacks** and choose **Build stack previews** to build
+Open one project in **Stacks** and choose **Build stacks** to build
 every current target/channel group, or **Build channel** on one card to test
 only that group. Once a result exists, the corresponding actions become
 **Rebuild current set** and **Rebuild channel**. An individual rebuild replaces
@@ -162,7 +162,7 @@ channel.
 ### Queue builds by hand
 
 Build buttons stay available while a build runs. Clicking **Build channel** on
-another card — or a color build, or **Build stack previews** for the whole set
+another card — or a color build, or **Build stacks** for the whole set
 — queues that job behind the running one on the same single-job worker, so
 memory use does not grow with the queue. Each card shows its own state:
 `queued` cards wait, the `running` card shows live progress, and the status
@@ -292,14 +292,18 @@ progress instead of an idle panel.
 
 ## Stacks made by WBPP
 
-A WBPP run started from PSF Guard ends by taking its master lights in as
-stacks. **WBPP stacks**, below PSF Guard's own in **Stacks**, shows each one
+**Stack in WBPP**, beside **Build stacks**, runs PixInsight's WBPP on the
+server for the project, or for the target chosen in the header; it opens the
+same run dialog as the Library's project cards, needs the same
+database-management grant, and names the run's state while one is queued,
+running or finished. A WBPP run started from PSF Guard ends by taking its
+master lights in as stacks. **WBPP stacks**, below PSF Guard's own in **Stacks**, shows each one
 with a preview and its FITS, and the **Combine channel stacks** section offers
 it as a channel source marked *WBPP*: choose, for example, L, R, G and B from
 WBPP and PSF Guard composes the color preview, with the same background,
-stretch and processing as for its own stacks. **Take in the last run** does the
-same for the project's last run when it finished before this feature or its
-import failed. It reads only that run's folder, and it needs database
+stretch and processing as for its own stacks. **Take in the last run** appears
+once the project's last run has finished, and does the same for a run that
+finished before PSF Guard took runs in or whose import failed. It reads only that run's folder, and it needs database
 management, like starting a run.
 
 - One master per filter and exposure is taken: without drizzle first, since
@@ -987,11 +991,12 @@ validate. The server checks
 every saved or imported setup against the same types the build endpoints
 parse, so a setup that saves is a setup a build can use.
 
-The whole **Stack previews** panel collapses from its title, like the detail
-sections inside it, and stays collapsed across reloads. The result cards also
-follow the thumbnail size set in **Images**: from 600&nbsp;px up they widen to one
-full-width column, and below that they keep the two-column layout — zooming
-out never makes a stack preview smaller. A collapsed panel
+The whole **Stacks** panel collapses from its title, like the detail sections
+inside it, and stays collapsed across reloads. **Size**, at the top of the
+view, sets how wide the stack and color cards are, from 300 to 1600&nbsp;px (550
+by default, two to a row on a laptop). As many fit to a row as the window allows, the rows sit centred, a
+card never grows past the window, and the size stays in the address. A
+collapsed panel
 shows how many remembered channels it is holding, or that a build is running;
 the header's background jobs chip keeps reporting progress either way.
 

@@ -205,7 +205,7 @@ describe('StackPreviewPanel job adoption', () => {
       .toHaveAttribute('aria-valuenow', '1');
     // The queue stays open while the adopted build runs: the header button
     // keeps its label and stays clickable, and a Stop appears for the build.
-    expect(screen.getByRole('button', { name: 'Build stack previews' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Build stacks' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
   });
 
@@ -336,7 +336,7 @@ describe('StackPreviewPanel job adoption', () => {
       { wrapper: wrapper() }
     );
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Build stack previews' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Build stacks' }));
     expect(await screen.findByText('2/2 frames')).toBeInTheDocument();
 
     // Another build starts — from a second tab, or the desktop app. The
