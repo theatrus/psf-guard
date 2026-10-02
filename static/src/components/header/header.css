@@ -68,8 +68,11 @@
   border-color: transparent;
 }
 
+/* As wide as its label, in either header layout: a basis wider than the
+   label would make the views measure wider on one row than stacked, and
+   the header would flip between the two at some widths. */
 .header-group .project-target-selector.compact {
-  flex: 1 1 18rem;
+  flex: 0 1 auto;
   min-width: 0;
   max-width: 28rem;
 }
