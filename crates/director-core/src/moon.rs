@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 mod windows;
 pub use windows::moon_windows;
+pub(crate) use windows::MoonTrack;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]

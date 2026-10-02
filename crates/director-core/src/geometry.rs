@@ -125,6 +125,7 @@ impl BoundGeometry {
         };
         let mut windows = BTreeMap::new();
         let mut non_lunar_windows = BTreeMap::new();
+        let mut moon_track = None;
         let mut cache: Vec<(String, AltitudeLimits, Vec<Interval>)> = vec![];
         for (goal, allocated) in assignment.goals.iter().zip(permitted) {
             let resolved = source.resolve(&goal.id).map_err(Error::Program)?;
@@ -173,20 +174,32 @@ impl BoundGeometry {
             };
             let mut eligible = intersect(&allocated, computed)?;
             non_lunar_windows.insert(goal.id.clone(), eligible.clone());
-            if let Some(policy) = &resolved.recipe.moon {
-                let lunar = crate::moon::moon_windows(
-                    policy,
-                    IcrsPosition {
-                        ra_degrees: f64::from(resolved.target.icrs_ra_mas)
-                            / f64::from(MAS_PER_DEGREE),
-                        dec_degrees: f64::from(resolved.target.icrs_dec_mas)
-                            / f64::from(MAS_PER_DEGREE),
-                    },
-                    constraints.rig.site,
-                    constraints.rig.orientation,
-                    span,
-                )
-                .map_err(Error::Geometry)?;
+            if let Some(policy) = &resolved.recipe.moon
+                && policy.enabled
+            {
+                if moon_track.is_none() {
+                    moon_track = Some(
+                        crate::moon::MoonTrack::new(
+                            constraints.rig.site,
+                            constraints.rig.orientation,
+                            span,
+                        )
+                        .map_err(Error::Geometry)?,
+                    );
+                }
+                let lunar = moon_track
+                    .as_ref()
+                    .unwrap()
+                    .windows(
+                        policy,
+                        IcrsPosition {
+                            ra_degrees: f64::from(resolved.target.icrs_ra_mas)
+                                / f64::from(MAS_PER_DEGREE),
+                            dec_degrees: f64::from(resolved.target.icrs_dec_mas)
+                                / f64::from(MAS_PER_DEGREE),
+                        },
+                    )
+                    .map_err(Error::Geometry)?;
                 eligible = intersect(&eligible, &lunar)?;
             }
             windows.insert(goal.id.clone(), eligible);
