@@ -3314,6 +3314,14 @@ separate workflow; these mappings alone do not resolve them.
   Explicit template policy, TS mapping, local lunar windows, capability gates
   and parked waits are the first increment. Inheritance, weighted preferences,
   detailed reasons and full phase-2 acceptance remain open.
+- [x] Deliver the explicit-template Moon increment end to end: library editor,
+  TS import/activation, immutable recipes, shared local lunar windows, v2
+  capability gates and parked waits. Verified with NINA 3.3.0.1064 / OmniSim:
+  priority-100 blocked recipe skipped, three eligible captures across two
+  targets during server outage, parked native wait, reconnect delivery and
+  replay refusal. Connected automatic intake/release also passed with enabled
+  lunar rules. Inheritance, detailed diagnostics and deterministic Moon-rise
+  during slow native setup remain part of the unchecked full acceptance above.
 - [ ] Implement versioned allocation, acknowledgements, checkpoints, and limits.
 - [ ] Renew or replace workloads through reconciled successor grants at safe
   boundaries. Carry forward pending/accepted/rejected credit, spent attempts,
