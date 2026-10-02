@@ -1566,6 +1566,20 @@ for a commissioned open-air setup. Native editor screenshots cover 640/1000 px;
 742 plugin tests cover freshness, clock/profile/device changes, cancellation,
 failed stop and clearance loss during park. Evidence is in the plugin smoke guide.
 
+Plugin [#42](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/42)
+adds a saved Session **On abort** policy: park with independent enclosure
+clearance (the legacy default), or stop slewing/tracking without parking.
+It applies to operator cancellation, unsafe conditions, timeout and acquisition
+failure after launch. Normal completion still parks; planned waits retain their
+separate setting. A blocked or failed park falls back to stop commands; failed
+stops remain errors. NINA's tracking setter returns the resulting tracking state,
+so `false` confirms tracking-off rather than failure. Native offline tests cover
+both abort choices and enclosure closure; 751 plugin tests and 640/1000 px native
+editor checks passed. The plugin smoke guide records exact evidence. No server
+API or planning contract changes are required for this local adapter policy.
+This does not yet commission the persistent observing-night recovery policy or
+authorize automatic resume, repeated guide/slew recovery, or shutter movement.
+
 The next native recovery increment must keep one persistent per-rig recovery
 directory across allocations, admit an explicit
 observing night, prevent downgrade after commissioning, classify local quality
@@ -3519,12 +3533,17 @@ separate workflow; these mappings alone do not resolve them.
   retain the interrupted owner's stop latch after reopening. Test actual shutter
   closure during an offline exposure and weather-unsafe open-air park separately.
   This is not yet the persistent night-stop or automatic recovery policy.
+- [x] Expose saved per-Session abort park/stop choices with enclosure precedence,
+  failed-park stop fallback and no automatic restart. Verify both choices in
+  native offline NINA/ASCOM acquisition. See plugin #42; normal completion and
+  planned waits keep separate behavior.
 - [ ] Integrate [quality holds and session stop](#quality-holds-equipment-failures-and-session-stop)
   in the plugin through the versioned contract, local evidence classification,
   native bounded probes, Session controls and explicit resume authority.
-- [ ] Enforce commissioned enclosure-aware abort/park/stop through one native
-  shutdown owner. Test roof closure, repeated guide/slew failures, blocked/failed
-  parking and safety flapping in real N.I.N.A. simulator sessions while offline.
+- [ ] Connect the local enclosure-aware abort/park/stop owner to commissioned,
+  persistent observing-night recovery. Roof closure and both local abort choices
+  are tested; repeated guide/slew failures, failed-parking recovery and safety
+  flapping across recovery sessions still need native offline validation.
 - [ ] Prove explicit TS/Sync coexistence and the optional Chatstronomy adapter.
 - [ ] Implement the shared-core operation state machine and the TS-style native
   container/options contract. Test configured trigger order and frequency,
