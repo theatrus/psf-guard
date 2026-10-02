@@ -429,6 +429,8 @@ async fn a_target_scheduler_project_is_imported_as_framing_and_plan_drafts_once(
     let guid = Uuid::new_v4();
     let path = register(&f, "heart", "Heart rig", &[(1, "Heart Nebula", Some(guid))]);
     let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute("UPDATE project SET priority=2 WHERE Id=1", [])
+        .unwrap();
     db.execute_batch(
         "INSERT INTO exposuretemplate (Id, profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel, moonavoidanceenabled,
             moonavoidanceseparation, moonavoidancewidth, maximumhumidity, defaultexposure, moonrelaxscale, moonrelaxmaxaltitude,
@@ -475,6 +477,7 @@ async fn a_target_scheduler_project_is_imported_as_framing_and_plan_drafts_once(
     )
     .await;
     let objectives = plan["data"]["plan"]["objectives"].as_array().unwrap();
+    assert!(objectives.iter().all(|o| o["priority"] == 2));
     let ha = objectives
         .iter()
         .find(|o| o["bandpass_id"] == "h_alpha")
@@ -497,6 +500,8 @@ async fn a_target_scheduler_project_is_imported_as_framing_and_plan_drafts_once(
     assert_eq!(ha_c["exposure_seconds"], 300.0);
     assert_eq!(ha_c["enabled"], true);
     // A second listing changes nothing: the drafts are the operator's now.
+    db.execute("UPDATE project SET priority=0 WHERE Id=1", [])
+        .unwrap();
     let (_, again) = call(&f.app, "GET", "/plans", Value::Null, None).await;
     let row2 = again["data"]["rows"]
         .as_array()
@@ -506,6 +511,19 @@ async fn a_target_scheduler_project_is_imported_as_framing_and_plan_drafts_once(
         .unwrap();
     assert_eq!(row2["framing"]["revision"], 1);
     assert_eq!(row2["plan"]["revision"], 1);
+    let (_, retained) = call(
+        &f.app,
+        "GET",
+        &format!("/projects/{project}/plan"),
+        Value::Null,
+        None,
+    )
+    .await;
+    assert!(retained["data"]["plan"]["objectives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|o| o["priority"] == 2));
 }
 
 /// A server without database management still plans over its catalogs. The

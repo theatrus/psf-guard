@@ -26,6 +26,14 @@ target, filter and exposure from its authorized workload, reevaluating after
 real operation delays and at safe boundaries. The C# adapter must not add its
 own priority, filter-selection or scheduling policy.
 
+TS-style local execution is the primary observing loop, not an optional
+fallback for remote plan playback. An admitted workload can contain multiple
+targets and recipes. The on-rig shared core selects what is useful now from
+local priority, visibility, horizon, meridian, equipment and progress evidence.
+Online allocation/check-in supplies bounded authority, corrective revisions
+and quality reinforcement; it must not authorize each ordinary target switch.
+There is still no TS runtime dependency or second scheduler in C#.
+
 Shared planning priorities resolve global defaults and site/rig/project
 overrides before scoring feasible work. Site, horizon, weather, equipment
 capabilities, pending captures and learned operation durations remain inputs;
@@ -40,9 +48,50 @@ diagnostics and exceptions, not as nightly steps.
 
 The first automatic-workload increment implements commissioned request intake,
 idempotent grants, clean terminal release and carried attempt budgets for the
-prepared-target executor. It does not implement multi-target acquisition,
-inherited policy resolution, grade feedback or crash/uncertain-work recovery.
+prepared-target executor. The local multi-target increment below extends it;
+inherited policy resolution, grade feedback and crash/uncertain-work recovery
+remain unfinished.
 Phase 2 must finish those gates. Every grant still has a one-shot launch.
+
+### Local multi-target execution increment
+
+The opt-in **Local target scheduling** session mode removes the adapter's
+one-target restriction. The existing Rust geometry/ledger core selects the
+highest-priority feasible goal after saves and native operation boundaries;
+the C# adapter only resolves that choice to its immutable target and recipe.
+Its inputs include live NINA site/horizon/altitude/meridian constraints and
+durable pending/attempt counts. Sequence-owned target preparation runs as the
+core's `BeforeTarget` operation after native unpark/tracking, with measured
+elapsed time recorded locally. Clean halted preparation can close and reselect
+after slow setup changes which goal is feasible; uncertain work still stops.
+
+Target visits use the seven TS-style slots, ordinary inherited conditions and
+triggers, and native inherited-coordinate slew/center instructions. Visits to
+different targets close the old target's hooks before starting the new target's
+hooks. Waiting ends a visit; setup runs again on return. A saved frame is pending,
+not accepted completion. The adapter verifies mount pointing before capture;
+this is not pixel-derived solve evidence.
+
+Target/periodic check-ins run in a bounded background pump. An outage cannot
+gate the next local target choice within the current grant. Automatic intake
+advertises `local_sequence_v1`; old sessions retain `prepared_target_v1`.
+Both reject rotation and Director-owned centering/dithering until those native
+policies are implemented. Unresolved intake cannot change execution modes.
+Final feed delivery, park and release remain necessary for successor authority.
+
+Implemented: local multi-target priority execution, target-context transitions,
+one-shot setup receipts, clean reselect and asynchronous reporting. Not
+implemented: automatic AF/guiding/center/dither/flip policy, duration-model
+learning, online priority/grade corrections applied to active grants, a TS DB
+refresh during a live grant, or offline cold-start/recovery admission. Priorities
+currently come from the activated/imported plan objectives. New TS imports
+preserve project Low/Normal/High priority (0/1/2) across their objectives,
+instead of inventing a filter priority from alphabetical bandpass order.
+Missing/null/unknown source priority defaults to Normal; later TS edits do not
+overwrite an existing Director draft. Full inherited
+policy/TS scheduling parity remains a phase-2 gate. Commissioned acquisition
+and the new local mode remain explicit opt-ins. This does not complete a phase
+gate or change the published runtime-only preview.
 
 ### Automatic workload exchange increment
 
@@ -3061,6 +3110,12 @@ separate workflow; these mappings alone do not resolve them.
 
 ### Phase 2: single-rig autonomous Director
 
+- [x] Execute multiple targets locally within one admitted workload using
+  shared-core priorities and fresh native geometry/progress. Preserve the
+  seven-slot target lifecycle and verify an offline target switch in real NINA.
+  Sequence-owned setup is implemented; automatic operation defaults are not.
+- [x] Deliver target/periodic capture check-ins in a bounded background pump
+  without gating ordinary local target transitions on network responses.
 - [ ] After one-time commissioning, automatically refresh unchanged context,
   request eligible workloads, acknowledge bounded grants and run an enabled
   session without per-target or per-allocation operator clicks.

@@ -37,6 +37,20 @@ fn has_column(connection: &Connection, table: &str, column: &str) -> bool {
         .is_ok()
 }
 
+fn source_priority(connection: &Connection, project_row: i64) -> Result<u32, StoreError> {
+    // TS Low/Normal/High are 0/1/2, with higher values preferred. Do not
+    // introduce a filter priority from alphabetical bandpass ordering.
+    if !has_column(connection, "project", "priority") {
+        return Ok(1);
+    }
+    let priority = connection.query_row(
+        "SELECT priority FROM project WHERE Id=?1",
+        [project_row],
+        |row| row.get::<_, Option<i64>>(0),
+    )?;
+    Ok(priority.filter(|p| (0..=2).contains(p)).unwrap_or(1) as u32)
+}
+
 fn source_targets(
     connection: &Connection,
     project_row: i64,
@@ -295,6 +309,7 @@ pub(super) fn import_from_catalog(
         imported.framing = true;
     }
     if need_plan {
+        let priority = source_priority(connection, project_row)?;
         let templates = read_templates(connection).map_err(|_| StoreError::InvalidInput)?;
         let enabled = if has_column(connection, "exposureplan", "enabled") {
             "COALESCE(e.enabled, 1) = 1"
@@ -336,9 +351,7 @@ pub(super) fn import_from_catalog(
         }
         let mut objectives = Vec::new();
         let mut contributions = Vec::new();
-        for (priority, (bandpass_id, (index, exposure, desired))) in
-            by_bandpass.into_iter().enumerate()
-        {
+        for (bandpass_id, (index, exposure, desired)) in by_bandpass {
             if desired == 0 {
                 continue;
             }
@@ -348,7 +361,7 @@ pub(super) fn import_from_catalog(
                 bandpass_id,
                 purpose: "faint_detail".to_owned(),
                 goal: Goal::Frames { value: desired },
-                priority: priority as u32 + 1,
+                priority,
             };
             contributions.push(Contribution {
                 id: Uuid::new_v4(),
@@ -390,6 +403,24 @@ pub(super) fn import_from_catalog(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_ts_priority_preserves_low_normal_high_without_inventing_values() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE project(Id INTEGER PRIMARY KEY); INSERT INTO project VALUES(1)",
+        )
+        .unwrap();
+        assert_eq!(source_priority(&db, 1).unwrap(), 1);
+        db.execute_batch("ALTER TABLE project ADD COLUMN priority INTEGER")
+            .unwrap();
+        assert_eq!(source_priority(&db, 1).unwrap(), 1);
+        for (priority, expected) in [(0, 0), (1, 1), (2, 2), (-1, 1), (999, 1)] {
+            db.execute("UPDATE project SET priority=?1", [priority])
+                .unwrap();
+            assert_eq!(source_priority(&db, 1).unwrap(), expected);
+        }
+    }
 
     fn target(name: &str, ra: f64, dec: f64, rotation: f64) -> SourceTarget {
         SourceTarget {

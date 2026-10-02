@@ -148,7 +148,10 @@ holds for it becomes Director's own drafts: its targets become the framing
 (center and rotation from the rows, a grid of panels when the targets form
 one, the rig's field as the panel size when its optics are known) and its
 exposure plans become the plan (one objective per bandpass with the frames
-a panel wants, bound to the template each plan uses at its exposure). From
+a panel wants, bound to the template each plan uses at its exposure). New
+imports retain the source project's Low/Normal/High priority (0/1/2) on each
+objective; missing, null or unknown priorities use Normal. Filters do not gain
+priority from alphabetical ordering. From
 then on the drafts are the operator's; nothing is imported twice. The
 targets are measured in the plane of the mosaic's centre, where N.I.N.A.
 lays panels out, so a mosaic far from the equator still reads as its grid.
@@ -950,9 +953,13 @@ or retroactively stop a disconnected executor.
 
 Paired `POST /rigs/{rig}/workloads/request` takes `coordinator_instance_id`,
 `catalog_id`, a durable `request_id` UUID, `configuration_id`, and
-`execution_mode: "prepared_target_v1"`. This is the only supported intake mode;
-multi-target, rotation and Director-owned centering/dithering requests are
-refused before a new grant is stored. Persist the
+`execution_mode: "prepared_target_v1"` or `"local_sequence_v1"`. Prepared mode
+requires one target. Local sequence mode accepts multiple targets for the
+on-rig Rust core to prioritize using live NINA constraints; native sequence
+hooks own target setup. Both refuse rotation and Director-owned
+centering/dithering before a new grant is stored. Historical retry replies are
+also checked against the requested capability. Local target switches do not
+require a workload request or coordinator check-in. Persist the
 UUID before sending. The response data contains `request_id`, `state`,
 `workload`, and `retry_after_seconds`. `issued` returns a workload containing
 the unchanged allocation envelope, `released: false`, and null `ledger_id` and
