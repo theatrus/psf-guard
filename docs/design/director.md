@@ -1412,7 +1412,8 @@ filter without capturing a blocked recipe.
 ### Quality holds, equipment failures and session stop
 
 Partially implemented phase-2 work: the Rust policy and separate durable recovery
-store are exposed through opt-in IPC 9, but are not wired into N.I.N.A.
+store are exposed through opt-in IPC 9 and the managed plugin client, but are not
+wired into native N.I.N.A. acquisition.
 They do not yet protect real acquisition or enable automatic recovery. The current
 native safety owner still cancels acquisition, attempts park and stays stopped
 after Safe returns. Extend it with this session policy using local evidence while
@@ -1478,9 +1479,10 @@ corrupt state, journal paging and nonoverlapping new-night admission.
 
 Runtime **0.9.0 / IPC 9** adds recovery contract **1**. The planning engine stays
 0.3.0 / contract 2. Old IPC/runtime handshakes fail before opening a database.
-The public plugin remains pinned to its existing 0.8.0 artifact; do not replace
-that executable alone. Adopt the new runtime, hash pin, wire client and native
-integration together in a later reviewed plugin increment.
+Plugin [#40](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/40)
+adopts the verified 0.9.0 artifact and IPC 9 handshake with a typed recovery
+client. Do not replace the executable alone. The public N.I.N.A. Session still
+launches with recovery disabled; native integration remains a separate gate.
 
 The verified launcher may pass `--recovery-directory <absolute-per-rig-directory>`
 after `--state-directory <absolute-allocation-directory>`. Both must already exist
@@ -1529,6 +1531,28 @@ bounds and successor-allocation blocking. The Windows process harness tests real
 pipes, exclusive recovery ownership, process death after probe/park issuance and
 restart without redispatch. These are not N.I.N.A. equipment tests. Browser,
 server-loop and real N.I.N.A. recovery simulator gates remain unimplemented.
+
+The managed client requires explicit open/readback before event submission and
+checks immutable identity/policy, monotonic revisions/time, exact wire fields
+and enums, bounded contiguous pages, and one-shot attempt/deadline correlation.
+Interrupted submission faults the connection; callers must reconnect and read
+evidence, never reconstruct a permit from an in-flight snapshot. Real-sidecar
+tests cover quality hold/probe completion and persisted stop/park replay after
+restart. All 712 plugin tests passed locally on 2026-10-02.
+
+Existing acquisition was also retested with packaged runtime 0.9.0, native NINA
+3.3.0.1064, ASCOM OmniSim and an isolated PSF Guard server: offline multi-target
+Moon avoidance (three saved frames, six batch receipts, replay refusal) and a
+separate unsafe abort/park/no-restart run passed. These tests kept recovery
+disabled and do not prove native recovery dispatch. Exact evidence lives in the
+plugin's `docs/nina-smoke-test.md`.
+
+The next native increment needs separate commissioned enclosure/motion evidence:
+the existing safety monitor does not establish roof clearance. It must also keep
+one persistent per-rig recovery directory across allocations, admit an explicit
+observing night, prevent downgrade after commissioning, classify local quality
+evidence, and bind original suggestions to one-shot native checks. UI work must
+not offer an enabled recovery policy before that acquisition path is tested.
 
 #### Remaining acquisition integration
 
@@ -3468,7 +3492,10 @@ separate workflow; these mappings alone do not resolve them.
 - [x] Expose opt-in recovery contract 1 through runtime 0.9.0 / IPC 9, with
   one-shot issuance receipts, local journal pages, a separate per-rig lease and
   durable acquisition gating. Validate pipe restart and replay in real Windows
-  processes; the public plugin has not adopted this runtime yet.
+  processes.
+- [x] Adopt runtime 0.9.0 / IPC 9 and a strict managed recovery client in plugin
+  #40. Verify real-sidecar quality/stop/replay and existing full-stack acquisition
+  with recovery disabled. This does not enable native recovery or Session controls.
 - [ ] Integrate [quality holds and session stop](#quality-holds-equipment-failures-and-session-stop)
   in the plugin through the versioned contract, local evidence classification,
   native bounded probes, Session controls and explicit resume authority.
