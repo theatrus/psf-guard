@@ -8,7 +8,13 @@
 
 - The header's background jobs queue can change the order of waiting stack
   builds and WBPP runs, take one out of the line, and stop the running job
-  after asking once. WBPP runs from every database now appear there too.
+  after asking once. WBPP runs from every database appear there too, and so
+  do automatic stack refreshes still waiting for new frames or grades to
+  settle, with **Run now** and **Skip**.
+
+- Stack progress keeps moving through the final rejection pass, in the header
+  and on the stack card, instead of sitting at 100% while the three passes
+  run.
 
 - Director's experimental workload API can commission automatic requests for a
   reviewed rig/client and project scope, release a clean parked session after

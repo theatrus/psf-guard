@@ -152,4 +152,40 @@ describe('header activity items', () => {
     });
     expect(lineLengths(items)).toEqual({ stack: 0, wbpp: 2 });
   });
+
+  it('shows the final pass in words and lists refreshes still settling', () => {
+    const running = { ...stack('R', 'running', 21, 34), progress_label: 'Rejecting transients · pass 2/3 · frame 3/8' };
+    const color = { ...stack('C', 'running', 1, 4), kind: 'color' as const };
+    const items = activityItems([], [running, color], undefined, [
+      {
+        database_id: 'a', database_name: 'Askar', project_id: 7, project_name: 'Heart',
+        reason: 'arrival', due_in_seconds: 170,
+      },
+      {
+        database_id: 'a', database_name: 'Askar', project_id: null, project_name: null,
+        reason: 'grade', due_in_seconds: 5,
+      },
+    ]);
+    expect(items[0]).toMatchObject({
+      detail: 'Rejecting transients · pass 2/3 · frame 3/8',
+      percent: (21 / 34) * 100,
+      stoppable: true,
+    });
+    // A running color composition finishes once it starts.
+    expect(items[1]).toMatchObject({ title: 'Composing color', stoppable: false });
+    expect(items[2]).toMatchObject({
+      kind: 'automatic',
+      title: 'Automatic refresh',
+      scope: 'Askar · Heart',
+      detail: 'After new frames · starts in 3 min',
+      queued: true,
+      control: { kind: 'scheduled', dbId: 'a', projectId: 7 },
+    });
+    expect(items[3]).toMatchObject({
+      scope: 'Askar · every followed project',
+      detail: 'After grade changes · starting now',
+    });
+    // Settling refreshes are not in a line a person reorders.
+    expect(lineLengths(items)).toEqual({ stack: 0, wbpp: 0 });
+  });
 });

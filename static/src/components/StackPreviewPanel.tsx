@@ -3,6 +3,7 @@ import { formatIntegration, totalIntegration } from '../utils/integrationTime';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import { openSettings } from '../utils/settingsIntent';
+import { stackGroupPercent } from '../utils/stackProgress';
 import { STACK_METHOD_QUERY_KEY, methodName, sameMethod } from '../utils/stackMethod';
 import type {
   CalibrationMode,
@@ -992,11 +993,17 @@ export default function StackPreviewPanel({
                 const processedFrames = progressGroup?.processed_frames ?? 0;
                 const eligibleFrames =
                   progressGroup?.eligible_frames ?? current?.images.length ?? 0;
+                // The final rejection pass reads every frame three more
+                // times after the frame count is complete, so the bar
+                // counts those reads too.
                 const progressPercentage =
                   progressState === 'ready'
                     ? 100
-                    : eligibleFrames > 0
-                      ? Math.min(100, (processedFrames / eligibleFrames) * 100)
+                    : progressGroup
+                      ? stackGroupPercent(
+                          progressGroup,
+                          activeGroup ? activeEntry?.job.method : artifact?.method
+                        )
                       : 0;
                 const progressLabel =
                   progressState === 'queued'

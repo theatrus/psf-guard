@@ -387,6 +387,10 @@ pub struct StackGroupStatus {
     /// Where the curve is published as JSON, beside the stack's own FITS.
     #[serde(default)]
     pub snr_url: Option<String>,
+    /// Where the final rejection pass is, while it runs. The frame counts
+    /// above are complete by then, so this is what still moves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_pass: Option<FinalPassProgress>,
     pub error: Option<String>,
     #[serde(default)]
     pub calibration: crate::calibration::AppliedCalibration,
@@ -519,6 +523,48 @@ pub enum StackActivityKind {
     Color,
 }
 
+/// How far the final rejection pass has read: each admitted frame once per
+/// pass, three passes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FinalPassProgress {
+    /// 1-based.
+    pub pass: usize,
+    pub passes: usize,
+    /// Frames read in this pass, 1-based.
+    pub frame: usize,
+    pub frames: usize,
+}
+
+impl FinalPassProgress {
+    pub fn done(&self) -> usize {
+        (self.pass.saturating_sub(1)) * self.frames + self.frame
+    }
+
+    pub fn total(&self) -> usize {
+        self.passes * self.frames
+    }
+}
+
+/// Work done and to do in one channel, in frame reads: the live pass reads
+/// each eligible frame once, and a final pass three more times per admitted
+/// frame. Until the final pass starts its size is estimated from the
+/// eligible frames, so the share only steps forward when frames drop out.
+fn group_work(group: &StackGroupStatus, reintegrates: bool) -> (usize, usize) {
+    let live = group.eligible_frames;
+    let estimate = if reintegrates && live >= 3 {
+        3 * live
+    } else {
+        0
+    };
+    match (group.state, group.final_pass) {
+        (StackGroupState::Skipped, _) => (0, 0),
+        (StackGroupState::Ready, Some(pass)) => (live + pass.total(), live + pass.total()),
+        (StackGroupState::Ready, None) => (live + estimate, live + estimate),
+        (_, Some(pass)) => (live + pass.done().min(pass.total()), live + pass.total()),
+        (_, None) => (group.processed_frames.min(live), live + estimate),
+    }
+}
+
 /// One queued or running stack build, described well enough for a header
 /// indicator and for a panel to re-attach to a job it did not start.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -541,12 +587,33 @@ pub struct StackActivityEntry {
     /// Place in the line of waiting builds, 0 next; `None` once running.
     #[serde(default)]
     pub queue_position: Option<usize>,
+    /// The progress in words, when the units alone would mislead: the
+    /// final rejection pass reads frames the live pass already counted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StackActivity {
     pub schema_version: u32,
     pub active: Vec<StackActivityEntry>,
+    /// Automatic refreshes still settling, soonest first. They become
+    /// builds in `active` when they start.
+    #[serde(default)]
+    pub scheduled: Vec<ScheduledRefreshView>,
+}
+
+/// A waiting automatic refresh, with the names a person reads.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledRefreshView {
+    pub database_id: String,
+    pub database_name: String,
+    pub project_id: Option<i32>,
+    /// `None` for a whole-database refresh, or a project that is gone.
+    pub project_name: Option<String>,
+    /// `arrival`, `sync` or `grade`.
+    pub reason: automatic::RefreshReason,
+    pub due_in_seconds: u64,
 }
 
 fn channel_label(target_name: &str, filter_name: &str) -> String {
@@ -600,24 +667,30 @@ fn mono_activity(job: &StackPreviewJob) -> StackActivityEntry {
         },
         None => "Preparing stack".to_string(),
     };
-    let total_units = job
+    let reintegrates = job
+        .method
+        .is_none_or(|method| method.final_pass == StackFinalPass::Reintegrate);
+    let (processed_units, total_units) = job
         .groups
         .iter()
-        .filter(|group| group.state != StackGroupState::Skipped)
-        .map(|group| group.eligible_frames)
-        .sum();
-    let processed_units = job
-        .groups
-        .iter()
-        .filter(|group| group.state != StackGroupState::Skipped)
-        .map(|group| {
-            if group.state == StackGroupState::Ready {
-                group.eligible_frames
-            } else {
-                group.processed_frames.min(group.eligible_frames)
-            }
-        })
-        .sum();
+        .map(|group| group_work(group, reintegrates))
+        .fold((0, 0), |(done, total), (group_done, group_total)| {
+            (done + group_done, total + group_total)
+        });
+    // What a person reads: frames while registering, then where the final
+    // pass is.
+    let progress_label = pending.and_then(|group| match group.final_pass {
+        Some(pass) if group.state == StackGroupState::Running => Some(format!(
+            "Rejecting transients · pass {}/{} · frame {}/{}",
+            pass.pass, pass.passes, pass.frame, pass.frames
+        )),
+        _ if group.state == StackGroupState::Running && group.eligible_frames > 0 => Some(format!(
+            "{}/{} frames",
+            group.processed_frames.min(group.eligible_frames),
+            group.eligible_frames
+        )),
+        _ => None,
+    });
     StackActivityEntry {
         kind: StackActivityKind::Mono,
         job_id: job.job_id.clone(),
@@ -631,6 +704,7 @@ fn mono_activity(job: &StackPreviewJob) -> StackActivityEntry {
         created_unix_seconds: job.created_unix_seconds,
         automatic: job.automatic,
         queue_position: None,
+        progress_label,
     }
 }
 
@@ -657,6 +731,7 @@ fn color_activity(job: &color::StackColorJob) -> StackActivityEntry {
         created_unix_seconds: job.created_unix_seconds,
         automatic: job.automatic,
         queue_position: None,
+        progress_label: None,
     }
 }
 
@@ -1381,10 +1456,94 @@ pub async fn cancel_stack_preview_job(
 pub async fn get_stack_activity(
     State(state): State<Arc<AppState>>,
 ) -> Json<ApiResponse<StackActivity>> {
+    let scheduled = state.auto_stacks.scheduled();
+    let scheduled = if scheduled.is_empty() {
+        Vec::new()
+    } else {
+        // Names come from the catalogs; a short read each, off the runtime.
+        let state = Arc::clone(&state);
+        tokio::task::spawn_blocking(move || name_scheduled(&state, scheduled))
+            .await
+            .unwrap_or_default()
+    };
     Json(ApiResponse::success(StackActivity {
         schema_version: 1,
         active: state.stack_previews.active(),
+        scheduled,
     }))
+}
+
+fn name_scheduled(
+    state: &AppState,
+    scheduled: Vec<automatic::ScheduledRefresh>,
+) -> Vec<ScheduledRefreshView> {
+    scheduled
+        .into_iter()
+        .map(|refresh| {
+            let ctx = state.get_database(&refresh.database_id);
+            let project_name = match (&ctx, refresh.project_id) {
+                (Some(ctx), Some(project_id)) => ctx.db().lock().ok().and_then(|conn| {
+                    conn.query_row(
+                        "SELECT name FROM project WHERE Id = ?1",
+                        [project_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .ok()
+                }),
+                _ => None,
+            };
+            ScheduledRefreshView {
+                database_name: ctx
+                    .map(|ctx| ctx.name.clone())
+                    .unwrap_or_else(|| refresh.database_id.clone()),
+                database_id: refresh.database_id,
+                project_id: refresh.project_id,
+                project_name,
+                reason: refresh.reason,
+                due_in_seconds: refresh.due_in_seconds,
+            }
+        })
+        .collect()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ScheduledRefreshRequest {
+    pub database_id: String,
+    #[serde(default)]
+    pub project_id: Option<i32>,
+}
+
+impl ScheduledRefreshRequest {
+    fn key(self) -> automatic::RefreshKey {
+        automatic::RefreshKey {
+            database_id: self.database_id,
+            project_id: self.project_id,
+        }
+    }
+}
+
+/// `POST /api/stack-activity/scheduled/skip` — drop a waiting automatic
+/// refresh. The next arrival or grade change schedules it again.
+pub async fn skip_scheduled_refresh(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<ScheduledRefreshRequest>,
+) -> Result<Json<ApiResponse<StackActivity>>, AppError> {
+    if !state.auto_stacks.skip(&request.key()) {
+        return Err(AppError::NotFound);
+    }
+    Ok(get_stack_activity(State(state)).await)
+}
+
+/// `POST /api/stack-activity/scheduled/run-now` — start a waiting automatic
+/// refresh at the scheduler's next look, within seconds.
+pub async fn run_scheduled_refresh_now(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<ScheduledRefreshRequest>,
+) -> Result<Json<ApiResponse<StackActivity>>, AppError> {
+    if !state.auto_stacks.run_now(&request.key()) {
+        return Err(AppError::NotFound);
+    }
+    Ok(get_stack_activity(State(state)).await)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1415,6 +1574,21 @@ pub async fn cancel_stack_activity_job(
     Path(job_id): Path<String>,
 ) -> Result<Json<ApiResponse<StackActivity>>, AppError> {
     validate_job_id(&job_id)?;
+    // A color composition only checks for a stop before it starts; once it
+    // runs it finishes, which is minutes at most. Saying it stopped would be
+    // a lie.
+    let composing = state
+        .stack_previews
+        .color_jobs
+        .lock()
+        .unwrap()
+        .get(&job_id)
+        .is_some_and(|job| job.state == StackJobState::Running);
+    if composing {
+        return Err(AppError::BadRequest(
+            "A running color composition cannot be stopped; it finishes in a few minutes".into(),
+        ));
+    }
     if !state.stack_previews.request_cancel(&job_id) {
         return Err(AppError::BadRequest(
             "This build has already finished".into(),
@@ -1983,6 +2157,7 @@ fn prepare_job(
             fits_url: None,
             snr: None,
             snr_url: None,
+            final_pass: None,
             error: (eligible_frames < 2).then(|| "Fewer than two eligible FITS frames".to_string()),
             calibration: crate::calibration::AppliedCalibration::default(),
             input_images,
@@ -3335,21 +3510,25 @@ fn run_group(
         let reference_headers = stacker.reference_headers().to_vec();
         let accepted_frames = stacker.view().accepted_frames;
         let rejected_frames = stacker.view().rejected_frames;
-        let set_phase = |phase: String| {
-            state.stack_previews.update(job_id, |job| {
-                job.groups[group.index].phase = phase;
-            });
-        };
         let report_pass = |pass: seiza_stacking::BatchStackPass, index: usize, count: usize| {
             let pass = match pass {
                 seiza_stacking::BatchStackPass::Estimate => 1,
                 seiza_stacking::BatchStackPass::Refine => 2,
                 seiza_stacking::BatchStackPass::Integrate => 3,
             };
-            set_phase(format!(
-                "Rejecting transients: pass {pass}/3, frame {}/{count}",
-                index + 1
-            ));
+            state.stack_previews.update(job_id, |job| {
+                let group = &mut job.groups[group.index];
+                group.phase = format!(
+                    "Rejecting transients: pass {pass}/3, frame {}/{count}",
+                    index + 1
+                );
+                group.final_pass = Some(FinalPassProgress {
+                    pass,
+                    passes: 3,
+                    frame: index + 1,
+                    frames: count,
+                });
+            });
         };
         // The final pass replays PSF Guard's ledger, keeping each frame's
         // background matched to the reference the live pass chose. Seiza
@@ -4055,6 +4234,7 @@ mod tests {
             fits_url: None,
             snr: None,
             snr_url: None,
+            final_pass: None,
             error: None,
             calibration: crate::calibration::AppliedCalibration::default(),
             input_images: vec![StackInputImage {
@@ -4269,6 +4449,38 @@ mod tests {
         assert_eq!(unsplit.public.groups.len(), 1);
         assert!(unsplit.public.groups[0].exposure_group.is_none());
         assert_ne!(unsplit.public.job_id, subset.public.job_id);
+    }
+
+    #[test]
+    fn the_final_pass_keeps_the_progress_moving() {
+        let mut group = ready_group(42, "Ha", 1);
+        group.eligible_frames = 10;
+        group.processed_frames = 4;
+        group.state = StackGroupState::Running;
+        // Registering: 4 of 10 frames, with 30 final reads still to come.
+        assert_eq!(group_work(&group, true), (4, 40));
+        assert_eq!(group_work(&group, false), (4, 10));
+        // The live pass is done and pass 2 has read 3 of 8 admitted frames.
+        group.processed_frames = 10;
+        group.final_pass = Some(FinalPassProgress {
+            pass: 2,
+            passes: 3,
+            frame: 3,
+            frames: 8,
+        });
+        assert_eq!(group_work(&group, true), (21, 34));
+        group.state = StackGroupState::Ready;
+        assert_eq!(group_work(&group, true), (34, 34));
+
+        let mut job = completed_job("final", vec![group]);
+        job.state = StackJobState::Running;
+        job.groups[0].state = StackGroupState::Running;
+        let entry = mono_activity(&job);
+        assert_eq!((entry.processed_units, entry.total_units), (21, 34));
+        assert_eq!(
+            entry.progress_label.as_deref(),
+            Some("Rejecting transients · pass 2/3 · frame 3/8")
+        );
     }
 
     #[tokio::test]

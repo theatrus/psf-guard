@@ -35,7 +35,7 @@ function busy(db: DatabaseActivity): boolean {
 export function useHeaderActivity() {
   const { data: databases = [] } = useAllDatabases();
   const queryClient = useQueryClient();
-  const { active: stacks } = useStackActivity();
+  const { active: stacks, scheduled } = useStackActivity();
   const wbpp = useQuery<WbppActivity>({
     queryKey: WBPP_ACTIVITY_QUERY_KEY,
     queryFn: apiClient.getWbppActivity,
@@ -85,7 +85,7 @@ export function useHeaderActivity() {
     scan: scans[index]?.data,
     backfill: backfills[index]?.data,
   }));
-  const items = activityItems(perDb, stacks, wbpp.data);
+  const items = activityItems(perDb, stacks, wbpp.data, scheduled);
   const summary = summarize(items);
 
   // A database whose work just finished has new images, metrics and grades
@@ -138,11 +138,14 @@ export function useHeaderActivity() {
   // scan errors it has been holding; then it leaves and forgets them.
   const [finished, setFinished] = useState<FinishedNote | null>(null);
   const finishedTimer = useRef<number | null>(null);
-  const previousCount = useRef(summary.count);
+  // Running and lined-up work; a refresh still settling is not, so
+  // skipping one does not say "Done".
+  const workCount = items.filter((item) => item.kind !== 'automatic').length;
+  const previousCount = useRef(workCount);
   useEffect(() => {
     const before = previousCount.current;
-    previousCount.current = summary.count;
-    if (summary.count > 0) {
+    previousCount.current = workCount;
+    if (workCount > 0) {
       if (finishedTimer.current != null) {
         window.clearTimeout(finishedTimer.current);
         finishedTimer.current = null;
@@ -157,7 +160,7 @@ export function useHeaderActivity() {
       setScanError(null);
       finishedTimer.current = null;
     }, FINISHED_MS);
-  }, [summary.count]);
+  }, [workCount]);
   useEffect(() => () => {
     if (finishedTimer.current != null) window.clearTimeout(finishedTimer.current);
   }, []);

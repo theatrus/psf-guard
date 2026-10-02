@@ -10,12 +10,12 @@ import './header.css';
 /** How long the list stays after the pointer leaves, so it can be reached. */
 const HOVER_CLOSE_MS = 200;
 
-function ProgressRing({ percent }: { percent: number | null }) {
+function ProgressRing({ percent, idle }: { percent: number | null; idle: boolean }) {
   const radius = 7;
   const circumference = 2 * Math.PI * radius;
   return (
     <svg
-      className={`activity-ring${percent == null ? ' is-indeterminate' : ''}`}
+      className={`activity-ring${percent == null && !idle ? ' is-indeterminate' : ''}`}
       viewBox="0 0 18 18"
       width="18"
       height="18"
@@ -28,7 +28,14 @@ function ProgressRing({ percent }: { percent: number | null }) {
         cy="9"
         r={radius}
         strokeDasharray={circumference}
-        strokeDashoffset={percent == null ? circumference * 0.7 : circumference * (1 - percent / 100)}
+        // Nothing running: an empty ring, not a spinner caught mid-turn.
+        strokeDashoffset={
+          percent != null
+            ? circumference * (1 - percent / 100)
+            : idle
+              ? circumference
+              : circumference * 0.7
+        }
       />
     </svg>
   );
@@ -36,10 +43,17 @@ function ProgressRing({ percent }: { percent: number | null }) {
 
 type ActivityAction =
   | { type: 'move'; control: ActivityControl; position: number }
-  | { type: 'stop'; control: ActivityControl };
+  | { type: 'stop'; control: ActivityControl }
+  | { type: 'run-now'; control: ActivityControl };
 
 function runAction(action: ActivityAction): Promise<unknown> {
   const { control } = action;
+  if (control.kind === 'scheduled') {
+    return action.type === 'run-now'
+      ? apiClient.runScheduledRefreshNow(control.dbId, control.projectId)
+      : apiClient.skipScheduledRefresh(control.dbId, control.projectId);
+  }
+  if (action.type === 'run-now') return Promise.resolve();
   if (action.type === 'move') {
     if (control.kind === 'stack') return apiClient.moveStackJob(control.jobId, action.position);
     if (control.kind === 'wbpp-queued') return apiClient.moveQueuedWbppRun(control.queueId, action.position);
@@ -71,7 +85,9 @@ function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowCont
         <span className="activity-row-title">{item.title}</span>
         <span className="activity-row-state">
           {item.queued
-            ? waiting ? `queued · ${item.position! + 1}` : 'queued'
+            ? waiting
+              ? `queued · ${item.position! + 1}`
+              : item.kind === 'automatic' ? 'waiting' : 'queued'
             : item.percent != null ? `${Math.round(item.percent)}%` : 'working'}
         </span>
       </div>
@@ -89,7 +105,30 @@ function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowCont
       )}
       <div className="activity-row-foot">
         <div className="activity-row-detail">{item.detail}</div>
-        {allowed && control && (
+        {allowed && control?.kind === 'scheduled' && (
+          <div className="activity-row-actions">
+            <button
+              type="button"
+              aria-label={`Run ${name} now`}
+              title="Run now"
+              disabled={controls.busy}
+              onClick={() => controls.run({ type: 'run-now', control })}
+            >
+              Run now
+            </button>
+            <button
+              type="button"
+              className="activity-row-stop"
+              aria-label={`Skip ${name}`}
+              title="Skip this refresh"
+              disabled={controls.busy}
+              onClick={() => controls.run({ type: 'stop', control })}
+            >
+              ✕
+            </button>
+          </div>
+        )}
+        {allowed && control && control.kind !== 'scheduled' && (item.queued || item.stoppable) && (
           <div className="activity-row-actions">
             {waiting && (
               <>
@@ -176,6 +215,16 @@ export default function ActivityChip() {
   const queryClient = useQueryClient();
   const action = useMutation({
     mutationFn: runAction,
+    // Every route answers with the line as it now stands; showing it at
+    // once keeps a second click from acting on the old positions.
+    onSuccess: (result, variables) => {
+      if (!result || typeof result !== 'object') return;
+      if (variables.control.kind === 'stack' || variables.control.kind === 'scheduled') {
+        queryClient.setQueryData(STACK_ACTIVITY_QUERY_KEY, result);
+      } else if (variables.type === 'move') {
+        queryClient.setQueryData(WBPP_ACTIVITY_QUERY_KEY, result);
+      }
+    },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: STACK_ACTIVITY_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: WBPP_ACTIVITY_QUERY_KEY });
@@ -246,7 +295,9 @@ export default function ActivityChip() {
   const controls: RowControls = {
     allowed: (item) =>
       access.canWrite
-      && (item.control?.kind === 'stack' || !!serverInfo?.allow_database_management),
+      && (item.control?.kind === 'stack'
+        || item.control?.kind === 'scheduled'
+        || !!serverInfo?.allow_database_management),
     run: (next) => {
       // A control was used, so the list stays open after the pointer leaves.
       setPinned(true);
@@ -312,7 +363,7 @@ export default function ActivityChip() {
         }}
       >
         {scanError && <span className="activity-chip-mark" aria-hidden="true" title={scanError.message}>!</span>}
-        <ProgressRing percent={summary.percent} />
+        <ProgressRing percent={summary.percent} idle={running === 0} />
         {percent != null && <span className="activity-chip-percent">{percent}%</span>}
         <span className="activity-chip-count">{jobs}</span>
       </button>

@@ -1699,6 +1699,28 @@ export const apiClient = {
     return data.data;
   },
 
+  /** Drop a waiting automatic refresh. */
+  skipScheduledRefresh: async (databaseId: string, projectId: number | null): Promise<StackActivity> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<StackActivity>>(
+      '/stack-activity/scheduled/skip',
+      { database_id: databaseId, project_id: projectId }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to skip the refresh');
+    return data.data;
+  },
+
+  /** Start a waiting automatic refresh at the scheduler's next look. */
+  runScheduledRefreshNow: async (databaseId: string, projectId: number | null): Promise<StackActivity> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<StackActivity>>(
+      '/stack-activity/scheduled/run-now',
+      { database_id: databaseId, project_id: projectId }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to start the refresh');
+    return data.data;
+  },
+
   getWbppActivity: async (): Promise<WbppActivity> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<WbppActivity>>('/wbpp/activity');

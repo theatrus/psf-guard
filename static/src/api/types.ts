@@ -695,7 +695,17 @@ export interface ProgressiveSnr {
   analysis_reason?: string | null;
 }
 
+/** Where a channel's final rejection pass has read to. */
+export interface FinalPassProgress {
+  pass: number;
+  passes: number;
+  frame: number;
+  frames: number;
+}
+
 export interface StackGroupStatus {
+  /** Present while, and after, the final rejection pass runs. */
+  final_pass?: FinalPassProgress | null;
   exposure_group?: ExposureGroup | null;
   index: number;
   target_id: number;
@@ -838,11 +848,26 @@ export interface StackActivityEntry {
   automatic?: boolean;
   /** Place in the line of waiting builds, 0 next; null once running. */
   queue_position?: number | null;
+  /** The progress in words, such as the final rejection pass's place. */
+  progress_label?: string | null;
+}
+
+/** An automatic refresh still waiting for its frames or grades to settle. */
+export interface ScheduledRefresh {
+  database_id: string;
+  database_name: string;
+  /** null refreshes every followed project of the database. */
+  project_id: number | null;
+  project_name: string | null;
+  reason: 'arrival' | 'sync' | 'grade';
+  due_in_seconds: number;
 }
 
 export interface StackActivity {
   schema_version: number;
   active: StackActivityEntry[];
+  /** Automatic refreshes still settling, soonest first. */
+  scheduled?: ScheduledRefresh[];
 }
 
 export type StackStretchColorStrategy = 'linked' | 'unlinked' | 'luminance-preserving';

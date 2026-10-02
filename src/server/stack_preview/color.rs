@@ -3500,6 +3500,7 @@ mod tests {
             group: StackGroupStatus {
                 snr: None,
                 snr_url: None,
+                final_pass: None,
                 index,
                 target_id: 7,
                 target_name: "Color target".into(),

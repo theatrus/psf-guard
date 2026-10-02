@@ -1,6 +1,7 @@
 import type {
   CacheRefreshProgress,
   QualityBackfillStatus,
+  ScheduledRefresh,
   SpatialScanStatus,
   StackActivityEntry,
   WbppActivity,
@@ -9,6 +10,7 @@ import type {
 /** What a row can do: stop its job, and move it in its line. */
 export type ActivityControl =
   | { kind: 'stack'; jobId: string }
+  | { kind: 'scheduled'; dbId: string; projectId: number | null }
   | { kind: 'wbpp-running'; dbId: string }
   | { kind: 'wbpp-queued'; dbId: string; queueId: string };
 
@@ -18,7 +20,7 @@ export type ActivityQueue = 'stack' | 'wbpp';
 /** One piece of background work the header reports. */
 export interface ActivityItem {
   key: string;
-  kind: 'refresh' | 'quality' | 'stack' | 'wbpp';
+  kind: 'refresh' | 'quality' | 'stack' | 'wbpp' | 'automatic';
   /** What is happening: "Stacking", "Analyzing quality". */
   title: string;
   /** What it happens to: a database, or a target and channel. */
@@ -36,6 +38,8 @@ export interface ActivityItem {
   /** Place among the waiting jobs of its line, 0 next. */
   position?: number;
   control?: ActivityControl;
+  /** Whether Stop can end it while it runs. A color composition cannot. */
+  stoppable?: boolean;
 }
 
 export interface DatabaseActivity {
@@ -132,13 +136,15 @@ function stackItem(entry: StackActivityEntry): ActivityItem {
     control: { kind: 'stack', jobId: entry.job_id },
     key: `stack:${entry.job_id}`,
     kind: 'stack',
+    stoppable: queued || entry.kind === 'mono',
     title: entry.kind === 'mono' ? 'Stacking' : 'Composing color',
     scope: entry.label,
     detail: queued
       ? 'Waiting for the build ahead'
-      : entry.total_units > 0
-        ? `${entry.processed_units}/${entry.total_units} ${unit}`
-        : entry.detail,
+      : entry.progress_label
+        ?? (entry.total_units > 0
+          ? `${entry.processed_units}/${entry.total_units} ${unit}`
+          : entry.detail),
     queued,
     percent: queued ? null : fraction(entry.processed_units, entry.total_units),
     automatic: entry.automatic,
@@ -155,7 +161,10 @@ const WBPP_STAGES: Record<string, string> = {
 function wbppItems(wbpp: WbppActivity | undefined): ActivityItem[] {
   if (!wbpp) return [];
   const running = wbpp.running.map((run): ActivityItem => ({
-    key: `wbpp:${run.db_id}`,
+    // The start time is part of the key, so the next run on the same
+    // database is a new row and never inherits an armed Stop.
+    key: `wbpp:${run.db_id}:${run.started_at ?? ''}`,
+    stoppable: true,
     kind: 'wbpp',
     title: 'WBPP',
     scope: `${run.db_name} · ${run.scope}`,
@@ -171,6 +180,7 @@ function wbppItems(wbpp: WbppActivity | undefined): ActivityItem[] {
   }));
   const queued = wbpp.queued.map((run, index): ActivityItem => ({
     key: `wbpp-queued:${run.id}`,
+    stoppable: true,
     kind: 'wbpp',
     title: 'WBPP',
     scope: `${run.db_name} · ${run.scope}`,
@@ -184,12 +194,43 @@ function wbppItems(wbpp: WbppActivity | undefined): ActivityItem[] {
   return [...running, ...queued];
 }
 
+const REFRESH_REASONS: Record<ScheduledRefresh['reason'], string> = {
+  arrival: 'new frames',
+  sync: 'a sync',
+  grade: 'grade changes',
+};
+
+function startsIn(seconds: number): string {
+  if (seconds <= 15) return 'starting now';
+  const minutes = Math.ceil(seconds / 60);
+  return `starts in ${minutes} min`;
+}
+
+function scheduledItems(scheduled: ScheduledRefresh[]): ActivityItem[] {
+  return scheduled.map((refresh) => ({
+    key: `scheduled:${refresh.database_id}:${refresh.project_id ?? 'all'}`,
+    kind: 'automatic',
+    title: 'Automatic refresh',
+    scope: `${refresh.database_name} · ${
+      refresh.project_id == null
+        ? 'every followed project'
+        : refresh.project_name ?? `project ${refresh.project_id}`
+    }`,
+    detail: `After ${REFRESH_REASONS[refresh.reason]} · ${startsIn(refresh.due_in_seconds)}`,
+    queued: true,
+    percent: null,
+    automatic: true,
+    control: { kind: 'scheduled', dbId: refresh.database_id, projectId: refresh.project_id },
+  }));
+}
+
 /** Every job the header reports: each line's running work, then its waiting
- *  work in the order it will run. */
+ *  work in the order it will run, then automatic refreshes still settling. */
 export function activityItems(
   databases: DatabaseActivity[],
   stacks: StackActivityEntry[],
-  wbpp?: WbppActivity
+  wbpp?: WbppActivity,
+  scheduled: ScheduledRefresh[] = []
 ): ActivityItem[] {
   const items: ActivityItem[] = [];
   for (const db of databases) {
@@ -204,6 +245,7 @@ export function activityItems(
   );
   items.push(...ordered.map(stackItem));
   items.push(...wbppItems(wbpp));
+  items.push(...scheduledItems(scheduled));
   return items;
 }
 

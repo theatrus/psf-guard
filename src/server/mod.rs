@@ -717,6 +717,14 @@ async fn run_server_internal(
         .route("/info", get(handlers::get_server_info))
         .route("/stack-activity", get(stack_preview::get_stack_activity))
         .route(
+            "/stack-activity/scheduled/skip",
+            post(stack_preview::skip_scheduled_refresh),
+        )
+        .route(
+            "/stack-activity/scheduled/run-now",
+            post(stack_preview::run_scheduled_refresh_now),
+        )
+        .route(
             "/stack-activity/{job_id}/move",
             post(stack_preview::move_stack_job),
         )

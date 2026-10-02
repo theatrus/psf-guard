@@ -263,14 +263,27 @@ the queue: each build names its target and channel and how far it has got, and
 waiting builds say `queued` with their place in line. Catalog refreshes,
 quality scans and WBPP runs share the same chip.
 
+The overall percent and each build's bar count frame reads: the live pass
+reads each eligible frame once, and the final rejection pass three more times
+per admitted frame, so the bar keeps moving through the final pass instead of
+sitting at 100%. While that pass runs the build's line reads, for example,
+`Rejecting transients · pass 2/3 · frame 4/14`.
+
 Builds wait in a line of their own, and the line, not the order they were
 asked for, decides what runs next. In the queue, **↑** and **↓** move a
 waiting build, **×** takes it out of the line, and **Stop** ends the running
-build after asking once. Mono and color builds share the line. These controls
-need write access. `POST /api/stack-activity/{job_id}/move` with
+build after asking once. Mono and color builds share the line. A running color
+composition has no **Stop**: it only checks for one before it starts, and
+finishes within minutes. Automatic refreshes still settling after new frames,
+a sync or grade changes are listed too, with when they start; **Run now**
+starts one within seconds and **×** skips it until the next change. These
+controls need write access. `POST /api/stack-activity/{job_id}/move` with
 `{"position": n}` (0 is next) and `POST /api/stack-activity/{job_id}/cancel`
 do the same from scripts; `GET /api/stack-activity` lists builds running first,
-then the line in order, each waiting one with its `queue_position`. Reopening the project grid re-attaches the stack panels to the
+then the line in order, each waiting one with its `queue_position`, and the
+settling automatic refreshes under `scheduled`.
+`POST /api/stack-activity/scheduled/run-now` and `/scheduled/skip` take
+`{"database_id": …, "project_id": …}`. Reopening the project grid re-attaches the stack panels to the
 running job, so leaving the page and coming back restores the live per-card
 progress instead of an idle panel.
 
