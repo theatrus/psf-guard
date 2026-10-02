@@ -1124,8 +1124,12 @@ reserves work atomically before returning a grant; a dropped reply must not
 reserve the same deficit again. Repeated check-ins cannot refresh spent budgets.
 An unchanged current grant may be returned; a successor requires reconciliation
 of the old grant and an explicit transition acknowledged at a safe boundary.
-Exact wire messages remain to be designed and versioned; the current capture
-receipt endpoint alone does not implement workload exchange.
+The v1 commissioned request/clean-release exchange is implemented (see
+[Director management](../DIRECTOR.md#automatic-workload-policy-and-exchange)).
+Receipt cursors travel through the separate capture checkpoint endpoint.
+General successor recovery, active-grant revisions and duration/quality
+reinforcement still need versioned contracts; capture receipts alone do not
+establish those capabilities.
 Requesting work must not let a paired client admit its own grants or bypass
 operator-approved project scope. The coordinator issues grants under the saved
 commissioning policy; local enablement, safety and exclusive ownership still
