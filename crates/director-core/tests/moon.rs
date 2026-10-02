@@ -111,6 +111,16 @@ fn invalid_policy_and_evidence_cannot_be_treated_as_clear() {
 
 #[test]
 fn eligible_sensitive_filters_keep_their_static_aversion() {
+    assert_eq!(
+        MoonPolicy {
+            separation_degrees: -0.0,
+            ..policy()
+        }
+        .aversion()
+        .unwrap()
+        .to_bits(),
+        0.0_f64.to_bits()
+    );
     let ha = MoonPolicy {
         separation_degrees: 30.0,
         width_days: 3.0,

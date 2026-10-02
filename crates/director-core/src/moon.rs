@@ -96,7 +96,7 @@ impl MoonPolicy {
         } else if self.moon_down {
             1.0
         } else {
-            self.separation_degrees * self.width_days / (180.0 * 14.0)
+            (self.separation_degrees * self.width_days / (180.0 * 14.0)).abs()
         })
     }
 
