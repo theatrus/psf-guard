@@ -3032,6 +3032,161 @@ pub(super) fn retained_calibration_source(
         }))
 }
 
+/// The color previews to compose for a target once a build leaves none of
+/// its channels waiting.
+///
+/// Every preview composed before for the target comes back with the newest
+/// stack of each of its channels: the same role, filter, exposure group and
+/// origin (PSF Guard or WBPP), so a choice the person made between families
+/// holds. One whose channels did not change is left alone. A target with no
+/// preview yet gets its first one when `defaults` carries the person's
+/// display pipeline: LRGB when it has L, R, G and B, else RGB, else the
+/// first narrowband palette its channels allow, from PSF Guard's own stacks.
+pub(super) fn requests_after_build(
+    ctx: &crate::server::database_context::DatabaseContext,
+    project_id: i32,
+    target_id: i32,
+    defaults: Option<&StackColorProcessing>,
+) -> Result<Vec<StackColorRequest>, AppError> {
+    let latest = load_latest_stacks(ctx, project_id)?;
+    let sources = collect_sources(&ctx.cache_dir_path, &latest);
+    let Some(target) = sources.get(&target_id) else {
+        return Ok(Vec::new());
+    };
+    let remembered = load_latest_colors(ctx, project_id)?
+        .jobs
+        .into_iter()
+        .filter(|job| job.target_id == target_id)
+        .collect::<Vec<_>>();
+    Ok(plan_after_build(target_id, target, &remembered, defaults))
+}
+
+/// [`requests_after_build`] once the target's channel stacks and its
+/// remembered color previews are in hand.
+fn plan_after_build(
+    target_id: i32,
+    target: &TargetSources,
+    remembered: &[StackColorJob],
+    defaults: Option<&StackColorProcessing>,
+) -> Vec<StackColorRequest> {
+    let reference = |source: &StackColorSource| StackColorSourceRef {
+        job_id: source.job_id.clone(),
+        group_index: source.group_index,
+        artifact_revision: source.artifact_revision.clone(),
+    };
+    let mut requests = Vec::new();
+    for previous in remembered {
+        let mut input_sources = BTreeMap::new();
+        let mut changed = false;
+        for source in &previous.sources {
+            let newest = target.by_role.get(&source.role).and_then(|candidates| {
+                candidates.iter().find(|candidate| {
+                    candidate.filter_name == source.filter_name
+                        && candidate.wbpp == source.wbpp
+                        && candidate.exposure_group.as_ref().map(|group| &group.key)
+                            == source.exposure_group.as_ref().map(|group| &group.key)
+                })
+            });
+            let chosen = match newest {
+                Some(candidate) => {
+                    changed |= candidate.job_id != source.job_id
+                        || candidate.group_index != source.group_index
+                        || candidate.artifact_revision != source.artifact_revision;
+                    reference(candidate)
+                }
+                None => reference(source),
+            };
+            input_sources.insert(source.role, chosen);
+        }
+        if changed {
+            requests.push(StackColorRequest {
+                target_id,
+                kind: previous.kind,
+                palette: previous.palette,
+                force: false,
+                crop: previous.crop,
+                processing: previous.processing.clone(),
+                input_sources,
+            });
+        }
+    }
+    if let (true, Some(defaults)) = (remembered.is_empty(), defaults)
+        && let Some(request) = first_composite(target_id, target, defaults)
+    {
+        requests.push(request);
+    }
+    requests
+}
+
+/// A target's first color preview: the richest kind its channels make, each
+/// role from its one PSF Guard stack, with the person's display pipeline
+/// narrowed to those roles. `None` when no kind has exactly one stack for
+/// every role it needs.
+fn first_composite(
+    target_id: i32,
+    target: &TargetSources,
+    defaults: &StackColorProcessing,
+) -> Option<StackColorRequest> {
+    let own = |role: StackColorRole| -> Option<&StackColorSource> {
+        let candidates = target
+            .by_role
+            .get(&role)?
+            .iter()
+            .filter(|candidate| !candidate.wbpp)
+            .collect::<Vec<_>>();
+        match candidates.as_slice() {
+            [only] => Some(*only),
+            _ => None,
+        }
+    };
+    let has = |role: StackColorRole| own(role).is_some();
+    let mut kinds = vec![(StackColorKind::Lrgb, None), (StackColorKind::Rgb, None)];
+    if has(StackColorRole::Ha) && has(StackColorRole::Oiii) {
+        kinds.extend(
+            StackNarrowbandPalette::all(has(StackColorRole::Sii))
+                .into_iter()
+                .map(|palette| (StackColorKind::Narrowband, Some(palette))),
+        );
+    }
+    kinds.into_iter().find_map(|(kind, palette)| {
+        let roles = required_roles(kind, palette);
+        let input_sources = roles
+            .iter()
+            .map(|&role| {
+                own(role).map(|source| {
+                    (
+                        role,
+                        StackColorSourceRef {
+                            job_id: source.job_id.clone(),
+                            group_index: source.group_index,
+                            artifact_revision: source.artifact_revision.clone(),
+                        },
+                    )
+                })
+            })
+            .collect::<Option<BTreeMap<_, _>>>()?;
+        let mut processing = defaults.clone();
+        processing
+            .input_stretches
+            .retain(|role, _| roles.contains(role));
+        processing
+            .input_deconvolutions
+            .retain(|role, _| roles.contains(role));
+        processing
+            .input_rc_astro
+            .retain(|role, _| roles.contains(role));
+        Some(StackColorRequest {
+            target_id,
+            kind,
+            palette,
+            force: false,
+            crop: StackColorCrop::default(),
+            processing: Some(processing),
+            input_sources,
+        })
+    })
+}
+
 fn collect_sources(
     cache_root: &FsPath,
     latest: &LatestStackPreviews,
@@ -3662,6 +3817,142 @@ mod tests {
             outdated: false,
             outdated_reason: None,
         }
+    }
+
+    fn channel(role: StackColorRole, filter: &str, job: &str, wbpp: bool) -> StackColorSource {
+        StackColorSource {
+            role,
+            filter_name: filter.into(),
+            label: filter.into(),
+            exposure_group: None,
+            job_id: job.into(),
+            group_index: 0,
+            artifact_revision: format!("rev-{job}"),
+            accepted_frames: 5,
+            wbpp,
+            total_exposure_seconds: None,
+            reference_image_id: None,
+            sky_orientation: None,
+            registration_transform: None,
+        }
+    }
+
+    fn sources(channels: Vec<StackColorSource>) -> TargetSources {
+        let mut by_role = BTreeMap::<StackColorRole, Vec<StackColorSource>>::new();
+        for source in channels {
+            by_role.entry(source.role).or_default().push(source);
+        }
+        TargetSources {
+            target_name: "Color target".into(),
+            by_role,
+            unmapped_filters: Vec::new(),
+        }
+    }
+
+    fn defaults() -> StackColorProcessing {
+        StackColorProcessing {
+            input_stretches: [
+                StackColorRole::Luminance,
+                StackColorRole::Red,
+                StackColorRole::Green,
+                StackColorRole::Blue,
+                StackColorRole::Ha,
+            ]
+            .into_iter()
+            .map(|role| (role, Vec::new()))
+            .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_composed_preview_follows_its_newest_channels_and_keeps_its_family() {
+        use StackColorRole::{Blue, Green, Red};
+        let mut previous = running_color_job("old-rgb", StackJobState::Completed);
+        previous.kind = StackColorKind::Rgb;
+        previous.palette = None;
+        previous.target_id = 7;
+        previous.sources = vec![
+            channel(Red, "R", "old-r", false),
+            channel(Green, "G", "g", false),
+            channel(Blue, "B", "b", false),
+        ];
+        // R was stacked again; WBPP also made an R, which is another family.
+        let target = sources(vec![
+            channel(Red, "R", "new-r", false),
+            channel(Red, "R", "wbpp-r", true),
+            channel(Green, "G", "g", false),
+            channel(Blue, "B", "b", false),
+        ]);
+        let requests = plan_after_build(
+            7,
+            &target,
+            std::slice::from_ref(&previous),
+            Some(&defaults()),
+        );
+        assert_eq!(
+            requests.len(),
+            1,
+            "only the remembered preview, no first composite"
+        );
+        let request = &requests[0];
+        assert_eq!(request.kind, StackColorKind::Rgb);
+        assert_eq!(request.input_sources[&Red].job_id, "new-r");
+        assert_eq!(request.input_sources[&Green].job_id, "g");
+
+        // Nothing changed: nothing to compose.
+        previous.sources[0] = channel(Red, "R", "new-r", false);
+        assert!(plan_after_build(7, &target, &[previous], Some(&defaults())).is_empty());
+    }
+
+    #[test]
+    fn a_target_without_color_gets_its_richest_first_composite() {
+        use StackColorRole::{Blue, Green, Ha, Luminance, Oiii, Red};
+        let rgb = || {
+            vec![
+                channel(Red, "R", "r", false),
+                channel(Red, "R", "wbpp-r", true),
+                channel(Green, "G", "g", false),
+                channel(Blue, "B", "b", false),
+            ]
+        };
+        // R, G and B from PSF Guard's own stacks, beside a WBPP R.
+        let requests = plan_after_build(7, &sources(rgb()), &[], Some(&defaults()));
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].kind, StackColorKind::Rgb);
+        assert_eq!(requests[0].input_sources[&Red].job_id, "r");
+        let stretches = &requests[0].processing.as_ref().unwrap().input_stretches;
+        assert_eq!(
+            stretches.keys().copied().collect::<Vec<_>>(),
+            [Red, Green, Blue]
+        );
+
+        // With L too, LRGB comes first.
+        let mut lrgb = rgb();
+        lrgb.push(channel(Luminance, "L", "l", false));
+        let requests = plan_after_build(7, &sources(lrgb), &[], Some(&defaults()));
+        assert_eq!(requests[0].kind, StackColorKind::Lrgb);
+
+        // Ha and OIII alone make a narrowband preview.
+        let requests = plan_after_build(
+            7,
+            &sources(vec![
+                channel(Ha, "Ha", "ha", false),
+                channel(Oiii, "OIII", "o", false),
+            ]),
+            &[],
+            Some(&defaults()),
+        );
+        assert_eq!(requests[0].kind, StackColorKind::Narrowband);
+        assert!(requests[0].palette.is_some());
+
+        // Without the person's defaults, as for an automatic refresh, no
+        // first composite; and a role with two of PSF Guard's own stacks is
+        // a choice left to the person.
+        assert!(plan_after_build(7, &sources(rgb()), &[], None).is_empty());
+        let mut two_reds = rgb();
+        two_reds.push(channel(Red, "R", "r-300s", false));
+        assert!(plan_after_build(7, &sources(two_reds), &[], Some(&defaults())).is_empty());
     }
 
     #[test]

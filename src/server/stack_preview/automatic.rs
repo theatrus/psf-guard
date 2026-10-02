@@ -18,12 +18,11 @@
 //! cache hit and starts no work. After a mono refresh finishes, the color
 //! previews composed from its channels are recomposed the same way.
 
-use super::color::{self, StackColorJob, StackColorRequest, StackColorSourceRef};
+use super::color::{self, StackColorJob, StackColorRequest};
 use super::{
     current_latest_stacks, current_project_latest_stacks, enqueue_job, latest_path, manifest_path,
     prepare_job, read_latest_indices, validate_request, CalibrationOverride, LatestStackPreviews,
-    StackGroupState, StackJobState, StackPreviewJob, StackPreviewRequest, StackScoringSettings,
-    MAX_REMEMBERED_JOBS,
+    StackJobState, StackPreviewJob, StackPreviewRequest, StackScoringSettings, MAX_REMEMBERED_JOBS,
 };
 use crate::db::Database;
 use crate::models::AcquiredImage;
@@ -676,6 +675,10 @@ pub(super) fn refresh_request(
         scoring: scoring_overrides(&newest.scoring),
         // The server's current method, so a settings change reaches the next refresh.
         method: None,
+        // A refresh brings back the color previews composed before, never a
+        // first one nobody asked for.
+        color_defaults: None,
+        channel: None,
     })
 }
 
@@ -690,123 +693,107 @@ fn scoring_overrides(scoring: &StackScoringSettings) -> ScoringOverrideQuery {
     }
 }
 
-/// Recompose the color previews that drew on channels a finished automatic
-/// refresh just rebuilt, with the same kind, palette, crop, and processing.
-pub(super) fn recompose_colors(
+/// Compose a target's color previews again once a build leaves none of its
+/// channels waiting, so color follows the channels in the queue: the ones
+/// composed before, from the newest stack of each of their channels, and,
+/// when the build carried the person's display pipeline and the target has
+/// none, its first composite. A target another build is still stacking
+/// waits for that build, which composes it when it ends.
+pub(super) fn compose_colors_after(
     state: &Arc<AppState>,
     ctx: &Arc<DatabaseContext>,
     job: &StackPreviewJob,
 ) {
-    let remembered = match color::load_latest_colors(ctx, job.project_id) {
-        Ok(latest) => latest.jobs,
-        Err(error) => {
-            tracing::warn!(
-                db = %ctx.id,
-                project_id = job.project_id,
-                "could not read remembered color previews: {error:?}"
-            );
-            return;
-        }
-    };
-    for previous in remembered {
-        let Some(request) = color_refresh_request(&previous, job) else {
+    // Every target the build touched: a channel that stopped or failed
+    // still releases the color its finished siblings were waiting on.
+    let targets = job
+        .groups
+        .iter()
+        .map(|group| group.target_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    for target_id in targets {
+        if state.stack_previews.target_still_building(
+            &job.database_id,
+            job.project_id,
+            target_id,
+            &job.job_id,
+        ) {
             continue;
-        };
-        let mut prepared = match color::prepare_color_job(ctx, job.project_id, &request) {
-            Ok(prepared) => prepared,
+        }
+        let requests = match color::requests_after_build(
+            ctx,
+            job.project_id,
+            target_id,
+            job.color_defaults.as_ref(),
+        ) {
+            Ok(requests) => requests,
             Err(error) => {
                 tracing::warn!(
                     db = %ctx.id,
                     project_id = job.project_id,
-                    "could not prepare a color refresh: {error:?}"
+                    target_id,
+                    "could not plan the color previews after a build: {error:?}"
                 );
                 continue;
             }
         };
-        let color_id = prepared.public.job_id.clone();
-        if let Some(existing) = state.stack_previews.get_color(&color_id)
-            && matches!(
-                existing.state,
-                StackJobState::Queued | StackJobState::Running | StackJobState::Completed
-            )
-        {
-            continue;
+        for request in requests {
+            enqueue_color_after(state, ctx, job.project_id, &request, job.automatic);
         }
-        let manifest = color::color_manifest_path(&prepared.cache_root, &color_id);
-        if let Ok(bytes) = std::fs::read(&manifest)
-            && let Ok(existing) = serde_json::from_slice::<StackColorJob>(&bytes)
-            && existing.state == StackJobState::Completed
-            && color::color_job_artifacts_exist(&prepared.cache_root, &existing)
-        {
-            continue;
-        }
-        prepared.public.automatic = true;
-        if !state.stack_previews.insert_color(prepared.public.clone()) {
-            tracing::warn!("color refresh skipped: too many color jobs are active");
-            continue;
-        }
-        tracing::info!(
-            db = %ctx.id,
-            project_id = job.project_id,
-            job_id = color_id,
-            "Recomposing the {} color preview after an automatic refresh",
-            previous.label
-        );
-        let origin =
-            super::journal::JournaledStackJob::color(&ctx.id, job.project_id, &request, true);
-        color::enqueue_color_job(Arc::clone(state), prepared, origin);
     }
 }
 
-/// The remembered color preview's request, pointed at the channels the mono
-/// job just rebuilt. `None` when the job rebuilt none of its channels.
-fn color_refresh_request(
-    previous: &StackColorJob,
-    job: &StackPreviewJob,
-) -> Option<StackColorRequest> {
-    let mut input_sources = BTreeMap::new();
-    let mut changed = false;
-    for source in &previous.sources {
-        // PSF Guard's own stacks never stand in for a WBPP master.
-        let rebuilt = job.groups.iter().find(|group| {
-            !source.wbpp
-                && group.state == StackGroupState::Ready
-                && group.target_id == previous.target_id
-                && group.filter_name == source.filter_name
-                && group.exposure_group.as_ref().map(|exposure| &exposure.key)
-                    == source.exposure_group.as_ref().map(|exposure| &exposure.key)
-        });
-        let reference = match rebuilt {
-            Some(group) => {
-                changed |= group.index != source.group_index
-                    || job.job_id != source.job_id
-                    || job.artifact_revision != source.artifact_revision;
-                StackColorSourceRef {
-                    job_id: job.job_id.clone(),
-                    group_index: group.index,
-                    artifact_revision: job.artifact_revision.clone(),
-                }
-            }
-            None => StackColorSourceRef {
-                job_id: source.job_id.clone(),
-                group_index: source.group_index,
-                artifact_revision: source.artifact_revision.clone(),
-            },
-        };
-        input_sources.insert(source.role, reference);
+/// Queue one color preview after a build, unless the same one is already
+/// queued, running, or built.
+fn enqueue_color_after(
+    state: &Arc<AppState>,
+    ctx: &Arc<DatabaseContext>,
+    project_id: i32,
+    request: &StackColorRequest,
+    automatic: bool,
+) {
+    let mut prepared = match color::prepare_color_job(ctx, project_id, request) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            tracing::warn!(
+                db = %ctx.id,
+                project_id,
+                "could not prepare a color preview after a build: {error:?}"
+            );
+            return;
+        }
+    };
+    let color_id = prepared.public.job_id.clone();
+    if let Some(existing) = state.stack_previews.get_color(&color_id)
+        && matches!(
+            existing.state,
+            StackJobState::Queued | StackJobState::Running | StackJobState::Completed
+        )
+    {
+        return;
     }
-    if !changed {
-        return None;
+    let manifest = color::color_manifest_path(&prepared.cache_root, &color_id);
+    if let Ok(bytes) = std::fs::read(&manifest)
+        && let Ok(existing) = serde_json::from_slice::<StackColorJob>(&bytes)
+        && existing.state == StackJobState::Completed
+        && color::color_job_artifacts_exist(&prepared.cache_root, &existing)
+    {
+        return;
     }
-    Some(StackColorRequest {
-        target_id: previous.target_id,
-        kind: previous.kind,
-        palette: previous.palette,
-        force: false,
-        crop: previous.crop,
-        processing: previous.processing.clone(),
-        input_sources,
-    })
+    prepared.public.automatic = automatic;
+    if !state.stack_previews.insert_color(prepared.public.clone()) {
+        tracing::warn!("color preview after a build skipped: too many color jobs are active");
+        return;
+    }
+    tracing::info!(
+        db = %ctx.id,
+        project_id,
+        job_id = color_id,
+        "Composing the {} color preview after its channels were stacked",
+        prepared.public.label
+    );
+    let origin = super::journal::JournaledStackJob::color(&ctx.id, project_id, request, automatic);
+    color::enqueue_color_job(Arc::clone(state), prepared, origin);
 }
 
 #[cfg(test)]

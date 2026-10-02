@@ -206,6 +206,7 @@ impl Fixture {
             method: Default::default(),
             groups: vec![group],
             error: None,
+            color_defaults: None,
         };
         let source = MasterSource {
             kind: SourceKind::Mono,

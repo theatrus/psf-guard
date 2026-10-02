@@ -345,6 +345,7 @@ pub fn import_masters(
             groups: vec![group.clone()],
             error: None,
             automatic: false,
+            color_defaults: None,
         };
         if let Err(error) =
             super::stretch::write_json_atomic(&super::manifest_path(cache_root, &job_id), &job)
