@@ -89,16 +89,40 @@ pub(super) struct Request {
 #[serde(rename_all = "snake_case")]
 pub(super) enum ExecutionMode {
     PreparedTargetV1,
+    LocalSequenceV1,
 }
 
 pub(super) fn supports_prepared_target(p: &psf_guard_director_core::program::Program) -> bool {
-    p.targets.len() == 1
-        && p.targets[0].position_angle_mas.is_none()
+    p.targets.len() == 1 && supports_local_sequence(p)
+}
+
+pub(super) fn supports_local_sequence(p: &psf_guard_director_core::program::Program) -> bool {
+    !p.targets.is_empty()
+        && p.targets.iter().all(|t| t.position_angle_mas.is_none())
         && !p.configuration.enable_slew_center
         && p.configuration.dither_every == 0
         && p.recipes
             .iter()
             .all(|r| r.dither_override.is_none_or(|n| n == 0))
+}
+
+impl ExecutionMode {
+    fn validate(
+        &self,
+        p: &psf_guard_director_core::program::Program,
+    ) -> Result<(), program::PullError> {
+        let supported = match self {
+            Self::PreparedTargetV1 => supports_prepared_target(p),
+            Self::LocalSequenceV1 => supports_local_sequence(p),
+        };
+        if supported {
+            Ok(())
+        } else {
+            Err(program::PullError::NotReady(
+                "The workload exceeds the executor mode's target/rotation or sequence-owned preparation capabilities. No new workload was issued.".into(),
+            ))
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -162,6 +186,10 @@ pub(super) async fn request(
                         {
                             return Err(Error::Conflict.into());
                         }
+                        let program =
+                            serde_json::from_value(w.allocation.snapshot["program"].clone())
+                                .map_err(|_| Error::Internal)?;
+                        input.execution_mode.validate(&program)?;
                         return Ok(Reply {
                             request_id: input.request_id,
                             state: if w.released { "released" } else { "issued" },
@@ -213,13 +241,7 @@ pub(super) async fn request(
                         });
                     }
                     let revision = preview.revision.clone();
-                    match input.execution_mode {
-                        ExecutionMode::PreparedTargetV1 => {
-                            if !supports_prepared_target(&preview.program) {
-                                return Err(program::PullError::NotReady("This executor requires one prepared target and sequence-owned centering/dithering. No workload was issued.".into()));
-                            }
-                        }
-                    }
+                    input.execution_mode.validate(&preview.program)?;
                     preview.program.assignment.id = format!("allocation-{}", input.request_id);
                     let mut snapshot =
                         serde_json::to_value(preview).map_err(|_| Error::Internal)?;

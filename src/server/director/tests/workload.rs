@@ -14,6 +14,13 @@ fn prepared_executor_rejects_unsupported_work_before_admission() {
     let mut invalid = p.clone();
     invalid.targets.push(p.targets[0].clone());
     assert!(!supported(&invalid));
+    assert!(crate::server::director::workload::supports_local_sequence(
+        &invalid
+    ));
+    invalid.targets[1].position_angle_mas = Some(0);
+    assert!(!crate::server::director::workload::supports_local_sequence(
+        &invalid
+    ));
     let mut invalid = p.clone();
     invalid.targets[0].position_angle_mas = Some(0);
     assert!(!supported(&invalid));

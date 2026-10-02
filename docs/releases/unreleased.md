@@ -1,5 +1,11 @@
 # Unreleased
 
+- Allow Director executors to request bounded multi-target workloads for local
+  priority scheduling, while preserving the original prepared-target mode and
+  the same commissioning, launch, budget and release checks.
+- Preserve Target Scheduler project priorities in newly imported Director plans
+  instead of assigning priorities by filter name. Existing drafts stay unchanged.
+
 > Add a line here as each user-visible change merges. At release time this
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
