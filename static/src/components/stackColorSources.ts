@@ -98,7 +98,8 @@ export function colorSourceKey(source: Pick<StackColorSource, 'job_id' | 'group_
 
 export function sameColorSourceFamily(left: StackColorSource, right: StackColorSource): boolean {
   return left.role === right.role && left.filter_name === right.filter_name
-    && (left.exposure_group?.key ?? null) === (right.exposure_group?.key ?? null);
+    && (left.exposure_group?.key ?? null) === (right.exposure_group?.key ?? null)
+    && !!left.wbpp === !!right.wbpp;
 }
 
 export function resolveColorSources(

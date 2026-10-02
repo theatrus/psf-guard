@@ -872,7 +872,9 @@ fn requires_write(method: &Method, path: &str, can_compute: bool) -> bool {
     {
         return false;
     }
-    if !can_compute {
+    // Taking WBPP masters in writes files from a run folder; it is not a
+    // display calculation.
+    if !can_compute || path.ends_with("/stack-previews/wbpp/import") {
         return true;
     }
 
@@ -1090,6 +1092,11 @@ mod tests {
             true,
         ));
         assert!(requires_write(&Method::POST, "/databases/create", true,));
+        assert!(requires_write(
+            &Method::POST,
+            "/db/test/projects/2/stack-previews/wbpp/import",
+            true,
+        ));
     }
 
     #[test]

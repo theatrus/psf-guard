@@ -1694,41 +1694,40 @@ pub async fn get_wbpp_stacks(
 
 #[derive(Debug, Deserialize)]
 pub struct ImportWbppStacksRequest {
-    /// The WBPP output folder; omitted takes this database's last run.
-    #[serde(default)]
-    pub output_dir: Option<String>,
-    /// The target the masters belong to; omitted works only for a project
-    /// with one target, or the last run's own target.
+    /// The target the masters belong to; omitted takes the run's own target,
+    /// or the project's only target.
     #[serde(default)]
     pub target_id: Option<i32>,
 }
 
-/// `POST /api/db/{db}/projects/{project}/stack-previews/wbpp/import` — take a
-/// WBPP run's master lights in as stacks. A run that finishes in PSF Guard is
-/// taken in on its own; this covers earlier runs and runs made elsewhere.
+/// `POST /api/db/{db}/projects/{project}/stack-previews/wbpp/import` — take
+/// this project's last WBPP run in as stacks. A run that finishes in PSF
+/// Guard is taken in on its own; this covers one that finished before this
+/// feature or whose import failed. Only the run's own folder is read.
 pub async fn import_wbpp_stacks(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, project_id)): Path<(String, i32)>,
     Json(request): Json<ImportWbppStacksRequest>,
 ) -> Result<Json<ApiResponse<wbpp_stacks::WbppImport>>, AppError> {
-    let (last_output, last_target) = {
+    crate::server::handlers::require_database_management_allowed(&state)?;
+    let (output_dir, last_target) = {
         let store = ctx.wbpp_run.read().unwrap();
+        if store.progress.output_dir.is_empty() {
+            return Err(AppError::BadRequest(
+                "No WBPP run to take stacks from".into(),
+            ));
+        }
+        if store.progress.project_id != Some(project_id) {
+            return Err(AppError::BadRequest(
+                "The last WBPP run was for another project".into(),
+            ));
+        }
         (
-            (!store.progress.output_dir.is_empty()).then(|| store.progress.output_dir.clone()),
+            std::path::PathBuf::from(&store.progress.output_dir),
             crate::server::wbpp_run::last_target(&store),
         )
     };
-    let output_dir = request
-        .output_dir
-        .or(last_output)
-        .ok_or_else(|| AppError::BadRequest("No WBPP run to take stacks from".into()))?;
-    let output_dir = std::path::PathBuf::from(output_dir);
-    if !output_dir.is_dir() {
-        return Err(AppError::BadRequest(format!(
-            "{} is not a folder",
-            output_dir.display()
-        )));
-    }
     let ctx = Arc::clone(&ctx.0);
     let target_id = request.target_id.or(last_target);
     tokio::task::spawn_blocking(move || {

@@ -193,9 +193,57 @@ fn job_id_for(path: &Path, metadata: &std::fs::Metadata) -> String {
     id
 }
 
+static IMPORT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Write one master's FITS and previews into the stack store, unless an
+/// earlier import already left both. Returns its channel count.
+fn write_master(cache_root: &Path, job_id: &str, master: &Path) -> Result<usize, String> {
+    let fits = super::fits_path(cache_root, job_id, 0);
+    let preview = super::preview_path(cache_root, job_id, 0);
+    let original = super::original_preview_path(cache_root, job_id, 0);
+    let source = if fits.is_file() {
+        fits.as_path()
+    } else {
+        master
+    };
+    let frame = crate::image_io::open_linear_frame(source).map_err(|error| error.to_string())?;
+    if !fits.is_file() {
+        let directory = super::stack_dir(cache_root, job_id);
+        std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+        let temporary = directory.join(format!(
+            "group-0.fits.{}.part",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let written = seiza_stacking::write_linear_image_fits_f32(
+            &temporary,
+            &frame.image,
+            &frame.headers,
+            &[],
+        )
+        .map_err(|error| error.to_string())
+        .and_then(|()| std::fs::rename(&temporary, &fits).map_err(|error| error.to_string()));
+        if let Err(error) = written {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error);
+        }
+    }
+    if !preview.is_file() || !original.is_file() {
+        super::stretch::render_image_previews_atomic(
+            &frame.image,
+            &super::stretch::default_linear_config(),
+            super::stretch::StackStretchSourceTransfer::Linear,
+            &preview,
+            &original,
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    Ok(frame.image.channels)
+}
+
 /// Take a finished run's master lights into the project's WBPP stacks. Each
 /// becomes a FITS and preview in the stack store, read through PSF Guard's
-/// frame reader; a master already taken in is left as it is. Newer masters
+/// frame reader; a master already taken in is left as it is. A master that
+/// fails is listed as skipped, and the rest still go in. Newer masters
 /// for the same target, filter and exposure replace older ones in the index.
 pub fn import_masters(
     ctx: &DatabaseContext,
@@ -214,6 +262,11 @@ pub fn import_masters(
         return Err("the run wrote no master lights".into());
     }
     let cache_root = &ctx.cache_dir_path;
+    // One import at a time: the automatic one and a click can name the same
+    // masters, and the index is read, changed, and written whole.
+    let _guard = IMPORT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut index = load_index(ctx, project_id);
     let now = chrono::Utc::now().timestamp();
     for (path, name) in masters {
@@ -230,38 +283,13 @@ pub fn import_masters(
         };
         let job_id = job_id_for(&path, &metadata);
         let revision = format!("wbpp-{}", &job_id[..12]);
-        let fits = super::fits_path(cache_root, &job_id, 0);
-        if !fits.is_file() {
-            let frame = match crate::image_io::open_linear_frame(&path) {
-                Ok(frame) => frame,
-                Err(error) => {
-                    outcome.skipped.push(format!("{label}: {error}"));
-                    continue;
-                }
-            };
-            let directory = super::stack_dir(cache_root, &job_id);
-            std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-            let temporary = directory.join("group-0.fits.part");
-            seiza_stacking::write_linear_image_fits_f32(
-                &temporary,
-                &frame.image,
-                &frame.headers,
-                &[],
-            )
-            .map_err(|error| error.to_string())?;
-            std::fs::rename(&temporary, &fits).map_err(|error| error.to_string())?;
-            super::stretch::render_image_previews_atomic(
-                &frame.image,
-                &super::stretch::default_linear_config(),
-                super::stretch::StackStretchSourceTransfer::Linear,
-                &super::preview_path(cache_root, &job_id, 0),
-                &super::original_preview_path(cache_root, &job_id, 0),
-            )
-            .map_err(|error| error.to_string())?;
-        }
-        let channels = crate::image_io::open_linear_frame(&fits)
-            .map(|frame| frame.image.channels)
-            .unwrap_or(1);
+        let channels = match write_master(cache_root, &job_id, &path) {
+            Ok(channels) => channels,
+            Err(error) => {
+                outcome.skipped.push(format!("{label}: {error}"));
+                continue;
+            }
+        };
         let group = StackGroupStatus {
             index: 0,
             target_id,
@@ -317,7 +345,12 @@ pub fn import_masters(
             error: None,
             automatic: false,
         };
-        super::stretch::write_json_atomic(&super::manifest_path(cache_root, &job_id), &job)?;
+        if let Err(error) =
+            super::stretch::write_json_atomic(&super::manifest_path(cache_root, &job_id), &job)
+        {
+            outcome.skipped.push(format!("{label}: {error}"));
+            continue;
+        }
         let entry = LatestStackPreviewGroup {
             job_id: job_id.clone(),
             artifact_revision: revision,
@@ -438,5 +471,82 @@ mod tests {
             .unwrap_err()
             .contains("all 2 targets"));
         assert!(run_target(&conn, 1, Some(21)).is_err());
+    }
+
+    #[test]
+    fn an_import_takes_good_masters_skips_a_broken_one_and_repeats_cleanly() {
+        let temp = tempfile::tempdir().unwrap();
+        let database_path = temp.path().join("scheduler.sqlite");
+        let connection = crate::ts_schema::create_fresh_db(&database_path).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO project (Id, profileId, name) VALUES (1, 'default', 'Project');
+                 INSERT INTO target (Id, name, active, epochcode, projectId)
+                    VALUES (1, 'Target', 1, 0, 1);",
+            )
+            .unwrap();
+        drop(connection);
+        let ctx = DatabaseContext::new(
+            "test".into(),
+            "Test".into(),
+            database_path.to_string_lossy().into_owned(),
+            vec![temp.path().to_string_lossy().into_owned()],
+            None,
+            None,
+            None,
+            temp.path().join("cache").to_string_lossy().into_owned(),
+        )
+        .unwrap();
+        let run = temp.path().join("run");
+        let masters = run.join("master");
+        std::fs::create_dir_all(&masters).unwrap();
+        let image = seiza_stacking::LinearImage {
+            width: 32,
+            height: 24,
+            channels: 1,
+            data: (0..32 * 24).map(|value| value as f32 / 1000.0).collect(),
+        };
+        seiza_stacking::write_linear_image_fits_f32(
+            masters.join("masterLight_BIN-1_32x24_EXPOSURE-60.00s_FILTER-R_mono.fits"),
+            &image,
+            &[],
+            &[],
+        )
+        .unwrap();
+        std::fs::write(
+            masters.join("masterLight_BIN-1_32x24_EXPOSURE-60.00s_FILTER-G_mono.fits"),
+            b"not a FITS file",
+        )
+        .unwrap();
+
+        let target = (1, "Target".to_string());
+        let first = import_masters(&ctx, 1, target.clone(), &run).unwrap();
+        assert_eq!(first.imported.len(), 1, "{first:?}");
+        assert_eq!(first.skipped.len(), 1, "{first:?}");
+        assert!(first.skipped[0].contains("FILTER-G"));
+
+        let index = load_index(&ctx, 1);
+        assert_eq!(index.groups.len(), 1);
+        let entry = &index.groups[0];
+        assert_eq!(entry.group.filter_name, "R");
+        assert_eq!(entry.group.output_channels, 1);
+        assert_eq!(entry.wbpp.as_ref().unwrap().exposure_seconds, Some(60.0));
+        let cache = &ctx.cache_dir_path;
+        assert!(super::super::fits_path(cache, &entry.job_id, 0).is_file());
+        assert!(super::super::preview_path(cache, &entry.job_id, 0).is_file());
+
+        // A preview lost after the FITS was written comes back on the next
+        // import, and the master is not listed twice.
+        std::fs::remove_file(super::super::preview_path(cache, &entry.job_id, 0)).unwrap();
+        let second = import_masters(&ctx, 1, target, &run).unwrap();
+        assert_eq!(second.imported.len(), 1);
+        assert!(super::super::preview_path(cache, &entry.job_id, 0).is_file());
+        assert_eq!(load_index(&ctx, 1).groups.len(), 1);
+        let leftovers = std::fs::read_dir(super::super::stack_dir(cache, &entry.job_id))
+            .unwrap()
+            .flatten()
+            .filter(|file| file.file_name().to_string_lossy().ends_with(".part"))
+            .count();
+        assert_eq!(leftovers, 0);
     }
 }

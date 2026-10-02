@@ -918,9 +918,21 @@ async fn launch(
             })
             .await;
         }
+        let complete = matches!(outcome, Ok("complete"));
+        match outcome {
+            Ok(stage) => finish(&job_store, stage, None),
+            Err(error) => {
+                tracing::warn!("WBPP run failed: {error:#}");
+                finish(&job_store, "error", Some(format!("{error:#}")));
+            }
+        }
+        // PixInsight is free: letting go of the slot hands it to the next
+        // run in line.
+        drop(claim);
         // The masters become stacks in the Stacks view, where PSF Guard
-        // composes their color preview.
-        if let (Ok("complete"), Some(project_id)) = (&outcome, project_id) {
+        // composes their color preview. The run is already finished and the
+        // slot free, so decoding masters holds up neither.
+        if let (true, Some(project_id)) = (complete, project_id) {
             let import_ctx = job_ctx.clone();
             let _ = tokio::task::spawn_blocking(move || {
                 let target = {
@@ -951,16 +963,6 @@ async fn launch(
             })
             .await;
         }
-        match outcome {
-            Ok(stage) => finish(&job_store, stage, None),
-            Err(error) => {
-                tracing::warn!("WBPP run failed: {error:#}");
-                finish(&job_store, "error", Some(format!("{error:#}")));
-            }
-        }
-        // PixInsight is free: letting go of the slot hands it to the next
-        // run in line.
-        drop(claim);
     });
 
     Ok(true)

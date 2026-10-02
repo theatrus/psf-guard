@@ -767,8 +767,10 @@ fn color_refresh_request(
     let mut input_sources = BTreeMap::new();
     let mut changed = false;
     for source in &previous.sources {
+        // PSF Guard's own stacks never stand in for a WBPP master.
         let rebuilt = job.groups.iter().find(|group| {
-            group.state == StackGroupState::Ready
+            !source.wbpp
+                && group.state == StackGroupState::Ready
                 && group.target_id == previous.target_id
                 && group.filter_name == source.filter_name
                 && group.exposure_group.as_ref().map(|exposure| &exposure.key)

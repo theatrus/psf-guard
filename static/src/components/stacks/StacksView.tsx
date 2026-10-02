@@ -59,6 +59,8 @@ export default function StacksView() {
     [navigate, searchParams]
   );
 
+  const canManage = access.canWrite && !!serverInfo?.allow_database_management;
+
   if (!dbId || projectId == null) {
     return (
       <div className="stacks-view stacks-empty">
@@ -77,7 +79,7 @@ export default function StacksView() {
           key={`${dbId}:${projectId}`}
           dbId={dbId}
           projectId={projectId}
-          canManage={access.canWrite && !!serverInfo?.allow_database_management}
+          canManage={canManage}
         />
       </div>
       {selection && (
@@ -101,7 +103,7 @@ export default function StacksView() {
         onOpenImage={openImage}
         targetId={targetId}
       />
-      <WbppStacks dbId={dbId} projectId={projectId} targetId={targetId} />
+      <WbppStacks dbId={dbId} projectId={projectId} targetId={targetId} canImport={canManage} />
     </div>
   );
 }

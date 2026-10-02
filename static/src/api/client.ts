@@ -1780,7 +1780,7 @@ export const apiClient = {
   importWbppStacks: async (
     dbId: string,
     projectId: number,
-    request: { output_dir?: string; target_id?: number } = {}
+    request: { target_id?: number } = {}
   ): Promise<WbppStackImport> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.post<ApiResponse<WbppStackImport>>(

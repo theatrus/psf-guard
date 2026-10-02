@@ -1398,8 +1398,9 @@ fn select_sources(
 }
 
 fn source_family_key(sources: &[StackColorSource]) -> String {
+    let wbpp = sources.iter().any(|source| source.wbpp);
     // Preserve the pre-grouping latest identity for legacy unsplit projects.
-    if sources.iter().all(|source| source.exposure_group.is_none()) {
+    if !wbpp && sources.iter().all(|source| source.exposure_group.is_none()) {
         return String::new();
     }
     let families = sources
@@ -1417,7 +1418,19 @@ fn source_family_key(sources: &[StackColorSource]) -> String {
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let bytes = serde_json::to_vec(&families).expect("color source families are serializable");
+    // A WBPP master and PSF Guard's stack of the same filter are different
+    // families, so neither composite replaces the other. Keys without WBPP
+    // channels stay as they were.
+    let bytes = if wbpp {
+        let origins = sources
+            .iter()
+            .map(|source| (source.role, source.wbpp))
+            .collect::<BTreeMap<_, _>>();
+        serde_json::to_vec(&("wbpp-origin", &families, &origins))
+    } else {
+        serde_json::to_vec(&families)
+    }
+    .expect("color source families are serializable");
     let mut key = String::with_capacity(64);
     for byte in Sha256::digest(bytes) {
         write!(&mut key, "{byte:02x}").expect("writing to a String cannot fail");
@@ -4020,6 +4033,17 @@ mod tests {
         let sources = select_sources(&targets[&7], &request).unwrap();
         assert_eq!(sources.len(), 3);
         assert_eq!(source_family_key(&sources), "");
+
+        // The same filters from WBPP are another family, so a WBPP composite
+        // and PSF Guard's own never replace each other.
+        let mut wbpp = sources.clone();
+        for source in &mut wbpp {
+            source.wbpp = true;
+        }
+        let wbpp_key = source_family_key(&wbpp);
+        assert_ne!(wbpp_key, "");
+        wbpp[0].wbpp = false;
+        assert_ne!(source_family_key(&wbpp), wbpp_key);
     }
 
     #[test]

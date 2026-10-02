@@ -298,22 +298,26 @@ with a preview and its FITS, and the **Combine channel stacks** section offers
 it as a channel source marked *WBPP*: choose, for example, L, R, G and B from
 WBPP and PSF Guard composes the color preview, with the same background,
 stretch and processing as for its own stacks. **Take in the last run** does the
-same for a run that finished before, or before a restart; `POST
-/api/db/{db}/projects/{project}/stack-previews/wbpp/import` takes an
-`output_dir` for a run made elsewhere.
+same for the project's last run when it finished before this feature or its
+import failed. It reads only that run's folder, and it needs database
+management, like starting a run.
 
 - One master per filter and exposure is taken: without drizzle first, since
   drizzle changes the scale and color composition aligns channels of one
   scale, then cropped. A drizzled master is taken when it is the only one.
 - WBPP groups frames by filter, exposure and binning, not by target. Masters
-  are tied to a target only when the run covered one: a run for one target,
-  or for a project with one target. A run across several targets mixes them,
-  and its masters are not taken in.
+  are tied to a target only when a project's run covered one: a run for one
+  target of the project, or for a project with one target. A run across
+  several targets mixes them, and its masters are not taken in.
 - WBPP records no frame count in a master, so its cards say *WBPP master*
   instead.
 - WBPP stacks live in their own index, `wbpp-project-<id>.json`, so they never
   replace PSF Guard's stack of the same channel. A newer master for the same
   target, filter and exposure replaces the older one there.
+- A color preview built from WBPP channels is kept apart from one built from
+  PSF Guard's stacks of the same filters, and a rebuilt PSF Guard stack never
+  takes a WBPP channel's place in a remembered preview.
+- A master that cannot be read is listed as skipped and the rest go in.
 
 ## Stop a build
 

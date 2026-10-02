@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
-import { useAccess } from '../../auth/access';
 import type { LatestStackPreviewGroup } from '../../api/types';
 
 function wbppStacksQueryKey(dbId: string, projectId: number) {
@@ -29,12 +28,14 @@ export default function WbppStacks({
   dbId,
   projectId,
   targetId,
+  canImport,
 }: {
   dbId: string;
   projectId: number;
   targetId?: number | null;
+  /** Taking a run in writes files, so it needs database management. */
+  canImport: boolean;
 }) {
-  const access = useAccess();
   const queryClient = useQueryClient();
   const stacks = useQuery({
     queryKey: wbppStacksQueryKey(dbId, projectId),
@@ -63,7 +64,7 @@ export default function WbppStacks({
             channel marked WBPP.
           </p>
         </div>
-        {access.canWrite && (
+        {canImport && (
           <button
             type="button"
             className="toolbar-button"
