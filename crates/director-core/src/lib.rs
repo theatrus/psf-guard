@@ -16,6 +16,7 @@ pub mod optics;
 pub mod preparation;
 pub mod program;
 pub mod project;
+pub mod recovery;
 pub mod visibility;
 pub mod windows;
 use windows::{observing_windows, Interval, MeridianExclusion, TransitCoverage, WindowError};
