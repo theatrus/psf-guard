@@ -1339,6 +1339,74 @@ rather than letting Director and a TS sequence operate the same equipment.
 Optional TS import/catalog compatibility remains a public contract,
 including stable GUIDs, schema variation, grade values, and RA unit conversion.
 
+### Filter-specific Moon avoidance in exposure settings
+
+Required phase-2 work. Moon avoidance belongs in the existing exposure
+template/recipe settings and must participate in local smart-filter selection.
+The current scheduler view reads TS template Moon fields and the night preview
+shows lunar geometry, but Director's executable `Recipe` does not carry or
+enforce this policy yet. A Moon chart or retained source field is not proof of
+acquisition enforcement.
+
+Add a **Moon avoidance** group alongside filter, exposure and gain. Support
+inherit, explicit off, and a custom policy, displaying the effective values and
+their source. The custom policy includes minimum target-Moon separation,
+Moon-down-only eligibility and the supported phase/altitude relaxation controls.
+Separate hard eligibility limits from a configurable soft preference for better
+lunar conditions. Show degrees and meaningful units; validate ranges and
+combinations. Preserve unset, explicit off and valid zero as distinct values.
+Use global/site/rig/project planning defaults, then the selected exposure
+template's explicit override and any explicit contribution recipe override.
+Persist references and overrides, not copies of every inherited value. A rig's
+commissioned hard limits remain authoritative.
+
+Templates for different filters can have different tolerances. Broadband,
+OIII and Ha must not receive one flattened project-wide threshold, nor should
+Director assume all narrowband filters tolerate the same conditions. Named
+presets may seed editable values, but filter-name guessing cannot silently
+replace a saved policy. Distinct short/long recipes may also override their
+requirements while retaining exact filter/configuration identity.
+
+The shared core first excludes recipes violating their effective hard lunar
+limits, then scores eligible work using the resolved priority and smart-filter
+policy, including its explicit lunar preference weight. High target priority
+cannot bypass a Moon-down or separation restriction. If a preferred filter is
+blocked, consider eligible filters on that target and other targets. When all
+authorized work is blocked, wait until the next feasible window and explain
+why; do not repeatedly slew, change filters or count this as equipment failure.
+Avoid unnecessary switching with the shared switching-cost policy, without
+overriding eligibility. The UI and telemetry must distinguish **Moon blocked**
+from a lower-priority eligible recipe and show separation, required limit,
+Moon altitude/illumination and the next candidate window.
+
+Resolve the policy into a versioned immutable program snapshot for both server
+simulation and the local sidecar. Compute conditions from the site's location,
+time and the shared lunar ephemeris, including the declared horizon convention
+for Moon-down and sufficient accuracy/margin near thresholds. Reevaluate after
+slow setup and before capture over the required operation/exposure interval;
+an old night-preview sample cannot authorize dispatch. Offline operation uses
+the same pinned policy and ephemeris. Missing required policy/context blocks
+that recipe with a reason. Executors that cannot enforce the policy must
+reject the program capability rather than silently ignoring it.
+
+Preserve TS template fields through import, activation and supported export:
+`moonavoidanceenabled`, `moonavoidanceseparation`, `moonavoidancewidth`,
+`moonrelaxscale`, `moonrelaxminaltitude`, `moonrelaxmaxaltitude` and
+`moondownenabled`. Verify their formula, units and precedence against the pinned
+TS implementation before mapping them. Optional legacy columns use documented
+compatibility defaults; an unsupported nondefault rule needs a visible review
+result instead of being discarded. Existing operator-edited Director templates
+must not be overwritten by re-import.
+
+Deliver template storage/API/editor and TS mapping together with shared-core
+evaluation, program capability negotiation and native execution integration.
+Keep the feature marked pending until that complete path is tested. Cover
+mixed-filter priorities, independent Moon-down/separation settings, relaxation
+boundaries, inheritance/off/zero, Moon rise during slow setup, all-work-blocked
+waits and disconnected execution. Prove identical server/sidecar selection and
+use deterministic simulated time to verify real NINA switches to an eligible
+filter without capturing a blocked recipe.
+
 ### Quality holds, equipment failures and session stop
 
 Planned phase-2 behavior; this section does not describe a shipped recovery
@@ -3237,6 +3305,10 @@ separate workflow; these mappings alone do not resolve them.
 - [ ] Use the same resolved smart-filter, avoidance and priority policy in
   simulation and acquisition. Test inherited/off/zero values, mixed overrides,
   parent edits, multi-rig scope, hard-limit precedence and offline version parity.
+- [ ] Add [filter-specific Moon avoidance](#filter-specific-moon-avoidance-in-exposure-settings)
+  to exposure template/recipe settings, preserve TS rules and enforce them in
+  shared-core selection and native dispatch. Gate on offline and mixed-filter
+  parity tests, including waits when every recipe is Moon-blocked.
 - [ ] Implement versioned allocation, acknowledgements, checkpoints, and limits.
 - [ ] Renew or replace workloads through reconciled successor grants at safe
   boundaries. Carry forward pending/accepted/rejected credit, spent attempts,
