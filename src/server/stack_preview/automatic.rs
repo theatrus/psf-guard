@@ -678,6 +678,7 @@ pub(super) fn refresh_request(
         // A refresh brings back the color previews composed before, never a
         // first one nobody asked for.
         color_defaults: None,
+        channel: None,
     })
 }
 

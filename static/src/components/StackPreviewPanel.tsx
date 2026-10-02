@@ -461,6 +461,7 @@ export default function StackPreviewPanel({
       imageIds: number[];
       operationKey: string;
       perChannel: boolean;
+      channel?: ChannelInput;
     }) => {
       const request = {
         image_ids: variables.imageIds,
@@ -481,6 +482,11 @@ export default function StackPreviewPanel({
             calibration: channelOverride(channel.key)!,
           })),
         color_defaults: defaultColorProcessing(ALL_COLOR_ROLES),
+        channel: variables.channel && {
+          target_id: variables.channel.targetId,
+          filter_name: variables.channel.filterName,
+          exposure_group_key: variables.channel.exposureGroup?.key,
+        },
       };
       return variables.perChannel
         ? apiClient.startStackPreviewChannels(dbId, projectId, request)
@@ -677,11 +683,14 @@ export default function StackPreviewPanel({
   };
   const beginChannel = (channel: ChannelInput, force: boolean) => {
     resetStop();
+    // Every image in scope, with the channel named: the rest only lend
+    // their reference frames, so this matches what Build stacks queues.
     startStack({
       force,
-      imageIds: channel.images.map((image) => image.id),
+      imageIds: stableImageIds,
       operationKey: channel.key,
       perChannel: false,
+      channel,
     });
   };
 

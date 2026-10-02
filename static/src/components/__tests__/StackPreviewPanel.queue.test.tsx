@@ -168,8 +168,10 @@ describe('StackPreviewPanel manual queue', () => {
       http.post(
         '/api/db/:dbId/projects/:projectId/stack-previews',
         async ({ request }) => {
-          const body = (await request.json()) as { image_ids: number[] };
-          if (body.image_ids.includes(1)) {
+          // A channel build names its channel; its images are the whole set.
+          const body = (await request.json()) as { image_ids: number[]; channel?: { filter_name: string } };
+          expect(body.image_ids).toEqual([1, 2, 3, 4]);
+          if (body.channel?.filter_name === 'Ha') {
             const started = job('job-ha', 100, 'running', [group(0, 'Ha', 'running', [1, 2])]);
             jobs['job-ha'] = started;
             return ok(started);

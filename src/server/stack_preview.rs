@@ -199,6 +199,29 @@ pub struct StackPreviewRequest {
     /// rebuilds the color previews already composed for the target.
     #[serde(default)]
     pub color_defaults: Option<color::StackColorProcessing>,
+    /// Build only this channel of the request's images. The rest of the
+    /// images still teach it the pier-side mapping, so a channel built alone
+    /// is the same build as the one Build stacks queues for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<StackChannelKey>,
+}
+
+/// One channel of a request: a target, a filter, and an exposure group when
+/// the project splits them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StackChannelKey {
+    pub target_id: i32,
+    pub filter_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure_group_key: Option<String>,
+}
+
+impl StackChannelKey {
+    fn matches(&self, target_id: i32, filter_name: &str, exposure_group_key: Option<&str>) -> bool {
+        self.target_id == target_id
+            && self.filter_name == filter_name
+            && self.exposure_group_key.as_deref() == exposure_group_key
+    }
 }
 
 /// One channel's calibration mode, overriding the request-wide choice.
@@ -1576,11 +1599,12 @@ pub async fn start_stack_previews(
 
 /// `POST /api/db/{db}/projects/{project}/stack-previews/channels` — the
 /// request's images split into one build per channel, queued in channel
-/// order so the header's queue lists each channel on its own. Each channel
-/// is prepared as **Build channel** would, so the two share a cache, and
-/// carries its siblings' reference frames so an unsolved channel still
-/// faces the way the solved ones do. A channel already built for this
-/// request comes back as it is.
+/// order so the header's queue lists each channel on its own. Each carries
+/// its siblings' reference frames, so an unsolved channel still faces the
+/// way the solved ones do; a request naming one `channel` on the single
+/// route makes the same build, so the two share a cache. Channels with too
+/// few frames come back together as one build that settles at once, and a
+/// channel already built for this request comes back as it is.
 pub async fn start_stack_preview_channels(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
@@ -1591,29 +1615,7 @@ pub async fn start_stack_preview_channels(
     let ctx_arc = Arc::clone(&ctx.0);
     let request_for_prepare = request.clone();
     let channels = tokio::task::spawn_blocking(move || {
-        let whole = prepare_job(&ctx_arc, project_id, &request_for_prepare)?;
-        let buildable = |group: &PreparedGroup| group.frames.len() >= 2;
-        let mut channels = Vec::new();
-        for (group, public) in whole.groups.iter().zip(&whole.public.groups) {
-            if !buildable(group) {
-                continue;
-            }
-            let mut channel_request = request_for_prepare.clone();
-            channel_request.image_ids = public
-                .input_images
-                .iter()
-                .map(|image| image.image_id)
-                .collect();
-            let mut prepared = prepare_job(&ctx_arc, project_id, &channel_request)?;
-            prepared.orientation_peers = whole
-                .groups
-                .iter()
-                .filter(|other| other.index != group.index && buildable(other))
-                .filter_map(|other| other.frames.first().cloned())
-                .collect();
-            channels.push((channel_request, prepared));
-        }
-        Ok::<_, AppError>(channels)
+        prepare_channels(&ctx_arc, project_id, &request_for_prepare, None)
     })
     .await
     .map_err(|error| {
@@ -1711,7 +1713,8 @@ fn start_prepared(
     let response = prepared.public.clone();
     if !state.stack_previews.insert(response.clone()) {
         return Err(AppError::BadRequest(format!(
-            "At most {MAX_REMEMBERED_JOBS} stack preview jobs may be active at once"
+            "At most {MAX_QUEUED_JOBS} stack builds may wait at once, and \
+             {MAX_REMEMBERED_JOBS} may be running or kept"
         )));
     }
     let origin = journal::JournaledStackJob::mono(&ctx.id, project_id, request, &response, false);
@@ -2267,6 +2270,141 @@ fn prepare_job(
     project_id: i32,
     request: &StackPreviewRequest,
 ) -> Result<PreparedJob, AppError> {
+    let Some(channel) = &request.channel else {
+        return prepare_whole(ctx, project_id, request, None).map(|(job, _)| job);
+    };
+    prepare_channels(ctx, project_id, request, Some(channel))?
+        .pop()
+        .map(|(_, job)| job)
+        .ok_or_else(|| AppError::BadRequest("No image in this request is in that channel".into()))
+}
+
+/// What one group hashes to, so its build can stand alone: the shared
+/// settings and that group's own frames.
+struct GroupIdentity {
+    key: StackChannelKey,
+    hash: String,
+}
+
+fn hex_digest(hasher: Sha256) -> String {
+    let mut text = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        write!(&mut text, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    text
+}
+
+/// The request split into one build per channel, each with its siblings'
+/// reference frames for the pier-side vote. Their image ids and source
+/// fingerprints are part of each build's identity, since they can change
+/// which way an unsolved channel faces. With `only`, just that channel,
+/// even when it has too few frames to stack; without it, channels with too
+/// few frames come back together in one build that settles at once.
+fn prepare_channels(
+    ctx: &Arc<DatabaseContext>,
+    project_id: i32,
+    request: &StackPreviewRequest,
+    only: Option<&StackChannelKey>,
+) -> Result<Vec<(StackPreviewRequest, PreparedJob)>, AppError> {
+    let mut whole_request = request.clone();
+    whole_request.channel = None;
+    let (whole, identities) = prepare_whole(ctx, project_id, &whole_request, only)?;
+    let buildable = whole
+        .groups
+        .iter()
+        .map(|group| group.frames.len() >= 2)
+        .collect::<Vec<_>>();
+    let peer_frames = whole
+        .groups
+        .iter()
+        .map(|group| group.frames.first().cloned())
+        .collect::<Vec<_>>();
+    let PreparedJob {
+        public,
+        groups,
+        orientation_peers: _,
+        cache_root,
+        north_up,
+        order,
+    } = whole;
+    let mut channels = Vec::new();
+    let mut skipped_images = Vec::new();
+    for (((group, mut status), identity), position) in groups
+        .into_iter()
+        .zip(public.groups.iter().cloned())
+        .zip(identities)
+        .zip(0..)
+    {
+        if let Some(only) = only
+            && only != &identity.key
+        {
+            continue;
+        }
+        if only.is_none() && !buildable[position] {
+            skipped_images.extend(status.input_images.iter().map(|image| image.image_id));
+            continue;
+        }
+        let peers = peer_frames
+            .iter()
+            .enumerate()
+            .filter(|(other, _)| *other != position && buildable[*other])
+            .filter_map(|(_, frame)| frame.clone())
+            .collect::<Vec<_>>();
+        let mut hasher = Sha256::new();
+        hasher.update(identity.hash.as_bytes());
+        hasher.update(b"\0orientation-peers\0");
+        for peer in &peers {
+            hasher.update(peer.image_id.to_le_bytes());
+            hasher.update(peer.source_fingerprint.as_bytes());
+        }
+        let job_id = hex_digest(hasher);
+        status.index = 0;
+        if status.state == StackGroupState::Queued {
+            status.preview_url = Some(format!(
+                "/api/db/{}/stack-previews/{job_id}/0/preview?v={}",
+                ctx.id, public.artifact_revision
+            ));
+            status.fits_url = Some(format!(
+                "/api/db/{}/stack-previews/{job_id}/0/fits?v={}",
+                ctx.id, public.artifact_revision
+            ));
+        }
+        let mut channel_public = public.clone();
+        channel_public.job_id = job_id;
+        channel_public.groups = vec![status];
+        let mut channel_request = whole_request.clone();
+        channel_request.channel = Some(identity.key);
+        channels.push((
+            channel_request,
+            PreparedJob {
+                public: channel_public,
+                groups: vec![PreparedGroup { index: 0, ..group }],
+                orientation_peers: peers,
+                cache_root: cache_root.clone(),
+                north_up,
+                order,
+            },
+        ));
+    }
+    if !skipped_images.is_empty() {
+        let mut skipped_request = whole_request.clone();
+        skipped_request.image_ids = skipped_images;
+        let skipped = prepare_whole(ctx, project_id, &skipped_request, None)?.0;
+        channels.push((skipped_request, skipped));
+    }
+    Ok(channels)
+}
+
+/// Prepare every channel of the request as one build, and say what each
+/// group hashes to on its own. With `fingerprint_only`, the costly
+/// calibration fingerprint is taken for that channel alone: the others only
+/// lend their reference frames.
+fn prepare_whole(
+    ctx: &Arc<DatabaseContext>,
+    project_id: i32,
+    request: &StackPreviewRequest,
+    fingerprint_only: Option<&StackChannelKey>,
+) -> Result<(PreparedJob, Vec<GroupIdentity>), AppError> {
     let flat_star_masking = crate::calibration::flat_star_masking_enabled();
     let scoring = StackScoringSettings::from_overrides(&request.scoring);
     let requested = request.image_ids.iter().copied().collect::<HashSet<_>>();
@@ -2398,9 +2536,13 @@ fn prepare_job(
     hasher.update(b"\0method\0");
     hasher.update(method.fingerprint().as_bytes());
 
+    // Each group's own identity starts from the same settings.
+    let prefix = hasher.clone();
+    let mut identities = Vec::new();
     for (index, ((target_id, target_name, filter_name, exposure_group_key), mut entries)) in
         grouped.into_iter().enumerate()
     {
+        let mut group_hasher = prefix.clone();
         // Hash the mode each channel actually stacks under, so the same
         // effective configuration lands on the same job whether it came from
         // the request-wide mode or an override.
@@ -2411,12 +2553,18 @@ fn prepare_job(
             .and_then(|(image, _)| exposure_groups.by_image.get(&image.id))
             .cloned();
         hasher.update(target_id.to_le_bytes());
+        group_hasher.update(target_id.to_le_bytes());
         hasher.update(target_name.as_bytes());
+        group_hasher.update(target_name.as_bytes());
         hasher.update(filter_name.as_bytes());
+        group_hasher.update(filter_name.as_bytes());
         hasher.update(group_calibration.as_str().as_bytes());
+        group_hasher.update(group_calibration.as_str().as_bytes());
         if let Some(key) = &exposure_group_key {
             hasher.update(b"\0exposure-group\0");
+            group_hasher.update(b"\0exposure-group\0");
             hasher.update(key.as_bytes());
+            group_hasher.update(key.as_bytes());
         }
         entries.sort_by_key(|(image, _)| (image.acquired_date.unwrap_or(0), image.id));
         let total_candidates = entries.len();
@@ -2434,11 +2582,16 @@ fn prepare_job(
 
         for (image, scored) in entries {
             hasher.update(image.id.to_le_bytes());
+            group_hasher.update(image.id.to_le_bytes());
             hasher.update(image.grading_status.to_le_bytes());
+            group_hasher.update(image.grading_status.to_le_bytes());
             hasher.update(image.acquired_date.unwrap_or(0).to_le_bytes());
+            group_hasher.update(image.acquired_date.unwrap_or(0).to_le_bytes());
             hasher.update(scored.quality_score.to_le_bytes());
+            group_hasher.update(scored.quality_score.to_le_bytes());
             if let Some(reason) = scored.regrade_reason.as_deref() {
                 hasher.update(reason.as_bytes());
+                group_hasher.update(reason.as_bytes());
             }
 
             let exclusion = exclusion_reason(&image, &scored, request.accepted_only);
@@ -2473,8 +2626,10 @@ fn prepare_job(
             };
             let source_fingerprint = source_fingerprint(&path);
             hasher.update(source_fingerprint.as_bytes());
+            group_hasher.update(source_fingerprint.as_bytes());
             let exposure_seconds = exposure_seconds_from_metadata(&image.metadata);
             hasher.update(exposure_seconds.to_le_bytes());
+            group_hasher.update(exposure_seconds.to_le_bytes());
             frames.push(PreparedFrame {
                 image_id: image.id,
                 acquired_date: image.acquired_date,
@@ -2502,7 +2657,9 @@ fn prepare_job(
         if frames.len() > 1 && request.order == snr::StackFrameOrder::Capture {
             frames[1..].sort_by_key(|frame| (frame.acquired_date.unwrap_or(0), frame.image_id));
         }
-        if !frames.is_empty() {
+        let fingerprinted = fingerprint_only
+            .is_none_or(|key| key.matches(target_id, &filter_name, exposure_group_key.as_deref()));
+        if !frames.is_empty() && fingerprinted {
             let directory_tree = ctx.get_directory_tree().map_err(AppError::db)?;
             let conn = ctx.db();
             let conn = conn.lock().map_err(AppError::db)?;
@@ -2515,8 +2672,17 @@ fn prepare_job(
                 )
                 .map_err(AppError::db)?;
                 hasher.update(fingerprint.as_bytes());
+                group_hasher.update(fingerprint.as_bytes());
             }
         }
+        identities.push(GroupIdentity {
+            key: StackChannelKey {
+                target_id,
+                filter_name: filter_name.clone(),
+                exposure_group_key: exposure_group_key.clone(),
+            },
+            hash: hex_digest(group_hasher),
+        });
         let eligible_frames = frames.len();
         public_groups.push(StackGroupStatus {
             index,
@@ -2584,32 +2750,35 @@ fn prepare_job(
         }
     }
     let now = chrono::Utc::now().timestamp();
-    Ok(PreparedJob {
-        public: StackPreviewJob {
-            automatic: false,
-            schema_version: 2,
-            job_id,
-            database_id: ctx.id.clone(),
-            project_id,
-            state: StackJobState::Queued,
-            accepted_only: request.accepted_only,
-            created_unix_seconds: now,
-            artifact_revision,
-            cache_version: STACK_PREVIEW_CACHE_VERSION,
-            stacking_version: SEIZA_STACKING_VERSION.into(),
+    Ok((
+        PreparedJob {
+            public: StackPreviewJob {
+                automatic: false,
+                schema_version: 2,
+                job_id,
+                database_id: ctx.id.clone(),
+                project_id,
+                state: StackJobState::Queued,
+                accepted_only: request.accepted_only,
+                created_unix_seconds: now,
+                artifact_revision,
+                cache_version: STACK_PREVIEW_CACHE_VERSION,
+                stacking_version: SEIZA_STACKING_VERSION.into(),
+                order: request.order,
+                scoring,
+                method: Some(method),
+                groups: public_groups,
+                error: None,
+                color_defaults: request.color_defaults.clone(),
+            },
+            groups: prepared_groups,
+            cache_root: ctx.cache_dir_path.clone(),
+            north_up: request.north_up,
             order: request.order,
-            scoring,
-            method: Some(method),
-            groups: public_groups,
-            error: None,
-            color_defaults: request.color_defaults.clone(),
+            orientation_peers: Vec::new(),
         },
-        groups: prepared_groups,
-        cache_root: ctx.cache_dir_path.clone(),
-        north_up: request.north_up,
-        order: request.order,
-        orientation_peers: Vec::new(),
-    })
+        identities,
+    ))
 }
 
 fn exclusion_reason(
@@ -3108,11 +3277,11 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
     }
     // Color follows the channels: once no build is left for a target, its
     // color previews are composed again from the newest channel stacks.
-    // A stopped or failed last channel still lets the channels before it
-    // reach their color previews.
+    // A failed last channel still lets the channels before it reach their
+    // color previews. A stopped one does not: Stop all must not start color
+    // work, and the next build or a cache hit composes what is due.
     if let Some(job) = state.stack_previews.get(&job_id)
-        && (matches!(job.state, StackJobState::Completed | StackJobState::Failed)
-            || (job.state == StackJobState::Cancelled && !job.automatic))
+        && matches!(job.state, StackJobState::Completed | StackJobState::Failed)
         && let Some(ctx) = state.get_database(&database_id)
     {
         automatic::compose_colors_after(state, &ctx, &job);
@@ -4902,6 +5071,71 @@ mod tests {
     }
 
     #[test]
+    fn a_channel_build_is_the_same_build_whether_asked_alone_or_split() {
+        let directory = tempfile::tempdir().unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        conn.execute_batch("INSERT INTO project(Id,name,profileId,guid) VALUES(1,'Project','profile','project-one');
+            INSERT INTO target(Id,name,projectId,active,ra,dec,epochcode,rotation,roi,guid)
+                VALUES(1,'Target',1,1,10,20,0,0,100,'target-one');").unwrap();
+        for (id, filter) in [(1, "Ha"), (2, "Ha"), (3, "OIII"), (4, "OIII")] {
+            conn.execute("INSERT INTO acquiredimage(Id,projectId,targetId,gradingStatus,metadata,acquireddate,filtername)
+                VALUES(?1,1,1,1,'{}',?1,?2)", rusqlite::params![id, filter]).unwrap();
+        }
+        let mut ctx = DatabaseContext::new_for_test(conn);
+        ctx.cache_dir_path = directory.path().to_path_buf();
+        ctx.cache_dir = directory.path().to_string_lossy().into_owned();
+        let ctx = Arc::new(ctx);
+        let request: StackPreviewRequest = serde_json::from_value(
+            serde_json::json!({"image_ids":[1, 2, 3, 4],"calibration":"off"}),
+        )
+        .unwrap();
+        let whole = prepare_job(&ctx, 1, &request).unwrap();
+        // With no exposure recorded, the project's exposure split still
+        // names the group.
+        let oiii = StackChannelKey {
+            target_id: 1,
+            filter_name: "OIII".into(),
+            exposure_group_key: whole.public.groups[1]
+                .exposure_group
+                .as_ref()
+                .map(|group| group.key.clone()),
+        };
+        let mut alone = request.clone();
+        alone.channel = Some(oiii.clone());
+        let first = prepare_job(&ctx, 1, &alone).unwrap();
+        let again = prepare_job(&ctx, 1, &alone).unwrap();
+        assert_eq!(first.public.groups.len(), 1);
+        assert_eq!(first.public.groups[0].filter_name, "OIII");
+        assert_eq!(first.public.groups[0].index, 0);
+        assert_eq!(
+            first.public.job_id, again.public.job_id,
+            "a channel build is stable"
+        );
+        assert_ne!(first.public.job_id, whole.public.job_id);
+
+        // No frame has a file, so the split has nothing to queue: both
+        // channels come back together as one build that settles at once,
+        // the same build the single route makes for their images.
+        let split = prepare_channels(&ctx, 1, &request, None).unwrap();
+        assert_eq!(split.len(), 1);
+        assert_eq!(split[0].1.public.groups.len(), 2);
+        assert!(split[0]
+            .1
+            .public
+            .groups
+            .iter()
+            .all(|group| group.state == StackGroupState::Skipped));
+        assert_eq!(split[0].1.public.job_id, whole.public.job_id);
+        // Asked by name, a channel with too few frames still comes back,
+        // as itself.
+        let named = prepare_channels(&ctx, 1, &request, Some(&oiii)).unwrap();
+        assert_eq!(named.len(), 1);
+        assert_eq!(named[0].0.channel.as_ref(), Some(&oiii));
+        assert_eq!(named[0].1.public.job_id, first.public.job_id);
+    }
+
+    #[test]
     fn the_final_pass_keeps_the_progress_moving() {
         let mut group = ready_group(42, "Ha", 1);
         group.eligible_frames = 10;
@@ -5261,6 +5495,7 @@ mod tests {
             scoring: Default::default(),
             method: Default::default(),
             color_defaults: None,
+            channel: None,
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
@@ -5274,6 +5509,7 @@ mod tests {
             scoring: Default::default(),
             method: Default::default(),
             color_defaults: None,
+            channel: None,
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
@@ -5287,6 +5523,7 @@ mod tests {
             scoring: Default::default(),
             method: Default::default(),
             color_defaults: None,
+            channel: None,
         })
         .is_ok());
     }
@@ -5310,6 +5547,7 @@ mod tests {
                 calibration: CalibrationMode::Off,
             }],
             color_defaults: None,
+            channel: None,
         };
         assert_eq!(request.calibration_for(7, "Ha", None), CalibrationMode::Off);
         assert_eq!(

@@ -277,6 +277,12 @@ export type StackPreviewStartRequest = {
    * rebuilds the color previews already composed for the target.
    */
   color_defaults?: StackColorProcessing;
+  /**
+   * Build only this channel of the images. The others still lend their
+   * reference frames for the pier-side mapping, so this is the same build
+   * Build stacks queues for the channel.
+   */
+  channel?: { target_id: number; filter_name: string; exposure_group_key?: string };
 };
 
 export const apiClient = {

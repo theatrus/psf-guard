@@ -16,9 +16,11 @@ every target/channel group, or **Build channel** on one card to test only that
 group. **Build stacks** asks the server for one build per channel, so the
 header's queue lists each channel on its own, in channel order. A channel
 already built for the same inputs and settings comes back at once instead of
-stacking again. Each channel build still learns the pier-side mapping from its
-sibling channels' reference frames, so an unsolved channel faces the way the
-solved ones do, as it did when they shared one build. Once a result exists, the corresponding actions become
+stacking again; a channel with too few frames shows as skipped. Each channel
+build still learns the pier-side mapping from its sibling channels' reference
+frames, so an unsolved channel faces the way the solved ones do, as it did
+when they shared one build. **Build channel** sends the same set with the
+channel named, so it makes the same build and shares its cache. Once a result exists, the corresponding actions become
 **Rebuild current set** and **Rebuild channel**. An individual rebuild replaces
 only that channel's remembered result; the other channel cards remain intact.
 
@@ -1020,8 +1022,9 @@ Color follows the channels in the queue. Once a build leaves none of a
 target's channels waiting, every color preview composed for that target
 before is composed again from the newest stack of each of its channels, with
 its kind, palette, crop and processing unchanged; one whose channels did not
-change is left alone. A stopped or failed channel still releases the color
-its finished siblings were waiting on. Each channel keeps its family: its
+change is left alone. A failed channel still releases the color its finished
+siblings were waiting on; a stopped one does not, so **Stop all** starts no
+color work, and the next build composes what is due. Each channel keeps its family: its
 filter, exposure group, and whether WBPP or PSF Guard made it. A target with
 no color preview yet gets its first one after a build started from Stacks,
 for the whole set or one channel: LRGB when it has L, R, G
