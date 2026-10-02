@@ -3,6 +3,7 @@ pub mod astrobin_export;
 pub mod auth;
 pub mod autoimport;
 pub mod cache;
+pub mod cache_budget;
 pub mod calibration_settings;
 pub mod catalog_install;
 pub mod database_context;
@@ -34,6 +35,7 @@ pub mod stack_preview;
 pub mod stack_settings;
 pub mod state;
 pub mod static_file_service;
+pub mod storage_settings;
 pub mod sync_preview;
 pub mod update_notice;
 pub mod user_admin;
@@ -309,6 +311,7 @@ async fn run_server_internal(
                 && let Ok(registry) = crate::db_registry::DbRegistry::load_or_init(path)
             {
                 state.apply_worker_settings(registry.workers.as_ref());
+                cache_budget::configure(registry.storage.as_ref());
             }
             let policy = state.worker_policy();
             tracing::info!(
@@ -419,6 +422,14 @@ async fn run_server_internal(
                 );
             }
         }
+    }
+
+    // Keep the cache's volume under its limit, culling previews first.
+    {
+        let state_clone = Arc::clone(&state);
+        tokio::spawn(async move {
+            cache_budget::run(state_clone).await;
+        });
     }
 
     // Start background image pre-generation if enabled
@@ -806,6 +817,11 @@ async fn run_server_internal(
             get(stack_settings::get_worker_settings).put(stack_settings::update_worker_settings),
         )
         .route(
+            "/settings/storage",
+            get(storage_settings::get_storage_settings)
+                .put(storage_settings::update_storage_settings),
+        )
+        .route(
             "/settings/stacking/method",
             get(stack_settings::get_stack_method).put(stack_settings::update_stack_method),
         )
@@ -1071,6 +1087,15 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
                 );
                 continue;
             }
+            // The cache volume is near its limit: previews made now would be
+            // culled by the next pass and made again by the next scan.
+            if !cache_budget::room_for_previews(&ctx.cache_dir_path) {
+                tracing::debug!(
+                    "⏸️ Pre-generation paused (db={}): the cache volume is near its limit",
+                    ctx.id
+                );
+                continue;
+            }
 
             tracing::debug!(
                 "🔍 Scanning db={} for images needing pre-generation",
@@ -1126,6 +1151,12 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
                 // Yield mid-cycle: stop dispatching new work as soon as an
                 // interactive job appears; already-running tasks drain.
                 if state.interactive_job_active() {
+                    yielded_early = true;
+                    break;
+                }
+                // And as soon as the volume nears its limit, so one scan
+                // cannot write a whole catalog past it.
+                if !cache_budget::room_for_previews(&ctx.cache_dir_path) {
                     yielded_early = true;
                     break;
                 }

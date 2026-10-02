@@ -16,6 +16,12 @@
 
 ## Added
 
+- A disk limit for the cache: Settings → Stacking → **Disk use** shows how full
+  each cache volume is and what the cache holds, and past **Most of the
+  volume to use** (90% by default) PSF Guard deletes image previews, least
+  recently viewed first, then old stack checkpoints. Stacks and calibration
+  masters are never deleted.
+
 - **Stacks** sits beside **Images** and **Sequence** in the header and holds
   the stack previews, which used to sit above the image grid. It stacks every
   frame of the project or target in scope; **Stack selected** in Images opens

@@ -98,6 +98,7 @@ import type { GuidFillReport, GuidReport,
   WbppStackImport,
   StackMethodSettings,
   WorkerSettings,
+  StorageSettings,
   ArtifactSearchJob,
   ReferenceRegion,
   LatestStackPreviews,
@@ -702,6 +703,23 @@ export const apiClient = {
     const apiInstance = await getApi();
     const { data } = await apiInstance.put<ApiResponse<WorkerSettings>>('/settings/workers', update);
     if (!data.data) throw new Error(data.error || 'Failed to save the processor shares');
+    return data.data;
+  },
+
+  getStorageSettings: async (): Promise<StorageSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<StorageSettings>>('/settings/storage');
+    if (!data.data) throw new Error(data.error || 'Failed to load the disk limit');
+    return data.data;
+  },
+
+  /** Saves the limit and checks the cache volumes at once. */
+  updateStorageSettings: async (maxVolumePercent: number): Promise<StorageSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<StorageSettings>>('/settings/storage', {
+      max_volume_percent: maxVolumePercent,
+    });
+    if (!data.data) throw new Error(data.error || 'Failed to save the disk limit');
     return data.data;
   },
 

@@ -462,6 +462,11 @@ pub struct DbRegistry {
     /// values. Additive within registry v2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workers: Option<WorkerSettings>,
+    /// How full the cache's volume may get before PSF Guard culls image
+    /// previews, edited in Settings. Additive within registry v2; absent
+    /// uses the default limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage: Option<StorageSettings>,
     /// Process-global AstroBin export settings, edited from the settings
     /// panel and the export dialog. Additive within registry v2; absent
     /// means no filter has an AstroBin id yet.
@@ -480,6 +485,16 @@ pub struct AstroBinSettings {
     /// Filter name, as the catalog spells it, to AstroBin filter id.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub filter_ids: std::collections::BTreeMap<String, u32>,
+}
+
+/// The cache's disk limit a person chose.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageSettings {
+    /// Highest share of the cache volume, in percent, that may be used
+    /// before image previews are culled; 100 turns culling off. Absent uses
+    /// the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_volume_percent: Option<u8>,
 }
 
 /// The processor shares a person chose, over the server config file's.
@@ -620,6 +635,7 @@ impl Default for DbRegistry {
             export: None,
             stacking: None,
             workers: None,
+            storage: None,
             astrobin: None,
             pixinsight: None,
         }
