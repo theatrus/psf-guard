@@ -703,9 +703,24 @@ export interface FinalPassProgress {
   frames: number;
 }
 
+/** The calibration master a channel is building, by frame read. */
+export interface MasterBuildProgress {
+  kind: 'bias' | 'dark' | 'dark_flat' | 'flat';
+  filter?: string | null;
+  /** The frame being read in this pass, from 1. */
+  frame: number;
+  frames: number;
+  pass: number;
+  passes: number;
+  /** Which build this is for the channel, from 1; a flat retry counts. */
+  build?: number;
+}
+
 export interface StackGroupStatus {
   /** Present while, and after, the final rejection pass runs. */
   final_pass?: FinalPassProgress | null;
+  /** Present while the channel builds a calibration master. */
+  calibration_progress?: MasterBuildProgress | null;
   exposure_group?: ExposureGroup | null;
   index: number;
   target_id: number;

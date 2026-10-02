@@ -1472,6 +1472,7 @@ mod tests {
             snr: None,
             snr_url: None,
             final_pass: None,
+            calibration_progress: None,
             error: None,
             calibration: Default::default(),
             input_images: Vec::new(),

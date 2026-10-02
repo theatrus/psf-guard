@@ -3,7 +3,7 @@ import { formatIntegration, totalIntegration } from '../utils/integrationTime';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import { openSettings } from '../utils/settingsIntent';
-import { stackGroupPercent } from '../utils/stackProgress';
+import { masterBuildLabel, masterBuildReads, stackGroupPercent } from '../utils/stackProgress';
 import { STACK_METHOD_QUERY_KEY, methodName, sameMethod } from '../utils/stackMethod';
 import type {
   CalibrationMode,
@@ -1015,7 +1015,9 @@ export default function StackPreviewPanel({
                       : 'Waiting for stacker'
                     : progressState === 'running'
                       ? progressGroup?.phase === 'calibration'
-                        ? 'Building calibration masters'
+                        ? progressGroup.calibration_progress
+                          ? `Building ${masterBuildLabel(progressGroup.calibration_progress)}`
+                          : 'Building calibration masters'
                         : progressGroup?.phase?.startsWith('Rejecting transients:')
                           ? progressGroup.phase
                         : progressGroup?.phase === 'orienting'
@@ -1034,6 +1036,11 @@ export default function StackPreviewPanel({
                             : progressState === 'error'
                               ? 'Stack failed'
                               : 'Not built';
+                // While a master builds, the bar counts that master's frame
+                // reads, and so does what it reports to assistive tech.
+                const masterBuild = progressState === 'running' && progressGroup?.phase === 'calibration'
+                  ? progressGroup.calibration_progress ?? null
+                  : null;
                 const reusedFrames = progressGroup?.reused_frames ?? 0;
                 const progressDetail = progressGroup
                   ? `${processedFrames}/${eligibleFrames} frames${
@@ -1224,7 +1231,9 @@ export default function StackPreviewPanel({
                         {activeGroup?.state === 'queued'
                           ? 'Waiting for stacker'
                           : activeGroup?.phase === 'calibration'
-                            ? 'Matching and building calibration masters'
+                            ? activeGroup.calibration_progress
+                              ? `Building ${masterBuildLabel(activeGroup.calibration_progress)}`
+                              : 'Matching and building calibration masters'
                             : activeGroup?.phase?.startsWith('Rejecting transients:')
                               ? activeGroup.phase
                             : activeGroup?.phase === 'rendering'
@@ -1258,8 +1267,9 @@ export default function StackPreviewPanel({
                         role="progressbar"
                         aria-label={`${targetName} ${channelLabel(filterName, exposureGroup)} stack progress`}
                         aria-valuemin={0}
-                        aria-valuemax={eligibleFrames}
-                        aria-valuenow={processedFrames}
+                        aria-valuemax={masterBuild ? masterBuildReads(masterBuild)[1] : eligibleFrames}
+                        aria-valuenow={masterBuild ? masterBuildReads(masterBuild)[0] : processedFrames}
+                        aria-valuetext={masterBuild ? `Building ${masterBuildLabel(masterBuild)}` : undefined}
                       >
                         <span style={{ width: `${progressPercentage}%` }} />
                       </div>

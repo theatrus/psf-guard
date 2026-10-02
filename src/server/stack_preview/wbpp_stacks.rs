@@ -322,6 +322,7 @@ pub fn import_masters(
             snr: None,
             snr_url: None,
             final_pass: None,
+            calibration_progress: None,
             error: None,
             calibration: crate::calibration::AppliedCalibration::default(),
             input_images: Vec::new(),
