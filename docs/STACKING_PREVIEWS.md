@@ -572,6 +572,41 @@ cards the grid shows, never a project without remembered previews, and never
 changes the calibration library, grades, or files. Target merges, exposure
 moves, and peer pulls count as syncs.
 
+An automatic build uses the background share of the processor, 25% of the
+cores by default, while a build you start uses the interactive share, 50%.
+**Settings → Stacking → Processor use** sets both; see below.
+
+### After a restart
+
+The queue survives a restart. PSF Guard keeps a job journal beside the
+database registry (`<registry>.jobs.json`): stack and color builds queued or
+running, in the order they would run, automatic refreshes still settling with
+their due times, and the WBPP line, including a run the restart cut off. On
+start it puts them back: each build is prepared again from the catalog as it
+is now, so one whose project or frames are gone is skipped with a note in the
+log, and a build that finished just before the restart is not repeated. A
+build cut off part way resumes from its checkpoint where it can. With
+automatic previews on, every database is also checked once after the usual
+settling delay, so frames that arrived while the server was down still reach
+their stacks; a check that finds nothing new starts nothing. A server without
+a registry keeps no journal.
+
+## Processor use
+
+**Settings → Stacking → Processor use** sets how many cores each kind of work
+may use, as a share of the logical cores:
+
+- **Work you wait on**: stack builds you start, quality scans, and previews
+  being looked at. Default 50%, or the server config's `scan_worker_ratio`.
+- **Background work**: automatic stack refreshes, preview pre-generation, and
+  quality backfill. Default 25%, or `background_worker_ratio`.
+
+A share chosen here is kept in the registry and wins over the config file;
+**Use the default** goes back to the file's value. A change applies to work
+that starts after it. Memory can lower the count further: a pool never holds
+more frames than half the free memory allows. `GET` and `PUT
+/api/settings/workers` read and set the shares; `null` means the default.
+
 ## Cached results
 
 PSF Guard remembers the last successful preview for every target/channel in the

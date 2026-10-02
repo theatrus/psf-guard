@@ -304,10 +304,17 @@ async fn run_server_internal(
                     config.host
                 );
             }
+            // Shares chosen in Settings sit over the config file's.
+            if let Some(path) = &config.registry_path
+                && let Ok(registry) = crate::db_registry::DbRegistry::load_or_init(path)
+            {
+                state.apply_worker_settings(registry.workers.as_ref());
+            }
+            let policy = state.worker_policy();
             tracing::info!(
                 "📐 Worker ratios — interactive {:.2}, background {:.2} (of {} logical cores)",
-                config.worker_policy.interactive_ratio,
-                config.worker_policy.background_ratio,
+                policy.interactive_ratio,
+                policy.background_ratio,
                 crate::concurrency::logical_cores()
             );
             report_preview_settings(&state, &config);
@@ -344,6 +351,26 @@ async fn run_server_internal(
     // Remembered stack previews follow the catalog when the operator asked
     // for that; the scheduler idles otherwise.
     crate::server::stack_preview::automatic::spawn(Arc::clone(&state));
+
+    // The queue from before a restart comes back, then the journal keeps it
+    // from here on. Frames that arrived while the server was down reach
+    // remembered previews through one check of every database, after the
+    // usual settling delay; a check that finds nothing new starts nothing.
+    {
+        let state = Arc::clone(&state);
+        tokio::spawn(async move {
+            crate::server::stack_preview::journal::restore(&state).await;
+            crate::server::stack_preview::journal::spawn_writer(Arc::clone(&state));
+            if crate::server::stack_preview::automatic::policy().enabled {
+                for ctx in state.all_databases() {
+                    state.auto_stacks.touch_database(
+                        &ctx.id,
+                        crate::server::stack_preview::automatic::RefreshReason::Sync,
+                    );
+                }
+            }
+        });
+    }
 
     // Databases that asked for it import new frames on open and on schedule.
     crate::server::autoimport::spawn(Arc::clone(&state));
@@ -758,6 +785,10 @@ async fn run_server_internal(
         .route(
             "/settings/stacking",
             get(stack_settings::get_stack_settings).put(stack_settings::update_stack_settings),
+        )
+        .route(
+            "/settings/workers",
+            get(stack_settings::get_worker_settings).put(stack_settings::update_worker_settings),
         )
         .route(
             "/settings/stacking/method",

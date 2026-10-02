@@ -1405,6 +1405,17 @@ export interface CalibrationSettings {
   flat_star_masking: boolean;
 }
 
+/** How much of the processor work may take, as fractions of logical cores. */
+export interface WorkerSettings {
+  /** Work a person waits on: builds they start, quality scans, previews. */
+  interactive_ratio: number;
+  /** Work nobody waits on: automatic refreshes, pre-generation, backfill. */
+  background_ratio: number;
+  default_interactive_ratio: number;
+  default_background_ratio: number;
+  logical_cores: number;
+}
+
 /** Whether, and how soon, remembered stack previews rebuild on their own. */
 export interface StackAutomationSettings {
   /** Rebuild when frames arrive, a sync lands, or grades change. */

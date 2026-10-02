@@ -291,6 +291,45 @@ impl AutomaticStackRefresh {
         scheduled
     }
 
+    /// The waiting refreshes with wall-clock due times, for the job journal.
+    pub fn journal_entries(&self) -> Vec<super::journal::JournaledRefresh> {
+        let now = Instant::now();
+        let wall = chrono::Utc::now().timestamp();
+        self.pending
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(key, entry)| super::journal::JournaledRefresh {
+                database_id: key.database_id.clone(),
+                project_id: key.project_id,
+                reason: entry.reason,
+                due_unix: wall + entry.due_at.saturating_duration_since(now).as_secs() as i64,
+            })
+            .collect()
+    }
+
+    /// Put back a refresh the journal kept across a restart, due when it was
+    /// due then, or now if that has passed. Nothing when automation is off.
+    pub fn restore(&self, refresh: &super::journal::JournaledRefresh) {
+        if !ENABLED.load(Ordering::Relaxed) {
+            return;
+        }
+        let now = Instant::now();
+        let wait = (refresh.due_unix - chrono::Utc::now().timestamp()).max(0) as u64;
+        let due_at = now + Duration::from_secs(wait);
+        let key = RefreshKey {
+            database_id: refresh.database_id.clone(),
+            project_id: refresh.project_id,
+        };
+        let mut pending = self.pending.lock().unwrap();
+        let entry = pending.entry(key).or_insert(Pending {
+            due_at,
+            first_touched: now,
+            reason: refresh.reason,
+        });
+        entry.due_at = entry.due_at.min(due_at);
+    }
+
     /// Drop one waiting refresh. False when nothing waits under that key.
     pub fn skip(&self, key: &RefreshKey) -> bool {
         self.pending.lock().unwrap().remove(key).is_some()
@@ -539,7 +578,14 @@ async fn refresh_project(
         request.image_ids.len(),
         latest.groups.len()
     );
-    enqueue_job(Arc::clone(state), prepared);
+    let origin = super::journal::JournaledStackJob::mono(
+        &ctx.id,
+        project_id,
+        &request,
+        &prepared.public,
+        true,
+    );
+    enqueue_job(Arc::clone(state), prepared, origin);
     Ok(RefreshOutcome::Started)
 }
 
@@ -688,7 +734,13 @@ pub(super) fn recompose_colors(
             "Recomposing the {} color preview after an automatic refresh",
             previous.label
         );
-        color::enqueue_color_job(Arc::clone(state), prepared);
+        let origin = super::journal::JournaledStackJob::Color {
+            database_id: ctx.id.clone(),
+            project_id: job.project_id,
+            automatic: true,
+            request: request.clone(),
+        };
+        color::enqueue_color_job(Arc::clone(state), prepared, origin);
     }
 }
 

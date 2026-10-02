@@ -118,6 +118,19 @@ pub struct WbppRunStore {
     pub progress: WbppRunProgress,
     /// Set by a cancel; read by the watcher to name the outcome.
     cancel: Option<Arc<AtomicBool>>,
+    /// What the run under way was asked for, so the job journal can start it
+    /// again after a restart cut it off.
+    request: Option<StartWbppRunRequest>,
+}
+
+impl WbppRunStore {
+    /// The request of the run under way, if one is.
+    pub fn running_request(&self) -> Option<StartWbppRunRequest> {
+        self.progress
+            .running
+            .then(|| self.request.clone())
+            .flatten()
+    }
 }
 
 pub type SharedWbppRun = Arc<RwLock<WbppRunStore>>;
@@ -156,6 +169,7 @@ fn finish(store: &RwLock<WbppRunStore>, stage: &str, error: Option<String>) {
     s.progress.error = error;
     s.progress.finished_at = Some(chrono::Utc::now().timestamp());
     s.cancel = None;
+    s.request = None;
 }
 
 pub fn progress_snapshot(store: &RwLock<WbppRunStore>) -> WbppRunProgress {
@@ -296,7 +310,7 @@ pub async fn update_pixinsight_settings(
 // Runs
 // ----------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StartWbppRunRequest {
     #[serde(default)]
     pub project_id: Option<i32>,
@@ -689,7 +703,24 @@ pub async fn start_wbpp_run(
     ))))
 }
 
-fn scope_of(req: &StartWbppRunRequest) -> String {
+/// Put runs the job journal kept back in line, next first, and let the
+/// first of them start.
+pub(crate) fn restore_queue(state: &Arc<AppState>, runs: Vec<(String, StartWbppRunRequest)>) {
+    if runs.is_empty() {
+        return;
+    }
+    let now = chrono::Utc::now().timestamp();
+    for (db_id, request) in runs {
+        if state.get_database(&db_id).is_none() {
+            continue;
+        }
+        let scope = scope_of(&request);
+        state.wbpp_queue.push(&db_id, scope, request, now);
+    }
+    tokio::spawn(drain_queue(Arc::clone(state)));
+}
+
+pub(crate) fn scope_of(req: &StartWbppRunRequest) -> String {
     req.scope_label
         .clone()
         .filter(|label| !label.trim().is_empty())
@@ -735,6 +766,7 @@ async fn launch(
     let Some(cancel) = try_begin(&store, scope.clone(), req.options.clone()) else {
         return Ok(false);
     };
+    store.write().unwrap().request = Some(req.clone());
 
     let work_dir = root.join(run_dir_name(&scope));
     let output_dir = work_dir.join(OUTPUT_DIRECTORY);
@@ -851,7 +883,7 @@ impl Drop for SlotClaim {
 /// PixInsight missing) is recorded on its database and dropped; letting go
 /// of the slot then drains again, so the line keeps moving. Boxed because a
 /// slot's release schedules this again.
-fn drain_queue(state: Arc<AppState>) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+pub(crate) fn drain_queue(state: Arc<AppState>) -> Pin<Box<dyn Future<Output = ()> + Send>> {
     Box::pin(async move {
         // Another run holds PixInsight; its end drains again.
         if state.wbpp_queue.is_empty() || any_run_active(&state) {

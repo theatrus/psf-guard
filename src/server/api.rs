@@ -1147,7 +1147,7 @@ pub struct SpatialScanRequest {
 /// [`SequenceAnalysisQuery`], which converts into this via
 /// [`SequenceAnalysisQuery::scoring_overrides`] so both endpoints apply
 /// overrides through one method.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScoringOverrideQuery {
     pub penalty_satellite: Option<f64>,
     pub penalty_pointing: Option<f64>,

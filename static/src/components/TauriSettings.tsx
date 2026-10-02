@@ -19,6 +19,7 @@ import { useDirectorStatus } from '../hooks/useDirectorStatus';
 import CalibrationMatchingSettings from './CalibrationMatchingSettings';
 import StackAutomationSettings from './StackAutomationSettings';
 import StackMethodSettings from './StackMethodSettings';
+import WorkerShareSettings from './WorkerShareSettings';
 import ExportDefaultsSettings from './ExportDefaultsSettings';
 import AstroBinSettings from './AstroBinSettings';
 import PixInsightSettings from './PixInsightSettings';
@@ -1892,6 +1893,7 @@ export default function TauriSettings({
             <div className="settings-setups">
               <StackMethodSettings />
               <StackAutomationSettings />
+              <WorkerShareSettings />
             </div>
           )}
 

@@ -457,6 +457,11 @@ pub struct DbRegistry {
     /// settings panel. Additive within registry v2; absent means off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stacking: Option<StackAutomationSettings>,
+    /// Shares of the processor for interactive and background work, edited
+    /// on the Stacking settings page. Absent uses the server config file's
+    /// values. Additive within registry v2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workers: Option<WorkerSettings>,
     /// Process-global AstroBin export settings, edited from the settings
     /// panel and the export dialog. Additive within registry v2; absent
     /// means no filter has an AstroBin id yet.
@@ -475,6 +480,36 @@ pub struct AstroBinSettings {
     /// Filter name, as the catalog spells it, to AstroBin filter id.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub filter_ids: std::collections::BTreeMap<String, u32>,
+}
+
+/// The processor shares a person chose, over the server config file's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct WorkerSettings {
+    /// Fraction of logical cores for work a person waits on: stack builds
+    /// they start, quality scans, previews. Absent keeps the config's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interactive_ratio: Option<f64>,
+    /// Fraction for work nobody waits on: automatic stack refreshes,
+    /// preview pre-generation, quality backfill. Absent keeps the config's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_ratio: Option<f64>,
+}
+
+impl WorkerSettings {
+    /// `base` with these shares over it, each clamped to 5–100%.
+    pub fn apply(
+        &self,
+        base: crate::concurrency::WorkerPolicy,
+    ) -> crate::concurrency::WorkerPolicy {
+        let mut policy = base;
+        if let Some(ratio) = self.interactive_ratio {
+            policy = policy.with_interactive_ratio(ratio.clamp(0.05, 1.0));
+        }
+        if let Some(ratio) = self.background_ratio {
+            policy = policy.with_background_ratio(ratio.clamp(0.05, 1.0));
+        }
+        policy
+    }
 }
 
 /// Whether, and how soon, remembered stack previews rebuild on their own
@@ -577,6 +612,7 @@ impl Default for DbRegistry {
             calibration: None,
             export: None,
             stacking: None,
+            workers: None,
             astrobin: None,
             pixinsight: None,
         }

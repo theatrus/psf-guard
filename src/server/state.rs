@@ -64,6 +64,9 @@ pub struct AppState {
     /// `concurrency::WorkerPolicy`). Process-global; sourced from the TOML
     /// `[server]` ratios, otherwise the compiled-in defaults.
     pub worker_policy: RwLock<crate::concurrency::WorkerPolicy>,
+    /// The policy the server config file gave, before any shares chosen in
+    /// Settings; what "use the default" goes back to.
+    configured_worker_policy: RwLock<crate::concurrency::WorkerPolicy>,
     /// How generated previews are encoded. PNG unless the TOML `[server]`
     /// section asks for JPEG.
     pub preview_encoding: RwLock<crate::preview_format::PreviewEncoding>,
@@ -432,6 +435,7 @@ impl AppState {
             anonymous_access_trusted: RwLock::new(true),
             update_notices: crate::server::update_notice::UpdateNoticeManager::default(),
             worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
+            configured_worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             preview_encoding: RwLock::new(crate::preview_format::PreviewEncoding::default()),
             preview_color_default: RwLock::new(true),
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
@@ -497,9 +501,24 @@ impl AppState {
         self.site_banner.read().unwrap().clone()
     }
 
-    /// Set the worker tuning policy (from the TOML `[server]` config).
+    /// Set the worker tuning policy (from the TOML `[server]` config). It
+    /// is also the base that shares chosen in Settings apply over.
     pub fn set_worker_policy(&self, policy: crate::concurrency::WorkerPolicy) {
+        *self.configured_worker_policy.write().unwrap() = policy;
         *self.worker_policy.write().unwrap() = policy;
+    }
+
+    /// The policy from the server config file, before Settings.
+    pub fn configured_worker_policy(&self) -> crate::concurrency::WorkerPolicy {
+        *self.configured_worker_policy.read().unwrap()
+    }
+
+    /// Put the shares chosen in Settings over the config file's policy, for
+    /// every pool sized from now on.
+    pub fn apply_worker_settings(&self, settings: Option<&crate::db_registry::WorkerSettings>) {
+        let base = self.configured_worker_policy();
+        *self.worker_policy.write().unwrap() =
+            settings.map_or(base, |settings| settings.apply(base));
     }
 
     /// The worker tuning policy in effect.
@@ -608,6 +627,7 @@ impl AppState {
             anonymous_access_trusted: RwLock::new(true),
             update_notices: crate::server::update_notice::UpdateNoticeManager::default(),
             worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
+            configured_worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             preview_encoding: RwLock::new(crate::preview_format::PreviewEncoding::default()),
             preview_color_default: RwLock::new(true),
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
