@@ -216,7 +216,7 @@ test('retains RC-Astro color steps in saved setups on desktop and mobile', async
     }, error: null,
   } }));
   await page.setViewportSize({ width: 1440, height: 1100 });
-  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=2`);
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2`);
   const card = page.locator('.stack-color-card[data-color-kind="rgb"]');
   await card.getByRole('button', { name: 'Build RGB color preview' }).click();
   await expect(card.locator('.stack-preview-progress')).toHaveAttribute(
@@ -291,7 +291,7 @@ test('inspects exact calibration masters across mono sessions and color channels
   seedSyntheticColorStacks(dbId, 2, true);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.route('**/images/*/preview?*', (route) => route.abort());
-  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=2`);
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2`);
   const catalogResponse = page.waitForResponse((response) => response.url().includes('/calibration-masters?'));
   await page.getByRole('button', { name: 'Inspect calibration masters for R', exact: true }).click();
   const catalog: StackCalibrationMasters = (await (await catalogResponse).json()).data;
@@ -383,11 +383,11 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   // This spec is about the stack queue. Keep the ordinary image-preview queue
   // out of the way so the large FITS fixture is not decoded twice in parallel.
   await page.route('**/images/*/preview?*', (route) => route.abort());
-  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=1`);
 
   const panel = page.locator('.stack-preview-panel');
   await expect(panel).toBeVisible({ timeout: 15_000 });
-  await expect(panel).toContainText('3 visible images');
+  await expect(panel).toContainText('integrate the 3 images');
   const gridColumns = await panel.locator('.stack-preview-grid').evaluate(
     (grid) => getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length
   );
@@ -712,14 +712,18 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   await acceptedOnly.uncheck();
   await expect(panel.locator('.stack-preview-card')).toHaveAttribute('data-outdated', 'false');
 
-  await page.goto(
-    `/#/grid?db=${encodeURIComponent(dbId)}&project=1&search=no-such-stack-target`
-  );
-  await expect(page.locator('.stack-preview-outdated')).toContainText(
-    'not in the current input'
-  );
-  await expect(page.getByRole('img', { name: /stack preview/i })).toBeVisible();
+  // A selection sent from Images is another input: the result built from
+  // all three frames is out of date for it, and still shown.
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+  const gridCards = page.locator('.image-card');
+  await expect(gridCards).toHaveCount(3, { timeout: 15_000 });
+  await gridCards.nth(0).click();
+  await gridCards.nth(1).click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
+  await page.getByRole('button', { name: 'Stack selected' }).click();
+  await expect(page.locator('.stacks-selection')).toContainText('2 images selected in Images');
+  await expect(page.locator('.stack-preview-outdated')).toContainText('input images changed');
+  await expect(page.getByRole('img', { name: /stack preview/i })).toBeVisible();
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=1`);
   await expect(page.locator('.stack-preview-card')).toHaveAttribute('data-outdated', 'false');
 
   // The last successful per-channel result survives navigation and restart-like
@@ -879,7 +883,7 @@ test('keeps a running stack visible in the header and re-attaches the panel', as
     },
   }));
 
-  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=1`);
 
   // The panel re-attaches to a build it did not start.
   const progress = page.locator('.stack-preview-progress');
@@ -907,7 +911,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   test.setTimeout(180_000);
   seedSyntheticColorStacks(dbId, 2);
   await page.setViewportSize({ width: 1440, height: 1800 });
-  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=2`);
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2`);
 
   const section = page.locator('.stack-color-section');
   await expect(section).toBeVisible();
@@ -1225,14 +1229,14 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   // At a large grid zoom the result cards follow: one full-width column for
   // both the mono and the color grids. Zooming back returns the two-column
   // layout — the cards never get narrower than it.
-  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=2&size=700`);
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2&size=700`);
   await expect(stackPanel).toBeVisible({ timeout: 15_000 });
   await expect(stackPanel).toHaveAttribute('data-wide', 'true');
   const wideColumns = await stackPanel.locator('.stack-color-grid').first().evaluate(
     (grid) => getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length
   );
   expect(wideColumns).toBe(1);
-  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=2&size=300`);
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2&size=300`);
   await expect(stackPanel).toBeVisible({ timeout: 15_000 });
   await expect(stackPanel).not.toHaveAttribute('data-wide', 'true');
   const normalColumns = await stackPanel.locator('.stack-color-grid').first().evaluate(

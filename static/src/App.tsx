@@ -138,6 +138,7 @@ function AppContent() {
   const isOnOverview = isOverviewPath(location.pathname);
   const isOnGrid = location.pathname === '/grid';
   const isOnSequence = location.pathname === '/sequence';
+  const isOnStacks = location.pathname === '/stacks';
   const isOnSky = isSkyPath(location.pathname);
 
   return (
@@ -207,6 +208,16 @@ function AppContent() {
               title={hasReviewScope ? undefined : 'Choose a project or database first'}
             >
               Sequence
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate(toScoped('/stacks'))}
+              className="header-button"
+              aria-current={isOnStacks ? 'page' : undefined}
+              disabled={!hasReviewScope}
+              title={hasReviewScope ? undefined : 'Choose a project or database first'}
+            >
+              Stacks
             </button>
           </div>
           <button

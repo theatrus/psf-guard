@@ -4,6 +4,7 @@ import App from '../App';
 import MainView from '../components/MainView';
 import Overview from '../components/Overview';
 import SequenceView from '../components/SequenceView';
+import StacksView from '../components/stacks/StacksView';
 import SkyPage from '../components/sky/SkyPage';
 import PlanPage from '../components/director/PlanPage';
 import LegacyPlanningRedirect from '../components/director/LegacyPlanningRedirect';
@@ -50,6 +51,10 @@ const router = createHashRouter([
       {
         path: "sequence",
         element: <SequenceView />
+      },
+      {
+        path: "stacks",
+        element: <StacksView />
       },
       {
         path: "sky",

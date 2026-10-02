@@ -807,7 +807,25 @@ export interface StackScoringSettings {
   star_count_reject_below: number | null;
 }
 
+/** Where a stack WBPP made came from. */
+export interface WbppStackSource {
+  master_file: string;
+  output_dir: string;
+  exposure_seconds: number | null;
+  drizzle: boolean;
+  autocrop: boolean;
+  imported_unix_seconds: number;
+}
+
+/** What taking in a WBPP run's masters did. */
+export interface WbppStackImport {
+  imported: string[];
+  skipped: string[];
+}
+
 export interface LatestStackPreviewGroup {
+  /** Set when WBPP made this stack and PSF Guard only took it in. */
+  wbpp?: WbppStackSource | null;
   job_id: string;
   artifact_revision: string;
   accepted_only: boolean;
@@ -1049,6 +1067,8 @@ export interface StackColorSource {
   group_index: number;
   artifact_revision: string;
   accepted_frames: number;
+  /** WBPP made this channel's stack; it records no frame count. */
+  wbpp?: boolean;
   /** Integrated exposure of the channel stack, in seconds. */
   total_exposure_seconds?: number | null;
   reference_image_id: number | null;

@@ -3,6 +3,7 @@ import { formatIntegration, totalIntegration } from '../utils/integrationTime';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type {
+  StackColorSource,
   StackColorCrop,
   StackColorJob,
   StackColorKind,
@@ -24,6 +25,11 @@ import { STACK_ACTIVITY_QUERY_KEY, useStackActivity } from '../hooks/useStackAct
 import { buildColorExposureSets, colorSourceKey, colorSourcesLabel, completedColorArtifact, resolveColorSources, sameColorSourceFamily, type ColorExposureSet } from './stackColorSources';
 import { withRetainedColorExposureSets } from './colorExposureCards';
 import './StackColorSources.css';
+
+/** A channel's frame count, or that WBPP made it and recorded none. */
+function sourceFramesText(source: Pick<StackColorSource, 'accepted_frames' | 'wbpp'>): string {
+  return source.wbpp ? 'WBPP master' : `${source.accepted_frames} frames`;
+}
 
 interface StackColorPreviewPanelProps {
   dbId: string;
@@ -385,12 +391,12 @@ function ColorCard({
               <strong>{roleLabels[source.role]}</strong>
               {colorSourcesLabel([source])}
               <small>
-                {source.accepted_frames} frames
+                {sourceFramesText(source)}
                 {(source.total_exposure_seconds ?? 0) > 0 && ` · ${formatIntegration(source.total_exposure_seconds)}`}
               </small>
             </span>
           ))}
-          {artifact && (
+          {artifact && !artifact.sources.some((source) => source.wbpp) && (
             <span className="stack-color-source-total">
               <strong>{sourceFrames}</strong> integrated inputs
               {sourceSeconds > 0 && <> · <strong>{formatIntegration(sourceSeconds)}</strong> integrated</>}
@@ -652,7 +658,7 @@ export default function StackColorPreviewPanel({
             >
               <option value="">{choices.length ? 'Choose stack' : 'Unavailable'}</option>
               {choices.map((source) => <option key={colorSourceKey(source)} value={colorSourceKey(source)}>
-                {colorSourcesLabel([source])} · {source.accepted_frames} frames
+                {colorSourcesLabel([source])} · {sourceFramesText(source)}
               </option>)}
             </select>
           </label>;
@@ -835,7 +841,9 @@ export default function StackColorPreviewPanel({
           summary={[
             colorSourcesLabel(inspector.sources),
             `${inspector.sources.length} channel stacks`,
-            `${inspector.sources.reduce((sum, source) => sum + source.accepted_frames, 0)} integrated inputs`,
+            ...(inspector.sources.some((source) => source.wbpp)
+              ? []
+              : [`${inspector.sources.reduce((sum, source) => sum + source.accepted_frames, 0)} integrated inputs`]),
             ...(totalIntegration(inspector.sources.map((source) => source.total_exposure_seconds)) > 0
               ? [`${formatIntegration(totalIntegration(inspector.sources.map((source) => source.total_exposure_seconds)))} integrated`]
               : []),

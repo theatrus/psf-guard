@@ -412,8 +412,10 @@ the image grid and comparison tools:
 - **File location**: image details show the resolved path when the source file
   is present and fall back to the path recorded in the catalog. Copy any shown
   path, or use **Show in folder** in the desktop app.
-- **Stack previews**: in a single project, build a registered preview from an
-  explicit multi-selection or the current visible filters. Matching cataloged
+- **Stack previews**: in a project's **Stacks** view, build a registered
+  preview from every frame in scope, or from a selection sent from Images
+  with **Stack selected**. WBPP's master lights show there too, ready for
+  PSF Guard's color composition. Matching cataloged
   bias, dark, and flat masters apply before registration.
   PSF Guard excludes rejected and regrade-recommended frames before Seiza
   performs registration and admission, and retains a downloadable linear FITS

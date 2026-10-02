@@ -530,6 +530,14 @@ async fn run_server_internal(
             get(stack_preview::get_stack_preview_job),
         )
         .route(
+            "/projects/{project_id}/stack-previews/wbpp",
+            get(stack_preview::get_wbpp_stacks),
+        )
+        .route(
+            "/projects/{project_id}/stack-previews/wbpp/import",
+            post(stack_preview::import_wbpp_stacks),
+        )
+        .route(
             "/projects/{project_id}/stack-previews/{job_id}/cancel",
             post(stack_preview::cancel_stack_preview_job),
         )

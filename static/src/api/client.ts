@@ -95,6 +95,7 @@ import type { GuidFillReport, GuidReport,
   StackFrameOrder,
   StackMethod,
   WbppActivity,
+  WbppStackImport,
   StackMethodSettings,
   WorkerSettings,
   ArtifactSearchJob,
@@ -1762,6 +1763,31 @@ export const apiClient = {
       { position }
     );
     if (!data.data) throw new Error(data.error || 'Failed to move the queued run');
+    return data.data;
+  },
+
+  /** The stacks WBPP made for a project and PSF Guard took in. */
+  getWbppStacks: async (dbId: string, projectId: number): Promise<LatestStackPreviews> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<LatestStackPreviews>>(
+      dbPath(dbId, `/projects/${projectId}/stack-previews/wbpp`)
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to load WBPP stacks');
+    return data.data;
+  },
+
+  /** Take a WBPP run's master lights in as stacks: the last run by default. */
+  importWbppStacks: async (
+    dbId: string,
+    projectId: number,
+    request: { output_dir?: string; target_id?: number } = {}
+  ): Promise<WbppStackImport> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<WbppStackImport>>(
+      dbPath(dbId, `/projects/${projectId}/stack-previews/wbpp/import`),
+      request
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to take in the WBPP masters');
     return data.data;
   },
 
