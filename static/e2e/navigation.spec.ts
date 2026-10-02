@@ -741,12 +741,20 @@ test('Grid starts target quality analysis and keeps progress in the global heade
   await analyzeQuality.click();
 
   await expect.poll(() => posted).toMatchObject({ target_id: 1 });
-  const globalStatus = page.locator('.header-cache-slot .quality-analysis-status');
-  await expect(globalStatus).toContainText('Analyzing quality');
-  await expect(globalStatus).toContainText('Solving 1/3 frames');
+  // The header keeps the job to a small chip; hovering it opens the queue.
+  const activity = page.getByRole('button', { name: /Background jobs/ });
+  const queue = page.getByRole('region', { name: 'Background jobs' });
+  await expect(activity).toContainText('1 job');
+  await activity.hover();
+  await expect(queue).toContainText('Analyzing quality');
+  await expect(queue).toContainText('Solving 1/3 frames');
 
+  // The open queue lies over the views; Escape puts it away.
+  await page.keyboard.press('Escape');
+  await expect(queue).toBeHidden();
   await page.getByRole('button', { name: 'Sequence' }).click();
-  await expect(globalStatus).toContainText('Analyzing quality');
+  await activity.hover();
+  await expect(queue).toContainText('Analyzing quality');
 });
 
 test('Grid selection marker leaves the quality score visible', async ({ page }) => {

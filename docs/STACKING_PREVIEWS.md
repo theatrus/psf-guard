@@ -163,7 +163,7 @@ another card — or a color build, or **Build stack previews** for the whole set
 — queues that job behind the running one on the same single-job worker, so
 memory use does not grow with the queue. Each card shows its own state:
 `queued` cards wait, the `running` card shows live progress, and the status
-line counts the builds in the queue. The header **Stacking** indicator lists
+line counts the builds in the queue. The header's background jobs chip lists
 the same queue in every view. **Stop** becomes **Stop all** when more than one
 build is pending and stops every queued and running job; channels that already
 finished keep their previews.
@@ -255,13 +255,15 @@ checkpoints deleted outright are ones that can never resume again — written
 by another stacking pipeline version, unreadable, or an orphaned half of an
 interrupted save.
 
-A build belongs to the server, not to the page that started it. The header
-shows a **Stacking** indicator next to the cache and quality-analysis progress
-for as long as any mono or color build is queued or running, in every view and
-in every database. Reopening the project grid re-attaches the stack panels to
-the running job, so leaving the page and coming back restores the live per-card
-progress instead of an idle panel. The indicator names the target and channel
-being stacked, its frame counts, and how many further builds are waiting.
+A build belongs to the server, not to the page that started it. The header's
+background jobs chip counts it for as long as any mono or color build is
+queued or running, in every view and in every database. The chip shows only
+the overall progress and the number of jobs. Hover, focus or click it to open
+the queue: each build names its target and channel and its frame counts, and
+waiting builds say `queued`. Catalog refreshes and quality scans share the
+same chip. Reopening the project grid re-attaches the stack panels to the
+running job, so leaving the page and coming back restores the live per-card
+progress instead of an idle panel.
 
 ## Stop a build
 
@@ -542,8 +544,8 @@ build, a color composition, a stretch, or an artifact search stops every
 automatic build (a color recomposition already running finishes, which is
 minutes at most), and the stopped build's checkpoint resumes when its project
 comes back for a refresh a few minutes later. Starting the very build the
-refresh is already running simply makes it yours. The header **Stacking**
-indicator marks automatic builds `automatic`. A refresh follows only the
+refresh is already running simply makes it yours. The header's background
+jobs queue marks automatic builds `automatic`. A refresh follows only the
 cards the grid shows, never a project without remembered previews, and never
 changes the calibration library, grades, or files. Target merges, exposure
 moves, and peer pulls count as syncs.
@@ -874,7 +876,7 @@ follow the grid's thumbnail-size slider: from 600&nbsp;px up they widen to one
 full-width column, and below that they keep the two-column layout — zooming
 out never makes a stack preview smaller. A collapsed panel
 shows how many remembered channels it is holding, or that a build is running;
-the header's Stacking indicator keeps reporting progress either way.
+the header's background jobs chip keeps reporting progress either way.
 
 ## Color previews from channel stacks
 

@@ -5,13 +5,12 @@ import { useQuery } from '@tanstack/react-query';
 import ProjectTargetSelector from './components/ProjectTargetSelector';
 import RigTargetSelect from './components/header/RigTargetSelect';
 import { useCurrentPlan } from './components/header/useCurrentPlan';
+import ActivityChip from './components/header/ActivityChip';
 import LiveChip from './components/header/LiveChip';
 import KeyboardShortcutHelp from './components/KeyboardShortcutHelp';
 import ServerInfoPanel from './components/ServerInfoPanel';
 import SiteBanner from './components/SiteBanner';
 import UpdateNotice from './components/UpdateNotice';
-import DatabaseActivityStatus from './components/DatabaseActivityStatus';
-import AggregatedCacheStatus from './components/AggregatedCacheStatus';
 import TauriSettings from './components/TauriSettings';
 import { isOverviewPath, isPlanningPath, isSkyPath, useDbProjectTarget, useGridState, withoutPlanningParams } from './hooks/useUrlState';
 import { isTauriApp, tauriConfig } from './utils/tauri';
@@ -219,13 +218,9 @@ function AppContent() {
         </nav>
 
         <div className="header-utilities">
-          <div className="header-cache-slot" aria-live="polite">
-            {/* Scoped views show the active database's refresh or quality job;
-                unscoped views merge active jobs across databases. This fixed
-                slot keeps status changes from moving the header. */}
-            <DatabaseActivityStatus className="header-cache-progress" />
-            <AggregatedCacheStatus className="header-cache-progress" />
-          </div>
+          {/* Background work on every database, kept to one small chip;
+              hover or click opens the queue. */}
+          <ActivityChip />
           <LiveChip />
           {isOnGrid && (
             <button

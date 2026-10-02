@@ -887,13 +887,18 @@ test('keeps a running stack visible in the header and re-attaches the panel', as
   await expect(progress).toContainText('1/3 frames');
 
   // The header keeps reporting it from every view.
-  const headerStacking = page.locator('.header-cache-slot .stack-activity-status');
-  await expect(headerStacking).toContainText('Stacking');
-  await expect(headerStacking).toContainText('Alpha M44 · B · 1/3 frames');
+  const activity = page.getByRole('button', { name: /Background jobs/ });
+  const queue = page.getByRole('region', { name: 'Background jobs' });
+  await activity.click();
+  await expect(queue).toContainText('Stacking');
+  await expect(queue).toContainText('Alpha M44 · B');
+  await expect(queue).toContainText('1/3 frames');
+  await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Sequence' }).click();
-  await expect(headerStacking).toContainText('Stacking');
+  await expect(activity).toBeVisible();
   await page.getByRole('button', { name: 'Library' }).click();
-  await expect(headerStacking).toContainText('Stacking');
+  await activity.hover();
+  await expect(queue).toContainText('Stacking');
 });
 
 test('composes cached channel stacks into RGB, LRGB, and selectable narrowband previews', async ({

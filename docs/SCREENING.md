@@ -174,9 +174,9 @@ results from an older quality model. It stays hidden when every frame is up to
 date. Use **Rescan All Quality** in Settings when you need to force a full
 rescan. The target scan runs spatial/photometric screening and fresh plate
 solves in the background, then
-refreshes the sequence scores. The fixed header status shows frame and solve
-progress while you move between views; Library folds the work into its
-cross-database status. Results persist across restarts. The
+refreshes the sequence scores. The header's background jobs chip counts the
+scan while you move between views, in every database; hover or click it for
+the frame and solve progress. Results persist across restarts. The
 sequence analysis shows coverage badges, classifications, solved-center
 scatter, a session view, and an all-session stack comparison for each filter.
 When analysis names a cause, the same reason and supporting evidence appear on

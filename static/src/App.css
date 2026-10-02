@@ -245,31 +245,6 @@
 
 /* The jobs slot sits with the utilities; it grows into whatever the row
    has left and shrinks to its indicators on a narrow window. */
-.header-cache-slot {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  flex: 0 1 22rem;
-  min-width: 0;
-  max-width: 22rem;
-  height: 32px;
-  overflow: hidden;
-}
-
-.header-cache-slot .cache-refresh-status {
-  flex: 1 1 auto;
-  width: auto;
-  min-width: 0;
-  margin: 0;
-}
-
-/* Stacking is the secondary chip: it yields width to analysis and cache
-   refresh, and only takes the whole slot when it is alone. */
-.header-cache-slot .stack-activity-status {
-  flex: 0 1 auto;
-  max-width: 100%;
-}
-
 .header-view-tabs,
 .header-utilities {
   display: flex;
@@ -751,30 +726,6 @@
 
   .selector-group.compact label {
     display: none;
-  }
-
-  /* Room for the analysis chip and the secondary stacking chip side by side,
-     both reduced to their indicators. */
-  .header-cache-slot {
-    flex: 0 0 4.5rem;
-    width: 4.5rem;
-    min-width: 0;
-    max-width: none;
-    height: 28px;
-  }
-
-  .header-cache-slot .cache-refresh-status {
-    height: 28px;
-    padding: 3px;
-  }
-
-  .header-cache-slot .cache-status-main,
-  .header-cache-slot .cache-status-details {
-    display: none;
-  }
-
-  .header-cache-slot .progress-indicator {
-    width: 22px;
   }
 
   .utility-label {

@@ -204,6 +204,11 @@
 
 ## Changed
 
+- Background work in the header is one small chip: the overall progress and
+  the number of jobs. Hover, focus or click it to see the queue, with every
+  catalog refresh, quality scan and stack build, running or queued, on any
+  database. It used to take a wide slot beside the views.
+
 - Stack previews keep different exposure lengths apart by default, so 120 s
   and 300 s frames build separate stacks instead of dimming each other. A
   project can still turn **Separate exposure groups** off, and a project that
