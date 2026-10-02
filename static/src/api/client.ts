@@ -242,6 +242,43 @@ const stackStretchError = (cause: unknown, fallback: string): Error => {
   return cause instanceof Error ? cause : new Error(fallback);
 };
 
+/** What a stack build is asked for, alone or split by channel. */
+export type StackPreviewStartRequest = {
+  image_ids: number[];
+  accepted_only: boolean;
+  force?: boolean;
+  /** Reproject onto the shared north-up, east-left grid. Off by default. */
+  north_up?: boolean;
+  /**
+   * Integration order. `capture` (default) is chronological; `quality`
+   * puts the best-graded frames first, which makes the progressive
+   * signal-to-noise curve a reading of which frames are worth keeping.
+   */
+  order?: StackFrameOrder;
+  /**
+   * Scoring overrides (penalty scales, absolute reject limits) so stack
+   * frame exclusion agrees with every other scoring surface.
+   */
+  scoring?: PenaltyScaleParams;
+  /** How to calibrate the lights: auto (default), on (forced), or off. */
+  calibration?: CalibrationMode;
+  /** How the frames integrate; omitted uses the server's stacking method. */
+  method?: StackMethod;
+  /** Per-channel exceptions to `calibration`, by target and filter. */
+  calibration_overrides?: Array<{
+    target_id: number;
+    filter_name: string;
+    exposure_group_key?: string;
+    calibration: CalibrationMode;
+  }>;
+  /**
+   * The display pipeline a target's first color preview gets once this
+   * build leaves none of its channels waiting. Omitted, the server only
+   * rebuilds the color previews already composed for the target.
+   */
+  color_defaults?: StackColorProcessing;
+};
+
 export const apiClient = {
   getDirectorStatus: async (): Promise<DirectorStatus> => {
     const api = await getApi();
@@ -1635,45 +1672,28 @@ export const apiClient = {
   startStackPreviews: async (
     dbId: string,
     projectId: number,
-    request: {
-      image_ids: number[];
-      accepted_only: boolean;
-      force?: boolean;
-      /** Reproject onto the shared north-up, east-left grid. Off by default. */
-      north_up?: boolean;
-      /**
-       * Integration order. `capture` (default) is chronological; `quality`
-       * puts the best-graded frames first, which makes the progressive
-       * signal-to-noise curve a reading of which frames are worth keeping.
-       */
-      order?: StackFrameOrder;
-      /**
-       * Scoring overrides (penalty scales, absolute reject limits) so stack
-       * frame exclusion agrees with every other scoring surface.
-       */
-      scoring?: PenaltyScaleParams;
-      /** How to calibrate the lights: auto (default), on (forced), or off. */
-      calibration?: CalibrationMode;
-      /** How the frames integrate; omitted uses the server's stacking method. */
-      method?: StackMethod;
-      /** Per-channel exceptions to `calibration`, by target and filter. */
-      calibration_overrides?: Array<{
-        target_id: number;
-        filter_name: string;
-        exposure_group_key?: string;
-        calibration: CalibrationMode;
-      }>;
-      /**
-       * The display pipeline a target's first color preview gets once this
-       * build leaves none of its channels waiting. Omitted, the server only
-       * rebuilds the color previews already composed for the target.
-       */
-      color_defaults?: StackColorProcessing;
-    }
+    request: StackPreviewStartRequest
   ): Promise<StackPreviewJob> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.post<ApiResponse<StackPreviewJob>>(
       dbPath(dbId, `/projects/${projectId}/stack-previews`),
+      request
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to start stack previews');
+    return data.data;
+  },
+  /**
+   * The same request split into one build per channel, queued in channel
+   * order; channels already built for it come back as they are.
+   */
+  startStackPreviewChannels: async (
+    dbId: string,
+    projectId: number,
+    request: StackPreviewStartRequest
+  ): Promise<StackPreviewJob[]> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<StackPreviewJob[]>>(
+      dbPath(dbId, `/projects/${projectId}/stack-previews/channels`),
       request
     );
     if (!data.data) throw new Error(data.error || 'Failed to start stack previews');

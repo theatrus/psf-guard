@@ -22,8 +22,7 @@ use super::color::{self, StackColorJob, StackColorRequest};
 use super::{
     current_latest_stacks, current_project_latest_stacks, enqueue_job, latest_path, manifest_path,
     prepare_job, read_latest_indices, validate_request, CalibrationOverride, LatestStackPreviews,
-    StackGroupState, StackJobState, StackPreviewJob, StackPreviewRequest, StackScoringSettings,
-    MAX_REMEMBERED_JOBS,
+    StackJobState, StackPreviewJob, StackPreviewRequest, StackScoringSettings, MAX_REMEMBERED_JOBS,
 };
 use crate::db::Database;
 use crate::models::AcquiredImage;
@@ -704,10 +703,11 @@ pub(super) fn compose_colors_after(
     ctx: &Arc<DatabaseContext>,
     job: &StackPreviewJob,
 ) {
+    // Every target the build touched: a channel that stopped or failed
+    // still releases the color its finished siblings were waiting on.
     let targets = job
         .groups
         .iter()
-        .filter(|group| group.state == StackGroupState::Ready)
         .map(|group| group.target_id)
         .collect::<std::collections::BTreeSet<_>>();
     for target_id in targets {

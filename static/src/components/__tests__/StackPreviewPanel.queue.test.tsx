@@ -94,9 +94,9 @@ describe('StackPreviewPanel exposure groups', () => {
       http.get('/api/stack-activity', () => ok({ schema_version: 1, active: [] })),
       http.get('/api/db/test/projects/1/stack-previews/latest', () => ok({ groups: [] })),
       http.get('/api/db/test/projects/1/stack-previews/color', () => ok({ targets: [], jobs: [] })),
-      http.post('/api/db/test/projects/1/stack-previews', async ({ request }) => {
+      http.post('/api/db/test/projects/1/stack-previews/channels', async ({ request }) => {
         submitted = await request.json() as Record<string, unknown>;
-        return ok(started);
+        return ok([started]);
       }),
       http.get('/api/db/test/projects/1/stack-previews/split', () => ok(started)),
     );
@@ -117,38 +117,34 @@ describe('StackPreviewPanel exposure groups', () => {
 });
 
 describe('StackPreviewPanel manual queue', () => {
-  it('queues one build per channel, each carrying the color defaults', async () => {
-    const bodies: Array<{ image_ids: number[]; color_defaults?: { input_stretches: Record<string, unknown> } }> = [];
-    const jobs: Record<string, unknown> = {};
+  it('asks the server for one build per channel, with the color defaults', async () => {
+    let body: { image_ids: number[]; color_defaults?: { input_stretches: Record<string, unknown> } } | undefined;
+    const jobs: Record<string, unknown> = {
+      'job-ha': job('job-ha', 101, 'running', [group(0, 'Ha', 'running', [1, 2])]),
+      'job-oiii': job('job-oiii', 102, 'queued', [group(0, 'OIII', 'queued', [3, 4])]),
+    };
     server.use(
       http.get('/api/stack-activity', () => ok({ schema_version: 1, active: [] })),
       http.get('/api/db/:dbId/projects/:projectId/stack-previews/latest', () => ok({ groups: [] })),
       http.get('/api/db/:dbId/projects/:projectId/stack-previews/color', () => ok({ targets: [], jobs: [] })),
-      http.post('/api/db/:dbId/projects/:projectId/stack-previews', async ({ request }) => {
-        const body = (await request.json()) as (typeof bodies)[number];
-        bodies.push(body);
-        const filter = body.image_ids.includes(1) ? 'Ha' : 'OIII';
-        const started = job(`job-${filter}`, 100 + bodies.length, bodies.length === 1 ? 'running' : 'queued', [
-          group(0, filter, bodies.length === 1 ? 'running' : 'queued', body.image_ids),
-        ]);
-        jobs[`job-${filter}`] = started;
-        return ok(started);
+      http.post('/api/db/:dbId/projects/:projectId/stack-previews/channels', async ({ request }) => {
+        body = (await request.json()) as typeof body;
+        return ok([jobs['job-ha'], jobs['job-oiii']]);
       }),
       http.get('/api/db/:dbId/projects/:projectId/stack-previews/:jobId', ({ params }) =>
         ok(jobs[params.jobId as string])
       ),
     );
-    render(<StackPreviewPanel dbId="test" projectId={1} images={images}
+    const view = render(<StackPreviewPanel dbId="test" projectId={1} images={images}
       selectionSource="visible" onOpenImage={() => undefined} />, { wrapper: wrapper() });
     await userEvent.click(await screen.findByRole('button', { name: 'Build stacks' }));
-    await waitFor(() => expect(bodies).toHaveLength(2));
-    expect(bodies.map((body) => body.image_ids)).toEqual([[1, 2], [3, 4]]);
-    for (const body of bodies) {
-      expect(Object.keys(body.color_defaults?.input_stretches ?? {})).toEqual(
-        expect.arrayContaining(['luminance', 'red', 'green', 'blue', 'ha', 'oiii', 'sii'])
-      );
-    }
-    expect((await screen.findAllByText('running')).length).toBeGreaterThan(0);
+    await waitFor(() => expect(body?.image_ids).toEqual([1, 2, 3, 4]));
+    expect(Object.keys(body?.color_defaults?.input_stretches ?? {})).toEqual(
+      expect.arrayContaining(['luminance', 'red', 'green', 'blue', 'ha', 'oiii', 'sii'])
+    );
+    // Both channel builds are watched: one runs, the other waits its turn.
+    await waitFor(() => expect(view.container.querySelectorAll('.stack-group-state.running')).toHaveLength(1));
+    expect(view.container.querySelectorAll('.stack-group-state.queued')).toHaveLength(1);
   });
 
   it('keeps other channels buildable and shows both queued builds', async () => {

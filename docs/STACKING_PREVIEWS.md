@@ -13,9 +13,12 @@ than a final-processing workflow.
 
 Open one project in **Stacks** and choose **Build stacks** to build
 every target/channel group, or **Build channel** on one card to test only that
-group. **Build stacks** queues one build per channel, so the header's queue
-lists each channel on its own; **Build current set** queues only the channels
-that are new or out of date, and is off when every channel is current. Once a result exists, the corresponding actions become
+group. **Build stacks** asks the server for one build per channel, so the
+header's queue lists each channel on its own, in channel order. A channel
+already built for the same inputs and settings comes back at once instead of
+stacking again. Each channel build still learns the pier-side mapping from its
+sibling channels' reference frames, so an unsolved channel faces the way the
+solved ones do, as it did when they shared one build. Once a result exists, the corresponding actions become
 **Rebuild current set** and **Rebuild channel**. An individual rebuild replaces
 only that channel's remembered result; the other channel cards remain intact.
 
@@ -1017,9 +1020,11 @@ Color follows the channels in the queue. Once a build leaves none of a
 target's channels waiting, every color preview composed for that target
 before is composed again from the newest stack of each of its channels, with
 its kind, palette, crop and processing unchanged; one whose channels did not
-change is left alone. Each channel keeps its family: its filter, exposure
-group, and whether WBPP or PSF Guard made it. A target with no color preview
-yet gets its first one after a build started here: LRGB when it has L, R, G
+change is left alone. A stopped or failed channel still releases the color
+its finished siblings were waiting on. Each channel keeps its family: its
+filter, exposure group, and whether WBPP or PSF Guard made it. A target with
+no color preview yet gets its first one after a build started from Stacks,
+for the whole set or one channel: LRGB when it has L, R, G
 and B, else RGB, else the first narrowband palette its channels allow, with
 the display pipeline the color cards start from. A role with two of PSF
 Guard's own stacks, such as two exposure groups of R, is a choice left to

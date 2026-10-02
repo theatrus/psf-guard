@@ -68,6 +68,16 @@ const idleWbppRun = {
 };
 
 export const handlers = [
+  // A whole-set build asks for one build per channel. A test that mocks only
+  // the single build gets that build back as the one channel.
+  http.post('/api/db/:dbId/projects/:projectId/stack-previews/channels', async ({ request, params }) => {
+    const single = await fetch(
+      new URL(`/api/db/${params.dbId}/projects/${params.projectId}/stack-previews`, request.url),
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: await request.text() }
+    );
+    const json = await single.json();
+    return HttpResponse.json({ ...json, data: json.data ? [json.data] : null }, { status: single.status });
+  }),
   http.get('/api/director/v1/templates', () => HttpResponse.json({ success: true, data: [], error: null })),
   http.get('/api/director/v1/sky/search', ({ request }) => HttpResponse.json({
     success: true, data: { query: new URL(request.url).searchParams.get('q') ?? '', local: { available: false, note: 'object catalog is not configured', items: [] }, online: null, online_state: 'skipped', online_cached: false }, error: null,

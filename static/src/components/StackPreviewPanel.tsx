@@ -453,18 +453,17 @@ export default function StackPreviewPanel({
     variables: startVariables,
     reset: resetStart,
   } = useMutation({
-    // One job per channel, posted in order, so the queue shows each channel
-    // as its own build; the server composes color once a target's last
-    // channel is in.
+    // A whole-set build goes to the server as one request it splits into a
+    // build per channel, so the queue lists each channel and color follows
+    // a target's last one; a channel build is a single request.
     mutationFn: async (variables: {
       force: boolean;
-      batches: number[][];
+      imageIds: number[];
       operationKey: string;
+      perChannel: boolean;
     }) => {
-      const jobs: StackPreviewJob[] = [];
-      for (const imageIds of variables.batches) {
-        jobs.push(await apiClient.startStackPreviews(dbId, projectId, {
-        image_ids: imageIds,
+      const request = {
+        image_ids: variables.imageIds,
         accepted_only: acceptedOnly,
         force: variables.force,
         order: frameOrder,
@@ -482,9 +481,10 @@ export default function StackPreviewPanel({
             calibration: channelOverride(channel.key)!,
           })),
         color_defaults: defaultColorProcessing(ALL_COLOR_ROLES),
-        }));
-      }
-      return jobs;
+      };
+      return variables.perChannel
+        ? apiClient.startStackPreviewChannels(dbId, projectId, request)
+        : [await apiClient.startStackPreviews(dbId, projectId, request)];
     },
     onSuccess: (jobs) => {
       for (const job of jobs) {
@@ -673,27 +673,18 @@ export default function StackPreviewPanel({
   // user was stopping, not to the next one they start.
   const beginAll = (force: boolean) => {
     resetStop();
-    // Every channel on a rebuild; otherwise the ones not built or out of
-    // date, so a current channel is not stacked again.
-    const batches = [...currentChannels.values()]
-      .filter((channel) => channel.images.length >= 2 && (force || channelNeedsBuild(channel.key)))
-      .map((channel) => channel.images.map((image) => image.id));
-    if (batches.length > 0) startStack({ force, batches, operationKey: 'all' });
+    startStack({ force, imageIds: stableImageIds, operationKey: 'all', perChannel: true });
   };
   const beginChannel = (channel: ChannelInput, force: boolean) => {
     resetStop();
     startStack({
       force,
-      batches: [channel.images.map((image) => image.id)],
+      imageIds: channel.images.map((image) => image.id),
       operationKey: channel.key,
+      perChannel: false,
     });
   };
 
-  const channelArtifactBuilt = (key: string) => {
-    const activeEntry = activeByChannel.get(key);
-    return (activeEntry && activeEntry.group.state === 'ready') || latestByChannel.has(key);
-  };
-  const channelNeedsBuild = (key: string) => !channelArtifactBuilt(key) || channelStale(key);
   function channelStale(key: string): boolean {
     const activeEntry = activeByChannel.get(key);
     const latestEntry = latestByChannel.get(key);
@@ -733,9 +724,6 @@ export default function StackPreviewPanel({
       : false;
   }
   const staleCount = displayKeys.filter(channelStale).length;
-  const anyToBuild = [...currentChannels.values()].some(
-    (channel) => channel.images.length >= 2 && channelNeedsBuild(channel.key)
-  );
   const outdatedSourceKeys = useMemo(() => {
     const sourceKeys = new Set<string>();
     for (const entry of latest.data?.groups ?? []) {
@@ -908,13 +896,11 @@ export default function StackPreviewPanel({
             <button
               className="stack-preview-build"
               type="button"
-              disabled={!canCompute || startPending || stableImageIds.length < 2 || !anyToBuild}
+              disabled={!canCompute || startPending || stableImageIds.length < 2}
               title={
-                !canCompute
-                  ? 'This account can view cached stacks but cannot build them.'
-                  : !anyToBuild && stableImageIds.length >= 2
-                    ? 'Every channel is up to date. Rebuild current set stacks them again.'
-                    : 'Queues one build per channel that is new or out of date; color follows each target’s last channel.'
+                canCompute
+                  ? 'Queues one build per channel; a channel already built as it is comes back at once, and color follows each target’s last channel.'
+                  : 'This account can view cached stacks but cannot build them.'
               }
               onClick={() => beginAll(false)}
             >

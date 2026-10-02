@@ -242,8 +242,8 @@
 ## Changed
 
 - **Build stacks** queues one build per channel, so the header's queue lists
-  each channel on its own, and **Build current set** queues only the channels
-  that are new or out of date. Once a target's last channel is in, its color
+  each channel on its own; a channel already built as asked comes back at
+  once. Once a target's last channel is in, its color
   previews are composed again from the new stacks, after builds started by
   hand as well as automatic ones, and a target with no color preview yet gets
   its first: LRGB, else RGB, else narrowband.

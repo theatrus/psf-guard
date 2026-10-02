@@ -147,6 +147,9 @@ fn impulse_filter_for(
 }
 const MAX_REQUEST_IMAGES: usize = 10_000;
 const MAX_REMEMBERED_JOBS: usize = 64;
+/// Queued builds are small until they run, so a project queued one channel
+/// at a time may go past [`MAX_REMEMBERED_JOBS`] up to this many.
+const MAX_QUEUED_JOBS: usize = 1024;
 const PREVIEW_MAX_DIMENSION: u32 = 2400;
 const STACK_BYTES_PER_OUTPUT_SAMPLE: u64 = 96;
 
@@ -1193,6 +1196,10 @@ impl StackPreviewManager {
                 .min_by_key(|entry| entry.created_unix_seconds)
                 .map(|entry| entry.job_id.clone())
             else {
+                if job.state == StackJobState::Queued && jobs.len() < MAX_QUEUED_JOBS {
+                    jobs.insert(job.job_id.clone(), job);
+                    return true;
+                }
                 return false;
             };
             jobs.remove(&oldest);
@@ -1312,6 +1319,10 @@ struct PreparedGroup {
 struct PreparedJob {
     public: StackPreviewJob,
     groups: Vec<PreparedGroup>,
+    /// Reference frames of channels queued beside this one, stacked in jobs
+    /// of their own. They only teach the pier-side mapping, so a channel
+    /// that was never solved still faces the way its solved siblings do.
+    orientation_peers: Vec<PreparedFrame>,
     cache_root: PathBuf,
     north_up: bool,
     order: snr::StackFrameOrder,
@@ -1556,6 +1567,87 @@ pub async fn start_stack_previews(
         AppError::InternalError(format!("Stack preparation task failed: {error}"))
     })??;
 
+    let started = start_prepared(&state, &ctx.0, project_id, &request, prepared)?;
+    if let Some(cached) = started.cached {
+        compose_after_cache_hits(&state, &ctx.0, vec![cached]).await;
+    }
+    Ok(Json(ApiResponse::success(started.job)))
+}
+
+/// `POST /api/db/{db}/projects/{project}/stack-previews/channels` — the
+/// request's images split into one build per channel, queued in channel
+/// order so the header's queue lists each channel on its own. Each channel
+/// is prepared as **Build channel** would, so the two share a cache, and
+/// carries its siblings' reference frames so an unsolved channel still
+/// faces the way the solved ones do. A channel already built for this
+/// request comes back as it is.
+pub async fn start_stack_preview_channels(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, project_id)): Path<(String, i32)>,
+    Json(request): Json<StackPreviewRequest>,
+) -> Result<Json<ApiResponse<Vec<StackPreviewJob>>>, AppError> {
+    validate_request(&request)?;
+    let ctx_arc = Arc::clone(&ctx.0);
+    let request_for_prepare = request.clone();
+    let channels = tokio::task::spawn_blocking(move || {
+        let whole = prepare_job(&ctx_arc, project_id, &request_for_prepare)?;
+        let buildable = |group: &PreparedGroup| group.frames.len() >= 2;
+        let mut channels = Vec::new();
+        for (group, public) in whole.groups.iter().zip(&whole.public.groups) {
+            if !buildable(group) {
+                continue;
+            }
+            let mut channel_request = request_for_prepare.clone();
+            channel_request.image_ids = public
+                .input_images
+                .iter()
+                .map(|image| image.image_id)
+                .collect();
+            let mut prepared = prepare_job(&ctx_arc, project_id, &channel_request)?;
+            prepared.orientation_peers = whole
+                .groups
+                .iter()
+                .filter(|other| other.index != group.index && buildable(other))
+                .filter_map(|other| other.frames.first().cloned())
+                .collect();
+            channels.push((channel_request, prepared));
+        }
+        Ok::<_, AppError>(channels)
+    })
+    .await
+    .map_err(|error| {
+        AppError::InternalError(format!("Stack preparation task failed: {error}"))
+    })??;
+    let mut jobs = Vec::with_capacity(channels.len());
+    let mut cached = Vec::new();
+    for (channel_request, prepared) in channels {
+        let started = start_prepared(&state, &ctx.0, project_id, &channel_request, prepared)?;
+        cached.extend(started.cached);
+        jobs.push(started.job);
+    }
+    // Once every channel is in line, so color waits for the ones still to
+    // build rather than composing from a half-queued set.
+    compose_after_cache_hits(&state, &ctx.0, cached).await;
+    Ok(Json(ApiResponse::success(jobs)))
+}
+
+struct Started {
+    job: StackPreviewJob,
+    /// A completed build the request matched, whose color may need to
+    /// follow it: its card can point back at an older build.
+    cached: Option<StackPreviewJob>,
+}
+
+/// Queue a prepared build, or hand back the same build already queued,
+/// running, or finished.
+fn start_prepared(
+    state: &Arc<AppState>,
+    ctx: &Arc<DatabaseContext>,
+    project_id: i32,
+    request: &StackPreviewRequest,
+    prepared: PreparedJob,
+) -> Result<Started, AppError> {
     let manifest_path = manifest_path(&prepared.cache_root, &prepared.public.job_id);
     if let Some(existing) = state.stack_previews.get(&prepared.public.job_id)
         && (matches!(
@@ -1564,15 +1656,22 @@ pub async fn start_stack_previews(
         ) || (!request.force && existing.state == StackJobState::Completed))
     {
         if existing.state == StackJobState::Completed
-            && let Err(error) = state.stack_previews.persist_latest(&ctx, &existing)
+            && let Err(error) = state.stack_previews.persist_latest(ctx, &existing)
         {
             tracing::warn!("Failed to refresh latest stack preview index: {error}");
         }
         // The same build is already under way for the automatic refresh:
-        // it is now the user's, and every other automatic build yields.
+        // it is now the user's, and every other automatic build yields. It
+        // takes the person's color defaults with it.
         let existing = if existing.automatic {
             state.stack_previews.adopt(&existing.job_id);
-            interrupt_automatic(&state);
+            if request.color_defaults.is_some() {
+                let defaults = request.color_defaults.clone();
+                state.stack_previews.update(&existing.job_id, |job| {
+                    job.color_defaults = defaults;
+                });
+            }
+            interrupt_automatic(state);
             state
                 .stack_previews
                 .get(&existing.job_id)
@@ -1580,31 +1679,67 @@ pub async fn start_stack_previews(
         } else {
             existing
         };
-        return Ok(Json(ApiResponse::success(existing)));
+        let cached = (existing.state == StackJobState::Completed).then(|| {
+            let mut cached = existing.clone();
+            cached.color_defaults = request.color_defaults.clone();
+            cached
+        });
+        return Ok(Started {
+            job: existing,
+            cached,
+        });
     }
     if !request.force
         && let Ok(bytes) = std::fs::read(&manifest_path)
         && let Ok(existing) = serde_json::from_slice::<StackPreviewJob>(&bytes)
         && existing.state == StackJobState::Completed
     {
-        if let Err(error) = state.stack_previews.persist_latest(&ctx, &existing) {
+        if let Err(error) = state.stack_previews.persist_latest(ctx, &existing) {
             tracing::warn!("Failed to refresh latest stack preview index: {error}");
         }
         let _ = state.stack_previews.insert(existing.clone());
-        return Ok(Json(ApiResponse::success(existing)));
+        let mut cached = existing.clone();
+        cached.color_defaults = request.color_defaults.clone();
+        return Ok(Started {
+            job: existing,
+            cached: Some(cached),
+        });
     }
 
     // Real work is about to queue: the user's build takes the worker.
-    interrupt_automatic(&state);
+    interrupt_automatic(state);
     let response = prepared.public.clone();
     if !state.stack_previews.insert(response.clone()) {
         return Err(AppError::BadRequest(format!(
             "At most {MAX_REMEMBERED_JOBS} stack preview jobs may be active at once"
         )));
     }
-    let origin = journal::JournaledStackJob::mono(&ctx.id, project_id, &request, &response, false);
-    enqueue_job(Arc::clone(&state), prepared, origin);
-    Ok(Json(ApiResponse::success(response)))
+    let origin = journal::JournaledStackJob::mono(&ctx.id, project_id, request, &response, false);
+    enqueue_job(Arc::clone(state), prepared, origin);
+    Ok(Started {
+        job: response,
+        cached: None,
+    })
+}
+
+/// Let color follow builds a request matched rather than ran, carrying the
+/// request's color defaults, off the async runtime.
+async fn compose_after_cache_hits(
+    state: &Arc<AppState>,
+    ctx: &Arc<DatabaseContext>,
+    jobs: Vec<StackPreviewJob>,
+) {
+    if jobs.is_empty() {
+        return;
+    }
+    let state = Arc::clone(state);
+    let ctx = Arc::clone(ctx);
+    let _ = tokio::task::spawn_blocking(move || {
+        for job in jobs {
+            automatic::compose_colors_after(&state, &ctx, &job);
+        }
+    })
+    .await;
 }
 
 /// A build the user asks for takes the worker: automatic builds stop, and
@@ -2473,6 +2608,7 @@ fn prepare_job(
         cache_root: ctx.cache_dir_path.clone(),
         north_up: request.north_up,
         order: request.order,
+        orientation_peers: Vec::new(),
     })
 }
 
@@ -2733,9 +2869,18 @@ fn reference_anchors(
     state: &Arc<AppState>,
     database_id: &str,
     groups: &[PreparedGroup],
+    peers: &[PreparedFrame],
 ) -> HashMap<usize, Option<(bool, &'static str)>> {
     let Some(ctx) = state.get_database(database_id) else {
         return HashMap::new();
+    };
+    let orient = |reference: &PreparedFrame| {
+        let headers = crate::image_io::read_header(&reference.path).unwrap_or_default();
+        ReferenceOrientation {
+            north_up: cached_or_embedded_wcs(&ctx, reference, &headers)
+                .and_then(|(wcs, _)| faces_north_up(wcs.cd)),
+            west_of_pier: pier_side_from_headers(&headers).and_then(is_west_of_pier),
+        }
     };
     let mut orientations = Vec::new();
     for group in groups {
@@ -2745,18 +2890,15 @@ fn reference_anchors(
         if group.frames.len() < 2 {
             continue;
         }
-        let headers = crate::image_io::read_header(&reference.path).unwrap_or_default();
-        let orientation = ReferenceOrientation {
-            north_up: cached_or_embedded_wcs(&ctx, reference, &headers)
-                .and_then(|(wcs, _)| faces_north_up(wcs.cd)),
-            west_of_pier: pier_side_from_headers(&headers).and_then(is_west_of_pier),
-        };
-        orientations.push((group.index, orientation));
+        orientations.push((group.index, orient(reference)));
     }
+    // Sibling channels stacked in their own jobs vote on the mapping too,
+    // as they would have in one job.
     let calibration = calibrate_pier_side(
         &orientations
             .iter()
             .map(|(_, orientation)| *orientation)
+            .chain(peers.iter().map(orient))
             .collect::<Vec<_>>(),
     );
     orientations
@@ -2856,6 +2998,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
     let PreparedJob {
         public: _,
         mut groups,
+        orientation_peers,
         cache_root,
         north_up,
         order,
@@ -2894,7 +3037,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
         // built. A channel that was never solved has to borrow the pier-to-sky
         // mapping from one that was, and it cannot do that from a decision taken
         // after its own. Headers only, so this costs no pixel reads.
-        let anchors = reference_anchors(state, &database_id, &groups);
+        let anchors = reference_anchors(state, &database_id, &groups, &orientation_peers);
         for group in groups {
             if group.frames.len() < 2 {
                 continue;
@@ -2965,8 +3108,11 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
     }
     // Color follows the channels: once no build is left for a target, its
     // color previews are composed again from the newest channel stacks.
+    // A stopped or failed last channel still lets the channels before it
+    // reach their color previews.
     if let Some(job) = state.stack_previews.get(&job_id)
-        && job.state == StackJobState::Completed
+        && (matches!(job.state, StackJobState::Completed | StackJobState::Failed)
+            || (job.state == StackJobState::Cancelled && !job.automatic))
         && let Some(ctx) = state.get_database(&database_id)
     {
         automatic::compose_colors_after(state, &ctx, &job);
@@ -4846,6 +4992,23 @@ mod tests {
         value["calibration_progress"] = serde_json::Value::Null;
         let group: StackGroupStatus = serde_json::from_value(value).unwrap();
         assert!(group.calibration_progress.is_none());
+    }
+
+    #[test]
+    fn a_project_queued_by_channel_may_go_past_the_remembered_cap() {
+        let manager = StackPreviewManager::new();
+        for index in 0..MAX_REMEMBERED_JOBS + 10 {
+            let mut queued = completed_job(&format!("{index:064x}"), vec![]);
+            queued.state = StackJobState::Queued;
+            assert!(manager.insert(queued), "queued channel {index} was refused");
+        }
+        // A job that is not waiting to run still meets the cap.
+        let running = {
+            let mut job = completed_job(&format!("{:064x}", 9999), vec![]);
+            job.state = StackJobState::Running;
+            job
+        };
+        assert!(!manager.insert(running));
     }
 
     #[test]

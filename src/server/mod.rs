@@ -513,6 +513,10 @@ async fn run_server_internal(
             post(stack_preview::start_stack_previews),
         )
         .route(
+            "/projects/{project_id}/stack-previews/channels",
+            post(stack_preview::start_stack_preview_channels),
+        )
+        .route(
             "/projects/{project_id}/stack-previews/latest",
             get(stack_preview::get_latest_stack_previews),
         )
