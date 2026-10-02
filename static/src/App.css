@@ -79,9 +79,9 @@
 }
 
 /* Header */
-/* Brand, then the views (Library, the Review and Plan groups, Sky), then
-   the utilities with the jobs slot and the Live chip. One row on a wide
-   window; below 1500px the views take a row of their own. */
+/* Brand, then the views (Library, the scope group, Sky), then the
+   utilities with the jobs chip and the Live chip. One row whenever they
+   fit; otherwise the views take a row of their own (.is-stacked). */
 .app-header {
   position: relative;
   z-index: 200;
@@ -687,7 +687,31 @@
   cursor: not-allowed;
 }
 
-@media (max-width: 1500px) {
+/* The views take a row of their own only when the brand, the views and the
+   utilities do not fit on one; useHeaderFit measures and sets the class. */
+.app-header.is-stacked {
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "brand utilities"
+    "nav nav";
+  padding: 0.5rem 0.8rem;
+}
+
+.app-header.is-stacked .header-scope {
+  flex: 0 1 auto;
+}
+
+/* On one row nothing in the views shrinks: a strip that does not fit
+   overflows instead, which is what tells the header to stack. */
+@media (min-width: 761px) {
+  .app-header:not(.is-stacked) .header-nav > *,
+  .app-header:not(.is-stacked) .header-nav .header-group > * {
+    flex-shrink: 0;
+  }
+}
+
+/* Phones stack from the first paint, before anything is measured. */
+@media (max-width: 760px) {
   .app-header,
   .app-header.compact {
     grid-template-columns: auto minmax(0, 1fr);
@@ -695,10 +719,6 @@
       "brand utilities"
       "nav nav";
     padding: 0.5rem 0.8rem;
-  }
-
-  .header-scope {
-    flex: 0 1 auto;
   }
 }
 
@@ -3050,11 +3070,27 @@
   min-width: 0;
 }
 
+.grid-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
 .grid-stats {
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.toolbar-button.stats-toggle {
+  flex: 0 0 auto;
+}
+
+.toolbar-button.stats-toggle[aria-pressed="true"] {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
 }
 
 /* Compact toolbar styles */

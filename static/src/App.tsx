@@ -7,12 +7,13 @@ import RigTargetSelect from './components/header/RigTargetSelect';
 import { useCurrentPlan } from './components/header/useCurrentPlan';
 import ActivityChip from './components/header/ActivityChip';
 import LiveChip from './components/header/LiveChip';
+import { useHeaderFit } from './components/header/useHeaderFit';
 import KeyboardShortcutHelp from './components/KeyboardShortcutHelp';
 import ServerInfoPanel from './components/ServerInfoPanel';
 import SiteBanner from './components/SiteBanner';
 import UpdateNotice from './components/UpdateNotice';
 import TauriSettings from './components/TauriSettings';
-import { isOverviewPath, isPlanningPath, isSkyPath, useDbProjectTarget, useGridState, withoutPlanningParams } from './hooks/useUrlState';
+import { isOverviewPath, isPlanningPath, isSkyPath, useDbProjectTarget, withoutPlanningParams } from './hooks/useUrlState';
 import { isTauriApp, tauriConfig } from './utils/tauri';
 import {
   OPEN_SETTINGS_EVENT,
@@ -28,7 +29,6 @@ function AppContent() {
   const navigate = useNavigate();
   const location = useLocation();
   const isOnPlan = isPlanningPath(location.pathname);
-  const { showStats, setShowStats } = useGridState();
   // The review scope: a database, and usually a project, parked in the URL.
   const { dbId } = useDbProjectTarget();
   const hasReviewScope = dbId !== null;
@@ -64,6 +64,8 @@ function AppContent() {
   // Settings opens by itself at most once: the check repeats for late Tauri
   // globals, and a user who closed it should not see it come back.
   const autoOpened = useRef(false);
+  const headerRef = useRef<HTMLElement>(null);
+  const headerStacked = useHeaderFit(headerRef);
 
   // Check configuration on mount. In both Tauri and browser/CLI-server mode,
   // we pop the settings modal automatically when no databases are configured.
@@ -140,8 +142,8 @@ function AppContent() {
 
   return (
     <div className="app">
-      <header className="app-header compact">
-        <div className="header-brand">
+      <header ref={headerRef} className={`app-header compact${headerStacked ? ' is-stacked' : ''}`}>
+        <div className="header-brand" data-header-part="brand">
           <button
             type="button"
             className="brand-button"
@@ -158,7 +160,7 @@ function AppContent() {
           </button>
         </div>
 
-        <nav className="header-view-tabs header-nav" aria-label="Views">
+        <nav className="header-view-tabs header-nav" aria-label="Views" data-header-part="nav">
           <button
             type="button"
             onClick={() => navigate(toScoped('/'))}
@@ -217,25 +219,11 @@ function AppContent() {
           </button>
         </nav>
 
-        <div className="header-utilities">
+        <div className="header-utilities" data-header-part="utilities">
           {/* Background work on every database, kept to one small chip;
               hover or click opens the queue. */}
           <ActivityChip />
           <LiveChip />
-          {isOnGrid && (
-            <button
-              type="button"
-              onClick={() => setShowStats(!showStats)}
-              className="header-button utility-button"
-              aria-pressed={showStats}
-              title={showStats ? 'Hide image statistics' : 'Show image statistics'}
-            >
-              <span className="utility-icon" aria-hidden="true">▥</span>
-              <span className="utility-label">
-              {showStats ? 'Hide Stats' : 'Stats'}
-              </span>
-            </button>
-          )}
           {access.canWrite && (
             <button
               type="button"

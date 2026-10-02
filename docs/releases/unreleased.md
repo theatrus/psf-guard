@@ -204,6 +204,11 @@
 
 ## Changed
 
+- The header keeps the views on its first row whenever they fit beside the
+  brand and the utilities, and gives them a row of their own only when they
+  do not, rather than below a fixed 1500 px. The **Stats** switch moved from
+  the header to the Images grid, beside the image count it expands on.
+
 - Background work in the header is one small chip: the overall progress and
   the number of jobs. Hover, focus or click it to see the queue, with every
   catalog refresh, quality scan and stack build, running or queued, on any

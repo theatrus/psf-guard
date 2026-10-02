@@ -63,6 +63,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     groupingMode,
     imageSize,
     showStats,
+    setShowStats,
     expandedGroups,
     currentImageId: urlCurrentImageId,
     selectedImages,
@@ -969,15 +970,29 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
             </div>
             
             <div className="stats-section">
-              <div className="grid-stats">
-                {filteredImages.length} of {allImages.length} images • {imageGroups.length} groups
-                {filters.status !== 'all' && ` • ${statusFilterLabel(filters.status)}`}
-                {filters.filterName !== 'all' && ` • ${filters.filterName}`}
-                {filters.searchTerm && ` • "${filters.searchTerm}"`}
-                {' • '}
-                <span className="grid-quality-state" title={qualityStatus.title}>
-                  {qualityStatus.label}
-                </span>
+              <div className="grid-summary">
+                <div className="grid-stats">
+                  {filteredImages.length} of {allImages.length} images • {imageGroups.length} groups
+                  {filters.status !== 'all' && ` • ${statusFilterLabel(filters.status)}`}
+                  {filters.filterName !== 'all' && ` • ${filters.filterName}`}
+                  {filters.searchTerm && ` • "${filters.searchTerm}"`}
+                  {' • '}
+                  <span className="grid-quality-state" title={qualityStatus.title}>
+                    {qualityStatus.label}
+                  </span>
+                </div>
+                {/* The statistics describe these images, so their switch sits
+                    with the count it expands on. */}
+                <button
+                  type="button"
+                  className="toolbar-button compact stats-toggle"
+                  aria-pressed={showStats}
+                  aria-controls={showStats ? 'grid-stats-dashboard' : undefined}
+                  title={showStats ? 'Hide image statistics' : 'Show image statistics'}
+                  onClick={() => setShowStats(!showStats)}
+                >
+                  <span aria-hidden="true">▥</span> Stats
+                </button>
               </div>
               <div
                 className={`selection-action-bar ${selectedImages.size > 1 ? 'active' : ''}`}
@@ -1040,7 +1055,9 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
         )}
 
         {showStats && (
-          <StatsDashboard images={filteredImages} />
+          <div id="grid-stats-dashboard">
+            <StatsDashboard images={filteredImages} />
+          </div>
         )}
 
         <div className="image-groups">
