@@ -296,14 +296,17 @@ progress instead of an idle panel.
 server for the project, or for the target chosen in the header; it opens the
 same run dialog as the Library's project cards, needs the same
 database-management grant, and names the run's state while one is queued,
-running or finished. A WBPP run started from PSF Guard ends by taking its
-master lights in as stacks. **WBPP stacks**, below PSF Guard's own in **Stacks**, shows each one
+running or finished. With a target chosen it shows only that target's run.
+For a project with several targets it asks for a target first: WBPP stacks
+a project's targets together, so their masters could not come back as stacks.
+A WBPP run started from PSF Guard ends by taking its master lights in as
+stacks before PixInsight takes the next run, and the page shows them as soon
+as they are in. **WBPP stacks**, below PSF Guard's own in **Stacks**, shows each one
 with a preview and its FITS, and the **Combine channel stacks** section offers
 it as a channel source marked *WBPP*: choose, for example, L, R, G and B from
 WBPP and PSF Guard composes the color preview, with the same background,
-stretch and processing as for its own stacks. **Take in the last run** appears
-once the project's last run has finished, and does the same for a run that
-finished before PSF Guard took runs in or whose import failed. It reads only that run's folder, and it needs database
+stretch and processing as for its own stacks. When that fails the section
+says why, and **Take in the last run** appears to try again. It reads only that run's folder, and it needs database
 management, like starting a run.
 
 - One master per filter and exposure is taken: without drizzle first, since
@@ -992,10 +995,12 @@ every saved or imported setup against the same types the build endpoints
 parse, so a setup that saves is a setup a build can use.
 
 The whole **Stacks** panel collapses from its title, like the detail sections
-inside it, and stays collapsed across reloads. **Size**, at the top of the
-view, sets how wide the stack and color cards are, from 300 to 1600&nbsp;px (550
-by default, two to a row on a laptop). As many fit to a row as the window allows, the rows sit centred, a
-card never grows past the window, and the size stays in the address. A
+inside it, and stays collapsed across reloads. **Card size**, at the top of
+the view, sets how wide the stack and color cards are, from 300 to
+1600&nbsp;px (550 by default, two to a row on a laptop). As many fit to a row
+as the window allows, the rows sit centred, a card never grows past the
+window, and the size stays in the address. Below 980&nbsp;px wide the cards
+take one full-width column whatever the size. A
 collapsed panel
 shows how many remembered channels it is holding, or that a build is running;
 the header's background jobs chip keeps reporting progress either way.

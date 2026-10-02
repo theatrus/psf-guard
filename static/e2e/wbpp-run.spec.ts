@@ -292,13 +292,14 @@ test('the Stacks view runs WBPP for its project and offers its masters after', a
   await dialog.locator('.dialog-footer').getByRole('button', { name: 'Close' }).click();
   await expect(page.getByRole('button', { name: 'Stacking in WBPP…' })).toBeVisible();
 
-  // The run ends; the button says so and the take-in action appears. The
-  // stand-in's "master" is a script, so taking it in lists it as skipped.
+  // The run ends and its masters are taken in before the next run may
+  // start. The stand-in's "master" is a script, so the section says it could
+  // not be read; only a failed take-in offers Take in the last run.
   await expect(page.getByRole('button', { name: 'WBPP masters ready' })).toBeVisible({ timeout: 60_000 });
-  const takeIn = page.getByRole('button', { name: 'Take in the last run' });
-  await expect(takeIn).toBeVisible();
-  await takeIn.click();
-  await expect(page.locator('.wbpp-stacks')).toContainText('Skipped: masterLight_BIN-1_FILTER-B.xisf');
+  await expect(page.locator('.wbpp-stacks')).toContainText('could not be read as a stack', {
+    timeout: 30_000,
+  });
+  await expect(page.getByRole('button', { name: 'Take in the last run' })).toHaveCount(0);
 });
 
 test('the Stacks view sizes its cards and keeps the size in the address', async ({ page }) => {

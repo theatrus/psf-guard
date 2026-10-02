@@ -83,14 +83,17 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
   const progress = run.progress;
   const elapsed = useElapsed(progress);
   // Whether the database's run is the one this dialog was opened for.
+  // A dialog opened for one target of a project is about that target's run.
+  const sameTarget = (targetId: number | null | undefined) =>
+    request.scope.target_id == null || targetId === request.scope.target_id;
   const ownRun =
     isRunOfInterest(progress) &&
     (request.scope.project_id != null
-      ? progress.project_id === request.scope.project_id
+      ? progress.project_id === request.scope.project_id && sameTarget(progress.target_id)
       : progress.project_id == null && progress.scope === request.label);
   const queuedEntry = run.queued.find((entry) =>
     request.scope.project_id != null
-      ? entry.project_id === request.scope.project_id
+      ? entry.project_id === request.scope.project_id && sameTarget(entry.target_id)
       : request.scope.target_id != null
         ? entry.target_id === request.scope.target_id
         : false

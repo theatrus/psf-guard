@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
-import type { LatestStackPreviewGroup } from '../../api/types';
+import type { LatestStackPreviewGroup, WbppStacksTakenIn } from '../../api/types';
 
 function wbppStacksQueryKey(dbId: string, projectId: number) {
   return ['db', dbId, 'wbpp-stacks', projectId] as const;
@@ -20,9 +20,8 @@ function treatment(entry: LatestStackPreviewGroup): string {
 
 /**
  * The stacks WBPP made for this project. A run started from **Stack in WBPP**
- * is taken in when it ends; **Take in the last run** appears only while this
- * project's last run has finished, for one that ended before PSF Guard took
- * runs in or whose import failed. PSF Guard composes their color in the color
+ * is taken in when it ends; **Take in the last run** appears only when that
+ * failed, with the reason, to try again. PSF Guard composes their color in the color
  * section above, where each appears as a channel marked WBPP.
  */
 export default function WbppStacks({
@@ -30,15 +29,15 @@ export default function WbppStacks({
   projectId,
   targetId,
   canImport,
-  lastRunFinished = false,
+  lastRun = null,
 }: {
   dbId: string;
   projectId: number;
   targetId?: number | null;
   /** Taking a run in writes files, so it needs database management. */
   canImport: boolean;
-  /** This project's last WBPP run finished with masters to take in. */
-  lastRunFinished?: boolean;
+  /** How this project's finished WBPP run came in as stacks, if it did. */
+  lastRun?: WbppStacksTakenIn | null;
 }) {
   const queryClient = useQueryClient();
   const stacks = useQuery({
@@ -68,7 +67,7 @@ export default function WbppStacks({
             channel marked WBPP.
           </p>
         </div>
-        {canImport && lastRunFinished && (
+        {canImport && lastRun?.state === 'error' && (
           <button
             type="button"
             className="toolbar-button"
@@ -79,6 +78,20 @@ export default function WbppStacks({
           </button>
         )}
       </header>
+      {lastRun?.state === 'importing' && (
+        <p className="muted" role="status">Taking in the last run’s masters…</p>
+      )}
+      {lastRun?.state === 'done' && lastRun.imported === 0 && lastRun.skipped > 0 && (
+        <p className="muted" role="status">
+          The last run’s {lastRun.skipped === 1 ? 'master' : `${lastRun.skipped} masters`} could not be
+          read as {lastRun.skipped === 1 ? 'a stack' : 'stacks'}.
+        </p>
+      )}
+      {lastRun?.state === 'error' && !importRun.data && (
+        <p className="muted" role="status">
+          The last run’s masters were not taken in: {lastRun.error}
+        </p>
+      )}
       {importRun.isError && (
         <p className="error-text" role="alert">{(importRun.error as Error).message}</p>
       )}

@@ -140,16 +140,25 @@ export function isProjectsRun(progress: WbppRunProgress | undefined, projectId: 
   return isRunOfInterest(progress) && progress.project_id === projectId;
 }
 
-/** The short state a project card shows: its own run, or its place in line. */
+/**
+ * The short state a project card shows: its own run, or its place in line.
+ * With a target, only that target's run counts, not another target's in
+ * the same project.
+ */
 export function describeWbppRunForProject(
   status: WbppRunStatus | undefined,
-  projectId: number
+  projectId: number,
+  targetId?: number | null
 ): { label: string; tone: 'running' | 'done' | 'error' | 'queued' } | null {
   if (!status) return null;
-  const queued = (status.queued ?? []).find((entry) => entry.project_id === projectId);
+  const sameTarget = (entryTarget: number | null | undefined) =>
+    targetId == null || entryTarget === targetId;
+  const queued = (status.queued ?? []).find(
+    (entry) => entry.project_id === projectId && sameTarget(entry.target_id)
+  );
   if (queued) return { label: 'Queued for WBPP', tone: 'queued' };
   const progress = status.progress;
-  if (!isProjectsRun(progress, projectId)) return null;
+  if (!isProjectsRun(progress, projectId) || !sameTarget(progress.target_id)) return null;
   if (progress.running) return { label: 'Stacking in WBPP…', tone: 'running' };
   switch (progress.stage) {
     case 'complete':

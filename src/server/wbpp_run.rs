@@ -98,6 +98,22 @@ pub struct WbppRunProgress {
     /// The masters' save below the database's process directory: what was
     /// asked for at the start, and how it went.
     pub publish: Option<PublishOutcome>,
+    /// Taking the masters in as stacks for the Stacks view, once a project's
+    /// run completes. The run holds PixInsight's slot until this settles,
+    /// so a page that saw `importing` can refresh its stacks on `done`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stacks: Option<StacksTakenIn>,
+}
+
+/// What became of a run's masters as stacks.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct StacksTakenIn {
+    /// `importing`, `done`, or `error`.
+    pub state: String,
+    pub imported: usize,
+    pub skipped: usize,
+    /// Why nothing was taken in, such as a run across several targets.
+    pub error: Option<String>,
 }
 
 /// What happened to a run's masters when saved to the process directory.
@@ -926,43 +942,67 @@ async fn launch(
                 finish(&job_store, "error", Some(format!("{error:#}")));
             }
         }
+        // The masters become stacks in the Stacks view, where PSF Guard
+        // composes their color preview. The run already reads as finished;
+        // the slot stays held until the stacks settle, so the next run in
+        // line cannot replace this progress before the page sees them.
+        if let (true, Some(project_id)) = (complete, project_id) {
+            update(&job_store, |progress| {
+                progress.stacks = Some(StacksTakenIn {
+                    state: "importing".into(),
+                    ..Default::default()
+                });
+            });
+            let import_ctx = job_ctx.clone();
+            let taken = tokio::task::spawn_blocking(move || {
+                let target = {
+                    let conn = import_ctx.db();
+                    let conn = conn.lock().map_err(|error| error.to_string())?;
+                    crate::server::stack_preview::wbpp_stacks::run_target(
+                        &conn, project_id, target_id,
+                    )?
+                };
+                crate::server::stack_preview::wbpp_stacks::import_masters(
+                    &import_ctx,
+                    project_id,
+                    target,
+                    &import_output,
+                )
+            })
+            .await
+            .unwrap_or_else(|error| Err(error.to_string()));
+            let stacks = match taken {
+                Ok(outcome) => {
+                    tracing::info!(
+                        "🔭 WBPP masters taken in as stacks for db={} project={project_id}: {} new, {} skipped",
+                        job_ctx.id,
+                        outcome.imported.len(),
+                        outcome.skipped.len()
+                    );
+                    StacksTakenIn {
+                        state: "done".into(),
+                        imported: outcome.imported.len(),
+                        skipped: outcome.skipped.len(),
+                        error: None,
+                    }
+                }
+                Err(reason) => {
+                    tracing::info!(
+                        "🔭 WBPP masters for db={} project={project_id} not taken in as stacks: {reason}",
+                        job_ctx.id
+                    );
+                    StacksTakenIn {
+                        state: "error".into(),
+                        error: Some(reason),
+                        ..Default::default()
+                    }
+                }
+            };
+            update(&job_store, |progress| progress.stacks = Some(stacks));
+        }
         // PixInsight is free: letting go of the slot hands it to the next
         // run in line.
         drop(claim);
-        // The masters become stacks in the Stacks view, where PSF Guard
-        // composes their color preview. The run is already finished and the
-        // slot free, so decoding masters holds up neither.
-        if let (true, Some(project_id)) = (complete, project_id) {
-            let import_ctx = job_ctx.clone();
-            let _ = tokio::task::spawn_blocking(move || {
-                let target = {
-                    let conn = import_ctx.db();
-                    let Ok(conn) = conn.lock() else { return };
-                    crate::server::stack_preview::wbpp_stacks::run_target(&conn, project_id, target_id)
-                };
-                let result = target.and_then(|target| {
-                    crate::server::stack_preview::wbpp_stacks::import_masters(
-                        &import_ctx,
-                        project_id,
-                        target,
-                        &import_output,
-                    )
-                });
-                match result {
-                    Ok(outcome) => tracing::info!(
-                        "🔭 WBPP masters taken in as stacks for db={} project={project_id}: {} new, {} skipped",
-                        import_ctx.id,
-                        outcome.imported.len(),
-                        outcome.skipped.len()
-                    ),
-                    Err(reason) => tracing::info!(
-                        "🔭 WBPP masters for db={} project={project_id} not taken in as stacks: {reason}",
-                        import_ctx.id
-                    ),
-                }
-            })
-            .await;
-        }
     });
 
     Ok(true)

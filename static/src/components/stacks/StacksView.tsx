@@ -1,6 +1,6 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import { useDbProjectTarget, useUrlParams } from '../../hooks/useUrlState';
 import { useAccess } from '../../auth/access';
@@ -37,10 +37,12 @@ export default function StacksView() {
   const handed = (location.state as StackSelectionState | null)?.stackImageIds;
   // How wide the cards are; in the URL so a reload keeps the layout.
   const { getNumberParam, updateParams } = useUrlParams();
+  const requestedSize = getNumberParam('cardsize');
   const cardSize = Math.min(
     CARD_SIZE_MAX,
-    Math.max(CARD_SIZE_MIN, getNumberParam('cardsize') ?? DEFAULT_STACK_CARD_SIZE)
+    Math.max(CARD_SIZE_MIN, Number.isFinite(requestedSize) ? requestedSize! : DEFAULT_STACK_CARD_SIZE)
   );
+  const queryClient = useQueryClient();
   const [wbppOpen, setWbppOpen] = useState(false);
   const access = useAccess();
   const { data: serverInfo } = useQuery({
@@ -82,7 +84,26 @@ export default function StacksView() {
     staleTime: 5 * 60 * 1000,
     enabled: canManage,
   });
-  const wbppState = projectId != null ? describeWbppRunForProject(wbppStatus, projectId) : null;
+  const wbppState =
+    projectId != null ? describeWbppRunForProject(wbppStatus, projectId, targetId) : null;
+  // How the finished run's masters came in as stacks. When the import
+  // settles, the stacks and the color channels it added are refetched.
+  const runStacks = wbppState?.tone === 'done' ? wbppStatus?.progress.stacks ?? null : null;
+  const settled = runStacks && runStacks.state !== 'importing'
+    ? `${wbppStatus?.progress.started_at}:${runStacks.state}`
+    : null;
+  const lastSettled = useRef<string | null>(null);
+  useEffect(() => {
+    if (settled && lastSettled.current !== null && settled !== lastSettled.current && dbId) {
+      queryClient.invalidateQueries({ queryKey: ['db', dbId] });
+    }
+    if (settled) lastSettled.current = settled;
+    else if (lastSettled.current === null) lastSettled.current = '';
+  }, [settled, dbId, queryClient]);
+  // WBPP integrates a project's targets together, so a project-wide run
+  // over several targets cannot come back as stacks.
+  const severalTargets =
+    targetId == null && new Set(images.map((image) => image.target_id)).size > 1;
   const scopeLabel =
     (targetId != null ? images.find((image) => image.target_id === targetId)?.target_name : null) ??
     images[0]?.project_name ??
@@ -104,6 +125,7 @@ export default function StacksView() {
       <div className="stacks-toolbar">
         <ThumbnailSizeControl
           id="stacks-card-size"
+          label="Card size"
           value={cardSize}
           min={CARD_SIZE_MIN}
           max={CARD_SIZE_MAX}
@@ -142,10 +164,13 @@ export default function StacksView() {
             <button
               type="button"
               className={`stack-preview-wbpp${wbppState ? ` wbpp-state-${wbppState.tone}` : ''}`}
+              disabled={!wbppState && severalTargets}
               title={
                 wbppState
                   ? "Open this project's WBPP run"
-                  : "Stack in PixInsight's WBPP on the server; its master lights come back here as stacks"
+                  : severalTargets
+                    ? 'Choose a target in the header first: WBPP stacks a project’s targets together, so their masters could not come back here as stacks'
+                    : "Stack in PixInsight's WBPP on the server; its master lights come back here as stacks"
               }
               onClick={() => setWbppOpen(true)}
             >
@@ -159,7 +184,7 @@ export default function StacksView() {
         projectId={projectId}
         targetId={targetId}
         canImport={canManage}
-        lastRunFinished={wbppState?.tone === 'done'}
+        lastRun={runStacks}
       />
       {wbppOpen && (
         <WbppRunDialog

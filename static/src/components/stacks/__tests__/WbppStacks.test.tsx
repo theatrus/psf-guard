@@ -6,6 +6,7 @@ import type { ReactNode } from 'react';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../../test/msw-server';
 import WbppStacks from '../WbppStacks';
+import type { WbppStacksTakenIn } from '../../../api/types';
 
 function ok(data: unknown) {
   return HttpResponse.json({ success: true, data, error: null, status: 'ready' });
@@ -33,7 +34,13 @@ function entry(targetId: number, target: string, filter: string, drizzle = false
   };
 }
 
-function renderSection(targetId: number | null = null, canImport = true, lastRunFinished = true) {
+const failed = { state: 'error' as const, imported: 0, skipped: 0, error: 'the run wrote no master lights' };
+
+function renderSection(
+  targetId: number | null = null,
+  canImport = true,
+  lastRun: WbppStacksTakenIn | null = failed
+) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
@@ -43,7 +50,7 @@ function renderSection(targetId: number | null = null, canImport = true, lastRun
       projectId={1}
       targetId={targetId}
       canImport={canImport}
-      lastRunFinished={lastRunFinished}
+      lastRun={lastRun}
     />, { wrapper: Wrapper });
 }
 
@@ -66,13 +73,13 @@ describe('WbppStacks', () => {
     expect(screen.getAllByRole('link', { name: 'FITS' })).toHaveLength(2);
   });
 
-  it('offers no import until this project has a finished run', async () => {
+  it('offers no import unless the last run failed to come in', async () => {
     server.use(
       http.get('/api/db/:dbId/projects/:projectId/stack-previews/wbpp', () =>
         ok({ schema_version: 1, database_id: 'test', project_id: 1, updated_unix_seconds: 1, groups: [] })
       )
     );
-    renderSection(null, true, false);
+    renderSection(null, true, null);
     expect(await screen.findByText(/Choose Stack in WBPP above/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Take in the last run' })).toBeNull();
   });
@@ -102,6 +109,7 @@ describe('WbppStacks', () => {
     );
     renderSection();
     expect(await screen.findByText(/No WBPP stacks yet/)).toBeInTheDocument();
+    expect(screen.getByText(/not taken in: the run wrote no master lights/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Take in the last run' }));
     expect(await screen.findByText('Took in 1 master.')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText('NGC 7331 · L')).toBeInTheDocument());

@@ -242,9 +242,10 @@
 ## Changed
 
 - **Stacks** can run WBPP: **Stack in WBPP** sits beside **Build stacks** and
-  shows the run's state, and **Take in the last run** appears only once this
-  project has a finished run. A **Size** control sets how wide the stack and
-  color cards are, in place of the Images thumbnail size they used to follow.
+  shows the run's state; the run's masters show as stacks as soon as it ends,
+  and **Take in the last run** appears only when that failed. A **Card size**
+  control sets how wide the stack and color cards are, in place of the Images
+  thumbnail size they used to follow.
   The page says *stacks* rather than *stack previews*.
 
 - Building calibration masters shows its progress. The stack card and the
