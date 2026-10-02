@@ -64,13 +64,51 @@ fn write_cached(cache_root: &Path, source_fingerprint: &str, score: Option<Score
 }
 
 /// Score one frame, read through PSF Guard's frame reader so an XISF frame
-/// declaring a 0..1 range sits on the same scale as the rest.
-fn score_frame(path: &Path) -> Option<Score> {
-    let frame = crate::image_io::open_linear_frame(path).ok()?;
-    seiza_stacking::reference_score(&frame).map(|score| Score {
-        score: score.score,
-        background_variation: score.background_variation,
-    })
+/// declaring a 0..1 range sits on the same scale as the rest. `Err` when
+/// the frame could not be read or scoring failed outright, which may pass;
+/// `Ok(None)` when Seiza read it and found nothing to score, which will not.
+fn score_frame(path: &Path) -> Result<Option<Score>, ()> {
+    let frame = crate::image_io::open_linear_frame(path).map_err(|error| {
+        tracing::debug!(
+            "Reference scoring could not read {}: {error}",
+            path.display()
+        );
+    })?;
+    // One frame Seiza cannot handle must not take the whole job with it.
+    std::panic::catch_unwind(|| seiza_stacking::reference_score(&frame))
+        .map_err(|_| {
+            tracing::warn!("Reference scoring panicked on {}", path.display());
+        })
+        .map(|score| {
+            score.map(|score| Score {
+                score: score.score,
+                background_variation: score.background_variation,
+            })
+        })
+}
+
+/// Remove cached scores another Seiza version wrote; nothing reads them.
+pub(super) fn prune(cache_root: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(cache_root.join("stack-previews").join("reference-scores"))
+    else {
+        return 0;
+    };
+    let mut removed = 0;
+    for path in entries.flatten().map(|entry| entry.path()) {
+        let current = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<CachedScore>(&bytes).ok())
+            .is_some_and(|cached| cached.stacking_version == SEIZA_STACKING_VERSION);
+        if !current
+            && path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            && std::fs::remove_file(&path).is_ok()
+        {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// The index of the chosen frame, or `None` when no frame scored.
@@ -146,9 +184,13 @@ pub(super) fn scores(
                 .map(|&index| score_frame(&frames[index].path))
                 .collect::<Vec<_>>()
         });
-        for (&index, score) in chunk.iter().zip(measured) {
-            write_cached(cache_root, &frames[index].source_fingerprint, score);
-            scores[index] = Some(score);
+        for (&index, measured) in chunk.iter().zip(measured) {
+            // Only Seiza's own answer is kept; a failed read is retried next
+            // time.
+            if let Ok(score) = measured {
+                write_cached(cache_root, &frames[index].source_fingerprint, score);
+            }
+            scores[index] = Some(measured.ok().flatten());
         }
         done += chunk.len();
         progress(done, frames.len());
@@ -229,5 +271,38 @@ mod tests {
         )
         .unwrap();
         assert_eq!(read_cached(cache.path(), "a"), None);
+    }
+
+    #[test]
+    fn an_unreadable_frame_is_not_remembered_and_old_versions_are_pruned() {
+        let cache = tempfile::tempdir().unwrap();
+        let missing = frame(9, 0, 0.5);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        let scores = scores(
+            std::slice::from_ref(&missing),
+            cache.path(),
+            &pool,
+            &AtomicBool::new(false),
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(scores, vec![None]);
+        assert_eq!(read_cached(cache.path(), &missing.source_fingerprint), None);
+
+        write_cached(cache.path(), "kept", score(1.0, 1.0));
+        let stale = CachedScore {
+            stacking_version: "0.0.0".into(),
+            score: None,
+        };
+        std::fs::write(
+            cache_path(cache.path(), "old"),
+            serde_json::to_vec(&stale).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(prune(cache.path()), 1);
+        assert_eq!(read_cached(cache.path(), "kept"), Some(score(1.0, 1.0)));
     }
 }

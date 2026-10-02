@@ -416,10 +416,11 @@ pub struct StackPreviewJob {
     /// written before this field existed used the calibrated defaults.
     #[serde(default)]
     pub scoring: StackScoringSettings,
-    /// How every group integrated its frames. Manifests written before this
-    /// field existed used the classic method.
-    #[serde(default = "StackMethod::classic")]
-    pub method: StackMethod,
+    /// How every group integrated its frames. `None` only on a manifest
+    /// written before the method could be chosen, with Seiza 0.18: such a
+    /// stack is out of date whatever the method now is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<StackMethod>,
     pub groups: Vec<StackGroupStatus>,
     pub error: Option<String>,
     /// Built by the automatic refresh rather than asked for. Such a build
@@ -495,10 +496,10 @@ pub struct LatestStackPreviewGroup {
     /// defaults, represented by the type's default value.
     #[serde(default)]
     pub scoring: StackScoringSettings,
-    /// How this artifact integrated its frames. Old indices used the
-    /// classic method.
-    #[serde(default = "StackMethod::classic")]
-    pub method: StackMethod,
+    /// How this artifact integrated its frames. `None` only on an index
+    /// written before the method could be chosen, with Seiza 0.18.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<StackMethod>,
     pub group: StackGroupStatus,
 }
 
@@ -1893,7 +1894,7 @@ fn prepare_job(
             stacking_version: SEIZA_STACKING_VERSION.into(),
             order: request.order,
             scoring,
-            method,
+            method: Some(method),
             groups: public_groups,
             error: None,
         },
@@ -2261,7 +2262,8 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
     let database_id = prepared.public.database_id.clone();
     let accepted_only = prepared.public.accepted_only;
     let scoring = prepared.public.scoring;
-    let method = prepared.public.method;
+    // Every job this process prepares records its method.
+    let method = prepared.public.method.unwrap_or_default();
     let PreparedJob {
         public: _,
         mut groups,
@@ -4504,7 +4506,7 @@ mod tests {
 
         assert_eq!(restored.order, snr::StackFrameOrder::Capture);
         assert_eq!(restored.scoring, StackScoringSettings::default());
-        assert_eq!(restored.method, StackMethod::classic());
+        assert_eq!(restored.method, None);
     }
 
     #[test]
@@ -4516,7 +4518,7 @@ mod tests {
         let restored: StackPreviewJob = serde_json::from_value(serialized).unwrap();
 
         assert_eq!(restored.scoring, StackScoringSettings::default());
-        assert_eq!(restored.method, StackMethod::classic());
+        assert_eq!(restored.method, None);
     }
 
     #[test]
@@ -4548,13 +4550,19 @@ mod tests {
         let equal = job(serde_json::json!({"method": {"weighting": "equal"}}));
         // Without a method the request takes the server's, which defaults to
         // Seiza's recommended one.
-        assert_eq!(omitted.public.method, StackMethod::default());
+        assert_eq!(omitted.public.method, Some(StackMethod::default()));
         assert_eq!(omitted.public.job_id, recommended.public.job_id);
         // Even the final pass alone makes another artifact.
         assert_ne!(draft.public.job_id, recommended.public.job_id);
-        assert_eq!(draft.public.method.final_pass, StackFinalPass::Draft);
+        assert_eq!(
+            draft.public.method.unwrap().final_pass,
+            StackFinalPass::Draft
+        );
         assert_ne!(equal.public.job_id, recommended.public.job_id);
-        assert_eq!(equal.public.method.weighting, StackWeighting::Equal);
+        assert_eq!(
+            equal.public.method.unwrap().weighting,
+            StackWeighting::Equal
+        );
     }
 
     #[test]

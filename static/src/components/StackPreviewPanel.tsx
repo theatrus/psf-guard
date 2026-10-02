@@ -129,6 +129,15 @@ function readCalibrationMode(): CalibrationMode {
   }
 }
 
+/**
+ * Whether a build weighed its frames: any admitted frame carries a weight.
+ * Read from the frames rather than the method, so a weighted stack from
+ * before the method existed still shows them.
+ */
+function hasFrameWeights(artifact: StackArtifact): boolean {
+  return artifact.group.frames.some((frame) => (frame.integration_weight?.length ?? 0) > 0);
+}
+
 /** A frame's weight in the stack mean, one value per channel. */
 function frameWeightSummary(frame: StackFrameDecision): string {
   const weights = frame.integration_weight;
@@ -266,8 +275,12 @@ function staleReason(
   if (!sameScoring(scoringPreferencesOf(builtScoring), scoringPreferencesOf(scoring))) {
     return 'Out of date — scoring settings changed';
   }
+  // A stack that records no method predates the choice and Seiza 0.19.
+  if (!builtMethod) {
+    return 'Out of date — built before the stacking method could be chosen';
+  }
   // Until the server's method has loaded there is nothing to compare.
-  if (builtMethod && currentMethod && !sameMethod(builtMethod, currentMethod)) {
+  if (currentMethod && !sameMethod(builtMethod, currentMethod)) {
     return 'Out of date — stacking method changed';
   }
   return null;
@@ -1316,7 +1329,7 @@ export default function StackPreviewPanel({
                                   <th>Quality</th>
                                   <th>Decision</th>
                                   <th>Registration</th>
-                                  {artifact.method?.weighting === 'noise' && (
+                                  {hasFrameWeights(artifact) && (
                                     <th title="Weight in the stack mean, per channel. The reference weighs 1.">
                                       Weight
                                     </th>
@@ -1330,7 +1343,7 @@ export default function StackPreviewPanel({
                                     <td>{frame.quality_score?.toFixed(2) ?? '—'}</td>
                                     <td title={frame.reason ?? undefined}>{frame.disposition}</td>
                                     <td>{frame.reason || registrationSummary(frame)}</td>
-                                    {artifact.method?.weighting === 'noise' && (
+                                    {hasFrameWeights(artifact) && (
                                       <td
                                         className="stack-frame-weight"
                                         title={frame.noise_sigma?.length

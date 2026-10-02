@@ -141,13 +141,16 @@ fill the photosites Bayer drizzle left empty, so a drizzle stack publishes its
 live stack, which Seiza does fill, and its card says so.
 
 A change applies to the next build, automatic refreshes included. Cards built
-another way show **Out of date — stacking method changed**. The whole method
+another way show **Out of date — stacking method changed**, and cards built
+before the method could be chosen show **Out of date — built before the
+stacking method could be chosen**. The whole method
 enters the job id, and a resume checkpoint records it. A build whose method
 accumulates differently starts over and says `Full restack: the stacking
 method changed`.
 
 API callers may send `"method": {…}` in the build request; fields left out take
 the recommended value, and a request without it uses the server's method.
+The old `"weighting"` field is ignored.
 `GET` and `PUT /api/settings/stacking/method` read and set the server's method.
 Jobs and the latest index record `method`, and each admitted frame of a
 weighted build records `integration_weight` and `noise_sigma`, one value per

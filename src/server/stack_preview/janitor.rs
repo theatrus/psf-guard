@@ -158,12 +158,20 @@ pub(super) fn prune(cache_root: &Path, keep: &KeepSet, stacking_version: &str) {
     let removed_inputs =
         prune_directories(&stack_root.join("color-inputs"), &keep.color_input_ids, now);
     let removed_checkpoints = prune_checkpoints(&stack_root.join("resume"), stacking_version, now);
-    if removed_mono + removed_color + removed_inputs + removed_checkpoints > 0 {
+    let removed_reference_scores = super::reference::prune(cache_root);
+    if removed_mono
+        + removed_color
+        + removed_inputs
+        + removed_checkpoints
+        + removed_reference_scores
+        > 0
+    {
         tracing::info!(
             removed_mono,
             removed_color,
             removed_inputs,
             removed_checkpoints,
+            removed_reference_scores,
             "Pruned superseded stack cache entries"
         );
     }

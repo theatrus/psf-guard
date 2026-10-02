@@ -72,7 +72,7 @@ function decision(
   };
 }
 
-function mockLatest(built: StackMethod, frames: StackFrameDecision[] = [], current: StackMethod = recommended) {
+function mockLatest(built: StackMethod | undefined, frames: StackFrameDecision[] = [], current: StackMethod = recommended) {
   let submitted: Record<string, unknown> | undefined;
   server.use(
     http.get('/api/settings/stacking/method', () => ok({ method: current, recommended, classic })),
@@ -89,7 +89,7 @@ function mockLatest(built: StackMethod, frames: StackFrameDecision[] = [], curre
         created_unix_seconds: 90,
         cache_version: 13,
         order: 'capture',
-        method: built,
+        ...(built ? { method: built } : {}),
         group: {
           index: 0,
           target_id: 42,
@@ -230,5 +230,19 @@ describe('StackPreviewPanel stacking method', () => {
     );
     const table = view.container.querySelector('.stack-frame-table-wrap table') as HTMLElement;
     expect(within(table).queryByRole('columnheader', { name: 'Weight' })).toBeNull();
+  });
+
+  it('marks a stack from before the method out of date, keeping its frame weights', async () => {
+    mockLatest(undefined, [
+      decision(1, 'reference', [1], [2.0]),
+      decision(2, 'accepted', [0.5], [3.0]),
+    ]);
+    const view = renderPanel();
+    await waitFor(() =>
+      expect(view.container.querySelector('.stack-preview-outdated'))
+        .toHaveTextContent('Out of date — built before the stacking method could be chosen')
+    );
+    const table = view.container.querySelector('.stack-frame-table-wrap table') as HTMLElement;
+    expect(within(table).getByRole('columnheader', { name: 'Weight' })).toBeInTheDocument();
   });
 });
