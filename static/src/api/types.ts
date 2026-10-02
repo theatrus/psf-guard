@@ -1541,6 +1541,14 @@ export interface WbppOutputFile {
   kind: 'master' | 'calibrated' | 'registered' | 'log' | 'other';
 }
 
+/** What became of a WBPP run's masters as stacks for the Stacks view. */
+export interface WbppStacksTakenIn {
+  state: 'importing' | 'done' | 'error';
+  imported: number;
+  skipped: number;
+  error: string | null;
+}
+
 export interface WbppRunProgress {
   running: boolean;
   /** `planning`, `launching`, `running`, `complete`, `error`, `cancelled`, or empty. */
@@ -1572,6 +1580,10 @@ export interface WbppRunProgress {
   project_id: number | null;
   /** The masters' save below the process directory, when asked for. */
   publish: WbppPublishOutcome | null;
+  /** The target the run was for, when it was for one. */
+  target_id?: number | null;
+  /** Taking the masters in as stacks, once a project's run completes. */
+  stacks?: WbppStacksTakenIn;
 }
 
 export interface WbppPublishOutcome {

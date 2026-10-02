@@ -409,7 +409,7 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   await expect(progress).toContainText('3/3 frames');
   await expect(panel).toContainText('Alpha M44');
   await expect(panel.locator('.stack-preview-channel')).toHaveText('B');
-  await expect(panel).toContainText('Stack preview');
+  await expect(panel.getByRole('heading', { name: /Stacks/ })).toBeVisible();
   // Builds keep the reference frame's rotation, so no sky-orientation marker.
   await expect(panel.locator('.stack-preview-orientation')).toHaveCount(0);
 
@@ -1226,23 +1226,24 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await expect(stackPanel).not.toHaveAttribute('data-collapsed', 'true');
   await expect(stackPanel.locator('.stack-color-card').first()).toBeVisible();
 
-  // At a large grid zoom the result cards follow: one full-width column for
-  // both the mono and the color grids. Zooming back returns the two-column
-  // layout — the cards never get narrower than it.
-  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2&size=700`);
-  await expect(stackPanel).toBeVisible({ timeout: 15_000 });
-  await expect(stackPanel).toHaveAttribute('data-wide', 'true');
-  const wideColumns = await stackPanel.locator('.stack-color-grid').first().evaluate(
-    (grid) => getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length
-  );
-  expect(wideColumns).toBe(1);
-  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2&size=300`);
-  await expect(stackPanel).toBeVisible({ timeout: 15_000 });
-  await expect(stackPanel).not.toHaveAttribute('data-wide', 'true');
-  const normalColumns = await stackPanel.locator('.stack-color-grid').first().evaluate(
-    (grid) => getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length
-  );
-  expect(normalColumns).toBe(2);
+  // Size sets how wide the stack and color cards are; a size wider than the
+  // page fills it and goes no further.
+  const cardWidth = async (size: number) => {
+    await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2&cardsize=${size}`);
+    await expect(stackPanel).toBeVisible({ timeout: 15_000 });
+    const card = stackPanel.locator('.stack-color-card').first();
+    await expect(card).toBeVisible();
+    const grid = stackPanel.locator('.stack-color-grid').first();
+    return {
+      card: (await card.boundingBox())!.width,
+      grid: await grid.evaluate((element) => element.clientWidth),
+    };
+  };
+  const narrow = await cardWidth(400);
+  expect(Math.abs(narrow.card - 400)).toBeLessThan(2);
+  const wide = await cardWidth(1600);
+  expect(wide.card).toBeLessThanOrEqual(wide.grid + 1);
+  expect(wide.card).toBeGreaterThan(narrow.card);
 
   if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
     const docs = path.resolve(process.cwd(), '..', 'docs');

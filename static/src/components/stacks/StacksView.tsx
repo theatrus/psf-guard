@@ -1,12 +1,16 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
-import { useDbProjectTarget, useGridState } from '../../hooks/useUrlState';
+import { useDbProjectTarget, useUrlParams } from '../../hooks/useUrlState';
 import { useAccess } from '../../auth/access';
 import ProjectExposureGrouping from '../ProjectExposureGrouping';
 import { imageDetailPath } from '../../utils/imageDetailRoutes';
-import StackPreviewPanel from '../StackPreviewPanel';
+import StackPreviewPanel, { DEFAULT_STACK_CARD_SIZE } from '../StackPreviewPanel';
+import ThumbnailSizeControl from '../ThumbnailSizeControl';
+import WbppRunDialog from '../WbppRunDialog';
+import { describeWbppRunForProject, useWbppRun } from '../../hooks/useWbppRun';
+import { DEFAULT_WBPP_OPTIONS } from '../../api/types';
 import WbppStacks from './WbppStacks';
 import './stacks.css';
 
@@ -14,6 +18,10 @@ import './stacks.css';
 export interface StackSelectionState {
   stackImageIds?: number[];
 }
+
+const CARD_SIZE_MIN = 300;
+const CARD_SIZE_MAX = 1600;
+const CARD_SIZE_STEP = 50;
 
 /**
  * Stacks: PSF Guard's stack previews and their color, and the stacks WBPP
@@ -27,8 +35,15 @@ export default function StacksView() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const handed = (location.state as StackSelectionState | null)?.stackImageIds;
-  // The grid's zoom widens the stack cards here too, as it did in Images.
-  const { imageSize } = useGridState();
+  // How wide the cards are; in the URL so a reload keeps the layout.
+  const { getNumberParam, updateParams } = useUrlParams();
+  const requestedSize = getNumberParam('cardsize');
+  const cardSize = Math.min(
+    CARD_SIZE_MAX,
+    Math.max(CARD_SIZE_MIN, Number.isFinite(requestedSize) ? requestedSize! : DEFAULT_STACK_CARD_SIZE)
+  );
+  const queryClient = useQueryClient();
+  const [wbppOpen, setWbppOpen] = useState(false);
   const access = useAccess();
   const { data: serverInfo } = useQuery({
     queryKey: ['serverInfo'],
@@ -60,6 +75,39 @@ export default function StacksView() {
   );
 
   const canManage = access.canWrite && !!serverInfo?.allow_database_management;
+  // WBPP runs write files, so they sit behind database management, as in
+  // the Library.
+  const { status: wbppStatus } = useWbppRun(canManage ? dbId : null);
+  const { data: exportSettings } = useQuery({
+    queryKey: ['export-settings'],
+    queryFn: apiClient.getExportSettings,
+    staleTime: 5 * 60 * 1000,
+    enabled: canManage,
+  });
+  const wbppState =
+    projectId != null ? describeWbppRunForProject(wbppStatus, projectId, targetId) : null;
+  // How the finished run's masters came in as stacks. When the import
+  // settles, the stacks and the color channels it added are refetched.
+  const runStacks = wbppState?.tone === 'done' ? wbppStatus?.progress.stacks ?? null : null;
+  const settled = runStacks && runStacks.state !== 'importing'
+    ? `${wbppStatus?.progress.started_at}:${runStacks.state}`
+    : null;
+  const lastSettled = useRef<string | null>(null);
+  useEffect(() => {
+    if (settled && lastSettled.current !== null && settled !== lastSettled.current && dbId) {
+      queryClient.invalidateQueries({ queryKey: ['db', dbId] });
+    }
+    if (settled) lastSettled.current = settled;
+    else if (lastSettled.current === null) lastSettled.current = '';
+  }, [settled, dbId, queryClient]);
+  // WBPP integrates a project's targets together, so a project-wide run
+  // over several targets cannot come back as stacks.
+  const severalTargets =
+    targetId == null && new Set(images.map((image) => image.target_id)).size > 1;
+  const scopeLabel =
+    (targetId != null ? images.find((image) => image.target_id === targetId)?.target_name : null) ??
+    images[0]?.project_name ??
+    `Project ${projectId}`;
 
   if (!dbId || projectId == null) {
     return (
@@ -75,6 +123,15 @@ export default function StacksView() {
     <div className="stacks-view">
       {/* Whether exposure lengths stack apart is a choice about stacks first. */}
       <div className="stacks-toolbar">
+        <ThumbnailSizeControl
+          id="stacks-card-size"
+          label="Card size"
+          value={cardSize}
+          min={CARD_SIZE_MIN}
+          max={CARD_SIZE_MAX}
+          step={CARD_SIZE_STEP}
+          onChange={(size) => updateParams({ cardsize: size })}
+        />
         <ProjectExposureGrouping
           key={`${dbId}:${projectId}`}
           dbId={dbId}
@@ -99,11 +156,47 @@ export default function StacksView() {
         projectId={projectId}
         images={selection ?? images}
         selectionSource={selection ? 'selected' : 'scope'}
-        imageSize={imageSize}
+        cardSize={cardSize}
         onOpenImage={openImage}
         targetId={targetId}
+        actions={
+          canManage && (
+            <button
+              type="button"
+              className={`stack-preview-wbpp${wbppState ? ` wbpp-state-${wbppState.tone}` : ''}`}
+              disabled={!wbppState && severalTargets}
+              title={
+                wbppState
+                  ? "Open this project's WBPP run"
+                  : severalTargets
+                    ? 'Choose a target in the header first: WBPP stacks a project’s targets together, so their masters could not come back here as stacks'
+                    : "Stack in PixInsight's WBPP on the server; its master lights come back here as stacks"
+              }
+              onClick={() => setWbppOpen(true)}
+            >
+              {wbppState ? wbppState.label : 'Stack in WBPP'}
+            </button>
+          )
+        }
       />
-      <WbppStacks dbId={dbId} projectId={projectId} targetId={targetId} canImport={canManage} />
+      <WbppStacks
+        dbId={dbId}
+        projectId={projectId}
+        targetId={targetId}
+        canImport={canManage}
+        lastRun={runStacks}
+      />
+      {wbppOpen && (
+        <WbppRunDialog
+          request={{
+            dbId,
+            scope: targetId != null ? { project_id: projectId, target_id: targetId } : { project_id: projectId },
+            label: scopeLabel,
+          }}
+          defaultOptions={exportSettings?.wbpp ?? DEFAULT_WBPP_OPTIONS}
+          onClose={() => setWbppOpen(false)}
+        />
+      )}
     </div>
   );
 }

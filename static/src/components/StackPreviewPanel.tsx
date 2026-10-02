@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { formatIntegration, totalIntegration } from '../utils/integrationTime';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
@@ -48,22 +48,19 @@ interface StackPreviewPanelProps {
   /** `scope`: every frame in the project or target, as the Stacks view
    *  passes them. */
   selectionSource: 'selected' | 'visible' | 'scope';
-  /** The grid's thumbnail size; large zooms widen the result cards too. */
-  imageSize?: number;
+  /** How wide a result card is, in pixels; as many fit to a row as the
+   *  page allows. */
+  cardSize?: number;
+  /** More run options beside the build buttons, such as stacking in WBPP. */
+  actions?: ReactNode;
   onOpenImage: (imageId: number) => void;
   /** The target chosen in the header. With one chosen, stacks remembered
    *  from the project's other targets (a mosaic's other panels) stay out. */
   targetId?: number | null;
 }
 
-/**
- * Above this grid zoom the result cards go single-column and full width.
- * Below it the layout is untouched: zooming out never shrinks a stack card,
- * it only stops widening them, because a preview that is too small to judge
- * defeats the panel. A two-column stack card is about 600px on a typical
- * window, so this is the point where the grid's own thumbnails catch up.
- */
-export const STACK_WIDE_IMAGE_SIZE = 600;
+/** A result card's width when the page does not choose one. */
+export const DEFAULT_STACK_CARD_SIZE = 550;
 
 interface ChannelInput {
   key: string;
@@ -325,7 +322,8 @@ export default function StackPreviewPanel({
   projectId,
   images,
   selectionSource,
-  imageSize,
+  cardSize = DEFAULT_STACK_CARD_SIZE,
+  actions,
   onOpenImage,
   targetId = null,
 }: StackPreviewPanelProps) {
@@ -649,7 +647,7 @@ export default function StackPreviewPanel({
 
   const running = startPending || unfinishedJobs.length > 0;
   const queuedBuilds = unfinishedJobs.length;
-  const buildLabel = latest.data?.groups.length ? 'Build current set' : 'Build stack previews';
+  const buildLabel = latest.data?.groups.length ? 'Build current set' : 'Build stacks';
   const error = startError ?? stopError ?? statusError ?? latest.error;
   const sourceText =
     selectionSource === 'selected' ? 'selected' : selectionSource === 'scope' ? '' : 'visible';
@@ -765,7 +763,7 @@ export default function StackPreviewPanel({
         className="stack-preview-panel"
         aria-labelledby="stack-preview-title"
         data-collapsed={collapsed || undefined}
-        data-wide={(imageSize ?? 0) >= STACK_WIDE_IMAGE_SIZE || undefined}
+        style={{ '--stack-card-size': `${cardSize}px` } as CSSProperties}
       >
         <div className="stack-preview-heading">
           <div>
@@ -790,7 +788,7 @@ export default function StackPreviewPanel({
                 >
                   ▶
                 </span>
-                Stack previews
+                Stacks
               </button>
               {collapsed && (
                 <small className="stack-preview-collapsed-summary">
@@ -910,6 +908,7 @@ export default function StackPreviewPanel({
                     : 'Stop'}
               </button>
             )}
+            {actions}
           </div>
           )}
         </div>
@@ -920,7 +919,7 @@ export default function StackPreviewPanel({
         )}
         {error && (
           <div className="stack-preview-message error" role="alert">
-            {error instanceof Error ? error.message : 'Stack preview failed'}
+            {error instanceof Error ? error.message : 'Stack failed'}
           </div>
         )}
         {activeJob?.error && <div className="stack-preview-message error">{activeJob.error}</div>}
@@ -948,7 +947,6 @@ export default function StackPreviewPanel({
               <span>
                 {displayKeys.length} target/channel group{displayKeys.length === 1 ? '' : 's'}
               </span>
-              <span>Stack preview</span>
               {queuedBuilds > 1 && (
                 <span className="stack-preview-queue-depth">{queuedBuilds} builds in the queue</span>
               )}
@@ -1247,7 +1245,7 @@ export default function StackPreviewPanel({
                           (activeGroup?.state === 'cancelled'
                             ? 'This channel was stopped before it finished. Build it again when you are ready.'
                             : canBuildChannel
-                              ? 'No preview has been built for this channel.'
+                              ? 'No stack has been built for this channel yet.'
                               : 'At least two current images are required for this channel.')}
                       </div>
                     )}

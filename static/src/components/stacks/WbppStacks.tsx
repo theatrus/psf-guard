@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
-import type { LatestStackPreviewGroup } from '../../api/types';
+import type { LatestStackPreviewGroup, WbppStacksTakenIn } from '../../api/types';
 
 function wbppStacksQueryKey(dbId: string, projectId: number) {
   return ['db', dbId, 'wbpp-stacks', projectId] as const;
@@ -19,9 +19,9 @@ function treatment(entry: LatestStackPreviewGroup): string {
 }
 
 /**
- * The stacks WBPP made for this project. A run that finishes in PSF Guard is
- * taken in on its own; **Take in the last run** covers one that finished
- * before, or after a restart. PSF Guard composes their color in the color
+ * The stacks WBPP made for this project. A run started from **Stack in WBPP**
+ * is taken in when it ends; **Take in the last run** appears only when that
+ * failed, with the reason, to try again. PSF Guard composes their color in the color
  * section above, where each appears as a channel marked WBPP.
  */
 export default function WbppStacks({
@@ -29,12 +29,15 @@ export default function WbppStacks({
   projectId,
   targetId,
   canImport,
+  lastRun = null,
 }: {
   dbId: string;
   projectId: number;
   targetId?: number | null;
   /** Taking a run in writes files, so it needs database management. */
   canImport: boolean;
+  /** How this project's finished WBPP run came in as stacks, if it did. */
+  lastRun?: WbppStacksTakenIn | null;
 }) {
   const queryClient = useQueryClient();
   const stacks = useQuery({
@@ -64,7 +67,7 @@ export default function WbppStacks({
             channel marked WBPP.
           </p>
         </div>
-        {canImport && (
+        {canImport && lastRun?.state === 'error' && (
           <button
             type="button"
             className="toolbar-button"
@@ -75,6 +78,20 @@ export default function WbppStacks({
           </button>
         )}
       </header>
+      {lastRun?.state === 'importing' && (
+        <p className="muted" role="status">Taking in the last run’s masters…</p>
+      )}
+      {lastRun?.state === 'done' && lastRun.imported === 0 && lastRun.skipped > 0 && (
+        <p className="muted" role="status">
+          The last run’s {lastRun.skipped === 1 ? 'master' : `${lastRun.skipped} masters`} could not be
+          read as {lastRun.skipped === 1 ? 'a stack' : 'stacks'}.
+        </p>
+      )}
+      {lastRun?.state === 'error' && !importRun.data && (
+        <p className="muted" role="status">
+          The last run’s masters were not taken in: {lastRun.error}
+        </p>
+      )}
       {importRun.isError && (
         <p className="error-text" role="alert">{(importRun.error as Error).message}</p>
       )}
@@ -88,8 +105,9 @@ export default function WbppStacks({
       )}
       {stacks.isLoading ? null : entries.length === 0 ? (
         <p className="muted">
-          No WBPP stacks yet. Stack this project in WBPP from the Library, and its master lights show
-          here when the run ends.
+          {canImport
+            ? 'No WBPP stacks yet. Choose Stack in WBPP above, and its master lights show here when the run ends.'
+            : 'No WBPP stacks yet.'}
         </p>
       ) : (
         <ul className="wbpp-stack-grid">

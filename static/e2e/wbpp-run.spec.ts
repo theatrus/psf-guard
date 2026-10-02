@@ -267,3 +267,49 @@ test('the Overview stacks a project from its card and shows the masters', async 
   await expect(page.locator('.overview-wbpp-run')).toHaveCount(0);
   await expect(page.locator('.project-card').filter({ hasText: 'Project Beta' }).getByText('Stack in WBPP')).toBeVisible();
 });
+
+test('the Stacks view runs WBPP for its project and offers its masters after', async ({ page, request }) => {
+  const configured = (await (await request.put('/api/settings/pixinsight', { data: { binary: fakeBinary } })).json()).data;
+  test.skip(!configured.ready, 'no display and no xvfb-run on this machine');
+  const projects = (await (await request.get(`/api/db/${dbId}/projects`)).json()).data as Array<{
+    id: number;
+    name: string;
+  }>;
+  const alpha = projects.find((project) => project.name === 'Project Alpha')!;
+
+  await page.goto(`/#/stacks?db=${dbId}&project=${alpha.id}`);
+  const wbpp = page.getByRole('button', { name: 'Stack in WBPP' });
+  await expect(wbpp).toBeVisible({ timeout: 15_000 });
+  // No run of this project has finished, so there is nothing to take in.
+  await expect(page.getByRole('button', { name: 'Take in the last run' })).toHaveCount(0);
+  await expect(page.getByText(/Choose Stack in WBPP above/)).toBeVisible();
+
+  await wbpp.click();
+  const dialog = page.locator('.wbpp-run-dialog');
+  await expect(dialog).toContainText('Stack with WBPP — Project Alpha');
+  await dialog.getByRole('button', { name: 'Start stacking' }).click();
+  await expect(dialog).toContainText('PixInsight is running WBPP', { timeout: 15_000 });
+  await dialog.locator('.dialog-footer').getByRole('button', { name: 'Close' }).click();
+  await expect(page.getByRole('button', { name: 'Stacking in WBPP…' })).toBeVisible();
+
+  // The run ends and its masters are taken in before the next run may
+  // start. The stand-in's "master" is a script, so the section says it could
+  // not be read; only a failed take-in offers Take in the last run.
+  await expect(page.getByRole('button', { name: 'WBPP masters ready' })).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('.wbpp-stacks')).toContainText('could not be read as a stack', {
+    timeout: 30_000,
+  });
+  await expect(page.getByRole('button', { name: 'Take in the last run' })).toHaveCount(0);
+});
+
+test('the Stacks view sizes its cards and keeps the size in the address', async ({ page }) => {
+  await page.goto(`/#/stacks?db=${dbId}&project=1`);
+  const size = page.locator('#stacks-card-size');
+  await expect(size).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('.stack-preview-panel')).toHaveCSS('--stack-card-size', '550px');
+  await size.fill('400');
+  await expect(page).toHaveURL(/cardsize=400/);
+  await expect(page.locator('.stack-preview-panel')).toHaveCSS('--stack-card-size', '400px');
+  await page.reload();
+  await expect(page.locator('#stacks-card-size')).toHaveValue('400');
+});

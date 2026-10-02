@@ -105,7 +105,7 @@ describe('StackPreviewPanel exposure groups', () => {
     expect(await screen.findAllByRole('button', { name: 'Build channel' })).toHaveLength(2);
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Sh2 86 Ha · 30 s calibration' }), 'off');
     expect(screen.getByRole('combobox', { name: 'Sh2 86 Ha · 300 s calibration' })).toHaveValue('');
-    await userEvent.click(screen.getByRole('button', { name: 'Build stack previews' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Build stacks' }));
     await waitFor(() => expect(submitted?.calibration_overrides).toEqual([
       { target_id: 42, filter_name: 'Ha', exposure_group_key: 'short', calibration: 'off' },
     ]));
@@ -184,7 +184,7 @@ describe('StackPreviewPanel manual queue', () => {
     expect(screen.getByRole('button', { name: 'Stop all (2)' })).toBeEnabled();
 
     // The whole-set button never greyed out either.
-    expect(screen.getByRole('button', { name: 'Build stack previews' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Build stacks' })).toBeEnabled();
   });
 
   it('labels a resumed build with its restored frames', async () => {
