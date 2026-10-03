@@ -12,7 +12,9 @@ use crate::{Decision, Request, State, CONTRACT_VERSION};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 mod preparation;
+mod priority;
 pub use preparation::GeometryPreparation;
+pub use priority::PriorityError;
 
 pub const CONSTRAINTS_VERSION: u32 = 1;
 

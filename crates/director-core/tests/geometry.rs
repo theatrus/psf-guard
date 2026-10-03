@@ -12,6 +12,8 @@ use psf_guard_director_core::{
 use serde_json::json;
 #[path = "geometry/dispatch.rs"]
 mod dispatch;
+#[path = "geometry/priority.rs"]
+mod priority_preview;
 #[path = "geometry/recovery.rs"]
 mod recovery;
 

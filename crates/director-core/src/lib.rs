@@ -14,6 +14,7 @@ pub mod moon;
 pub mod night;
 pub mod optics;
 pub mod preparation;
+pub mod priority;
 pub mod program;
 pub mod project;
 pub mod recovery;
