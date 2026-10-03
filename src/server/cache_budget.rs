@@ -9,9 +9,11 @@
 //! folder uses the lowest of their limits. Every few minutes this module
 //! reads each volume as `df` does and, when one is over, deletes from what
 //! lives on that volume only: image previews least recently used first, then
-//! stack resume checkpoints a day old or more. Stacks, color previews,
-//! calibration masters and WBPP masters are never culled: they are what the
-//! space is for.
+//! stack resume checkpoints a day old or more, then calibration masters
+//! unused for a week whose frames can build them again (see
+//! [`crate::server::master_cleanup`]), while no build runs. Stacks, color
+//! previews and WBPP masters are never culled: they are what the space is
+//! for.
 //!
 //! Least recently used means the file's access time. Many mounts do not
 //! update it on read (`noatime`, NFS), so serving a cached preview sets it
@@ -197,11 +199,13 @@ pub fn record(reports: Vec<VolumeReport>) {
 }
 
 /// One storage folder of one database, with the kinds that live in it.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Folder {
     database: String,
     path: PathBuf,
     kinds: Vec<StorageKind>,
+    /// The database, for the catalog the master step reads.
+    context: Option<Arc<crate::server::database_context::DatabaseContext>>,
 }
 
 impl Folder {
@@ -228,6 +232,7 @@ fn folders(state: &AppState) -> Vec<Folder> {
                     database: ctx.name.clone(),
                     path: path.clone(),
                     kinds: vec![kind],
+                    context: Some(Arc::clone(&ctx)),
                 }),
             }
         }
@@ -253,9 +258,12 @@ pub fn pass(state: &AppState) -> Vec<VolumeReport> {
         .map(|(device, folders)| (*device, volume_limit(folders)))
         .collect();
     *VOLUME_LIMITS.lock().unwrap() = limits.clone();
+    // Masters only while no build runs, since a build may be reading one;
+    // the build permit is taken only when a volume needs masters removed.
+    let no_build = || state.stack_previews.try_maintenance_permit();
     volumes
         .into_iter()
-        .filter_map(|(device, folders)| report_volume(device, &folders, limits[&device]))
+        .filter_map(|(device, folders)| report_volume(device, &folders, limits[&device], &no_build))
         .collect()
 }
 
@@ -269,7 +277,12 @@ fn volume_limit(folders: &[Folder]) -> u8 {
         .unwrap_or_else(max_volume_percent)
 }
 
-fn report_volume(device: u64, folders: &[Folder], limit: u8) -> Option<VolumeReport> {
+fn report_volume(
+    device: u64,
+    folders: &[Folder],
+    limit: u8,
+    no_build: &dyn Fn() -> Option<tokio::sync::OwnedSemaphorePermit>,
+) -> Option<VolumeReport> {
     let first = &folders.first()?.path;
     let mut usage = volume_usage(first)?;
     let mut culled_files = 0;
@@ -290,10 +303,27 @@ fn report_volume(device: u64, folders: &[Folder], limit: u8) -> Option<VolumeRep
             .filter(|folder| folder.holds(StorageKind::Stacks))
             .map(|folder| folder.path.as_path())
             .collect();
-        for tier in [
+        let mut _held = None;
+        let mut tiers = vec![
             preview_candidates(&caches, now),
             checkpoint_candidates(&stacks, now),
-        ] {
+        ];
+        // Read the catalog only when the cheap tiers cannot free enough.
+        let cheap: u64 = tiers
+            .iter()
+            .flatten()
+            .map(|candidate| candidate.bytes)
+            .sum();
+        if cheap < need
+            && folders
+                .iter()
+                .any(|folder| folder.holds(StorageKind::Calibration))
+            && let Some(permit) = no_build()
+        {
+            _held = Some(permit);
+            tiers.push(master_candidates(folders, now));
+        }
+        for tier in tiers {
             for candidate in tier {
                 if need == 0 {
                     break;
@@ -382,6 +412,23 @@ struct Candidate {
     paths: Vec<PathBuf>,
     bytes: u64,
     last_used: SystemTime,
+}
+
+/// Calibration masters from the master folders on this volume, unused for
+/// a week and rebuildable, least recently used first; masters a kept stack
+/// names come last.
+fn master_candidates(folders: &[Folder], now: SystemTime) -> Vec<Candidate> {
+    folders
+        .iter()
+        .filter(|folder| folder.holds(StorageKind::Calibration))
+        .filter_map(|folder| folder.context.as_ref())
+        .flat_map(|ctx| crate::server::master_cleanup::lru_candidates(ctx, now))
+        .map(|master| Candidate {
+            paths: vec![master.path],
+            bytes: master.bytes,
+            last_used: master.last_used,
+        })
+        .collect()
 }
 
 /// Every image preview not used in the last few minutes, least recently
@@ -692,17 +739,19 @@ mod tests {
                 database: "Rig".into(),
                 path: cache.clone(),
                 kinds: vec![StorageKind::Cache, StorageKind::Calibration],
+                context: None,
             },
             Folder {
                 database: "Rig".into(),
                 path: stacks.clone(),
                 kinds: vec![StorageKind::Stacks],
+                context: None,
             },
         ];
         let device = device_of(temp.path()).unwrap();
 
         // A limit of 0% asks for everything that may go.
-        let report = report_volume(device, &folders, 0).unwrap();
+        let report = report_volume(device, &folders, 0, &|| None).unwrap();
 
         assert_eq!(report.culled_files, 2);
         assert!(!cache.join("previews/old.png").exists());
@@ -734,6 +783,7 @@ mod tests {
             database: "Rig".into(),
             path: PathBuf::new(),
             kinds,
+            context: None,
         };
         // A volume holding two folders uses the lower limit.
         assert_eq!(volume_limit(&[folder(vec![StorageKind::Stacks])]), 95);

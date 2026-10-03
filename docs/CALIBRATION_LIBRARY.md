@@ -413,6 +413,21 @@ flat masters that used it; a changed dark-flat invalidates its flat master.
 A later stack reuses a valid file. The database records its source set, input masters, and Seiza
 version.
 
+Since a changed input writes a new file, old masters stay behind. Once an
+hour, while no stack build runs, PSF Guard removes from the master folder:
+
+- half-written files a stopped build left (`*.fits.tmp-*`), a day old;
+- masters the catalog no longer records, such as those of forgotten frames,
+  a day old;
+- masters a newer master of the same rig, kind, exposure, filter and
+  temperature replaced, once unused for a month and named by no stack.
+
+When the master folder's volume is over its disk limit, masters unused for a
+week may go too (see [Disk use](STACKING_PREVIEWS.md#disk-use)). A master
+whose source frames are no longer on disk is never removed, nor is a master's
+catalog record. A removed master that a stack needs again is built again from
+its frames; until then the stack's **Masters** view reports it missing.
+
 The stack card reports `Calibration applied`, `Calibration set incomplete`, or
 no calibration. It also shows input counts and any missing-file warning.
 Calibration happens on raw CFA samples before debayering.

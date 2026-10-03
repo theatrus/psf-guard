@@ -60,7 +60,7 @@ describe('StorageSettings', () => {
     expect(screen.getByText(/Stacks 120.0 GiB · calibration masters 8.0 GiB · image previews 40.0 GiB/))
       .toBeInTheDocument();
     expect(screen.getByText(/culled 1200 previews and checkpoints, 3.0 GiB/)).toBeInTheDocument();
-    expect(screen.getByRole('alert')).toHaveTextContent('Stacks and masters are never culled');
+    expect(screen.getByRole('alert')).toHaveTextContent('Stacks are never culled');
   });
 
   it('saves a new limit when the slider is let go', async () => {
