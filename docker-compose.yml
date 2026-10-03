@@ -1,5 +1,14 @@
-version: '3.8'
-
+# PSF Guard with everything it writes kept on one volume.
+#
+# /data holds the database registry and browser users, the cache (previews,
+# plate solves, quality scans, stacks, calibration masters) and the Seiza
+# catalogs the in-app installer downloads, so updating the image or
+# recreating the container keeps them. See README.md, "Docker".
+#
+# The server binds every interface, so it asks for a login. Add the first
+# editor once the container runs:
+#   docker compose exec psf-guard psf-guard users add admin --role read-write
+# (it asks for a password), then sign in at http://localhost:3000/.
 services:
   psf-guard:
     image: ghcr.io/theatrus/psf-guard:latest
@@ -7,34 +16,37 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      # Update these paths to match your system
-      # Windows example:
-      # - C:\Users\YourName\AppData\Local\NINA\SchedulerPlugin\schedulerdb.sqlite:/data/database.sqlite:ro
-      # Linux/Mac example:
-      - ./schedulerdb.sqlite:/data/database.sqlite:ro
+      - psf-guard-data:/data
+      # Your Target Scheduler database. Writable: grading updates it.
+      # Windows: C:\Users\YourName\AppData\Local\NINA\SchedulerPlugin\schedulerdb.sqlite
+      - ./schedulerdb.sqlite:/data/database.sqlite
+      # Your images. Read-only is enough to review and grade.
       - ./images:/images:ro
+      # Optional: Seiza catalogs you already have, instead of downloading
+      # them in Settings. Drop SEIZA_CATALOG_DIR below to use the volume.
+      # - /path/to/seiza-data:/catalogs:ro
+      # Optional: a server config file (port, preview format, remote sync).
+      # - ./psf-guard.toml:/config/psf-guard.toml:ro
+    # With a config file:
+    # command: server --config /config/psf-guard.toml /data/database.sqlite /images
     command: server /data/database.sqlite /images
     restart: unless-stopped
     environment:
       - RUST_LOG=info
+      # - SEIZA_CATALOG_DIR=/catalogs
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/projects"]
+      # Answers without a login, so it works before the first user exists.
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/auth/status"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-    # Optional: Set resource limits
+    # Optional: resource limits
     # deploy:
     #   resources:
     #     limits:
     #       cpus: '2'
     #       memory: 2G
-    #     reservations:
-    #       cpus: '0.5'
-    #       memory: 512M
 
-# Optional: Add a network if you want to connect with other services
-# networks:
-#   default:
-#     name: astronomy-net
-#     external: true
+volumes:
+  psf-guard-data:
