@@ -1,9 +1,8 @@
 # Unreleased
 
-- Tune Director observing preferences in the project planner: importance,
-  seven scoring weights, presets, minimum dwell and switching margin, with
-  global/site/rig/project inheritance. Opted-in rigs execute the saved policy
-  offline; existing allocations and legacy scheduling remain unchanged.
+- Rank Director projects in one global list, with optional site or rig orders.
+  Newly issued programs follow the highest eligible project offline, without
+  per-project scoring weights. Existing allocations remain unchanged.
 
 - Set per-filter Moon avoidance in Director exposure templates. The shared
   planner skips blocked recipes, preserves Target Scheduler lunar settings and

@@ -157,3 +157,125 @@ fn project_attachment_preserves_preferences_without_orphaning_records() {
         store.save_observing_settings(&global).unwrap();
     }
 }
+
+#[test]
+fn project_order_inherits_and_overrides_without_project_weights() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let mut store = MetaStore::create(&path).unwrap();
+    let rig = store.create_rig(Uuid::new_v4(), "Rig").unwrap().id;
+    let site = store.create_site(Uuid::new_v4(), "Site").unwrap().id;
+    let a = store.create_project(Uuid::new_v4(), "A").unwrap().id;
+    let b = store.create_project(Uuid::new_v4(), "B").unwrap().id;
+    let mut global = Settings::empty(Scope::Global, store.instance_id());
+    global.project_order = Some(vec![a, b]);
+    store.save_observing_settings(&global).unwrap();
+    let mut rig_settings = Settings::empty(Scope::Rig, rig);
+    rig_settings.site_id = Some(site);
+    let mut rig_settings = store.save_observing_settings(&rig_settings).unwrap();
+    let effective = store.effective_observing_preferences(rig, None).unwrap();
+    assert_eq!(effective.project_order, Some(vec![a, b]));
+    assert_eq!(effective.order_source.unwrap().scope, Scope::Global);
+    let mut site_settings = Settings::empty(Scope::Site, site);
+    site_settings.project_order = Some(vec![b, a]);
+    store.save_observing_settings(&site_settings).unwrap();
+    let effective = store.effective_observing_preferences(rig, Some(a)).unwrap();
+    assert_eq!(effective.project_order, Some(vec![b, a]));
+    assert_eq!(effective.order_source.unwrap().scope, Scope::Site);
+    rig_settings.project_order = Some(vec![a]);
+    let mut rig_settings = store.save_observing_settings(&rig_settings).unwrap();
+    assert_eq!(
+        store
+            .effective_observing_preferences(rig, None)
+            .unwrap()
+            .project_order,
+        Some(vec![a])
+    );
+    rig_settings.project_order = None;
+    store.save_observing_settings(&rig_settings).unwrap();
+    assert!(matches!(
+        store.save_observing_settings(&rig_settings),
+        Err(Error::Conflict)
+    ));
+    drop(store);
+    let store = MetaStore::open(&path).unwrap();
+    assert_eq!(
+        store
+            .effective_observing_preferences(rig, None)
+            .unwrap()
+            .project_order,
+        Some(vec![b, a])
+    );
+}
+
+#[test]
+fn project_orders_validate_identity_duplicates_limits_and_scope() {
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let project = store.create_project(Uuid::new_v4(), "Project").unwrap().id;
+    for order in [
+        vec![project, project],
+        vec![Uuid::nil()],
+        vec![Uuid::new_v4()],
+        (0..257).map(|_| Uuid::new_v4()).collect(),
+    ] {
+        let mut settings = Settings::empty(Scope::Global, store.instance_id());
+        settings.project_order = Some(order);
+        assert!(store.save_observing_settings(&settings).is_err());
+    }
+    let mut settings = Settings::empty(Scope::Project, project);
+    settings.project_order = Some(vec![project]);
+    assert!(matches!(
+        store.save_observing_settings(&settings),
+        Err(Error::InvalidInput)
+    ));
+}
+
+#[test]
+fn attaching_projects_preserves_order_and_invalidates_stale_editors() {
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let keep = store.create_project(Uuid::new_v4(), "Keep").unwrap().id;
+    let first = store.create_project(Uuid::new_v4(), "First").unwrap().id;
+    let second = store.create_project(Uuid::new_v4(), "Second").unwrap().id;
+    let mut global = Settings::empty(Scope::Global, store.instance_id());
+    global.project_order = Some(vec![first, second]);
+    let stale = store.save_observing_settings(&global).unwrap();
+    store.attach_project(keep, first).unwrap();
+    let saved = store
+        .observing_settings(Scope::Global, store.instance_id())
+        .unwrap();
+    assert_eq!(saved.project_order, Some(vec![keep, second]));
+    assert_eq!(saved.revision, stale.revision + 1);
+    store.attach_project(keep, second).unwrap();
+    let saved = store
+        .observing_settings(Scope::Global, store.instance_id())
+        .unwrap();
+    assert_eq!(saved.project_order, Some(vec![keep]));
+    assert_eq!(saved.revision, stale.revision + 2);
+    assert!(store.save_observing_settings(&stale).is_err());
+}
+
+#[test]
+fn schema_19_preferences_without_order_keep_legacy_behavior() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let mut store = MetaStore::create(&path).unwrap();
+    let rig = store.create_rig(Uuid::new_v4(), "Rig").unwrap().id;
+    let mut global = Settings::empty(Scope::Global, store.instance_id());
+    global.enabled = Some(true);
+    store.save_observing_settings(&global).unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "UPDATE observing_preferences SET payload=json_remove(payload,'$.project_order')",
+        [],
+    )
+    .unwrap();
+    conn.pragma_update(None, "user_version", 19).unwrap();
+    drop(conn);
+    let store = MetaStore::open(&path).unwrap();
+    let effective = store.effective_observing_preferences(rig, None).unwrap();
+    assert!(effective.enabled);
+    assert!(effective.project_order.is_none());
+}

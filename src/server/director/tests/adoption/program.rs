@@ -339,6 +339,28 @@ async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment(
         raw_get(&a.f.app, &wrong_rig, None).await.0,
         StatusCode::FORBIDDEN
     );
+    // Saving an order replaces score policies in newly issued programs, but
+    // never rewrites the already-issued allocation snapshots above.
+    {
+        use psf_guard_director_core::priority::Scope;
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut settings = store.observing_settings(Scope::Global, instance).unwrap();
+        settings.enabled = Some(true);
+        settings.project_order = Some(vec![a.project]);
+        store.save_observing_settings(&settings).unwrap();
+    }
+    let (status, ranked_etag, body) = raw_get(&a.f.app, &path, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_ne!(ranked_etag, Some(etag.clone()));
+    assert!(body["data"]["program"]["observing_preferences"].is_null());
+    let ranked_program: psf_guard_director_core::program::Program =
+        serde_json::from_value(body["data"]["program"].clone()).unwrap();
+    assert!(ranked_program
+        .assignment
+        .goals
+        .iter()
+        .all(|goal| goal.priority > 0));
+
     // An unactivated draft edit must not change priorities in an active program.
     {
         let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
