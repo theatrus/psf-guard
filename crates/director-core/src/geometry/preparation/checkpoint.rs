@@ -16,6 +16,8 @@ struct Checkpoint {
     constraints: Constraints,
     initial: Request,
     local: LocalState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active: Option<crate::priority::ActiveGoal>,
     preparation: String,
 }
 
@@ -30,6 +32,7 @@ impl GeometryPreparation<'_> {
             constraints: self.geometry.constraints.clone(),
             initial: self.initial.clone(),
             local: self.local.clone(),
+            active: self.active.clone(),
             preparation: String::from_utf8(
                 self.inner
                     .checkpoint()
@@ -66,13 +69,14 @@ impl BoundGeometry {
         let inner = Preparation::restore(saved.preparation.as_bytes())
             .map_err(|_| Error::InvalidCheckpoint)?;
         let mut restored = self
-            .preparation(
+            .preparation_with_active(
                 inner.id().into(),
                 &saved.initial,
                 &self.constraints,
                 &inner.context().goal_id,
                 saved.local,
                 inner.estimates(),
+                saved.active,
             )
             .map_err(|_| Error::InvalidCheckpoint)?;
         if !inner.same_inputs(&restored.inner) {

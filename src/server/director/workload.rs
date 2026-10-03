@@ -92,6 +92,8 @@ pub(super) enum ExecutionMode {
     LocalSequenceV1,
     PreparedTargetV2,
     LocalSequenceV2,
+    PreparedTargetV3,
+    LocalSequenceV3,
 }
 
 pub(super) fn supports_prepared_target(p: &psf_guard_director_core::program::Program) -> bool {
@@ -118,16 +120,26 @@ impl ExecutionMode {
             .iter()
             .any(|r| r.moon.as_ref().is_some_and(|m| m.enabled));
         let supported = match self {
-            Self::PreparedTargetV1 => !moon_required && supports_prepared_target(p),
-            Self::LocalSequenceV1 => !moon_required && supports_local_sequence(p),
-            Self::PreparedTargetV2 => supports_prepared_target(p),
-            Self::LocalSequenceV2 => supports_local_sequence(p),
+            Self::PreparedTargetV1 => {
+                p.observing_preferences.is_none() && !moon_required && supports_prepared_target(p)
+            }
+            Self::LocalSequenceV1 => {
+                p.observing_preferences.is_none() && !moon_required && supports_local_sequence(p)
+            }
+            Self::PreparedTargetV2 => {
+                p.observing_preferences.is_none() && supports_prepared_target(p)
+            }
+            Self::LocalSequenceV2 => {
+                p.observing_preferences.is_none() && supports_local_sequence(p)
+            }
+            Self::PreparedTargetV3 => supports_prepared_target(p),
+            Self::LocalSequenceV3 => supports_local_sequence(p),
         };
         if supported {
             Ok(())
         } else {
             Err(program::PullError::NotReady(
-                "The workload exceeds the executor mode's target/rotation, Moon avoidance or sequence-owned preparation capabilities. No new workload was issued.".into(),
+                "The workload exceeds the executor mode's target/rotation, Moon avoidance, observing preferences or sequence-owned preparation capabilities. No new workload was issued.".into(),
             ))
         }
     }

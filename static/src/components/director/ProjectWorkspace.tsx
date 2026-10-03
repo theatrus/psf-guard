@@ -8,6 +8,7 @@ import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import { ProjectPlanEditor } from '../ProjectSchedulerDialog';
 import FramingView from './FramingView';
 import PlanEditor from './PlanEditor';
+import ObservingPreferences from './ObservingPreferences';
 import ActivationPanel from './ActivationPanel';
 import type { FramingSeed } from './framingModel';
 import { retryWhenBusy } from './retry';
@@ -92,6 +93,7 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
       <div><h3 className="director-section-heading">Plan</h3><PlanEditor projectId={projectId} /></div>
       <div><h3 className="director-section-heading">Activation</h3><ActivationPanel projectId={projectId} /></div>
     </div>
+    <ObservingPreferences projectId={projectId} rigs={row.links.map(link => ({ id: link.rig.id, name: link.catalog_name }))} />
     <section aria-label="Linked databases">
       <h3 className="director-section-heading">Databases</h3>
       {!manageable && <p className="director-muted">This server cannot change rig databases, so the targets and exposures below are view only.</p>}

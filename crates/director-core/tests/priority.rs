@@ -7,6 +7,25 @@ fn source(scope: Scope) -> Source {
         revision: 1,
     }
 }
+
+#[test]
+fn resolved_policy_roundtrip_rejects_forged_values_and_provenance() {
+    let policy = resolved(Policy::preset(Preset::Balanced));
+    let encoded = serde_json::to_value(&policy).unwrap();
+    assert_eq!(
+        serde_json::from_value::<ResolvedPolicy>(encoded.clone()).unwrap(),
+        policy
+    );
+    for field in ["policy", "provenance", "schema_version"] {
+        let mut changed = encoded.clone();
+        match field {
+            "policy" => changed[field]["importance"] = 99.into(),
+            "provenance" => changed[field]["importance"]["revision"] = 99.into(),
+            _ => changed[field] = 99.into(),
+        }
+        assert!(serde_json::from_value::<ResolvedPolicy>(changed).is_err());
+    }
+}
 fn resolved(policy: Policy) -> ResolvedPolicy {
     resolve(policy, source(Scope::Global), &[]).unwrap()
 }

@@ -17,7 +17,8 @@ use psf_guard_director_core::geometry::{BoundGeometry, Constraints};
 use psf_guard_director_core::program::{BoundProgram, Program};
 
 const APPLICATION_ID: i32 = 0x5047444c;
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 5;
+mod selection;
 const CAPTURE_EVENT_VERSION: u32 = 1;
 const MAX_EVENT_PAGE: usize = 256;
 
@@ -185,7 +186,7 @@ impl Ledger {
         };
         let decision = match (&self.geometry, constraints) {
             (Some(geometry), Some(current)) => geometry
-                .evaluate(&request, current)
+                .evaluate_with_active(&request, current, selection::read(&tx)?.as_ref())
                 .map_err(Error::Geometry)?,
             (None, None) => psf_guard_director_core::evaluate(&request).map_err(Error::Planner)?,
             _ => return Err(Error::ConflictingEvidence),
@@ -262,6 +263,13 @@ impl Ledger {
         program: Option<BoundProgram>,
         geometry: Option<BoundGeometry>,
     ) -> Result<Self, Error> {
+        if geometry.is_none()
+            && program
+                .as_ref()
+                .is_some_and(|p| p.snapshot().observing_preferences.is_some())
+        {
+            return Err(Error::ConflictingEvidence);
+        }
         // Absolute filesystem paths exclude SQLite's temporary/":memory:" names
         // and URI connection parameters that can silently disable persistence.
         if !path.is_absolute() {
@@ -336,10 +344,11 @@ impl Ledger {
             program::insert(&tx, program.as_ref())?;
             geometry::create_table(&tx)?;
             geometry::insert(&tx, geometry.as_ref())?;
+            selection::create(&tx)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         } else if application != APPLICATION_ID {
             return Err(Error::ForeignDatabase);
-        } else if (1..=3).contains(&version) {
+        } else if (1..=4).contains(&version) {
             if version == 1 {
                 preparation::create_tables(&tx)?;
             }
@@ -347,7 +356,10 @@ impl Ledger {
                 tx.execute_batch("ALTER TABLE allocation ADD COLUMN program_required INTEGER NOT NULL DEFAULT 0 CHECK(program_required IN (0,1));")?;
                 program::create_table(&tx)?;
             }
-            geometry::create_table(&tx)?;
+            if version < 4 {
+                geometry::create_table(&tx)?;
+            }
+            selection::create(&tx)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         } else if version != SCHEMA_VERSION {
             return Err(Error::UnsupportedSchema);

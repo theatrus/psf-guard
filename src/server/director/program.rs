@@ -274,6 +274,29 @@ pub(super) fn assemble(
     // Persist the validity interval. A retry must return identical content,
     // while changed inputs or expiry must mint a different assignment identity.
     let assignment_revision = activations.iter().map(|a| a.revision).max().unwrap_or(1);
+    let observing_preferences = if store.effective_observing_preferences(rig, None)?.enabled {
+        let mut policies = BTreeMap::new();
+        let mut bindings = BTreeMap::new();
+        for link in &built.links {
+            let id = link.project_id.to_string();
+            if !policies.contains_key(&id) {
+                policies.insert(
+                    id.clone(),
+                    store
+                        .effective_observing_preferences(rig, Some(link.project_id))?
+                        .resolved,
+                );
+            }
+            bindings.insert(link.goal_id.clone(), id);
+        }
+        Some(psf_guard_director_core::priority::ProgramPreferences {
+            schema_version: 1,
+            policies,
+            bindings,
+        })
+    } else {
+        None
+    };
     let fingerprint = catalog_discovery::digest(
         &serde_json::to_vec(&(
             "program-v2",
@@ -285,6 +308,7 @@ pub(super) fn assemble(
             &built.links,
             &built.bindings,
             &built.omitted,
+            &observing_preferences,
             &configuration,
             profile.as_ref().map(|p| p.revision),
         ))
@@ -319,6 +343,7 @@ pub(super) fn assemble(
         })
         .collect();
     let program = Program {
+        observing_preferences,
         schema_version: PROGRAM_VERSION,
         assignment: Assignment {
             id: format!("assignment-{}", issue.id),

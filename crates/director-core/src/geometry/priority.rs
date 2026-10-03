@@ -20,7 +20,7 @@ impl BoundGeometry {
         active: Option<&ActiveGoal>,
     ) -> Result<Ranking, PriorityError> {
         let decision = self
-            .evaluate(request, current)
+            .evaluate_legacy(request, current)
             .map_err(PriorityError::Geometry)?;
         if !matches!(decision, Decision::Acquire { .. }) {
             return Ok(Ranking {

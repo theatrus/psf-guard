@@ -17,6 +17,28 @@ fn moon_rules_require_a_capable_executor_even_on_historical_requests() {
     assert!(ExecutionMode::LocalSequenceV1.validate(&p).is_err());
     assert!(ExecutionMode::PreparedTargetV2.validate(&p).is_ok());
     assert!(ExecutionMode::LocalSequenceV2.validate(&p).is_ok());
+    use psf_guard_director_core::priority::{
+        self, Policy, Preset, ProgramPreferences, Scope, Source,
+    };
+    let policy = priority::resolve(
+        Policy::preset(Preset::Balanced),
+        Source {
+            scope: Scope::Global,
+            id: "global".into(),
+            revision: 1,
+        },
+        &[],
+    )
+    .unwrap();
+    p.observing_preferences = Some(ProgramPreferences {
+        schema_version: 1,
+        policies: [("policy".into(), policy)].into(),
+        bindings: [(p.assignment.goals[0].id.clone(), "policy".into())].into(),
+    });
+    assert!(ExecutionMode::PreparedTargetV2.validate(&p).is_err());
+    assert!(ExecutionMode::LocalSequenceV2.validate(&p).is_err());
+    assert!(ExecutionMode::PreparedTargetV3.validate(&p).is_ok());
+    assert!(ExecutionMode::LocalSequenceV3.validate(&p).is_ok());
 }
 
 #[test]
