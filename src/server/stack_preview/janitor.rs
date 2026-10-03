@@ -150,15 +150,26 @@ fn prune_checkpoints(resume_root: &Path, stacking_version: &str, now: SystemTime
 /// Delete every stack artifact nothing references, and every checkpoint no
 /// build has refreshed within its age limit. Errors are logged per entry; one
 /// undeletable directory never stops the sweep.
-pub(super) fn prune(cache_root: &Path, keep: &KeepSet, stacking_version: &str) {
+pub(super) fn prune(stack_root: &Path, keep: &KeepSet, stacking_version: &str) {
     let now = SystemTime::now();
-    let stack_root = cache_root.join("stack-previews");
-    let removed_mono = prune_directories(&stack_root, &keep.mono_job_ids, now);
-    let removed_color = prune_directories(&stack_root.join("color"), &keep.color_job_ids, now);
-    let removed_inputs =
-        prune_directories(&stack_root.join("color-inputs"), &keep.color_input_ids, now);
-    let removed_checkpoints = prune_checkpoints(&stack_root.join("resume"), stacking_version, now);
-    let removed_reference_scores = super::reference::prune(cache_root);
+    use crate::server::storage::{stack_folder, stack_kind, stacks};
+    let removed_mono = prune_directories(&stacks(stack_root), &keep.mono_job_ids, now);
+    let removed_color = prune_directories(
+        &stack_folder(stack_root, stack_kind::COLOR),
+        &keep.color_job_ids,
+        now,
+    );
+    let removed_inputs = prune_directories(
+        &stack_folder(stack_root, stack_kind::COLOR_INPUTS),
+        &keep.color_input_ids,
+        now,
+    );
+    let removed_checkpoints = prune_checkpoints(
+        &stack_folder(stack_root, stack_kind::RESUME),
+        stacking_version,
+        now,
+    );
+    let removed_reference_scores = super::reference::prune(stack_root);
     if removed_mono
         + removed_color
         + removed_inputs

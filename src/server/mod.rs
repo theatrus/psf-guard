@@ -35,6 +35,7 @@ pub mod stack_preview;
 pub mod stack_settings;
 pub mod state;
 pub mod static_file_service;
+pub mod storage;
 pub mod storage_settings;
 pub mod sync_preview;
 pub mod update_notice;
@@ -1330,7 +1331,7 @@ fn report_preview_settings(state: &AppState, config: &ServerConfig) {
     let stale = state
         .all_databases()
         .iter()
-        .map(|ctx| stale_format_bytes(&ctx.cache_dir, encoding.format))
+        .map(|ctx| stale_format_bytes(&ctx.cache_dir_path, encoding.format))
         .sum::<u64>();
     if stale > 0 {
         tracing::warn!(
@@ -1342,10 +1343,13 @@ fn report_preview_settings(state: &AppState, config: &ServerConfig) {
 }
 
 /// Bytes of cached preview artifacts that are *not* in the configured format.
-fn stale_format_bytes(cache_dir: &str, keeping: crate::preview_format::PreviewFormat) -> u64 {
-    ["previews", "annotated"]
+fn stale_format_bytes(
+    cache_dir: &std::path::Path,
+    keeping: crate::preview_format::PreviewFormat,
+) -> u64 {
+    crate::server::storage::ENCODED_PREVIEW_CATEGORIES
         .iter()
-        .flat_map(|category| std::fs::read_dir(std::path::Path::new(cache_dir).join(category)))
+        .flat_map(|category| std::fs::read_dir(cache_dir.join(category)))
         .flatten()
         .flatten()
         .filter(|entry| crate::preview_format::PreviewFormat::of_path(&entry.path()) != keeping)
@@ -1366,8 +1370,6 @@ async fn pregenerate_preview(
     target_name: &str,
     size: &str,
 ) -> Result<bool> {
-    use crate::server::cache::CacheManager;
-
     // Get image data from database first (needed for cache key)
     let image_data = {
         use crate::db::Database;
@@ -1413,12 +1415,13 @@ async fn pregenerate_preview(
         mapping_revision.as_deref(),
     );
 
-    let cache_manager = CacheManager::new(std::path::PathBuf::from(&ctx.cache_dir));
-    cache_manager.ensure_category_dir("previews")?;
-    let cache_path = cache_manager.get_cached_path("previews", &cache_key, "png");
+    // The viewer asks for the configured encoding, so warm that file name.
+    let cache_path =
+        handlers::artifact_cache_path(ctx, "previews", &cache_key, state.preview_encoding())
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
 
     // Skip if already cached and not expired
-    if cache_manager.is_cached(&cache_path)
+    if cache_path.exists()
         && let Ok(metadata) = tokio::fs::metadata(&cache_path).await
     {
         let age = metadata.modified()?.elapsed().unwrap_or_default();
@@ -1483,8 +1486,6 @@ async fn pregenerate_annotated(
     file_only: &str,
     target_name: &str,
 ) -> Result<bool> {
-    use crate::server::cache::CacheManager;
-
     // Get image data from database first (needed for cache key)
     let image_data = {
         use crate::db::Database;
@@ -1524,12 +1525,12 @@ async fn pregenerate_annotated(
         mapping_revision.as_deref(),
     );
 
-    let cache_manager = CacheManager::new(std::path::PathBuf::from(&ctx.cache_dir));
-    cache_manager.ensure_category_dir("annotated")?;
-    let cache_path = cache_manager.get_cached_path("annotated", &cache_key, "png");
+    let cache_path =
+        handlers::artifact_cache_path(ctx, "annotated", &cache_key, state.preview_encoding())
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
 
     // Skip if already cached and not expired
-    if cache_manager.is_cached(&cache_path)
+    if cache_path.exists()
         && let Ok(metadata) = tokio::fs::metadata(&cache_path).await
     {
         let age = metadata.modified()?.elapsed().unwrap_or_default();
@@ -1677,5 +1678,106 @@ mod startup_tests {
         assert!(!start("0.0.0.0", false, false, false).unwrap());
         // The operator said otherwise, so management may start too.
         assert!(start("0.0.0.0", true, true, false).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod pregeneration_tests {
+    use super::pregenerate_preview;
+    use crate::preview_format::{PreviewEncoding, PreviewFormat};
+    use crate::server::database_context::DatabaseContext;
+    use crate::server::state::AppState;
+    use std::io::Write;
+    use std::sync::Arc;
+
+    fn write_fits(path: &std::path::Path) {
+        let mut header = Vec::new();
+        for card in [
+            "SIMPLE  =                    T",
+            "BITPIX  =                   16",
+            "NAXIS   =                    2",
+            "NAXIS1  =                   16",
+            "NAXIS2  =                   16",
+            "IMAGETYP= 'LIGHT'",
+            "END",
+        ] {
+            let mut bytes = card.as_bytes().to_vec();
+            bytes.resize(80, b' ');
+            header.extend_from_slice(&bytes);
+        }
+        header.resize(header.len().div_ceil(2880) * 2880, b' ');
+        let mut data = (0..256i16)
+            .flat_map(|value| (value * 37).to_be_bytes())
+            .collect::<Vec<_>>();
+        data.resize(2880, 0);
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(&header).unwrap();
+        file.write_all(&data).unwrap();
+    }
+
+    /// Pre-generation must write the file name the viewer asks for. With JPEG
+    /// configured it used to write `.png`, so the viewer missed and rendered
+    /// every image again.
+    #[tokio::test]
+    async fn pregenerated_previews_use_the_configured_extension() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = temp.path().join("scheduler.sqlite");
+        crate::ts_schema::create_fresh_db(&database).unwrap();
+        let images = temp.path().join("images");
+        std::fs::create_dir_all(&images).unwrap();
+        write_fits(&images.join("frame.fits"));
+        let ctx = DatabaseContext::new(
+            "test".into(),
+            "Test".into(),
+            database.to_string_lossy().into_owned(),
+            vec![images.to_string_lossy().into_owned()],
+            None,
+            None,
+            None,
+            temp.path().join("cache").to_string_lossy().into_owned(),
+        )
+        .unwrap();
+        {
+            let connection = ctx.db();
+            let connection = connection.lock().unwrap();
+            connection
+                .execute_batch(
+                    "INSERT INTO project (Id, profileId, name, isMosaic, flatsHandling)
+                         VALUES (1, 'profile', 'Project', 0, 0);
+                     INSERT INTO target (Id, name, active, epochcode, projectId)
+                         VALUES (1, 'Target', 1, 0, 1);
+                     INSERT INTO acquiredimage
+                        (Id, projectId, targetId, acquireddate, filtername, gradingStatus,
+                         metadata, profileId)
+                     VALUES (1, 1, 1, 1700000000, 'L', 0,
+                             '{\"FileName\": \"frame.fits\"}', 'profile');",
+                )
+                .unwrap();
+        }
+        let ctx = Arc::new(ctx);
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        *state.preview_encoding.write().unwrap() = PreviewEncoding {
+            format: PreviewFormat::Jpeg,
+            ..PreviewEncoding::default()
+        };
+
+        let generated = pregenerate_preview(&state, &ctx, 1, "frame.fits", "Target", "screen")
+            .await
+            .unwrap();
+        assert!(generated);
+        let names = std::fs::read_dir(ctx.cache_dir_path.join("previews"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(names.len(), 1, "{names:?}");
+        assert!(names[0].ends_with(".jpg"), "{names:?}");
+
+        // The second pass finds it rather than rendering again.
+        let generated = pregenerate_preview(&state, &ctx, 1, "frame.fits", "Target", "screen")
+            .await
+            .unwrap();
+        assert!(!generated);
     }
 }

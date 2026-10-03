@@ -167,9 +167,11 @@ impl Fixture {
         let directory = tempfile::tempdir().unwrap();
         let mut ctx =
             DatabaseContext::new_for_test(rusqlite::Connection::open_in_memory().unwrap());
-        ctx.cache_dir_path = directory.path().join("cache").join("test");
-        ctx.cache_dir = ctx.cache_dir_path.to_string_lossy().into_owned();
-        std::fs::create_dir_all(ctx.cache_dir_path.join("calibration-masters")).unwrap();
+        ctx.use_storage_for_test(&directory.path().join("cache").join("test"));
+        std::fs::create_dir_all(crate::server::storage::calibration_masters(
+            &ctx.calibration_root,
+        ))
+        .unwrap();
         Self {
             _directory: directory,
             state: Arc::new(AppState::new_for_test(
@@ -385,7 +387,7 @@ fn invalid_paths_wrong_kind_and_other_database_are_refused() {
     let (_, source) = fixture.stack(AppliedCalibration::default());
     let mut other = DatabaseContext::new_for_test(rusqlite::Connection::open_in_memory().unwrap());
     other.id = "other-db".into();
-    other.cache_dir_path = fixture.ctx.cache_dir_path.clone();
+    other.use_storage_for_test(&fixture.ctx.cache_dir_path);
     assert!(matches!(
         load_mono_group(&fixture.state, &other, &source),
         Err(AppError::NotFound)
@@ -780,7 +782,7 @@ async fn generation_failure_is_terminal_and_status_batches_preserve_request_orde
         .error
         .as_ref()
         .unwrap()
-        .contains(&fixture.ctx.cache_dir));
+        .contains(fixture.ctx.cache_dir_path.to_string_lossy().as_ref()));
     let response = get_preview(
         State(fixture.state.clone()),
         DbContext(fixture.ctx.clone()),

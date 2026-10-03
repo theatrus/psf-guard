@@ -150,7 +150,8 @@ struct PreparedSearch {
     groups: Vec<SearchGroup>,
     reference_width: usize,
     reference_height: usize,
-    cache_root: PathBuf,
+    stack_root: PathBuf,
+    calibration_root: PathBuf,
 }
 
 struct LoadedCrop {
@@ -298,7 +299,7 @@ pub async fn get_artifact_crop(
     if job.database_id != ctx.id || !job.results.iter().any(|result| result.image_id == image_id) {
         return Err(AppError::NotFound);
     }
-    let path = artifact_crop_path(&ctx.cache_dir_path, &search_id, image_id);
+    let path = artifact_crop_path(&ctx.stack_root, &search_id, image_id);
     let file = tokio::fs::File::open(&path)
         .await
         .map_err(|_| AppError::NotFound)?;
@@ -338,7 +339,7 @@ fn start_prepared_search(
         return Ok(Json(ApiResponse::success(existing)));
     }
     if let Ok(bytes) = std::fs::read(artifact_manifest_path(
-        &prepared.cache_root,
+        &prepared.stack_root,
         &prepared.public.search_id,
     )) && let Ok(mut existing) = serde_json::from_slice::<ArtifactSearchJob>(&bytes)
         && existing.state == ArtifactSearchState::Completed
@@ -395,7 +396,7 @@ fn load_stack_job(
     if let Some(job) = state.stack_previews.get(job_id) {
         return Ok(job);
     }
-    let bytes = std::fs::read(super::manifest_path(&ctx.cache_dir_path, job_id))
+    let bytes = std::fs::read(super::manifest_path(&ctx.stack_root, job_id))
         .map_err(|_| AppError::NotFound)?;
     serde_json::from_slice(&bytes)
         .map_err(|error| AppError::InternalError(format!("Invalid stack manifest: {error}")))
@@ -410,7 +411,7 @@ fn load_color_job(
         .stack_previews
         .get_color(job_id)
         .map(Ok)
-        .unwrap_or_else(|| color::load_persisted_color_job(&ctx.cache_dir_path, job_id))
+        .unwrap_or_else(|| color::load_persisted_color_job(&ctx.stack_root, job_id))
 }
 
 fn load_color_stack_sources(
@@ -472,9 +473,9 @@ fn prepare_search(
     stack_groups: Vec<StackSearchGroup>,
 ) -> Result<PreparedSearch, AppError> {
     let reference_path = if source_kind == "mono" {
-        super::original_preview_path(&ctx.cache_dir_path, source_job_id, group_index.unwrap_or(0))
+        super::original_preview_path(&ctx.stack_root, source_job_id, group_index.unwrap_or(0))
     } else {
-        color::color_original_preview_path(&ctx.cache_dir_path, source_job_id)
+        color::color_original_preview_path(&ctx.stack_root, source_job_id)
     };
     let reference_reader = image::ImageReader::open(reference_path).map_err(|error| {
         AppError::InternalError(format!("Failed to read the stack dimensions: {error}"))
@@ -626,7 +627,8 @@ fn prepare_search(
         groups,
         reference_width,
         reference_height,
-        cache_root: ctx.cache_dir_path.clone(),
+        stack_root: ctx.stack_root.clone(),
+        calibration_root: ctx.calibration_root.clone(),
     })
 }
 
@@ -660,7 +662,7 @@ fn enqueue_search(state: Arc<AppState>, prepared: PreparedSearch) {
 fn run_search(state: &Arc<AppState>, prepared: PreparedSearch) {
     let search_id = prepared.public.search_id.clone();
     let database_id = prepared.public.database_id.clone();
-    let cache_root = prepared.cache_root.clone();
+    let stack_root = prepared.stack_root.clone();
     state
         .stack_previews
         .update_artifact_search(&search_id, |job| {
@@ -684,7 +686,7 @@ fn run_search(state: &Arc<AppState>, prepared: PreparedSearch) {
             }
         });
     if let Some(job) = state.stack_previews.get_artifact_search(&search_id)
-        && let Err(error) = persist_artifact_job(&cache_root, &job)
+        && let Err(error) = persist_artifact_job(&stack_root, &job)
     {
         tracing::warn!("Failed to persist artifact search {search_id}: {error}");
     }
@@ -709,7 +711,7 @@ fn run_search_inner(
         .get_directory_tree()
         .map_err(|error| format!("Indexing calibration folders: {error}"))?;
     let mut all_results = Vec::new();
-    let output_dir = artifact_dir(&prepared.cache_root, &prepared.public.search_id);
+    let output_dir = artifact_dir(&prepared.stack_root, &prepared.public.search_id);
     std::fs::create_dir_all(&output_dir).map_err(|error| error.to_string())?;
 
     for group in &prepared.groups {
@@ -730,7 +732,7 @@ fn run_search_inner(
             .collect::<Vec<_>>();
         let plan = crate::calibration::resolve_or_build_master_plan(
             &calibration_conn,
-            &prepared.cache_root,
+            &prepared.calibration_root,
             &paths,
             Some(&directory_tree),
             None,
@@ -799,7 +801,7 @@ fn run_search_inner(
             });
             if render_during_scan {
                 let original_path = artifact_crop_path(
-                    &prepared.cache_root,
+                    &prepared.stack_root,
                     &prepared.public.search_id,
                     source.image_id,
                 );
@@ -858,7 +860,7 @@ fn run_search_inner(
                 let masters = &plan.sessions[plan.assignments[source_index]].masters;
                 let crop = extract_source_crop(source, masters, prepared)?;
                 let original_path = artifact_crop_path(
-                    &prepared.cache_root,
+                    &prepared.stack_root,
                     &prepared.public.search_id,
                     source.image_id,
                 );
@@ -1296,19 +1298,20 @@ fn hex_digest(digest: impl AsRef<[u8]>) -> String {
     output
 }
 
-fn artifact_dir(cache_root: &FsPath, search_id: &str) -> PathBuf {
-    cache_root
-        .join("stack-previews")
-        .join("artifact-searches")
-        .join(search_id)
+fn artifact_dir(stack_root: &FsPath, search_id: &str) -> PathBuf {
+    crate::server::storage::stack_folder(
+        stack_root,
+        crate::server::storage::stack_kind::ARTIFACT_SEARCHES,
+    )
+    .join(search_id)
 }
 
-fn artifact_manifest_path(cache_root: &FsPath, search_id: &str) -> PathBuf {
-    artifact_dir(cache_root, search_id).join("manifest.json")
+fn artifact_manifest_path(stack_root: &FsPath, search_id: &str) -> PathBuf {
+    artifact_dir(stack_root, search_id).join("manifest.json")
 }
 
-fn artifact_crop_path(cache_root: &FsPath, search_id: &str, image_id: i32) -> PathBuf {
-    artifact_dir(cache_root, search_id).join(format!("image-{image_id}.png"))
+fn artifact_crop_path(stack_root: &FsPath, search_id: &str, image_id: i32) -> PathBuf {
+    artifact_dir(stack_root, search_id).join(format!("image-{image_id}.png"))
 }
 
 fn load_artifact_job(
@@ -1319,7 +1322,7 @@ fn load_artifact_job(
     if let Some(job) = state.stack_previews.get_artifact_search(search_id) {
         return Ok(job);
     }
-    let bytes = std::fs::read(artifact_manifest_path(&ctx.cache_dir_path, search_id))
+    let bytes = std::fs::read(artifact_manifest_path(&ctx.stack_root, search_id))
         .map_err(|_| AppError::NotFound)?;
     let job = serde_json::from_slice::<ArtifactSearchJob>(&bytes).map_err(|error| {
         AppError::InternalError(format!("Invalid artifact search manifest: {error}"))
@@ -1328,8 +1331,8 @@ fn load_artifact_job(
     Ok(job)
 }
 
-fn persist_artifact_job(cache_root: &FsPath, job: &ArtifactSearchJob) -> Result<(), String> {
-    let path = artifact_manifest_path(cache_root, &job.search_id);
+fn persist_artifact_job(stack_root: &FsPath, job: &ArtifactSearchJob) -> Result<(), String> {
+    let path = artifact_manifest_path(stack_root, &job.search_id);
     let parent = path
         .parent()
         .ok_or_else(|| "Artifact manifest path has no parent".to_string())?;
@@ -1443,7 +1446,7 @@ mod tests {
             .unwrap(),
         );
         let job_id = "a".repeat(64);
-        let preview_path = super::super::original_preview_path(&ctx.cache_dir_path, &job_id, 0);
+        let preview_path = super::super::original_preview_path(&ctx.stack_root, &job_id, 0);
         std::fs::create_dir_all(preview_path.parent().unwrap()).unwrap();
         image::GrayImage::new(16, 16).save(preview_path).unwrap();
         let group = StackGroupStatus {

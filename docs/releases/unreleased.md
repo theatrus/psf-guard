@@ -435,6 +435,10 @@
 
 ## Fixed
 
+- With previews set to JPEG, background pre-generation now writes the file
+  the viewer asks for. It used to save JPEG data under a `.png` name, so the
+  viewer missed it and rendered every image again.
+
 - A queued WBPP run no longer vanishes from the line when its turn comes while
   its database is busy; it keeps its place at the head. Two WBPP starts that
   arrive together, or a start that races the line, can no longer launch two

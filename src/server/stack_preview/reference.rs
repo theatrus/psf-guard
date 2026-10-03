@@ -33,26 +33,27 @@ struct CachedScore {
     score: Option<Score>,
 }
 
-fn cache_path(cache_root: &Path, source_fingerprint: &str) -> PathBuf {
+fn cache_path(stack_root: &Path, source_fingerprint: &str) -> PathBuf {
     let digest = Sha256::digest(source_fingerprint.as_bytes());
     let name = digest
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    cache_root
-        .join("stack-previews")
-        .join("reference-scores")
-        .join(format!("{name}.json"))
+    crate::server::storage::stack_folder(
+        stack_root,
+        crate::server::storage::stack_kind::REFERENCE_SCORES,
+    )
+    .join(format!("{name}.json"))
 }
 
-fn read_cached(cache_root: &Path, source_fingerprint: &str) -> Option<Option<Score>> {
-    let bytes = std::fs::read(cache_path(cache_root, source_fingerprint)).ok()?;
+fn read_cached(stack_root: &Path, source_fingerprint: &str) -> Option<Option<Score>> {
+    let bytes = std::fs::read(cache_path(stack_root, source_fingerprint)).ok()?;
     let cached: CachedScore = serde_json::from_slice(&bytes).ok()?;
     (cached.stacking_version == SEIZA_STACKING_VERSION).then_some(cached.score)
 }
 
-fn write_cached(cache_root: &Path, source_fingerprint: &str, score: Option<Score>) {
-    let path = cache_path(cache_root, source_fingerprint);
+fn write_cached(stack_root: &Path, source_fingerprint: &str, score: Option<Score>) {
+    let path = cache_path(stack_root, source_fingerprint);
     let record = CachedScore {
         stacking_version: SEIZA_STACKING_VERSION.into(),
         score,
@@ -88,9 +89,11 @@ fn score_frame(path: &Path) -> Result<Option<Score>, ()> {
 }
 
 /// Remove cached scores another Seiza version wrote; nothing reads them.
-pub(super) fn prune(cache_root: &Path) -> usize {
-    let Ok(entries) = std::fs::read_dir(cache_root.join("stack-previews").join("reference-scores"))
-    else {
+pub(super) fn prune(stack_root: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(crate::server::storage::stack_folder(
+        stack_root,
+        crate::server::storage::stack_kind::REFERENCE_SCORES,
+    )) else {
         return 0;
     };
     let mut removed = 0;
@@ -156,14 +159,14 @@ pub(super) fn reorder(frames: &mut Vec<PreparedFrame>, chosen: usize, order: snr
 /// when cancelled.
 pub(super) fn scores(
     frames: &[PreparedFrame],
-    cache_root: &Path,
+    stack_root: &Path,
     pool: &rayon::ThreadPool,
     cancel: &AtomicBool,
     mut progress: impl FnMut(usize, usize),
 ) -> Option<Vec<Option<Score>>> {
     let mut scores = frames
         .iter()
-        .map(|frame| read_cached(cache_root, &frame.source_fingerprint))
+        .map(|frame| read_cached(stack_root, &frame.source_fingerprint))
         .collect::<Vec<_>>();
     let missing = scores
         .iter()
@@ -188,7 +191,7 @@ pub(super) fn scores(
             // Only Seiza's own answer is kept; a failed read is retried next
             // time.
             if let Ok(score) = measured {
-                write_cached(cache_root, &frames[index].source_fingerprint, score);
+                write_cached(stack_root, &frames[index].source_fingerprint, score);
             }
             scores[index] = Some(measured.ok().flatten());
         }

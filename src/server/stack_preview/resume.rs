@@ -149,31 +149,31 @@ fn group_key(
     output
 }
 
-fn resume_dir(cache_root: &Path) -> PathBuf {
-    cache_root.join("stack-previews").join("resume")
+fn resume_dir(stack_root: &Path) -> PathBuf {
+    crate::server::storage::stack_folder(stack_root, crate::server::storage::stack_kind::RESUME)
 }
 
 pub(super) fn context_path(
-    cache_root: &Path,
+    stack_root: &Path,
     database_id: &str,
     target_id: i32,
     filter_name: &str,
     exposure_group_key: Option<&str>,
 ) -> PathBuf {
-    resume_dir(cache_root).join(format!(
+    resume_dir(stack_root).join(format!(
         "{}.seiza-stack",
         group_key(database_id, target_id, filter_name, exposure_group_key)
     ))
 }
 
 pub(super) fn manifest_path(
-    cache_root: &Path,
+    stack_root: &Path,
     database_id: &str,
     target_id: i32,
     filter_name: &str,
     exposure_group_key: Option<&str>,
 ) -> PathBuf {
-    resume_dir(cache_root).join(format!(
+    resume_dir(stack_root).join(format!(
         "{}.json",
         group_key(database_id, target_id, filter_name, exposure_group_key)
     ))
@@ -184,7 +184,7 @@ pub(super) fn manifest_path(
 /// decision carries the reason so the build can say why it starts over.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn load(
-    cache_root: &Path,
+    stack_root: &Path,
     database_id: &str,
     target_id: i32,
     filter_name: &str,
@@ -198,14 +198,14 @@ pub(super) fn load(
     requested: &[(i32, &str, f64)],
 ) -> ResumeDecision {
     let manifest_path = manifest_path(
-        cache_root,
+        stack_root,
         database_id,
         target_id,
         filter_name,
         exposure_group_key,
     );
     let context_path = context_path(
-        cache_root,
+        stack_root,
         database_id,
         target_id,
         filter_name,
@@ -311,21 +311,21 @@ pub(super) fn store_manifest(path: &Path, manifest: &ResumeManifest) -> Result<(
 /// Drop a group's checkpoint. Used when a fresh build replaces it and fails
 /// to save its own, so a later build cannot resume from the wrong ancestor.
 pub(super) fn discard(
-    cache_root: &Path,
+    stack_root: &Path,
     database_id: &str,
     target_id: i32,
     filter_name: &str,
     exposure_group_key: Option<&str>,
 ) {
     let _ = std::fs::remove_file(manifest_path(
-        cache_root,
+        stack_root,
         database_id,
         target_id,
         filter_name,
         exposure_group_key,
     ));
     let _ = std::fs::remove_file(context_path(
-        cache_root,
+        stack_root,
         database_id,
         target_id,
         filter_name,
@@ -384,10 +384,10 @@ mod tests {
         }
     }
 
-    fn store(cache_root: &Path, manifest: &ResumeManifest) {
+    fn store(stack_root: &Path, manifest: &ResumeManifest) {
         store_manifest(
             &manifest_path(
-                cache_root,
+                stack_root,
                 "db",
                 manifest.target_id,
                 &manifest.filter_name,
@@ -399,7 +399,7 @@ mod tests {
         // The context itself is Seiza's; its presence is what load checks.
         std::fs::write(
             context_path(
-                cache_root,
+                stack_root,
                 "db",
                 manifest.target_id,
                 &manifest.filter_name,
@@ -420,20 +420,20 @@ mod tests {
         assert_eq!(restored.decision.image_id, 1);
     }
 
-    fn try_load(cache_root: &Path, requested: &[(i32, &str)]) -> Option<ResumeState> {
+    fn try_load(stack_root: &Path, requested: &[(i32, &str)]) -> Option<ResumeState> {
         let requested = requested
             .iter()
             .map(|&(image_id, fingerprint)| (image_id, fingerprint, 300.0))
             .collect::<Vec<_>>();
-        try_load_with_exposures(cache_root, &requested)
+        try_load_with_exposures(stack_root, &requested)
     }
 
     fn try_load_with_exposures(
-        cache_root: &Path,
+        stack_root: &Path,
         requested: &[(i32, &str, f64)],
     ) -> Option<ResumeState> {
         load(
-            cache_root,
+            stack_root,
             "db",
             7,
             "Ha",
@@ -722,9 +722,9 @@ mod tests {
         }
     }
 
-    fn load_weighted(cache_root: &Path) -> ResumeDecision {
+    fn load_weighted(stack_root: &Path) -> ResumeDecision {
         load(
-            cache_root,
+            stack_root,
             "db",
             7,
             "Ha",

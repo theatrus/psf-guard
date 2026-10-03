@@ -224,7 +224,7 @@ pub async fn clear_calibration_masters(
         .acquire_maintenance_permit()
         .await
         .map_err(AppError::Conflict)?;
-    let master_root = ctx.cache_dir_path.join("calibration-masters");
+    let master_root = crate::server::storage::calibration_masters(&ctx.calibration_root);
     if master_root.exists() {
         tokio::fs::remove_dir_all(&master_root)
             .await
@@ -4116,7 +4116,10 @@ pub async fn get_image(
                 image_file_identity_cache_token(&image),
                 source_token,
             );
-            (ctx.get_cache_path("stats", &filename), source_token)
+            (
+                ctx.cache_dir_path.join("stats").join(filename),
+                source_token,
+            )
         })
     });
     if let Some((stats_cache_path, _)) = stats_cache.as_ref()
@@ -4557,13 +4560,13 @@ pub(crate) fn rendered_artifact_mapping_revision(
 /// The extension differs per format, so a PNG cache and a JPEG cache coexist:
 /// changing the setting misses and regenerates rather than serving one as the
 /// other, and changing it back finds the originals still valid.
-fn artifact_cache_path(
+pub(crate) fn artifact_cache_path(
     ctx: &DatabaseContext,
     category: &str,
     key: &str,
     encoding: crate::preview_format::PreviewEncoding,
 ) -> Result<PathBuf, AppError> {
-    let cm = crate::server::cache::CacheManager::new(PathBuf::from(&ctx.cache_dir));
+    let cm = ctx.cache();
     cm.ensure_category_dir(category)
         .map_err(|e| AppError::InternalError(format!("Failed to create cache directory: {}", e)))?;
     Ok(cm.get_cached_path(category, key, encoding.extension()))
@@ -5386,7 +5389,6 @@ pub async fn get_image_stars(
     use crate::hocus_focus_star_detection::detect_stars_hocus_focus;
     use crate::image_analysis::FitsImage;
     use crate::psf_fitting::PSFType;
-    use crate::server::cache::CacheManager;
 
     // Get image metadata from database
     let (image, file_only, target_name) = {
@@ -5430,7 +5432,7 @@ pub async fn get_image_stars(
     // detector picks a telescope-class preset from the frame's headers, so
     // v1 entries (fixed defaults) are stale for wide/long rigs.
     let cache_key = star_detection_cache_key(&image, &file_only, &source_token);
-    let cache_manager = CacheManager::new(PathBuf::from(&ctx.cache_dir));
+    let cache_manager = ctx.cache();
     cache_manager
         .ensure_category_dir("stars")
         .map_err(|e| AppError::InternalError(format!("Failed to create cache directory: {}", e)))?;
@@ -5946,7 +5948,6 @@ pub async fn get_psf_visualization(
     use crate::commands::visualize_psf_multi_common::create_psf_multi_image;
     use crate::image_analysis::FitsImage;
     use crate::psf_fitting::PSFType;
-    use crate::server::cache::CacheManager;
     use image::codecs::png::{CompressionType, FilterType, PngEncoder};
     use image::{ColorType, ImageEncoder};
 
@@ -6008,7 +6009,7 @@ pub async fn get_psf_visualization(
         grid_cols,
         &source_token,
     );
-    let cache_manager = CacheManager::new(PathBuf::from(&ctx.cache_dir));
+    let cache_manager = ctx.cache();
     cache_manager
         .ensure_category_dir("psf_multi")
         .map_err(|e| AppError::InternalError(format!("Failed to create cache directory: {}", e)))?;

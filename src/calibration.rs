@@ -2447,7 +2447,7 @@ fn header_pedestal_hint(light: &FrameMeta) -> Option<f64> {
 
 pub fn resolve_or_build_masters(
     conn: &Connection,
-    cache_root: &Path,
+    calibration_root: &Path,
     light_paths: &[PathBuf],
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
     cancel: Option<&AtomicBool>,
@@ -2455,7 +2455,7 @@ pub fn resolve_or_build_masters(
 ) -> Result<(seiza_stacking::CalibrationMasters, AppliedCalibration)> {
     resolve_or_build_masters_pinned(
         conn,
-        cache_root,
+        calibration_root,
         light_paths,
         directory_tree,
         cancel,
@@ -2481,7 +2481,7 @@ struct CalibrationBuildSettings {
 /// a different sample.
 fn resolve_or_build_masters_pinned(
     conn: &Connection,
-    cache_root: &Path,
+    calibration_root: &Path,
     light_paths: &[PathBuf],
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
     cancel: Option<&AtomicBool>,
@@ -2554,7 +2554,7 @@ fn resolve_or_build_masters_pinned(
             }
         }
     };
-    let master_root = cache_root.join("calibration-masters");
+    let master_root = crate::server::storage::calibration_masters(calibration_root);
     std::fs::create_dir_all(&master_root)
         .with_context(|| format!("creating {}", master_root.display()))?;
 
@@ -3095,7 +3095,7 @@ fn session_key(selected: &CalibrationSelection) -> String {
 /// fitted pedestal instead of fitting its own.
 pub fn resolve_or_build_master_plan(
     conn: &Connection,
-    cache_root: &Path,
+    calibration_root: &Path,
     light_paths: &[PathBuf],
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
     cancel: Option<&AtomicBool>,
@@ -3104,7 +3104,7 @@ pub fn resolve_or_build_master_plan(
 ) -> Result<CalibrationPlan> {
     resolve_or_build_master_plan_with_options(
         conn,
-        cache_root,
+        calibration_root,
         light_paths,
         directory_tree,
         cancel,
@@ -3255,7 +3255,7 @@ impl MasterBuildWatch {
 
 pub(crate) fn resolve_or_build_master_plan_with_options(
     conn: &Connection,
-    cache_root: &Path,
+    calibration_root: &Path,
     light_paths: &[PathBuf],
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
     cancel: Option<&AtomicBool>,
@@ -3320,7 +3320,7 @@ pub(crate) fn resolve_or_build_master_plan_with_options(
             .and_then(|detail| detail.estimated_pedestal_adu);
         let (masters, applied) = resolve_or_build_masters_pinned(
             conn,
-            cache_root,
+            calibration_root,
             lights,
             directory_tree,
             cancel,
@@ -3418,7 +3418,7 @@ fn compose_group_summary(
 
 pub fn resolve_or_build_masters_for_group(
     conn: &Connection,
-    cache_root: &Path,
+    calibration_root: &Path,
     light_paths: &[PathBuf],
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
     cancel: Option<&AtomicBool>,
@@ -3426,7 +3426,7 @@ pub fn resolve_or_build_masters_for_group(
 ) -> Result<(seiza_stacking::CalibrationMasters, AppliedCalibration)> {
     let mut plan = resolve_or_build_master_plan(
         conn,
-        cache_root,
+        calibration_root,
         light_paths,
         directory_tree,
         cancel,

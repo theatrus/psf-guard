@@ -1149,8 +1149,8 @@ impl StackPreviewManager {
 
     /// Everything on disk that is still referenced: jobs a panel may poll,
     /// and jobs a durable latest index still names. Reads every project's
-    /// index because a cache root hosts every project of a database.
-    fn cache_keep_set(&self, cache_root: &FsPath) -> janitor::KeepSet {
+    /// index because a stack root hosts every project of a database.
+    fn cache_keep_set(&self, stack_root: &FsPath) -> janitor::KeepSet {
         let mut mono_job_ids: std::collections::HashSet<String> =
             self.jobs.lock().unwrap().keys().cloned().collect();
         let mut color_job_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -1162,17 +1162,18 @@ impl StackPreviewManager {
                 color_input_ids.insert(input_id.clone());
             }
         }
-        for latest in read_latest_indices::<LatestStackPreviews>(&cache_root.join("stack-previews"))
-            .into_iter()
-            .chain(wbpp_stacks::read_wbpp_indices(
-                &cache_root.join("stack-previews"),
-            ))
+        for latest in
+            read_latest_indices::<LatestStackPreviews>(&crate::server::storage::stacks(stack_root))
+                .into_iter()
+                .chain(wbpp_stacks::read_wbpp_indices(
+                    &crate::server::storage::stacks(stack_root),
+                ))
         {
             for group in latest.groups {
                 mono_job_ids.insert(group.job_id);
             }
         }
-        for (job_id, input_id) in color::latest_color_references(cache_root) {
+        for (job_id, input_id) in color::latest_color_references(stack_root) {
             color_job_ids.insert(job_id);
             if let Some(input_id) = input_id {
                 color_input_ids.insert(input_id);
@@ -1187,9 +1188,9 @@ impl StackPreviewManager {
 
     /// Sweep superseded artifacts after a build settles. Failures are logged;
     /// pruning never fails a build.
-    pub(super) fn prune_cache(&self, cache_root: &FsPath) {
-        let keep = self.cache_keep_set(cache_root);
-        janitor::prune(cache_root, &keep, SEIZA_STACKING_VERSION);
+    pub(super) fn prune_cache(&self, stack_root: &FsPath) {
+        let keep = self.cache_keep_set(stack_root);
+        janitor::prune(stack_root, &keep, SEIZA_STACKING_VERSION);
         let active_sources = self
             .jobs
             .lock()
@@ -1197,7 +1198,7 @@ impl StackPreviewManager {
             .values()
             .map(|job| (job.job_id.clone(), job.artifact_revision.clone()))
             .collect();
-        rc_astro::prune_rc_astro_cache(cache_root, &active_sources);
+        rc_astro::prune_rc_astro_cache(stack_root, &active_sources);
     }
 
     pub(crate) async fn acquire_maintenance_permit(
@@ -1273,7 +1274,7 @@ impl StackPreviewManager {
                 .map_err(|error| format!("Failed to load project exposure groups: {error:?}"))?
         };
         let _guard = self.latest_write.lock().unwrap();
-        persist_latest_groups_with_exposures(&ctx.cache_dir_path, job, Some(&current))
+        persist_latest_groups_with_exposures(&ctx.stack_root, job, Some(&current))
     }
 }
 
@@ -1350,7 +1351,8 @@ struct PreparedJob {
     /// of their own. They only teach the pier-side mapping, so a channel
     /// that was never solved still faces the way its solved siblings do.
     orientation_peers: Vec<PreparedFrame>,
-    cache_root: PathBuf,
+    stack_root: PathBuf,
+    calibration_root: PathBuf,
     north_up: bool,
     order: snr::StackFrameOrder,
 }
@@ -1654,7 +1656,7 @@ fn start_prepared(
     request: &StackPreviewRequest,
     prepared: PreparedJob,
 ) -> Result<Started, AppError> {
-    let manifest_path = manifest_path(&prepared.cache_root, &prepared.public.job_id);
+    let manifest_path = manifest_path(&prepared.stack_root, &prepared.public.job_id);
     if let Some(existing) = state.stack_previews.get(&prepared.public.job_id)
         && (matches!(
             existing.state,
@@ -2020,7 +2022,7 @@ pub async fn get_latest_stack_previews(
     ctx: DbContext,
     Path((_db_id, project_id)): Path<(String, i32)>,
 ) -> Result<Json<ApiResponse<LatestStackPreviews>>, AppError> {
-    let path = latest_path(&ctx.cache_dir_path, project_id);
+    let path = latest_path(&ctx.stack_root, project_id);
     let latest = match std::fs::read(path) {
         Ok(bytes) => serde_json::from_slice::<LatestStackPreviews>(&bytes).map_err(|error| {
             AppError::InternalError(format!("Invalid latest stack preview index: {error}"))
@@ -2057,7 +2059,7 @@ pub async fn get_stack_preview_job(
         }
         return Ok(Json(ApiResponse::success(job)));
     }
-    let path = manifest_path(&ctx.cache_dir_path, &job_id);
+    let path = manifest_path(&ctx.stack_root, &job_id);
     let bytes = std::fs::read(path).map_err(|_| AppError::NotFound)?;
     let job: StackPreviewJob = serde_json::from_slice(&bytes)
         .map_err(|error| AppError::InternalError(format!("Invalid stack manifest: {error}")))?;
@@ -2075,9 +2077,9 @@ pub async fn get_stack_preview_image(
 ) -> Result<Response, AppError> {
     validate_job_id(&job_id)?;
     let path = match query.size {
-        StackPreviewImageSize::Screen => preview_path(&ctx.cache_dir_path, &job_id, group_index),
+        StackPreviewImageSize::Screen => preview_path(&ctx.stack_root, &job_id, group_index),
         StackPreviewImageSize::Original => {
-            original_preview_path(&ctx.cache_dir_path, &job_id, group_index)
+            original_preview_path(&ctx.stack_root, &job_id, group_index)
         }
     };
     let file = tokio::fs::File::open(&path)
@@ -2107,7 +2109,7 @@ pub async fn get_stack_preview_snr(
     Path((_db_id, job_id, group_index)): Path<(String, String, usize)>,
 ) -> Result<Response, AppError> {
     validate_job_id(&job_id)?;
-    let path = snr_path(&ctx.cache_dir_path, &job_id, group_index);
+    let path = snr_path(&ctx.stack_root, &job_id, group_index);
     let body = tokio::fs::read(&path)
         .await
         .map_err(|_| AppError::NotFound)?;
@@ -2127,7 +2129,7 @@ pub async fn download_stack_preview_fits(
     Path((_db_id, job_id, group_index)): Path<(String, String, usize)>,
 ) -> Result<Response, AppError> {
     validate_job_id(&job_id)?;
-    let path = fits_path(&ctx.cache_dir_path, &job_id, group_index);
+    let path = fits_path(&ctx.stack_root, &job_id, group_index);
     let file = tokio::fs::File::open(&path)
         .await
         .map_err(|_| AppError::NotFound)?;
@@ -2165,7 +2167,7 @@ pub async fn apply_stack_preview_stretch(
     let result = stretch::apply_to_fits(
         state,
         ctx.id.clone(),
-        ctx.cache_dir_path.clone(),
+        ctx.stack_root.clone(),
         source_key,
         revision,
         source,
@@ -2192,7 +2194,7 @@ pub async fn get_stack_preview_processing(
     let (source_key, revision, _) = stack_processing_source(&state, &ctx, &job_id, group_index)?;
     validate_processing_revision(query.v.as_deref(), &revision)?;
     Ok(Json(ApiResponse::success(stretch::selected_processing(
-        &ctx.cache_dir_path,
+        &ctx.stack_root,
         &source_key,
         &revision,
     )?)))
@@ -2206,7 +2208,7 @@ pub async fn clear_stack_preview_processing(
 ) -> Result<StatusCode, AppError> {
     let (source_key, revision, _) = stack_processing_source(&state, &ctx, &job_id, group_index)?;
     validate_processing_revision(query.v.as_deref(), &revision)?;
-    stretch::clear_selected_processing(&ctx.cache_dir_path, &source_key, &revision)?;
+    stretch::clear_selected_processing(&ctx.stack_root, &source_key, &revision)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -2229,7 +2231,7 @@ fn stack_processing_source(
     let job = if let Some(job) = state.stack_previews.get(job_id) {
         job
     } else {
-        let bytes = std::fs::read(manifest_path(&ctx.cache_dir_path, job_id))
+        let bytes = std::fs::read(manifest_path(&ctx.stack_root, job_id))
             .map_err(|_| AppError::NotFound)?;
         serde_json::from_slice::<StackPreviewJob>(&bytes).map_err(|error| {
             AppError::InternalError(format!("Invalid stack preview manifest: {error}"))
@@ -2243,7 +2245,7 @@ fn stack_processing_source(
         .get(group_index)
         .filter(|group| group.index == group_index && group.state == StackGroupState::Ready)
         .ok_or(AppError::NotFound)?;
-    let source = fits_path(&ctx.cache_dir_path, job_id, group.index);
+    let source = fits_path(&ctx.stack_root, job_id, group.index);
     Ok((
         format!("mono:{job_id}:{}", group.index),
         job.artifact_revision,
@@ -2356,7 +2358,8 @@ fn prepare_channels(
         public,
         groups,
         orientation_peers: _,
-        cache_root,
+        stack_root,
+        calibration_root,
         north_up,
         order,
     } = whole;
@@ -2415,7 +2418,8 @@ fn prepare_channels(
                 public: channel_public,
                 groups: vec![PreparedGroup { index: 0, ..group }],
                 orientation_peers: peers,
-                cache_root: cache_root.clone(),
+                stack_root: stack_root.clone(),
+                calibration_root: calibration_root.clone(),
                 north_up,
                 order,
             },
@@ -2809,7 +2813,8 @@ fn prepare_whole(
                 color_defaults: request.color_defaults.clone(),
             },
             groups: prepared_groups,
-            cache_root: ctx.cache_dir_path.clone(),
+            stack_root: ctx.stack_root.clone(),
+            calibration_root: ctx.calibration_root.clone(),
             north_up: request.north_up,
             order: request.order,
             orientation_peers: Vec::new(),
@@ -3119,7 +3124,7 @@ fn reference_anchors(
 fn choose_references(
     state: &Arc<AppState>,
     job_id: &str,
-    cache_root: &FsPath,
+    stack_root: &FsPath,
     groups: &mut [PreparedGroup],
     order: snr::StackFrameOrder,
     worker_policy: &crate::concurrency::WorkerPolicy,
@@ -3148,7 +3153,7 @@ fn choose_references(
         };
         let index = group.index;
         let Some(scores) =
-            reference::scores(&group.frames, cache_root, &pool, cancel, |done, count| {
+            reference::scores(&group.frames, stack_root, &pool, cancel, |done, count| {
                 state.stack_previews.update(job_id, |job| {
                     job.groups[index].phase = format!("Choosing a reference: frame {done}/{count}");
                 });
@@ -3205,7 +3210,8 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
         public: _,
         mut groups,
         orientation_peers,
-        cache_root,
+        stack_root,
+        calibration_root,
         north_up,
         order,
     } = prepared;
@@ -3216,7 +3222,8 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
     let group_job = GroupJob {
         database_id: &database_id,
         job_id: &job_id,
-        cache_root: &cache_root,
+        stack_root: &stack_root,
+        calibration_root: &calibration_root,
         north_up,
         accepted_only,
         scoring,
@@ -3232,7 +3239,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
             choose_references(
                 state,
                 &job_id,
-                &cache_root,
+                &stack_root,
                 &mut groups,
                 order,
                 &worker_policy,
@@ -3294,7 +3301,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
         }
     });
     if let Some(job) = state.stack_previews.get(&job_id)
-        && let Err(error) = persist_manifest(&cache_root, &job)
+        && let Err(error) = persist_manifest(&stack_root, &job)
     {
         tracing::warn!("Failed to persist stack preview manifest: {error}");
     }
@@ -3323,7 +3330,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
     {
         automatic::compose_colors_after(state, &ctx, &job);
     }
-    state.stack_previews.prune_cache(&cache_root);
+    state.stack_previews.prune_cache(&stack_root);
 }
 
 /// Whether a channel produced an artifact or stopped on request. A failure is
@@ -3338,7 +3345,8 @@ enum GroupOutcome {
 struct GroupJob<'a> {
     database_id: &'a str,
     job_id: &'a str,
-    cache_root: &'a FsPath,
+    stack_root: &'a FsPath,
+    calibration_root: &'a FsPath,
     north_up: bool,
     accepted_only: bool,
     scoring: StackScoringSettings,
@@ -3359,7 +3367,8 @@ fn run_group(
     let &GroupJob {
         database_id,
         job_id,
-        cache_root,
+        stack_root,
+        calibration_root,
         north_up,
         accepted_only,
         scoring,
@@ -3445,7 +3454,7 @@ fn run_group(
     let plan = pool.install(move || {
         crate::calibration::resolve_or_build_master_plan_with_options(
             &calibration_conn,
-            cache_root,
+            calibration_root,
             &light_paths,
             Some(&directory_tree),
             Some(cancel.as_ref()),
@@ -3547,7 +3556,7 @@ fn run_group(
         })
         .collect::<Vec<_>>();
     let decision = resume::load(
-        cache_root,
+        stack_root,
         database_id,
         group_target_id,
         &group_filter_name,
@@ -3620,7 +3629,7 @@ fn run_group(
                     tracing::warn!(
                         "Stack checkpoint context and manifest did not match; rebuilding from scratch"
                     );
-                    resume::discard(cache_root, database_id, group_target_id, &group_filter_name, group_exposure_key.as_deref());
+                    resume::discard(stack_root, database_id, group_target_id, &group_filter_name, group_exposure_key.as_deref());
                     state.stack_previews.update(job_id, |job| {
                         job.groups[group.index].resume_note =
                             Some("Full restack: the checkpoint files did not match".into());
@@ -3631,7 +3640,7 @@ fn run_group(
                     tracing::warn!(
                         "Stack checkpoint could not be reopened ({error}); rebuilding from scratch"
                     );
-                    resume::discard(cache_root, database_id, group_target_id, &group_filter_name, group_exposure_key.as_deref());
+                    resume::discard(stack_root, database_id, group_target_id, &group_filter_name, group_exposure_key.as_deref());
                     state.stack_previews.update(job_id, |job| {
                         job.groups[group.index].resume_note =
                             Some("Full restack: the checkpoint could not be reopened".into());
@@ -3809,7 +3818,7 @@ fn run_group(
                 }
                 if ledger.iter().any(|frame| frame.retryable_failure) {
                     resume::discard(
-                        cache_root,
+                        stack_root,
                         database_id,
                         group_target_id,
                         &group_filter_name,
@@ -3818,7 +3827,7 @@ fn run_group(
                     return;
                 }
                 let context_path = resume::context_path(
-                    cache_root,
+                    stack_root,
                     database_id,
                     group_target_id,
                     &group_filter_name,
@@ -3852,7 +3861,7 @@ fn run_group(
                     .and_then(|()| {
                         resume::store_manifest(
                             &resume::manifest_path(
-                                cache_root,
+                                stack_root,
                                 database_id,
                                 group_target_id,
                                 &group_filter_name,
@@ -3866,7 +3875,7 @@ fn run_group(
                     // it. Discard the pair so nothing resumes from half a save.
                     tracing::warn!("Failed to save stack checkpoint: {error}");
                     resume::discard(
-                        cache_root,
+                        stack_root,
                         database_id,
                         group_target_id,
                         &group_filter_name,
@@ -4326,7 +4335,7 @@ fn run_group(
             status.phase = "rendering".into();
             status.sky_orientation = Some(sky_orientation);
         });
-        let fits_destination = fits_path(cache_root, job_id, group.index);
+        let fits_destination = fits_path(stack_root, job_id, group.index);
         let fits_parent = fits_destination
             .parent()
             .ok_or_else(|| "Stack FITS path has no parent".to_string())?;
@@ -4400,13 +4409,13 @@ fn run_group(
             &image,
             &stretch::default_linear_config(),
             stretch::StackStretchSourceTransfer::Linear,
-            &preview_path(cache_root, job_id, group.index),
-            &original_preview_path(cache_root, job_id, group.index),
+            &preview_path(stack_root, job_id, group.index),
+            &original_preview_path(stack_root, job_id, group.index),
         )
         .map_err(|error| error.to_string())?;
         let snr_url = state.stack_previews.get(job_id).and_then(|current| {
             publish_snr_artifact(
-                &snr_path(cache_root, job_id, group.index),
+                &snr_path(stack_root, job_id, group.index),
                 &progressive,
                 format!(
                     "/api/db/{}/stack-previews/{}/{}/snr?v={}",
@@ -4497,8 +4506,8 @@ fn save_png_atomic(image: &image::DynamicImage, destination: &FsPath) -> Result<
     std::fs::rename(&temporary, destination).map_err(|error| error.to_string())
 }
 
-fn persist_manifest(cache_root: &FsPath, job: &StackPreviewJob) -> Result<(), String> {
-    let path = manifest_path(cache_root, &job.job_id);
+fn persist_manifest(stack_root: &FsPath, job: &StackPreviewJob) -> Result<(), String> {
+    let path = manifest_path(stack_root, &job.job_id);
     let parent = path
         .parent()
         .ok_or_else(|| "Stack manifest path has no parent".to_string())?;
@@ -4510,12 +4519,12 @@ fn persist_manifest(cache_root: &FsPath, job: &StackPreviewJob) -> Result<(), St
 }
 
 #[cfg(test)]
-fn persist_latest_groups(cache_root: &FsPath, job: &StackPreviewJob) -> Result<(), String> {
-    persist_latest_groups_with_exposures(cache_root, job, None)
+fn persist_latest_groups(stack_root: &FsPath, job: &StackPreviewJob) -> Result<(), String> {
+    persist_latest_groups_with_exposures(stack_root, job, None)
 }
 
 fn persist_latest_groups_with_exposures(
-    cache_root: &FsPath,
+    stack_root: &FsPath,
     job: &StackPreviewJob,
     current: Option<&ProjectExposureGroups>,
 ) -> Result<(), String> {
@@ -4532,7 +4541,7 @@ fn persist_latest_groups_with_exposures(
         return Ok(());
     }
 
-    let path = latest_path(cache_root, job.project_id);
+    let path = latest_path(stack_root, job.project_id);
     let mut latest = std::fs::read(&path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<LatestStackPreviews>(&bytes).ok())
@@ -4657,12 +4666,12 @@ pub(super) fn current_project_latest_stacks(
     Ok(latest)
 }
 
-fn stack_dir(cache_root: &FsPath, job_id: &str) -> PathBuf {
-    cache_root.join("stack-previews").join(job_id)
+fn stack_dir(stack_root: &FsPath, job_id: &str) -> PathBuf {
+    crate::server::storage::stacks(stack_root).join(job_id)
 }
 
-fn manifest_path(cache_root: &FsPath, job_id: &str) -> PathBuf {
-    stack_dir(cache_root, job_id).join("manifest.json")
+fn manifest_path(stack_root: &FsPath, job_id: &str) -> PathBuf {
+    stack_dir(stack_root, job_id).join("manifest.json")
 }
 
 /// Parse every `latest-project-*.json` directly inside a directory.
@@ -4683,29 +4692,27 @@ pub(crate) fn read_latest_indices<T: serde::de::DeserializeOwned>(directory: &Fs
         .collect()
 }
 
-fn latest_path(cache_root: &FsPath, project_id: i32) -> PathBuf {
-    cache_root
-        .join("stack-previews")
-        .join(format!("latest-project-{project_id}.json"))
+fn latest_path(stack_root: &FsPath, project_id: i32) -> PathBuf {
+    crate::server::storage::stacks(stack_root).join(format!("latest-project-{project_id}.json"))
 }
 
-fn preview_path(cache_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
-    stack_dir(cache_root, job_id).join(format!("group-{group_index}.png"))
+fn preview_path(stack_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
+    stack_dir(stack_root, job_id).join(format!("group-{group_index}.png"))
 }
 
-fn original_preview_path(cache_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
-    stack_dir(cache_root, job_id).join(format!("group-{group_index}-original.png"))
+fn original_preview_path(stack_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
+    stack_dir(stack_root, job_id).join(format!("group-{group_index}-original.png"))
 }
 
-fn fits_path(cache_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
-    stack_dir(cache_root, job_id).join(format!("group-{group_index}.fits"))
+fn fits_path(stack_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
+    stack_dir(stack_root, job_id).join(format!("group-{group_index}.fits"))
 }
 
 /// A group's progressive signal-to-noise curve, as JSON beside its FITS. It
 /// lives inside the job directory, so the cache janitor sweeps it with the
 /// rest of the job.
-fn snr_path(cache_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
-    stack_dir(cache_root, job_id).join(format!("group-{group_index}-snr.json"))
+fn snr_path(stack_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
+    stack_dir(stack_root, job_id).join(format!("group-{group_index}-snr.json"))
 }
 
 /// The exposure the accumulator has taken so far. Turned-away frames carry no
@@ -5067,8 +5074,7 @@ mod tests {
                 VALUES(?1,1,1,1,?2,?1,'Ha')", rusqlite::params![id, serde_json::json!({"ExposureDuration":exposure}).to_string()]).unwrap();
         }
         let mut ctx = DatabaseContext::new_for_test(conn);
-        ctx.cache_dir_path = directory.path().to_path_buf();
-        ctx.cache_dir = directory.path().to_string_lossy().into_owned();
+        ctx.use_storage_for_test(directory.path());
         let ctx = Arc::new(ctx);
         let request = |ids: Vec<i32>| {
             serde_json::from_value::<StackPreviewRequest>(
@@ -5120,8 +5126,7 @@ mod tests {
                 VALUES(?1,1,1,1,'{}',?1,?2)", rusqlite::params![id, filter]).unwrap();
         }
         let mut ctx = DatabaseContext::new_for_test(conn);
-        ctx.cache_dir_path = directory.path().to_path_buf();
-        ctx.cache_dir = directory.path().to_string_lossy().into_owned();
+        ctx.use_storage_for_test(directory.path());
         let ctx = Arc::new(ctx);
         let request: StackPreviewRequest = serde_json::from_value(
             serde_json::json!({"image_ids":[1, 2, 3, 4],"calibration":"off"}),
@@ -5783,8 +5788,7 @@ mod tests {
                 VALUES(?1,1,1,1,'{}',?1,'Ha')", rusqlite::params![id]).unwrap();
         }
         let mut ctx = DatabaseContext::new_for_test(conn);
-        ctx.cache_dir_path = directory.path().to_path_buf();
-        ctx.cache_dir = directory.path().to_string_lossy().into_owned();
+        ctx.use_storage_for_test(directory.path());
         let ctx = Arc::new(ctx);
         let job = |extra: serde_json::Value| {
             let mut body = serde_json::json!({"image_ids":[1,2,3],"calibration":"off"});

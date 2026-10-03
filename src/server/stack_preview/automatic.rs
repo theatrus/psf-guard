@@ -542,26 +542,27 @@ fn followed_projects(ctx: &DatabaseContext) -> Vec<i32> {
 
 /// Projects whose cards this database shows now.
 fn stacked_projects(ctx: &DatabaseContext) -> Vec<i32> {
-    let mut projects: Vec<i32> =
-        read_latest_indices::<LatestStackPreviews>(&ctx.cache_dir_path.join("stack-previews"))
-            .into_iter()
-            .filter(|latest| latest.database_id == ctx.id)
-            .filter_map(|latest| {
-                let project_id = latest.project_id;
-                match current_project_latest_stacks(ctx, project_id, latest) {
-                    Ok(latest) if !latest.groups.is_empty() => Some(project_id),
-                    Ok(_) => None,
-                    Err(error) => {
-                        tracing::warn!(
-                            db = %ctx.id,
-                            project_id,
-                            "could not read remembered stack previews: {error:?}"
-                        );
-                        None
-                    }
-                }
-            })
-            .collect();
+    let mut projects: Vec<i32> = read_latest_indices::<LatestStackPreviews>(
+        &crate::server::storage::stacks(&ctx.stack_root),
+    )
+    .into_iter()
+    .filter(|latest| latest.database_id == ctx.id)
+    .filter_map(|latest| {
+        let project_id = latest.project_id;
+        match current_project_latest_stacks(ctx, project_id, latest) {
+            Ok(latest) if !latest.groups.is_empty() => Some(project_id),
+            Ok(_) => None,
+            Err(error) => {
+                tracing::warn!(
+                    db = %ctx.id,
+                    project_id,
+                    "could not read remembered stack previews: {error:?}"
+                );
+                None
+            }
+        }
+    })
+    .collect();
     projects.sort_unstable();
     projects.dedup();
     projects
@@ -594,7 +595,7 @@ fn read_latest(
     ctx: &DatabaseContext,
     project_id: i32,
 ) -> Result<Option<LatestStackPreviews>, AppError> {
-    let bytes = match std::fs::read(latest_path(&ctx.cache_dir_path, project_id)) {
+    let bytes = match std::fs::read(latest_path(&ctx.stack_root, project_id)) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
@@ -669,7 +670,7 @@ async fn refresh_project(
             .get(&job_id)
             .filter(|existing| existing.state == StackJobState::Completed)
             .or_else(|| {
-                std::fs::read(manifest_path(&prepared.cache_root, &job_id))
+                std::fs::read(manifest_path(&prepared.stack_root, &job_id))
                     .ok()
                     .and_then(|bytes| serde_json::from_slice::<StackPreviewJob>(&bytes).ok())
                     .filter(|existing| existing.state == StackJobState::Completed)
@@ -1124,11 +1125,11 @@ fn enqueue_color_after(
     {
         return;
     }
-    let manifest = color::color_manifest_path(&prepared.cache_root, &color_id);
+    let manifest = color::color_manifest_path(&prepared.stack_root, &color_id);
     if let Ok(bytes) = std::fs::read(&manifest)
         && let Ok(existing) = serde_json::from_slice::<StackColorJob>(&bytes)
         && existing.state == StackJobState::Completed
-        && color::color_job_artifacts_exist(&prepared.cache_root, &existing)
+        && color::color_job_artifacts_exist(&prepared.stack_root, &existing)
     {
         return;
     }
@@ -1370,8 +1371,7 @@ mod tests {
                 VALUES(?1,1,1,1,'{}',?2,?3)", rusqlite::params![id, at, filter]).unwrap();
         }
         let mut ctx = DatabaseContext::new_for_test(conn);
-        ctx.cache_dir_path = directory.path().to_path_buf();
-        ctx.cache_dir = directory.path().to_string_lossy().into_owned();
+        ctx.use_storage_for_test(directory.path());
         let ctx = Arc::new(ctx);
         let mut stacked = remembered(1, "R", 10, crate::calibration::CalibrationMode::Auto, true);
         stacked["group"]["input_images"] = serde_json::json!([
@@ -1382,7 +1382,7 @@ mod tests {
             "schema_version": 1, "database_id": ctx.id, "project_id": 1, "updated_unix_seconds": 5,
             "groups": [stacked]
         });
-        let path = latest_path(&ctx.cache_dir_path, 1);
+        let path = latest_path(&ctx.stack_root, 1);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, serde_json::to_vec(&latest).unwrap()).unwrap();
 

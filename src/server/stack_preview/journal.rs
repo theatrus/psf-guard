@@ -474,7 +474,7 @@ async fn restore_stack_job(
             // finished manifest stays until the new one lands.
             if !request.force
                 && let Ok(bytes) =
-                    std::fs::read(super::manifest_path(&prepared.cache_root, &job_id))
+                    std::fs::read(super::manifest_path(&prepared.stack_root, &job_id))
                 && let Ok(existing) = serde_json::from_slice::<StackPreviewJob>(&bytes)
                 && existing.state == super::StackJobState::Completed
             {
@@ -510,12 +510,12 @@ async fn restore_stack_job(
             if state.stack_previews.get_color(&job_id).is_some() {
                 return Err(NotRestored::Skip(format!("{job_id} is already known")));
             }
-            let manifest = super::color::color_manifest_path(&prepared.cache_root, &job_id);
+            let manifest = super::color::color_manifest_path(&prepared.stack_root, &job_id);
             if !request.force
                 && let Ok(bytes) = std::fs::read(&manifest)
                 && let Ok(existing) = serde_json::from_slice::<super::color::StackColorJob>(&bytes)
                 && existing.state == super::StackJobState::Completed
-                && super::color::color_job_artifacts_exist(&prepared.cache_root, &existing)
+                && super::color::color_job_artifacts_exist(&prepared.stack_root, &existing)
             {
                 return Err(NotRestored::Skip(format!(
                     "{job_id} finished before the restart"

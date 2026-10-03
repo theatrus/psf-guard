@@ -2,7 +2,7 @@
 //!
 //! The run is the referenced WBPP export made real: PSF Guard plans the
 //! frames, writes `run-wbpp.js` and its launchers into a work folder below
-//! the cache, and starts PixInsight on it headless, with a virtual display
+//! the runs folder, and starts PixInsight on it headless, with a virtual display
 //! when the server has none. One run per database at a time, as the export
 //! and import jobs are. Progress comes from WBPP's own log, which the run
 //! reads every couple of seconds; the results are whatever WBPP wrote below
@@ -218,7 +218,7 @@ pub struct PixInsightSettingsResponse {
     /// available.
     pub ready: bool,
     /// The runs folder the settings name, if any. Absent means each
-    /// database's export directory when it has one, else the cache.
+    /// database's export directory when it has one, else its stack root.
     pub runs_dir: Option<String>,
     /// Bytes free where that folder is (or would be), when known.
     pub runs_dir_free_bytes: Option<u64>,
@@ -229,7 +229,7 @@ pub struct UpdatePixInsightSettingsRequest {
     /// Empty or absent means look in the standard places.
     #[serde(default)]
     pub binary: Option<String>,
-    /// Empty or absent means the export directory or the cache.
+    /// Empty or absent means the export directory or the stack root.
     #[serde(default)]
     pub runs_dir: Option<String>,
 }
@@ -272,14 +272,14 @@ fn settings_response(settings: PixInsightSettings) -> PixInsightSettingsResponse
 }
 
 /// Where a run's folder goes: what the request names, else the settings'
-/// runs folder, else the database's export directory, else the cache.
-/// Every root but the cache gets the database's slug below it, so two
+/// runs folder, else the database's export directory, else the stack root.
+/// Every root but the stack root gets the database's slug below it, so two
 /// databases' runs never share a folder.
 pub fn run_root(
     requested: Option<&str>,
     settings_runs_dir: Option<&str>,
     export_dir: Option<&Path>,
-    cache_dir: &Path,
+    stack_root: &Path,
     db_id: &str,
 ) -> PathBuf {
     if let Some(root) = requested.map(str::trim).filter(|root| !root.is_empty()) {
@@ -294,7 +294,7 @@ pub fn run_root(
     if let Some(export_dir) = export_dir {
         return export_dir.join("wbpp");
     }
-    cache_dir.join("wbpp")
+    stack_root.join(crate::server::storage::WBPP_RUNS)
 }
 
 /// GET /api/settings/pixinsight
@@ -838,7 +838,7 @@ async fn launch(
         req.work_root.as_deref(),
         settings.runs_dir.as_deref(),
         ctx.export_dir.as_deref(),
-        &ctx.cache_dir_path,
+        &ctx.stack_root,
         &ctx.id,
     );
     if root.to_string_lossy().contains(',') {

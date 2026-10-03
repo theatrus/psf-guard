@@ -101,13 +101,11 @@ pub fn choose_masters(files: &[PathBuf]) -> Vec<(PathBuf, MasterName)> {
     chosen
 }
 
-pub(super) fn wbpp_index_path(cache_root: &Path, project_id: i32) -> PathBuf {
-    cache_root
-        .join("stack-previews")
-        .join(format!("wbpp-project-{project_id}.json"))
+pub(super) fn wbpp_index_path(stack_root: &Path, project_id: i32) -> PathBuf {
+    crate::server::storage::stacks(stack_root).join(format!("wbpp-project-{project_id}.json"))
 }
 
-/// Every WBPP index in a cache, for the janitor's keep-set.
+/// Every WBPP index below a stack root, for the janitor's keep-set.
 pub(super) fn read_wbpp_indices(directory: &Path) -> Vec<LatestStackPreviews> {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return Vec::new();
@@ -127,7 +125,7 @@ pub(super) fn read_wbpp_indices(directory: &Path) -> Vec<LatestStackPreviews> {
 
 /// A project's WBPP stacks, empty when it has none.
 pub fn load_index(ctx: &DatabaseContext, project_id: i32) -> LatestStackPreviews {
-    std::fs::read(wbpp_index_path(&ctx.cache_dir_path, project_id))
+    std::fs::read(wbpp_index_path(&ctx.stack_root, project_id))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<LatestStackPreviews>(&bytes).ok())
         .filter(|index| index.database_id == ctx.id && index.project_id == project_id)
@@ -197,10 +195,10 @@ static IMPORT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Write one master's FITS and previews into the stack store, unless an
 /// earlier import already left both. Returns its channel count.
-fn write_master(cache_root: &Path, job_id: &str, master: &Path) -> Result<usize, String> {
-    let fits = super::fits_path(cache_root, job_id, 0);
-    let preview = super::preview_path(cache_root, job_id, 0);
-    let original = super::original_preview_path(cache_root, job_id, 0);
+fn write_master(stack_root: &Path, job_id: &str, master: &Path) -> Result<usize, String> {
+    let fits = super::fits_path(stack_root, job_id, 0);
+    let preview = super::preview_path(stack_root, job_id, 0);
+    let original = super::original_preview_path(stack_root, job_id, 0);
     let source = if fits.is_file() {
         fits.as_path()
     } else {
@@ -208,7 +206,7 @@ fn write_master(cache_root: &Path, job_id: &str, master: &Path) -> Result<usize,
     };
     let frame = crate::image_io::open_linear_frame(source).map_err(|error| error.to_string())?;
     if !fits.is_file() {
-        let directory = super::stack_dir(cache_root, job_id);
+        let directory = super::stack_dir(stack_root, job_id);
         std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
         let temporary = directory.join(format!(
             "group-0.fits.{}.part",
@@ -261,7 +259,7 @@ pub fn import_masters(
     if masters.is_empty() {
         return Err("the run wrote no master lights".into());
     }
-    let cache_root = &ctx.cache_dir_path;
+    let stack_root = &ctx.stack_root;
     // One import at a time: the automatic one and a click can name the same
     // masters, and the index is read, changed, and written whole.
     let _guard = IMPORT_LOCK
@@ -283,7 +281,7 @@ pub fn import_masters(
         };
         let job_id = job_id_for(&path, &metadata);
         let revision = format!("wbpp-{}", &job_id[..12]);
-        let channels = match write_master(cache_root, &job_id, &path) {
+        let channels = match write_master(stack_root, &job_id, &path) {
             Ok(channels) => channels,
             Err(error) => {
                 outcome.skipped.push(format!("{label}: {error}"));
@@ -348,7 +346,7 @@ pub fn import_masters(
             color_defaults: None,
         };
         if let Err(error) =
-            super::stretch::write_json_atomic(&super::manifest_path(cache_root, &job_id), &job)
+            super::stretch::write_json_atomic(&super::manifest_path(stack_root, &job_id), &job)
         {
             outcome.skipped.push(format!("{label}: {error}"));
             continue;
@@ -394,7 +392,7 @@ pub fn import_masters(
             .then_with(|| left.group.filter_name.cmp(&right.group.filter_name))
     });
     index.updated_unix_seconds = now;
-    super::stretch::write_json_atomic(&wbpp_index_path(cache_root, project_id), &index)?;
+    super::stretch::write_json_atomic(&wbpp_index_path(stack_root, project_id), &index)?;
     Ok(outcome)
 }
 
@@ -533,7 +531,7 @@ mod tests {
         assert_eq!(entry.group.filter_name, "R");
         assert_eq!(entry.group.output_channels, 1);
         assert_eq!(entry.wbpp.as_ref().unwrap().exposure_seconds, Some(60.0));
-        let cache = &ctx.cache_dir_path;
+        let cache = &ctx.stack_root;
         assert!(super::super::fits_path(cache, &entry.job_id, 0).is_file());
         assert!(super::super::preview_path(cache, &entry.job_id, 0).is_file());
 
