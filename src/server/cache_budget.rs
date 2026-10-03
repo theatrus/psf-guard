@@ -332,16 +332,17 @@ fn report_volume(
             .flatten()
             .map(|candidate| candidate.bytes)
             .sum();
+        // The permit first: a pass that may not take masters reads nothing,
+        // and no build can reuse a master between choosing and deleting it.
         if cheap < need
             && folders
                 .iter()
                 .any(|folder| folder.holds(StorageKind::Calibration))
+            && let Some(permit) = no_build()
         {
             let masters = master_candidates(folders, device, now);
             let master_bytes: u64 = masters.iter().map(|candidate| candidate.bytes).sum();
-            if cheap + master_bytes >= need
-                && let Some(permit) = no_build()
-            {
+            if cheap + master_bytes >= need {
                 _held = Some(permit);
                 tiers.push(masters);
             }

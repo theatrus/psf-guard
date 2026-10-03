@@ -75,9 +75,12 @@ pub fn sweep(state: &AppState, ctx: &DatabaseContext, now: SystemTime) -> usize 
     let Some(_no_build) = state.stack_previews.try_maintenance_permit() else {
         return 0;
     };
+    // A build may have reused one since it was chosen.
+    let still_unused =
+        |path: &&PathBuf| age(path, now, Used).is_some_and(|unused| unused >= REPLACED_UNUSED);
     let removed = debris
         .iter()
-        .chain(&replaced)
+        .chain(replaced.iter().filter(still_unused))
         .filter(|path| remove(path))
         .count();
     if removed > 0 {
@@ -212,7 +215,14 @@ pub fn referenced_labels(stack_root: &Path) -> Option<HashSet<String>> {
         storage::stacks(stack_root),
         storage::stack_folder(stack_root, storage::stack_kind::COLOR),
     ] {
-        for path in read_folder(&folder)? {
+        let Some(entries) = read_folder(&folder) else {
+            tracing::warn!(
+                "Not removing calibration masters: {} could not be listed",
+                folder.display()
+            );
+            return None;
+        };
+        for path in entries {
             if path.is_dir() {
                 let manifest = path.join("manifest.json");
                 if manifest.is_file() {
@@ -228,7 +238,13 @@ pub fn referenced_labels(stack_root: &Path) -> Option<HashSet<String>> {
     }
     let mut labels = HashSet::new();
     for file in files {
-        let text = std::fs::read_to_string(&file).ok()?;
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            tracing::warn!(
+                "Not removing calibration masters: {} could not be read, and it may name one",
+                file.display()
+            );
+            return None;
+        };
         labels.extend(labels_in(&text));
     }
     Some(labels)
