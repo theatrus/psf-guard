@@ -748,6 +748,17 @@ Successor allocations start without continuity after terminal release and park.
 Cross-allocation continuity, candidate explanations in the UI/status and learned
 timing estimates remain backlog. A preview is never a capture reservation.
 
+2026-10-02 execution validation: 493 Director crate tests, 77 server Director
+tests, 702 frontend tests and 775 plugin tests passed. The real-server Chromium
+planning test saved and reloaded overrides at desktop and mobile sizes. Native
+NINA 3.3.0.1064 with ASCOM OmniSim and packaged runtime 0.10.0 reversed legacy
+target order using saved importance, captured three frames across two targets
+during server outage, and reconciled all six events. The automatic workload
+variant completed and parked offline, then released through batch check-in.
+The unsafe-monitor regression aborted, parked and did not resume automatically.
+Review fixes cover corrupt/deleted dwell state, parent edits that zero a child,
+project attachment cleanup, and deterministic managed policy serialization.
+
 Later factors may include seasonal opportunity, project-level completion,
 fair-share/starvation control, measured quality and multi-rig opportunity cost.
 They require explicit evidence and shared-core tests; collaboration/fair-share

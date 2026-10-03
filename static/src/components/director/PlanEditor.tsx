@@ -131,7 +131,7 @@ export default function PlanEditor({ projectId }: { projectId: string }) {
                 onChange={event => changeObjective(objective.id, { goal: convertGoal(objective.goal, event.target.value as 'hours' | 'frames', goalExposure(objective, plan, rigList, templatesByRig)) })}>
                 <option value="hours">hours</option><option value="frames">frames per rig</option>
               </select></span></label>
-            <label>Priority<input aria-label="Objective priority" type="number" min={0} max={1000} step={1} value={objective.priority} onChange={event => changeObjective(objective.id, { priority: Math.max(0, Math.min(1000, Math.round(number(event.target.value, 1)))) })} /></label>
+            <label>Legacy priority<input aria-label="Objective priority" type="number" min={0} max={1000} step={1} value={objective.priority} onChange={event => changeObjective(objective.id, { priority: Math.max(0, Math.min(1000, Math.round(number(event.target.value, 1)))) })} /></label>
             {canWrite && <button type="button" aria-label={`Remove ${objective.bandpass_id} objective`} title="Remove objective" onClick={() => removeObjective(objective.id)}><Trash2 size={16} /></button>}
           </li>)}
         </ul>
