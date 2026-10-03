@@ -23,7 +23,7 @@ mod workload;
 fn state(dir: &TempDir, enable: bool) -> AppState {
     let mut state = AppState::from_databases(
         vec![],
-        dir.path().join("cache").to_string_lossy().into(),
+        dir.path().join("cache"),
         PregenerationConfig::default(),
     )
     .unwrap();
@@ -58,7 +58,7 @@ async fn discovery_is_scoped_read_only_and_does_not_block_metadata() {
         None,
         None,
         None,
-        dir.path().join("cache").to_string_lossy().into(),
+        dir.path().join("cache"),
     )
     .unwrap();
     state

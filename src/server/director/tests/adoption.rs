@@ -54,7 +54,7 @@ impl Fixture {
             None,
             None,
             None,
-            dir.path().join("cache").to_string_lossy().into(),
+            dir.path().join("cache"),
         )
         .unwrap();
         state

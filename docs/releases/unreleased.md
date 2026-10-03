@@ -20,6 +20,14 @@
 
 ## Added
 
+- Stacks and calibration masters can live on their own volumes. Name them
+  with `--stack-dir` and `--calibration-dir` (or `stack_directory` and
+  `calibration_directory` under `[cache]`), or choose them, and the cache, in
+  Settings → Stacking → **Disk use** → **Folders**, the desktop app included.
+  A folder saved in Settings takes effect at the next start, which moves the
+  files across first; if a move fails, PSF Guard moves them back, keeps the old
+  folder, and tries again next time.
+
 - A disk limit for the cache: Settings → Stacking → **Disk use** shows how full
   each cache volume is and what the cache holds, and past **Most of the
   volume to use** (90% by default) PSF Guard deletes image previews, least

@@ -1,7 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
-import type { CacheVolumeReport } from '../api/types';
+import type {
+  CacheVolumeReport,
+  StorageFolder,
+  StorageFolderKind,
+  StorageFoldersUpdate,
+  StorageSettings as StorageSettingsData,
+} from '../api/types';
+import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
 
 const QUERY_KEY = ['storage-settings'] as const;
 
@@ -57,6 +64,157 @@ function VolumeUse({ volume }: { volume: CacheVolumeReport }) {
           Over the limit with no previews left to cull. Stacks are never culled, so free space on
           this volume or move the cache to a larger one; preview pre-generation waits meanwhile.
         </p>
+      )}
+    </div>
+  );
+}
+
+const FOLDER_LABELS: Record<StorageFolderKind, { name: string; hint: string }> = {
+  cache: { name: 'Cache', hint: 'Image previews, star lists and plate solves.' },
+  stacks: { name: 'Stacks', hint: 'Stacks, their processing, and WBPP runs. Empty uses the cache.' },
+  calibration: {
+    name: 'Calibration masters',
+    hint: 'Masters built from your calibration frames. Empty uses the cache.',
+  },
+};
+
+const FOLDER_FIELDS: Record<StorageFolderKind, keyof StorageFoldersUpdate> = {
+  cache: 'cache_dir',
+  stacks: 'stack_dir',
+  calibration: 'calibration_dir',
+};
+
+function chosenFolders(folders: StorageFolder[]): Record<StorageFolderKind, string> {
+  const chosen = { cache: '', stacks: '', calibration: '' };
+  for (const folder of folders) chosen[folder.kind] = folder.chosen ?? '';
+  return chosen;
+}
+
+/**
+ * Where the cache, stacks and masters go. A change takes effect when the
+ * server next starts, which moves the files across first.
+ */
+function StorageFolders({ current, canManage }: { current: StorageSettingsData; canManage: boolean }) {
+  const queryClient = useQueryClient();
+  const [draft, setDraft] = useState(() => chosenFolders(current.folders));
+  const [restarting, setRestarting] = useState(false);
+  // Follow a save made elsewhere unless this form has its own edits.
+  const savedKey = JSON.stringify(chosenFolders(current.folders));
+  const lastSaved = useRef(savedKey);
+  useEffect(() => {
+    if (lastSaved.current === savedKey) return;
+    const previous = lastSaved.current;
+    lastSaved.current = savedKey;
+    setDraft((draftNow) =>
+      JSON.stringify(draftNow) === previous ? (JSON.parse(savedKey) as typeof draftNow) : draftNow,
+    );
+  }, [savedKey]);
+  const save = useMutation({
+    mutationFn: apiClient.updateStorageFolders,
+    onSuccess: (updated) => {
+      queryClient.setQueryData(QUERY_KEY, updated);
+      const saved = chosenFolders(updated.folders);
+      lastSaved.current = JSON.stringify(saved);
+      setDraft(saved);
+    },
+  });
+  const saved = chosenFolders(current.folders);
+  const dirty = current.folders.some((folder) => draft[folder.kind].trim() !== saved[folder.kind]);
+  const pending = current.folders.some((folder) => folder.path !== folder.next_path);
+  const editable = canManage && current.can_choose_folders;
+
+  // The whole app, not just its server: files move only at a fresh start,
+  // when nothing from the old server is still writing.
+  const restart = async () => {
+    setRestarting(true);
+    if (!(await tauriConfig.restartApplication())) setRestarting(false);
+  };
+
+  const submit = () => {
+    const update: StorageFoldersUpdate = {};
+    for (const folder of current.folders) {
+      if (folder.source !== 'server_config') update[FOLDER_FIELDS[folder.kind]] = draft[folder.kind].trim();
+    }
+    save.mutate(update);
+  };
+
+  return (
+    <div className="storage-folders">
+      <h4>Folders</h4>
+      {current.folders.map((folder) => {
+        const label = FOLDER_LABELS[folder.kind];
+        const fixed = folder.source === 'server_config';
+        const inputId = `storage-folder-${folder.kind}`;
+        return (
+          <div className="storage-folder" key={folder.kind}>
+            <label htmlFor={inputId} className="stack-method-label">
+              {label.name}
+            </label>
+            <div className="storage-folder-input">
+              <input
+                id={inputId}
+                type="text"
+                value={fixed ? folder.next_path : draft[folder.kind]}
+                placeholder={folder.kind === 'cache' ? folder.next_path : 'Same as the cache'}
+                disabled={!editable || fixed || save.isPending}
+                aria-describedby={`${inputId}-hint`}
+                onChange={(event) => setDraft({ ...draft, [folder.kind]: event.target.value })}
+                spellCheck={false}
+              />
+              {isTauriApp() && editable && !fixed && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={save.isPending}
+                  onClick={async () => {
+                    const picked = await tauriFileSystem.pickImageDirectory();
+                    if (picked) setDraft((previous) => ({ ...previous, [folder.kind]: picked }));
+                  }}
+                >
+                  Browse…
+                </button>
+              )}
+            </div>
+            <small className="muted" id={`${inputId}-hint`}>
+              {fixed ? 'Set by the server config file.' : label.hint}
+              {folder.path !== folder.next_path && (
+                <>
+                  {' '}
+                  In use until the restart: <code>{folder.path}</code>
+                </>
+              )}
+            </small>
+          </div>
+        );
+      })}
+      {current.folder_notes.map((note) => (
+        <p key={note} className="muted storage-volume-note">
+          {note}
+        </p>
+      ))}
+      {!current.can_choose_folders && (
+        <p className="muted">This server keeps no settings file, so only its config file sets the folders.</p>
+      )}
+      {editable && (
+        <div className="storage-folder-actions">
+          <button type="button" className="btn btn-primary" disabled={!dirty || save.isPending} onClick={submit}>
+            {save.isPending ? 'Saving…' : 'Save folders'}
+          </button>
+          {pending && (
+            <span className="muted">
+              The new folders take effect when PSF Guard next starts, which moves the files across
+              first. A large move delays that start.
+            </span>
+          )}
+          {pending && isTauriApp() && (
+            <button type="button" className="btn btn-secondary" onClick={restart} disabled={restarting}>
+              {restarting ? 'Restarting…' : 'Restart now'}
+            </button>
+          )}
+        </div>
+      )}
+      {save.isError && (
+        <p className="error-text" role="alert">{(save.error as Error).message}</p>
       )}
     </div>
   );
@@ -145,6 +303,7 @@ export default function StorageSettings({ canManage }: { canManage: boolean }) {
       {save.isError && (
         <p className="error-text" role="alert">{(save.error as Error).message}</p>
       )}
+      <StorageFolders current={current} canManage={canManage} />
     </div>
   );
 }

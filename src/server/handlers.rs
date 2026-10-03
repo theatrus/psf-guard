@@ -79,7 +79,7 @@ pub async fn get_server_info(
             });
     let info = ServerInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
-        cache_directory: state.cache_dir_root.clone(),
+        cache_directory: state.storage_roots.cache.display().to_string(),
         allow_database_management: state.database_management_allowed()
             && access.role == crate::server::auth::AccessRole::ReadWrite,
         banner: state.site_banner(),
@@ -504,6 +504,24 @@ pub async fn list_databases(
         .collect();
     summaries.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(Json(ApiResponse::success(summaries)))
+}
+
+/// Load the registry, let `change` edit it, and save it. The registry write
+/// lock is held throughout, so two settings saves never lose one another's
+/// edit. An error from `change` saves nothing.
+pub(crate) async fn update_registry<T>(
+    state: &AppState,
+    change: impl FnOnce(&mut crate::db_registry::DbRegistry) -> Result<T, AppError>,
+) -> Result<T, AppError> {
+    let path = require_registry_path(state)?;
+    let _registry_guard = state.registry_write.lock().await;
+    let mut registry = crate::db_registry::DbRegistry::load_or_init(&path)
+        .map_err(|error| AppError::InternalError(error.to_string()))?;
+    let value = change(&mut registry)?;
+    registry
+        .save(&path)
+        .map_err(|error| AppError::InternalError(error.to_string()))?;
+    Ok(value)
 }
 
 pub(crate) fn require_registry_path(state: &AppState) -> Result<std::path::PathBuf, AppError> {
@@ -1394,7 +1412,7 @@ pub async fn add_database_route(
 
     // Open the connection now so persisting bad config can't outlive a failure.
     let ctx = Arc::new(
-        DatabaseContext::from_entry(&entry, state.cache_dir_root.clone())
+        DatabaseContext::from_entry(&entry, state.storage_roots.clone())
             .map_err(|e| AppError::BadRequest(format!("opening database: {}", e)))?,
     );
 
@@ -1585,34 +1603,27 @@ pub async fn update_database_route(
         ))?
         .clone();
 
-    // If the slug changed, move the on-disk cache directory so previously
-    // generated previews carry over to the new identity. Failure is non-fatal:
-    // worst case the cache is rebuilt under the new slug.
-    if new_id != db_id {
-        let old_dir = std::path::PathBuf::from(&state.cache_dir_root).join(&db_id);
-        let new_dir = std::path::PathBuf::from(&state.cache_dir_root).join(&new_id);
-        if old_dir.exists() {
-            if let Err(e) = std::fs::rename(&old_dir, &new_dir) {
-                tracing::warn!(
-                    "Failed to rename cache dir {} -> {}: {} (old cache will be orphaned)",
-                    old_dir.display(),
-                    new_dir.display(),
-                    e
-                );
-            } else {
-                tracing::info!(
-                    "Renamed cache dir {} -> {}",
-                    old_dir.display(),
-                    new_dir.display()
-                );
-            }
-        }
+    // If the slug changed, move the database's folders so previews, stacks
+    // and masters carry over to the new identity. Failure is non-fatal:
+    // worst case they are generated again under the new slug.
+    let renamed = (new_id != db_id).then(|| {
+        crate::server::storage::relocate::rename_database(&state.storage_roots, &db_id, &new_id)
+    });
+    for failure in renamed.iter().flat_map(|renamed| &renamed.failures) {
+        tracing::warn!("Renaming {db_id} to {new_id}: {failure}");
     }
 
     let new_ctx = Arc::new(
-        DatabaseContext::from_entry(&entry, state.cache_dir_root.clone())
+        DatabaseContext::from_entry(&entry, state.storage_roots.clone())
             .map_err(|e| AppError::BadRequest(format!("opening database: {}", e)))?,
     );
+    if renamed.is_some_and(|renamed| renamed.calibration_moved) {
+        crate::server::storage::relocate::follow_master_rows(
+            &new_ctx,
+            &state.storage_roots.calibration.join(&db_id),
+            &new_ctx.calibration_root,
+        );
+    }
 
     reg.save(&registry_path)
         .map_err(|e| AppError::InternalError(format!("persisting registry: {}", e)))?;
@@ -2857,7 +2868,7 @@ pub async fn create_database_route(
         .clone();
 
     let ctx = Arc::new(
-        DatabaseContext::from_entry(&entry, state.cache_dir_root.clone())
+        DatabaseContext::from_entry(&entry, state.storage_roots.clone())
             .map_err(|e| AppError::InternalError(format!("opening new database: {}", e)))?,
     );
 

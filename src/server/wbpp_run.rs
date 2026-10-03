@@ -36,7 +36,9 @@ use crate::server::{
     api::ApiResponse,
     database_context::open_scheduler_connection_with_flags,
     extract::DbContext,
-    handlers::{require_database_management_allowed, require_registry_path, AppError},
+    handlers::{
+        require_database_management_allowed, require_registry_path, update_registry, AppError,
+    },
     state::AppState,
 };
 
@@ -314,20 +316,18 @@ pub async fn update_pixinsight_settings(
     Json(request): Json<UpdatePixInsightSettingsRequest>,
 ) -> Result<Json<ApiResponse<PixInsightSettingsResponse>>, AppError> {
     require_database_management_allowed(&state)?;
-    let path = require_registry_path(&state)?;
-    let _registry_guard = state.registry_write.lock().await;
-    let mut registry = DbRegistry::load_or_init(&path)
-        .map_err(|error| AppError::InternalError(error.to_string()))?;
     let settings = PixInsightSettings {
         binary: clean(request.binary),
         runs_dir: clean(request.runs_dir),
     };
     // Absent is what the defaults already mean; storing nothing keeps the
     // registry clean for older builds reading the same file.
-    registry.pixinsight = (settings != PixInsightSettings::default()).then(|| settings.clone());
-    registry
-        .save(&path)
-        .map_err(|error| AppError::InternalError(error.to_string()))?;
+    let stored = (settings != PixInsightSettings::default()).then(|| settings.clone());
+    update_registry(&state, |registry| {
+        registry.pixinsight = stored;
+        Ok(())
+    })
+    .await?;
     let response = tokio::task::spawn_blocking(move || settings_response(settings))
         .await
         .map_err(|error| AppError::InternalError(format!("settings task: {error}")))?;

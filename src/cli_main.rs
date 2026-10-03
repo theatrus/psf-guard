@@ -1280,6 +1280,8 @@ pub fn main() -> Result<()> {
             image_dirs,
             static_dir,
             cache_dir,
+            stack_dir,
+            calibration_dir,
             port,
             host,
             pregenerate_screen,
@@ -1335,6 +1337,7 @@ pub fn main() -> Result<()> {
                 Config::default()
             };
             app_config.merge_with_cli(None, None, port, host, cache_dir);
+            app_config.merge_storage_cli(stack_dir, calibration_dir);
 
             // We deliberately do NOT call app_config.validate() — the DB path
             // requirement no longer applies (DBs come from the registry).
@@ -1358,29 +1361,6 @@ pub fn main() -> Result<()> {
                 PregenerationConfig::from_config(app_config.get_pregeneration())
             };
 
-            crate::calibration::configure_rotation_tolerance(
-                db_registry
-                    .calibration
-                    .as_ref()
-                    .and_then(|calibration| calibration.rotation_tolerance_deg),
-            );
-            crate::calibration::configure_external_master_policy(
-                db_registry
-                    .calibration
-                    .as_ref()
-                    .and_then(|calibration| calibration.external_masters),
-            );
-            crate::calibration::configure_flat_star_masking(
-                db_registry
-                    .calibration
-                    .as_ref()
-                    .and_then(|calibration| calibration.flat_star_masking)
-                    .unwrap_or(false),
-            );
-            crate::server::stack_preview::automatic::configure_from_registry(
-                db_registry.stacking.as_ref(),
-            );
-            let cache_directory = app_config.get_cache_directory();
             let server_host = app_config.get_host();
             let server_port = app_config.get_port();
             let worker_policy = app_config.get_worker_policy();
@@ -1417,25 +1397,25 @@ pub fn main() -> Result<()> {
 
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(async {
-                crate::server::run_server(
+                crate::server::run_server_with_config(crate::server::ServerConfig {
                     databases,
                     static_dir,
-                    cache_directory,
-                    server_host,
-                    server_port,
+                    storage: app_config.storage_config(),
+                    host: server_host,
+                    port: server_port,
                     pregeneration_config,
-                    Some(registry_path),
+                    registry_path: Some(registry_path),
                     allow_database_management,
                     director_meta,
                     allow_anonymous_access,
                     site_banner,
-                    server_auth,
+                    auth: server_auth,
                     worker_policy,
                     preview_encoding,
                     preview_color_default,
-                    app_config.server.keep_failed_uploads(),
+                    keep_failed_uploads: app_config.server.keep_failed_uploads(),
                     astrometry_config,
-                )
+                })
                 .await
             })?;
         }

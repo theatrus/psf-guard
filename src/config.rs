@@ -422,10 +422,22 @@ pub struct ImagesConfig {
     pub directories: Vec<String>,
 }
 
+/// The cache folder when neither the config file, the command line nor
+/// Settings names one.
+pub const DEFAULT_CACHE_DIRECTORY: &str = "./cache";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheConfig {
-    /// Cache directory path (default: "./cache")
+    /// Cache directory path (default: "./cache"). Naming it here fixes it:
+    /// Settings shows it but cannot change it.
     pub directory: Option<String>,
+    /// Where stacks go. Absent uses Settings, else the cache directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stack_directory: Option<String>,
+    /// Where calibration masters go. Absent uses Settings, else the cache
+    /// directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calibration_directory: Option<String>,
     /// File cache TTL as human readable time (default: "5m")
     pub file_ttl: Option<String>,
     /// Directory tree cache TTL as human readable time (default: "5m")  
@@ -465,7 +477,11 @@ impl Default for ServerConfig {
 impl Default for CacheConfig {
     fn default() -> Self {
         Self {
-            directory: Some("./cache".to_string()),
+            // Absent so Settings can choose; `storage_config` supplies
+            // `./cache` when nothing does.
+            directory: None,
+            stack_directory: None,
+            calibration_directory: None,
             file_ttl: Some("5m".to_string()),
             directory_ttl: Some("5m".to_string()),
         }
@@ -532,6 +548,20 @@ impl Config {
         }
     }
 
+    /// The command line's stack and calibration folders override the file's.
+    pub fn merge_storage_cli(
+        &mut self,
+        stack_dir: Option<String>,
+        calibration_dir: Option<String>,
+    ) {
+        if let Some(stacks) = stack_dir {
+            self.cache.stack_directory = Some(stacks);
+        }
+        if let Some(calibration) = calibration_dir {
+            self.cache.calibration_directory = Some(calibration);
+        }
+    }
+
     /// Get the effective values with defaults applied
     pub fn get_port(&self) -> u16 {
         self.server.port.unwrap_or(3000)
@@ -594,7 +624,25 @@ impl Config {
         self.cache
             .directory
             .clone()
-            .unwrap_or_else(|| "./cache".to_string())
+            .unwrap_or_else(|| DEFAULT_CACHE_DIRECTORY.to_string())
+    }
+
+    /// The storage folders this file and the command line fix. The rest
+    /// come from Settings, else the cache, else `./cache`.
+    pub fn storage_config(&self) -> crate::server::storage::StorageConfig {
+        let named = |value: &Option<String>| {
+            value
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(std::path::PathBuf::from)
+        };
+        crate::server::storage::StorageConfig {
+            default_cache: DEFAULT_CACHE_DIRECTORY.into(),
+            cache: named(&self.cache.directory),
+            stacks: named(&self.cache.stack_directory),
+            calibration: named(&self.cache.calibration_directory),
+        }
     }
 
     pub fn get_file_ttl(&self) -> Duration {
@@ -817,10 +865,21 @@ directory = "./cache"
             Some("127.0.0.1".to_string()),
             Some("/new/cache".to_string()),
         );
+        config.merge_storage_cli(Some("/new/stacks".to_string()), None);
 
         assert_eq!(config.get_port(), 8080);
         assert_eq!(config.get_host(), "127.0.0.1");
         assert_eq!(config.get_cache_directory(), "/new/cache");
+        let storage = config.storage_config();
+        assert_eq!(
+            storage.cache.as_deref(),
+            Some(std::path::Path::new("/new/cache"))
+        );
+        assert_eq!(
+            storage.stacks.as_deref(),
+            Some(std::path::Path::new("/new/stacks"))
+        );
+        assert_eq!(storage.calibration, None);
         assert_eq!(config.database.unwrap().path, "/new/database.sqlite");
         assert_eq!(
             config.images.unwrap().directories,

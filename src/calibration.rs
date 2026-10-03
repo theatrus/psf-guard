@@ -5407,6 +5407,79 @@ static EXTERNAL_MASTER_POLICY: std::sync::atomic::AtomicU8 = std::sync::atomic::
 
 static FLAT_STAR_MASKING: AtomicBool = AtomicBool::new(false);
 
+/// Point master rows recorded below `from` at the same files below `to`,
+/// after their folder moved. Rows store absolute paths, so without this a
+/// moved master would look unrecorded and be built again. A row whose new
+/// path another row already records names the same master, so it goes. One
+/// transaction: the rows move together or not at all. A catalog without the
+/// master table has nothing to rewrite.
+pub fn rewrite_master_paths(
+    conn: &mut rusqlite::Connection,
+    from: &Path,
+    to: &Path,
+) -> rusqlite::Result<usize> {
+    use crate::server::storage::relocate::normalized;
+    let from = normalized(from);
+    let transaction = conn.transaction()?;
+    let rows: Vec<(String, String)> = {
+        let mut statement = match transaction
+            .prepare("SELECT master_uuid, cache_path FROM psf_guard_calibration_master")
+        {
+            Ok(statement) => statement,
+            Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+                if message.contains("no such table") =>
+            {
+                return Ok(0);
+            }
+            Err(error) => return Err(error),
+        };
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    let mut rewritten = 0;
+    for (uuid, cache_path) in rows {
+        let Ok(relative) = normalized(Path::new(&cache_path))
+            .strip_prefix(&from)
+            .map(Path::to_path_buf)
+        else {
+            continue;
+        };
+        let moved = to.join(relative).to_string_lossy().into_owned();
+        let taken: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM psf_guard_calibration_master
+                           WHERE cache_path = ?1 AND master_uuid <> ?2)",
+            rusqlite::params![moved, uuid],
+            |row| row.get(0),
+        )?;
+        rewritten += if taken {
+            transaction.execute(
+                "DELETE FROM psf_guard_calibration_master WHERE master_uuid = ?1",
+                [&uuid],
+            )?
+        } else {
+            transaction.execute(
+                "UPDATE psf_guard_calibration_master SET cache_path = ?1 WHERE master_uuid = ?2",
+                rusqlite::params![moved, uuid],
+            )?
+        };
+    }
+    transaction.commit()?;
+    Ok(rewritten)
+}
+
+/// Apply the calibration settings a person chose; `None` restores every
+/// default.
+pub fn configure(settings: Option<&crate::db_registry::CalibrationSettings>) {
+    configure_rotation_tolerance(settings.and_then(|settings| settings.rotation_tolerance_deg));
+    configure_external_master_policy(settings.and_then(|settings| settings.external_masters));
+    configure_flat_star_masking(
+        settings
+            .and_then(|settings| settings.flat_star_masking)
+            .unwrap_or(false),
+    );
+}
+
 /// Set the default for new calibration plans; already-running plans keep
 /// their captured value and content-addressed master identity.
 pub fn configure_flat_star_masking(enabled: bool) {
@@ -6063,6 +6136,61 @@ fn format_number(value: Option<f64>) -> String {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn moved_master_rows_follow_their_folder_and_others_stay() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        for (uuid, path) in [
+            ("a", "/old/db/calibration-masters/dark-a.fits"),
+            ("b", "/elsewhere/db/calibration-masters/dark-b.fits"),
+            // The same master already recorded at the new place.
+            ("c", "/old/db/calibration-masters/dark-c.fits"),
+            ("c-new", "/new/db/calibration-masters/dark-c.fits"),
+        ] {
+            conn.execute(
+                "INSERT INTO psf_guard_calibration_master
+                    (master_uuid, rig_uuid, kind, cache_path, source_set_hash, source_count,
+                     source_frame_uuids, created_at, seiza_version, cache_version,
+                     statistics_json)
+                 VALUES (?1, 'rig', 'dark', ?2, 'hash', 1, '[]', 0, 'v', 1, '{}')",
+                rusqlite::params![uuid, path],
+            )
+            .unwrap();
+        }
+
+        let rewritten =
+            rewrite_master_paths(&mut conn, Path::new("/old/db"), Path::new("/new/db")).unwrap();
+
+        assert_eq!(rewritten, 2);
+        let rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM psf_guard_calibration_master",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 3);
+        let path = |uuid: &str| -> String {
+            conn.query_row(
+                "SELECT cache_path FROM psf_guard_calibration_master WHERE master_uuid = ?1",
+                [uuid],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(path("a"), "/new/db/calibration-masters/dark-a.fits");
+        assert_eq!(path("b"), "/elsewhere/db/calibration-masters/dark-b.fits");
+        assert_eq!(
+            rewrite_master_paths(
+                &mut Connection::open_in_memory().unwrap(),
+                Path::new("/old"),
+                Path::new("/new")
+            )
+            .unwrap(),
+            0
+        );
+    }
 
     fn frame(path: &str, kind: &str) -> FrameMeta {
         FrameMeta {
