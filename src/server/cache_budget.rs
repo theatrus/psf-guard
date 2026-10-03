@@ -1,13 +1,15 @@
-//! Keeping the cache's volume from filling.
+//! Keeping the storage volumes from filling.
 //!
-//! Every database caches below the server's cache root: image previews,
-//! annotated previews and star lists that any viewer can make again in a
-//! moment, beside stacks, color composites and calibration masters that take
-//! minutes to hours. A volume shared with other data can fill, so a person
-//! sets the highest share of it that may be used. Every few minutes this
-//! module reads the volume as `df` does and, when it is over that share,
-//! deletes image previews least recently used first until it is back under,
-//! then stack resume checkpoints a day old or more. Stacks, color previews,
+//! Every database keeps generated files in three folders, which may sit on
+//! different volumes: the cache (image previews, annotated previews and star
+//! lists that any viewer can make again in a moment), stacks, and
+//! calibration masters, which take minutes to hours. A volume shared with
+//! other data can fill, so a person sets the highest share of it that may be
+//! used, for all three alike or one each; a volume holding more than one
+//! folder uses the lowest of their limits. Every few minutes this module
+//! reads each volume as `df` does and, when one is over, deletes from what
+//! lives on that volume only: image previews least recently used first, then
+//! stack resume checkpoints a day old or more. Stacks, color previews,
 //! calibration masters and WBPP masters are never culled: they are what the
 //! space is for.
 //!
@@ -16,7 +18,7 @@
 //! explicitly, at most once an hour per file.
 
 use crate::server::state::AppState;
-use crate::server::storage::{self, PREVIEW_CATEGORIES};
+use crate::server::storage::{self, StorageKind, PREVIEW_CATEGORIES};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -44,7 +46,16 @@ const TOUCH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// NFS is slow, and only Settings shows them.
 const SIZES_TTL: Duration = Duration::from_secs(60 * 60);
 
-static MAX_VOLUME_PERCENT: AtomicU8 = AtomicU8::new(DEFAULT_MAX_VOLUME_PERCENT);
+/// Limits for the cache, stacks and calibration masters, in that order.
+static LIMITS: [AtomicU8; 3] = [
+    AtomicU8::new(DEFAULT_MAX_VOLUME_PERCENT),
+    AtomicU8::new(DEFAULT_MAX_VOLUME_PERCENT),
+    AtomicU8::new(DEFAULT_MAX_VOLUME_PERCENT),
+];
+/// Each volume's limit as the last pass worked it out, by device, so
+/// pre-generation stops where that volume's cull would clear.
+static VOLUME_LIMITS: std::sync::LazyLock<Mutex<HashMap<u64, u8>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 static LAST: Mutex<Vec<VolumeReport>> = Mutex::new(Vec::new());
 /// One pass at a time: two reading the same volume would each cull the
 /// whole excess.
@@ -53,17 +64,34 @@ static PASS: Mutex<()> = Mutex::new(());
 static SIZES: std::sync::LazyLock<Mutex<HashMap<u64, (Instant, CacheSizes)>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Apply the registry's choice.
+/// Apply the registry's choice. Stacks and masters without a limit of
+/// their own use the cache's.
 pub fn configure(settings: Option<&crate::db_registry::StorageSettings>) {
-    let percent = settings
-        .and_then(|settings| settings.max_volume_percent)
-        .unwrap_or(DEFAULT_MAX_VOLUME_PERCENT)
-        .clamp(MIN_MAX_VOLUME_PERCENT, 100);
-    MAX_VOLUME_PERCENT.store(percent, Ordering::Relaxed);
+    let clamp = |percent: u8| percent.clamp(MIN_MAX_VOLUME_PERCENT, 100);
+    let cache = clamp(
+        settings
+            .and_then(|settings| settings.max_volume_percent)
+            .unwrap_or(DEFAULT_MAX_VOLUME_PERCENT),
+    );
+    let own = |percent: Option<u8>| percent.map(clamp).unwrap_or(cache);
+    LIMITS[StorageKind::Cache as usize].store(cache, Ordering::Relaxed);
+    LIMITS[StorageKind::Stacks as usize].store(
+        own(settings.and_then(|settings| settings.stack_max_volume_percent)),
+        Ordering::Relaxed,
+    );
+    LIMITS[StorageKind::Calibration as usize].store(
+        own(settings.and_then(|settings| settings.calibration_max_volume_percent)),
+        Ordering::Relaxed,
+    );
 }
 
+/// The cache's limit.
 pub fn max_volume_percent() -> u8 {
-    MAX_VOLUME_PERCENT.load(Ordering::Relaxed)
+    limit_for(StorageKind::Cache)
+}
+
+pub fn limit_for(kind: StorageKind) -> u8 {
+    LIMITS[kind as usize].load(Ordering::Relaxed)
 }
 
 /// Whether background work may write previews into this cache: its volume
@@ -71,7 +99,9 @@ pub fn max_volume_percent() -> u8 {
 /// previews the next pass would delete. A preview someone opens is made
 /// either way. True when there is no limit or the volume cannot be read.
 pub fn room_for_previews(cache_dir: &Path) -> bool {
-    let limit = max_volume_percent();
+    let limit = device_of(cache_dir)
+        .and_then(|device| VOLUME_LIMITS.lock().unwrap().get(&device).copied())
+        .unwrap_or_else(max_volume_percent);
     if limit >= 100 {
         return true;
     }
@@ -89,16 +119,19 @@ pub fn last_reports() -> Vec<VolumeReport> {
     LAST.lock().unwrap().clone()
 }
 
-/// One volume holding database caches, as the last pass found it.
+/// One volume holding storage folders, as the last pass found it.
 #[derive(Debug, Clone, Serialize)]
 pub struct VolumeReport {
-    /// A cache directory on the volume, for people to find it by.
+    /// A storage folder on the volume, for people to find it by.
     pub path: String,
     pub databases: Vec<String>,
+    /// Which of the cache, stacks and calibration masters live here.
+    pub kinds: Vec<StorageKind>,
     pub total_bytes: u64,
     pub used_bytes: u64,
     /// As `df` reports it: used over what the cache could use.
     pub used_percent: f64,
+    /// The lowest limit of the folders here.
     pub max_percent: u8,
     /// Image previews, annotated previews and star lists.
     pub preview_bytes: u64,
@@ -163,29 +196,81 @@ pub fn record(reports: Vec<VolumeReport>) {
     *LAST.lock().unwrap() = reports;
 }
 
+/// One storage folder of one database, with the kinds that live in it.
+#[derive(Debug, Clone)]
+struct Folder {
+    database: String,
+    path: PathBuf,
+    kinds: Vec<StorageKind>,
+}
+
+impl Folder {
+    fn holds(&self, kind: StorageKind) -> bool {
+        self.kinds.contains(&kind)
+    }
+}
+
+/// Every database's storage folders, one entry per distinct folder.
+fn folders(state: &AppState) -> Vec<Folder> {
+    let mut folders: Vec<Folder> = Vec::new();
+    for ctx in state.all_databases() {
+        for (kind, path) in [
+            (StorageKind::Cache, &ctx.cache_dir_path),
+            (StorageKind::Stacks, &ctx.stack_root),
+            (StorageKind::Calibration, &ctx.calibration_root),
+        ] {
+            match folders
+                .iter_mut()
+                .find(|folder| folder.database == ctx.name && folder.path == *path)
+            {
+                Some(folder) => folder.kinds.push(kind),
+                None => folders.push(Folder {
+                    database: ctx.name.clone(),
+                    path: path.clone(),
+                    kinds: vec![kind],
+                }),
+            }
+        }
+    }
+    folders
+}
+
 /// One pass over every volume: read it, cull if it is over, report.
 pub fn pass(state: &AppState) -> Vec<VolumeReport> {
     let _one_at_a_time = PASS.lock().unwrap_or_else(|poison| poison.into_inner());
-    let limit = max_volume_percent();
-    let mut volumes: Vec<(u64, Vec<(String, PathBuf)>)> = Vec::new();
-    for ctx in state.all_databases() {
-        let Some(device) = device_of(&ctx.cache_dir_path) else {
+    let mut volumes: Vec<(u64, Vec<Folder>)> = Vec::new();
+    for folder in folders(state) {
+        let Some(device) = device_of(&folder.path) else {
             continue;
         };
-        let entry = (ctx.name.clone(), ctx.cache_dir_path.clone());
         match volumes.iter_mut().find(|(known, _)| *known == device) {
-            Some((_, caches)) => caches.push(entry),
-            None => volumes.push((device, vec![entry])),
+            Some((_, folders)) => folders.push(folder),
+            None => volumes.push((device, vec![folder])),
         }
     }
+    let limits: HashMap<u64, u8> = volumes
+        .iter()
+        .map(|(device, folders)| (*device, volume_limit(folders)))
+        .collect();
+    *VOLUME_LIMITS.lock().unwrap() = limits.clone();
     volumes
         .into_iter()
-        .filter_map(|(device, caches)| report_volume(device, &caches, limit))
+        .filter_map(|(device, folders)| report_volume(device, &folders, limits[&device]))
         .collect()
 }
 
-fn report_volume(device: u64, caches: &[(String, PathBuf)], limit: u8) -> Option<VolumeReport> {
-    let first = &caches.first()?.1;
+/// The lowest limit of the kinds on a volume.
+fn volume_limit(folders: &[Folder]) -> u8 {
+    folders
+        .iter()
+        .flat_map(|folder| folder.kinds.iter().copied())
+        .map(limit_for)
+        .min()
+        .unwrap_or_else(max_volume_percent)
+}
+
+fn report_volume(device: u64, folders: &[Folder], limit: u8) -> Option<VolumeReport> {
+    let first = &folders.first()?.path;
     let mut usage = volume_usage(first)?;
     let mut culled_files = 0;
     let mut freed_bytes = 0;
@@ -193,10 +278,21 @@ fn report_volume(device: u64, caches: &[(String, PathBuf)], limit: u8) -> Option
         let target = (f64::from(limit) - HEADROOM_PERCENT).max(0.0);
         let mut need = usage.bytes_over(target);
         let now = SystemTime::now();
-        // Previews first, least recently used first; then old checkpoints.
+        // Only what lives on this volume: previews from caches here, least
+        // recently used first; then old checkpoints from stacks here.
+        let caches: Vec<&Path> = folders
+            .iter()
+            .filter(|folder| folder.holds(StorageKind::Cache))
+            .map(|folder| folder.path.as_path())
+            .collect();
+        let stacks: Vec<&Path> = folders
+            .iter()
+            .filter(|folder| folder.holds(StorageKind::Stacks))
+            .map(|folder| folder.path.as_path())
+            .collect();
         for tier in [
-            preview_candidates(caches, now),
-            checkpoint_candidates(caches, now),
+            preview_candidates(&caches, now),
+            checkpoint_candidates(&stacks, now),
         ] {
             for candidate in tier {
                 if need == 0 {
@@ -213,7 +309,8 @@ fn report_volume(device: u64, caches: &[(String, PathBuf)], limit: u8) -> Option
         }
         if culled_files > 0 {
             tracing::info!(
-                "🧹 Cache volume at {:.1}% (limit {limit}%): culled {culled_files} previews and checkpoints, {} MiB",
+                "🧹 Volume of {} at {:.1}% (limit {limit}%): culled {culled_files} previews and checkpoints, {} MiB",
+                first.display(),
                 usage.percent(),
                 freed_bytes / (1 << 20)
             );
@@ -230,8 +327,8 @@ fn report_volume(device: u64, caches: &[(String, PathBuf)], limit: u8) -> Option
             .map(|(_, sizes)| *sizes);
         cached.unwrap_or_else(|| {
             let mut sizes = CacheSizes::default();
-            for (_, cache) in caches {
-                sizes.add(cache);
+            for folder in folders {
+                sizes.add(&folder.path);
             }
             SIZES
                 .lock()
@@ -243,13 +340,28 @@ fn report_volume(device: u64, caches: &[(String, PathBuf)], limit: u8) -> Option
     let over_limit = limit < 100 && usage.percent() > f64::from(limit);
     if over_limit {
         tracing::warn!(
-            "Cache volume at {:.1}% is over the {limit}% limit with no previews left to cull",
+            "Volume of {} at {:.1}% is over the {limit}% limit with nothing left to cull",
+            first.display(),
             usage.percent()
         );
     }
+    let mut databases: Vec<String> = Vec::new();
+    let mut kinds: Vec<StorageKind> = Vec::new();
+    for folder in folders {
+        if !databases.contains(&folder.database) {
+            databases.push(folder.database.clone());
+        }
+        for kind in &folder.kinds {
+            if !kinds.contains(kind) {
+                kinds.push(*kind);
+            }
+        }
+    }
+    kinds.sort_by_key(|kind| *kind as usize);
     Some(VolumeReport {
         path: first.display().to_string(),
-        databases: caches.iter().map(|(name, _)| name.clone()).collect(),
+        databases,
+        kinds,
         total_bytes: usage.total,
         used_bytes: usage.used,
         used_percent: usage.percent(),
@@ -274,9 +386,9 @@ struct Candidate {
 
 /// Every image preview not used in the last few minutes, least recently
 /// used first.
-fn preview_candidates(caches: &[(String, PathBuf)], now: SystemTime) -> Vec<Candidate> {
+fn preview_candidates(caches: &[&Path], now: SystemTime) -> Vec<Candidate> {
     let mut candidates = Vec::new();
-    for (_, cache) in caches {
+    for cache in caches {
         for category in PREVIEW_CATEGORIES {
             let Ok(entries) = std::fs::read_dir(cache.join(category)) else {
                 continue;
@@ -310,11 +422,10 @@ fn preview_candidates(caches: &[(String, PathBuf)], now: SystemTime) -> Vec<Cand
 /// Stack resume checkpoints a day old or more, oldest first: they only
 /// save work if a stopped build resumes, and the stack they lead to is kept.
 /// A checkpoint's files (its context and its manifest) go together.
-fn checkpoint_candidates(caches: &[(String, PathBuf)], now: SystemTime) -> Vec<Candidate> {
+fn checkpoint_candidates(stack_roots: &[&Path], now: SystemTime) -> Vec<Candidate> {
     let mut groups: HashMap<PathBuf, Candidate> = HashMap::new();
-    for (_, cache) in caches {
-        let directory =
-            crate::server::storage::stack_folder(cache, crate::server::storage::stack_kind::RESUME);
+    for stack_root in stack_roots {
+        let directory = storage::stack_folder(stack_root, storage::stack_kind::RESUME);
         let Ok(entries) = std::fs::read_dir(&directory) else {
             continue;
         };
@@ -372,18 +483,30 @@ struct CacheSizes {
 }
 
 impl CacheSizes {
-    fn add(&mut self, cache: &Path) {
-        let Ok(entries) = std::fs::read_dir(cache) else {
+    /// Count one storage folder, whichever kinds live in it, by the names
+    /// of what it holds.
+    fn add(&mut self, folder: &Path) {
+        let Ok(entries) = std::fs::read_dir(folder) else {
             return;
         };
         for entry in entries.flatten() {
             let name = entry.file_name();
             let bytes = tree_bytes(&entry.path());
-            match name.to_string_lossy().as_ref() {
-                category if PREVIEW_CATEGORIES.contains(&category) => self.previews += bytes,
-                storage::STACKS => self.stacks += bytes,
-                storage::CALIBRATION_MASTERS => self.calibration += bytes,
-                _ => self.other += bytes,
+            let name = name.to_string_lossy();
+            if PREVIEW_CATEGORIES.contains(&name.as_ref()) {
+                self.previews += bytes;
+            } else if StorageKind::Stacks
+                .database_folders()
+                .contains(&name.as_ref())
+            {
+                self.stacks += bytes;
+            } else if StorageKind::Calibration
+                .database_folders()
+                .contains(&name.as_ref())
+            {
+                self.calibration += bytes;
+            } else {
+                self.other += bytes;
             }
         }
     }
@@ -510,7 +633,7 @@ mod tests {
                 .unwrap();
         }
         std::fs::write(stacks.join("group-0.fits"), vec![0u8; 5000]).unwrap();
-        let caches = vec![("Rig".to_string(), cache.path().to_path_buf())];
+        let caches = [cache.path()];
         let candidates = preview_candidates(&caches, now);
         let names = candidates
             .iter()
@@ -530,6 +653,99 @@ mod tests {
         sizes.add(cache.path());
         assert_eq!(sizes.previews, 3000);
         assert_eq!(sizes.stacks, 5000);
+    }
+
+    #[cfg(unix)]
+    fn aged(path: &Path, bytes: usize, age: Duration) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, vec![0u8; bytes]).unwrap();
+        let then = SystemTime::now() - age;
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_accessed(then)
+                    .set_modified(then),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    // Volumes are read on Unix only.
+    #[cfg(unix)]
+    fn a_volume_culls_only_what_lives_on_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = temp.path().join("cache/db");
+        let stacks = temp.path().join("stacks/db");
+        let old = Duration::from_secs(3 * 86_400);
+        aged(&cache.join("previews/old.png"), 100, old);
+        // A cache folder's stray checkpoint and a stack folder's stray preview
+        // belong to kinds that do not live there.
+        aged(&cache.join("stack-previews/resume/a.json"), 100, old);
+        aged(&stacks.join("previews/stray.png"), 100, old);
+        aged(&stacks.join("stack-previews/resume/b.json"), 100, old);
+        aged(&stacks.join("stack-previews/job/group-0.fits"), 100, old);
+        let folders = [
+            Folder {
+                database: "Rig".into(),
+                path: cache.clone(),
+                kinds: vec![StorageKind::Cache, StorageKind::Calibration],
+            },
+            Folder {
+                database: "Rig".into(),
+                path: stacks.clone(),
+                kinds: vec![StorageKind::Stacks],
+            },
+        ];
+        let device = device_of(temp.path()).unwrap();
+
+        // A limit of 0% asks for everything that may go.
+        let report = report_volume(device, &folders, 0).unwrap();
+
+        assert_eq!(report.culled_files, 2);
+        assert!(!cache.join("previews/old.png").exists());
+        assert!(!stacks.join("stack-previews/resume/b.json").exists());
+        assert!(cache.join("stack-previews/resume/a.json").exists());
+        assert!(stacks.join("previews/stray.png").exists());
+        assert!(stacks.join("stack-previews/job/group-0.fits").exists());
+        assert_eq!(
+            report.kinds,
+            vec![
+                StorageKind::Cache,
+                StorageKind::Stacks,
+                StorageKind::Calibration
+            ]
+        );
+    }
+
+    #[test]
+    fn stacks_and_masters_share_the_cache_limit_unless_they_have_their_own() {
+        configure(Some(&crate::db_registry::StorageSettings {
+            max_volume_percent: Some(80),
+            stack_max_volume_percent: Some(95),
+            ..Default::default()
+        }));
+        assert_eq!(limit_for(StorageKind::Cache), 80);
+        assert_eq!(limit_for(StorageKind::Stacks), 95);
+        assert_eq!(limit_for(StorageKind::Calibration), 80);
+        let folder = |kinds: Vec<StorageKind>| Folder {
+            database: "Rig".into(),
+            path: PathBuf::new(),
+            kinds,
+        };
+        // A volume holding two folders uses the lower limit.
+        assert_eq!(volume_limit(&[folder(vec![StorageKind::Stacks])]), 95);
+        assert_eq!(
+            volume_limit(&[
+                folder(vec![StorageKind::Stacks]),
+                folder(vec![StorageKind::Cache])
+            ]),
+            80
+        );
+        configure(None);
+        assert_eq!(limit_for(StorageKind::Stacks), DEFAULT_MAX_VOLUME_PERCENT);
     }
 
     #[test]
@@ -564,8 +780,7 @@ mod tests {
                     .unwrap();
             }
         }
-        let caches = vec![("Rig".to_string(), cache.path().to_path_buf())];
-        let candidates = checkpoint_candidates(&caches, SystemTime::now());
+        let candidates = checkpoint_candidates(&[cache.path()], SystemTime::now());
         // Only the old checkpoint, both of its files in one candidate.
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].paths.len(), 2);

@@ -28,11 +28,13 @@
   files across first; if a move fails, PSF Guard moves them back, keeps the old
   folder, and tries again next time.
 
-- A disk limit for the cache: Settings → Stacking → **Disk use** shows how full
-  each cache volume is and what the cache holds, and past **Most of the
-  volume to use** (90% by default) PSF Guard deletes image previews, least
-  recently viewed first, then old stack checkpoints. Stacks and calibration
-  masters are never deleted.
+- A disk limit: Settings → Stacking → **Disk use** shows how full each volume
+  the cache, stacks and masters sit on is and what each holds. Past **Most of
+  the volume to use** (90% by default) PSF Guard deletes image previews from
+  that volume, least recently viewed first, then old stack checkpoints. Stacks
+  and calibration masters are never deleted. Stacks and masters can have limits
+  of their own, and a volume over its limit frees space only from what lives on
+  it.
 
 - **Stacks** sits beside **Images** and **Sequence** in the header and holds
   the stack previews, which used to sit above the image grid. It stacks every

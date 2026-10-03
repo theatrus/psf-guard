@@ -100,6 +100,7 @@ import type { GuidFillReport, GuidReport,
   WorkerSettings,
   StorageSettings,
   StorageFoldersUpdate,
+  StorageLimitsUpdate,
   ArtifactSearchJob,
   ReferenceRegion,
   LatestStackPreviews,
@@ -738,12 +739,10 @@ export const apiClient = {
     return data.data;
   },
 
-  /** Saves the limit and checks the cache volumes at once. */
-  updateStorageSettings: async (maxVolumePercent: number): Promise<StorageSettings> => {
+  /** Saves the limits and checks the volumes at once. */
+  updateStorageSettings: async (limits: StorageLimitsUpdate): Promise<StorageSettings> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.put<ApiResponse<StorageSettings>>('/settings/storage', {
-      max_volume_percent: maxVolumePercent,
-    });
+    const { data } = await apiInstance.put<ApiResponse<StorageSettings>>('/settings/storage', limits);
     if (!data.data) throw new Error(data.error || 'Failed to save the disk limit');
     return data.data;
   },
