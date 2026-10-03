@@ -255,6 +255,7 @@ pub async fn upload_image(
         &ctx.id,
         crate::server::stack_preview::automatic::RefreshReason::Arrival,
     );
+    crate::server::quality_arrival::note_arrival(&ctx.id);
     tracing::info!(
         "Remote image received for db={}: {} ({} bytes, sha256={})",
         ctx.id,

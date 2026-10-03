@@ -1240,6 +1240,8 @@ pub struct QualityBackfillRequest {
 pub struct QualityBackfillStatusResponse {
     pub started: bool,
     pub progress: crate::server::quality_backfill::QualityBackfillProgress,
+    /// Frames arriving by sync, upload or auto-import are analyzed too.
+    pub analyze_new_frames: bool,
 }
 
 #[derive(Debug, Serialize)]

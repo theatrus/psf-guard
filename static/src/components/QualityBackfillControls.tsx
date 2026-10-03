@@ -42,6 +42,21 @@ export default function QualityBackfillControls({ dbId }: { dbId: string }) {
         Rescan All Quality
       </button>
       <div className="quality-backfill-option">
+        <label title="Run the background quality analysis on frames that arrive by sync, peer pull, remote upload or auto-import, a couple of minutes after they land. Writes nothing to the catalog.">
+          <input
+            type="checkbox"
+            checked={job.analyzeNewFrames}
+            disabled={job.isSavingNewFrames || !job.status}
+            onChange={(event) => job.setAnalyzeNewFrames(event.target.checked)}
+          />
+          Analyze new frames as they arrive
+        </label>
+        <small>
+          Sync, peer pulls, remote uploads and auto-import. Without it, frames wait for Analyze
+          Missing Quality, and a target can be scored on two kinds of star count meanwhile.
+        </small>
+      </div>
+      <div className="quality-backfill-option">
         <label title="Fill measured star count and HFR into images imported without them. Only missing values are written; N.I.N.A.-recorded measurements are never replaced. Remembered as the default for every analyze action.">
           <input
             type="checkbox"

@@ -91,3 +91,32 @@ describe('QualityBackfillControls star-metadata option', () => {
     ).not.toBeChecked();
   });
 });
+
+describe('QualityBackfillControls new-frame analysis', () => {
+  it('saves the choice to analyze frames as they arrive', async () => {
+    let enabled = false;
+    const status = () => ({ ...idleStatus, data: { ...idleStatus.data, analyze_new_frames: enabled } });
+    const bodies: unknown[] = [];
+    server.use(
+      http.get('/api/db/:dbId/analysis/quality-backfill', () => HttpResponse.json(status())),
+      http.put('/api/db/:dbId/analysis/quality-backfill/new-frames', async ({ request }) => {
+        const body = (await request.json()) as { enabled: boolean };
+        bodies.push(body);
+        enabled = body.enabled;
+        return HttpResponse.json(status());
+      })
+    );
+
+    const user = userEvent.setup();
+    render(<QualityBackfillControls dbId="test" />, { wrapper: wrapper() });
+
+    const checkbox = await screen.findByRole('checkbox', { name: /analyze new frames as they arrive/i });
+    await waitFor(() => expect(checkbox).toBeEnabled());
+    expect(checkbox).not.toBeChecked();
+
+    await user.click(checkbox);
+
+    await waitFor(() => expect(bodies).toEqual([{ enabled: true }]));
+    await waitFor(() => expect(checkbox).toBeChecked());
+  });
+});
