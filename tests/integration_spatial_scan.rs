@@ -87,8 +87,7 @@ fn create_test_app(conn: Connection, cache_dir: &std::path::Path) -> (Router, Ar
         let mut dbs = state.databases.write().unwrap();
         let ctx = dbs.get("test").unwrap();
         let mut isolated: DatabaseContext = (**ctx).clone();
-        isolated.cache_dir_path = cache_dir.to_path_buf();
-        isolated.cache_dir = cache_dir.to_string_lossy().into_owned();
+        isolated.use_storage_for_test(cache_dir);
         dbs.insert("test".to_string(), Arc::new(isolated));
     }
 

@@ -175,7 +175,7 @@ pub async fn get_sky_coverage(
     let context = ctx.0.clone();
     let response = tokio::task::spawn_blocking(move || {
         let footprints = footprints_for(&context, &targets, &lights);
-        let previews = previews_for(&context.cache_dir_path);
+        let previews = previews_for(&context);
         assemble(targets, lights, footprints, previews)
     })
     .await
@@ -588,7 +588,7 @@ fn footprints_for(
 
 /// The stack preview to draw for each target: the newest finished colour
 /// stack when there is one, else the mono stack with the most integration.
-pub(crate) fn previews_for(cache_dir: &Path) -> HashMap<i32, SkyPreview> {
+pub(crate) fn previews_for(context: &DatabaseContext) -> HashMap<i32, SkyPreview> {
     use super::stack_preview::{
         color::{LatestStackColorPreviews, StackColorKind, StackColorRole},
         LatestStackPreviews, StackGroupState, StackGroupStatus, StackJobState,
@@ -600,13 +600,14 @@ pub(crate) fn previews_for(cache_dir: &Path) -> HashMap<i32, SkyPreview> {
         solutions
             .entry(image_id)
             .or_insert_with(|| {
-                crate::astrometry::persisted_pixel_analysis(cache_dir, image_id)
+                crate::astrometry::persisted_pixel_analysis(&context.cache_dir_path, image_id)
                     .and_then(|analysis| analysis.solution)
             })
             .clone()
     };
 
-    let stacks = cache_dir.join("stack-previews");
+    use crate::server::storage::{stack_folder, stack_kind, stacks};
+    let stacks = stacks(&context.stack_root);
     let mono: Vec<StackGroupStatus> =
         super::stack_preview::read_latest_indices::<LatestStackPreviews>(&stacks)
             .into_iter()
@@ -614,9 +615,9 @@ pub(crate) fn previews_for(cache_dir: &Path) -> HashMap<i32, SkyPreview> {
             .collect();
 
     let mut colour_ranked: HashMap<i32, (bool, i64)> = HashMap::new();
-    for index in
-        super::stack_preview::read_latest_indices::<LatestStackColorPreviews>(&stacks.join("color"))
-    {
+    for index in super::stack_preview::read_latest_indices::<LatestStackColorPreviews>(
+        &stack_folder(&context.stack_root, stack_kind::COLOR),
+    ) {
         for job in index.jobs {
             if job.state != StackJobState::Completed || job.preview_url.is_empty() {
                 continue;

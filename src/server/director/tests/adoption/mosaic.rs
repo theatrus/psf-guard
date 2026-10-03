@@ -11,7 +11,7 @@ use crate::astrometry::{
 /// A ready H-alpha stack of one target in the rig's cache, in the shape the
 /// stack preview job writes, whose reference frame 42 has a persisted solve.
 fn write_stack(cache: &std::path::Path, project_row: i64, target_id: i64, solved: bool) {
-    let stacks = cache.join("stack-previews");
+    let stacks = crate::server::storage::stacks(cache);
     std::fs::create_dir_all(&stacks).unwrap();
     let group = json!({
         "index": 0, "target_id": target_id, "target_name": "IC 1805 r1c1", "filter_name": "Ha",

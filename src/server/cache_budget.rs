@@ -16,6 +16,7 @@
 //! explicitly, at most once an hour per file.
 
 use crate::server::state::AppState;
+use crate::server::storage::{self, PREVIEW_CATEGORIES};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -42,8 +43,6 @@ const TOUCH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// How long a volume's cache sizes are trusted: walking a large cache over
 /// NFS is slow, and only Settings shows them.
 const SIZES_TTL: Duration = Duration::from_secs(60 * 60);
-/// Image previews, culled first. Each is one file below the category.
-const PREVIEW_CATEGORIES: [&str; 3] = ["previews", "annotated", "stars"];
 
 static MAX_VOLUME_PERCENT: AtomicU8 = AtomicU8::new(DEFAULT_MAX_VOLUME_PERCENT);
 static LAST: Mutex<Vec<VolumeReport>> = Mutex::new(Vec::new());
@@ -314,7 +313,8 @@ fn preview_candidates(caches: &[(String, PathBuf)], now: SystemTime) -> Vec<Cand
 fn checkpoint_candidates(caches: &[(String, PathBuf)], now: SystemTime) -> Vec<Candidate> {
     let mut groups: HashMap<PathBuf, Candidate> = HashMap::new();
     for (_, cache) in caches {
-        let directory = cache.join("stack-previews").join("resume");
+        let directory =
+            crate::server::storage::stack_folder(cache, crate::server::storage::stack_kind::RESUME);
         let Ok(entries) = std::fs::read_dir(&directory) else {
             continue;
         };
@@ -381,8 +381,8 @@ impl CacheSizes {
             let bytes = tree_bytes(&entry.path());
             match name.to_string_lossy().as_ref() {
                 category if PREVIEW_CATEGORIES.contains(&category) => self.previews += bytes,
-                "stack-previews" => self.stacks += bytes,
-                "calibration-masters" => self.calibration += bytes,
+                storage::STACKS => self.stacks += bytes,
+                storage::CALIBRATION_MASTERS => self.calibration += bytes,
                 _ => self.other += bytes,
             }
         }

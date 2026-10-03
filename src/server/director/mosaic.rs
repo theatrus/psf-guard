@@ -150,7 +150,7 @@ pub(super) async fn get(
                     .map_err(StoreError::from)?;
                 let found = previews
                     .entry(context.id.clone())
-                    .or_insert_with(|| previews_for(&context.cache_dir_path));
+                    .or_insert_with(|| previews_for(context));
                 for target in &activated.targets {
                     let row =
                         target_row(&connection, target.target_guid).map_err(StoreError::from)?;

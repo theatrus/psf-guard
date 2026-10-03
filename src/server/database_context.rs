@@ -478,10 +478,15 @@ pub struct DatabaseContext {
     /// Automatic import of new frames, when the operator turned it on.
     pub autoimport: Option<crate::db_registry::AutoImportSettings>,
     /// Per-DB cache directory: `<cache_root>/<slug>/`. Created on construction.
-    /// All preview/annotated/PSF artifacts for this database live below here,
-    /// so two DBs with overlapping image IDs do not collide.
-    pub cache_dir: String,
+    /// Image previews, star lists, astrometry and the other per-image results
+    /// for this database live below here, so two DBs with overlapping image
+    /// IDs do not collide. See [`crate::server::storage`] for the layout.
     pub cache_dir_path: PathBuf,
+    /// Where this database's stacks go: `stack-previews/` lives below it.
+    pub stack_root: PathBuf,
+    /// Where this database's calibration masters go: `calibration-masters/`
+    /// lives below it.
+    pub calibration_root: PathBuf,
     db_connection: Arc<Mutex<Connection>>,
     pub(crate) exposure_groups_cache:
         Arc<Mutex<crate::server::exposure_groups::ProjectExposureGroupsCache>>,
@@ -866,7 +871,8 @@ impl DatabaseContext {
                 e
             )
         })?;
-        let cache_dir = cache_dir_path.to_string_lossy().into_owned();
+        let stack_root = cache_dir_path.clone();
+        let calibration_root = cache_dir_path.clone();
 
         let conn = open_scheduler_connection(&db_path)?;
         let fingerprint = fingerprint_path(&db_path);
@@ -882,8 +888,9 @@ impl DatabaseContext {
             export_dir,
             process_dir,
             autoimport: None,
-            cache_dir,
             cache_dir_path,
+            stack_root,
+            calibration_root,
             db_connection: Arc::new(Mutex::new(conn)),
             exposure_groups_cache: Arc::new(Mutex::new(Default::default())),
             db_fingerprint: Arc::new(Mutex::new(fingerprint)),
@@ -1047,10 +1054,6 @@ impl DatabaseContext {
                 );
             }
         }
-    }
-
-    pub fn get_cache_path(&self, category: &str, filename: &str) -> PathBuf {
-        self.cache_dir_path.join(category).join(filename)
     }
 
     pub fn get_image_path(&self, relative_path: &str) -> PathBuf {
@@ -2060,6 +2063,20 @@ impl DatabaseContext {
         Ok(Arc::new(tree_result))
     }
 
+    /// This database's per-image cache files.
+    pub fn cache(&self) -> crate::server::cache::CacheManager {
+        crate::server::cache::CacheManager::new(&self.cache_dir_path)
+    }
+
+    /// Point the cache, stacks and calibration masters all at one folder,
+    /// for tests.
+    #[doc(hidden)]
+    pub fn use_storage_for_test(&mut self, directory: &Path) {
+        self.cache_dir_path = directory.to_path_buf();
+        self.stack_root = directory.to_path_buf();
+        self.calibration_root = directory.to_path_buf();
+    }
+
     /// Construct a DatabaseContext for integration testing with a pre-opened
     /// connection. Skips filesystem validation.
     #[doc(hidden)]
@@ -2075,8 +2092,9 @@ impl DatabaseContext {
             export_dir: None,
             process_dir: None,
             autoimport: None,
-            cache_dir: "/tmp/psf-guard-test".to_string(),
             cache_dir_path: PathBuf::from("/tmp/psf-guard-test"),
+            stack_root: PathBuf::from("/tmp/psf-guard-test"),
+            calibration_root: PathBuf::from("/tmp/psf-guard-test"),
             db_connection: Arc::new(Mutex::new(conn)),
             exposure_groups_cache: Arc::new(Mutex::new(Default::default())),
             db_fingerprint: Arc::new(Mutex::new(None)),
@@ -2118,8 +2136,9 @@ impl Clone for DatabaseContext {
             export_dir: self.export_dir.clone(),
             process_dir: self.process_dir.clone(),
             autoimport: self.autoimport.clone(),
-            cache_dir: self.cache_dir.clone(),
             cache_dir_path: self.cache_dir_path.clone(),
+            stack_root: self.stack_root.clone(),
+            calibration_root: self.calibration_root.clone(),
             db_connection: self.db_connection.clone(),
             exposure_groups_cache: self.exposure_groups_cache.clone(),
             db_fingerprint: self.db_fingerprint.clone(),

@@ -391,23 +391,21 @@ pub(super) fn rc_astro_chain_ids(
     Ok(ids)
 }
 
-pub(super) fn rc_astro_dir(cache_root: &FsPath, rc_astro_id: &str) -> PathBuf {
-    cache_root
-        .join("stack-previews")
-        .join("rc-astro")
+pub(super) fn rc_astro_dir(stack_root: &FsPath, rc_astro_id: &str) -> PathBuf {
+    crate::server::storage::stack_folder(stack_root, crate::server::storage::stack_kind::RC_ASTRO)
         .join(rc_astro_id)
 }
 
-fn rc_astro_manifest_path(cache_root: &FsPath, rc_astro_id: &str) -> PathBuf {
-    rc_astro_dir(cache_root, rc_astro_id).join("manifest.json")
+fn rc_astro_manifest_path(stack_root: &FsPath, rc_astro_id: &str) -> PathBuf {
+    rc_astro_dir(stack_root, rc_astro_id).join("manifest.json")
 }
 
-pub(super) fn rc_astro_fits_path(cache_root: &FsPath, rc_astro_id: &str) -> PathBuf {
-    rc_astro_dir(cache_root, rc_astro_id).join("processed.fits")
+pub(super) fn rc_astro_fits_path(stack_root: &FsPath, rc_astro_id: &str) -> PathBuf {
+    rc_astro_dir(stack_root, rc_astro_id).join("processed.fits")
 }
 
-pub(super) fn rc_astro_stars_path(cache_root: &FsPath, rc_astro_id: &str) -> PathBuf {
-    rc_astro_dir(cache_root, rc_astro_id).join("stars.fits")
+pub(super) fn rc_astro_stars_path(stack_root: &FsPath, rc_astro_id: &str) -> PathBuf {
+    rc_astro_dir(stack_root, rc_astro_id).join("stars.fits")
 }
 
 #[derive(Default, Deserialize)]
@@ -422,7 +420,7 @@ pub async fn download_rc_astro_fits(
     axum::extract::Query(query): axum::extract::Query<RcAstroDownloadQuery>,
 ) -> Result<axum::response::Response, AppError> {
     super::validate_job_id(&id)?;
-    let cached = std::fs::read(rc_astro_manifest_path(&ctx.cache_dir_path, &id))
+    let cached = std::fs::read(rc_astro_manifest_path(&ctx.stack_root, &id))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<CachedRcAstro>(&bytes).ok())
         .filter(|manifest| {
@@ -430,9 +428,9 @@ pub async fn download_rc_astro_fits(
         })
         .ok_or(AppError::NotFound)?;
     let path = if query.stars {
-        rc_astro_stars_path(&ctx.cache_dir_path, &cached.rc_astro_id)
+        rc_astro_stars_path(&ctx.stack_root, &cached.rc_astro_id)
     } else {
-        rc_astro_fits_path(&ctx.cache_dir_path, &cached.rc_astro_id)
+        rc_astro_fits_path(&ctx.stack_root, &cached.rc_astro_id)
     };
     let label = if query.stars { "stars" } else { "processed" };
     super::color::stream_artifact(
@@ -463,13 +461,13 @@ fn refresh_manifest_mtime(manifest_path: &FsPath) {
 /// Load one cached prefix, or say why it does not serve. A hit refreshes
 /// the manifest mtime.
 fn load_cached_prefix(
-    cache_root: &FsPath,
+    stack_root: &FsPath,
     rc_astro_id: &str,
     prefix: &RcAstroProcessing,
 ) -> Option<(LinearImage, Option<LinearImage>, StackRcAstroResult)> {
-    let fits = rc_astro_fits_path(cache_root, rc_astro_id);
-    let stars_fits = rc_astro_stars_path(cache_root, rc_astro_id);
-    let manifest_path = rc_astro_manifest_path(cache_root, rc_astro_id);
+    let fits = rc_astro_fits_path(stack_root, rc_astro_id);
+    let stars_fits = rc_astro_stars_path(stack_root, rc_astro_id);
+    let manifest_path = rc_astro_manifest_path(stack_root, rc_astro_id);
     let bytes = std::fs::read(&manifest_path).ok()?;
     let cached = serde_json::from_slice::<CachedRcAstro>(&bytes).ok()?;
     if cached.schema_version != RC_ASTRO_CACHE_VERSION
@@ -493,7 +491,7 @@ fn load_cached_prefix(
 /// Write one prefix's artifacts: the processed FITS, the stars FITS when one
 /// exists, and the manifest naming what produced them.
 fn persist_prefix(
-    cache_root: &FsPath,
+    stack_root: &FsPath,
     rc_astro_id: &str,
     prefix: &RcAstroProcessing,
     image: &LinearImage,
@@ -501,8 +499,8 @@ fn persist_prefix(
     result: &StackRcAstroResult,
     reference_headers: &[(String, seiza_fits::HeaderValue)],
 ) -> Result<(), String> {
-    let fits = rc_astro_fits_path(cache_root, rc_astro_id);
-    let stars_fits = rc_astro_stars_path(cache_root, rc_astro_id);
+    let fits = rc_astro_fits_path(stack_root, rc_astro_id);
+    let stars_fits = rc_astro_stars_path(stack_root, rc_astro_id);
     let parent = fits
         .parent()
         .ok_or_else(|| "RC-Astro FITS path has no parent".to_string())?;
@@ -533,7 +531,7 @@ fn persist_prefix(
         std::fs::rename(&temporary, &stars_fits).map_err(|error| error.to_string())?;
     }
     super::stretch::write_json_atomic(
-        &rc_astro_manifest_path(cache_root, rc_astro_id),
+        &rc_astro_manifest_path(stack_root, rc_astro_id),
         &CachedRcAstro {
             schema_version: RC_ASTRO_CACHE_VERSION,
             rc_astro_id: rc_astro_id.into(),
@@ -550,7 +548,7 @@ fn persist_prefix(
 /// download handlers serve; the returned images feed the stretch renders
 /// directly.
 pub(super) fn apply_rc_astro(
-    cache_root: &FsPath,
+    stack_root: &FsPath,
     chain_ids: &[String],
     config: &RcAstroProcessing,
     schemas: &[(String, ExternalToolSchema)],
@@ -559,7 +557,7 @@ pub(super) fn apply_rc_astro(
     on_progress: &mut dyn FnMut(&str, f32),
 ) -> Result<RcAstroOutcome, String> {
     apply_rc_astro_with_runner(
-        cache_root,
+        stack_root,
         chain_ids,
         config,
         schemas,
@@ -577,7 +575,7 @@ pub(super) fn apply_rc_astro(
 
 #[allow(clippy::too_many_arguments)]
 fn apply_rc_astro_with_runner(
-    cache_root: &FsPath,
+    stack_root: &FsPath,
     chain_ids: &[String],
     config: &RcAstroProcessing,
     schemas: &[(String, ExternalToolSchema)],
@@ -613,7 +611,7 @@ fn apply_rc_astro_with_runner(
     let mut resume_at = 0;
     for end in (1..=ordered.len()).rev() {
         if let Some((cached_image, cached_stars, cached_result)) =
-            load_cached_prefix(cache_root, &chain_ids[end - 1], &prefix_config(end))
+            load_cached_prefix(stack_root, &chain_ids[end - 1], &prefix_config(end))
         {
             // The served prefix refreshed its own mtime; refresh the ones
             // under it too. A chain the user keeps re-applying must keep
@@ -621,7 +619,7 @@ fn apply_rc_astro_with_runner(
             // the first later-step retune after two weeks reruns the whole
             // chain — the recompute this cache layout exists to avoid.
             for id in &chain_ids[..end - 1] {
-                refresh_manifest_mtime(&rc_astro_manifest_path(cache_root, id));
+                refresh_manifest_mtime(&rc_astro_manifest_path(stack_root, id));
             }
             if end == ordered.len() {
                 return Ok(RcAstroOutcome {
@@ -717,7 +715,7 @@ fn apply_rc_astro_with_runner(
             has_stars: stars.is_some(),
         };
         persist_prefix(
-            cache_root,
+            stack_root,
             &chain_ids[index],
             &prefix_config(index + 1),
             &current,
@@ -764,15 +762,18 @@ const RC_ASTRO_RETENTION: std::time::Duration = std::time::Duration::from_secs(1
 /// hundreds of megabytes (processed plus stars FITS), and version bumps
 /// deliberately mint new identities, so the directory grows without this.
 pub(super) fn prune_rc_astro_cache(
-    cache_root: &FsPath,
+    stack_root: &FsPath,
     active_sources: &std::collections::HashMap<String, String>,
 ) {
-    let root = cache_root.join("stack-previews").join("rc-astro");
+    let root = crate::server::storage::stack_folder(
+        stack_root,
+        crate::server::storage::stack_kind::RC_ASTRO,
+    );
     let Ok(entries) = std::fs::read_dir(&root) else {
         return;
     };
-    let mut retained = super::stretch::selected_rc_astro_ids(cache_root, active_sources);
-    retained.extend(super::color::latest_color_rc_astro_ids(cache_root));
+    let mut retained = super::stretch::selected_rc_astro_ids(stack_root, active_sources);
+    retained.extend(super::color::latest_color_rc_astro_ids(stack_root));
     let stale = |path: &std::path::Path, retention: std::time::Duration| {
         std::fs::metadata(path)
             .and_then(|metadata| metadata.modified())

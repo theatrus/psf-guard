@@ -7,8 +7,11 @@ pub struct CacheManager {
 }
 
 impl CacheManager {
-    pub fn new(cache_dir: PathBuf) -> Self {
-        Self { cache_dir }
+    /// Files below one database's cache root, sorted into category folders.
+    pub fn new(cache_dir: &Path) -> Self {
+        Self {
+            cache_dir: cache_dir.to_path_buf(),
+        }
     }
 
     pub fn get_cached_path(&self, category: &str, key: &str, extension: &str) -> PathBuf {

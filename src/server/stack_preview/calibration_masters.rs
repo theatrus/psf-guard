@@ -238,7 +238,7 @@ fn load_mono_group(
         }
         project_id = Some(job.project_id);
     }
-    if let Ok(bytes) = std::fs::read(super::manifest_path(&ctx.cache_dir_path, &source.job_id)) {
+    if let Ok(bytes) = std::fs::read(super::manifest_path(&ctx.stack_root, &source.job_id)) {
         let job: StackPreviewJob = serde_json::from_slice(&bytes)
             .map_err(|_| AppError::InternalError("Invalid stack manifest".into()))?;
         if job.database_id != ctx.id || job.job_id != source.job_id {
@@ -252,7 +252,7 @@ fn load_mono_group(
     // A forced rebuild can replace the live job while the UI still shows the
     // previous completed artifact. Its durable latest entry owns that history.
     if let Some(project_id) = project_id {
-        if let Ok(bytes) = std::fs::read(super::latest_path(&ctx.cache_dir_path, project_id)) {
+        if let Ok(bytes) = std::fs::read(super::latest_path(&ctx.stack_root, project_id)) {
             let latest: LatestStackPreviews = serde_json::from_slice(&bytes)
                 .map_err(|_| AppError::InternalError("Invalid latest stack index".into()))?;
             if latest.database_id != ctx.id || latest.project_id != project_id {
@@ -295,7 +295,7 @@ fn load_color_job(
         }
         project_id = Some(job.project_id);
     }
-    if let Ok(job) = color::load_persisted_color_job(&ctx.cache_dir_path, &source.job_id) {
+    if let Ok(job) = color::load_persisted_color_job(&ctx.stack_root, &source.job_id) {
         if job.database_id != ctx.id || job.job_id != source.job_id {
             return Err(AppError::NotFound);
         }
@@ -499,9 +499,11 @@ fn master_path(ctx: &DatabaseContext, master: &RecordedMaster) -> Result<PathBuf
             "Invalid calibration master reference".into(),
         ));
     }
-    let base = std::fs::canonicalize(&ctx.cache_dir_path).map_err(|_| AppError::NotFound)?;
-    let root = std::fs::canonicalize(ctx.cache_dir_path.join("calibration-masters"))
-        .map_err(|_| AppError::NotFound)?;
+    let base = std::fs::canonicalize(&ctx.calibration_root).map_err(|_| AppError::NotFound)?;
+    let root = std::fs::canonicalize(crate::server::storage::calibration_masters(
+        &ctx.calibration_root,
+    ))
+    .map_err(|_| AppError::NotFound)?;
     let path = std::fs::canonicalize(root.join(&master.label)).map_err(|_| AppError::NotFound)?;
     if !root.starts_with(&base) || !path.starts_with(&root) || !path.is_file() {
         return Err(AppError::NotFound);
@@ -531,10 +533,8 @@ fn supplement_entry(ctx: &DatabaseContext, entry: &mut MasterEntry) {
     let Ok(conn) = conn.try_lock() else {
         return;
     };
-    let path = ctx
-        .cache_dir_path
-        .join("calibration-masters")
-        .join(&entry.label);
+    let path =
+        crate::server::storage::calibration_masters(&ctx.calibration_root).join(&entry.label);
     let row: Result<Option<(i64, String)>, _> = conn.query_row(
         "SELECT source_count, statistics_json FROM psf_guard_calibration_master WHERE cache_path = ?1",
         [path.to_string_lossy().as_ref()], |row| Ok((row.get(0)?, row.get(1)?)),
@@ -642,7 +642,7 @@ fn preview_job(
     let base = std::fs::canonicalize(&ctx.cache_dir_path).map_err(|_| AppError::NotFound)?;
     let mut directory = base.clone();
     // Validate each existing ancestor before creating a child, including links.
-    for component in ["previews", "calibration-masters"] {
+    for component in ["previews", crate::server::storage::CALIBRATION_MASTERS] {
         directory.push(component);
         match std::fs::create_dir(&directory) {
             Ok(()) => {}

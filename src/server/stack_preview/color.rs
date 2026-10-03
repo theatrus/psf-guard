@@ -543,7 +543,7 @@ struct TargetSources {
 
 pub(super) struct PreparedColorJob {
     pub(super) public: StackColorJob,
-    pub(super) cache_root: PathBuf,
+    pub(super) stack_root: PathBuf,
     background_regions: BTreeMap<StackColorRole, Vec<ProtectedRegion>>,
     rc_astro_schemas: BTreeMap<StackColorRole, Vec<(String, seiza_stacking::ExternalToolSchema)>>,
     rc_astro_chains: BTreeMap<StackColorRole, Vec<String>>,
@@ -849,18 +849,18 @@ impl StackPreviewManager {
         }
     }
 
-    fn persist_latest_color(&self, cache_root: &FsPath, job: &StackColorJob) -> Result<(), String> {
+    fn persist_latest_color(&self, stack_root: &FsPath, job: &StackColorJob) -> Result<(), String> {
         let _guard = self.latest_write.lock().unwrap();
-        persist_latest_color(cache_root, job)
+        persist_latest_color(stack_root, job)
     }
 }
 
 pub(super) fn load_persisted_color_job(
-    cache_root: &FsPath,
+    stack_root: &FsPath,
     job_id: &str,
 ) -> Result<StackColorJob, AppError> {
     let bytes =
-        std::fs::read(color_manifest_path(cache_root, job_id)).map_err(|_| AppError::NotFound)?;
+        std::fs::read(color_manifest_path(stack_root, job_id)).map_err(|_| AppError::NotFound)?;
     serde_json::from_slice(&bytes)
         .map_err(|error| AppError::InternalError(format!("Invalid color manifest: {error}")))
 }
@@ -870,7 +870,7 @@ pub async fn get_stack_color_catalog(
     Path((_db_id, project_id)): Path<(String, i32)>,
 ) -> Result<Json<ApiResponse<StackColorCatalog>>, AppError> {
     let latest = load_latest_stacks(&ctx, project_id)?;
-    let sources = collect_sources(&ctx.cache_dir_path, &latest);
+    let sources = collect_sources(&ctx.stack_root, &latest);
     let targets = availability(&sources);
     let mut jobs = load_latest_colors(&ctx, project_id)?.jobs;
     for job in &mut jobs {
@@ -927,28 +927,28 @@ pub async fn start_stack_color(
         }
         if !request.force
             && existing.state == StackJobState::Completed
-            && color_job_artifacts_exist(&prepared.cache_root, &existing)
+            && color_job_artifacts_exist(&prepared.stack_root, &existing)
         {
             let existing = mark_color_reused(existing);
             state
                 .stack_previews
-                .persist_latest_color(&prepared.cache_root, &existing)
+                .persist_latest_color(&prepared.stack_root, &existing)
                 .map_err(AppError::InternalError)?;
             let _ = state.stack_previews.insert_color(existing.clone());
             return Ok(Json(ApiResponse::success(existing)));
         }
     }
-    let manifest = color_manifest_path(&prepared.cache_root, &prepared.public.job_id);
+    let manifest = color_manifest_path(&prepared.stack_root, &prepared.public.job_id);
     if !request.force
         && let Ok(bytes) = std::fs::read(&manifest)
         && let Ok(existing) = serde_json::from_slice::<StackColorJob>(&bytes)
         && existing.state == StackJobState::Completed
-        && color_job_artifacts_exist(&prepared.cache_root, &existing)
+        && color_job_artifacts_exist(&prepared.stack_root, &existing)
     {
         let existing = mark_color_reused(existing);
         state
             .stack_previews
-            .persist_latest_color(&prepared.cache_root, &existing)
+            .persist_latest_color(&prepared.stack_root, &existing)
             .map_err(AppError::InternalError)?;
         let _ = state.stack_previews.insert_color(existing.clone());
         return Ok(Json(ApiResponse::success(existing)));
@@ -993,7 +993,7 @@ pub async fn get_stack_color_job(
         }
         return Ok(Json(ApiResponse::success(job)));
     }
-    let bytes = std::fs::read(color_manifest_path(&ctx.cache_dir_path, &job_id))
+    let bytes = std::fs::read(color_manifest_path(&ctx.stack_root, &job_id))
         .map_err(|_| AppError::NotFound)?;
     let job: StackColorJob = serde_json::from_slice(&bytes)
         .map_err(|error| AppError::InternalError(format!("Invalid color manifest: {error}")))?;
@@ -1011,10 +1011,8 @@ pub async fn get_stack_color_image(
 ) -> Result<Response, AppError> {
     super::validate_job_id(&job_id)?;
     let path = match query.size {
-        StackPreviewImageSize::Screen => color_preview_path(&ctx.cache_dir_path, &job_id),
-        StackPreviewImageSize::Original => {
-            color_original_preview_path(&ctx.cache_dir_path, &job_id)
-        }
+        StackPreviewImageSize::Screen => color_preview_path(&ctx.stack_root, &job_id),
+        StackPreviewImageSize::Original => color_original_preview_path(&ctx.stack_root, &job_id),
     };
     stream_artifact(path, "image/png", None).await
 }
@@ -1024,7 +1022,7 @@ pub async fn download_stack_color_fits(
     Path((_db_id, job_id)): Path<(String, String)>,
 ) -> Result<Response, AppError> {
     super::validate_job_id(&job_id)?;
-    let manifest = std::fs::read(color_manifest_path(&ctx.cache_dir_path, &job_id))
+    let manifest = std::fs::read(color_manifest_path(&ctx.stack_root, &job_id))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<StackColorJob>(&bytes).ok());
     let label = manifest
@@ -1033,7 +1031,7 @@ pub async fn download_stack_color_fits(
         .unwrap_or_else(|| "color".into());
     let filename = format!("psf-guard-{label}-{}.fits", &job_id[..12]);
     stream_artifact(
-        color_fits_path(&ctx.cache_dir_path, &job_id),
+        color_fits_path(&ctx.stack_root, &job_id),
         "application/fits",
         Some(filename),
     )
@@ -1191,7 +1189,7 @@ pub(super) fn prepare_color_job(
         }
     }
     let latest = load_latest_stacks(ctx, project_id)?;
-    let targets = collect_sources(&ctx.cache_dir_path, &latest);
+    let targets = collect_sources(&ctx.stack_root, &latest);
     let target = targets.get(&request.target_id).ok_or_else(|| {
         AppError::BadRequest("No completed channel stacks are available for that target".into())
     })?;
@@ -1346,7 +1344,7 @@ pub(super) fn prepare_color_job(
             outdated: false,
             outdated_reason: None,
         },
-        cache_root: ctx.cache_dir_path.clone(),
+        stack_root: ctx.stack_root.clone(),
         background_regions,
         rc_astro_schemas,
         rc_astro_chains,
@@ -1754,7 +1752,7 @@ fn run_color_job(state: &Arc<AppState>, prepared: PreparedColorJob) {
             state,
             &prepared.public,
             &prepared.background_regions,
-            &prepared.cache_root,
+            &prepared.stack_root,
             &prepared.rc_astro_schemas,
             &prepared.rc_astro_chains,
         )
@@ -1774,15 +1772,15 @@ fn run_color_job(state: &Arc<AppState>, prepared: PreparedColorJob) {
             if let Some(mut completed) = state.stack_previews.get_color(&job_id) {
                 finish_color_job(&mut completed);
                 let persisted =
-                    persist_color_manifest(&prepared.cache_root, &completed).and_then(|()| {
+                    persist_color_manifest(&prepared.stack_root, &completed).and_then(|()| {
                         state
                             .stack_previews
-                            .persist_latest_color(&prepared.cache_root, &completed)
+                            .persist_latest_color(&prepared.stack_root, &completed)
                     });
                 match persisted {
                     Ok(()) => {
                         let _ = state.stack_previews.insert_color(completed);
-                        state.stack_previews.prune_cache(&prepared.cache_root);
+                        state.stack_previews.prune_cache(&prepared.stack_root);
                     }
                     Err(error) => {
                         tracing::warn!("Failed to publish color preview: {error}");
@@ -1929,7 +1927,7 @@ fn compose_color(
     state: &Arc<AppState>,
     job: &StackColorJob,
     background_regions: &BTreeMap<StackColorRole, Vec<ProtectedRegion>>,
-    cache_root: &FsPath,
+    stack_root: &FsPath,
     rc_astro_schemas: &BTreeMap<StackColorRole, Vec<(String, seiza_stacking::ExternalToolSchema)>>,
     rc_astro_chains: &BTreeMap<StackColorRole, Vec<String>>,
 ) -> Result<(), String> {
@@ -1949,7 +1947,7 @@ fn compose_color(
         .ok_or_else(|| "Color job has no reference channel".to_string())?;
     let cached_inputs = job.linear_input_id.as_deref().and_then(|input_id| {
         load_cached_color_input_manifest(
-            cache_root,
+            stack_root,
             input_id,
             reference_role,
             &job.sources,
@@ -1998,7 +1996,7 @@ fn compose_color(
             Some(reference_role),
             None,
         );
-        let reference = load_source_frame(cache_root, reference_source)?;
+        let reference = load_source_frame(stack_root, reference_source)?;
         progress.advance(StackColorProgressPhase::LoadingSources, 1);
         (
             reference,
@@ -2072,7 +2070,7 @@ fn compose_color(
                 .as_deref()
                 .expect("cached inputs have an identity");
             let frame = crate::image_io::open_linear_frame(color_input_fits_path(
-                cache_root,
+                stack_root,
                 input_id,
                 source.role,
             ))
@@ -2086,7 +2084,7 @@ fn compose_color(
                 Some(source.role),
                 None,
             );
-            let frame = load_source_frame(cache_root, source)?;
+            let frame = load_source_frame(stack_root, source)?;
             progress.advance(StackColorProgressPhase::LoadingSources, 1);
             frame
         };
@@ -2408,7 +2406,7 @@ fn compose_color(
                             &source.filter_name,
                         );
                         let outcome = super::rc_astro::apply_rc_astro(
-                            cache_root,
+                            stack_root,
                             chain,
                             config,
                             schemas,
@@ -2483,7 +2481,7 @@ fn compose_color(
                         resolved_rc_astro: resolved_rc_astro.clone(),
                     };
                     store_cached_color_inputs(
-                        cache_root,
+                        stack_root,
                         input_id,
                         &job.sources,
                         &images,
@@ -2731,7 +2729,7 @@ fn compose_color(
             None,
             None,
         );
-        let fits_destination = color_fits_path(cache_root, &job.job_id);
+        let fits_destination = color_fits_path(stack_root, &job.job_id);
         let parent = fits_destination
             .parent()
             .ok_or_else(|| "Color FITS path has no parent".to_string())?;
@@ -2756,8 +2754,8 @@ fn compose_color(
             &composition.image,
             &stretch_config,
             source_transfer,
-            &color_preview_path(cache_root, &job.job_id),
-            &color_original_preview_path(cache_root, &job.job_id),
+            &color_preview_path(stack_root, &job.job_id),
+            &color_original_preview_path(stack_root, &job.job_id),
             |render_phase| {
                 if let Some(previous) = active_render.replace(render_phase) {
                     progress.finish(render_progress_phase(previous));
@@ -2824,9 +2822,9 @@ fn registered_channel_headers(
     headers
 }
 
-fn load_source_frame(cache_root: &FsPath, source: &StackColorSource) -> Result<FitsFrame, String> {
+fn load_source_frame(stack_root: &FsPath, source: &StackColorSource) -> Result<FitsFrame, String> {
     let frame = crate::image_io::open_linear_frame(super::fits_path(
-        cache_root,
+        stack_root,
         &source.job_id,
         source.group_index,
     ))
@@ -2841,30 +2839,30 @@ fn load_source_frame(cache_root: &FsPath, source: &StackColorSource) -> Result<F
 }
 
 fn load_cached_color_input_manifest(
-    cache_root: &FsPath,
+    stack_root: &FsPath,
     input_id: &str,
     reference_role: StackColorRole,
     sources: &[StackColorSource],
     rc_astro_ids: &BTreeMap<StackColorRole, String>,
 ) -> Option<(CachedColorInputs, FitsFrame)> {
-    let bytes = std::fs::read(color_input_manifest_path(cache_root, input_id)).ok()?;
+    let bytes = std::fs::read(color_input_manifest_path(stack_root, input_id)).ok()?;
     let manifest = serde_json::from_slice::<CachedColorInputs>(&bytes).ok()?;
     let roles = sources.iter().map(|source| source.role).collect::<Vec<_>>();
     if manifest.schema_version != COLOR_INPUT_CACHE_VERSION
         || manifest.input_id != input_id
         || manifest.roles != roles
-        || !rc_astro_artifacts_exist(cache_root, rc_astro_ids, &manifest.resolved_rc_astro)
+        || !rc_astro_artifacts_exist(stack_root, rc_astro_ids, &manifest.resolved_rc_astro)
     {
         return None;
     }
     if !roles
         .iter()
-        .all(|role| color_input_fits_path(cache_root, input_id, *role).is_file())
+        .all(|role| color_input_fits_path(stack_root, input_id, *role).is_file())
     {
         return None;
     }
     let reference = crate::image_io::open_linear_frame(color_input_fits_path(
-        cache_root,
+        stack_root,
         input_id,
         reference_role,
     ))
@@ -2874,31 +2872,31 @@ fn load_cached_color_input_manifest(
 }
 
 fn rc_astro_artifacts_exist(
-    cache_root: &FsPath,
+    stack_root: &FsPath,
     ids: &BTreeMap<StackColorRole, String>,
     results: &BTreeMap<StackColorRole, StackColorRcAstroResult>,
 ) -> bool {
     ids.iter().all(|(role, id)| {
         super::validate_job_id(id).is_ok()
-            && super::rc_astro::rc_astro_fits_path(cache_root, id).is_file()
+            && super::rc_astro::rc_astro_fits_path(stack_root, id).is_file()
             && results.get(role).is_some_and(|result| {
                 !result.result.has_stars
-                    || super::rc_astro::rc_astro_stars_path(cache_root, id).is_file()
+                    || super::rc_astro::rc_astro_stars_path(stack_root, id).is_file()
             })
     })
 }
 
-pub(super) fn color_job_artifacts_exist(cache_root: &FsPath, job: &StackColorJob) -> bool {
-    color_artifacts_exist(cache_root, &job.job_id)
+pub(super) fn color_job_artifacts_exist(stack_root: &FsPath, job: &StackColorJob) -> bool {
+    color_artifacts_exist(stack_root, &job.job_id)
         && rc_astro_artifacts_exist(
-            cache_root,
+            stack_root,
             &job.input_rc_astro_ids,
             &job.resolved_input_rc_astro,
         )
 }
 
 fn store_cached_color_inputs(
-    cache_root: &FsPath,
+    stack_root: &FsPath,
     input_id: &str,
     sources: &[StackColorSource],
     images: &BTreeMap<StackColorRole, LinearImage>,
@@ -2909,7 +2907,7 @@ fn store_cached_color_inputs(
         let image = images
             .get(&source.role)
             .ok_or_else(|| format!("{} prepared image is missing", source.role.label()))?;
-        let destination = color_input_fits_path(cache_root, input_id, source.role);
+        let destination = color_input_fits_path(stack_root, input_id, source.role);
         let parent = destination
             .parent()
             .ok_or_else(|| "Color input FITS path has no parent".to_string())?;
@@ -2919,7 +2917,7 @@ fn store_cached_color_inputs(
             .map_err(|error| error.to_string())?;
         std::fs::rename(&temporary, &destination).map_err(|error| error.to_string())?;
     }
-    write_json_atomic(&color_input_manifest_path(cache_root, input_id), manifest)
+    write_json_atomic(&color_input_manifest_path(stack_root, input_id), manifest)
 }
 
 fn render_progress_phase(
@@ -2956,7 +2954,7 @@ fn load_latest_stacks(
     ctx: &crate::server::database_context::DatabaseContext,
     project_id: i32,
 ) -> Result<LatestStackPreviews, AppError> {
-    match std::fs::read(super::latest_path(&ctx.cache_dir_path, project_id)) {
+    match std::fs::read(super::latest_path(&ctx.stack_root, project_id)) {
         Ok(bytes) => {
             let latest: LatestStackPreviews = serde_json::from_slice(&bytes).map_err(|error| {
                 AppError::InternalError(format!("Invalid latest stack preview index: {error}"))
@@ -2988,7 +2986,7 @@ pub(super) fn load_latest_colors(
     ctx: &crate::server::database_context::DatabaseContext,
     project_id: i32,
 ) -> Result<LatestStackColorPreviews, AppError> {
-    match std::fs::read(latest_color_path(&ctx.cache_dir_path, project_id)) {
+    match std::fs::read(latest_color_path(&ctx.stack_root, project_id)) {
         Ok(bytes) => {
             let latest: LatestStackColorPreviews =
                 serde_json::from_slice(&bytes).map_err(|error| {
@@ -3049,7 +3047,7 @@ pub(super) fn requests_after_build(
     defaults: Option<&StackColorProcessing>,
 ) -> Result<Vec<StackColorRequest>, AppError> {
     let latest = load_latest_stacks(ctx, project_id)?;
-    let sources = collect_sources(&ctx.cache_dir_path, &latest);
+    let sources = collect_sources(&ctx.stack_root, &latest);
     let Some(target) = sources.get(&target_id) else {
         return Ok(Vec::new());
     };
@@ -3188,7 +3186,7 @@ fn first_composite(
 }
 
 fn collect_sources(
-    cache_root: &FsPath,
+    stack_root: &FsPath,
     latest: &LatestStackPreviews,
 ) -> BTreeMap<i32, TargetSources> {
     let mut targets = BTreeMap::<i32, TargetSources>::new();
@@ -3199,7 +3197,7 @@ fn collect_sources(
         {
             continue;
         }
-        if !super::fits_path(cache_root, &entry.job_id, entry.group.index).is_file() {
+        if !super::fits_path(stack_root, &entry.job_id, entry.group.index).is_file() {
             continue;
         }
         let target = targets.entry(entry.group.target_id).or_default();
@@ -3409,10 +3407,10 @@ fn validate_current_color_sources(
     Ok(())
 }
 
-fn color_artifacts_exist(cache_root: &FsPath, job_id: &str) -> bool {
-    color_preview_path(cache_root, job_id).is_file()
-        && color_original_preview_path(cache_root, job_id).is_file()
-        && color_fits_path(cache_root, job_id).is_file()
+fn color_artifacts_exist(stack_root: &FsPath, job_id: &str) -> bool {
+    color_preview_path(stack_root, job_id).is_file()
+        && color_original_preview_path(stack_root, job_id).is_file()
+        && color_fits_path(stack_root, job_id).is_file()
 }
 
 fn color_job_outdated_reason(
@@ -3433,7 +3431,7 @@ fn color_job_outdated_reason(
     }
     if !job.sources.iter().all(|source| {
         source_is_current(source, job.target_id, latest)
-            && super::fits_path(&ctx.cache_dir_path, &source.job_id, source.group_index).is_file()
+            && super::fits_path(&ctx.stack_root, &source.job_id, source.group_index).is_file()
     }) {
         return Ok(Some("one or more source channel stacks changed".into()));
     }
@@ -3451,18 +3449,18 @@ fn color_job_outdated_reason(
             return Ok(Some("the plate-solve background protection changed".into()));
         }
     }
-    if !color_job_artifacts_exist(&ctx.cache_dir_path, job) {
+    if !color_job_artifacts_exist(&ctx.stack_root, job) {
         return Ok(Some("a cached color artifact is missing".into()));
     }
     Ok(None)
 }
 
-fn persist_color_manifest(cache_root: &FsPath, job: &StackColorJob) -> Result<(), String> {
-    write_json_atomic(&color_manifest_path(cache_root, &job.job_id), job)
+fn persist_color_manifest(stack_root: &FsPath, job: &StackColorJob) -> Result<(), String> {
+    write_json_atomic(&color_manifest_path(stack_root, &job.job_id), job)
 }
 
-fn persist_latest_color(cache_root: &FsPath, job: &StackColorJob) -> Result<(), String> {
-    let path = latest_color_path(cache_root, job.project_id);
+fn persist_latest_color(stack_root: &FsPath, job: &StackColorJob) -> Result<(), String> {
+    let path = latest_color_path(stack_root, job.project_id);
     let mut latest = std::fs::read(&path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<LatestStackColorPreviews>(&bytes).ok())
@@ -3508,39 +3506,41 @@ fn write_json_atomic(path: &FsPath, value: &impl Serialize) -> Result<(), String
     std::fs::rename(&temporary, path).map_err(|error| error.to_string())
 }
 
-fn color_dir(cache_root: &FsPath, job_id: &str) -> PathBuf {
-    cache_root.join("stack-previews").join("color").join(job_id)
+fn color_dir(stack_root: &FsPath, job_id: &str) -> PathBuf {
+    crate::server::storage::stack_folder(stack_root, crate::server::storage::stack_kind::COLOR)
+        .join(job_id)
 }
 
-pub(super) fn color_manifest_path(cache_root: &FsPath, job_id: &str) -> PathBuf {
-    color_dir(cache_root, job_id).join("manifest.json")
+pub(super) fn color_manifest_path(stack_root: &FsPath, job_id: &str) -> PathBuf {
+    color_dir(stack_root, job_id).join("manifest.json")
 }
 
-fn color_preview_path(cache_root: &FsPath, job_id: &str) -> PathBuf {
-    color_dir(cache_root, job_id).join("preview.png")
+fn color_preview_path(stack_root: &FsPath, job_id: &str) -> PathBuf {
+    color_dir(stack_root, job_id).join("preview.png")
 }
 
-pub(super) fn color_original_preview_path(cache_root: &FsPath, job_id: &str) -> PathBuf {
-    color_dir(cache_root, job_id).join("preview-original.png")
+pub(super) fn color_original_preview_path(stack_root: &FsPath, job_id: &str) -> PathBuf {
+    color_dir(stack_root, job_id).join("preview-original.png")
 }
 
-fn color_fits_path(cache_root: &FsPath, job_id: &str) -> PathBuf {
-    color_dir(cache_root, job_id).join("color.fits")
+fn color_fits_path(stack_root: &FsPath, job_id: &str) -> PathBuf {
+    color_dir(stack_root, job_id).join("color.fits")
 }
 
-fn color_input_dir(cache_root: &FsPath, input_id: &str) -> PathBuf {
-    cache_root
-        .join("stack-previews")
-        .join("color-inputs")
-        .join(input_id)
+fn color_input_dir(stack_root: &FsPath, input_id: &str) -> PathBuf {
+    crate::server::storage::stack_folder(
+        stack_root,
+        crate::server::storage::stack_kind::COLOR_INPUTS,
+    )
+    .join(input_id)
 }
 
-fn color_input_manifest_path(cache_root: &FsPath, input_id: &str) -> PathBuf {
-    color_input_dir(cache_root, input_id).join("manifest.json")
+fn color_input_manifest_path(stack_root: &FsPath, input_id: &str) -> PathBuf {
+    color_input_dir(stack_root, input_id).join("manifest.json")
 }
 
-fn color_input_fits_path(cache_root: &FsPath, input_id: &str, role: StackColorRole) -> PathBuf {
-    color_input_dir(cache_root, input_id).join(format!("{}.fits", role_cache_name(role)))
+fn color_input_fits_path(stack_root: &FsPath, input_id: &str, role: StackColorRole) -> PathBuf {
+    color_input_dir(stack_root, input_id).join(format!("{}.fits", role_cache_name(role)))
 }
 
 fn role_cache_name(role: StackColorRole) -> &'static str {
@@ -3556,30 +3556,30 @@ fn role_cache_name(role: StackColorRole) -> &'static str {
 }
 
 /// Job and cached-input references from every project's durable color index.
-pub(super) fn latest_color_references(cache_root: &FsPath) -> Vec<(String, Option<String>)> {
-    super::read_latest_indices::<LatestStackColorPreviews>(
-        &cache_root.join("stack-previews").join("color"),
-    )
+pub(super) fn latest_color_references(stack_root: &FsPath) -> Vec<(String, Option<String>)> {
+    super::read_latest_indices::<LatestStackColorPreviews>(&crate::server::storage::stack_folder(
+        stack_root,
+        crate::server::storage::stack_kind::COLOR,
+    ))
     .into_iter()
     .flat_map(|latest| latest.jobs)
     .map(|job| (job.job_id, job.linear_input_id))
     .collect()
 }
 
-pub(super) fn latest_color_rc_astro_ids(cache_root: &FsPath) -> Vec<String> {
-    super::read_latest_indices::<LatestStackColorPreviews>(
-        &cache_root.join("stack-previews").join("color"),
-    )
+pub(super) fn latest_color_rc_astro_ids(stack_root: &FsPath) -> Vec<String> {
+    super::read_latest_indices::<LatestStackColorPreviews>(&crate::server::storage::stack_folder(
+        stack_root,
+        crate::server::storage::stack_kind::COLOR,
+    ))
     .into_iter()
     .flat_map(|latest| latest.jobs)
     .flat_map(|job| job.input_rc_astro_ids.into_values())
     .collect()
 }
 
-fn latest_color_path(cache_root: &FsPath, project_id: i32) -> PathBuf {
-    cache_root
-        .join("stack-previews")
-        .join("color")
+fn latest_color_path(stack_root: &FsPath, project_id: i32) -> PathBuf {
+    crate::server::storage::stack_folder(stack_root, crate::server::storage::stack_kind::COLOR)
         .join(format!("latest-project-{project_id}.json"))
 }
 

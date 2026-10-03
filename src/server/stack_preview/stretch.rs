@@ -489,10 +489,10 @@ impl StretchIdentity {
     }
 }
 
-fn read_cached_manifest(cache_root: &FsPath, stretch_id: &str) -> Option<StackStretchPreview> {
-    let bytes = std::fs::read(stretch_manifest_path(cache_root, stretch_id)).ok()?;
+fn read_cached_manifest(stack_root: &FsPath, stretch_id: &str) -> Option<StackStretchPreview> {
+    let bytes = std::fs::read(stretch_manifest_path(stack_root, stretch_id)).ok()?;
     let cached = serde_json::from_slice::<StackStretchPreview>(&bytes).ok()?;
-    stretch_artifacts_exist(cache_root, stretch_id, &cached).then_some(cached)
+    stretch_artifacts_exist(stack_root, stretch_id, &cached).then_some(cached)
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -512,7 +512,7 @@ struct ProcessingSource {
 
 static SELECTION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-fn selection_path(cache_root: &FsPath, source_key: &str, source_revision: &str) -> PathBuf {
+fn selection_path(stack_root: &FsPath, source_key: &str, source_revision: &str) -> PathBuf {
     let mut hasher = Sha256::new();
     hasher.update(source_key.as_bytes());
     hasher.update([0]);
@@ -521,9 +521,7 @@ fn selection_path(cache_root: &FsPath, source_key: &str, source_revision: &str) 
     for byte in hasher.finalize() {
         write!(&mut id, "{byte:02x}").expect("writing to a String cannot fail");
     }
-    cache_root
-        .join("stack-processing")
-        .join(format!("{id}.json"))
+    crate::server::storage::stack_processing(stack_root).join(format!("{id}.json"))
 }
 
 fn read_selection(path: &FsPath) -> Option<ProcessingSelection> {
@@ -571,28 +569,28 @@ fn complete_selection(path: &FsPath, stretch_id: &str) -> Result<(), String> {
 }
 
 pub(super) fn selected_processing(
-    cache_root: &FsPath,
+    stack_root: &FsPath,
     source_key: &str,
     source_revision: &str,
 ) -> Result<Option<StackStretchPreview>, AppError> {
     let _guard = SELECTION_LOCK
         .lock()
         .map_err(|error| AppError::InternalError(error.to_string()))?;
-    let selected = read_selection(&selection_path(cache_root, source_key, source_revision))
+    let selected = read_selection(&selection_path(stack_root, source_key, source_revision))
         .and_then(|selection| selection.selected)
         .filter(|id| validate_job_id(id).is_ok());
-    Ok(selected.and_then(|id| read_cached_manifest(cache_root, &id)))
+    Ok(selected.and_then(|id| read_cached_manifest(stack_root, &id)))
 }
 
 pub(super) fn clear_selected_processing(
-    cache_root: &FsPath,
+    stack_root: &FsPath,
     source_key: &str,
     source_revision: &str,
 ) -> Result<(), AppError> {
     let _guard = SELECTION_LOCK
         .lock()
         .map_err(|error| AppError::InternalError(error.to_string()))?;
-    match std::fs::remove_file(selection_path(cache_root, source_key, source_revision)) {
+    match std::fs::remove_file(selection_path(stack_root, source_key, source_revision)) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(AppError::InternalError(format!(
@@ -602,13 +600,14 @@ pub(super) fn clear_selected_processing(
 }
 
 pub(super) fn selected_rc_astro_ids(
-    cache_root: &FsPath,
+    stack_root: &FsPath,
     active_sources: &std::collections::HashMap<String, String>,
 ) -> std::collections::HashSet<String> {
     let Ok(_guard) = SELECTION_LOCK.lock() else {
         return Default::default();
     };
-    let Ok(entries) = std::fs::read_dir(cache_root.join("stack-processing")) else {
+    let Ok(entries) = std::fs::read_dir(crate::server::storage::stack_processing(stack_root))
+    else {
         return Default::default();
     };
     entries
@@ -624,7 +623,7 @@ pub(super) fn selected_rc_astro_ids(
                 .is_some_and(|age| age < std::time::Duration::from_secs(24 * 3600));
             if !recently_touched
                 && !selection.source.as_ref().is_some_and(|source| {
-                    processing_source_exists(cache_root, source, active_sources)
+                    processing_source_exists(stack_root, source, active_sources)
                 })
             {
                 let _ = std::fs::remove_file(entry.path());
@@ -634,13 +633,13 @@ pub(super) fn selected_rc_astro_ids(
         })
         .filter_map(|selection| selection.selected)
         .filter(|id| validate_job_id(id).is_ok())
-        .filter_map(|id| read_cached_manifest(cache_root, &id))
+        .filter_map(|id| read_cached_manifest(stack_root, &id))
         .filter_map(|preview| preview.rc_astro_id)
         .collect()
 }
 
 fn processing_source_exists(
-    cache_root: &FsPath,
+    stack_root: &FsPath,
     source: &ProcessingSource,
     active_sources: &std::collections::HashMap<String, String>,
 ) -> bool {
@@ -670,7 +669,7 @@ fn processing_source_exists(
     if active_sources.get(job_id) == Some(&source.revision) {
         return true;
     }
-    std::fs::read(super::manifest_path(cache_root, job_id))
+    std::fs::read(super::manifest_path(stack_root, job_id))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<SourceManifest>(&bytes).ok())
         .is_some_and(|job| {
@@ -678,7 +677,7 @@ fn processing_source_exists(
                 && job.groups.get(group_index).is_some_and(|group| {
                     group.index == group_index && group.state == super::StackGroupState::Ready
                 })
-                && super::fits_path(cache_root, job_id, group_index).is_file()
+                && super::fits_path(stack_root, job_id, group_index).is_file()
         })
 }
 
@@ -686,7 +685,7 @@ fn processing_source_exists(
 pub(super) async fn apply_to_fits(
     state: Arc<AppState>,
     database_id: String,
-    cache_root: PathBuf,
+    stack_root: PathBuf,
     source_key: String,
     source_revision: String,
     source_path: PathBuf,
@@ -701,7 +700,7 @@ pub(super) async fn apply_to_fits(
     if let Some(rc_astro) = &request.rc_astro {
         rc_astro.validate().map_err(AppError::BadRequest)?;
     }
-    let selection_path = selection_path(&cache_root, &source_key, &source_revision);
+    let selection_path = selection_path(&stack_root, &source_key, &source_revision);
     let selection_generation = select_processing.then(super::new_artifact_revision);
     if let Some(generation) = &selection_generation {
         request_selection_with_source(
@@ -784,7 +783,7 @@ pub(super) async fn apply_to_fits(
         bind_selection(&selection_path, generation, &stretch_id)
             .map_err(AppError::InternalError)?;
     }
-    if let Some(mut cached) = read_cached_manifest(&cache_root, &stretch_id) {
+    if let Some(mut cached) = read_cached_manifest(&stack_root, &stretch_id) {
         if cached.request.is_none() {
             cached.request = Some(StackViewProcessingRequest {
                 stretch: request.stretch.clone(),
@@ -794,7 +793,7 @@ pub(super) async fn apply_to_fits(
             let _guard = SELECTION_LOCK
                 .lock()
                 .map_err(|error| AppError::InternalError(error.to_string()))?;
-            write_json_atomic(&stretch_manifest_path(&cache_root, &stretch_id), &cached)
+            write_json_atomic(&stretch_manifest_path(&stack_root, &stretch_id), &cached)
                 .map_err(AppError::InternalError)?;
         }
         if select_processing {
@@ -839,7 +838,7 @@ pub(super) async fn apply_to_fits(
         tokio::spawn(compute_stretch_variant(
             state,
             database_id,
-            cache_root,
+            stack_root,
             token,
             identity,
             source_path,
@@ -855,7 +854,7 @@ pub(super) async fn apply_to_fits(
     match compute_stretch_variant(
         state,
         database_id,
-        cache_root.clone(),
+        stack_root.clone(),
         token,
         identity,
         source_path,
@@ -886,7 +885,7 @@ pub(super) async fn apply_to_fits(
 async fn compute_stretch_variant(
     state: Arc<AppState>,
     database_id: String,
-    cache_root: PathBuf,
+    stack_root: PathBuf,
     token: InFlightToken,
     identity: StretchIdentity,
     source_path: PathBuf,
@@ -915,7 +914,7 @@ async fn compute_stretch_variant(
             return None;
         }
     };
-    if let Some(cached) = read_cached_manifest(&cache_root, &identity.stretch_id) {
+    if let Some(cached) = read_cached_manifest(&stack_root, &identity.stretch_id) {
         if let Err(message) = complete_selection(&identity.selection_path, &identity.stretch_id) {
             park_failure(message);
             return None;
@@ -924,14 +923,14 @@ async fn compute_stretch_variant(
     }
     let guard = state.begin_interactive_job();
     let state_for_render = Arc::clone(&state);
-    let cache_for_render = cache_root.clone();
+    let stack_for_render = stack_root.clone();
     let database_for_render = database_id.clone();
     let result = tokio::task::spawn_blocking(move || {
         let _guard = guard;
         let _permit = permit;
         let rendered = render_fits_variant(
             &state_for_render,
-            &cache_for_render,
+            &stack_for_render,
             &identity.stretch_id,
             &source_path,
             &config,
@@ -948,7 +947,7 @@ async fn compute_stretch_variant(
             rendered,
         );
         write_json_atomic(
-            &stretch_manifest_path(&cache_for_render, &identity.stretch_id),
+            &stretch_manifest_path(&stack_for_render, &identity.stretch_id),
             &response,
         )?;
         complete_selection(&identity.selection_path, &identity.stretch_id)?;
@@ -1031,7 +1030,7 @@ struct RenderedVariant {
 #[allow(clippy::too_many_arguments)]
 fn render_fits_variant(
     state: &Arc<AppState>,
-    cache_root: &FsPath,
+    stack_root: &FsPath,
     stretch_id: &str,
     source_path: &FsPath,
     config: &StretchConfig,
@@ -1099,8 +1098,8 @@ fn render_fits_variant(
     let deconvolution = if let Some(request) = deconvolution_request {
         let deconvolution_id = deconvolution_id
             .ok_or_else(|| "Deconvolution cache identity is missing".to_string())?;
-        let fits = deconvolution_fits_path(cache_root, deconvolution_id);
-        let manifest = deconvolution_manifest_path(cache_root, deconvolution_id);
+        let fits = deconvolution_fits_path(stack_root, deconvolution_id);
+        let manifest = deconvolution_manifest_path(stack_root, deconvolution_id);
         let cached = std::fs::read(&manifest)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<CachedDeconvolution>(&bytes).ok())
@@ -1160,7 +1159,7 @@ fn render_fits_variant(
         (rc_astro_request, rc_astro_chain, rc_astro_schemas.as_ref())
     {
         rc_astro_outcome = Some(super::rc_astro::apply_rc_astro(
-            cache_root,
+            stack_root,
             chain_ids,
             &rc_astro_config,
             schemas,
@@ -1183,8 +1182,8 @@ fn render_fits_variant(
         .as_ref()
         .map(|(image, _)| image)
         .unwrap_or(linear);
-    let screen = stretch_preview_path(cache_root, stretch_id);
-    let original = stretch_original_preview_path(cache_root, stretch_id);
+    let screen = stretch_preview_path(stack_root, stretch_id);
+    let original = stretch_original_preview_path(stack_root, stretch_id);
     let render = pool.install(|| {
         render_image_previews_with_details(prepared, config, &screen, &original, |_| {})
     })?;
@@ -1218,8 +1217,8 @@ fn render_fits_variant(
             None => None,
         };
         let stars_source = stars_prepared.as_ref().unwrap_or(stars);
-        let stars_screen = stretch_stars_preview_path(cache_root, stretch_id);
-        let stars_original = stretch_stars_original_preview_path(cache_root, stretch_id);
+        let stars_screen = stretch_stars_preview_path(stack_root, stretch_id);
+        let stars_original = stretch_stars_original_preview_path(stack_root, stretch_id);
         pool.install(|| {
             render_previews_with_plan(stars_source, &render.plan, &stars_screen, &stars_original)
         })?;
@@ -1299,9 +1298,9 @@ pub async fn get_stack_stretch_image(
 ) -> Result<Response, AppError> {
     validate_job_id(&stretch_id)?;
     let path = match query.size {
-        StackPreviewImageSize::Screen => stretch_preview_path(&ctx.cache_dir_path, &stretch_id),
+        StackPreviewImageSize::Screen => stretch_preview_path(&ctx.stack_root, &stretch_id),
         StackPreviewImageSize::Original => {
-            stretch_original_preview_path(&ctx.cache_dir_path, &stretch_id)
+            stretch_original_preview_path(&ctx.stack_root, &stretch_id)
         }
     };
     let file = tokio::fs::File::open(&path)
@@ -1328,7 +1327,7 @@ pub async fn download_stack_stretch_fits(
     Path((_db_id, stretch_id)): Path<(String, String)>,
 ) -> Result<Response, AppError> {
     validate_job_id(&stretch_id)?;
-    let manifest = std::fs::read(stretch_manifest_path(&ctx.cache_dir_path, &stretch_id))
+    let manifest = std::fs::read(stretch_manifest_path(&ctx.stack_root, &stretch_id))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<StackStretchPreview>(&bytes).ok())
         .ok_or(AppError::NotFound)?;
@@ -1337,14 +1336,14 @@ pub async fn download_stack_stretch_fits(
     let (path, label) = if let Some(rc_astro_id) = &manifest.rc_astro_id {
         validate_job_id(rc_astro_id)?;
         (
-            super::rc_astro::rc_astro_fits_path(&ctx.cache_dir_path, rc_astro_id),
+            super::rc_astro::rc_astro_fits_path(&ctx.stack_root, rc_astro_id),
             "processed",
         )
     } else {
         let deconvolution_id = manifest.deconvolution_id.ok_or(AppError::NotFound)?;
         validate_job_id(&deconvolution_id)?;
         (
-            deconvolution_fits_path(&ctx.cache_dir_path, &deconvolution_id),
+            deconvolution_fits_path(&ctx.stack_root, &deconvolution_id),
             "deconvolved",
         )
     };
@@ -1382,11 +1381,9 @@ pub async fn get_stack_stretch_stars_image(
 ) -> Result<Response, AppError> {
     validate_job_id(&stretch_id)?;
     let path = match query.size {
-        StackPreviewImageSize::Screen => {
-            stretch_stars_preview_path(&ctx.cache_dir_path, &stretch_id)
-        }
+        StackPreviewImageSize::Screen => stretch_stars_preview_path(&ctx.stack_root, &stretch_id),
         StackPreviewImageSize::Original => {
-            stretch_stars_original_preview_path(&ctx.cache_dir_path, &stretch_id)
+            stretch_stars_original_preview_path(&ctx.stack_root, &stretch_id)
         }
     };
     let file = tokio::fs::File::open(&path)
@@ -1414,13 +1411,13 @@ pub async fn download_stack_stretch_stars_fits(
     Path((_db_id, stretch_id)): Path<(String, String)>,
 ) -> Result<Response, AppError> {
     validate_job_id(&stretch_id)?;
-    let manifest = std::fs::read(stretch_manifest_path(&ctx.cache_dir_path, &stretch_id))
+    let manifest = std::fs::read(stretch_manifest_path(&ctx.stack_root, &stretch_id))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<StackStretchPreview>(&bytes).ok())
         .ok_or(AppError::NotFound)?;
     let rc_astro_id = manifest.rc_astro_id.ok_or(AppError::NotFound)?;
     validate_job_id(&rc_astro_id)?;
-    let path = super::rc_astro::rc_astro_stars_path(&ctx.cache_dir_path, &rc_astro_id);
+    let path = super::rc_astro::rc_astro_stars_path(&ctx.stack_root, &rc_astro_id);
     let file = tokio::fs::File::open(&path)
         .await
         .map_err(|_| AppError::NotFound)?;
@@ -1445,66 +1442,65 @@ pub async fn download_stack_stretch_stars_fits(
         })
 }
 
-fn stretch_dir(cache_root: &FsPath, stretch_id: &str) -> PathBuf {
-    cache_root
-        .join("stack-previews")
-        .join("stretch")
+fn stretch_dir(stack_root: &FsPath, stretch_id: &str) -> PathBuf {
+    crate::server::storage::stack_folder(stack_root, crate::server::storage::stack_kind::STRETCH)
         .join(stretch_id)
 }
 
-fn stretch_manifest_path(cache_root: &FsPath, stretch_id: &str) -> PathBuf {
-    stretch_dir(cache_root, stretch_id).join("manifest.json")
+fn stretch_manifest_path(stack_root: &FsPath, stretch_id: &str) -> PathBuf {
+    stretch_dir(stack_root, stretch_id).join("manifest.json")
 }
 
-fn stretch_preview_path(cache_root: &FsPath, stretch_id: &str) -> PathBuf {
-    stretch_dir(cache_root, stretch_id).join("preview.png")
+fn stretch_preview_path(stack_root: &FsPath, stretch_id: &str) -> PathBuf {
+    stretch_dir(stack_root, stretch_id).join("preview.png")
 }
 
-fn stretch_original_preview_path(cache_root: &FsPath, stretch_id: &str) -> PathBuf {
-    stretch_dir(cache_root, stretch_id).join("preview-original.png")
+fn stretch_original_preview_path(stack_root: &FsPath, stretch_id: &str) -> PathBuf {
+    stretch_dir(stack_root, stretch_id).join("preview-original.png")
 }
 
-fn stretch_stars_preview_path(cache_root: &FsPath, stretch_id: &str) -> PathBuf {
-    stretch_dir(cache_root, stretch_id).join("stars.png")
+fn stretch_stars_preview_path(stack_root: &FsPath, stretch_id: &str) -> PathBuf {
+    stretch_dir(stack_root, stretch_id).join("stars.png")
 }
 
-fn stretch_stars_original_preview_path(cache_root: &FsPath, stretch_id: &str) -> PathBuf {
-    stretch_dir(cache_root, stretch_id).join("stars-original.png")
+fn stretch_stars_original_preview_path(stack_root: &FsPath, stretch_id: &str) -> PathBuf {
+    stretch_dir(stack_root, stretch_id).join("stars-original.png")
 }
 
-fn deconvolution_dir(cache_root: &FsPath, deconvolution_id: &str) -> PathBuf {
-    cache_root
-        .join("stack-previews")
-        .join("deconvolution")
-        .join(deconvolution_id)
+fn deconvolution_dir(stack_root: &FsPath, deconvolution_id: &str) -> PathBuf {
+    crate::server::storage::stack_folder(
+        stack_root,
+        crate::server::storage::stack_kind::DECONVOLUTION,
+    )
+    .join(deconvolution_id)
 }
 
-fn deconvolution_manifest_path(cache_root: &FsPath, deconvolution_id: &str) -> PathBuf {
-    deconvolution_dir(cache_root, deconvolution_id).join("manifest.json")
+fn deconvolution_manifest_path(stack_root: &FsPath, deconvolution_id: &str) -> PathBuf {
+    deconvolution_dir(stack_root, deconvolution_id).join("manifest.json")
 }
 
-fn deconvolution_fits_path(cache_root: &FsPath, deconvolution_id: &str) -> PathBuf {
-    deconvolution_dir(cache_root, deconvolution_id).join("deconvolved.fits")
+fn deconvolution_fits_path(stack_root: &FsPath, deconvolution_id: &str) -> PathBuf {
+    deconvolution_dir(stack_root, deconvolution_id).join("deconvolved.fits")
 }
 
 fn stretch_artifacts_exist(
-    cache_root: &FsPath,
+    stack_root: &FsPath,
     stretch_id: &str,
     manifest: &StackStretchPreview,
 ) -> bool {
-    stretch_preview_path(cache_root, stretch_id).is_file()
-        && stretch_original_preview_path(cache_root, stretch_id).is_file()
+    stretch_preview_path(stack_root, stretch_id).is_file()
+        && stretch_original_preview_path(stack_root, stretch_id).is_file()
         && manifest.deconvolution_id.as_ref().is_none_or(|id| {
-            validate_job_id(id).is_ok() && deconvolution_fits_path(cache_root, id).is_file()
+            validate_job_id(id).is_ok() && deconvolution_fits_path(stack_root, id).is_file()
         })
         && manifest.rc_astro_id.as_ref().is_none_or(|id| {
             validate_job_id(id).is_ok()
-                && super::rc_astro::rc_astro_fits_path(cache_root, id).is_file()
+                && super::rc_astro::rc_astro_fits_path(stack_root, id).is_file()
                 && (manifest.stars_fits_url.is_none()
-                    || super::rc_astro::rc_astro_stars_path(cache_root, id).is_file())
+                    || super::rc_astro::rc_astro_stars_path(stack_root, id).is_file())
         })
         && (manifest.stars_preview_url.is_none()
-            || stretch_stars_preview_path(cache_root, stretch_id).is_file())
+            || stretch_stars_preview_path(stack_root, stretch_id).is_file())
 }
 
 pub(super) fn write_json_atomic(path: &FsPath, value: &impl Serialize) -> Result<(), String> {
