@@ -257,21 +257,23 @@ what nothing references any more:
   index and from the in-memory job list, and cached color inputs no kept job
   points at;
 - stretch and deconvolution results no processing selection names, a week
-  after they were made, so a variant you might pick again stays a while;
+  after they were last selected or used, so a variant you might pick again
+  stays a while;
 - artifact searches whose stack is gone;
-- the indices of projects the catalog no longer has (merged or deleted), and
-  with them the stacks only they named;
-- WBPP runs in PSF Guard's own runs folder (`wbpp` below the stack folder) a
-  month after a newer run of the same scope; their master lights were taken
-  in when they finished. Runs in a folder you chose are never touched.
+- the indices of deleted projects, and with them the stacks only they named.
+  Merging a project moves its indices onto the project it merged into, so its
+  stacks stay.
+
+WBPP run folders are never removed: a run's output may exist nowhere else.
 
 Both indices replace entries per identity — mono per target/channel, color
 per target/kind/palette — so a job's output is durable until its input set
 changes and a newer build of the same identity supersedes it. A full day of
 grace on top means nothing a long build session or an open inspector still
-touches is swept out from under it. An index that cannot be read, from a
-newer build or a torn write, stops the sweep, since what it names cannot be
-told from what nothing names.
+touches is swept out from under it. An index or processing selection that
+cannot be read, from a newer build or a torn write, stops the sweep of that
+database, since what it names cannot be told from what nothing names; the
+server log says which file.
 
 Resume checkpoints follow the same rule: each is replaced in place when its
 group's input set changes and is otherwise kept, whatever its age. The only

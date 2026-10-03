@@ -562,6 +562,15 @@ fn complete_selection(path: &FsPath, stretch_id: &str) -> Result<(), String> {
     if let Some(mut selection) = read_selection(path)
         && selection.desired.as_deref() == Some(stretch_id)
     {
+        // The variant left behind keeps its week from now, not from when it
+        // was made.
+        if let Some(previous) = selection.selected.as_deref()
+            && previous != stretch_id
+            && validate_job_id(previous).is_ok()
+            && let Some(stack_root) = path.parent().and_then(FsPath::parent)
+        {
+            touch_dir(&stretch_dir(stack_root, previous));
+        }
         selection.selected = Some(stretch_id.into());
         write_json_atomic(path, &selection)?;
     }
@@ -599,23 +608,42 @@ pub(super) fn clear_selected_processing(
     }
 }
 
+/// Mark a cached result folder as just used. Best effort: a folder that
+/// cannot be opened (Windows opens no folders this way) keeps its old time.
+fn touch_dir(path: &FsPath) {
+    if let Ok(folder) = std::fs::File::open(path) {
+        let _ = folder.set_modified(std::time::SystemTime::now());
+    }
+}
+
 /// Stretch and deconvolution results a processing selection still names:
 /// the one selected, and the one it is waiting for. A stretch keeps the
-/// deconvolution it was made from.
+/// deconvolution it was made from. Fails with the folder or selection it
+/// could not read: without it, a selected result would look unreferenced.
 pub(super) fn kept_processing(
     stack_root: &FsPath,
-) -> (
-    std::collections::HashSet<String>,
-    std::collections::HashSet<String>,
-) {
+) -> Result<
+    (
+        std::collections::HashSet<String>,
+        std::collections::HashSet<String>,
+    ),
+    PathBuf,
+> {
+    let folder = crate::server::storage::stack_processing(stack_root);
     let mut stretches = std::collections::HashSet::new();
-    if let Ok(_guard) = SELECTION_LOCK.lock()
-        && let Ok(entries) = std::fs::read_dir(crate::server::storage::stack_processing(stack_root))
     {
-        for selection in entries
-            .flatten()
-            .filter_map(|entry| read_selection(&entry.path()))
-        {
+        let _guard = SELECTION_LOCK.lock().map_err(|_| folder.clone())?;
+        let entries = match std::fs::read_dir(&folder) {
+            Ok(entries) => Some(entries),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => return Err(folder),
+        };
+        for entry in entries.into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|extension| extension != "json") {
+                continue;
+            }
+            let selection = read_selection(&path).ok_or(path)?;
             stretches.extend(
                 [selection.selected, selection.desired]
                     .into_iter()
@@ -630,7 +658,7 @@ pub(super) fn kept_processing(
         .filter_map(|bytes| serde_json::from_slice::<StackStretchPreview>(&bytes).ok())
         .filter_map(|preview| preview.deconvolution_id)
         .collect();
-    (stretches, deconvolutions)
+    Ok((stretches, deconvolutions))
 }
 
 pub(super) fn selected_rc_astro_ids(
@@ -1132,6 +1160,9 @@ fn render_fits_variant(
     let deconvolution = if let Some(request) = deconvolution_request {
         let deconvolution_id = deconvolution_id
             .ok_or_else(|| "Deconvolution cache identity is missing".to_string())?;
+        // In use from now: the janitor keeps a deconvolution a week past its
+        // last use, and the stretch that will name it has no manifest yet.
+        touch_dir(&deconvolution_dir(stack_root, deconvolution_id));
         let fits = deconvolution_fits_path(stack_root, deconvolution_id);
         let manifest = deconvolution_manifest_path(stack_root, deconvolution_id);
         let cached = std::fs::read(&manifest)

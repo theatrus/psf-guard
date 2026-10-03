@@ -20,11 +20,12 @@
 //! be touching.
 //!
 //! Stretch and deconvolution results are kept while a processing selection
-//! names them; a variant nobody selected goes after a week. An artifact
-//! search goes with the stack it searched. Index files of projects the
-//! catalog no longer has go too, so their stacks follow (see
-//! [`drop_orphaned_indices`]). An index that cannot be read stops the sweep:
-//! everything it names would otherwise look unreferenced.
+//! names them; a variant nobody selected goes a week after its last use. An
+//! artifact search goes with the stack it searched. Index files of projects
+//! the catalog no longer has go too, so their stacks follow (see
+//! [`drop_orphaned_indices`]); a merged project's indices move to the
+//! project it merged into first. An index or selection that cannot be read
+//! stops the sweep: everything it names would otherwise look unreferenced.
 //!
 //! Resume checkpoints are superseded in place per target/channel and are
 //! kept until then. The only checkpoints deleted outright are those that can
@@ -40,14 +41,10 @@ use std::time::{Duration, SystemTime};
 /// swept out from under it.
 const UNREFERENCED_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Age an unselected stretch or deconvolution must reach before it goes: a
-/// person comparing variants may pick one again within days.
+/// How long an unselected stretch or deconvolution stays after it was last
+/// selected or used: a person comparing variants may pick one again within
+/// days.
 const UNSELECTED_PROCESSING_GRACE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
-
-/// Age a WBPP run in PSF Guard's own runs folder must reach, once a newer
-/// run of the same scope exists, before it goes. Its master lights were
-/// taken into the stack folder when the run finished.
-const SUPERSEDED_RUN_GRACE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 /// Everything the janitor must not delete, gathered by the caller from the
 /// latest indices and the in-memory job maps.
@@ -277,69 +274,81 @@ pub(super) fn drop_orphaned_indices(stack_root: &Path, live: &HashSet<i32>) -> u
     removed
 }
 
-/// Remove WBPP runs in PSF Guard's own runs folder that a newer run of the
-/// same scope replaced a month or more ago. Runs in a folder a person chose
-/// are theirs and are never touched. `running` is the work folder of a run
-/// in progress, if any.
-pub(super) fn prune_wbpp_runs(stack_root: &Path, running: Option<&Path>, now: SystemTime) -> usize {
-    let root = stack_root.join(crate::server::storage::WBPP_RUNS);
-    let Ok(entries) = std::fs::read_dir(&root) else {
-        return 0;
-    };
-    // `<scope>-<YYYYmmdd>-<HHMMSS>`, newest last within each scope.
-    let mut by_scope: std::collections::HashMap<String, Vec<(String, std::path::PathBuf)>> =
-        Default::default();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
-            continue;
+/// Move a merged project's stack indices onto the project it merged into,
+/// so its stacks stay referenced. Entries join the destination's own;
+/// a destination entry naming the same job wins. An index that cannot be
+/// read is left where it is, so nothing it names is lost.
+pub fn move_project_indices(stack_root: &Path, from: i32, to: i32) {
+    use crate::server::storage::{stack_folder, stack_kind, stacks};
+    for (folder, prefix, list) in [
+        (stacks(stack_root), "latest-project-", "groups"),
+        (stacks(stack_root), "wbpp-project-", "groups"),
+        (
+            stack_folder(stack_root, stack_kind::COLOR),
+            "latest-project-",
+            "jobs",
+        ),
+    ] {
+        let source = folder.join(format!("{prefix}{from}.json"));
+        let target = folder.join(format!("{prefix}{to}.json"));
+        let read = |path: &Path| -> Option<serde_json::Value> {
+            serde_json::from_slice(&std::fs::read(path).ok()?).ok()
         };
-        let Some((scope, stamp)) = split_run_name(&name) else {
+        if !source.exists() {
             continue;
-        };
-        if path.is_dir() {
-            by_scope
-                .entry(scope.to_string())
-                .or_default()
-                .push((stamp.to_string(), path));
         }
-    }
-    let mut removed = 0;
-    for runs in by_scope.values_mut() {
-        runs.sort();
-        runs.pop(); // the newest stays
-        for (_, path) in runs.iter() {
-            if running.is_some_and(|running| running.starts_with(path))
-                || !old_enough(path, now, SUPERSEDED_RUN_GRACE)
-            {
+        let Some(mut moved) = read(&source) else {
+            tracing::warn!("Left {} in place: it could not be read", source.display());
+            continue;
+        };
+        let merged = if target.exists() {
+            let Some(mut kept) = read(&target) else {
+                tracing::warn!(
+                    "Left {} in place: {} could not be read",
+                    source.display(),
+                    target.display()
+                );
                 continue;
+            };
+            let known: HashSet<String> = kept[list]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| entry["job_id"].as_str().map(str::to_string))
+                .collect();
+            let incoming: Vec<serde_json::Value> = moved[list]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|entry| {
+                    entry["job_id"]
+                        .as_str()
+                        .is_none_or(|job| !known.contains(job))
+                })
+                .collect();
+            if let Some(entries) = kept[list].as_array_mut() {
+                entries.extend(incoming);
             }
-            match std::fs::remove_dir_all(path) {
-                Ok(()) => removed += 1,
-                Err(error) => tracing::warn!(
-                    "Failed to remove superseded WBPP run {}: {error}",
-                    path.display()
-                ),
-            }
+            kept
+        } else {
+            moved["project_id"] = to.into();
+            moved
+        };
+        let staged = folder.join(format!(".{prefix}{to}.json.moving"));
+        let written = serde_json::to_vec(&merged)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| std::fs::write(&staged, bytes))
+            .and_then(|()| std::fs::rename(&staged, &target))
+            .and_then(|()| std::fs::remove_file(&source));
+        if let Err(error) = written {
+            let _ = std::fs::remove_file(&staged);
+            tracing::warn!(
+                "Could not move {} onto project {to}: {error}",
+                source.display()
+            );
         }
     }
-    removed
-}
-
-/// A run folder name's scope and its `YYYYmmdd-HHMMSS` stamp.
-fn split_run_name(name: &str) -> Option<(&str, &str)> {
-    let split = name.len().checked_sub("-YYYYmmdd-HHMMSS".len())?;
-    let (scope, stamp) = name.split_at(split);
-    let stamp = stamp.strip_prefix('-')?;
-    let valid = stamp.len() == 15
-        && stamp.char_indices().all(|(index, c)| {
-            if index == 8 {
-                c == '-'
-            } else {
-                c.is_ascii_digit()
-            }
-        });
-    (valid && !scope.is_empty()).then_some((scope, stamp))
 }
 
 #[cfg(test)]
@@ -564,34 +573,40 @@ mod tests {
     }
 
     #[test]
-    fn a_wbpp_run_goes_a_month_after_a_newer_one_of_its_scope() {
+    fn a_merged_projects_indices_join_the_project_it_merged_into() {
         let cache = tempfile::tempdir().unwrap();
-        let runs = cache.path().join("wbpp");
-        let make = |name: &str, days: u64| {
-            let path = runs.join(name);
-            fs::create_dir_all(&path).unwrap();
-            age(&path, days * 86_400);
-            path
+        let stacks = cache.path().join("stack-previews");
+        fs::create_dir_all(stacks.join("color")).unwrap();
+        fs::write(
+            stacks.join("latest-project-2.json"),
+            r#"{"project_id":2,"groups":[{"job_id":"a"},{"job_id":"b"}]}"#,
+        )
+        .unwrap();
+        fs::write(
+            stacks.join("latest-project-1.json"),
+            r#"{"project_id":1,"groups":[{"job_id":"b"},{"job_id":"c"}]}"#,
+        )
+        .unwrap();
+        fs::write(
+            stacks.join("wbpp-project-2.json"),
+            r#"{"project_id":2,"groups":[{"job_id":"w"}]}"#,
+        )
+        .unwrap();
+
+        move_project_indices(cache.path(), 2, 1);
+
+        let read = |name: &str| -> serde_json::Value {
+            serde_json::from_slice(&fs::read(stacks.join(name)).unwrap()).unwrap()
         };
-        let oldest = make("M42-20260101-010101", 90);
-        let running = make("M42-20260201-010101", 60);
-        let recent = make("M42-20260901-010101", 10);
-        let newest = make("M42-20260920-010101", 40);
-        let alone = make("NGC_7000-20260101-010101", 90);
-        let unrelated = make("notes", 90);
-
-        let removed = prune_wbpp_runs(
-            cache.path(),
-            Some(&running.join("output")),
-            SystemTime::now(),
-        );
-
-        assert_eq!(removed, 1);
-        assert!(!oldest.exists());
-        assert!(running.exists(), "a run in progress stays");
-        assert!(recent.exists(), "replaced too recently");
-        assert!(newest.exists(), "the newest of a scope stays");
-        assert!(alone.exists());
-        assert!(unrelated.exists());
+        let jobs: Vec<String> = read("latest-project-1.json")["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["job_id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(jobs, ["b", "c", "a"]);
+        assert_eq!(read("wbpp-project-1.json")["project_id"], 1);
+        assert!(!stacks.join("latest-project-2.json").exists());
+        assert!(!stacks.join("wbpp-project-2.json").exists());
     }
 }

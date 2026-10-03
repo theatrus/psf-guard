@@ -2795,6 +2795,14 @@ pub async fn merge_project_route(
             .merge_projects(project_id, req.into_project_id)
             .map_err(|e| AppError::BadRequest(e.to_string()))?
     };
+    // The merged project's stacks follow it, or the stack sweep would take
+    // them as a gone project's.
+    let stack_ctx = ctx.0.clone();
+    let into = req.into_project_id;
+    let _ = tokio::task::spawn_blocking(move || {
+        crate::server::stack_preview::move_project_stacks(&stack_ctx, project_id, into)
+    })
+    .await;
     // Targets and frames changed projects: the cards of both are out of date.
     state.auto_stacks.touch_database(
         &ctx.id,

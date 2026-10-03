@@ -1188,7 +1188,7 @@ impl StackPreviewManager {
                 }
             }
         }
-        let (stretch_ids, deconvolution_ids) = stretch::kept_processing(stack_root);
+        let (stretch_ids, deconvolution_ids) = stretch::kept_processing(stack_root)?;
         let mut artifact_search_ids: std::collections::HashSet<String> =
             self.artifact_jobs.lock().unwrap().keys().cloned().collect();
         artifact_search_ids.extend(artifact::kept_searches(
@@ -4705,23 +4705,31 @@ fn manifest_path(stack_root: &FsPath, job_id: &str) -> PathBuf {
     stack_dir(stack_root, job_id).join("manifest.json")
 }
 
-/// Parse every `latest-project-*.json` directly inside a directory.
-/// Every `<prefix>*.json` index in a folder, or the first that could not be
-/// read or parsed. A missing folder holds none.
 /// Sweep every database's stack folder an hour apart: the sweep after each
 /// build only reaches databases that still build. Each pass also drops the
-/// indices of projects a catalog no longer has, and WBPP runs that newer
-/// ones replaced. The first pass waits ten minutes, past the journal restore.
+/// indices of projects a catalog no longer has. The first pass waits ten
+/// minutes, past the journal restore. Holds the state weakly, so a server
+/// the desktop app restarted stops its janitor with it.
 pub async fn run_janitor(state: Arc<AppState>) {
+    let state = Arc::downgrade(&state);
     tokio::time::sleep(std::time::Duration::from_secs(10 * 60)).await;
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
     loop {
         interval.tick().await;
-        for ctx in state.all_databases() {
-            let state = Arc::clone(&state);
+        let Some(live) = state.upgrade() else {
+            return;
+        };
+        for ctx in live.all_databases() {
+            let state = Arc::clone(&live);
             let _ = tokio::task::spawn_blocking(move || sweep_database(&state, &ctx)).await;
         }
     }
+}
+
+/// Move a merged project's stacks onto the project it merged into, so the
+/// sweep does not take them as a gone project's.
+pub fn move_project_stacks(ctx: &DatabaseContext, from: i32, to: i32) {
+    janitor::move_project_indices(&ctx.stack_root, from, to);
 }
 
 fn sweep_database(state: &AppState, ctx: &DatabaseContext) {
@@ -4744,28 +4752,18 @@ fn sweep_database(state: &AppState, ctx: &DatabaseContext) {
         .as_ref()
         .map(|live| janitor::drop_orphaned_indices(&ctx.stack_root, live))
         .unwrap_or(0);
-    let running = {
-        let store = ctx.wbpp_run.read().unwrap();
-        let progress = &store.progress;
-        (progress.running && !progress.work_dir.is_empty())
-            .then(|| PathBuf::from(&progress.work_dir))
-    };
-    let runs = janitor::prune_wbpp_runs(
-        &ctx.stack_root,
-        running.as_deref(),
-        std::time::SystemTime::now(),
-    );
-    if orphaned + runs > 0 {
+    if orphaned > 0 {
         tracing::info!(
             db = %ctx.id,
             orphaned_indices = orphaned,
-            superseded_wbpp_runs = runs,
-            "Pruned stack indices of gone projects and superseded WBPP runs"
+            "Dropped the stack indices of projects the catalog no longer has"
         );
     }
     state.stack_previews.prune_cache(&ctx.stack_root);
 }
 
+/// Every `<prefix>*.json` index in a folder, or the first that could not be
+/// read or parsed. A missing folder holds none.
 pub(crate) fn try_read_indices<T: serde::de::DeserializeOwned>(
     directory: &FsPath,
     prefix: &str,
@@ -4796,6 +4794,8 @@ pub(crate) fn try_read_indices<T: serde::de::DeserializeOwned>(
     Ok(indices)
 }
 
+/// Parse every `latest-project-*.json` directly inside a directory,
+/// skipping any that cannot be read.
 pub(crate) fn read_latest_indices<T: serde::de::DeserializeOwned>(directory: &FsPath) -> Vec<T> {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return Vec::new();
@@ -4985,6 +4985,33 @@ mod tests {
         }
     }
     use super::*;
+
+    #[test]
+    fn an_unreadable_processing_selection_keeps_every_stretch() {
+        let cache = tempfile::tempdir().unwrap();
+        let stretch = crate::server::storage::stack_folder(
+            cache.path(),
+            crate::server::storage::stack_kind::STRETCH,
+        )
+        .join("e".repeat(64));
+        std::fs::create_dir_all(&stretch).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 86_400);
+        std::fs::File::open(&stretch)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(old))
+            .unwrap();
+        let selections = crate::server::storage::stack_processing(cache.path());
+        std::fs::create_dir_all(&selections).unwrap();
+        // A selection torn by a crash: it might have named this stretch.
+        std::fs::write(selections.join("torn.json"), "").unwrap();
+
+        StackPreviewManager::default().prune_cache(cache.path());
+
+        assert!(stretch.exists());
+        std::fs::remove_file(selections.join("torn.json")).unwrap();
+        StackPreviewManager::default().prune_cache(cache.path());
+        assert!(!stretch.exists());
+    }
 
     #[test]
     fn an_unreadable_index_stops_the_sweep() {
