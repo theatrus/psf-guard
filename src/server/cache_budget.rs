@@ -672,6 +672,8 @@ mod tests {
     }
 
     #[test]
+    // Volumes are read on Unix only.
+    #[cfg(unix)]
     fn a_volume_culls_only_what_lives_on_it() {
         let temp = tempfile::tempdir().unwrap();
         let cache = temp.path().join("cache/db");
