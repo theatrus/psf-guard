@@ -211,6 +211,7 @@ impl Harness {
                         export_dir: None,
                         process_dir: None,
                         autoimport: None,
+                        analyze_new_frames: false,
                     },
                     DbEntry {
                         id: "destination".into(),
@@ -222,6 +223,7 @@ impl Harness {
                         export_dir: None,
                         process_dir: None,
                         autoimport: None,
+                        analyze_new_frames: false,
                     },
                 ],
                 directory
@@ -963,6 +965,7 @@ async fn an_upload_only_key_cannot_reach_the_sync_protocol() {
                 export_dir: None,
                 process_dir: None,
                 autoimport: None,
+                analyze_new_frames: false,
             }],
             directory
                 .path()

@@ -2515,6 +2515,17 @@ export const apiClient = {
     return data.data;
   },
 
+  /** Analyze frames as they arrive by sync, upload or auto-import. */
+  setAnalyzeNewFrames: async (dbId: string, enabled: boolean): Promise<QualityBackfillStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<QualityBackfillStatus>>(
+      dbPath(dbId, '/analysis/quality-backfill/new-frames'),
+      { enabled }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to save the setting');
+    return data.data;
+  },
+
   getQualityBackfillStatus: async (dbId: string): Promise<QualityBackfillStatus> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<QualityBackfillStatus>>(

@@ -477,6 +477,9 @@ pub struct DatabaseContext {
     pub process_dir: Option<PathBuf>,
     /// Automatic import of new frames, when the operator turned it on.
     pub autoimport: Option<crate::db_registry::AutoImportSettings>,
+    /// Scan frames that arrive by sync, upload or auto-import for quality.
+    /// Shared so Settings can change it on the live context.
+    pub analyze_new_frames: Arc<AtomicBool>,
     /// Per-DB cache directory: `<cache_root>/<slug>/`. Created on construction.
     /// Image previews, star lists, astrometry and the other per-image results
     /// for this database live below here, so two DBs with overlapping image
@@ -792,6 +795,9 @@ impl DatabaseContext {
         // database from opening. The update route validates what it saves,
         // and the scheduler does nothing with a block that names no trigger.
         context.autoimport = entry.autoimport.clone();
+        context
+            .analyze_new_frames
+            .store(entry.analyze_new_frames, Ordering::Relaxed);
         Ok(context)
     }
 
@@ -894,6 +900,7 @@ impl DatabaseContext {
             export_dir,
             process_dir,
             autoimport: None,
+            analyze_new_frames: Arc::new(AtomicBool::new(false)),
             cache_dir_path,
             stack_root,
             calibration_root,
@@ -2098,6 +2105,7 @@ impl DatabaseContext {
             export_dir: None,
             process_dir: None,
             autoimport: None,
+            analyze_new_frames: Arc::new(AtomicBool::new(false)),
             cache_dir_path: PathBuf::from("/tmp/psf-guard-test"),
             stack_root: PathBuf::from("/tmp/psf-guard-test"),
             calibration_root: PathBuf::from("/tmp/psf-guard-test"),
@@ -2142,6 +2150,7 @@ impl Clone for DatabaseContext {
             export_dir: self.export_dir.clone(),
             process_dir: self.process_dir.clone(),
             autoimport: self.autoimport.clone(),
+            analyze_new_frames: self.analyze_new_frames.clone(),
             cache_dir_path: self.cache_dir_path.clone(),
             stack_root: self.stack_root.clone(),
             calibration_root: self.calibration_root.clone(),

@@ -44,11 +44,18 @@ export function useQualityBackfill(dbId: string | null | undefined) {
       }),
     onSuccess: (status) => queryClient.setQueryData(queryKey, status),
   });
+  const newFramesMutation = useMutation({
+    mutationFn: (enabled: boolean) => apiClient.setAnalyzeNewFrames(dbId!, enabled),
+    onSuccess: (status) => queryClient.setQueryData(queryKey, status),
+  });
 
   return {
     ...status,
     isStarting: startMutation.isPending,
-    error: startMutation.error ?? status.error,
+    error: startMutation.error ?? newFramesMutation.error ?? status.error,
     start: startMutation.mutate,
+    analyzeNewFrames: status.status?.analyze_new_frames ?? false,
+    setAnalyzeNewFrames: newFramesMutation.mutate,
+    isSavingNewFrames: newFramesMutation.isPending,
   };
 }

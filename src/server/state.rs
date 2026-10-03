@@ -613,6 +613,7 @@ impl AppState {
                 export_dir: None,
                 process_dir: None,
                 autoimport: None,
+                analyze_new_frames: false,
             }],
             cache_dir,
             pregeneration_config,
