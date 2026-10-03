@@ -155,7 +155,7 @@ function StorageFolders({ current, canManage }: { current: StorageSettingsData; 
 
   return (
     <div className="storage-folders">
-      <h4>Folders</h4>
+      <h3>Folders</h3>
       {current.folders.map((folder) => {
         const label = FOLDER_LABELS[folder.kind];
         const fixed = folder.source === 'server_config';
