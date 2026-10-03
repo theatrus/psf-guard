@@ -60,7 +60,7 @@ describe('StorageSettings', () => {
     expect(screen.getByText(/Stacks 120.0 GiB · calibration masters 8.0 GiB · image previews 40.0 GiB/))
       .toBeInTheDocument();
     expect(screen.getByText(/culled 1200 previews and checkpoints, 3.0 GiB/)).toBeInTheDocument();
-    expect(screen.getByRole('alert')).toHaveTextContent('Stacks are never culled');
+    expect(screen.getByRole('alert')).toHaveTextContent('Stacks and masters are never culled');
   });
 
   it('saves a new limit when the slider is let go', async () => {
@@ -73,7 +73,7 @@ describe('StorageSettings', () => {
       })
     );
     render(<StorageSettings canManage />, { wrapper: wrapper() });
-    const slider = await screen.findByRole('slider', { name: /Most of the cache volume/ });
+    const slider = await screen.findByRole('slider', { name: /Most of the volume to use/ });
     fireEvent.change(slider, { target: { value: '80' } });
     fireEvent.pointerUp(slider);
     await waitFor(() => expect(saved).toEqual({ max_volume_percent: 80 }));
@@ -126,7 +126,7 @@ describe('StorageSettings', () => {
   it('shows the limit but cannot change it without database management', async () => {
     server.use(http.get('/api/settings/storage', () => HttpResponse.json(settings(90))));
     render(<StorageSettings canManage={false} />, { wrapper: wrapper() });
-    expect(await screen.findByRole('slider', { name: /Most of the cache volume/ })).toBeDisabled();
+    expect(await screen.findByRole('slider', { name: /Most of the volume to use/ })).toBeDisabled();
     expect(screen.getByText(/needs database management/)).toBeInTheDocument();
   });
 });

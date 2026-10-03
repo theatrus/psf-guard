@@ -72,9 +72,13 @@ fn response(state: &AppState) -> StorageSettingsResponse {
         .collect();
     StorageSettingsResponse {
         max_volume_percent: cache_budget::max_volume_percent(),
-        stack_max_volume_percent: settings.and_then(|settings| settings.stack_max_volume_percent),
+        // As applied, clamped, not as the file holds them.
+        stack_max_volume_percent: settings
+            .and_then(|settings| settings.stack_max_volume_percent)
+            .map(|_| cache_budget::limit_for(StorageKind::Stacks)),
         calibration_max_volume_percent: settings
-            .and_then(|settings| settings.calibration_max_volume_percent),
+            .and_then(|settings| settings.calibration_max_volume_percent)
+            .map(|_| cache_budget::limit_for(StorageKind::Calibration)),
         default_max_volume_percent: cache_budget::DEFAULT_MAX_VOLUME_PERCENT,
         min_max_volume_percent: cache_budget::MIN_MAX_VOLUME_PERCENT,
         volumes: cache_budget::last_reports(),
@@ -117,22 +121,23 @@ pub async fn get_storage_settings(
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateStorageSettingsRequest {
-    /// The cache's limit; 100 turns culling off. Absent keeps it.
+    /// The cache's limit; 100 turns culling off. Absent or null keeps it.
+    /// Wider than a percent so a wrong number gets the range message.
     #[serde(default)]
-    pub max_volume_percent: Option<u8>,
+    pub max_volume_percent: Option<i64>,
     /// Absent keeps the stack limit; null shares the cache's.
     #[serde(default, deserialize_with = "present")]
-    pub stack_max_volume_percent: Option<Option<u8>>,
+    pub stack_max_volume_percent: Option<Option<i64>>,
     #[serde(default, deserialize_with = "present")]
-    pub calibration_max_volume_percent: Option<Option<u8>>,
+    pub calibration_max_volume_percent: Option<Option<i64>>,
 }
 
 /// Tell a field sent as null from one left out.
-fn present<'de, D>(deserializer: D) -> Result<Option<Option<u8>>, D::Error>
+fn present<'de, D>(deserializer: D) -> Result<Option<Option<i64>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    Option::<u8>::deserialize(deserializer).map(Some)
+    Option::<i64>::deserialize(deserializer).map(Some)
 }
 
 /// PUT /api/settings/storage — deletes previews from the next pass on, so
@@ -142,36 +147,35 @@ pub async fn update_storage_settings(
     Json(request): Json<UpdateStorageSettingsRequest>,
 ) -> Result<Json<ApiResponse<StorageSettingsResponse>>, AppError> {
     require_database_management_allowed(&state)?;
-    let in_range = |percent: u8| {
-        if (cache_budget::MIN_MAX_VOLUME_PERCENT..=100).contains(&percent) {
-            Ok(())
-        } else {
-            Err(AppError::BadRequest(format!(
-                "the limit must be between {}% and 100%",
-                cache_budget::MIN_MAX_VOLUME_PERCENT
-            )))
-        }
+    let percent = |value: i64| {
+        u8::try_from(value)
+            .ok()
+            .filter(|percent| (cache_budget::MIN_MAX_VOLUME_PERCENT..=100).contains(percent))
+            .ok_or_else(|| {
+                AppError::BadRequest(format!(
+                    "the limit must be between {}% and 100%",
+                    cache_budget::MIN_MAX_VOLUME_PERCENT
+                ))
+            })
     };
-    for percent in [
-        request.max_volume_percent,
-        request.stack_max_volume_percent.flatten(),
-        request.calibration_max_volume_percent.flatten(),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        in_range(percent)?;
-    }
+    let cache_limit = request.max_volume_percent.map(percent).transpose()?;
+    let own = |value: Option<Option<i64>>| {
+        value
+            .map(|value| value.map(percent).transpose())
+            .transpose()
+    };
+    let stack_limit = own(request.stack_max_volume_percent)?;
+    let calibration_limit = own(request.calibration_max_volume_percent)?;
     let storage = update_registry(&state, |registry| {
         store(registry, |storage| {
-            if let Some(percent) = request.max_volume_percent {
+            if let Some(percent) = cache_limit {
                 storage.max_volume_percent =
                     (percent != cache_budget::DEFAULT_MAX_VOLUME_PERCENT).then_some(percent);
             }
-            if let Some(percent) = request.stack_max_volume_percent {
+            if let Some(percent) = stack_limit {
                 storage.stack_max_volume_percent = percent;
             }
-            if let Some(percent) = request.calibration_max_volume_percent {
+            if let Some(percent) = calibration_limit {
                 storage.calibration_max_volume_percent = percent;
             }
         });
