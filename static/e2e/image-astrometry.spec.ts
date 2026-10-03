@@ -167,7 +167,8 @@ test('solves an ordinary acquisition frame on demand and enables the overlay', a
   await page.keyboard.press('o');
   await expect(page.getByRole('button', { name: 'Solving field…' })).toBeDisabled();
   await expect(page.getByText('Hinted solve')).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId('astrometry-overlay')).toBeVisible();
+  // The overlay waits on the solved preview, which can lag the panel on CI.
+  await expect(page.getByTestId('astrometry-overlay')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('astrometry-overlay').getByText('M 44')).toBeVisible();
 
   await page.keyboard.press('o');

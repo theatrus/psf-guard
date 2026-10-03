@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import { describePixInsight, formatFree } from '../utils/pixinsight';
+import PathField from './PathField';
 
 /**
  * Where PixInsight is on the server, for stacking with WBPP from inside
@@ -73,12 +74,13 @@ export default function PixInsightSettings() {
               standard places.
             </small>
           </span>
-          <input
-            type="text"
+          <PathField
+            kind="file"
+            dialogTitle="Select the PixInsight executable"
             aria-label="PixInsight executable"
             placeholder="/opt/PixInsight/bin/PixInsight.sh"
             value={draft ?? ''}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={setDraft}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && changed) submit();
             }}
@@ -90,18 +92,18 @@ export default function PixInsightSettings() {
             <small>
               Where runs put their script and WBPP&apos;s output; a run writes gigabytes, so pick
               a disk with room. Empty means the database&apos;s export directory when it has
-              one, else the cache.
+              one, else its stack folder.
               {current.runs_dir && current.runs_dir_free_bytes != null && (
                 <> {formatFree(current.runs_dir_free_bytes)} free there now.</>
               )}
             </small>
           </span>
-          <input
-            type="text"
+          <PathField
+            dialogTitle="Select the WBPP runs folder"
             aria-label="WBPP runs folder"
             placeholder="/data/wbpp-runs"
             value={runsDraft ?? ''}
-            onChange={(event) => setRunsDraft(event.target.value)}
+            onChange={setRunsDraft}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && changed) submit();
             }}
