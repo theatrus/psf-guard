@@ -6952,9 +6952,6 @@ pub(crate) fn merge_photometric_signals(
     }
 }
 
-/// Merge fresh detector and spatial results from the per-DB quality cache.
-/// A quality scan is the source of truth for star count and HFR once present;
-/// the spatial fields fill values that N.I.N.A. does not store.
 /// One frame of a quality scan: the work item, the expected target position,
 /// and whether it needs the spatial, astrometry and satellite stages.
 type QualityScanItem = (
@@ -7019,6 +7016,10 @@ fn record_frame_zero_points(
     );
 }
 
+/// Merge fresh detector and spatial results from the per-DB quality cache.
+/// The scan's star count and HFR go in `scan_stars`, beside the capture
+/// software's, for `choose_star_source` to pick between per set; the spatial
+/// fields fill values that N.I.N.A. does not store.
 pub(crate) fn merge_spatial_metrics(
     metrics: &mut crate::sequence_analysis::ImageMetrics,
     store: &crate::server::spatial_scan::SharedSpatialStore,
@@ -7051,13 +7052,17 @@ pub(crate) fn merge_spatial_metrics(
                 metrics.image_id,
                 recorded
             );
+            // Still a scan: the set's source must not flip because of it.
+            metrics.scan_stars = Some(crate::sequence_analysis::StarMeasure::default());
         } else if current_detector {
             if recorded == Some(0.0) && measured >= crate::sequence_analysis::CORROBORATING_STARS {
                 metrics.star_count = None;
                 metrics.hfr = None;
             }
-            metrics.measured_star_count = Some(measured);
-            metrics.measured_hfr = (entry.avg_hfr > 0.0).then_some(entry.avg_hfr);
+            metrics.scan_stars = Some(crate::sequence_analysis::StarMeasure {
+                star_count: Some(measured),
+                hfr: (entry.avg_hfr > 0.0).then_some(entry.avg_hfr),
+            });
         }
         if metrics.dead_cell_fraction.is_none() && !scan_failed {
             metrics.dead_cell_fraction = entry.dead_cell_fraction;
@@ -7260,7 +7265,10 @@ async fn start_spatial_scan_with_priority(
     // arriving when it was scanned, a frame replaced — says nothing about the
     // pixels there now, so it is measured again. Off the async threads: each
     // check reads the file's metadata, which can wait on a network mount.
-    let changed_sources: std::collections::HashSet<i32> = if force_spatial {
+    // Skipped while a scan runs: this request cannot start another, and a
+    // backfill polls here until the running one finishes.
+    let scan_running = ctx.spatial_metrics.read().unwrap().progress.running;
+    let changed_sources: std::collections::HashSet<i32> = if force_spatial || scan_running {
         Default::default()
     } else {
         let checks: Vec<_> = candidates
@@ -7295,8 +7303,7 @@ async fn start_spatial_scan_with_priority(
         let Some(file_only) = filename_from_metadata(&img.metadata) else {
             continue;
         };
-        if fill_metadata && crate::server::spatial_scan::metadata_lacks_star_metrics(&img.metadata)
-        {
+        if fill_metadata && crate::server::spatial_scan::metadata_wants_star_fill(&img.metadata) {
             star_fill.push((
                 img.id,
                 file_only.clone(),

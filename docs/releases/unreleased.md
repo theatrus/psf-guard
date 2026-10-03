@@ -444,9 +444,10 @@
   where N.I.N.A. counted 20 or more, the scan is ignored for that frame
   rather than capping it, and a frame with no stars anywhere is no longer
   called a localized occlusion. A target's frames are now compared on one
-  kind of star count, the scan's or N.I.N.A.'s, never a mix of the two,
-  which had dragged down whole nights on rigs where the two differ. A scan
-  taken from a file that has changed since is measured again.
+  kind of star count, mostly the scan's, rather than a mix of the scan's and
+  N.I.N.A.'s, which had dragged down whole nights on rigs where the two
+  differ. Max HFR and Min stars still judge each frame on its own count. A
+  scan taken from a file that has changed since is measured again.
 
 - With previews set to JPEG, background pre-generation now writes the file
   the viewer asks for. It used to save JPEG data under a `.png` name, so the

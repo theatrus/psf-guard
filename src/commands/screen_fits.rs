@@ -935,8 +935,8 @@ fn score_records(
                     astrometry: r.astrometry.clone(),
                     satellite: r.satellite.clone(),
                     spatial_evidence,
-                    measured_star_count: None,
-                    measured_hfr: None,
+                    scan_stars: None,
+                    own_stars: None,
                 }
             })
             .collect();

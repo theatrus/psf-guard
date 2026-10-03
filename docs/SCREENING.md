@@ -116,11 +116,17 @@ renormalizes around them. The same holds the other way round.
 Star counts and HFR come from one source per target and filter. The quality
 scan and the capture software count on different scales (HocusFocus and
 N.I.N.A.'s own detector differ several-fold, and a rig's settings can change
-between nights), so frames are compared on the scan's values only when every
-frame the capture software measured was also scanned, and on the capture
-software's values otherwise. A scan measured from a file that has since
-changed, such as a copy still arriving, is measured again the next time the
-target is scanned.
+between nights), so frames are compared on the scan's values when at least
+as many frames were scanned as were measured only by the capture software,
+and on the capture software's values otherwise. Values the scan wrote back
+into imported metadata count as the scan's. With the scan's values, a frame
+whose scan failed or has not run yet is left unmeasured, which the score
+renormalizes around, so a new frame waiting for its scan does not change how
+the rest are scored. Absolute limits and the zero-star cap still judge each
+frame on its own measurement: the scan's when it counted stars, else the
+capture software's. A scan measured from a file that has since changed, such
+as a copy still arriving, is measured again the next time the target is
+scanned, and the values it wrote back are replaced.
 
 How hard event evidence hits the score is adjustable. The **Scoring**
 control in the Sequence view scales the score hit from satellite trails,
@@ -337,7 +343,7 @@ Safety properties worth knowing:
 ## Limitations
 
 - The server scan uses N.I.N.A. Fast for star count and HFR. These match a
-  rig that runs N.I.N.A.'s built-in detector; a rig on HocusFocus counts on
+  rig that runs N.I.N.A.'s built-in detector. A rig on HocusFocus counts on
   another scale, which is why a target is scored from one source at a time. Its full-resolution measurement aperture also supplies flux for
   photometry. `screen-fits` supports flux photometry with either detector.
 - The photometric reference requires stars present in ≥50% of a session's
