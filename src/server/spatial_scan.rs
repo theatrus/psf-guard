@@ -732,12 +732,13 @@ fn compute_one(
     })
 }
 
-/// Whether a metadata JSON is missing star metrics a quality scan can fill.
+/// Whether a metadata JSON is missing star metrics a quality scan can fill,
+/// or holds ones an earlier scan filled in, which may need replacing.
 ///
 /// Header-first imports omit `DetectedStars` and `HFR` because no pixel
 /// evidence exists at import time. Unparsable metadata answers false: there
 /// is nothing safe to fill.
-pub fn metadata_lacks_star_metrics(metadata_json: &str) -> bool {
+pub fn metadata_wants_star_fill(metadata_json: &str) -> bool {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(metadata_json) else {
         return false;
     };
@@ -745,16 +746,21 @@ pub fn metadata_lacks_star_metrics(metadata_json: &str) -> bool {
         return false;
     };
     let missing = |key: &str| map.get(key).is_none_or(serde_json::Value::is_null);
-    missing("DetectedStars") || missing("HFR")
+    // Values an earlier scan filled in are checked again: the file may have
+    // changed since.
+    missing("DetectedStars") || missing("HFR") || map.contains_key("PsfGuardQualityFields")
 }
 
 /// Fill scan-measured star metrics into a metadata JSON that lacks them.
 ///
-/// The scan's detector is the scheduler-compatible one (`nina_fast`), so the
-/// filled values mean the same thing as a N.I.N.A. catalog's. Existing values
-/// are never overwritten, and a frame with no detected stars gets no HFR:
-/// zero would read as an impossibly sharp measurement rather than "none".
-/// Returns `None` when nothing was added.
+/// Filled fields are recorded in `PsfGuardQualityFields`, with the scan's
+/// source in `PsfGuardQualitySource`, so scoring reads them as the scan's
+/// scale rather than the capture software's. Values the capture software
+/// wrote are never overwritten. Values an earlier scan of a different file
+/// state filled in are replaced: a copy still arriving when it was scanned
+/// must not keep its partial count once the whole file is measured. A frame
+/// with no detected stars gets no HFR: zero would read as an impossibly
+/// sharp measurement rather than "none". Returns `None` when nothing changed.
 pub fn star_metrics_metadata_patch(
     metadata_json: &str,
     star_count: usize,
@@ -766,12 +772,35 @@ pub fn star_metrics_metadata_patch(
     let missing = |map: &serde_json::Map<String, serde_json::Value>, key: &str| {
         map.get(key).is_none_or(serde_json::Value::is_null)
     };
-    let same_source = source_revision.is_some_and(|source_revision| {
-        map.iter().any(|(key, value)| {
-            key.eq_ignore_ascii_case("PsfGuardQualitySource")
-                && value.as_str() == Some(source_revision)
-        })
-    });
+    let recorded_source = map
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("PsfGuardQualitySource"))
+        .and_then(|(_, value)| value.as_str())
+        .map(str::to_string);
+    let same_source = source_revision.is_some() && recorded_source.as_deref() == source_revision;
+    let mut replaced = false;
+    // Without a source of its own the scan cannot record the replacement, so
+    // it would replace the same fields again on every pass.
+    if !same_source && recorded_source.is_some() && source_revision.is_some() {
+        // A source recorded without its field list owns both, as in early
+        // write-backs.
+        let stale: Vec<String> = map
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case("PsfGuardQualityFields"))
+            .and_then(|(_, value)| value.as_array())
+            .map(|fields| {
+                fields
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .filter(|field| matches!(*field, "DetectedStars" | "HFR"))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_else(|| vec!["DetectedStars".into(), "HFR".into()]);
+        for field in stale {
+            replaced |= map.remove(&field).is_some();
+        }
+    }
     let mut supplied = if same_source {
         map.iter()
             .find_map(|(key, value)| {
@@ -799,7 +828,7 @@ pub fn star_metrics_metadata_patch(
         map.insert("HFR".to_string(), avg_hfr.into());
         supplied.push("HFR".to_string());
     }
-    let changed = supplied.len() != supplied_before;
+    let changed = replaced || supplied.len() != supplied_before;
     if changed && let Some(source_revision) = source_revision {
         map.insert("PsfGuardQualitySource".to_string(), source_revision.into());
         map.insert("PsfGuardQualityFields".to_string(), supplied.clone().into());
@@ -988,6 +1017,103 @@ mod tests {
     }
 
     #[test]
+    fn a_scan_that_found_no_stars_yields_to_the_capture_softwares_count() {
+        let mut frame = entry(1, "light.fits");
+        frame.detector = QUALITY_DETECTOR.into();
+        frame.detector_version = QUALITY_DETECTOR_VERSION;
+        frame.star_count = 0;
+        frame.avg_hfr = 0.0;
+        frame.dead_cell_fraction = Some(1.0);
+        let store = std::sync::Arc::new(store_with(vec![frame]));
+        let metadata = r#"{"FileName":"light.fits","DetectedStars":416,"HFR":1.68}"#;
+        let mut metrics =
+            crate::sequence_analysis::extract_metrics_from_metadata(1, metadata, None);
+
+        crate::server::handlers::merge_spatial_metrics(&mut metrics, &store, metadata, None);
+
+        assert_eq!(metrics.star_count, Some(416.0));
+        // Still recorded as a scan, with no count: the set's source holds.
+        assert_eq!(
+            metrics.scan_stars,
+            Some(crate::sequence_analysis::StarMeasure::default())
+        );
+        // The dead cells came from the same failed measurement.
+        assert_eq!(metrics.dead_cell_fraction, None);
+    }
+
+    #[test]
+    fn a_scan_count_is_kept_apart_from_the_catalog_count() {
+        let mut frame = entry(1, "light.fits");
+        frame.detector = QUALITY_DETECTOR.into();
+        frame.detector_version = QUALITY_DETECTOR_VERSION;
+        frame.star_count = 600;
+        frame.avg_hfr = 3.2;
+        let store = std::sync::Arc::new(store_with(vec![frame]));
+        let metadata = r#"{"FileName":"light.fits","DetectedStars":260,"HFR":1.9}"#;
+        let mut metrics =
+            crate::sequence_analysis::extract_metrics_from_metadata(1, metadata, None);
+
+        crate::server::handlers::merge_spatial_metrics(&mut metrics, &store, metadata, None);
+
+        assert_eq!(metrics.star_count, Some(260.0));
+        assert_eq!(
+            metrics.scan_stars,
+            Some(crate::sequence_analysis::StarMeasure {
+                star_count: Some(600.0),
+                hfr: Some(3.2)
+            })
+        );
+    }
+
+    #[test]
+    fn a_catalog_zero_yields_to_a_scan_that_found_stars() {
+        let mut frame = entry(1, "light.fits");
+        frame.detector = QUALITY_DETECTOR.into();
+        frame.detector_version = QUALITY_DETECTOR_VERSION;
+        frame.star_count = 450;
+        let store = std::sync::Arc::new(store_with(vec![frame]));
+        let metadata = r#"{"FileName":"light.fits","DetectedStars":0}"#;
+        let mut metrics =
+            crate::sequence_analysis::extract_metrics_from_metadata(1, metadata, None);
+
+        crate::server::handlers::merge_spatial_metrics(&mut metrics, &store, metadata, None);
+
+        assert_eq!(metrics.star_count, None);
+        assert_eq!(metrics.scan_stars.unwrap().star_count, Some(450.0));
+    }
+
+    #[test]
+    fn a_rescan_of_a_changed_file_replaces_what_the_old_scan_wrote_back() {
+        let written = r#"{"DetectedStars":12,"PsfGuardQualitySource":"file:partial","PsfGuardQualityFields":["DetectedStars"]}"#;
+        assert!(metadata_wants_star_fill(written));
+
+        let updated = star_metrics_metadata_patch(written, 410, 2.4, Some("file:whole")).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&updated).unwrap();
+
+        assert_eq!(value["DetectedStars"], 410);
+        assert_eq!(value["HFR"], 2.4);
+        assert_eq!(value["PsfGuardQualitySource"], "file:whole");
+        // The same scan again changes nothing.
+        assert_eq!(
+            star_metrics_metadata_patch(&updated, 410, 2.4, Some("file:whole")),
+            None
+        );
+        // An early write-back recorded its source but not its fields.
+        let early = r#"{"DetectedStars":12,"HFR":2.0,"PsfGuardQualitySource":"file:partial"}"#;
+        let value: serde_json::Value = serde_json::from_str(
+            &star_metrics_metadata_patch(early, 410, 2.4, Some("file:whole")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value["DetectedStars"], 410);
+        // A scan with no source of its own leaves earlier values alone.
+        let both = r#"{"DetectedStars":12,"HFR":2.0,"PsfGuardQualitySource":"file:partial","PsfGuardQualityFields":["DetectedStars","HFR"]}"#;
+        assert_eq!(star_metrics_metadata_patch(both, 410, 2.4, None), None);
+        // Values the capture software wrote are never replaced.
+        let native = r#"{"DetectedStars":300,"HFR":1.8}"#;
+        assert!(star_metrics_metadata_patch(native, 410, 2.4, Some("file:whole")).is_none());
+    }
+
+    #[test]
     fn scan_signal_to_noise_fills_the_scoring_dimension() {
         let mut frame = entry(7, "light.fits");
         frame.sky_noise_adu = Some(10.0);
@@ -1128,7 +1254,7 @@ mod tests {
     fn metadata_star_metrics_fill_only_missing_keys() {
         // Header-first import: both keys absent → both filled.
         let imported = r#"{"FileName":"a.xisf","SessionId":0}"#;
-        assert!(metadata_lacks_star_metrics(imported));
+        assert!(metadata_wants_star_fill(imported));
         let patched =
             star_metrics_metadata_patch(imported, 120, 2.5, Some("file:source-a")).unwrap();
         let value: serde_json::Value = serde_json::from_str(&patched).unwrap();
@@ -1143,12 +1269,12 @@ mod tests {
 
         // N.I.N.A. catalog: measurements present → untouched.
         let nina = r#"{"DetectedStars":300,"HFR":1.8}"#;
-        assert!(!metadata_lacks_star_metrics(nina));
+        assert!(!metadata_wants_star_fill(nina));
         assert!(star_metrics_metadata_patch(nina, 120, 2.5, None).is_none());
 
         // Null counts as missing (a writer may serialize unknowns as null).
         let with_null = r#"{"DetectedStars":null,"HFR":1.8}"#;
-        assert!(metadata_lacks_star_metrics(with_null));
+        assert!(metadata_wants_star_fill(with_null));
         let patched = star_metrics_metadata_patch(with_null, 120, 2.5, None).unwrap();
         let value: serde_json::Value = serde_json::from_str(&patched).unwrap();
         assert_eq!(value["DetectedStars"], 120);
@@ -1183,9 +1309,9 @@ mod tests {
         assert!(value.get("HFR").is_none(), "no stars → no HFR measurement");
 
         // Unparsable or non-object metadata: nothing to check, nothing to fill.
-        assert!(!metadata_lacks_star_metrics("not json"));
+        assert!(!metadata_wants_star_fill("not json"));
         assert!(star_metrics_metadata_patch("not json", 10, 2.0, None).is_none());
-        assert!(!metadata_lacks_star_metrics("[1,2]"));
+        assert!(!metadata_wants_star_fill("[1,2]"));
         assert!(star_metrics_metadata_patch("[1,2]", 10, 2.0, None).is_none());
     }
 
