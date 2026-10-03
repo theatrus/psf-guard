@@ -6139,14 +6139,36 @@ mod tests {
 
     #[test]
     fn moved_master_rows_follow_their_folder_and_others_stay() {
+        // Native absolute paths built part by part, as the builder writes
+        // them, so the test holds on Windows too.
+        let root = std::env::temp_dir().join("psf-guard-master-rows");
+        let at = |parts: &[&str]| -> String {
+            parts
+                .iter()
+                .fold(root.clone(), |path, part| path.join(part))
+                .to_string_lossy()
+                .into_owned()
+        };
         let mut conn = Connection::open_in_memory().unwrap();
         ensure_schema(&conn).unwrap();
         for (uuid, path) in [
-            ("a", "/old/db/calibration-masters/dark-a.fits"),
-            ("b", "/elsewhere/db/calibration-masters/dark-b.fits"),
+            (
+                "a",
+                at(&["old", "db", "calibration-masters", "dark-a.fits"]),
+            ),
+            (
+                "b",
+                at(&["elsewhere", "db", "calibration-masters", "dark-b.fits"]),
+            ),
             // The same master already recorded at the new place.
-            ("c", "/old/db/calibration-masters/dark-c.fits"),
-            ("c-new", "/new/db/calibration-masters/dark-c.fits"),
+            (
+                "c",
+                at(&["old", "db", "calibration-masters", "dark-c.fits"]),
+            ),
+            (
+                "c-new",
+                at(&["new", "db", "calibration-masters", "dark-c.fits"]),
+            ),
         ] {
             conn.execute(
                 "INSERT INTO psf_guard_calibration_master
@@ -6159,8 +6181,12 @@ mod tests {
             .unwrap();
         }
 
-        let rewritten =
-            rewrite_master_paths(&mut conn, Path::new("/old/db"), Path::new("/new/db")).unwrap();
+        let rewritten = rewrite_master_paths(
+            &mut conn,
+            Path::new(&at(&["old", "db"])),
+            Path::new(&at(&["new", "db"])),
+        )
+        .unwrap();
 
         assert_eq!(rewritten, 2);
         let rows: i64 = conn
@@ -6179,13 +6205,19 @@ mod tests {
             )
             .unwrap()
         };
-        assert_eq!(path("a"), "/new/db/calibration-masters/dark-a.fits");
-        assert_eq!(path("b"), "/elsewhere/db/calibration-masters/dark-b.fits");
+        assert_eq!(
+            path("a"),
+            at(&["new", "db", "calibration-masters", "dark-a.fits"])
+        );
+        assert_eq!(
+            path("b"),
+            at(&["elsewhere", "db", "calibration-masters", "dark-b.fits"])
+        );
         assert_eq!(
             rewrite_master_paths(
                 &mut Connection::open_in_memory().unwrap(),
-                Path::new("/old"),
-                Path::new("/new")
+                Path::new(&at(&["old"])),
+                Path::new(&at(&["new"]))
             )
             .unwrap(),
             0

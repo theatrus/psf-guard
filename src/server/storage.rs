@@ -440,8 +440,13 @@ mod tests {
             moves.iter().map(|step| step.kind).collect::<Vec<_>>(),
             vec![StorageKind::Cache, StorageKind::Stacks]
         );
-        assert_eq!(moves[0].from, "/old");
-        assert_eq!(moves[0].to, "/new");
+        let text = |path: &str| {
+            relocate::normalized(Path::new(path))
+                .to_string_lossy()
+                .into_owned()
+        };
+        assert_eq!(moves[0].from, text("/old"));
+        assert_eq!(moves[0].to, text("/new"));
     }
 
     fn registry_with(path: &Path, storage: StorageSettings) {
