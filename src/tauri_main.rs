@@ -559,6 +559,7 @@ mod tests {
                 export_dir: None,
                 process_dir: None,
                 autoimport: None,
+                analyze_new_frames: false,
             }],
             active_db_id: None,
             astrometry: None,

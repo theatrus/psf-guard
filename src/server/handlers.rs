@@ -1127,6 +1127,7 @@ pub(crate) async fn execute_scheduler_sync_paths(
             &destination_id_for_cache,
             crate::server::stack_preview::automatic::RefreshReason::Sync,
         );
+        crate::server::quality_arrival::note_arrival(&destination_id_for_cache);
     }
     Ok((response, fingerprint))
 }
@@ -1811,6 +1812,7 @@ mod remote_image_layout_settings_tests {
             export_dir: None,
             process_dir: None,
             autoimport: None,
+            analyze_new_frames: false,
         }
     }
 
@@ -3126,6 +3128,7 @@ pub(crate) fn spawn_import_job_with_trigger(
             }
         }
         let dry_run = outcome.dry_run;
+        let imported_any = outcome.imported > 0;
         job::complete_import(&job_store, outcome);
         if !dry_run {
             state.auto_stacks.touch_database(
@@ -3139,9 +3142,15 @@ pub(crate) fn spawn_import_job_with_trigger(
         let _ = ctx.ensure_cache_available();
 
         // Quality analysis is a general database maintenance job, not an
-        // import stage. An opt-in import only queues the changed targets.
-        if backfill && !target_ids.is_empty() {
-            spawn_quality_backfill(&state, ctx.clone(), target_ids, false, fill_metadata);
+        // import stage. An opt-in import only queues the changed targets;
+        // otherwise a database that analyzes new frames queues them itself.
+        // A backfill already running refuses this one; the arrival queue
+        // then picks the frames up once it finishes, if the database asks.
+        let queued = backfill
+            && !target_ids.is_empty()
+            && spawn_quality_backfill(&state, ctx.clone(), target_ids, false, fill_metadata);
+        if !queued && !dry_run && imported_any {
+            crate::server::quality_arrival::note_arrival(&ctx.id);
         }
     });
     true
@@ -3385,7 +3394,7 @@ fn fill_missing_star_metadata(
     filled
 }
 
-fn spawn_quality_backfill(
+pub(crate) fn spawn_quality_backfill(
     state: &Arc<AppState>,
     ctx: Arc<DatabaseContext>,
     target_ids: Vec<i32>,
@@ -3450,7 +3459,54 @@ pub async fn start_quality_backfill_route(
     Ok(Json(ApiResponse::success(QualityBackfillStatusResponse {
         started,
         progress: crate::server::quality_backfill::snapshot(&ctx.quality_backfill),
+        analyze_new_frames: ctx
+            .analyze_new_frames
+            .load(std::sync::atomic::Ordering::Relaxed),
     })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AnalyzeNewFramesRequest {
+    pub enabled: bool,
+}
+
+/// `PUT /api/db/{db}/analysis/quality-backfill/new-frames` — whether frames
+/// arriving by sync, upload or auto-import are analyzed for quality. A
+/// database setting, so it sits behind database management like the rest.
+pub async fn update_analyze_new_frames(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Json(request): Json<AnalyzeNewFramesRequest>,
+) -> Result<Json<ApiResponse<QualityBackfillStatusResponse>>, AppError> {
+    require_database_management_allowed(&state)?;
+    let db_id = ctx.id.clone();
+    {
+        let path = require_registry_path(&state)?;
+        let _registry_guard = state.registry_write.lock().await;
+        let mut registry = crate::db_registry::DbRegistry::load_or_init(&path)
+            .map_err(|error| AppError::InternalError(error.to_string()))?;
+        let entry = registry
+            .databases
+            .iter_mut()
+            .find(|entry| entry.id == db_id)
+            .ok_or(AppError::NotFound)?;
+        entry.analyze_new_frames = request.enabled;
+        registry
+            .save(&path)
+            .map_err(|error| AppError::InternalError(error.to_string()))?;
+    }
+    // The live context, which a database edit may have replaced meanwhile.
+    if let Some(live) = state.get_database(&db_id) {
+        live.analyze_new_frames
+            .store(request.enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+    ctx.analyze_new_frames
+        .store(request.enabled, std::sync::atomic::Ordering::Relaxed);
+    if request.enabled {
+        // Frames already waiting are analyzed as if they had just arrived.
+        crate::server::quality_arrival::note_arrival(&ctx.id);
+    }
+    get_quality_backfill_progress(ctx).await
 }
 
 pub async fn get_quality_backfill_progress(
@@ -3460,6 +3516,9 @@ pub async fn get_quality_backfill_progress(
     Ok(Json(ApiResponse::success(QualityBackfillStatusResponse {
         started: progress.running,
         progress,
+        analyze_new_frames: ctx
+            .analyze_new_frames
+            .load(std::sync::atomic::Ordering::Relaxed),
     })))
 }
 
@@ -6864,8 +6923,9 @@ pub(crate) fn merge_photometric_signals(
 }
 
 /// Merge fresh detector and spatial results from the per-DB quality cache.
-/// A quality scan is the source of truth for star count and HFR once present;
-/// the spatial fields fill values that N.I.N.A. does not store.
+/// The scan's star count and HFR go in `scan_stars`, beside the capture
+/// software's, for `choose_star_source` to pick between per set; the spatial
+/// fields fill values that N.I.N.A. does not store.
 pub(crate) fn merge_spatial_metrics(
     metrics: &mut crate::sequence_analysis::ImageMetrics,
     store: &crate::server::spatial_scan::SharedSpatialStore,
@@ -6881,13 +6941,47 @@ pub(crate) fn merge_spatial_metrics(
         &file_only,
         mapped_source_revision,
     ) {
-        if entry.detector == crate::server::spatial_scan::QUALITY_DETECTOR
-            && entry.detector_version == crate::server::spatial_scan::QUALITY_DETECTOR_VERSION
-        {
-            metrics.star_count = Some(entry.star_count as f64);
-            metrics.hfr = (entry.avg_hfr > 0.0).then_some(entry.avg_hfr);
+        let current_detector = entry.detector == crate::server::spatial_scan::QUALITY_DETECTOR
+            && entry.detector_version == crate::server::spatial_scan::QUALITY_DETECTOR_VERSION;
+        let measured = entry.star_count as f64;
+        let recorded = metrics.star_count;
+        // One measurement that finds no stars where the other finds plenty
+        // is a failed measurement, not a ruined frame: drop it, and what the
+        // same pass derived from it, so the score renormalizes instead.
+        let scan_failed = current_detector
+            && measured == 0.0
+            && recorded.is_some_and(|stars| stars >= crate::sequence_analysis::CORROBORATING_STARS);
+        if scan_failed {
+            tracing::debug!(
+                "image {}: quality scan found no stars where the capture software found {:?}; \
+                 ignoring the scan's star measurements",
+                metrics.image_id,
+                recorded
+            );
+            // Still a scan: the set's source must not flip because of it.
+            metrics.scan_stars = Some(crate::sequence_analysis::StarMeasure::default());
+        } else if current_detector {
+            let corroborates_zero =
+                recorded == Some(0.0) && measured < crate::sequence_analysis::CORROBORATING_STARS;
+            if recorded == Some(0.0) && !corroborates_zero {
+                metrics.star_count = None;
+                metrics.hfr = None;
+            }
+            // A handful of stars beside a recorded zero agrees with it: the
+            // frame is as good as starless.
+            metrics.scan_stars = Some(if corroborates_zero {
+                crate::sequence_analysis::StarMeasure {
+                    star_count: Some(0.0),
+                    hfr: None,
+                }
+            } else {
+                crate::sequence_analysis::StarMeasure {
+                    star_count: Some(measured),
+                    hfr: (entry.avg_hfr > 0.0).then_some(entry.avg_hfr),
+                }
+            });
         }
-        if metrics.dead_cell_fraction.is_none() {
+        if metrics.dead_cell_fraction.is_none() && !scan_failed {
             metrics.dead_cell_fraction = entry.dead_cell_fraction;
         }
         if metrics.bg_cell_spread.is_none() {
@@ -7079,12 +7173,49 @@ async fn start_spatial_scan_with_priority(
     let force_spatial = req.force || req.force_spatial;
     let force_astrometry = req.force || req.force_astrometry;
     let force_satellites = req.force || req.force_satellites;
+    // A measurement taken from a file that has changed since — a copy still
+    // arriving when it was scanned, a frame replaced — says nothing about the
+    // pixels there now, so it is measured again. Off the async threads: each
+    // check reads the file's metadata, which can wait on a network mount.
+    // Skipped while a scan runs: this request cannot start another, and a
+    // backfill polls here until the running one finishes.
+    let scan_running = ctx.spatial_metrics.read().unwrap().progress.running;
+    let changed_sources: std::collections::HashSet<i32> = if force_spatial || scan_running {
+        Default::default()
+    } else {
+        let checks: Vec<_> = candidates
+            .iter()
+            .filter(|(img, _, _)| mapped_sources.quality_revision(img.id).is_none())
+            .filter_map(|(img, target_name, _)| {
+                let file_only = filename_from_metadata(&img.metadata)?;
+                let measured_from = scan::valid_entry(&ctx.spatial_metrics, img.id, &file_only)?
+                    .source_revision?
+                    .strip_prefix("file:")?
+                    .to_string();
+                Some((img.clone(), target_name.clone(), file_only, measured_from))
+            })
+            .collect();
+        let check_ctx = ctx.0.clone();
+        tokio::task::spawn_blocking(move || {
+            checks
+                .into_iter()
+                .filter(|(img, target_name, file_only, measured_from)| {
+                    find_fits_file(&check_ctx, img, target_name, file_only)
+                        .ok()
+                        .and_then(|path| source_file_cache_token(&path))
+                        .is_some_and(|now| now != *measured_from)
+                })
+                .map(|(img, ..)| img.id)
+                .collect()
+        })
+        .await
+        .unwrap_or_default()
+    };
     for (img, target_name, expected) in candidates {
         let Some(file_only) = filename_from_metadata(&img.metadata) else {
             continue;
         };
-        if fill_metadata && crate::server::spatial_scan::metadata_lacks_star_metrics(&img.metadata)
-        {
+        if fill_metadata && crate::server::spatial_scan::metadata_wants_star_fill(&img.metadata) {
             star_fill.push((
                 img.id,
                 file_only.clone(),
@@ -7093,6 +7224,7 @@ async fn start_spatial_scan_with_priority(
             ));
         }
         let spatial_cached = !force_spatial
+            && !changed_sources.contains(&img.id)
             && scan::valid_quality_entry_for_source(
                 &ctx.spatial_metrics,
                 img.id,
@@ -7685,6 +7817,7 @@ mod delayed_ready_tests {
                     export_dir: None,
                     process_dir: None,
                     autoimport: None,
+                    analyze_new_frames: false,
                 }],
                 temp.path().join("cache").to_string_lossy().into_owned(),
                 crate::cli::PregenerationConfig::default(),

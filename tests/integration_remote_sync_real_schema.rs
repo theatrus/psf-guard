@@ -85,6 +85,7 @@ impl Harness {
                         export_dir: None,
                         process_dir: None,
                         autoimport: None,
+                        analyze_new_frames: false,
                     },
                     DbEntry {
                         id: "destination".into(),
@@ -96,6 +97,7 @@ impl Harness {
                         export_dir: None,
                         process_dir: None,
                         autoimport: None,
+                        analyze_new_frames: false,
                     },
                 ],
                 directory

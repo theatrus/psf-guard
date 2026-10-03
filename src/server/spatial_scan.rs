@@ -425,12 +425,52 @@ pub fn finalize_scan(store: &RwLock<SpatialMetricsStore>) {
     s.progress.finished_at = Some(chrono::Utc::now().timestamp());
 }
 
+/// Stars the second detector must find to overrule a scan that found none;
+/// fewer agrees with it.
+const SECOND_OPINION_STARS: usize = 20;
+/// How recently a frame must have been written for a constant tail to read
+/// as a copy still under way rather than, say, a registered frame's border.
+const STILL_ARRIVING: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Why a frame's pixels cannot be measured yet, if they cannot: a file
+/// written within the last hour whose data ends in a long run of one value.
+/// Windows copies, sync tools and cross-volume moves create the file at its
+/// full size first and fill it in after, so a scan meanwhile reads a frame
+/// whose unwritten tail is all zero bytes, and finds no stars in it.
+fn still_arriving(
+    data: &[u16],
+    width: usize,
+    modified: Option<std::time::SystemTime>,
+) -> Option<String> {
+    let recent = modified
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age < STILL_ARRIVING);
+    let last = *data.last()?;
+    let run = data
+        .iter()
+        .rev()
+        .take_while(|&&value| value == last)
+        .count();
+    (recent && run >= (width * 2).max(data.len() / 100)).then(|| {
+        format!(
+            "the last {run} pixels all hold one value and the file was written within the \
+             hour: it may still be copying, so it is not measured yet"
+        )
+    })
+}
+
 fn compute_one(
     item: &ScanWorkItem,
     config: &SpatialAnalysisConfig,
 ) -> anyhow::Result<StoredSpatialMetrics> {
     let headers = crate::commands::screen_fits::extract_headers(&item.fits_path);
     let fits = FitsImage::from_file(&item.fits_path)?;
+    let modified = std::fs::metadata(&item.fits_path)
+        .and_then(|metadata| metadata.modified())
+        .ok();
+    if let Some(reason) = still_arriving(&fits.data, fits.width, modified) {
+        anyhow::bail!(reason);
+    }
     let stats = fits.calculate_basic_statistics();
 
     let params = StarDetectionParams {
@@ -442,6 +482,26 @@ fn compute_one(
     let stretched = stretch_u16_to_u16(&fits.data, &stats.to_stretch_statistics(), &stretch_params);
     let result =
         detect_stars_with_original(&stretched, &fits.data, fits.width, fits.height, &params);
+    // No stars is a strong verdict that condemns a frame. Ask the second
+    // detector before recording it: when that one finds stars, this
+    // measurement failed, and recording it would cap a good frame.
+    if result.star_list.is_empty() {
+        let (second, _) = crate::hocus_focus_star_detection::params_for_frame_path(&item.fits_path);
+        let found = crate::hocus_focus_star_detection::detect_stars_hocus_focus(
+            &fits.data,
+            fits.width,
+            fits.height,
+            &second,
+        )
+        .stars
+        .len();
+        if found >= SECOND_OPINION_STARS {
+            anyhow::bail!(
+                "N.I.N.A. Fast found no stars where HocusFocus found {found}: the measurement \
+                 failed and is not recorded"
+            );
+        }
+    }
     let positions: Vec<(f64, f64)> = result.star_list.iter().map(|s| s.position).collect();
     // N.I.N.A. measures each accepted star on the full-resolution original.
     // Convert its background-subtracted aperture flux from stored units to
@@ -501,12 +561,13 @@ fn compute_one(
     })
 }
 
-/// Whether a metadata JSON is missing star metrics a quality scan can fill.
+/// Whether a metadata JSON is missing star metrics a quality scan can fill,
+/// or holds ones an earlier scan filled in, which may need replacing.
 ///
 /// Header-first imports omit `DetectedStars` and `HFR` because no pixel
 /// evidence exists at import time. Unparsable metadata answers false: there
 /// is nothing safe to fill.
-pub fn metadata_lacks_star_metrics(metadata_json: &str) -> bool {
+pub fn metadata_wants_star_fill(metadata_json: &str) -> bool {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(metadata_json) else {
         return false;
     };
@@ -514,16 +575,21 @@ pub fn metadata_lacks_star_metrics(metadata_json: &str) -> bool {
         return false;
     };
     let missing = |key: &str| map.get(key).is_none_or(serde_json::Value::is_null);
-    missing("DetectedStars") || missing("HFR")
+    // Values an earlier scan filled in are checked again: the file may have
+    // changed since.
+    missing("DetectedStars") || missing("HFR") || map.contains_key("PsfGuardQualityFields")
 }
 
 /// Fill scan-measured star metrics into a metadata JSON that lacks them.
 ///
-/// The scan's detector is the scheduler-compatible one (`nina_fast`), so the
-/// filled values mean the same thing as a N.I.N.A. catalog's. Existing values
-/// are never overwritten, and a frame with no detected stars gets no HFR:
-/// zero would read as an impossibly sharp measurement rather than "none".
-/// Returns `None` when nothing was added.
+/// Filled fields are recorded in `PsfGuardQualityFields`, with the scan's
+/// source in `PsfGuardQualitySource`, so scoring reads them as the scan's
+/// scale rather than the capture software's. Values the capture software
+/// wrote are never overwritten. Values an earlier scan of a different file
+/// state filled in are replaced: a copy still arriving when it was scanned
+/// must not keep its partial count once the whole file is measured. A frame
+/// with no detected stars gets no HFR: zero would read as an impossibly
+/// sharp measurement rather than "none". Returns `None` when nothing changed.
 pub fn star_metrics_metadata_patch(
     metadata_json: &str,
     star_count: usize,
@@ -535,12 +601,35 @@ pub fn star_metrics_metadata_patch(
     let missing = |map: &serde_json::Map<String, serde_json::Value>, key: &str| {
         map.get(key).is_none_or(serde_json::Value::is_null)
     };
-    let same_source = source_revision.is_some_and(|source_revision| {
-        map.iter().any(|(key, value)| {
-            key.eq_ignore_ascii_case("PsfGuardQualitySource")
-                && value.as_str() == Some(source_revision)
-        })
-    });
+    let recorded_source = map
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("PsfGuardQualitySource"))
+        .and_then(|(_, value)| value.as_str())
+        .map(str::to_string);
+    let same_source = source_revision.is_some() && recorded_source.as_deref() == source_revision;
+    let mut replaced = false;
+    // Without a source of its own the scan cannot record the replacement, so
+    // it would replace the same fields again on every pass.
+    if !same_source && recorded_source.is_some() && source_revision.is_some() {
+        // A source recorded without its field list owns both, as in early
+        // write-backs.
+        let stale: Vec<String> = map
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case("PsfGuardQualityFields"))
+            .and_then(|(_, value)| value.as_array())
+            .map(|fields| {
+                fields
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .filter(|field| matches!(*field, "DetectedStars" | "HFR"))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_else(|| vec!["DetectedStars".into(), "HFR".into()]);
+        for field in stale {
+            replaced |= map.remove(&field).is_some();
+        }
+    }
     let mut supplied = if same_source {
         map.iter()
             .find_map(|(key, value)| {
@@ -568,7 +657,7 @@ pub fn star_metrics_metadata_patch(
         map.insert("HFR".to_string(), avg_hfr.into());
         supplied.push("HFR".to_string());
     }
-    let changed = supplied.len() != supplied_before;
+    let changed = replaced || supplied.len() != supplied_before;
     if changed && let Some(source_revision) = source_revision {
         map.insert("PsfGuardQualitySource".to_string(), source_revision.into());
         map.insert("PsfGuardQualityFields".to_string(), supplied.clone().into());
@@ -653,11 +742,210 @@ pub type SharedSpatialStore = Arc<RwLock<SpatialMetricsStore>>;
 mod tests {
     use super::*;
 
+    /// A mono 16-bit FITS of a noisy sky with Gaussian stars, as a camera
+    /// writes it (BZERO 32768). Returns the path and where the data starts.
+    fn star_field(dir: &Path, name: &str) -> (PathBuf, usize) {
+        let (width, height) = (640usize, 480usize);
+        let mut seed = 12345u64;
+        let mut random = move || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            ((seed >> 33) as f64) / f64::from(1u32 << 31)
+        };
+        let mut pixels = vec![0f64; width * height];
+        for value in &mut pixels {
+            *value = 800.0 + (random() - 0.5) * 60.0;
+        }
+        for _ in 0..150 {
+            let (cx, cy) = (
+                8.0 + random() * (width as f64 - 16.0),
+                8.0 + random() * (height as f64 - 16.0),
+            );
+            let peak = 3000.0 + random() * 20000.0;
+            for y in (cy as usize).saturating_sub(6)..((cy as usize) + 7).min(height) {
+                for x in (cx as usize).saturating_sub(6)..((cx as usize) + 7).min(width) {
+                    let d2 = (x as f64 - cx).powi(2) + (y as f64 - cy).powi(2);
+                    pixels[y * width + x] += peak * (-d2 / (2.0 * 1.6f64.powi(2))).exp();
+                }
+            }
+        }
+        let mut header = Vec::new();
+        for card in [
+            "SIMPLE  =                    T".to_string(),
+            "BITPIX  =                   16".to_string(),
+            "NAXIS   =                    2".to_string(),
+            format!("NAXIS1  = {width:>20}"),
+            format!("NAXIS2  = {height:>20}"),
+            "BZERO   =                32768".to_string(),
+            "BSCALE  =                    1".to_string(),
+            "IMAGETYP= 'LIGHT'".to_string(),
+            "END".to_string(),
+        ] {
+            let mut bytes = card.into_bytes();
+            bytes.resize(80, b' ');
+            header.extend_from_slice(&bytes);
+        }
+        header.resize(header.len().div_ceil(2880) * 2880, b' ');
+        let start = header.len();
+        let mut data: Vec<u8> = pixels
+            .iter()
+            .flat_map(|value| {
+                let stored = (value.clamp(0.0, 65535.0) as i64 - 32768) as i16;
+                stored.to_be_bytes()
+            })
+            .collect();
+        data.resize(data.len().div_ceil(2880) * 2880, 0);
+        let path = dir.join(name);
+        std::fs::write(&path, [header, data].concat()).unwrap();
+        (path, start)
+    }
+
+    fn item(path: &Path) -> ScanWorkItem {
+        ScanWorkItem {
+            image_id: 1,
+            filename: path.file_name().unwrap().to_string_lossy().into_owned(),
+            fits_path: path.to_path_buf(),
+            source_generation: 0,
+            source_revision: None,
+        }
+    }
+
+    #[test]
+    fn a_frame_still_being_copied_is_not_measured_as_starless() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = SpatialAnalysisConfig::default();
+        let (whole, _) = star_field(temp.path(), "whole.fits");
+        let measured = compute_one(&item(&whole), &config).unwrap();
+        assert!(measured.star_count > 50, "{}", measured.star_count);
+
+        // The same frame with its last 60% not yet written: full size, zeros.
+        let (copying, start) = star_field(temp.path(), "copying.fits");
+        let mut bytes = std::fs::read(&copying).unwrap();
+        let data_len = 640 * 480 * 2;
+        let cut = start + data_len * 2 / 5;
+        bytes[cut..start + data_len].fill(0);
+        std::fs::write(&copying, bytes).unwrap();
+
+        let error = compute_one(&item(&copying), &config).unwrap_err();
+        assert!(
+            error.to_string().contains("may still be copying"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_old_constant_tail_is_a_border_not_a_copy() {
+        let mut data = vec![900u16; 1000];
+        data.extend(std::iter::repeat_n(0, 500));
+        let now = std::time::SystemTime::now();
+        let long_ago = now - std::time::Duration::from_secs(86_400);
+        assert!(still_arriving(&data, 100, Some(now)).is_some());
+        assert!(still_arriving(&data, 100, Some(long_ago)).is_none());
+        // A short run is ordinary data.
+        assert!(still_arriving(&data[..1100], 100, Some(now)).is_none());
+    }
+
     fn store_with(entries: Vec<StoredSpatialMetrics>) -> RwLock<SpatialMetricsStore> {
         RwLock::new(SpatialMetricsStore {
             metrics: entries.into_iter().map(|e| (e.image_id, e)).collect(),
             ..Default::default()
         })
+    }
+
+    #[test]
+    fn a_scan_that_found_no_stars_yields_to_the_capture_softwares_count() {
+        let mut frame = entry(1, "light.fits");
+        frame.detector = QUALITY_DETECTOR.into();
+        frame.detector_version = QUALITY_DETECTOR_VERSION;
+        frame.star_count = 0;
+        frame.avg_hfr = 0.0;
+        frame.dead_cell_fraction = Some(1.0);
+        let store = std::sync::Arc::new(store_with(vec![frame]));
+        let metadata = r#"{"FileName":"light.fits","DetectedStars":416,"HFR":1.68}"#;
+        let mut metrics =
+            crate::sequence_analysis::extract_metrics_from_metadata(1, metadata, None);
+
+        crate::server::handlers::merge_spatial_metrics(&mut metrics, &store, metadata, None);
+
+        assert_eq!(metrics.star_count, Some(416.0));
+        // Still recorded as a scan, with no count: the set's source holds.
+        assert_eq!(
+            metrics.scan_stars,
+            Some(crate::sequence_analysis::StarMeasure::default())
+        );
+        // The dead cells came from the same failed measurement.
+        assert_eq!(metrics.dead_cell_fraction, None);
+    }
+
+    #[test]
+    fn a_catalog_zero_yields_to_a_scan_that_found_stars() {
+        let mut frame = entry(1, "light.fits");
+        frame.detector = QUALITY_DETECTOR.into();
+        frame.detector_version = QUALITY_DETECTOR_VERSION;
+        frame.star_count = 450;
+        let store = std::sync::Arc::new(store_with(vec![frame]));
+        let metadata = r#"{"FileName":"light.fits","DetectedStars":0}"#;
+        let mut metrics =
+            crate::sequence_analysis::extract_metrics_from_metadata(1, metadata, None);
+
+        crate::server::handlers::merge_spatial_metrics(&mut metrics, &store, metadata, None);
+
+        assert_eq!(metrics.star_count, None);
+        assert_eq!(metrics.scan_stars.unwrap().star_count, Some(450.0));
+    }
+
+    #[test]
+    fn a_scan_count_is_kept_apart_from_the_catalog_count() {
+        let mut frame = entry(1, "light.fits");
+        frame.detector = QUALITY_DETECTOR.into();
+        frame.detector_version = QUALITY_DETECTOR_VERSION;
+        frame.star_count = 600;
+        frame.avg_hfr = 3.2;
+        let store = std::sync::Arc::new(store_with(vec![frame]));
+        let metadata = r#"{"FileName":"light.fits","DetectedStars":260,"HFR":1.9}"#;
+        let mut metrics =
+            crate::sequence_analysis::extract_metrics_from_metadata(1, metadata, None);
+
+        crate::server::handlers::merge_spatial_metrics(&mut metrics, &store, metadata, None);
+
+        assert_eq!(metrics.star_count, Some(260.0));
+        assert_eq!(
+            metrics.scan_stars,
+            Some(crate::sequence_analysis::StarMeasure {
+                star_count: Some(600.0),
+                hfr: Some(3.2)
+            })
+        );
+    }
+
+    #[test]
+    fn a_rescan_of_a_changed_file_replaces_what_the_old_scan_wrote_back() {
+        let written = r#"{"DetectedStars":12,"PsfGuardQualitySource":"file:partial","PsfGuardQualityFields":["DetectedStars"]}"#;
+        assert!(metadata_wants_star_fill(written));
+
+        let updated = star_metrics_metadata_patch(written, 410, 2.4, Some("file:whole")).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&updated).unwrap();
+
+        assert_eq!(value["DetectedStars"], 410);
+        assert_eq!(value["HFR"], 2.4);
+        assert_eq!(value["PsfGuardQualitySource"], "file:whole");
+        // The same scan again changes nothing.
+        assert_eq!(
+            star_metrics_metadata_patch(&updated, 410, 2.4, Some("file:whole")),
+            None
+        );
+        // An early write-back recorded its source but not its fields.
+        let early = r#"{"DetectedStars":12,"HFR":2.0,"PsfGuardQualitySource":"file:partial"}"#;
+        let value: serde_json::Value = serde_json::from_str(
+            &star_metrics_metadata_patch(early, 410, 2.4, Some("file:whole")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value["DetectedStars"], 410);
+        // A scan with no source of its own leaves earlier values alone.
+        let both = r#"{"DetectedStars":12,"HFR":2.0,"PsfGuardQualitySource":"file:partial","PsfGuardQualityFields":["DetectedStars","HFR"]}"#;
+        assert_eq!(star_metrics_metadata_patch(both, 410, 2.4, None), None);
+        // Values the capture software wrote are never replaced.
+        let native = r#"{"DetectedStars":300,"HFR":1.8}"#;
+        assert!(star_metrics_metadata_patch(native, 410, 2.4, Some("file:whole")).is_none());
     }
 
     fn entry(image_id: i32, filename: &str) -> StoredSpatialMetrics {
@@ -751,7 +1039,7 @@ mod tests {
     fn metadata_star_metrics_fill_only_missing_keys() {
         // Header-first import: both keys absent → both filled.
         let imported = r#"{"FileName":"a.xisf","SessionId":0}"#;
-        assert!(metadata_lacks_star_metrics(imported));
+        assert!(metadata_wants_star_fill(imported));
         let patched =
             star_metrics_metadata_patch(imported, 120, 2.5, Some("file:source-a")).unwrap();
         let value: serde_json::Value = serde_json::from_str(&patched).unwrap();
@@ -766,12 +1054,12 @@ mod tests {
 
         // N.I.N.A. catalog: measurements present → untouched.
         let nina = r#"{"DetectedStars":300,"HFR":1.8}"#;
-        assert!(!metadata_lacks_star_metrics(nina));
+        assert!(!metadata_wants_star_fill(nina));
         assert!(star_metrics_metadata_patch(nina, 120, 2.5, None).is_none());
 
         // Null counts as missing (a writer may serialize unknowns as null).
         let with_null = r#"{"DetectedStars":null,"HFR":1.8}"#;
-        assert!(metadata_lacks_star_metrics(with_null));
+        assert!(metadata_wants_star_fill(with_null));
         let patched = star_metrics_metadata_patch(with_null, 120, 2.5, None).unwrap();
         let value: serde_json::Value = serde_json::from_str(&patched).unwrap();
         assert_eq!(value["DetectedStars"], 120);
@@ -806,9 +1094,9 @@ mod tests {
         assert!(value.get("HFR").is_none(), "no stars → no HFR measurement");
 
         // Unparsable or non-object metadata: nothing to check, nothing to fill.
-        assert!(!metadata_lacks_star_metrics("not json"));
+        assert!(!metadata_wants_star_fill("not json"));
         assert!(star_metrics_metadata_patch("not json", 10, 2.0, None).is_none());
-        assert!(!metadata_lacks_star_metrics("[1,2]"));
+        assert!(!metadata_wants_star_fill("[1,2]"));
         assert!(star_metrics_metadata_patch("[1,2]", 10, 2.0, None).is_none());
     }
 

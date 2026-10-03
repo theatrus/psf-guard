@@ -1768,7 +1768,7 @@ export default function TauriSettings({
                         dbName={entry.name}
                         canManage={managementAllowed}
                       />
-                      <QualityBackfillControls dbId={entry.id} />
+                      <QualityBackfillControls dbId={entry.id} canManage={managementAllowed} />
                       <AutoImportSummary dbId={entry.id} settings={entry.autoimport} />
                     </div>
                     {managementAllowed && (

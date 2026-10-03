@@ -2617,6 +2617,8 @@ export interface QualityBackfillProgress {
 export interface QualityBackfillStatus {
   started: boolean;
   progress: QualityBackfillProgress;
+  /** Frames arriving by sync, upload or auto-import are analyzed too. */
+  analyze_new_frames?: boolean;
 }
 
 export interface QualityBackfillRequest {
