@@ -779,7 +779,11 @@ pub fn star_metrics_metadata_patch(
         .map(str::to_string);
     let same_source = source_revision.is_some() && recorded_source.as_deref() == source_revision;
     let mut replaced = false;
-    if !same_source && recorded_source.is_some() {
+    // Without a source of its own the scan cannot record the replacement, so
+    // it would replace the same fields again on every pass.
+    if !same_source && recorded_source.is_some() && source_revision.is_some() {
+        // A source recorded without its field list owns both, as in early
+        // write-backs.
         let stale: Vec<String> = map
             .iter()
             .find(|(key, _)| key.eq_ignore_ascii_case("PsfGuardQualityFields"))
@@ -792,7 +796,7 @@ pub fn star_metrics_metadata_patch(
                     .map(str::to_string)
                     .collect()
             })
-            .unwrap_or_default();
+            .unwrap_or_else(|| vec!["DetectedStars".into(), "HFR".into()]);
         for field in stale {
             replaced |= map.remove(&field).is_some();
         }
@@ -1094,6 +1098,16 @@ mod tests {
             star_metrics_metadata_patch(&updated, 410, 2.4, Some("file:whole")),
             None
         );
+        // An early write-back recorded its source but not its fields.
+        let early = r#"{"DetectedStars":12,"HFR":2.0,"PsfGuardQualitySource":"file:partial"}"#;
+        let value: serde_json::Value = serde_json::from_str(
+            &star_metrics_metadata_patch(early, 410, 2.4, Some("file:whole")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value["DetectedStars"], 410);
+        // A scan with no source of its own leaves earlier values alone.
+        let both = r#"{"DetectedStars":12,"HFR":2.0,"PsfGuardQualitySource":"file:partial","PsfGuardQualityFields":["DetectedStars","HFR"]}"#;
+        assert_eq!(star_metrics_metadata_patch(both, 410, 2.4, None), None);
         // Values the capture software wrote are never replaced.
         let native = r#"{"DetectedStars":300,"HFR":1.8}"#;
         assert!(star_metrics_metadata_patch(native, 410, 2.4, Some("file:whole")).is_none());

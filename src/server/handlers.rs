@@ -7055,13 +7055,24 @@ pub(crate) fn merge_spatial_metrics(
             // Still a scan: the set's source must not flip because of it.
             metrics.scan_stars = Some(crate::sequence_analysis::StarMeasure::default());
         } else if current_detector {
-            if recorded == Some(0.0) && measured >= crate::sequence_analysis::CORROBORATING_STARS {
+            let corroborates_zero =
+                recorded == Some(0.0) && measured < crate::sequence_analysis::CORROBORATING_STARS;
+            if recorded == Some(0.0) && !corroborates_zero {
                 metrics.star_count = None;
                 metrics.hfr = None;
             }
-            metrics.scan_stars = Some(crate::sequence_analysis::StarMeasure {
-                star_count: Some(measured),
-                hfr: (entry.avg_hfr > 0.0).then_some(entry.avg_hfr),
+            // A handful of stars beside a recorded zero agrees with it: the
+            // frame is as good as starless.
+            metrics.scan_stars = Some(if corroborates_zero {
+                crate::sequence_analysis::StarMeasure {
+                    star_count: Some(0.0),
+                    hfr: None,
+                }
+            } else {
+                crate::sequence_analysis::StarMeasure {
+                    star_count: Some(measured),
+                    hfr: (entry.avg_hfr > 0.0).then_some(entry.avg_hfr),
+                }
             });
         }
         if metrics.dead_cell_fraction.is_none() && !scan_failed {

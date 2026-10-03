@@ -3270,20 +3270,27 @@ pub struct StarMeasure {
 /// rig's settings can change between nights), so a reference drawn from a
 /// mix scores every frame of the other kind as lost stars.
 ///
-/// The scan's values are used when at least as many frames were scanned as
-/// were measured only by the capture software; a frame not scanned yet, or
-/// whose scan failed, is then left unmeasured, which the scoring
+/// The scan's values are used when at least as many frames have a scan
+/// count as were measured only by the capture software; a frame not scanned
+/// yet, or whose scan failed, is then left unmeasured, which the scoring
 /// renormalizes around, so a new arrival waiting for its scan does not flip
-/// the whole set's scale. Otherwise the capture software's values are used
-/// for every frame. Each frame also keeps its own best measurement in
-/// `own_stars`. Idempotent.
+/// the whole set's scale. A failed scan counts on neither side, so a rig
+/// whose every scan fails is scored on the capture software's counts. The
+/// cost: a frame that can never be scanned (its file offline) loses its star
+/// dimension once most of its target is scanned. Otherwise the capture
+/// software's values are used for every frame. Each frame also keeps its own
+/// best measurement in `own_stars`. Idempotent.
 pub fn choose_star_source(images: &[ImageMetrics]) -> Vec<ImageMetrics> {
     if images.iter().all(|image| image.own_stars.is_some()) {
         return images.to_vec();
     }
     let scanned = images
         .iter()
-        .filter(|image| image.scan_stars.is_some())
+        .filter(|image| {
+            image
+                .scan_stars
+                .is_some_and(|scan| scan.star_count.is_some())
+        })
         .count();
     let recorded_only = images
         .iter()
@@ -3692,16 +3699,16 @@ pub fn extract_metrics_from_metadata(
     let hfr = metadata["HFR"].as_f64();
 
     // Values PSF Guard's own scan wrote back into the metadata (header-first
-    // imports) are the scan's scale, not the capture software's.
-    let written_back: Vec<&str> = metadata["PsfGuardQualityFields"]
-        .as_array()
-        .map(|fields| {
-            fields
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .collect()
-        })
-        .unwrap_or_default();
+    // imports) are the scan's scale, not the capture software's. A source
+    // recorded without its field list owns both, as in early write-backs.
+    let written_back: Vec<&str> = match metadata["PsfGuardQualityFields"].as_array() {
+        Some(fields) => fields
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect(),
+        None if metadata["PsfGuardQualitySource"].is_string() => vec!["DetectedStars", "HFR"],
+        None => Vec::new(),
+    };
     let (star_count, hfr, scan_stars) = if written_back.contains(&"DetectedStars") {
         let scan_hfr = written_back.contains(&"HFR").then_some(hfr).flatten();
         (
@@ -3716,6 +3723,10 @@ pub fn extract_metrics_from_metadata(
                 hfr: scan_hfr,
             }),
         )
+    } else if written_back.contains(&"HFR") {
+        // The scan's HFR beside the capture software's count would mix
+        // scales within one frame; leave the HFR out instead.
+        (star_count, None, None)
     } else {
         (star_count, hfr, None)
     };
@@ -4219,6 +4230,37 @@ mod tests {
         assert_eq!(chosen[1].own_stars.unwrap().star_count, Some(260.0));
         assert_eq!(chosen[7].own_stars.unwrap().star_count, Some(1100.0));
         assert_all_good(&images);
+    }
+
+    #[test]
+    fn a_set_whose_every_scan_failed_is_scored_on_the_catalog() {
+        let mut images = two_scale_nights();
+        for image in &mut images {
+            image.scan_stars = Some(StarMeasure::default());
+        }
+
+        let chosen = choose_star_source(&images);
+
+        assert_eq!(chosen[0].star_count, Some(260.0));
+        assert_eq!(chosen[9].star_count, Some(1100.0));
+    }
+
+    #[test]
+    fn source_only_and_hfr_only_write_backs_do_not_mix_scales() {
+        let early = extract_metrics_from_metadata(
+            1,
+            r#"{"DetectedStars":612,"HFR":3.1,"PsfGuardQualitySource":"file:abc"}"#,
+            None,
+        );
+        assert_eq!(early.star_count, None);
+        assert_eq!(early.scan_stars.unwrap().star_count, Some(612.0));
+        let hfr_only = extract_metrics_from_metadata(
+            1,
+            r#"{"DetectedStars":260,"HFR":3.1,"PsfGuardQualitySource":"file:abc","PsfGuardQualityFields":["HFR"]}"#,
+            None,
+        );
+        assert_eq!(hfr_only.star_count, Some(260.0));
+        assert_eq!(hfr_only.hfr, None);
     }
 
     #[test]

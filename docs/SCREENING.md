@@ -117,12 +117,15 @@ Star counts and HFR come from one source per target and filter. The quality
 scan and the capture software count on different scales (HocusFocus and
 N.I.N.A.'s own detector differ several-fold, and a rig's settings can change
 between nights), so frames are compared on the scan's values when at least
-as many frames were scanned as were measured only by the capture software,
-and on the capture software's values otherwise. Values the scan wrote back
-into imported metadata count as the scan's. With the scan's values, a frame
-whose scan failed or has not run yet is left unmeasured, which the score
-renormalizes around, so a new frame waiting for its scan does not change how
-the rest are scored. Absolute limits and the zero-star cap still judge each
+as many frames have a scan count as were measured only by the capture
+software, and on the capture software's values otherwise. A failed scan
+counts on neither side, so a rig whose every scan fails is scored on the
+capture software's counts. Values the scan wrote back into imported metadata
+count as the scan's. With the scan's values, a frame whose scan failed or
+has not run yet is left unmeasured, which the score renormalizes around, so
+a new frame waiting for its scan does not change how the rest are scored. A
+frame that can never be scanned, because its file is offline, loses its star
+dimension once most of its target is scanned. Absolute limits and the zero-star cap still judge each
 frame on its own measurement: the scan's when it counted stars, else the
 capture software's. A scan measured from a file that has since changed, such
 as a copy still arriving, is measured again the next time the target is
