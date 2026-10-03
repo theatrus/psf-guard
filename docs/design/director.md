@@ -295,7 +295,7 @@ untested integration requirements unchecked.
 | Area | Implemented evidence | Still missing |
 | --- | --- | --- |
 | Shared engine | Merged `crates/director-core`: deterministic selection, program/recipe binding, preparation reducer, conservative altitude/horizon and meridian geometry; shared Rust/.NET fixtures. | Complete observing criteria, production Earth-orientation source, full operation inventory, duration learning and server simulation. |
-| Planning policy inheritance | Shared-core preview resolves typed global/site/rig/project observing preferences with field provenance, weighted explanations and continuity controls. Executable inputs still use the existing concrete priorities. | Persisted overrides, policy-bound grants, server/UI adoption and native dispatch integration are not implemented. The preview API does not change acquisition ranking. |
+| Planning policy inheritance | Saved global/site/rig/project overrides, planning controls and immutable program policies drive the shared geometry scorer and durable execution selection. Explicit opt-in preserves legacy ranking. | Cross-allocation continuity, displayed candidate score explanations and adaptive timing estimates remain open. |
 | Sidecar and local recovery | Merged `crates/director-ledger` and `crates/director-runtime`: schema-4 journal, capture/preparation outboxes, IPC 8/runtime 0.7.0, one-shot dispatch checks with exact latest-start deadlines, process crash/reopen tests; PSF Guard #464-487 and [#518](https://github.com/theatrus/psf-guard/pull/518). The current commissioning increment delivers capture receipts after restart and retains exact acknowledgements. | Preparation-feed delivery, pruning, grade feedback, assignment replacement and complete operator recovery. |
 | NINA native execution | Public opt-in prepared-target session with one-shot server launch, exclusive local ownership, native safety/watchdog, dated NINA EOP, native unpark/tracking/filter/readout/capture, seven hooks, batch check-in and optional status. Real #64/OmniSim/server tests cover offline RGB captures, replay refusal and Unsafe interruption during exposure. | Automatic multi-target work, all third-party hook contexts, full autofocus/guiding/flip/calibration, restart/resume, duration learning and successor allocation recovery. Arbitrary external equipment clients are not excluded. |
 | Published plugin | [0.1.0.1-preview.1](https://github.com/theatrus/psf-guard-director-nina-plugin/releases/tag/0.1.0.1-preview.1), runtime 0.6.0 / IPC 7; verified in the existing [registry](https://nina-plugins.psf-guard.com/plugins/manifests). | Settings expose runtime Start/Stop/status only. No pairing, assignments or usable acquisition container. Sync remains a separate unchanged plugin. |
@@ -667,14 +667,12 @@ local. Site-level planning overrides do not make sites own rig hardware or
 horizons. The policy resolver selects behavior; N.I.N.A. remains the equipment
 and safety execution boundary.
 
-Current executable objective priorities and preparation preferences are concrete
-prototype inputs. They do not yet implement this inheritance. The shared core
-now has an additive `priority` resolver/scorer and geometry-bound
-`preview_priority` API, described below. These are library preview APIs, not a
-server endpoint, UI control, wire-contract change or new dispatch authority.
-Persist optional overrides in owned intent/configuration records and bind
-validated effective values for the engine without losing the editable source
-hierarchy before enabling this policy for acquisition.
+Observing preferences are opt-in. Existing programs keep concrete objective
+priorities. The project planning workspace exposes global, site, rig and project
+overrides, presets, field sources and reset-to-inherit controls. Enable observing
+preferences at global, site or rig scope; projects tune policy but cannot change
+executor mode. A rig explicitly selects an existing planning site for inheritance.
+This association does not replace its native location, horizon or safety limits.
 
 #### User-controlled observing priority
 
@@ -685,13 +683,13 @@ When explicitly importing legacy priorities, map Low/Normal/High to 25/50/75;
 missing or unknown values map to 50. Do not reinterpret existing Director
 priorities or rewrite active grants during migration.
 
-The shared-core preview implements seven independently adjustable factors.
+The shared-core scorer implements seven independently adjustable factors.
 Weights are relative (0-1000); zero disables a factor and at least one must be
 nonzero. Normalize scores to 0-10000 and compute the weighted mean with integer
 arithmetic. Each result exposes the inputs, weights, weighted contributions and
 missing-evidence flags, so a future UI can explain why one objective won.
 
-| Factor | Current preview input |
+| Factor | Current scoring input |
 |---|---|
 | Importance | Explicit user value, scaled from 0-100. |
 | Window urgency | Complete operation cost divided by time remaining in the current hard eligibility window; includes exposure and estimated overhead. This is local window urgency, not a seasonal deadline prediction. |
@@ -726,16 +724,40 @@ their safety limits. Missing optional scoring evidence is explicitly neutral,
 not perfect; the geometry-bound entry point supplies altitude and Moon inputs
 itself. Reject malformed weights, hierarchy, goal bindings and timestamps.
 
-Acquisition integration is still required: persist these typed overrides in
-owned configuration/intent; show effective sources and reset-to-inherit controls;
-freeze the resolved policy and active-target context into a versioned grant;
-use the same score in simulation, ledger selection and native preparation;
-persist chosen-target/dwell state across allocation and process boundaries;
-and return score explanations in status/check-in. Policy corrections apply only
-at an authorized safe boundary, never midway through an exposure or after an
-unreconciled restart. The current plugin remains on its existing priority
-contract until those interfaces and simulator gates are implemented. Do not
-quietly change ranking during preparation or use a preview as a reservation.
+Meta schema 19 stores revision-checked overrides. Operator-only
+`PUT /preferences/{scope}/{id}` saves them; the matching GET reads them.
+`GET /preferences` returns global identity, presets and sites;
+`GET /rigs/{rig}/preferences?project_id=...` returns effective policy and sources.
+All paths are under `/api/director/v1`. These APIs never write rig databases.
+
+New program snapshots carry optional `observing_preferences` schema 1: a
+deduplicated policy map and exact goal-to-policy bindings. The program fingerprint
+includes policy and source revisions. Existing grants remain immutable after
+settings change. Runtime 0.10.0 / IPC 10 uses these policies in geometry evaluation
+and native preparation; automatic clients advertise `prepared_target_v3` or
+`local_sequence_v3`. Older modes refuse weighted programs rather than executing
+them with legacy priorities. The engine remains 0.3.0 for old program replay.
+
+Ledger schema 5 stores selected-goal time with an integrity digest in the same
+transaction as preparation. Reopening retains dwell; damaged or missing state
+fails closed. A preparation freezes its selection for one exposure but rechecks
+hard feasibility before each operation. A slow autofocus cannot make setup
+oscillate between targets, and no weight can override unsafe or expired work.
+Selection context currently lasts for one allocation, including process restarts.
+Successor allocations start without continuity after terminal release and park.
+Cross-allocation continuity, candidate explanations in the UI/status and learned
+timing estimates remain backlog. A preview is never a capture reservation.
+
+2026-10-02 execution validation: 493 Director crate tests, 77 server Director
+tests, 702 frontend tests and 775 plugin tests passed. The real-server Chromium
+planning test saved and reloaded overrides at desktop and mobile sizes. Native
+NINA 3.3.0.1064 with ASCOM OmniSim and packaged runtime 0.10.0 reversed legacy
+target order using saved importance, captured three frames across two targets
+during server outage, and reconciled all six events. The automatic workload
+variant completed and parked offline, then released through batch check-in.
+The unsafe-monitor regression aborted, parked and did not resume automatically.
+Review fixes cover corrupt/deleted dwell state, parent edits that zero a child,
+project attachment cleanup, and deterministic managed policy serialization.
 
 Later factors may include seasonal opportunity, project-level completion,
 fair-share/starvation control, measured quality and multi-rig opportunity cost.
@@ -3596,8 +3618,11 @@ separate workflow; these mappings alone do not resolve them.
 - [x] Add the shared-library observing-preference preview: typed hierarchy and
   field provenance, seven editable weights/presets, score explanations,
   deterministic tie-breaking and bounded continuity. Geometry-bound preview
-  retains hard limits. Persisted UI/grant/ledger/native adoption remains open
-  in the full item above; existing acquisition still uses its old contract.
+  retains hard limits.
+- [x] Persist observing overrides and expose planning controls; bind resolved
+  policies into new programs and use them in shared geometry execution and
+  durable preparation. Legacy mode remains the default. Cross-allocation
+  continuity and score explanations in UI/status remain open.
 - [ ] Add [filter-specific Moon avoidance](#filter-specific-moon-avoidance-in-exposure-settings)
   to exposure template/recipe settings, preserve TS rules and enforce them in
   shared-core selection and native dispatch. Gate on offline and mixed-filter

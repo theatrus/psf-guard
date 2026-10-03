@@ -270,13 +270,14 @@ impl Ledger {
         let preparation = match (&self.geometry, geometry_input) {
             (Some(geometry), Some((current, local))) => Reducer::Geometry(Box::new(
                 geometry
-                    .preparation(
+                    .preparation_with_active(
                         id.into(),
                         &request,
                         current,
                         &context.goal_id,
                         local,
                         estimates,
+                        selection::read(&tx)?,
                     )
                     .map_err(Error::Geometry)?,
             )),
@@ -287,6 +288,13 @@ impl Ledger {
             _ => return Err(Error::ConflictingEvidence),
         };
         let checkpoint = preparation.checkpoint().map_err(|_| Error::InvalidInput)?;
+        if self
+            .program
+            .as_ref()
+            .is_some_and(|p| p.snapshot().observing_preferences.is_some())
+        {
+            selection::selected(&tx, &context.goal_id, request.state.now_ms)?;
+        }
         tx.execute(
             "INSERT INTO preparation(id,status,checkpoint,checkpoint_digest) VALUES (?1,'active',?2,?3)",
             params![id, checkpoint, Sha256::digest(&checkpoint).as_slice()],

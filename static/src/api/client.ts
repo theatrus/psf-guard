@@ -440,6 +440,30 @@ export const apiClient = {
     return data.data;
   },
 
+  getObservingDefaults: async (): Promise<import('./directorPreferences').ObservingDefaults> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<import('./directorPreferences').ObservingDefaults>>('/director/v1/preferences');
+    if (!data.data) throw new Error(data.error || 'Failed to load observing defaults');
+    return data.data;
+  },
+  getObservingSettings: async (scope: import('./directorPreferences').PreferenceScope, id: string): Promise<import('./directorPreferences').ObservingSettings> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<import('./directorPreferences').ObservingSettings>>(`/director/v1/preferences/${scope}/${encodeURIComponent(id)}`);
+    if (!data.data) throw new Error(data.error || 'Failed to load observing preferences');
+    return data.data;
+  },
+  saveObservingSettings: async (settings: import('./directorPreferences').ObservingSettings): Promise<import('./directorPreferences').ObservingSettings> => {
+    const api = await getApi();
+    const { data } = await api.put<ApiResponse<import('./directorPreferences').ObservingSettings>>(`/director/v1/preferences/${settings.scope}/${encodeURIComponent(settings.scope_id)}`, settings);
+    if (!data.data) throw new Error(data.error || 'Failed to save observing preferences');
+    return data.data;
+  },
+  getEffectiveObserving: async (rig: string, project?: string): Promise<import('./directorPreferences').EffectiveObserving> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<import('./directorPreferences').EffectiveObserving>>(`/director/v1/rigs/${encodeURIComponent(rig)}/preferences`, { params: { project_id: project } });
+    if (!data.data) throw new Error(data.error || 'Failed to resolve observing preferences');
+    return data.data;
+  },
   getDirectorPlan: async (projectId: string): Promise<DirectorPlanView> => {
     const api = await getApi();
     const { data } = await api.get<ApiResponse<DirectorPlanView>>(`/director/v1/projects/${encodeURIComponent(projectId)}/plan`);

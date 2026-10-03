@@ -4,7 +4,9 @@
 use crate::{Decision, Request};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+mod program;
 mod selection;
+pub use program::ProgramPreferences;
 pub use selection::{preview, ActiveGoal, Candidate, Contribution, Ranking, Score};
 
 pub const VERSION: u32 = 1;
@@ -120,6 +122,25 @@ pub struct Overrides {
     pub switch_margin: Option<u16>,
 }
 
+impl Overrides {
+    pub fn apply_to(&self, mut policy: Policy) -> Result<Policy, Error> {
+        policy
+            .weights
+            .extend(self.weights.iter().map(|(k, v)| (*k, *v)));
+        if let Some(value) = self.importance {
+            policy.importance = value;
+        }
+        if let Some(value) = self.minimum_dwell_ms {
+            policy.minimum_dwell_ms = value;
+        }
+        if let Some(value) = self.switch_margin {
+            policy.switch_margin = value;
+        }
+        policy.validate()?;
+        Ok(policy)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Layer {
@@ -127,7 +148,8 @@ pub struct Layer {
     pub overrides: Overrides,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct Provenance {
     pub weights: BTreeMap<Factor, Source>,
     pub importance: Source,
@@ -144,6 +166,33 @@ pub struct ResolvedPolicy {
     global: Policy,
     global_source: Source,
     layers: Vec<Layer>,
+}
+
+impl<'de> Deserialize<'de> for ResolvedPolicy {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            schema_version: u32,
+            policy: Policy,
+            provenance: Provenance,
+            global: Policy,
+            global_source: Source,
+            layers: Vec<Layer>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        let resolved = resolve(wire.global, wire.global_source, &wire.layers)
+            .map_err(|_| serde::de::Error::custom("invalid observing policy"))?;
+        if wire.schema_version != VERSION
+            || wire.policy != resolved.policy
+            || wire.provenance != resolved.provenance
+        {
+            return Err(serde::de::Error::custom(
+                "observing policy provenance mismatch",
+            ));
+        }
+        Ok(resolved)
+    }
 }
 
 impl ResolvedPolicy {

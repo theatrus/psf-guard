@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 18;
+const SCHEMA_VERSION: i32 = 19;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -46,6 +46,7 @@ impl MetaStore {
         create_execution_start(&tx)?;
         super::equipment_report::create_table(&tx)?;
         super::workload::create_tables(&tx)?;
+        super::preferences::create_table(&tx)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         conn.close().map_err(|(_, error)| Error::Sqlite(error))?;
@@ -114,6 +115,9 @@ impl MetaStore {
             }
             if version < 18 {
                 super::workload::create_tables(&tx)?;
+            }
+            if version < 19 {
+                super::preferences::create_table(&tx)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }

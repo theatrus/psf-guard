@@ -556,6 +556,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .route("/projects/{id}/attach", axum::routing::post(attach_project))
         .route("/projects/{id}/detach", axum::routing::post(detach_project))
         .merge(configuration_api::routes())
+        .merge(preferences::routes())
         .merge(templates::routes())
         .layer(DefaultBodyLimit::max(4096))
 }
@@ -749,5 +750,6 @@ async fn detach_project(
 }
 
 mod configuration_api;
+mod preferences;
 #[cfg(test)]
 mod tests;

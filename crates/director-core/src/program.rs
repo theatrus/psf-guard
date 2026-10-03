@@ -132,6 +132,8 @@ pub struct Program {
     pub targets: Vec<Target>,
     pub recipes: Vec<Recipe>,
     pub bindings: Vec<Binding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observing_preferences: Option<crate::priority::ProgramPreferences>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -196,6 +198,11 @@ impl BoundProgram {
     }
 
     pub fn new(program: Program, state: &State) -> Result<Self, Error> {
+        if let Some(preferences) = &program.observing_preferences {
+            preferences
+                .validate(&program.assignment)
+                .map_err(|_| Error::InvalidBinding)?;
+        }
         if serde_json::to_vec(&program)
             .map_err(|_| Error::InvalidJson)?
             .len()

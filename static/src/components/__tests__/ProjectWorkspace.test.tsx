@@ -14,6 +14,7 @@ vi.mock('../director/FramingView', () => ({
 }));
 vi.mock('../director/PlanEditor', () => ({ default: ({ projectId }: { projectId: string }) => <output>{`Plan ${projectId}`}</output> }));
 vi.mock('../director/ActivationPanel', () => ({ default: ({ projectId }: { projectId: string }) => <output>{`Activation ${projectId}`}</output> }));
+vi.mock('../director/ObservingPreferences', () => ({ default: () => <output>Observing preferences</output> }));
 const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: null });
 const rig = { id: 'rig', name: 'C925', revision: 1 };
 

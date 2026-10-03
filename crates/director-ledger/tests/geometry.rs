@@ -22,6 +22,8 @@ mod capture_dispatch;
 mod deadlines;
 #[path = "geometry/dispatch.rs"]
 mod dispatch;
+#[path = "geometry/preferences.rs"]
+mod preferences;
 
 #[derive(Clone)]
 struct Fixture {
@@ -367,7 +369,7 @@ fn legacy_program_migration_preserves_evidence_without_adopting_geometry() {
     let events = legacy.preparation_events_after(0, 256).unwrap();
     drop(legacy);
     let db = Connection::open(&path).unwrap();
-    db.execute_batch("DROP TABLE execution_geometry; ALTER TABLE allocation DROP COLUMN geometry_required; PRAGMA user_version=3;").unwrap();
+    db.execute_batch("DROP TABLE observing_selection; DROP TABLE execution_geometry; ALTER TABLE allocation DROP COLUMN geometry_required; PRAGMA user_version=3;").unwrap();
     assert!(matches!(
         Ledger::open_geometry(
             &path,
@@ -389,7 +391,7 @@ fn legacy_program_migration_preserves_evidence_without_adopting_geometry() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        4
+        5
     );
     assert!(matches!(
         legacy.evaluate_geometry(f.state, &f.constraints),

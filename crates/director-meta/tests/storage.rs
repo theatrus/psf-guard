@@ -35,7 +35,7 @@ fn future_schema_and_corrupt_instance_are_refused() {
     let path = dir.path().join("meta.sqlite");
     drop(MetaStore::create(&path).unwrap());
     let conn = Connection::open(&path).unwrap();
-    conn.pragma_update(None, "user_version", 19).unwrap();
+    conn.pragma_update(None, "user_version", 20).unwrap();
     assert!(matches!(
         MetaStore::open(&path),
         Err(Error::UnsupportedSchema)
@@ -43,9 +43,9 @@ fn future_schema_and_corrupt_instance_are_refused() {
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        19
+        20
     );
-    conn.pragma_update(None, "user_version", 18).unwrap();
+    conn.pragma_update(None, "user_version", 19).unwrap();
     conn.execute("UPDATE meta SET instance_id=?1", [Uuid::nil().to_string()])
         .unwrap();
     assert!(matches!(
@@ -173,14 +173,14 @@ fn schema_eleven_upgrade_adds_contacts_without_recreating_client_tables() {
     let path = dir.path().join("meta.sqlite");
     let instance = MetaStore::create(&path).unwrap().instance_id();
     let conn = Connection::open(&path).unwrap();
-    conn.execute_batch("DROP TABLE workload_budget; DROP TABLE workload_history; DROP TABLE workload_policy; DROP TABLE equipment_report; DROP TABLE execution_start; DROP TABLE execution_allocation; DROP TABLE program_issue; DROP TABLE rig_contact; PRAGMA user_version=11;")
+    conn.execute_batch("DROP TABLE observing_preferences; DROP TABLE workload_budget; DROP TABLE workload_history; DROP TABLE workload_policy; DROP TABLE equipment_report; DROP TABLE execution_start; DROP TABLE execution_allocation; DROP TABLE program_issue; DROP TABLE rig_contact; PRAGMA user_version=11;")
         .unwrap();
     let store = MetaStore::open(&path).unwrap();
     assert_eq!(store.instance_id(), instance);
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        18
+        19
     );
     conn.prepare("SELECT rig_id,kind,at_ms,detail FROM rig_contact")
         .unwrap();

@@ -266,7 +266,7 @@ fn schema17_migration_preserves_manual_grant_without_automatic_authority() {
     drop(store);
     let c = rusqlite::Connection::open(&path).unwrap();
     c.execute_batch(
-        "DROP TABLE workload_budget; DROP TABLE workload_history; DROP TABLE workload_policy; PRAGMA user_version=17;",
+        "DROP TABLE observing_preferences; DROP TABLE workload_budget; DROP TABLE workload_history; DROP TABLE workload_policy; PRAGMA user_version=17;",
     )
     .unwrap();
     let mut store = MetaStore::open(&path).unwrap();
@@ -290,7 +290,7 @@ fn migration_from_fifteen_preserves_grant_and_enables_only_one_start() {
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute_batch(
-            "DROP TABLE workload_budget; DROP TABLE workload_history; DROP TABLE workload_policy; DROP TABLE equipment_report; DROP TABLE execution_start; PRAGMA user_version=15;",
+            "DROP TABLE observing_preferences; DROP TABLE workload_budget; DROP TABLE workload_history; DROP TABLE workload_policy; DROP TABLE equipment_report; DROP TABLE execution_start; PRAGMA user_version=15;",
         )
         .unwrap();
     let mut store = MetaStore::open(&path).unwrap();
@@ -403,7 +403,7 @@ fn migration_from_fourteen_preserves_identity_and_rolls_back_failure() {
     let id = store.instance_id();
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("DROP TABLE workload_budget; DROP TABLE workload_history; DROP TABLE workload_policy; DROP TABLE equipment_report; DROP TABLE execution_start; DROP TABLE execution_allocation; PRAGMA user_version=14; CREATE VIEW execution_allocation AS SELECT 1 AS rig_id;").unwrap();
+    conn.execute_batch("DROP TABLE observing_preferences; DROP TABLE workload_budget; DROP TABLE workload_history; DROP TABLE workload_policy; DROP TABLE equipment_report; DROP TABLE execution_start; DROP TABLE execution_allocation; PRAGMA user_version=14; CREATE VIEW execution_allocation AS SELECT 1 AS rig_id;").unwrap();
     assert!(MetaStore::open(&path).is_err());
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))

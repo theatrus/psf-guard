@@ -19,6 +19,7 @@ fn request() -> Request {
 
 fn program() -> Program {
     Program {
+        observing_preferences: None,
         schema_version: PROGRAM_VERSION,
         assignment: request().assignment,
         configuration: Configuration {

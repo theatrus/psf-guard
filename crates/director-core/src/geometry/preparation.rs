@@ -15,6 +15,7 @@ pub struct GeometryPreparation<'a> {
     inner: Preparation,
     initial: Request,
     local: LocalState,
+    active: Option<crate::priority::ActiveGoal>,
 }
 
 impl BoundGeometry {
@@ -27,7 +28,26 @@ impl BoundGeometry {
         local: LocalState,
         estimates: Estimates,
     ) -> Result<GeometryPreparation<'_>, Error> {
-        let narrowed = self.narrow(request)?;
+        self.preparation_with_active(id, request, current, goal_id, local, estimates, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn preparation_with_active(
+        &self,
+        id: String,
+        request: &Request,
+        current: &Constraints,
+        goal_id: &str,
+        local: LocalState,
+        estimates: Estimates,
+        active: Option<crate::priority::ActiveGoal>,
+    ) -> Result<GeometryPreparation<'_>, Error> {
+        if self.source.snapshot().observing_preferences.is_some()
+            && !matches!(self.evaluate_with_active(request, current, active.as_ref())?, Decision::Acquire { goal_id: chosen, .. } if chosen == goal_id)
+        {
+            return Err(Error::InvalidPreferences);
+        }
+        let narrowed = self.narrow_preparation(request, goal_id)?;
         self.check_current(request, current)?;
         let context = self
             .source
@@ -40,7 +60,20 @@ impl BoundGeometry {
             inner,
             initial: request.clone(),
             local,
+            active,
         })
+    }
+
+    fn narrow_preparation(&self, request: &Request, goal_id: &str) -> Result<Request, Error> {
+        let mut narrowed = self.narrow(request)?;
+        if self.source.snapshot().observing_preferences.is_some() {
+            // Freeze this exposure's choice, not its feasibility. Slow native
+            // operations still must fit, but cannot oscillate between targets.
+            for goal in &mut narrowed.assignment.goals {
+                goal.priority = u32::from(goal.id == goal_id);
+            }
+        }
+        Ok(narrowed)
     }
 }
 
@@ -63,7 +96,9 @@ impl GeometryPreparation<'_> {
     /// constraint latches a check-in even if the next snapshot changes back.
     /// In-flight actions retain their receipt obligation; safety stops still win.
     pub fn next(&mut self, request: &Request, current: &Constraints) -> Result<Next, Error> {
-        let narrowed = self.geometry.narrow(request)?;
+        let narrowed = self
+            .geometry
+            .narrow_preparation(request, &self.inner.context().goal_id)?;
         let changed = self.geometry.check_current(request, current).is_err();
         self.inner
             .next_with_constraint_change(&narrowed, changed)
@@ -79,7 +114,9 @@ impl GeometryPreparation<'_> {
         current: &Constraints,
         command: &Command,
     ) -> Result<Decision, Error> {
-        let narrowed = self.geometry.narrow(request)?;
+        let narrowed = self
+            .geometry
+            .narrow_preparation(request, &self.inner.context().goal_id)?;
         let changed = self.geometry.check_current(request, current).is_err();
         self.inner
             .check_pending_dispatch_with_constraint_change(&narrowed, command, changed)
@@ -93,7 +130,9 @@ impl GeometryPreparation<'_> {
         current: &Constraints,
         command: &Command,
     ) -> Result<crate::dispatch::DispatchCheck, Error> {
-        let narrowed = self.geometry.narrow(request)?;
+        let narrowed = self
+            .geometry
+            .narrow_preparation(request, &self.inner.context().goal_id)?;
         let changed = self.geometry.check_current(request, current).is_err();
         self.inner
             .check_pending_dispatch_deadline_with_constraint_change(&narrowed, command, changed)
@@ -107,7 +146,9 @@ impl GeometryPreparation<'_> {
         request: &Request,
         current: &Constraints,
     ) -> Result<crate::dispatch::DispatchCheck, Error> {
-        let narrowed = self.geometry.narrow(request)?;
+        let narrowed = self
+            .geometry
+            .narrow_preparation(request, &self.inner.context().goal_id)?;
         let changed = self.geometry.check_current(request, current).is_err();
         self.inner
             .check_capture_dispatch_deadline_with_constraint_change(&narrowed, changed)

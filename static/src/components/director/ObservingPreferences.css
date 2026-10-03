@@ -1,0 +1,19 @@
+.observing-preferences { border-top: 1px solid var(--border-color, #64706d); margin-top: 1rem; padding-top: 1rem; }
+.observing-preferences h3 { font-size: 1rem; margin: 0 0 0.8rem; }
+.observing-preferences form, .observing-context { max-width: 760px; }
+.observing-context, .observing-actions { display: flex; align-items: end; gap: 0.8rem; flex-wrap: wrap; }
+.observing-context label, .observing-preferences fieldset > label { display: grid; gap: 0.3rem; margin-bottom: 0.6rem; }
+.observing-preferences select { max-width: 100%; min-width: 0; }
+.observing-preferences fieldset { border: 0; padding: 0; margin: 0.8rem 0; min-width: 0; }
+.observing-preferences legend { font-weight: 600; margin-bottom: 0.8rem; }
+.observing-row { display: grid; grid-template-columns: minmax(100px, 1fr) 76px 82px; align-items: center; gap: 0.6rem; padding: 0.35rem 0; }
+.observing-row input[type=number] { width: 100%; min-width: 0; box-sizing: border-box; padding: 7px; color: var(--color-text-primary); background: var(--color-bg-secondary); border: 1px solid var(--color-border-tertiary); border-radius: 4px; }
+.observing-row input[type=number]:disabled { opacity: 0.65; }
+.observing-preferences input[type=checkbox] { accent-color: var(--color-primary); }
+.observing-weight-heading { font-size: 0.85rem; margin: 0 0 0.4rem; }
+.observing-row label small { display: block; opacity: 0.7; font-size: 0.75rem; }
+.observing-inherit { display: flex; align-items: center; gap: 0.3rem; font-size: 0.85rem; }
+.observing-weights { margin: 0.7rem 0; padding: 0.5rem 0; border-block: 1px solid var(--border-color, #64706d); }
+.observing-mode { font-size: 0.85rem; padding-bottom: 0.6rem; }
+.observing-actions { margin-top: 0.8rem; }
+@media(max-width: 430px) { .observing-row { grid-template-columns: minmax(90px,1fr) 60px 75px; gap: 0.4rem; } }

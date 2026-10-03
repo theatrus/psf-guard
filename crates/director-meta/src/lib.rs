@@ -16,6 +16,7 @@ pub mod framing;
 pub mod inbox;
 pub mod merge;
 pub mod plan;
+pub mod preferences;
 pub mod profile;
 pub mod program_issue;
 pub mod project;

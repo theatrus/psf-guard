@@ -63,6 +63,7 @@ pub enum Error {
     Geometry(VisibilityError),
     Preparation(crate::preparation::Error),
     InvalidCheckpoint,
+    InvalidPreferences,
 }
 
 /// Own both source intent and computed geometry. This object is intentionally
@@ -259,6 +260,28 @@ impl BoundGeometry {
     /// snapshot. Refreshing native files/profile state is the host's duty.
     /// Only progress counters may differ from the original assigned program.
     pub fn evaluate(&self, request: &Request, current: &Constraints) -> Result<Decision, Error> {
+        self.evaluate_with_active(request, current, None)
+    }
+
+    pub fn evaluate_with_active(
+        &self,
+        request: &Request,
+        current: &Constraints,
+        active: Option<&crate::priority::ActiveGoal>,
+    ) -> Result<Decision, Error> {
+        match &self.source.snapshot().observing_preferences {
+            Some(preferences) => self
+                .preview_priority(request, current, &preferences.for_goals(), active)
+                .map(|r| r.decision)
+                .map_err(|e| match e {
+                    PriorityError::Geometry(e) => e,
+                    PriorityError::Preferences(_) => Error::InvalidPreferences,
+                }),
+            None => self.evaluate_legacy(request, current),
+        }
+    }
+
+    fn evaluate_legacy(&self, request: &Request, current: &Constraints) -> Result<Decision, Error> {
         self.source
             .validate_projection(&request.assignment)
             .map_err(Error::Program)?;

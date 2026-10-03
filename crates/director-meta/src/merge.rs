@@ -73,6 +73,7 @@ impl MetaStore {
             },
             super::plan::read_plan,
         )?;
+        super::preferences::attach_project(&tx, self.instance_id, into, from)?;
         retire(&tx, from)?;
         tx.commit()?;
         Ok(Attached {
