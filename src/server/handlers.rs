@@ -1150,6 +1150,7 @@ pub(crate) async fn execute_scheduler_sync_paths(
             &destination_id_for_cache,
             crate::server::stack_preview::automatic::RefreshReason::Sync,
         );
+        crate::server::quality_arrival::note_arrival(&destination_id_for_cache);
     }
     Ok((response, fingerprint))
 }
@@ -1827,6 +1828,7 @@ mod remote_image_layout_settings_tests {
             export_dir: None,
             process_dir: None,
             autoimport: None,
+            analyze_new_frames: false,
         }
     }
 
@@ -3221,6 +3223,7 @@ pub(crate) fn spawn_import_job_with_trigger(
             }
         }
         let dry_run = outcome.dry_run;
+        let imported_any = outcome.imported > 0;
         job::complete_import(&job_store, outcome);
         if !dry_run {
             state.auto_stacks.touch_database(
@@ -3240,9 +3243,15 @@ pub(crate) fn spawn_import_job_with_trigger(
         }
 
         // Quality analysis is a general database maintenance job, not an
-        // import stage. An opt-in import only queues the changed targets.
-        if backfill && !target_ids.is_empty() {
-            spawn_quality_backfill(&state, ctx.clone(), target_ids, false, fill_metadata);
+        // import stage. An opt-in import only queues the changed targets;
+        // otherwise a database that analyzes new frames queues them itself.
+        // A backfill already running refuses this one; the arrival queue
+        // then picks the frames up once it finishes, if the database asks.
+        let queued = backfill
+            && !target_ids.is_empty()
+            && spawn_quality_backfill(&state, ctx.clone(), target_ids, false, fill_metadata);
+        if !queued && !dry_run && imported_any {
+            crate::server::quality_arrival::note_arrival(&ctx.id);
         }
     });
     true
@@ -3486,7 +3495,7 @@ fn fill_missing_star_metadata(
     filled
 }
 
-fn spawn_quality_backfill(
+pub(crate) fn spawn_quality_backfill(
     state: &Arc<AppState>,
     ctx: Arc<DatabaseContext>,
     target_ids: Vec<i32>,
@@ -3551,7 +3560,49 @@ pub async fn start_quality_backfill_route(
     Ok(Json(ApiResponse::success(QualityBackfillStatusResponse {
         started,
         progress: crate::server::quality_backfill::snapshot(&ctx.quality_backfill),
+        analyze_new_frames: ctx
+            .analyze_new_frames
+            .load(std::sync::atomic::Ordering::Relaxed),
     })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AnalyzeNewFramesRequest {
+    pub enabled: bool,
+}
+
+/// `PUT /api/db/{db}/analysis/quality-backfill/new-frames` — whether frames
+/// arriving by sync, upload or auto-import are analyzed for quality. A
+/// database setting, so it sits behind database management like the rest.
+pub async fn update_analyze_new_frames(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Json(request): Json<AnalyzeNewFramesRequest>,
+) -> Result<Json<ApiResponse<QualityBackfillStatusResponse>>, AppError> {
+    require_database_management_allowed(&state)?;
+    let db_id = ctx.id.clone();
+    update_registry(&state, |registry| {
+        let entry = registry
+            .databases
+            .iter_mut()
+            .find(|entry| entry.id == db_id)
+            .ok_or(AppError::NotFound)?;
+        entry.analyze_new_frames = request.enabled;
+        Ok(())
+    })
+    .await?;
+    // The live context, which a database edit may have replaced meanwhile.
+    if let Some(live) = state.get_database(&db_id) {
+        live.analyze_new_frames
+            .store(request.enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+    ctx.analyze_new_frames
+        .store(request.enabled, std::sync::atomic::Ordering::Relaxed);
+    if request.enabled {
+        // Frames already waiting are analyzed as if they had just arrived.
+        crate::server::quality_arrival::note_arrival(&ctx.id);
+    }
+    get_quality_backfill_progress(ctx).await
 }
 
 pub async fn get_quality_backfill_progress(
@@ -3561,6 +3612,9 @@ pub async fn get_quality_backfill_progress(
     Ok(Json(ApiResponse::success(QualityBackfillStatusResponse {
         started: progress.running,
         progress,
+        analyze_new_frames: ctx
+            .analyze_new_frames
+            .load(std::sync::atomic::Ordering::Relaxed),
     })))
 }
 
@@ -7947,6 +8001,7 @@ mod delayed_ready_tests {
                     export_dir: None,
                     process_dir: None,
                     autoimport: None,
+                    analyze_new_frames: false,
                 }],
                 temp.path().join("cache").to_string_lossy().into_owned(),
                 crate::cli::PregenerationConfig::default(),

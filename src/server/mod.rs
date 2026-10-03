@@ -23,6 +23,7 @@ pub mod pairing;
 pub mod peers;
 pub mod preview_queue;
 pub mod processing_setups;
+pub mod quality_arrival;
 pub mod quality_backfill;
 pub mod remote_audit;
 pub mod remote_sync;
@@ -438,6 +439,8 @@ async fn run_server_internal(
     }
     // Remove superseded stacks in every database, not only those building.
     tokio::spawn(stack_preview::run_janitor(Arc::clone(&state)));
+    // Scan newly arrived frames where a database asks for it.
+    tokio::spawn(quality_arrival::run(Arc::clone(&state)));
 
     // Start background image pre-generation if enabled
     if config.pregeneration_config.is_enabled() {
@@ -707,6 +710,10 @@ async fn run_server_internal(
             "/analysis/quality-backfill",
             post(handlers::start_quality_backfill_route)
                 .get(handlers::get_quality_backfill_progress),
+        )
+        .route(
+            "/analysis/quality-backfill/new-frames",
+            axum::routing::put(handlers::update_analyze_new_frames),
         )
         .route(
             "/import",

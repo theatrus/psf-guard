@@ -20,6 +20,11 @@
 
 ## Added
 
+- **Analyze new frames as they arrive**, a per-database option beside the
+  quality backfill buttons, runs the background quality analysis on frames
+  that arrive by sync, peer pull, remote upload or auto-import, so a target is
+  scored on one kind of star count without a manual backfill.
+
 - Stacks and calibration masters can live on their own volumes. Name them
   with `--stack-dir` and `--calibration-dir` (or `stack_directory` and
   `calibration_directory` under `[cache]`), or choose them, and the cache, in

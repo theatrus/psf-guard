@@ -99,6 +99,7 @@ async fn planning_and_grade_pushes_preview_before_writing() {
             export_dir: None,
             process_dir: None,
             autoimport: None,
+            analyze_new_frames: false,
         },
         DbEntry {
             id: "scope".into(),
@@ -110,6 +111,7 @@ async fn planning_and_grade_pushes_preview_before_writing() {
             export_dir: None,
             process_dir: None,
             autoimport: None,
+            analyze_new_frames: false,
         },
     ];
     let state = Arc::new(
@@ -409,6 +411,7 @@ async fn a_pull_brings_structure_and_captures_down_and_keeps_local_grades() {
                     export_dir: None,
                     process_dir: None,
                     autoimport: None,
+                    analyze_new_frames: false,
                 },
                 DbEntry {
                     id: "scope".into(),
@@ -420,6 +423,7 @@ async fn a_pull_brings_structure_and_captures_down_and_keeps_local_grades() {
                     export_dir: None,
                     process_dir: None,
                     autoimport: None,
+                    analyze_new_frames: false,
                 },
             ],
             dir.path().join("cache").to_string_lossy().into_owned(),

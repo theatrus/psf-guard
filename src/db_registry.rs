@@ -60,6 +60,10 @@ pub struct DbEntry {
     /// Import new frames from the image folders on its own. Absent means off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autoimport: Option<AutoImportSettings>,
+    /// Run the background quality scan on frames that arrive by sync, peer
+    /// pull, remote upload or auto-import. Off unless a person turns it on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub analyze_new_frames: bool,
 }
 
 /// When and what an automatic import brings in. A run scans the database's
@@ -812,6 +816,7 @@ impl DbRegistry {
                 export_dir: None,
                 process_dir: None,
                 autoimport: None,
+                analyze_new_frames: false,
             });
         }
         reg.save(path)?;
@@ -882,6 +887,7 @@ impl DbRegistry {
             export_dir: None,
             process_dir: None,
             autoimport: None,
+            analyze_new_frames: false,
         });
         Ok(self.databases.last().unwrap())
     }
@@ -1122,6 +1128,7 @@ mod tests {
             export_dir: None,
             process_dir: None,
             autoimport: None,
+            analyze_new_frames: false,
         });
         reg.save(&path).unwrap();
 

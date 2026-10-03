@@ -1,19 +1,49 @@
 import { useQualityBackfill } from '../hooks/useQualityBackfill';
 import { setStarMetadataFill, useStarMetadataFill } from '../hooks/useStarMetadataFill';
 
-export default function QualityBackfillControls({ dbId }: { dbId: string }) {
+export default function QualityBackfillControls({
+  dbId,
+  canManage = true,
+}: {
+  dbId: string;
+  /** Saving the arrival option needs database management on this server. */
+  canManage?: boolean;
+}) {
   const job = useQualityBackfill(dbId);
   const progress = job.status?.progress;
   // One preference for every analyze action (scan, backfill, import), so the
   // checkbox here is also the remembered default.
   const fillMetadata = useStarMetadataFill();
 
+  // Shown while a run is under way too: that run may be this option at work.
+  const arrivals = (
+    <div className="quality-backfill-option">
+      <label title="Run the background quality analysis on frames that arrive by sync, peer pull, remote upload or auto-import, a couple of minutes after they land. Writes nothing to the catalog.">
+        <input
+          type="checkbox"
+          checked={job.analyzeNewFrames}
+          disabled={!canManage || job.isSavingNewFrames || !job.status}
+          onChange={(event) => job.setAnalyzeNewFrames(event.target.checked)}
+        />
+        Analyze new frames as they arrive
+      </label>
+      <small>
+        Sync, peer pulls, remote uploads and auto-import. Without it, new frames wait for
+        Analyze Missing Quality.
+        {!canManage && ' Changing it needs database management on this server.'}
+      </small>
+    </div>
+  );
+
   if (job.isRunning && progress) {
     return (
-      <div className="quality-backfill-status" aria-live="polite">
-        Analyzing quality in the background… {progress.processed_targets}/
-        {progress.total_targets} targets
-      </div>
+      <>
+        <div className="quality-backfill-status" aria-live="polite">
+          Analyzing quality in the background… {progress.processed_targets}/
+          {progress.total_targets} targets
+        </div>
+        {arrivals}
+      </>
     );
   }
 
@@ -41,6 +71,7 @@ export default function QualityBackfillControls({ dbId }: { dbId: string }) {
       >
         Rescan All Quality
       </button>
+      {arrivals}
       <div className="quality-backfill-option">
         <label title="Fill measured star count and HFR into images imported without them. Only missing values are written; N.I.N.A.-recorded measurements are never replaced. Remembered as the default for every analyze action.">
           <input
