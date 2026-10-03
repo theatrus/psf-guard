@@ -4996,10 +4996,7 @@ mod tests {
         .join("e".repeat(64));
         std::fs::create_dir_all(&stretch).unwrap();
         let old = std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 86_400);
-        std::fs::File::open(&stretch)
-            .unwrap()
-            .set_times(std::fs::FileTimes::new().set_modified(old))
-            .unwrap();
+        filetime::set_file_mtime(&stretch, filetime::FileTime::from_system_time(old)).unwrap();
         let selections = crate::server::storage::stack_processing(cache.path());
         std::fs::create_dir_all(&selections).unwrap();
         // A selection torn by a crash: it might have named this stretch.
@@ -5020,10 +5017,7 @@ mod tests {
         let job = stacks.join("d".repeat(64));
         std::fs::create_dir_all(&job).unwrap();
         let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 86_400);
-        std::fs::File::open(&job)
-            .unwrap()
-            .set_times(std::fs::FileTimes::new().set_modified(old))
-            .unwrap();
+        filetime::set_file_mtime(&job, filetime::FileTime::from_system_time(old)).unwrap();
         // An index from a newer build, or a torn write: what does it name?
         std::fs::write(stacks.join("latest-project-1.json"), "{not json").unwrap();
 
