@@ -410,6 +410,9 @@ pub struct DatabaseContext {
     pub process_dir: Option<PathBuf>,
     /// Automatic import of new frames, when the operator turned it on.
     pub autoimport: Option<crate::db_registry::AutoImportSettings>,
+    /// Scan frames that arrive by sync, upload or auto-import for quality.
+    /// Shared so Settings can change it on the live context.
+    pub analyze_new_frames: Arc<AtomicBool>,
     /// Per-DB cache directory: `<cache_root>/<slug>/`. Created on construction.
     /// All preview/annotated/PSF artifacts for this database live below here,
     /// so two DBs with overlapping image IDs do not collide.
@@ -719,6 +722,9 @@ impl DatabaseContext {
         // database from opening. The update route validates what it saves,
         // and the scheduler does nothing with a block that names no trigger.
         context.autoimport = entry.autoimport.clone();
+        context
+            .analyze_new_frames
+            .store(entry.analyze_new_frames, Ordering::Relaxed);
         Ok(context)
     }
 
@@ -816,6 +822,7 @@ impl DatabaseContext {
             process_dir,
             autoimport: None,
             cache_dir,
+            analyze_new_frames: Arc::new(AtomicBool::new(false)),
             cache_dir_path,
             db_connection: Arc::new(Mutex::new(conn)),
             exposure_groups_cache: Arc::new(Mutex::new(Default::default())),
@@ -2009,6 +2016,7 @@ impl DatabaseContext {
             process_dir: None,
             autoimport: None,
             cache_dir: "/tmp/psf-guard-test".to_string(),
+            analyze_new_frames: Arc::new(AtomicBool::new(false)),
             cache_dir_path: PathBuf::from("/tmp/psf-guard-test"),
             db_connection: Arc::new(Mutex::new(conn)),
             exposure_groups_cache: Arc::new(Mutex::new(Default::default())),
@@ -2052,6 +2060,7 @@ impl Clone for DatabaseContext {
             process_dir: self.process_dir.clone(),
             autoimport: self.autoimport.clone(),
             cache_dir: self.cache_dir.clone(),
+            analyze_new_frames: self.analyze_new_frames.clone(),
             cache_dir_path: self.cache_dir_path.clone(),
             db_connection: self.db_connection.clone(),
             exposure_groups_cache: self.exposure_groups_cache.clone(),

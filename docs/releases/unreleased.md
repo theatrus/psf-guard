@@ -6,6 +6,11 @@
 
 ## Added
 
+- **Analyze new frames as they arrive**, a per-database option beside the
+  quality backfill buttons, runs the background quality analysis on frames
+  that arrive by sync, peer pull, remote upload or auto-import, so a target is
+  scored on one kind of star count without a manual backfill.
+
 ## Changed
 
 ## Fixed
