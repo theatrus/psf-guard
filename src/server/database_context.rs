@@ -771,12 +771,13 @@ fn publish_file_check_cache(
 }
 
 impl DatabaseContext {
-    /// `cache_root` is the shared parent directory; this constructor appends
-    /// the slug to produce a per-DB cache subdir and creates it on disk.
     /// Open the database a registry entry describes. Every place that turns
     /// an entry into a live context goes through here, so a setting added to
     /// the entry reaches the context in one place.
-    pub fn from_entry(entry: &crate::db_registry::DbEntry, cache_root: String) -> Result<Self> {
+    pub fn from_entry(
+        entry: &crate::db_registry::DbEntry,
+        roots: impl Into<crate::server::storage::StorageRoots>,
+    ) -> Result<Self> {
         let mut context = Self::new(
             entry.id.clone(),
             entry.name.clone(),
@@ -785,7 +786,7 @@ impl DatabaseContext {
             entry.remote_image_upload.clone(),
             entry.export_dir.clone(),
             entry.process_dir.clone(),
-            cache_root,
+            roots,
         )?;
         // Not validated here: a hand-edited block must not keep the whole
         // database from opening. The update route validates what it saves,
@@ -794,6 +795,8 @@ impl DatabaseContext {
         Ok(context)
     }
 
+    /// `roots` are the server's shared folders; this constructor appends the
+    /// slug to each and creates the per-database folders on disk.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: String,
@@ -803,7 +806,7 @@ impl DatabaseContext {
         remote_image_upload: Option<crate::db_registry::RemoteImageUploadConfig>,
         export_dir: Option<String>,
         process_dir: Option<String>,
-        cache_root: String,
+        roots: impl Into<crate::server::storage::StorageRoots>,
     ) -> Result<Self> {
         use std::path::Path;
 
@@ -863,16 +866,19 @@ impl DatabaseContext {
             })
             .transpose()?;
 
-        let cache_dir_path = PathBuf::from(&cache_root).join(&id);
-        std::fs::create_dir_all(&cache_dir_path).map_err(|e| {
-            anyhow::anyhow!(
-                "Creating cache directory {}: {}",
-                cache_dir_path.display(),
-                e
-            )
-        })?;
-        let stack_root = cache_dir_path.clone();
-        let calibration_root = cache_dir_path.clone();
+        let roots = roots.into();
+        let cache_dir_path = roots.cache.join(&id);
+        let stack_root = roots.stacks.join(&id);
+        let calibration_root = roots.calibration.join(&id);
+        for (kind, directory) in [
+            ("cache", &cache_dir_path),
+            ("stack", &stack_root),
+            ("calibration", &calibration_root),
+        ] {
+            std::fs::create_dir_all(directory).map_err(|e| {
+                anyhow::anyhow!("Creating {kind} directory {}: {e}", directory.display())
+            })?;
+        }
 
         let conn = open_scheduler_connection(&db_path)?;
         let fingerprint = fingerprint_path(&db_path);

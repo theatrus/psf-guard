@@ -2960,10 +2960,36 @@ export interface CacheVolumeReport {
   checked_unix: number;
 }
 
+export type StorageFolderKind = 'cache' | 'stacks' | 'calibration';
+
+export interface StorageFolder {
+  kind: StorageFolderKind;
+  /** In use now. */
+  path: string;
+  /** What the next start uses; differs from `path` until a restart. */
+  next_path: string;
+  /** `server_config` means the config file or command line fixes it. */
+  source: 'server_config' | 'settings' | 'default';
+  /** The folder chosen in Settings, if one is. */
+  chosen: string | null;
+}
+
 export interface StorageSettings {
   /** 100 turns culling off. */
   max_volume_percent: number;
   default_max_volume_percent: number;
   min_max_volume_percent: number;
   volumes: CacheVolumeReport[];
+  /** Cache, stacks and calibration masters, in that order. */
+  folders: StorageFolder[];
+  /** What this start's folder move did. */
+  folder_notes: string[];
+  can_choose_folders: boolean;
+}
+
+/** Empty or absent goes back to the default. */
+export interface StorageFoldersUpdate {
+  cache_dir?: string;
+  stack_dir?: string;
+  calibration_dir?: string;
 }

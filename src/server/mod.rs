@@ -67,7 +67,9 @@ pub struct ServerConfig {
     /// server still runs (the UI shows an empty state).
     pub databases: Vec<crate::db_registry::DbEntry>,
     pub static_dir: Option<String>,
-    pub cache_dir: String,
+    /// Storage folders the config file or command line fixes, and the
+    /// default cache. Settings choose the rest.
+    pub storage: storage::StorageConfig,
     pub host: String,
     pub port: u16,
     pub pregeneration_config: PregenerationConfig,
@@ -103,62 +105,6 @@ pub struct ServerConfig {
     pub astrometry_config: Option<crate::astrometry::AstrometryConfig>,
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn run_server(
-    databases: Vec<crate::db_registry::DbEntry>,
-    static_dir: Option<String>,
-    cache_dir: String,
-    host: String,
-    port: u16,
-    pregeneration_config: PregenerationConfig,
-    registry_path: Option<PathBuf>,
-    allow_database_management: bool,
-    director_meta: Option<PathBuf>,
-    allow_anonymous_access: bool,
-    site_banner: Option<crate::config::SiteBannerConfig>,
-    auth: Option<auth::ServerAuth>,
-    worker_policy: crate::concurrency::WorkerPolicy,
-    preview_encoding: crate::preview_format::PreviewEncoding,
-    preview_color_default: bool,
-    keep_failed_uploads: bool,
-    astrometry_config: Option<crate::astrometry::AstrometryConfig>,
-) -> anyhow::Result<()> {
-    // Initialize tracing with environment-based filtering (for CLI mode)
-    // Set RUST_LOG=debug for debug logs, RUST_LOG=info for info logs, etc.
-    // Default to info level if no RUST_LOG is set
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::filter::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::filter::EnvFilter::new("info")),
-        )
-        .with_target(false) // Don't show module paths in logs
-        .with_level(true) // Show log levels
-        .with_thread_ids(false) // Don't show thread IDs for cleaner output
-        .init();
-
-    let config = ServerConfig {
-        databases,
-        static_dir,
-        cache_dir,
-        host,
-        port,
-        pregeneration_config,
-        registry_path,
-        allow_database_management,
-        director_meta,
-        allow_anonymous_access,
-        site_banner,
-        auth,
-        worker_policy,
-        preview_encoding,
-        preview_color_default,
-        keep_failed_uploads,
-        astrometry_config,
-    };
-
-    run_server_internal(config, None).await
-}
-
 pub async fn run_server_with_config(config: ServerConfig) -> anyhow::Result<()> {
     // Initialize tracing with environment-based filtering (for CLI mode)
     // Set RUST_LOG=debug for debug logs, RUST_LOG=info for info logs, etc.
@@ -174,6 +120,18 @@ pub async fn run_server_with_config(config: ServerConfig) -> anyhow::Result<()> 
         .init();
 
     run_server_internal(config, None).await
+}
+
+/// Set once the first server of this process starts.
+static SERVER_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Apply the process-wide settings the registry holds. The one place that
+/// does, so the server and the desktop app start the same way and a restart
+/// picks up what Settings saved. Runs before any catalog opens.
+fn apply_registry_settings(registry: &crate::db_registry::DbRegistry) {
+    crate::calibration::configure(registry.calibration.as_ref());
+    stack_preview::automatic::configure_from_registry(registry.stacking.as_ref());
+    cache_budget::configure(registry.storage.as_ref());
 }
 
 /// Whether a caller with no session is trusted while the server has no user
@@ -239,7 +197,6 @@ async fn run_server_internal(
             .map(|d| format!("\n   - {} ({}): {}", d.name, d.id, d.db_path))
             .collect::<String>()
     );
-    tracing::info!("💾 Cache directory: {}", config.cache_dir);
 
     // Log pregeneration configuration
     if config.pregeneration_config.is_enabled() {
@@ -253,13 +210,53 @@ async fn run_server_internal(
         tracing::info!("🎨 Background pre-generation disabled");
     }
 
-    // Create cache directory if it doesn't exist
-    std::fs::create_dir_all(&config.cache_dir)?;
+    // Settle the storage folders, moving files when a setting changed one,
+    // before any database opens a folder below them.
+    let storage_config = config.storage.clone();
+    let registry_for_storage = config.registry_path.clone();
+    // Only the first server of a process moves files: one restarted inside
+    // the desktop app may still have the old one's background work writing.
+    let allow_moves = !SERVER_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst);
+    let startup_storage = tokio::task::spawn_blocking(move || {
+        storage::prepare(
+            &storage_config,
+            registry_for_storage.as_deref(),
+            allow_moves,
+        )
+    })
+    .await?;
+    for note in &startup_storage.notes {
+        if note.starts_with("Moved") {
+            tracing::info!("📦 {note}");
+        } else {
+            tracing::warn!("📦 {note}");
+        }
+    }
+    tracing::info!(
+        "💾 Cache directory: {}",
+        startup_storage.roots.cache.display()
+    );
+    tracing::info!(
+        "💾 Stack directory: {}",
+        startup_storage.roots.stacks.display()
+    );
+    tracing::info!(
+        "💾 Calibration master directory: {}",
+        startup_storage.roots.calibration.display()
+    );
+    // Read after the storage step, which may have recorded the folders.
+    let registry = config
+        .registry_path
+        .as_deref()
+        .and_then(|path| crate::db_registry::DbRegistry::load_or_init(path).ok());
+    if let Some(registry) = &registry {
+        apply_registry_settings(registry);
+    }
 
     // Create app state
     let state = match AppState::from_databases_with_astrometry(
         config.databases.clone(),
-        config.cache_dir.clone(),
+        startup_storage.roots.clone(),
         config.pregeneration_config.clone(),
         config.astrometry_config.clone(),
     ) {
@@ -307,12 +304,18 @@ async fn run_server_internal(
                     config.host
                 );
             }
+            state.set_storage_status(state::StorageStatus {
+                config: config.storage.clone(),
+                notes: startup_storage.notes.clone(),
+            });
+            for (slug, from, to) in &startup_storage.calibration_moves {
+                if let Some(ctx) = state.get_database(slug) {
+                    storage::relocate::follow_master_rows(&ctx, from, to);
+                }
+            }
             // Shares chosen in Settings sit over the config file's.
-            if let Some(path) = &config.registry_path
-                && let Ok(registry) = crate::db_registry::DbRegistry::load_or_init(path)
-            {
+            if let Some(registry) = &registry {
                 state.apply_worker_settings(registry.workers.as_ref());
-                cache_budget::configure(registry.storage.as_ref());
             }
             let policy = state.worker_policy();
             tracing::info!(
@@ -821,6 +824,10 @@ async fn run_server_internal(
             "/settings/storage",
             get(storage_settings::get_storage_settings)
                 .put(storage_settings::update_storage_settings),
+        )
+        .route(
+            "/settings/storage/folders",
+            axum::routing::put(storage_settings::update_storage_folders),
         )
         .route(
             "/settings/stacking/method",

@@ -487,14 +487,45 @@ pub struct AstroBinSettings {
     pub filter_ids: std::collections::BTreeMap<String, u32>,
 }
 
-/// The cache's disk limit a person chose.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Where generated files go and how full their volumes may get.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StorageSettings {
     /// Highest share of the cache volume, in percent, that may be used
     /// before image previews are culled; 100 turns culling off. Absent uses
     /// the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_volume_percent: Option<u8>,
+    /// Folders a person chose, as absolute paths. The server config file or
+    /// command line wins over these; absent stacks and masters go in the
+    /// cache, and an absent cache uses the server's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stack_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calibration_dir: Option<String>,
+    /// Moves Settings asked for and the next start carries out: one per
+    /// folder, from the folder in use when it was saved. A move that fails
+    /// stays here and is tried again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub moves: Vec<StorageMove>,
+}
+
+impl StorageSettings {
+    /// Whether nothing differs from the defaults, so the block can go.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// A folder move waiting for the next start.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageMove {
+    pub kind: crate::server::storage::StorageKind,
+    /// Absolute.
+    pub from: String,
+    /// Absolute.
+    pub to: String,
 }
 
 /// The processor shares a person chose, over the server config file's.

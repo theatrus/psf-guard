@@ -1107,6 +1107,16 @@ pub enum Commands {
         #[arg(long)]
         cache_dir: Option<String>,
 
+        /// Where stacks go (overrides config file; defaults to Settings,
+        /// else the cache directory)
+        #[arg(long)]
+        stack_dir: Option<String>,
+
+        /// Where calibration masters go (overrides config file; defaults to
+        /// Settings, else the cache directory)
+        #[arg(long)]
+        calibration_dir: Option<String>,
+
         /// Port to listen on (overrides config file)
         #[arg(short, long)]
         port: Option<u16>,

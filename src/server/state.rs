@@ -32,9 +32,12 @@ pub struct AppState {
     pub databases: RwLock<HashMap<String, Arc<DatabaseContext>>>,
     /// Pre-generation configuration (process-global).
     pub pregeneration_config: PregenerationConfig,
-    /// Root cache directory; per-DB caches live under this. B5 will namespace
-    /// per-slug subdirectories beneath this root.
-    pub cache_dir_root: String,
+    /// The server's cache, stack and calibration folders; each database
+    /// keeps a slug folder below every one.
+    pub storage_roots: crate::server::storage::StorageRoots,
+    /// Which folders the config file fixes, and what the start's folder move
+    /// did, for Settings.
+    pub storage_status: RwLock<StorageStatus>,
     /// Path to the on-disk database registry that mirrors `databases`. When
     /// set, the CRUD endpoints (`POST/PUT/DELETE /api/databases/...`) persist
     /// changes here. `None` disables the CRUD endpoints (e.g. in tests).
@@ -392,40 +395,60 @@ impl FileCheckCache {
     }
 }
 
+/// What Settings needs to explain the storage folders in use.
+#[derive(Debug, Clone)]
+pub struct StorageStatus {
+    pub config: crate::server::storage::StorageConfig,
+    /// One line per folder this start moved or kept back.
+    pub notes: Vec<String>,
+}
+
+impl StorageStatus {
+    fn defaulting_to(cache: impl Into<PathBuf>) -> Self {
+        Self {
+            config: crate::server::storage::StorageConfig::defaulting_to(cache),
+            notes: Vec::new(),
+        }
+    }
+}
+
 impl AppState {
     /// Build state for N configured databases. Each entry opens its own
     /// SQLite connection; failures bubble up immediately.
     pub fn from_databases(
         databases: Vec<DbEntry>,
-        cache_dir: String,
+        roots: impl Into<crate::server::storage::StorageRoots>,
         pregeneration_config: PregenerationConfig,
     ) -> Result<Self> {
-        Self::from_databases_with_astrometry(databases, cache_dir, pregeneration_config, None)
+        Self::from_databases_with_astrometry(databases, roots, pregeneration_config, None)
     }
 
     /// Build state with optional process-global Seiza catalog configuration.
     pub fn from_databases_with_astrometry(
         databases: Vec<DbEntry>,
-        cache_dir: String,
+        roots: impl Into<crate::server::storage::StorageRoots>,
         pregeneration_config: PregenerationConfig,
         astrometry_config: Option<crate::astrometry::AstrometryConfig>,
     ) -> Result<Self> {
+        let storage_roots = roots.into();
+        let cache_dir = storage_roots.cache.clone();
         let astrometry_config = astrometry_config.unwrap_or_default();
         let satellites = crate::satellites::SatelliteContext::new(
-            PathBuf::from(&cache_dir).join("satellites"),
+            cache_dir.join("satellites"),
             astrometry_config.satellite_elements_path(),
         )
         .map_err(anyhow::Error::msg)?;
         let mut map = HashMap::with_capacity(databases.len());
         for entry in databases {
-            let ctx = Arc::new(DatabaseContext::from_entry(&entry, cache_dir.clone())?);
+            let ctx = Arc::new(DatabaseContext::from_entry(&entry, storage_roots.clone())?);
             map.insert(entry.id, ctx);
         }
 
         Ok(Self {
             databases: RwLock::new(map),
             pregeneration_config,
-            cache_dir_root: cache_dir.clone(),
+            storage_status: RwLock::new(StorageStatus::defaulting_to(&storage_roots.cache)),
+            storage_roots,
             registry_path: RwLock::new(None),
             director: None,
             processing_setups_write: Mutex::new(()),
@@ -538,6 +561,10 @@ impl AppState {
         *self.preview_encoding.read().unwrap()
     }
 
+    pub fn set_storage_status(&self, status: StorageStatus) {
+        *self.storage_status.write().unwrap() = status;
+    }
+
     pub fn set_preview_color_default(&self, color: bool) {
         *self.preview_color_default.write().unwrap() = color;
     }
@@ -617,7 +644,8 @@ impl AppState {
         Self {
             databases: RwLock::new(databases),
             pregeneration_config: crate::cli::PregenerationConfig::default(),
-            cache_dir_root: "/tmp/psf-guard-test".to_string(),
+            storage_roots: crate::server::storage::StorageRoots::single("/tmp/psf-guard-test"),
+            storage_status: RwLock::new(StorageStatus::defaulting_to("/tmp/psf-guard-test")),
             registry_path: RwLock::new(None),
             director: None,
             processing_setups_write: Mutex::new(()),

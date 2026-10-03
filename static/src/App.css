@@ -7545,3 +7545,41 @@
 .storage-volume-head .is-over {
   color: var(--color-error);
 }
+
+.storage-folders {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.storage-folders h4 {
+  margin: 0;
+}
+
+.storage-folder {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.storage-folder-input {
+  display: flex;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.storage-folder-input input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono, monospace);
+}
+
+.storage-folder code {
+  overflow-wrap: anywhere;
+}
+
+.storage-folder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}

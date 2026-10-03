@@ -38,7 +38,7 @@ pub(super) async fn activated() -> Activated {
         None,
         None,
         None,
-        f._dir.path().join("cache").to_string_lossy().into(),
+        f._dir.path().join("cache"),
     )
     .unwrap();
     f.state
