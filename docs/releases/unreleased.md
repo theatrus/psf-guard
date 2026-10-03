@@ -459,6 +459,13 @@
   differ. Max HFR and Min stars still judge each frame on its own count. A
   scan taken from a file that has changed since is measured again.
 
+- Old calibration masters no longer pile up. Each hour PSF Guard removes
+  half-written masters, and masters a newer one built from the same frames
+  replaced, once unused for a month and named by no stack. Over the disk
+  limit, masters unused for a week go too when that brings the volume back
+  under. A master whose frames are gone, or that the catalog does not record,
+  is always kept, and a removed master is built again when a stack needs it.
+
 - Replaced stacks are now removed in every database, once an hour, not only
   after that database builds again. The sweep also removes stretch and
   deconvolution results a week after they were last selected or used,

@@ -70,14 +70,14 @@ function VolumeUse({ volume }: { volume: CacheVolumeReport }) {
       </p>
       {volume.culled_files > 0 && (
         <p className="muted storage-volume-note">
-          The last check culled {volume.culled_files} previews and checkpoints, {bytes(volume.freed_bytes)}.
+          The last check culled {volume.culled_files} files, {bytes(volume.freed_bytes)}.
         </p>
       )}
       {volume.over_limit && (
         <p className="storage-volume-note is-error" role="alert">
           {volume.kinds.includes('cache')
-            ? 'Over the limit with no previews or old checkpoints left to cull. Stacks and masters are never culled, so free space on this volume or move a folder to a larger one; preview pre-generation waits meanwhile.'
-            : 'Over the limit, and nothing here may be culled: stacks and masters are never deleted. Free space on this volume or move the folder to a larger one.'}
+            ? 'Over the limit with nothing left that may be culled. Stacks are never culled, so free space on this volume or move a folder to a larger one; preview pre-generation waits meanwhile.'
+            : 'Over the limit with nothing left that may be culled: stacks, and masters used this week or whose frames are gone, stay. Free space on this volume or move the folder to a larger one.'}
         </p>
       )}
     </div>
@@ -316,9 +316,10 @@ export default function StorageSettings({ canManage }: { canManage: boolean }) {
       <h3>Disk use</h3>
       <p className="muted">
         When a volume fills past its limit, PSF Guard deletes image previews from it, least recently
-        viewed first, until it is two points under, then stack checkpoints a day old or more. Stacks,
-        color previews and masters are never culled. Previews come back the next time someone opens
-        the image.
+        viewed first, until it is two points under, then stack checkpoints a day old or more, then
+        calibration masters unused for a week. Stacks and color previews are never culled. Previews
+        come back the next time someone opens the image, and masters are built again from their
+        frames.
       </p>
       {current.volumes.length === 0 ? (
         <p className="muted">The first check runs a minute after the server starts.</p>
@@ -380,7 +381,7 @@ export default function StorageSettings({ canManage }: { canManage: boolean }) {
             <LimitSlider
               label="Most of the calibration master volume to use"
               ariaLabel="Most of the calibration master volume to use, in percent"
-              hint="Masters are never culled: on their own volume, going past the limit is only reported. On the cache's volume the lower limit culls previews too."
+              hint="Past it, masters unused for a week go, least recently used first, when that brings the volume back under; one whose frames are gone always stays. On the cache's volume the lower limit culls previews too."
               value={current.calibration_max_volume_percent ?? current.max_volume_percent}
               min={current.min_max_volume_percent}
               disabled={!canManage}

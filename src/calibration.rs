@@ -3574,6 +3574,7 @@ fn adopt_external_master(
             .and_then(|copy| copy.validate_master_kind(expected_kind))
             .is_ok();
         if recorded_version == Some(i64::from(MASTER_CACHE_VERSION)) && file_valid {
+            note_master_used(&path);
             return Ok(AdoptedMaster {
                 master: BuiltMaster {
                     path,
@@ -3880,6 +3881,7 @@ fn build_master_once(
             };
             match masking_statistics {
                 Ok(statistics) => {
+                    note_master_used(&path);
                     let stability_note = cached_stability_note(conn, &path);
                     // A kept-but-unstable flat must not pass as a sound
                     // fallback for another set: its record says how its
@@ -5406,6 +5408,92 @@ impl ExternalMasterPolicy {
 static EXTERNAL_MASTER_POLICY: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 static FLAT_STAR_MASKING: AtomicBool = AtomicBool::new(false);
+
+/// Mark a master as just used, so the disk limit takes it last. Its access
+/// time records the use, as a served preview's does: many mounts do not
+/// update it on read.
+pub fn note_master_used(path: &Path) {
+    crate::server::cache_budget::note_served(path);
+}
+
+/// One recorded master, as the cleanup needs it.
+#[derive(Debug, Clone)]
+pub struct RecordedMasterFile {
+    pub cache_path: PathBuf,
+    /// Its kind and its exact set of source frames. A newer master with the
+    /// same key was built from the same frames (after a version change, a
+    /// new dependency or another masking mode), so it replaces this one for
+    /// good: no lights can need the older file again.
+    pub sources: String,
+    pub created_at: i64,
+    /// Every source frame is still on disk, so a removed master can be built
+    /// again. A master whose frames are gone is the only copy left.
+    pub rebuildable: bool,
+}
+
+/// What the cleanup may do to a catalog's masters, if anything: nothing on
+/// a read-only catalog or one a newer build wrote, since there a missing
+/// master cannot be recorded again and would not be rebuilt.
+pub fn master_catalog_rebuilds(conn: &Connection) -> bool {
+    !conn.is_readonly(rusqlite::MAIN_DB).unwrap_or(true)
+        && recorded_schema_version(conn).is_ok_and(|version| version <= CALIBRATION_SCHEMA_VERSION)
+}
+
+/// Every master the catalog records, with its source key and whether its
+/// source frames are still on disk. A catalog without the master table
+/// records none.
+pub fn recorded_master_files(conn: &Connection) -> rusqlite::Result<Vec<RecordedMasterFile>> {
+    let mut statement = match conn.prepare(
+        "SELECT cache_path, kind, created_at, source_frame_uuids
+         FROM psf_guard_calibration_master",
+    ) {
+        Ok(statement) => statement,
+        Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+            if message.contains("no such table") =>
+        {
+            return Ok(Vec::new());
+        }
+        Err(error) => return Err(error),
+    };
+    let rows: Vec<(String, String, i64, String)> = statement
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut frame_path =
+        conn.prepare("SELECT source_path FROM psf_guard_calibration_frame WHERE frame_uuid = ?1")?;
+    // Masters share frames across versions: look each one up once.
+    let mut on_disk: HashMap<String, bool> = HashMap::new();
+    let mut records = Vec::with_capacity(rows.len());
+    for (cache_path, kind, created_at, sources) in rows {
+        let mut uuids: Vec<String> = serde_json::from_str(&sources).unwrap_or_default();
+        uuids.sort();
+        let mut rebuildable = !uuids.is_empty();
+        for uuid in &uuids {
+            let present = match on_disk.get(uuid) {
+                Some(present) => *present,
+                None => {
+                    let path: Option<String> =
+                        frame_path.query_row([uuid], |row| row.get(0)).optional()?;
+                    let present = path.is_some_and(|path| Path::new(&path).is_file());
+                    on_disk.insert(uuid.clone(), present);
+                    present
+                }
+            };
+            if !present {
+                rebuildable = false;
+                break;
+            }
+        }
+        records.push(RecordedMasterFile {
+            cache_path: PathBuf::from(cache_path),
+            sources: format!("{kind}|{}", uuids.join(",")),
+            created_at,
+            rebuildable,
+        });
+    }
+    Ok(records)
+}
 
 /// Point master rows recorded below `from` at the same files below `to`,
 /// after their folder moved. Rows store absolute paths, so without this a

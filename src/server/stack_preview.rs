@@ -1232,6 +1232,12 @@ impl StackPreviewManager {
         rc_astro::prune_rc_astro_cache(stack_root, &active_sources);
     }
 
+    /// The build permit, when no stack build holds it: work that removes
+    /// files a build may read takes it so none runs meanwhile.
+    pub(crate) fn try_maintenance_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        Arc::clone(&self.permit).try_acquire_owned().ok()
+    }
+
     pub(crate) async fn acquire_maintenance_permit(
         &self,
     ) -> Result<tokio::sync::OwnedSemaphorePermit, String> {
@@ -4760,6 +4766,7 @@ fn sweep_database(state: &AppState, ctx: &DatabaseContext) {
         );
     }
     state.stack_previews.prune_cache(&ctx.stack_root);
+    crate::server::master_cleanup::sweep(state, ctx, std::time::SystemTime::now());
 }
 
 /// Every `<prefix>*.json` index in a folder, or the first that could not be

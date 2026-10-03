@@ -783,11 +783,17 @@ least recently viewed first, until the volume is two points under, sparing
 any viewed in the last quarter hour (viewing a cached preview or star list
 marks it as used, every few minutes at most). If that is not enough it
 deletes resume checkpoints a day old or more from stack folders there. A full
-stack volume never deletes previews from a cache on another disk.
-Stacks, color previews, WBPP stacks and calibration masters are never
+stack volume never deletes previews from a cache on another disk. Last, and
+only while no build runs and when it would bring the volume back under, it
+deletes calibration masters from master folders there that nobody used for a
+week, least recently used first, those no stack names before those one does.
+A master the catalog does not record, or whose frames are gone, is never
+deleted: it could not be built again. Changing a limit in Settings checks the
+volumes at once but leaves masters to the next regular pass. Stacks, color previews and WBPP stacks are never
 deleted: they take minutes to hours to make, while a preview comes back the
-next time someone opens the image. PSF Guard records use itself because many
-mounts, NFS among them, do not record reads.
+next time someone opens the image and a master is built again from its
+frames. PSF Guard records use itself because many mounts, NFS among them, do
+not record reads.
 
 Background preview pre-generation stops two points under the limit, where a
 cull would clear to, and checks before every image, so it never makes

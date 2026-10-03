@@ -16,6 +16,7 @@ pub mod extract;
 pub mod flat_history;
 pub mod handlers;
 pub mod import_job;
+pub mod master_cleanup;
 pub mod mcp;
 pub mod organization;
 pub mod pairing;
