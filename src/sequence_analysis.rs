@@ -592,8 +592,18 @@ pub struct ImageMetrics {
     /// sequence. Missing profiles do not force a split for older catalogs.
     #[serde(default)]
     pub capture_profile: Option<String>,
+    /// Stars and HFR the sequence scores, from the capture software unless
+    /// [`choose_star_source`] took the quality scan's for every frame.
     pub star_count: Option<f64>,
     pub hfr: Option<f64>,
+    /// The quality scan's own star count and HFR, kept apart from the
+    /// capture software's: the two count on different scales, so one
+    /// sequence must not compare a frame measured one way against a frame
+    /// measured the other.
+    #[serde(default)]
+    pub measured_star_count: Option<f64>,
+    #[serde(default)]
+    pub measured_hfr: Option<f64>,
     pub eccentricity: Option<f64>,
     pub snr: Option<f64>,
     pub background: Option<f64>,
@@ -1241,7 +1251,8 @@ impl SequenceAnalyzer {
         target_name: &str,
         filter_name: &str,
     ) -> Vec<ScoredSequence> {
-        let sequences = self.split_into_sequences(images);
+        let images = choose_star_source(images);
+        let sequences = self.split_into_sequences(&images);
 
         sequences
             .into_iter()
@@ -1259,6 +1270,9 @@ impl SequenceAnalyzer {
         target_name: &str,
         filter_name: &str,
     ) -> (Vec<ScoredSequence>, Option<TargetFilterRollup>) {
+        // Once for the whole target and filter, so the sessions and the
+        // rollup compare the same kind of count.
+        let images = &choose_star_source(images);
         let sequences = self.analyze(images, target_id, target_name, filter_name);
         if sequences.len() < 2 {
             return (sequences, None);
@@ -2733,11 +2747,21 @@ impl SequenceAnalyzer {
             let (category, details) = if occluded {
                 (
                     Some(IssueCategory::PossibleObstruction),
-                    Some(format!(
-                        "{:.0}% of frame grid cells have no stars (baseline {:.0}%). Localized occlusion (trees, dome, dew shield, or foreground lit by stray light).",
-                        dead_abs * 100.0,
-                        (dead_abs - dead_rise).max(0.0) * 100.0,
-                    )),
+                    Some(if dead_abs >= WHOLE_FRAME_DEAD_FRACTION {
+                        // Nothing is local about a frame with no stars
+                        // anywhere: name the whole-frame causes.
+                        format!(
+                            "{:.0}% of frame grid cells have no stars (baseline {:.0}%). The whole frame lost its stars: clouds, a closed or dewed-over aperture, or a failed measurement.",
+                            dead_abs * 100.0,
+                            (dead_abs - dead_rise).max(0.0) * 100.0,
+                        )
+                    } else {
+                        format!(
+                            "{:.0}% of frame grid cells have no stars (baseline {:.0}%). Localized occlusion (trees, dome, dew shield, or foreground lit by stray light).",
+                            dead_abs * 100.0,
+                            (dead_abs - dead_rise).max(0.0) * 100.0,
+                        )
+                    }),
                 )
             } else if small_cloud {
                 (
@@ -3220,6 +3244,41 @@ impl RelativeMetricTolerance {
     }
 }
 
+/// Dead-cell share past which a frame lost its stars everywhere, not in
+/// one part.
+const WHOLE_FRAME_DEAD_FRACTION: f64 = 0.95;
+
+/// Stars a second measurement must find to overrule one that found none.
+/// Fewer is close enough to zero to agree with it.
+pub const CORROBORATING_STARS: f64 = 20.0;
+
+/// Pick one source of star counts and HFR for a set of frames that will be
+/// compared: the quality scan's when every frame the capture software
+/// measured was also scanned, else the capture software's for all. The two
+/// count on different scales (HocusFocus and N.I.N.A.'s own detector differ
+/// several-fold, and a rig's settings can change between nights), so a
+/// reference drawn from a mix would score every frame of the other kind as
+/// lost stars. A frame neither measured stays unmeasured, which the scoring
+/// renormalizes around. Idempotent: the scan's values are consumed.
+pub fn choose_star_source(images: &[ImageMetrics]) -> Vec<ImageMetrics> {
+    let recorded_only = images
+        .iter()
+        .any(|image| image.star_count.is_some() && image.measured_star_count.is_none());
+    images
+        .iter()
+        .cloned()
+        .map(|mut image| {
+            if !recorded_only && image.measured_star_count.is_some() {
+                image.star_count = image.measured_star_count;
+                image.hfr = image.measured_hfr;
+            }
+            image.measured_star_count = None;
+            image.measured_hfr = None;
+            image
+        })
+        .collect()
+}
+
 /// Score ceiling for a frame whose star measurement found zero stars —
 /// low enough to read as condemned in every view, non-zero so temporal
 /// and pointing evidence can still rank multiple ruined frames.
@@ -3626,6 +3685,8 @@ pub fn extract_metrics_from_metadata(
         astrometry: None,
         satellite: None,
         spatial_evidence: None,
+        measured_star_count: None,
+        measured_hfr: None,
     }
 }
 
@@ -3657,6 +3718,8 @@ mod tests {
             astrometry: None,
             satellite: None,
             spatial_evidence: None,
+            measured_star_count: None,
+            measured_hfr: None,
         }
     }
 
@@ -3692,6 +3755,8 @@ mod tests {
             astrometry: None,
             satellite: None,
             spatial_evidence: None,
+            measured_star_count: None,
+            measured_hfr: None,
         }
     }
 
@@ -3726,6 +3791,8 @@ mod tests {
             astrometry: None,
             satellite: None,
             spatial_evidence: None,
+            measured_star_count: None,
+            measured_hfr: None,
         }
     }
 
@@ -4015,6 +4082,83 @@ mod tests {
             .details
             .as_deref()
             .is_some_and(|d| d.contains("No stars detected")));
+    }
+
+    #[test]
+    fn a_scanned_set_is_scored_on_the_scan_counts_whatever_the_catalog_says() {
+        // The capture software changed scale between nights (about 260 stars,
+        // then about 1100), while the scan counted about 600 throughout. On
+        // the catalog's counts the first night would look like lost stars.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let images: Vec<_> = (0..10)
+            .map(|i| {
+                let catalog = if i < 5 { 260.0 } else { 1100.0 };
+                let mut image = make_image(i, i as i64 * 300, catalog, 2.0);
+                image.measured_star_count = Some(600.0 + i as f64);
+                image.measured_hfr = Some(3.2);
+                image
+            })
+            .collect();
+
+        let sequence = &analyzer.analyze(&images, 1, "target", "Ha")[0];
+
+        for result in &sequence.images {
+            assert!(
+                result.quality_score > 0.9,
+                "frame {} scored {} on mixed scales",
+                result.image_id,
+                result.quality_score
+            );
+        }
+    }
+
+    #[test]
+    fn a_partly_scanned_set_keeps_the_catalog_counts_for_every_frame() {
+        let mut images: Vec<_> = (0..4)
+            .map(|i| make_image(i, i as i64 * 300, 1100.0, 1.5))
+            .collect();
+        images[0].measured_star_count = Some(600.0);
+        images[0].measured_hfr = Some(3.2);
+
+        let chosen = choose_star_source(&images);
+
+        assert!(chosen.iter().all(|image| image.star_count == Some(1100.0)));
+        assert!(chosen
+            .iter()
+            .all(|image| image.measured_star_count.is_none()));
+        // Choosing again changes nothing.
+        assert_eq!(
+            choose_star_source(&chosen)
+                .iter()
+                .map(|image| image.star_count)
+                .collect::<Vec<_>>(),
+            chosen
+                .iter()
+                .map(|image| image.star_count)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_scan_zero_still_caps_a_frame_nothing_else_measured() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..6)
+            .map(|i| {
+                let mut image = make_image(i, i as i64 * 300, 0.0, 0.0);
+                image.star_count = None;
+                image.hfr = None;
+                image.measured_star_count = Some(500.0);
+                image.measured_hfr = Some(2.5);
+                image
+            })
+            .collect();
+        images[2].measured_star_count = Some(0.0);
+        images[2].measured_hfr = None;
+
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+
+        assert!(sequence.images[2].quality_score <= ZERO_STAR_SCORE_CAP);
+        assert!(sequence.images[0].quality_score > 0.5);
     }
 
     #[test]

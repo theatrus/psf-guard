@@ -988,6 +988,46 @@ mod tests {
     }
 
     #[test]
+    fn a_scan_that_found_no_stars_yields_to_the_capture_softwares_count() {
+        let mut frame = entry(1, "light.fits");
+        frame.detector = QUALITY_DETECTOR.into();
+        frame.detector_version = QUALITY_DETECTOR_VERSION;
+        frame.star_count = 0;
+        frame.avg_hfr = 0.0;
+        frame.dead_cell_fraction = Some(1.0);
+        let store = std::sync::Arc::new(store_with(vec![frame]));
+        let metadata = r#"{"FileName":"light.fits","DetectedStars":416,"HFR":1.68}"#;
+        let mut metrics =
+            crate::sequence_analysis::extract_metrics_from_metadata(1, metadata, None);
+
+        crate::server::handlers::merge_spatial_metrics(&mut metrics, &store, metadata, None);
+
+        assert_eq!(metrics.star_count, Some(416.0));
+        assert_eq!(metrics.measured_star_count, None);
+        // The dead cells came from the same failed measurement.
+        assert_eq!(metrics.dead_cell_fraction, None);
+    }
+
+    #[test]
+    fn a_scan_count_is_kept_apart_from_the_catalog_count() {
+        let mut frame = entry(1, "light.fits");
+        frame.detector = QUALITY_DETECTOR.into();
+        frame.detector_version = QUALITY_DETECTOR_VERSION;
+        frame.star_count = 600;
+        frame.avg_hfr = 3.2;
+        let store = std::sync::Arc::new(store_with(vec![frame]));
+        let metadata = r#"{"FileName":"light.fits","DetectedStars":260,"HFR":1.9}"#;
+        let mut metrics =
+            crate::sequence_analysis::extract_metrics_from_metadata(1, metadata, None);
+
+        crate::server::handlers::merge_spatial_metrics(&mut metrics, &store, metadata, None);
+
+        assert_eq!(metrics.star_count, Some(260.0));
+        assert_eq!(metrics.measured_star_count, Some(600.0));
+        assert_eq!(metrics.measured_hfr, Some(3.2));
+    }
+
+    #[test]
     fn scan_signal_to_noise_fills_the_scoring_dimension() {
         let mut frame = entry(7, "light.fits");
         frame.sky_noise_adu = Some(10.0);

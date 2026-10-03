@@ -107,7 +107,20 @@ is capped at a condemned score with a **No Stars Detected** cause, even when
 it has no sequence peers — zero stars in a light frame is direct pixel
 evidence of clouds, trailing, or an obstructed aperture, not a normalization
 artifact. A frame with no star measurement at all is never capped; grading
-does not punish an image because an optional scan has not run.
+does not punish an image because an optional scan has not run. Two
+measurements that disagree do not cap a frame either: when the quality scan
+finds no stars where the capture software counted 20 or more, the scan failed,
+and its star count, HFR and dead cells for that frame are dropped, so the score
+renormalizes around them. The same holds the other way round.
+
+Star counts and HFR come from one source per target and filter. The quality
+scan and the capture software count on different scales (HocusFocus and
+N.I.N.A.'s own detector differ several-fold, and a rig's settings can change
+between nights), so frames are compared on the scan's values only when every
+frame the capture software measured was also scanned, and on the capture
+software's values otherwise. A scan measured from a file that has since
+changed, such as a copy still arriving, is measured again the next time the
+target is scanned.
 
 How hard event evidence hits the score is adjustable. The **Scoring**
 control in the Sequence view scales the score hit from satellite trails,
@@ -323,8 +336,9 @@ Safety properties worth knowing:
 
 ## Limitations
 
-- The server scan uses N.I.N.A. Fast for scheduler-compatible star count and
-  HFR. Its full-resolution measurement aperture also supplies flux for
+- The server scan uses N.I.N.A. Fast for star count and HFR. These match a
+  rig that runs N.I.N.A.'s built-in detector; a rig on HocusFocus counts on
+  another scale, which is why a target is scored from one source at a time. Its full-resolution measurement aperture also supplies flux for
   photometry. `screen-fits` supports flux photometry with either detector.
 - The photometric reference requires stars present in ≥50% of a session's
   frames, so it is blind to regions occluded for *most* of a sequence — by
