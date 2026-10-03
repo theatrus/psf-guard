@@ -279,12 +279,14 @@ upload or auto-import, wait for the next **Analyze Missing Quality** unless the
 database has **Analyze new frames as they arrive** on. With it, PSF Guard
 queues the same background analysis for the targets holding unmeasured frames
 a couple of minutes after the last arrival, so a night's batch is analyzed
-once. It writes nothing to the catalog: results stay in the quality cache. A
-frame it tried and could not measure, such as one whose file is missing, is
-not tried again for a day. The setting is off by default and changing it needs
-database management. Without it, a target with both measured and unmeasured
-frames is scored on the capture software's star counts until the gap closes
-(see [quality screening](SCREENING.md)).
+once. Each server start also checks every database that has it on, for frames
+that came while the server was down. It writes nothing to the catalog: results
+stay in the quality cache. A frame it tried and could not measure, such as one
+whose file is missing, is not tried again for a day, or until the server
+restarts. The setting is off by default and changing it needs database
+management. Without it, a target with many unmeasured frames is scored on the
+capture software's star counts, not the scan's, until they are analyzed (see
+[quality screening](SCREENING.md)).
 
 These controls sit with each database on the **Databases** tab. The screenshot
 below predates the tabs, so it shows them beside the Seiza catalog controls;

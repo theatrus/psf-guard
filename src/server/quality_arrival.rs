@@ -11,6 +11,8 @@
 //!
 //! A frame the scan tried and could not measure (its file is missing, say)
 //! is not tried again for a day, so a broken file never keeps the scan busy.
+//! That memory lasts until the server restarts. Each start checks every
+//! database that asks, for frames that arrived while it was down.
 
 use crate::server::database_context::DatabaseContext;
 use crate::server::state::AppState;
@@ -46,6 +48,12 @@ pub fn note_arrival(database_id: &str) {
 /// Start the scans arrivals asked for, once they settle. Holds the state
 /// weakly, so a server the desktop app restarted stops this with it.
 pub async fn run(state: Arc<AppState>) {
+    // Frames that arrived while the server was down raised no arrival.
+    for ctx in state.all_databases() {
+        if ctx.analyze_new_frames.load(Ordering::Relaxed) {
+            note_arrival(&ctx.id);
+        }
+    }
     let state = Arc::downgrade(&state);
     let mut interval = tokio::time::interval(POLL);
     loop {
@@ -67,6 +75,13 @@ pub async fn run(state: Arc<AppState>) {
             };
             if !ctx.analyze_new_frames.load(Ordering::Relaxed) {
                 PENDING.lock().unwrap().remove(&database);
+                continue;
+            }
+            // A backfill or scan under way would refuse this one: wait for
+            // it rather than read the whole catalog every poll meanwhile.
+            if ctx.quality_backfill.read().unwrap().progress.running
+                || ctx.spatial_metrics.read().unwrap().progress.running
+            {
                 continue;
             }
             let lookup = Arc::clone(&ctx);
@@ -117,6 +132,9 @@ fn untried(database: &str, unmeasured: &[(i32, i32)]) -> Vec<i32> {
 /// Every light frame with no current quality measurement, as (image, target).
 /// `None` when the catalog cannot be read.
 fn unmeasured_frames(ctx: &DatabaseContext) -> Option<Vec<(i32, i32)>> {
+    // After a start or a database edit the store is empty until loaded, and
+    // every frame would look unmeasured.
+    crate::server::spatial_scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
     let connection = crate::server::database_context::open_scheduler_connection_with_flags(
         &ctx.database_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,

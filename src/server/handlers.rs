@@ -3223,6 +3223,7 @@ pub(crate) fn spawn_import_job_with_trigger(
             }
         }
         let dry_run = outcome.dry_run;
+        let imported_any = outcome.imported > 0;
         job::complete_import(&job_store, outcome);
         if !dry_run {
             state.auto_stacks.touch_database(
@@ -3244,9 +3245,12 @@ pub(crate) fn spawn_import_job_with_trigger(
         // Quality analysis is a general database maintenance job, not an
         // import stage. An opt-in import only queues the changed targets;
         // otherwise a database that analyzes new frames queues them itself.
-        if backfill && !target_ids.is_empty() {
-            spawn_quality_backfill(&state, ctx.clone(), target_ids, false, fill_metadata);
-        } else if !dry_run {
+        // A backfill already running refuses this one; the arrival queue
+        // then picks the frames up once it finishes, if the database asks.
+        let queued = backfill
+            && !target_ids.is_empty()
+            && spawn_quality_backfill(&state, ctx.clone(), target_ids, false, fill_metadata);
+        if !queued && !dry_run && imported_any {
             crate::server::quality_arrival::note_arrival(&ctx.id);
         }
     });
@@ -3587,6 +3591,11 @@ pub async fn update_analyze_new_frames(
         Ok(())
     })
     .await?;
+    // The live context, which a database edit may have replaced meanwhile.
+    if let Some(live) = state.get_database(&db_id) {
+        live.analyze_new_frames
+            .store(request.enabled, std::sync::atomic::Ordering::Relaxed);
+    }
     ctx.analyze_new_frames
         .store(request.enabled, std::sync::atomic::Ordering::Relaxed);
     if request.enabled {

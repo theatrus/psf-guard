@@ -120,3 +120,16 @@ describe('QualityBackfillControls new-frame analysis', () => {
     await waitFor(() => expect(checkbox).toBeChecked());
   });
 });
+
+describe('QualityBackfillControls without database management', () => {
+  it('shows the arrival option but does not offer to change it', async () => {
+    server.use(
+      http.get('/api/db/:dbId/analysis/quality-backfill', () => HttpResponse.json(idleStatus))
+    );
+    render(<QualityBackfillControls dbId="test" canManage={false} />, { wrapper: wrapper() });
+
+    const checkbox = await screen.findByRole('checkbox', { name: /analyze new frames as they arrive/i });
+    expect(checkbox).toBeDisabled();
+    expect(screen.getByText(/needs database management/i)).toBeInTheDocument();
+  });
+});
