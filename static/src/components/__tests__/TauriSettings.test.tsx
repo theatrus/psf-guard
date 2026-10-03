@@ -124,6 +124,37 @@ describe('TauriSettings import state', () => {
     expect(await screen.findByRole('region', { name: 'Exposure template library' })).toBeInTheDocument();
   });
 
+  it('keeps disk use and storage folders on their own Storage tab', async () => {
+    server.use(
+      http.get('/api/databases', () => HttpResponse.json({ success: true, data: [], error: null })),
+      http.get('/api/settings/storage', () =>
+        HttpResponse.json({
+          success: true,
+          error: null,
+          data: {
+            max_volume_percent: 90,
+            stack_max_volume_percent: null,
+            calibration_max_volume_percent: null,
+            default_max_volume_percent: 90,
+            min_max_volume_percent: 50,
+            volumes: [],
+            folders: [],
+            folder_notes: [],
+            can_choose_folders: true,
+          },
+        })
+      ),
+    );
+    render(<MemoryRouter><TauriSettings isOpen onClose={() => {}} initialIntent="stacking" /></MemoryRouter>, { wrapper: createWrapper() });
+    expect(await screen.findByRole('tab', { name: 'Stacking' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('heading', { name: 'Disk use' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Storage' }));
+
+    expect(await screen.findByRole('heading', { name: 'Disk use' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Folders' })).toBeInTheDocument();
+  });
+
   it('hides catalog management on a read-only server', async () => {
     render(<TauriSettings isOpen onClose={() => undefined} />, {
       wrapper: createWrapper(),
