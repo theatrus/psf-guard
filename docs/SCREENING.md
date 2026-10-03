@@ -113,6 +113,14 @@ finds no stars where the capture software counted 20 or more, the scan failed,
 and its star count, HFR and dead cells for that frame are dropped, so the score
 renormalizes around them. The same holds the other way round.
 
+The scan also refuses to record a zero it cannot trust. A frame written within
+the last hour whose data ends in a long run of one value is taken as a copy
+still under way (Windows copies, sync tools and moves between volumes create
+the file at full size and fill it in after), and is measured on a later pass,
+once the finished copy changes the file. And before it records no stars, the
+scan runs HocusFocus on the same pixels; if that finds 20 stars or more, the
+measurement failed and nothing is recorded.
+
 Star counts and HFR come from one source per target and filter. The quality
 scan and the capture software count on different scales (HocusFocus and
 N.I.N.A.'s own detector differ several-fold, and a rig's settings can change

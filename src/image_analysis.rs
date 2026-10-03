@@ -21,7 +21,8 @@ impl ImageStatistics {
     /// u16 LUT stretch. Lossless: `calculate_statistics_with_mad` computed
     /// these fields with `seiza_fits::statistics_u16` in the first place.
     /// A missing MAD falls back to the normal-distribution approximation,
-    /// matching the retired local stretch implementation.
+    /// matching the retired local stretch implementation; a MAD below one
+    /// stored step is raised to one.
     pub fn to_stretch_statistics(&self) -> seiza_stretch::Statistics {
         seiza_stretch::Statistics {
             min: self.min as u16,
@@ -29,7 +30,11 @@ impl ImageStatistics {
             mean: self.mean,
             std_dev: self.std_dev,
             median: self.median as u16,
-            mad: self.mad.unwrap_or(self.std_dev * 0.6745),
+            // A MAD of zero (most pixels on one value, as in heavily
+            // quantized data) makes the stretch a two-level threshold that
+            // counts noise as stars. One stored step is the smallest real
+            // spread.
+            mad: self.mad.unwrap_or(self.std_dev * 0.6745).max(1.0),
             count: self.width * self.height,
         }
     }
@@ -294,4 +299,27 @@ fn average_planes(samples: Vec<f64>, pixels: usize, planes: usize) -> Vec<f64> {
                 / planes as f64
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_zero_mad_still_stretches_rather_than_thresholds() {
+        let stats = ImageStatistics {
+            width: 10,
+            height: 10,
+            mean: 100.0,
+            median: 100.0,
+            std_dev: 0.5,
+            min: 99.0,
+            max: 120.0,
+            star_count: None,
+            hfr: None,
+            fwhm: None,
+            mad: Some(0.0),
+        };
+        assert_eq!(stats.to_stretch_statistics().mad, 1.0);
+    }
 }
