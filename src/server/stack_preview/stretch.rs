@@ -599,6 +599,40 @@ pub(super) fn clear_selected_processing(
     }
 }
 
+/// Stretch and deconvolution results a processing selection still names:
+/// the one selected, and the one it is waiting for. A stretch keeps the
+/// deconvolution it was made from.
+pub(super) fn kept_processing(
+    stack_root: &FsPath,
+) -> (
+    std::collections::HashSet<String>,
+    std::collections::HashSet<String>,
+) {
+    let mut stretches = std::collections::HashSet::new();
+    if let Ok(_guard) = SELECTION_LOCK.lock()
+        && let Ok(entries) = std::fs::read_dir(crate::server::storage::stack_processing(stack_root))
+    {
+        for selection in entries
+            .flatten()
+            .filter_map(|entry| read_selection(&entry.path()))
+        {
+            stretches.extend(
+                [selection.selected, selection.desired]
+                    .into_iter()
+                    .flatten()
+                    .filter(|id| validate_job_id(id).is_ok()),
+            );
+        }
+    }
+    let deconvolutions = stretches
+        .iter()
+        .filter_map(|id| std::fs::read(stretch_manifest_path(stack_root, id)).ok())
+        .filter_map(|bytes| serde_json::from_slice::<StackStretchPreview>(&bytes).ok())
+        .filter_map(|preview| preview.deconvolution_id)
+        .collect();
+    (stretches, deconvolutions)
+}
+
 pub(super) fn selected_rc_astro_ids(
     stack_root: &FsPath,
     active_sources: &std::collections::HashMap<String, String>,

@@ -249,15 +249,29 @@ compute pool. No extra full-frame pre-measurement pass is required.
 ### Cache housekeeping
 
 Stack artifacts are content-addressed by job, so every rebuild writes a new
-directory and old ones used to accumulate forever. After a build settles, a
-janitor sweeps the stack cache and deletes what nothing references any more:
-mono and color job directories absent from every durable latest index and
-from the in-memory job list, and cached color inputs no kept job points at.
+directory and old ones used to accumulate forever. After a build settles, and
+once an hour in every database, a janitor sweeps the stack folder and deletes
+what nothing references any more:
+
+- mono and color job directories absent from every durable latest and WBPP
+  index and from the in-memory job list, and cached color inputs no kept job
+  points at;
+- stretch and deconvolution results no processing selection names, a week
+  after they were made, so a variant you might pick again stays a while;
+- artifact searches whose stack is gone;
+- the indices of projects the catalog no longer has (merged or deleted), and
+  with them the stacks only they named;
+- WBPP runs in PSF Guard's own runs folder (`wbpp` below the stack folder) a
+  month after a newer run of the same scope; their master lights were taken
+  in when they finished. Runs in a folder you chose are never touched.
+
 Both indices replace entries per identity — mono per target/channel, color
 per target/kind/palette — so a job's output is durable until its input set
 changes and a newer build of the same identity supersedes it. A full day of
 grace on top means nothing a long build session or an open inspector still
-touches is swept out from under it.
+touches is swept out from under it. An index that cannot be read, from a
+newer build or a torn write, stops the sweep, since what it names cannot be
+told from what nothing names.
 
 Resume checkpoints follow the same rule: each is replaced in place when its
 group's input set changes and is otherwise kept, whatever its age. The only

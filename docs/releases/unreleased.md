@@ -459,6 +459,13 @@
   differ. Max HFR and Min stars still judge each frame on its own count. A
   scan taken from a file that has changed since is measured again.
 
+- Replaced stacks are now removed in every database, once an hour, not only
+  after that database builds again. The sweep also removes unselected stretch
+  and deconvolution results after a week, artifact searches of removed
+  stacks, the stacks of deleted or merged projects, and WBPP runs in PSF
+  Guard's own runs folder a month after a newer run. A stack index that cannot
+  be read now keeps everything rather than leaving what it names unprotected.
+
 - With previews set to JPEG, background pre-generation now writes the file
   the viewer asks for. It used to save JPEG data under a `.png` name, so the
   viewer missed it and rendered every image again.

@@ -3555,18 +3555,6 @@ fn role_cache_name(role: StackColorRole) -> &'static str {
     }
 }
 
-/// Job and cached-input references from every project's durable color index.
-pub(super) fn latest_color_references(stack_root: &FsPath) -> Vec<(String, Option<String>)> {
-    super::read_latest_indices::<LatestStackColorPreviews>(&crate::server::storage::stack_folder(
-        stack_root,
-        crate::server::storage::stack_kind::COLOR,
-    ))
-    .into_iter()
-    .flat_map(|latest| latest.jobs)
-    .map(|job| (job.job_id, job.linear_input_id))
-    .collect()
-}
-
 pub(super) fn latest_color_rc_astro_ids(stack_root: &FsPath) -> Vec<String> {
     super::read_latest_indices::<LatestStackColorPreviews>(&crate::server::storage::stack_folder(
         stack_root,
