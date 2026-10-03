@@ -154,6 +154,7 @@ fn restart_retains_dwell_when_a_more_important_target_becomes_available() {
             &f.constraints,
         )
         .unwrap();
+    ledger.close_preparation("prep").unwrap();
     drop(ledger);
     let mut ledger = f.open(&path);
     let mut later = f.state.clone();
