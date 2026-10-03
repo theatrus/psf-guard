@@ -47,6 +47,7 @@ import AstroBinFilterSummary from './AstroBinFilterSummary';
 import UserManagement from './UserManagement';
 import ApiTokenManagement from './ApiTokenManagement';
 import './TauriSettings.css';
+import PathField from './PathField';
 
 /**
  * Settings groups unrelated jobs into named tabs so each stays easy to find.
@@ -470,39 +471,7 @@ export default function TauriSettings({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialIntent]);
 
-  const handlePickDbPath = async () => {
-    if (!isTauri) {
-      setStatusMessage(
-        'File picker is only available in the desktop app — paste the path into the field.'
-      );
-      return;
-    }
-    try {
-      const path = await tauriFileSystem.pickDatabaseFile();
-      if (path) setFormDbPath(path);
-    } catch (err) {
-      console.error('pickDatabaseFile failed:', err);
-    }
-  };
-
-  const handleAddImageDir = async () => {
-    if (!isTauri) {
-      setStatusMessage(
-        'Image directory picker is only available in the desktop app — type the path below and press the Add button.'
-      );
-      return;
-    }
-    try {
-      const path = await tauriFileSystem.pickImageDirectory();
-      if (path && !formImageDirs.includes(path)) {
-        setFormImageDirs([...formImageDirs, path]);
-      }
-    } catch (err) {
-      console.error('pickImageDirectory failed:', err);
-    }
-  };
-
-  // Browser-mode fallback: manually add an image directory from a text input.
+  // An image directory typed or picked, added with the Add button.
   const [pendingImageDir, setPendingImageDir] = useState('');
   const handleAddManualImageDir = () => {
     const trimmed = pendingImageDir.trim();
@@ -991,50 +960,42 @@ export default function TauriSettings({
           <div className="database-config">
             <label>N.I.N.A. Database File:</label>
             <div className="file-input-group">
-              <input
-                type="text"
+              <PathField
+                kind="file"
+                pick={tauriFileSystem.pickDatabaseFile}
                 value={formDbPath}
-                onChange={(e) => setFormDbPath(e.target.value)}
+                onChange={setFormDbPath}
                 placeholder="Select or enter database path"
                 className="file-path-input"
               />
-              <button onClick={handlePickDbPath} className="browse-button">
-                Browse…
-              </button>
             </div>
           </div>
         )}
 
         <div className="database-config">
           <label>Image Directories:</label>
-          {isTauri ? (
-            <button onClick={handleAddImageDir} className="add-directory-button">
-              + Add Image Directory
+          <div className="file-input-group">
+            <PathField
+              dialogTitle="Select Image Directory"
+              value={pendingImageDir}
+              onChange={setPendingImageDir}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleAddManualImageDir();
+                }
+              }}
+              placeholder={isTauri ? 'Browse, or type an absolute path, then Add' : 'Type an absolute path and press Add'}
+              className="file-path-input"
+            />
+            <button
+              onClick={handleAddManualImageDir}
+              className="browse-button"
+              disabled={!pendingImageDir.trim()}
+            >
+              Add
             </button>
-          ) : (
-            <div className="file-input-group">
-              <input
-                type="text"
-                value={pendingImageDir}
-                onChange={(e) => setPendingImageDir(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    handleAddManualImageDir();
-                  }
-                }}
-                placeholder="Type an absolute path and press Add"
-                className="file-path-input"
-              />
-              <button
-                onClick={handleAddManualImageDir}
-                className="browse-button"
-                disabled={!pendingImageDir.trim()}
-              >
-                Add
-              </button>
-            </div>
-          )}
+          </div>
           {formImageDirs.length > 0 && (
             <div className="image-directories">
               {formImageDirs.map((dir, index) => (
@@ -1324,26 +1285,26 @@ export default function TauriSettings({
             <label htmlFor="server-export-directory">
               Server export directory:
             </label>
-            <input
+            <PathField
               id="server-export-directory"
-              type="text"
               className="file-path-input"
+              dialogTitle="Select the export directory"
               placeholder="Absolute server path; empty disables server export"
               title="Exports triggered from the Library land here (reflinked where the filesystem supports it). Leave empty to offer the archive download instead."
               value={formExportDir}
-              onChange={(event) => setFormExportDir(event.target.value)}
+              onChange={setFormExportDir}
             />
             <label htmlFor="process-directory">
               Process directory:
             </label>
-            <input
+            <PathField
               id="process-directory"
-              type="text"
               className="file-path-input"
+              dialogTitle="Select the process directory"
               placeholder="Absolute server path, such as the rig's _Process folder"
               title="Where this rig's finished work lives. A WBPP run can save its masters below it, one folder per processing project, in a master/ subfolder."
               value={formProcessDir}
-              onChange={(event) => setFormProcessDir(event.target.value)}
+              onChange={setFormProcessDir}
             />
             <AutoImportFields value={formAutoImport} onChange={setFormAutoImport} />
           </div>

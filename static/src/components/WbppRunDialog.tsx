@@ -15,6 +15,7 @@ import Dialog from './Dialog';
 import WbppOptionsFields from './WbppOptionsFields';
 import { describePixInsight, formatFree } from '../utils/pixinsight';
 import './WbppRunDialog.css';
+import PathField from './PathField';
 
 /** The project or target to stack. */
 export interface WbppRunRequest {
@@ -330,15 +331,15 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
                         ? `, ${formatFree(pixinsight.data.runs_dir_free_bytes)} free`
                         : ''
                     })`
-                  : "the database's export directory, else the cache"}
+                  : "the database's export directory, else its stack folder"}
                 .
               </small>
             </span>
-            <input
-              type="text"
+            <PathField
+              dialogTitle="Select the folder for this run"
               value={workRoot}
               placeholder="/data/wbpp-runs"
-              onChange={(event) => setWorkRoot(event.target.value)}
+              onChange={setWorkRoot}
             />
           </label>
           {processDir ? (

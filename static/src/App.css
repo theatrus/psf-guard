@@ -7561,16 +7561,16 @@
   gap: 0.3rem;
 }
 
-.storage-folder-input {
+/* A path text field with the desktop app's Browse… beside it. */
+.path-field {
   display: flex;
   gap: 0.5rem;
   min-width: 0;
 }
 
-.storage-folder-input input {
+.path-field input {
   flex: 1;
   min-width: 0;
-  font-family: var(--font-mono, monospace);
 }
 
 .storage-folder code {

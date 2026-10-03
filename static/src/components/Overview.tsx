@@ -219,7 +219,7 @@ export default function Overview() {
     choice: ExportChoice
   ) => {
     try {
-      const dest = await tauriFileSystem.pickImageDirectory();
+      const dest = await tauriFileSystem.pickPath();
       if (!dest) return;
       setExportBusy(true);
       const summary = await apiClient.exportLocal(dbId, { dest, ...choice, ...scope });

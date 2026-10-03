@@ -17,9 +17,8 @@ struct TauriServerConfig {
 #[derive(Clone)]
 struct ServerState {
     url: Arc<Mutex<String>>,
-    /// Mirror of the on-disk registry. The Tauri commands keep this in sync
-    /// with `<config>/config.json` (default location).
-    registry: Arc<Mutex<DbRegistry>>,
+    /// The registry file. Commands read it from disk each time: Settings
+    /// save through the local server, so no in-memory copy stays current.
     registry_path: Arc<Mutex<PathBuf>>,
     server_shutdown: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 }
@@ -85,7 +84,6 @@ pub fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(ServerState {
             url: Arc::new(Mutex::new(server_url)),
-            registry: Arc::new(Mutex::new(initial_registry)),
             registry_path: Arc::new(Mutex::new(registry_path)),
             server_shutdown: Arc::new(Mutex::new(Some(shutdown_tx))),
         })
@@ -93,12 +91,9 @@ pub fn main() {
         .invoke_handler(tauri::generate_handler![
             get_server_url,
             pick_database_file,
-            pick_image_directory,
+            pick_folder,
             get_default_nina_database_path,
-            save_configuration,
             get_current_configuration,
-            add_database,
-            remove_database,
             show_image_in_folder,
             restart_application,
             restart_server,
@@ -113,54 +108,56 @@ fn get_server_url(state: tauri::State<ServerState>) -> String {
     state.url.lock().unwrap().clone()
 }
 
-#[tauri::command]
-async fn pick_database_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    use std::sync::{Arc, Mutex};
-    use tauri_plugin_dialog::DialogExt;
-    use tokio::sync::Notify;
-
-    let result = Arc::new(Mutex::new(None));
-    let notify = Arc::new(Notify::new());
-    let result_clone = result.clone();
-    let notify_clone = notify.clone();
-
-    app.dialog()
-        .file()
-        .add_filter("SQLite Database", &["sqlite", "db"])
-        .add_filter("All Files", &["*"])
-        .set_title("Select N.I.N.A. Database File")
-        .pick_file(move |file_path| {
-            *result_clone.lock().unwrap() = file_path.map(|p| p.to_string());
-            notify_clone.notify_one();
-        });
-
-    notify.notified().await;
-    let path = result.lock().unwrap().clone();
-    Ok(path)
+/// Wait for a dialog's answer: the plugin calls back on its own thread.
+async fn dialog_answer(
+    open: impl FnOnce(Box<dyn FnOnce(Option<String>) + Send>),
+) -> Option<String> {
+    let (sender, receiver) = oneshot::channel();
+    open(Box::new(move |picked| {
+        let _ = sender.send(picked);
+    }));
+    receiver.await.ok().flatten()
 }
 
 #[tauri::command]
-async fn pick_image_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    use std::sync::{Arc, Mutex};
+async fn pick_database_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
-    use tokio::sync::Notify;
+    Ok(dialog_answer(|answer| {
+        app.dialog()
+            .file()
+            .add_filter("SQLite Database", &["sqlite", "db"])
+            .add_filter("All Files", &["*"])
+            .set_title("Select N.I.N.A. Database File")
+            .pick_file(move |file| answer(file.map(|path| path.to_string())));
+    })
+    .await)
+}
 
-    let result = Arc::new(Mutex::new(None));
-    let notify = Arc::new(Notify::new());
-    let result_clone = result.clone();
-    let notify_clone = notify.clone();
-
-    app.dialog()
-        .file()
-        .set_title("Select Image Directory")
-        .pick_folder(move |folder_path| {
-            *result_clone.lock().unwrap() = folder_path.map(|p| p.to_string());
-            notify_clone.notify_one();
-        });
-
-    notify.notified().await;
-    let path = result.lock().unwrap().clone();
-    Ok(path)
+/// Pick a folder, or a file when `file` is set, for any path setting.
+#[tauri::command]
+async fn pick_folder(
+    app: tauri::AppHandle,
+    title: Option<String>,
+    file: Option<bool>,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picks_file = file.unwrap_or(false);
+    let title = title.unwrap_or_else(|| {
+        if picks_file {
+            "Select File".into()
+        } else {
+            "Select Folder".into()
+        }
+    });
+    Ok(dialog_answer(|answer| {
+        let dialog = app.dialog().file().set_title(title);
+        if picks_file {
+            dialog.pick_file(move |path| answer(path.map(|path| path.to_string())));
+        } else {
+            dialog.pick_folder(move |path| answer(path.map(|path| path.to_string())));
+        }
+    })
+    .await)
 }
 
 #[tauri::command]
@@ -281,59 +278,22 @@ async fn start_server_for_tauri(
 
 // ── Tauri commands operating on the registry ──────────────────────────────────
 
+fn registry_path(state: &ServerState) -> Result<PathBuf, String> {
+    Ok(state
+        .registry_path
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone())
+}
+
+fn load_registry(state: &ServerState) -> Result<DbRegistry, String> {
+    DbRegistry::load_or_init(&registry_path(state)?)
+        .map_err(|e| format!("Could not read the database registry: {e:#}"))
+}
+
 #[tauri::command]
 fn get_current_configuration(state: tauri::State<ServerState>) -> Result<DbRegistry, String> {
-    Ok(state.registry.lock().map_err(|e| e.to_string())?.clone())
-}
-
-/// Replace the entire registry with the supplied one. Used by the multi-DB
-/// settings panel (F3). Atomically writes to disk.
-#[tauri::command]
-fn save_configuration(state: tauri::State<ServerState>, config: DbRegistry) -> Result<(), String> {
-    let path = state
-        .registry_path
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
-    config.save(&path).map_err(|e| e.to_string())?;
-    *state.registry.lock().map_err(|e| e.to_string())? = config;
-    Ok(())
-}
-
-/// Add a single database to the registry. Returns the persisted entry, including
-/// any auto-generated or disambiguated slug.
-#[tauri::command]
-fn add_database(
-    state: tauri::State<ServerState>,
-    name: String,
-    db_path: String,
-    image_dirs: Vec<String>,
-) -> Result<DbEntry, String> {
-    let path = state
-        .registry_path
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
-    let mut reg = state.registry.lock().map_err(|e| e.to_string())?;
-    let entry = reg
-        .add(name, db_path, image_dirs, None)
-        .map_err(|e| e.to_string())?
-        .clone();
-    reg.save(&path).map_err(|e| e.to_string())?;
-    Ok(entry)
-}
-
-#[tauri::command]
-fn remove_database(state: tauri::State<ServerState>, db_id: String) -> Result<bool, String> {
-    let path = state
-        .registry_path
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
-    let mut reg = state.registry.lock().map_err(|e| e.to_string())?;
-    let removed = reg.remove(&db_id).map_err(|e| e.to_string())?;
-    reg.save(&path).map_err(|e| e.to_string())?;
-    Ok(removed)
+    load_registry(&state)
 }
 
 #[tauri::command]
@@ -342,17 +302,9 @@ async fn show_image_in_folder(
     db_id: String,
     path: String,
 ) -> Result<(), String> {
-    // Database CRUD runs through the local HTTP server, so the Tauri-side
-    // in-memory mirror can lag behind. Reload the small registry file before
-    // validating the requested path.
-    let registry_path = state
-        .registry_path
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
+    let state = state.inner().clone();
     tokio::task::spawn_blocking(move || {
-        let registry = DbRegistry::load_or_init(&registry_path)
-            .map_err(|e| format!("Could not read the database registry: {e:#}"))?;
+        let registry = load_registry(&state)?;
         let path = validate_image_reveal_path(&registry, &db_id, &path)?;
         launch_file_manager(&path)
     })
@@ -444,16 +396,10 @@ async fn restart_server(
 ) -> Result<String, String> {
     tracing::info!("🔄 Server restart requested");
 
-    // From disk, not the in-memory mirror: Settings save through the
-    // server, which writes the file and never touches the mirror.
-    let registry_path = state
-        .registry_path
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
-    let registry = DbRegistry::load_or_init(&registry_path).map_err(|e| e.to_string())?;
-    let (databases, astrometry_config) = (registry.databases.clone(), registry.astrometry.clone());
-    *state.registry.lock().map_err(|e| e.to_string())? = registry;
+    // Settings save through the server, which writes the file.
+    let registry_path = registry_path(&state)?;
+    let registry = load_registry(&state)?;
+    let (databases, astrometry_config) = (registry.databases, registry.astrometry);
 
     {
         let mut shutdown_guard = state.server_shutdown.lock().unwrap();
@@ -502,7 +448,7 @@ async fn restart_server(
 
 #[tauri::command]
 fn is_configuration_valid(state: tauri::State<ServerState>) -> Result<bool, String> {
-    let reg = state.registry.lock().map_err(|e| e.to_string())?;
+    let reg = load_registry(&state)?;
     Ok(reg
         .databases
         .iter()

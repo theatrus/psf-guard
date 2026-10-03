@@ -9,7 +9,8 @@ import type {
   StorageLimitsUpdate,
   StorageSettings as StorageSettingsData,
 } from '../api/types';
-import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
+import { isTauriApp, tauriConfig } from '../utils/tauri';
+import PathField from './PathField';
 
 const QUERY_KEY = ['storage-settings'] as const;
 
@@ -164,31 +165,15 @@ function StorageFolders({ current, canManage }: { current: StorageSettingsData; 
             <label htmlFor={inputId} className="stack-method-label">
               {label.name}
             </label>
-            <div className="storage-folder-input">
-              <input
-                id={inputId}
-                type="text"
-                value={fixed ? folder.next_path : draft[folder.kind]}
-                placeholder={folder.kind === 'cache' ? folder.next_path : 'Same as the cache'}
-                disabled={!editable || fixed || save.isPending}
-                aria-describedby={`${inputId}-hint`}
-                onChange={(event) => setDraft({ ...draft, [folder.kind]: event.target.value })}
-                spellCheck={false}
-              />
-              {isTauriApp() && editable && !fixed && (
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  disabled={save.isPending}
-                  onClick={async () => {
-                    const picked = await tauriFileSystem.pickImageDirectory();
-                    if (picked) setDraft((previous) => ({ ...previous, [folder.kind]: picked }));
-                  }}
-                >
-                  Browse…
-                </button>
-              )}
-            </div>
+            <PathField
+              id={inputId}
+              dialogTitle={`Select the ${label.name.toLowerCase()} folder`}
+              value={fixed ? folder.next_path : draft[folder.kind]}
+              placeholder={folder.kind === 'cache' ? folder.next_path : 'Same as the cache'}
+              disabled={!editable || fixed || save.isPending}
+              aria-describedby={`${inputId}-hint`}
+              onChange={(path) => setDraft((previous) => ({ ...previous, [folder.kind]: path }))}
+            />
             <small className="muted" id={`${inputId}-hint`}>
               {fixed ? 'Set by the server config file.' : label.hint}
               {folder.path !== folder.next_path && (

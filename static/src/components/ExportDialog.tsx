@@ -4,6 +4,7 @@ import type { ExportChoice, ExportLayout, ExportPlacement, WbppOptions } from '.
 import { DEFAULT_WBPP_OPTIONS } from '../api/types';
 import Dialog from './Dialog';
 import WbppOptionsFields from './WbppOptionsFields';
+import PathField from './PathField';
 
 /** One export the user has asked for, awaiting its layout choice. */
 export interface ExportRequest {
@@ -247,11 +248,11 @@ export default function ExportDialog({
                   Server path
                   <small>Frames are listed relative to this folder.</small>
                 </span>
-                <input
-                  type="text"
+                <PathField
+                  dialogTitle="Select the folder frames are listed from"
                   value={localRoot}
                   placeholder="/mnt/nas/astro"
-                  onChange={(event) => setLocalRoot(event.target.value)}
+                  onChange={setLocalRoot}
                 />
               </label>
               <label className="export-dialog-remote-root">

@@ -19,22 +19,27 @@ export const isTauriApp = (): boolean => {
   return hasTauri || hasTauriApi || hasInvoke || isWebview;
 };
 
-// Get the server URL when running in Tauri mode
-export const getServerUrl = async (): Promise<string> => {
-  if (isTauriApp()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke('get_server_url');
-    } catch (error) {
-      console.error('Failed to get server URL from Tauri:', error);
-      // Fallback to default
-      return 'http://localhost:3030';
-    }
+/**
+ * Call a desktop command, or settle for `fallback` outside the desktop app or
+ * when the command fails. Every helper below goes through here.
+ */
+async function invokeOr<T>(command: string, fallback: T, args?: Record<string, unknown>): Promise<T> {
+  if (!isTauriApp()) return fallback;
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<T>(command, args);
+  } catch (error) {
+    console.error(`Desktop command ${command} failed:`, error);
+    return fallback;
   }
-  
-  // In web mode, use relative URLs (current origin)
-  return '';
-};
+}
+
+/** What `invokeOr` returns for a command that did not run. */
+const FAILED = Symbol('failed');
+
+// The server URL in the desktop app; relative URLs (current origin) in a browser.
+export const getServerUrl = async (): Promise<string> =>
+  isTauriApp() ? invokeOr('get_server_url', 'http://localhost:3030') : '';
 
 // Initialize the base URL for API calls
 export const initializeApiBaseUrl = async (): Promise<string> => {
@@ -106,156 +111,38 @@ export interface DbRegistry {
 // Now points at the multi-DB registry shape.
 export type TauriConfig = DbRegistry;
 
-// Tauri-specific file system functions
+// Desktop file dialogs and the file manager.
 export const tauriFileSystem = {
-  // Pick database file using Tauri command
-  pickDatabaseFile: async (): Promise<string | null> => {
-    if (!isTauriApp()) return null;
-    
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke('pick_database_file');
-    } catch (error) {
-      console.error('Failed to pick database file:', error);
-      return null;
-    }
-  },
+  pickDatabaseFile: (): Promise<string | null> => invokeOr('pick_database_file', null),
 
-  // Pick image directory using Tauri command  
-  pickImageDirectory: async (): Promise<string | null> => {
-    if (!isTauriApp()) return null;
-    
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke('pick_image_directory');
-    } catch (error) {
-      console.error('Failed to pick image directory:', error);
-      return null;
-    }
-  },
+  /** A folder, or a file with `file`, for any path setting. */
+  pickPath: (options: { title?: string; file?: boolean } = {}): Promise<string | null> =>
+    invokeOr('pick_folder', null, { title: options.title, file: options.file ?? false }),
 
   // Show a resolved image file in Finder, Explorer, or the Linux file manager.
   showImageInFolder: async (dbId: string, path: string): Promise<void> => {
     if (!isTauriApp()) {
       throw new Error('Showing files is available only in the desktop app.');
     }
-
     const { invoke } = await import('@tauri-apps/api/core');
     await invoke('show_image_in_folder', { dbId, path });
   },
 
-  // Get default N.I.N.A. database path (Windows only)
-  getDefaultNinaPath: async (): Promise<string | null> => {
-    if (!isTauriApp()) return null;
-    
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke('get_default_nina_database_path');
-    } catch (error) {
-      console.error('Failed to get default N.I.N.A. path:', error);
-      return null;
-    }
-  }
+  // Default N.I.N.A. database path (Windows only).
+  getDefaultNinaPath: (): Promise<string | null> => invokeOr('get_default_nina_database_path', null),
 };
 
-// Configuration management functions
+// The registry and the desktop app's own server.
 export const tauriConfig = {
-  // Get current configuration (registry of all configured DBs)
-  getCurrentConfiguration: async (): Promise<DbRegistry | null> => {
-    if (!isTauriApp()) return null;
+  getCurrentConfiguration: (): Promise<DbRegistry | null> =>
+    invokeOr('get_current_configuration', null),
 
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke('get_current_configuration');
-    } catch (error) {
-      console.error('Failed to get current configuration:', error);
-      return null;
-    }
-  },
+  restartApplication: async (): Promise<boolean> =>
+    (await invokeOr<unknown>('restart_application', FAILED)) !== FAILED,
 
-  // Replace the entire registry. Used by the multi-DB settings panel.
-  saveConfiguration: async (config: DbRegistry): Promise<boolean> => {
-    if (!isTauriApp()) return false;
+  // Restart only the server (faster than the whole app; moves no files).
+  restartServer: async (): Promise<boolean> =>
+    (await invokeOr<unknown>('restart_server', FAILED)) !== FAILED,
 
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('save_configuration', { config });
-      return true;
-    } catch (error) {
-      console.error('Failed to save configuration:', error);
-      return false;
-    }
-  },
-
-  // Add a single database to the registry; the backend persists and returns the entry.
-  addDatabase: async (
-    name: string,
-    dbPath: string,
-    imageDirs: string[]
-  ): Promise<DbEntry | null> => {
-    if (!isTauriApp()) return null;
-
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke('add_database', { name, dbPath, imageDirs });
-    } catch (error) {
-      console.error('Failed to add database:', error);
-      return null;
-    }
-  },
-
-  // Remove a database from the registry by slug.
-  removeDatabase: async (dbId: string): Promise<boolean> => {
-    if (!isTauriApp()) return false;
-
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke('remove_database', { dbId });
-    } catch (error) {
-      console.error('Failed to remove database:', error);
-      return false;
-    }
-  },
-
-  // Restart application to apply new configuration
-  restartApplication: async (): Promise<boolean> => {
-    if (!isTauriApp()) return false;
-    
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('restart_application');
-      return true;
-    } catch (error) {
-      console.error('Failed to restart application:', error);
-      return false;
-    }
-  },
-
-  // Restart server with new configuration (faster than full app restart)
-  restartServer: async (): Promise<boolean> => {
-    if (!isTauriApp()) return false;
-    
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const result = await invoke('restart_server');
-      console.log('Server restart result:', result);
-      return true;
-    } catch (error) {
-      console.error('Failed to restart server:', error);
-      return false;
-    }
-  },
-
-  // Check if current configuration is valid
-  isConfigurationValid: async (): Promise<boolean> => {
-    if (!isTauriApp()) return false;
-    
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke('is_configuration_valid');
-    } catch (error) {
-      console.error('Failed to check configuration validity:', error);
-      return false;
-    }
-  }
+  isConfigurationValid: (): Promise<boolean> => invokeOr('is_configuration_valid', false),
 };
