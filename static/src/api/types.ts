@@ -2955,8 +2955,10 @@ export interface CacheVolumeReport {
   other_bytes: number;
   culled_files: number;
   freed_bytes: number;
-  /** Still over the limit with no previews left to cull. */
+  /** Still over the limit with nothing left that may be culled. */
   over_limit: boolean;
+  /** Which of the cache, stacks and calibration masters live here. */
+  kinds: StorageFolderKind[];
   checked_unix: number;
 }
 
@@ -2975,8 +2977,11 @@ export interface StorageFolder {
 }
 
 export interface StorageSettings {
-  /** 100 turns culling off. */
+  /** The cache's limit; 100 turns culling off. */
   max_volume_percent: number;
+  /** Own limits; null shares the cache's. */
+  stack_max_volume_percent: number | null;
+  calibration_max_volume_percent: number | null;
   default_max_volume_percent: number;
   min_max_volume_percent: number;
   volumes: CacheVolumeReport[];
@@ -2985,6 +2990,13 @@ export interface StorageSettings {
   /** What this start's folder move did. */
   folder_notes: string[];
   can_choose_folders: boolean;
+}
+
+/** Absent keeps a limit; null shares the cache's. */
+export interface StorageLimitsUpdate {
+  max_volume_percent?: number;
+  stack_max_volume_percent?: number | null;
+  calibration_max_volume_percent?: number | null;
 }
 
 /** Empty or absent goes back to the default. */

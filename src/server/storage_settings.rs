@@ -20,7 +20,12 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StorageSettingsResponse {
+    /// The cache's limit, which stacks and masters share unless they have
+    /// their own.
     pub max_volume_percent: u8,
+    /// Own limits; null shares the cache's.
+    pub stack_max_volume_percent: Option<u8>,
+    pub calibration_max_volume_percent: Option<u8>,
     pub default_max_volume_percent: u8,
     pub min_max_volume_percent: u8,
     /// Empty until the first pass, a minute after the server starts, and on
@@ -67,6 +72,9 @@ fn response(state: &AppState) -> StorageSettingsResponse {
         .collect();
     StorageSettingsResponse {
         max_volume_percent: cache_budget::max_volume_percent(),
+        stack_max_volume_percent: settings.and_then(|settings| settings.stack_max_volume_percent),
+        calibration_max_volume_percent: settings
+            .and_then(|settings| settings.calibration_max_volume_percent),
         default_max_volume_percent: cache_budget::DEFAULT_MAX_VOLUME_PERCENT,
         min_max_volume_percent: cache_budget::MIN_MAX_VOLUME_PERCENT,
         volumes: cache_budget::last_reports(),
@@ -109,8 +117,22 @@ pub async fn get_storage_settings(
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateStorageSettingsRequest {
-    /// 100 turns culling off.
-    pub max_volume_percent: u8,
+    /// The cache's limit; 100 turns culling off. Absent keeps it.
+    #[serde(default)]
+    pub max_volume_percent: Option<u8>,
+    /// Absent keeps the stack limit; null shares the cache's.
+    #[serde(default, deserialize_with = "present")]
+    pub stack_max_volume_percent: Option<Option<u8>>,
+    #[serde(default, deserialize_with = "present")]
+    pub calibration_max_volume_percent: Option<Option<u8>>,
+}
+
+/// Tell a field sent as null from one left out.
+fn present<'de, D>(deserializer: D) -> Result<Option<Option<u8>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<u8>::deserialize(deserializer).map(Some)
 }
 
 /// PUT /api/settings/storage — deletes previews from the next pass on, so
@@ -120,17 +142,38 @@ pub async fn update_storage_settings(
     Json(request): Json<UpdateStorageSettingsRequest>,
 ) -> Result<Json<ApiResponse<StorageSettingsResponse>>, AppError> {
     require_database_management_allowed(&state)?;
-    let percent = request.max_volume_percent;
-    if !(cache_budget::MIN_MAX_VOLUME_PERCENT..=100).contains(&percent) {
-        return Err(AppError::BadRequest(format!(
-            "the limit must be between {}% and 100%",
-            cache_budget::MIN_MAX_VOLUME_PERCENT
-        )));
+    let in_range = |percent: u8| {
+        if (cache_budget::MIN_MAX_VOLUME_PERCENT..=100).contains(&percent) {
+            Ok(())
+        } else {
+            Err(AppError::BadRequest(format!(
+                "the limit must be between {}% and 100%",
+                cache_budget::MIN_MAX_VOLUME_PERCENT
+            )))
+        }
+    };
+    for percent in [
+        request.max_volume_percent,
+        request.stack_max_volume_percent.flatten(),
+        request.calibration_max_volume_percent.flatten(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        in_range(percent)?;
     }
     let storage = update_registry(&state, |registry| {
         store(registry, |storage| {
-            storage.max_volume_percent =
-                (percent != cache_budget::DEFAULT_MAX_VOLUME_PERCENT).then_some(percent);
+            if let Some(percent) = request.max_volume_percent {
+                storage.max_volume_percent =
+                    (percent != cache_budget::DEFAULT_MAX_VOLUME_PERCENT).then_some(percent);
+            }
+            if let Some(percent) = request.stack_max_volume_percent {
+                storage.stack_max_volume_percent = percent;
+            }
+            if let Some(percent) = request.calibration_max_volume_percent {
+                storage.calibration_max_volume_percent = percent;
+            }
         });
         Ok(registry.storage.clone())
     })

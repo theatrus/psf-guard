@@ -750,18 +750,24 @@ desktop app, **Restart now** restarts the whole app, because a server
 restarted inside a running app could still have the old server writing; such
 a restart keeps the old folders until the next full start.
 
-Settings → Stacking → **Disk use** shows the volume each cache sits on, how
-full it is, and how much the cache holds of each kind.
+Settings → Stacking → **Disk use** shows every volume the three folders sit
+on: how full it is, which folders and databases it holds, and how much of it
+is previews, stacks and masters.
 
 **Most of the volume to use** (90% by default) is the highest share of the
-whole volume, other files included, that may be used, as `df` counts it.
-Every five minutes, and right after the limit is changed, PSF Guard reads
-each cache volume. When one is over the limit it deletes image previews,
-annotated previews and star lists, least recently viewed first, until the
-volume is two points under, sparing any viewed in the last quarter hour
-(viewing a cached preview or star list marks it as used, every few minutes
-at most).
-If that is not enough it deletes stack resume checkpoints a day old or more.
+whole volume, other files included, that may be used, as `df` counts it. It
+applies to all three folders unless **Separate limits for stacks and
+calibration masters** gives those two their own. A volume holding more than
+one folder uses the lowest of their limits.
+
+Every five minutes, and right after a limit is changed, PSF Guard reads each
+volume. When one is over its limit it deletes only what lives on that volume.
+First go image previews, annotated previews and star lists from caches there,
+least recently viewed first, until the volume is two points under, sparing
+any viewed in the last quarter hour (viewing a cached preview or star list
+marks it as used, every few minutes at most). If that is not enough it
+deletes resume checkpoints a day old or more from stack folders there. A full
+stack volume never deletes previews from a cache on another disk.
 Stacks, color previews, WBPP stacks and calibration masters are never
 deleted: they take minutes to hours to make, while a preview comes back the
 next time someone opens the image. PSF Guard records use itself because many
@@ -769,10 +775,11 @@ mounts, NFS among them, do not record reads.
 
 Background preview pre-generation stops two points under the limit, where a
 cull would clear to, and checks before every image, so it never makes
-previews the next pass would delete and the next scan make again. Previews
-someone opens are still made. A volume still over the limit once nothing
-more may go is reported in red. The cache's sizes in Settings are measured
-at most hourly, and after a cull. On a file system that keeps snapshots,
+previews the next pass would delete and the next scan make again. It uses
+the limit of the cache's volume, the lowest there when the volume holds other
+folders too. Previews someone opens are still made. A volume still over the
+limit once nothing more may go is reported in red. The sizes in Settings are
+measured at most hourly, and after a cull. On a file system that keeps snapshots,
 deleted previews free no space until the snapshot goes, so each pass culls
 further until none are left. 100%
 turns culling off. Changing the limit needs database management. Windows

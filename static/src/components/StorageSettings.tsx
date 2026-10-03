@@ -6,6 +6,7 @@ import type {
   StorageFolder,
   StorageFolderKind,
   StorageFoldersUpdate,
+  StorageLimitsUpdate,
   StorageSettings as StorageSettingsData,
 } from '../api/types';
 import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
@@ -23,6 +24,17 @@ function bytes(count: number): string {
   if (count >= GiB) return `${(count / GiB).toFixed(1)} GiB`;
   if (count >= MiB) return `${Math.round(count / MiB)} MiB`;
   return `${Math.round(count / KiB)} KiB`;
+}
+
+const KIND_NAMES: Record<StorageFolderKind, string> = {
+  cache: 'cache',
+  stacks: 'stacks',
+  calibration: 'calibration masters',
+};
+
+function kindList(kinds: StorageFolderKind[]): string {
+  const names = kinds.map((kind) => KIND_NAMES[kind]);
+  return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 }
 
 function VolumeUse({ volume }: { volume: CacheVolumeReport }) {
@@ -53,6 +65,7 @@ function VolumeUse({ volume }: { volume: CacheVolumeReport }) {
         image previews {bytes(volume.preview_bytes)}
         {volume.other_bytes > 0 && <> · other {bytes(volume.other_bytes)}</>}
         {volume.databases.length > 0 && <> · for {volume.databases.join(', ')}</>}
+        {volume.kinds.length > 0 && <> · holds the {kindList(volume.kinds)}</>}
       </p>
       {volume.culled_files > 0 && (
         <p className="muted storage-volume-note">
@@ -61,8 +74,9 @@ function VolumeUse({ volume }: { volume: CacheVolumeReport }) {
       )}
       {volume.over_limit && (
         <p className="storage-volume-note is-error" role="alert">
-          Over the limit with no previews left to cull. Stacks are never culled, so free space on
-          this volume or move the cache to a larger one; preview pre-generation waits meanwhile.
+          {volume.kinds.includes('cache')
+            ? 'Over the limit with no previews left to cull. Stacks are never culled, so free space on this volume or move a folder to a larger one; preview pre-generation waits meanwhile.'
+            : 'Over the limit, and nothing here may be culled: stacks and masters are never deleted. Free space on this volume or move the folder to a larger one.'}
         </p>
       )}
     </div>
@@ -220,9 +234,63 @@ function StorageFolders({ current, canManage }: { current: StorageSettingsData; 
   );
 }
 
+/** One limit: a slider saved when let go, on Enter, or on leaving it. */
+function LimitSlider({
+  label,
+  ariaLabel,
+  hint,
+  value,
+  min,
+  disabled,
+  onCommit,
+}: {
+  label: string;
+  ariaLabel: string;
+  hint: string;
+  value: number;
+  min: number;
+  disabled: boolean;
+  onCommit: (percent: number) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  const commit = () => {
+    if (draft !== value) onCommit(draft);
+  };
+  return (
+    <div className="review-preference worker-share">
+      <span>
+        <span className="stack-method-label">
+          {label}
+          <em className="worker-share-value">{draft >= 100 ? 'no limit' : `${draft}%`}</em>
+        </span>
+        <small>{hint}</small>
+      </span>
+      {/* Not disabled while saving: that would take the slider out of a keyboard user's hands. */}
+      <input
+        type="range"
+        min={min}
+        max={100}
+        step={1}
+        value={draft}
+        disabled={disabled}
+        aria-label={ariaLabel}
+        onChange={(event) => setDraft(Number(event.target.value))}
+        // Each save also checks the volumes, so not on every arrow press.
+        onPointerUp={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') commit();
+        }}
+        onBlur={commit}
+      />
+    </div>
+  );
+}
+
 /**
- * How full the cache's volume may get. Past the limit, image previews go
- * first, least recently used first, so stacks keep their room.
+ * How full each storage volume may get. Past the limit, image previews go
+ * first, least recently used first, so stacks keep their room. Stacks and
+ * masters may have limits of their own for the volumes they sit on.
  */
 export default function StorageSettings({ canManage }: { canManage: boolean }) {
   const queryClient = useQueryClient();
@@ -231,16 +299,12 @@ export default function StorageSettings({ canManage }: { canManage: boolean }) {
     queryFn: apiClient.getStorageSettings,
     refetchInterval: 60_000,
   });
-  const [draft, setDraft] = useState<number | null>(null);
-  useEffect(() => {
-    if (settings.data) setDraft(settings.data.max_volume_percent);
-  }, [settings.data]);
   const save = useMutation({
     mutationFn: apiClient.updateStorageSettings,
     onSuccess: (updated) => queryClient.setQueryData(QUERY_KEY, updated),
   });
 
-  if (settings.isLoading || draft === null) return null;
+  if (settings.isLoading) return null;
   if (settings.isError || !settings.data) {
     return (
       <div className="stack-method-settings">
@@ -250,55 +314,84 @@ export default function StorageSettings({ canManage }: { canManage: boolean }) {
     );
   }
   const current = settings.data;
-  const commit = () => {
-    if (!save.isPending && draft !== current.max_volume_percent) save.mutate(draft);
+  const separate =
+    current.stack_max_volume_percent !== null || current.calibration_max_volume_percent !== null;
+  const commit = (limits: StorageLimitsUpdate) => {
+    if (!save.isPending) save.mutate(limits);
   };
+  const needsManagement = canManage ? '' : ' Changing it needs database management on this server.';
 
   return (
     <div className="stack-method-settings storage-settings">
       <h3>Disk use</h3>
       <p className="muted">
-        The cache holds stacks, calibration masters and image previews. When its volume fills past
-        the limit, image previews go first, least recently viewed first, until it is two points
-        under; stacks, color previews and masters are never culled. Previews come back the next time
-        someone opens the image.
+        When a volume fills past its limit, PSF Guard deletes image previews from it, least recently
+        viewed first, until it is two points under, then stack checkpoints a day old or more. Stacks,
+        color previews and masters are never culled. Previews come back the next time someone opens
+        the image.
       </p>
       {current.volumes.length === 0 ? (
         <p className="muted">The first check runs a minute after the server starts.</p>
       ) : (
         current.volumes.map((volume) => <VolumeUse key={volume.path} volume={volume} />)
       )}
-      {/* Not disabled while saving: that would take the slider out of a keyboard user's hands. */}
       <fieldset className="calibration-settings-group" disabled={!canManage}>
-        <div className="review-preference worker-share">
+        <LimitSlider
+          label={separate ? 'Most of the cache volume to use' : 'Most of the volume to use'}
+          ariaLabel="Most of the cache volume to use, in percent"
+          hint={`Of the whole volume, other files included. Default ${current.default_max_volume_percent}%; 100% turns culling off.${needsManagement}`}
+          value={current.max_volume_percent}
+          min={current.min_max_volume_percent}
+          disabled={!canManage}
+          onCommit={(percent) => commit({ max_volume_percent: percent })}
+        />
+        <label className="review-preference storage-separate-limits">
+          <input
+            type="checkbox"
+            checked={separate}
+            disabled={!canManage || save.isPending}
+            onChange={(event) =>
+              commit(
+                event.target.checked
+                  ? {
+                      stack_max_volume_percent: current.max_volume_percent,
+                      calibration_max_volume_percent: current.max_volume_percent,
+                    }
+                  : { stack_max_volume_percent: null, calibration_max_volume_percent: null },
+              )
+            }
+          />
           <span>
-            <span className="stack-method-label">
-              Most of the volume to use
-              <em className="worker-share-value">{draft >= 100 ? 'no limit' : `${draft}%`}</em>
-            </span>
-            <small>
-              Of the whole volume, other files included. Default {current.default_max_volume_percent}%;
-              100% turns culling off.
-              {!canManage && ' Changing it needs database management on this server.'}
+            Separate limits for stacks and calibration masters
+            <small className="muted">
+              {' '}
+              For folders on their own volumes. A volume holding more than one folder uses the lowest
+              of their limits.
             </small>
           </span>
-          <input
-            type="range"
-            min={current.min_max_volume_percent}
-            max={100}
-            step={1}
-            value={draft}
-            aria-label="Most of the cache volume to use, in percent"
-            onChange={(event) => setDraft(Number(event.target.value))}
-            // Saved when let go, on Enter, or on leaving it: each save also
-            // checks the volume, so not on every arrow press.
-            onPointerUp={commit}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') commit();
-            }}
-            onBlur={commit}
-          />
-        </div>
+        </label>
+        {separate && (
+          <>
+            <LimitSlider
+              label="Most of the stack volume to use"
+              ariaLabel="Most of the stack volume to use, in percent"
+              hint="Only stack checkpoints a day old or more are culled from it."
+              value={current.stack_max_volume_percent ?? current.max_volume_percent}
+              min={current.min_max_volume_percent}
+              disabled={!canManage}
+              onCommit={(percent) => commit({ stack_max_volume_percent: percent })}
+            />
+            <LimitSlider
+              label="Most of the calibration master volume to use"
+              ariaLabel="Most of the calibration master volume to use, in percent"
+              hint="Nothing is culled from it; past the limit it is reported."
+              value={current.calibration_max_volume_percent ?? current.max_volume_percent}
+              min={current.min_max_volume_percent}
+              disabled={!canManage}
+              onCommit={(percent) => commit({ calibration_max_volume_percent: percent })}
+            />
+          </>
+        )}
       </fieldset>
       {save.isError && (
         <p className="error-text" role="alert">{(save.error as Error).message}</p>

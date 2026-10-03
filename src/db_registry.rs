@@ -495,6 +495,12 @@ pub struct StorageSettings {
     /// the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_volume_percent: Option<u8>,
+    /// Limits for the stack and calibration master volumes, when they
+    /// differ from the cache's. Absent uses `max_volume_percent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stack_max_volume_percent: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calibration_max_volume_percent: Option<u8>,
     /// Folders a person chose, as absolute paths. The server config file or
     /// command line wins over these; absent stacks and masters go in the
     /// cache, and an absent cache uses the server's default.

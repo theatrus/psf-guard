@@ -24,11 +24,18 @@ const folders = (stacksNext = '/cache') => [
   { kind: 'calibration', path: '/cache', next_path: '/cache', source: 'default', chosen: null },
 ];
 
-const settings = (limit: number, overLimit = false, stacksNext = '/cache') => ({
+const settings = (
+  limit: number,
+  overLimit = false,
+  stacksNext = '/cache',
+  stackLimit: number | null = null,
+) => ({
   success: true,
   error: null,
   data: {
     max_volume_percent: limit,
+    stack_max_volume_percent: stackLimit,
+    calibration_max_volume_percent: stackLimit === null ? null : limit,
     default_max_volume_percent: 90,
     min_max_volume_percent: 50,
     volumes: [{
@@ -36,6 +43,7 @@ const settings = (limit: number, overLimit = false, stacksNext = '/cache') => ({
       total_bytes: 1000 * GiB, used_bytes: 930 * GiB, used_percent: 93, max_percent: limit,
       preview_bytes: 40 * GiB, stack_bytes: 120 * GiB, calibration_bytes: 8 * GiB, other_bytes: 0,
       culled_files: 1200, freed_bytes: 3 * GiB, over_limit: overLimit, checked_unix: 1,
+      kinds: ['cache', 'stacks', 'calibration'],
     }],
     folders: folders(stacksNext),
     folder_notes: [],
@@ -88,6 +96,31 @@ describe('StorageSettings', () => {
     await waitFor(() => expect(saved).toEqual({ stack_dir: '/mnt/stacks', calibration_dir: '' }));
     expect(await screen.findByText(/take effect when PSF Guard next starts/)).toBeInTheDocument();
     expect(screen.getByText('/cache', { selector: 'code' })).toBeInTheDocument();
+  });
+
+  it('gives stacks and masters limits of their own when asked', async () => {
+    const saved: unknown[] = [];
+    let stackLimit: number | null = null;
+    server.use(
+      http.get('/api/settings/storage', () => HttpResponse.json(settings(90, false, '/cache', stackLimit))),
+      http.put('/api/settings/storage', async ({ request }) => {
+        const body = (await request.json()) as { stack_max_volume_percent?: number | null };
+        saved.push(body);
+        if (body.stack_max_volume_percent !== undefined) stackLimit = body.stack_max_volume_percent;
+        return HttpResponse.json(settings(90, false, '/cache', stackLimit));
+      })
+    );
+    render(<StorageSettings canManage />, { wrapper: wrapper() });
+    expect(await screen.findByText(/holds the cache, stacks and calibration masters/)).toBeInTheDocument();
+    expect(screen.queryByRole('slider', { name: /stack volume/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /Separate limits/ }));
+    await waitFor(() =>
+      expect(saved).toEqual([{ stack_max_volume_percent: 90, calibration_max_volume_percent: 90 }])
+    );
+    const stack = await screen.findByRole('slider', { name: /stack volume/ });
+    fireEvent.change(stack, { target: { value: '97' } });
+    fireEvent.pointerUp(stack);
+    await waitFor(() => expect(saved.at(-1)).toEqual({ stack_max_volume_percent: 97 }));
   });
 
   it('shows the limit but cannot change it without database management', async () => {

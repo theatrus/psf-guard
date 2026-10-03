@@ -28,6 +28,10 @@
   files across first; if a move fails, PSF Guard moves them back, keeps the old
   folder, and tries again next time.
 
+- **Disk use** now covers every volume the cache, stack and master folders sit
+  on, and stacks and masters can have limits of their own. A volume over its
+  limit frees space only from what lives on it.
+
 - A disk limit for the cache: Settings → Stacking → **Disk use** shows how full
   each cache volume is and what the cache holds, and past **Most of the
   volume to use** (90% by default) PSF Guard deletes image previews, least
