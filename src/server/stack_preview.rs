@@ -4766,10 +4766,7 @@ fn sweep_database(state: &AppState, ctx: &DatabaseContext) {
         );
     }
     state.stack_previews.prune_cache(&ctx.stack_root);
-    // Masters only while no build runs: a build may be reading one.
-    if let Some(_no_build) = state.stack_previews.try_maintenance_permit() {
-        crate::server::master_cleanup::sweep(ctx, std::time::SystemTime::now());
-    }
+    crate::server::master_cleanup::sweep(state, ctx, std::time::SystemTime::now());
 }
 
 /// Every `<prefix>*.json` index in a folder, or the first that could not be

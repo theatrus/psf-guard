@@ -413,20 +413,25 @@ flat masters that used it; a changed dark-flat invalidates its flat master.
 A later stack reuses a valid file. The database records its source set, input masters, and Seiza
 version.
 
-Since a changed input writes a new file, old masters stay behind. Once an
+Since a new build version, a new upstream master or another masking mode
+writes a new file from the same frames, old masters stay behind. Once an
 hour, while no stack build runs, PSF Guard removes from the master folder:
 
 - half-written files a stopped build left (`*.fits.tmp-*`), a day old;
-- masters the catalog no longer records, such as those of forgotten frames,
-  a day old;
-- masters a newer master of the same rig, kind, exposure, filter and
-  temperature replaced, once unused for a month and named by no stack.
+- masters a newer master built from exactly the same frames replaced, once
+  unused for a month and named by no stack index or job manifest. Masters
+  from other frames, such as another night's flats or another gain's darks,
+  never count as replacements.
 
-When the master folder's volume is over its disk limit, masters unused for a
-week may go too (see [Disk use](STACKING_PREVIEWS.md#disk-use)). A master
-whose source frames are no longer on disk is never removed, nor is a master's
-catalog record. A removed master that a stack needs again is built again from
-its frames; until then the stack's **Masters** view reports it missing.
+When the master folder's volume is over its disk limit and removing masters
+can bring it back under, masters unused for a week may go too, least recently
+used first (see [Disk use](STACKING_PREVIEWS.md#disk-use)). Never removed: a
+master the catalog does not record or whose source frames are no longer on
+disk, since neither could be built again; anything while the catalog is
+read-only or was written by a newer build; anything while a stack index or
+manifest cannot be read; and a master's catalog record. A removed master that
+a stack needs again is built again from its frames; until then the stack's
+**Masters** view reports it missing.
 
 The stack card reports `Calibration applied`, `Calibration set incomplete`, or
 no calibration. It also shows input counts and any missing-file warning.

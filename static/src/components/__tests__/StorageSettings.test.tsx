@@ -59,7 +59,7 @@ describe('StorageSettings', () => {
     expect(screen.getByRole('meter', { name: /Disk use of/ })).toHaveAttribute('aria-valuenow', '93');
     expect(screen.getByText(/Stacks 120.0 GiB · calibration masters 8.0 GiB · image previews 40.0 GiB/))
       .toBeInTheDocument();
-    expect(screen.getByText(/culled 1200 previews and checkpoints, 3.0 GiB/)).toBeInTheDocument();
+    expect(screen.getByText(/culled 1200 files, 3.0 GiB/)).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('Stacks are never culled');
   });
 

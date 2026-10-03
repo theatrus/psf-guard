@@ -242,6 +242,17 @@ fn folders(state: &AppState) -> Vec<Folder> {
 
 /// One pass over every volume: read it, cull if it is over, report.
 pub fn pass(state: &AppState) -> Vec<VolumeReport> {
+    run_pass(state, true)
+}
+
+/// A pass right after a limit changed: previews and checkpoints may go at
+/// once, but masters wait for the regular pass, so letting go of a slider
+/// never deletes masters on the spot.
+pub fn pass_after_limit_change(state: &AppState) -> Vec<VolumeReport> {
+    run_pass(state, false)
+}
+
+fn run_pass(state: &AppState, masters: bool) -> Vec<VolumeReport> {
     let _one_at_a_time = PASS.lock().unwrap_or_else(|poison| poison.into_inner());
     let mut volumes: Vec<(u64, Vec<Folder>)> = Vec::new();
     for folder in folders(state) {
@@ -260,7 +271,11 @@ pub fn pass(state: &AppState) -> Vec<VolumeReport> {
     *VOLUME_LIMITS.lock().unwrap() = limits.clone();
     // Masters only while no build runs, since a build may be reading one;
     // the build permit is taken only when a volume needs masters removed.
-    let no_build = || state.stack_previews.try_maintenance_permit();
+    let no_build = || {
+        masters
+            .then(|| state.stack_previews.try_maintenance_permit())
+            .flatten()
+    };
     volumes
         .into_iter()
         .filter_map(|(device, folders)| report_volume(device, &folders, limits[&device], &no_build))
@@ -308,7 +323,10 @@ fn report_volume(
             preview_candidates(&caches, now),
             checkpoint_candidates(&stacks, now),
         ];
-        // Read the catalog only when the cheap tiers cannot free enough.
+        // Read the catalog only when the cheap tiers cannot free enough, and
+        // take masters only when that brings the volume back under: on a
+        // volume filled by other files they would go for nothing, and be
+        // built again, and go again.
         let cheap: u64 = tiers
             .iter()
             .flatten()
@@ -318,10 +336,15 @@ fn report_volume(
             && folders
                 .iter()
                 .any(|folder| folder.holds(StorageKind::Calibration))
-            && let Some(permit) = no_build()
         {
-            _held = Some(permit);
-            tiers.push(master_candidates(folders, now));
+            let masters = master_candidates(folders, device, now);
+            let master_bytes: u64 = masters.iter().map(|candidate| candidate.bytes).sum();
+            if cheap + master_bytes >= need
+                && let Some(permit) = no_build()
+            {
+                _held = Some(permit);
+                tiers.push(masters);
+            }
         }
         for tier in tiers {
             for candidate in tier {
@@ -339,7 +362,7 @@ fn report_volume(
         }
         if culled_files > 0 {
             tracing::info!(
-                "🧹 Volume of {} at {:.1}% (limit {limit}%): culled {culled_files} previews and checkpoints, {} MiB",
+                "🧹 Volume of {} at {:.1}% (limit {limit}%): culled {culled_files} files, {} MiB",
                 first.display(),
                 usage.percent(),
                 freed_bytes / (1 << 20)
@@ -417,12 +440,18 @@ struct Candidate {
 /// Calibration masters from the master folders on this volume, unused for
 /// a week and rebuildable, least recently used first; masters a kept stack
 /// names come last.
-fn master_candidates(folders: &[Folder], now: SystemTime) -> Vec<Candidate> {
-    folders
+fn master_candidates(folders: &[Folder], device: u64, now: SystemTime) -> Vec<Candidate> {
+    let mut masters: Vec<crate::server::master_cleanup::MasterCandidate> = folders
         .iter()
         .filter(|folder| folder.holds(StorageKind::Calibration))
         .filter_map(|folder| folder.context.as_ref())
         .flat_map(|ctx| crate::server::master_cleanup::lru_candidates(ctx, now))
+        // Only what lives on this volume frees space on it.
+        .filter(|master| device_of(&master.path) == Some(device))
+        .collect();
+    masters.sort_by_key(|master| (master.referenced, master.last_used));
+    masters
+        .into_iter()
         .map(|master| Candidate {
             paths: vec![master.path],
             bytes: master.bytes,

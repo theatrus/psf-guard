@@ -184,9 +184,10 @@ pub async fn update_storage_settings(
     .await?;
     cache_budget::configure(storage.as_ref());
     let state_for_pass = Arc::clone(&state);
-    let reports = tokio::task::spawn_blocking(move || cache_budget::pass(&state_for_pass))
-        .await
-        .map_err(|error| AppError::InternalError(format!("storage check failed: {error}")))?;
+    let reports =
+        tokio::task::spawn_blocking(move || cache_budget::pass_after_limit_change(&state_for_pass))
+            .await
+            .map_err(|error| AppError::InternalError(format!("storage check failed: {error}")))?;
     cache_budget::record(reports);
     Ok(Json(ApiResponse::success(response(&state))))
 }

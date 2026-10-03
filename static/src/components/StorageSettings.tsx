@@ -70,7 +70,7 @@ function VolumeUse({ volume }: { volume: CacheVolumeReport }) {
       </p>
       {volume.culled_files > 0 && (
         <p className="muted storage-volume-note">
-          The last check culled {volume.culled_files} previews and checkpoints, {bytes(volume.freed_bytes)}.
+          The last check culled {volume.culled_files} files, {bytes(volume.freed_bytes)}.
         </p>
       )}
       {volume.over_limit && (
@@ -381,7 +381,7 @@ export default function StorageSettings({ canManage }: { canManage: boolean }) {
             <LimitSlider
               label="Most of the calibration master volume to use"
               ariaLabel="Most of the calibration master volume to use, in percent"
-              hint="Past it, masters unused for a week go, least recently used first; one whose frames are gone always stays. On the cache's volume the lower limit culls previews too."
+              hint="Past it, masters unused for a week go, least recently used first, when that brings the volume back under; one whose frames are gone always stays. On the cache's volume the lower limit culls previews too."
               value={current.calibration_max_volume_percent ?? current.max_volume_percent}
               min={current.min_max_volume_percent}
               disabled={!canManage}

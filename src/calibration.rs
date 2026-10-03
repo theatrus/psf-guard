@@ -5420,35 +5420,31 @@ pub fn note_master_used(path: &Path) {
 #[derive(Debug, Clone)]
 pub struct RecordedMasterFile {
     pub cache_path: PathBuf,
-    /// Same rig, kind, exposure, filter and temperature: masters that serve
-    /// the same lights, of which a newer one replaces an older.
-    pub identity: String,
+    /// Its kind and its exact set of source frames. A newer master with the
+    /// same key was built from the same frames (after a version change, a
+    /// new dependency or another masking mode), so it replaces this one for
+    /// good: no lights can need the older file again.
+    pub sources: String,
     pub created_at: i64,
     /// Every source frame is still on disk, so a removed master can be built
     /// again. A master whose frames are gone is the only copy left.
     pub rebuildable: bool,
 }
 
-/// cache_path, rig_uuid, kind, exposure_s, filter_name, camera_temp,
-/// created_at, source_frame_uuids.
-type MasterFileRow = (
-    String,
-    String,
-    String,
-    Option<f64>,
-    Option<String>,
-    Option<f64>,
-    i64,
-    String,
-);
+/// What the cleanup may do to a catalog's masters, if anything: nothing on
+/// a read-only catalog or one a newer build wrote, since there a missing
+/// master cannot be recorded again and would not be rebuilt.
+pub fn master_catalog_rebuilds(conn: &Connection) -> bool {
+    !conn.is_readonly(rusqlite::MAIN_DB).unwrap_or(true)
+        && recorded_schema_version(conn).is_ok_and(|version| version <= CALIBRATION_SCHEMA_VERSION)
+}
 
-/// Every master the catalog records with a file name, with whether its
+/// Every master the catalog records, with its source key and whether its
 /// source frames are still on disk. A catalog without the master table
 /// records none.
 pub fn recorded_master_files(conn: &Connection) -> rusqlite::Result<Vec<RecordedMasterFile>> {
     let mut statement = match conn.prepare(
-        "SELECT cache_path, rig_uuid, kind, exposure_s, filter_name, camera_temp,
-                created_at, source_frame_uuids
+        "SELECT cache_path, kind, created_at, source_frame_uuids
          FROM psf_guard_calibration_master",
     ) {
         Ok(statement) => statement,
@@ -5459,45 +5455,39 @@ pub fn recorded_master_files(conn: &Connection) -> rusqlite::Result<Vec<Recorded
         }
         Err(error) => return Err(error),
     };
-    let rows: Vec<MasterFileRow> = statement
+    let rows: Vec<(String, String, i64, String)> = statement
         .query_map([], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-                row.get(6)?,
-                row.get(7)?,
-            ))
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?
         .collect::<rusqlite::Result<_>>()?;
     let mut frame_path =
         conn.prepare("SELECT source_path FROM psf_guard_calibration_frame WHERE frame_uuid = ?1")?;
+    // Masters share frames across versions: look each one up once.
+    let mut on_disk: HashMap<String, bool> = HashMap::new();
     let mut records = Vec::with_capacity(rows.len());
-    for (cache_path, rig, kind, exposure, filter, temperature, created_at, sources) in rows {
-        let uuids: Vec<String> = serde_json::from_str(&sources).unwrap_or_default();
+    for (cache_path, kind, created_at, sources) in rows {
+        let mut uuids: Vec<String> = serde_json::from_str(&sources).unwrap_or_default();
+        uuids.sort();
         let mut rebuildable = !uuids.is_empty();
         for uuid in &uuids {
-            let path: Option<String> = frame_path.query_row([uuid], |row| row.get(0)).optional()?;
-            if !path.is_some_and(|path| Path::new(&path).is_file()) {
+            let present = match on_disk.get(uuid) {
+                Some(present) => *present,
+                None => {
+                    let path: Option<String> =
+                        frame_path.query_row([uuid], |row| row.get(0)).optional()?;
+                    let present = path.is_some_and(|path| Path::new(&path).is_file());
+                    on_disk.insert(uuid.clone(), present);
+                    present
+                }
+            };
+            if !present {
                 rebuildable = false;
                 break;
             }
         }
         records.push(RecordedMasterFile {
             cache_path: PathBuf::from(cache_path),
-            identity: format!(
-                "{rig}|{kind}|{}|{}|{}",
-                exposure
-                    .map(|seconds| (seconds * 10.0).round() as i64)
-                    .unwrap_or(-1),
-                filter.unwrap_or_default(),
-                temperature
-                    .map(|celsius| celsius.round() as i64)
-                    .unwrap_or(i64::MIN),
-            ),
+            sources: format!("{kind}|{}", uuids.join(",")),
             created_at,
             rebuildable,
         });
