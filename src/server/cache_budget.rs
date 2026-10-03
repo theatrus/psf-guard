@@ -655,6 +655,7 @@ mod tests {
         assert_eq!(sizes.stacks, 5000);
     }
 
+    #[cfg(unix)]
     fn aged(path: &Path, bytes: usize, age: Duration) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, vec![0u8; bytes]).unwrap();
