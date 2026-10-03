@@ -156,6 +156,32 @@ fn validate_hierarchy(conn: &Connection, instance: Uuid) -> Result<(), Error> {
     Ok(())
 }
 
+pub(crate) fn attach_project(
+    conn: &Connection,
+    instance: Uuid,
+    into: Uuid,
+    from: Uuid,
+) -> Result<(), Error> {
+    let own = read(conn, instance, Scope::Project, into)?;
+    let mut absorbed = read(conn, instance, Scope::Project, from)?;
+    if own.revision == 0 && absorbed.revision > 0 {
+        absorbed.scope_id = into;
+        absorbed.revision = 1;
+        conn.execute(
+            "INSERT INTO observing_preferences VALUES('project',?1,?2)",
+            params![
+                into.to_string(),
+                serde_json::to_string(&absorbed).map_err(|_| Error::InvalidInput)?
+            ],
+        )?;
+    }
+    conn.execute(
+        "DELETE FROM observing_preferences WHERE scope='project' AND scope_id=?1",
+        [from.to_string()],
+    )?;
+    Ok(())
+}
+
 impl MetaStore {
     pub fn observing_settings(&self, scope: Scope, id: Uuid) -> Result<Settings, Error> {
         read(&self.connection, self.instance_id, scope, id)

@@ -128,3 +128,32 @@ fn parent_edit_that_zeroes_a_child_is_rolled_back() {
     );
     assert!(store.effective_observing_preferences(rig, None).is_ok());
 }
+
+#[test]
+fn project_attachment_preserves_preferences_without_orphaning_records() {
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let rig = store.create_rig(Uuid::new_v4(), "Rig").unwrap().id;
+    let keep = store.create_project(Uuid::new_v4(), "Keep").unwrap().id;
+    for importance in [80, 20] {
+        let from = store.create_project(Uuid::new_v4(), "Absorbed").unwrap().id;
+        let mut settings = Settings::empty(Scope::Project, from);
+        settings.overrides.importance = Some(importance);
+        store.save_observing_settings(&settings).unwrap();
+        store.attach_project(keep, from).unwrap();
+        assert_eq!(
+            store
+                .effective_observing_preferences(rig, Some(keep))
+                .unwrap()
+                .resolved
+                .policy()
+                .importance,
+            80
+        );
+        let mut global = store
+            .observing_settings(Scope::Global, store.instance_id())
+            .unwrap();
+        global.enabled = Some(true);
+        store.save_observing_settings(&global).unwrap();
+    }
+}

@@ -120,3 +120,50 @@ fn selection_corruption_or_deletion_cannot_reset_dwell() {
             .is_err());
     }
 }
+
+#[test]
+fn restart_retains_dwell_when_a_more_important_target_becomes_available() {
+    let mut f = preferred_fixture();
+    f.program.assignment.goals[0].eligible_windows[0].start_ms = START + 1000;
+    let preferences = f.program.observing_preferences.as_mut().unwrap();
+    let mut policy = preferences.policies["short-ha"].policy().clone();
+    policy.importance = 100;
+    preferences.policies.insert(
+        "short-ha".into(),
+        priority::resolve(
+            policy,
+            Source {
+                scope: Scope::Global,
+                id: "global".into(),
+                revision: 1,
+            },
+            &[],
+        )
+        .unwrap(),
+    );
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    let mut ledger = f.open(&path);
+    ledger
+        .begin_geometry_preparation(
+            "prep",
+            "preferred",
+            f.local(),
+            Estimates::default(),
+            f.state.clone(),
+            &f.constraints,
+        )
+        .unwrap();
+    drop(ledger);
+    let mut ledger = f.open(&path);
+    let mut later = f.state.clone();
+    later.now_ms += 2000;
+    assert!(
+        matches!(ledger.evaluate_geometry(later.clone(), &f.constraints).unwrap(), Decision::Acquire { goal_id, .. } if goal_id == "preferred")
+    );
+    later.safety = Safety::Unsafe;
+    assert!(matches!(
+        ledger.evaluate_geometry(later, &f.constraints).unwrap(),
+        Decision::Stop { .. }
+    ));
+}
