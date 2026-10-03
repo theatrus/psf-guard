@@ -15,6 +15,11 @@
 
 ## Fixed
 
+- The quality scan no longer records zero stars for a frame it read while the
+  file was still being copied, or one where HocusFocus finds the stars N.I.N.A.
+  Fast missed (issue #616); such frames are measured again later. A frame
+  whose pixels mostly share one value no longer has noise counted as stars.
+
 - Frames with plenty of stars no longer score near zero because one
   measurement found none (issue #616). When the quality scan finds no stars
   where N.I.N.A. counted 20 or more, the scan is ignored for that frame

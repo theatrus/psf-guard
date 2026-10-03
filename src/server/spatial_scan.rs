@@ -425,12 +425,52 @@ pub fn finalize_scan(store: &RwLock<SpatialMetricsStore>) {
     s.progress.finished_at = Some(chrono::Utc::now().timestamp());
 }
 
+/// Stars the second detector must find to overrule a scan that found none;
+/// fewer agrees with it.
+const SECOND_OPINION_STARS: usize = 20;
+/// How recently a frame must have been written for a constant tail to read
+/// as a copy still under way rather than, say, a registered frame's border.
+const STILL_ARRIVING: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Why a frame's pixels cannot be measured yet, if they cannot: a file
+/// written within the last hour whose data ends in a long run of one value.
+/// Windows copies, sync tools and cross-volume moves create the file at its
+/// full size first and fill it in after, so a scan meanwhile reads a frame
+/// whose unwritten tail is all zero bytes, and finds no stars in it.
+fn still_arriving(
+    data: &[u16],
+    width: usize,
+    modified: Option<std::time::SystemTime>,
+) -> Option<String> {
+    let recent = modified
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age < STILL_ARRIVING);
+    let last = *data.last()?;
+    let run = data
+        .iter()
+        .rev()
+        .take_while(|&&value| value == last)
+        .count();
+    (recent && run >= (width * 2).max(data.len() / 100)).then(|| {
+        format!(
+            "the last {run} pixels all hold one value and the file was written within the \
+             hour: it may still be copying, so it is not measured yet"
+        )
+    })
+}
+
 fn compute_one(
     item: &ScanWorkItem,
     config: &SpatialAnalysisConfig,
 ) -> anyhow::Result<StoredSpatialMetrics> {
     let headers = crate::commands::screen_fits::extract_headers(&item.fits_path);
     let fits = FitsImage::from_file(&item.fits_path)?;
+    let modified = std::fs::metadata(&item.fits_path)
+        .and_then(|metadata| metadata.modified())
+        .ok();
+    if let Some(reason) = still_arriving(&fits.data, fits.width, modified) {
+        anyhow::bail!(reason);
+    }
     let stats = fits.calculate_basic_statistics();
 
     let params = StarDetectionParams {
@@ -442,6 +482,26 @@ fn compute_one(
     let stretched = stretch_u16_to_u16(&fits.data, &stats.to_stretch_statistics(), &stretch_params);
     let result =
         detect_stars_with_original(&stretched, &fits.data, fits.width, fits.height, &params);
+    // No stars is a strong verdict that condemns a frame. Ask the second
+    // detector before recording it: when that one finds stars, this
+    // measurement failed, and recording it would cap a good frame.
+    if result.star_list.is_empty() {
+        let (second, _) = crate::hocus_focus_star_detection::params_for_frame_path(&item.fits_path);
+        let found = crate::hocus_focus_star_detection::detect_stars_hocus_focus(
+            &fits.data,
+            fits.width,
+            fits.height,
+            &second,
+        )
+        .stars
+        .len();
+        if found >= SECOND_OPINION_STARS {
+            anyhow::bail!(
+                "N.I.N.A. Fast found no stars where HocusFocus found {found}: the measurement \
+                 failed and is not recorded"
+            );
+        }
+    }
     let positions: Vec<(f64, f64)> = result.star_list.iter().map(|s| s.position).collect();
     // N.I.N.A. measures each accepted star on the full-resolution original.
     // Convert its background-subtracted aperture flux from stored units to
@@ -681,6 +741,108 @@ pub type SharedSpatialStore = Arc<RwLock<SpatialMetricsStore>>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A mono 16-bit FITS of a noisy sky with Gaussian stars, as a camera
+    /// writes it (BZERO 32768). Returns the path and where the data starts.
+    fn star_field(dir: &Path, name: &str) -> (PathBuf, usize) {
+        let (width, height) = (640usize, 480usize);
+        let mut seed = 12345u64;
+        let mut random = move || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            ((seed >> 33) as f64) / f64::from(1u32 << 31)
+        };
+        let mut pixels = vec![0f64; width * height];
+        for value in &mut pixels {
+            *value = 800.0 + (random() - 0.5) * 60.0;
+        }
+        for _ in 0..150 {
+            let (cx, cy) = (
+                8.0 + random() * (width as f64 - 16.0),
+                8.0 + random() * (height as f64 - 16.0),
+            );
+            let peak = 3000.0 + random() * 20000.0;
+            for y in (cy as usize).saturating_sub(6)..((cy as usize) + 7).min(height) {
+                for x in (cx as usize).saturating_sub(6)..((cx as usize) + 7).min(width) {
+                    let d2 = (x as f64 - cx).powi(2) + (y as f64 - cy).powi(2);
+                    pixels[y * width + x] += peak * (-d2 / (2.0 * 1.6f64.powi(2))).exp();
+                }
+            }
+        }
+        let mut header = Vec::new();
+        for card in [
+            "SIMPLE  =                    T".to_string(),
+            "BITPIX  =                   16".to_string(),
+            "NAXIS   =                    2".to_string(),
+            format!("NAXIS1  = {width:>20}"),
+            format!("NAXIS2  = {height:>20}"),
+            "BZERO   =                32768".to_string(),
+            "BSCALE  =                    1".to_string(),
+            "IMAGETYP= 'LIGHT'".to_string(),
+            "END".to_string(),
+        ] {
+            let mut bytes = card.into_bytes();
+            bytes.resize(80, b' ');
+            header.extend_from_slice(&bytes);
+        }
+        header.resize(header.len().div_ceil(2880) * 2880, b' ');
+        let start = header.len();
+        let mut data: Vec<u8> = pixels
+            .iter()
+            .flat_map(|value| {
+                let stored = (value.clamp(0.0, 65535.0) as i64 - 32768) as i16;
+                stored.to_be_bytes()
+            })
+            .collect();
+        data.resize(data.len().div_ceil(2880) * 2880, 0);
+        let path = dir.join(name);
+        std::fs::write(&path, [header, data].concat()).unwrap();
+        (path, start)
+    }
+
+    fn item(path: &Path) -> ScanWorkItem {
+        ScanWorkItem {
+            image_id: 1,
+            filename: path.file_name().unwrap().to_string_lossy().into_owned(),
+            fits_path: path.to_path_buf(),
+            source_generation: 0,
+            source_revision: None,
+        }
+    }
+
+    #[test]
+    fn a_frame_still_being_copied_is_not_measured_as_starless() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = SpatialAnalysisConfig::default();
+        let (whole, _) = star_field(temp.path(), "whole.fits");
+        let measured = compute_one(&item(&whole), &config).unwrap();
+        assert!(measured.star_count > 50, "{}", measured.star_count);
+
+        // The same frame with its last 60% not yet written: full size, zeros.
+        let (copying, start) = star_field(temp.path(), "copying.fits");
+        let mut bytes = std::fs::read(&copying).unwrap();
+        let data_len = 640 * 480 * 2;
+        let cut = start + data_len * 2 / 5;
+        bytes[cut..start + data_len].fill(0);
+        std::fs::write(&copying, bytes).unwrap();
+
+        let error = compute_one(&item(&copying), &config).unwrap_err();
+        assert!(
+            error.to_string().contains("may still be copying"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_old_constant_tail_is_a_border_not_a_copy() {
+        let mut data = vec![900u16; 1000];
+        data.extend(std::iter::repeat_n(0, 500));
+        let now = std::time::SystemTime::now();
+        let long_ago = now - std::time::Duration::from_secs(86_400);
+        assert!(still_arriving(&data, 100, Some(now)).is_some());
+        assert!(still_arriving(&data, 100, Some(long_ago)).is_none());
+        // A short run is ordinary data.
+        assert!(still_arriving(&data[..1100], 100, Some(now)).is_none());
+    }
 
     fn store_with(entries: Vec<StoredSpatialMetrics>) -> RwLock<SpatialMetricsStore> {
         RwLock::new(SpatialMetricsStore {
