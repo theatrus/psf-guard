@@ -741,7 +741,7 @@ in each:
 
 Stacks and masters go in the cache unless something names their own folder.
 The command line wins over the config file. A folder neither names can be
-chosen in Settings → Stacking → **Disk use** → **Folders**, in the desktop
+chosen in Settings → **Storage** → **Folders**, in the desktop
 app too; Settings shows a fixed folder but cannot change it. Choosing
 folders needs database management.
 
@@ -766,7 +766,7 @@ desktop app, **Restart now** restarts the whole app, because a server
 restarted inside a running app could still have the old server writing; such
 a restart keeps the old folders until the next full start.
 
-Settings → Stacking → **Disk use** shows every volume the three folders sit
+Settings → **Storage** → **Disk use** shows every volume the three folders sit
 on: how full it is, which folders and databases it holds, and how much of it
 is previews, stacks and masters.
 

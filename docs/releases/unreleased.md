@@ -28,12 +28,12 @@
 - Stacks and calibration masters can live on their own volumes. Name them
   with `--stack-dir` and `--calibration-dir` (or `stack_directory` and
   `calibration_directory` under `[cache]`), or choose them, and the cache, in
-  Settings → Stacking → **Disk use** → **Folders**, the desktop app included.
+  Settings → **Storage** → **Folders**, the desktop app included.
   A folder saved in Settings takes effect at the next start, which moves the
   files across first; if a move fails, PSF Guard moves them back, keeps the old
   folder, and tries again next time.
 
-- A disk limit: Settings → Stacking → **Disk use** shows how full each volume
+- A disk limit: Settings → **Storage** → **Disk use** shows how full each volume
   the cache, stacks and masters sit on is and what each holds. Past **Most of
   the volume to use** (90% by default) PSF Guard deletes image previews from
   that volume, least recently viewed first, then old stack checkpoints. Stacks
@@ -265,6 +265,9 @@
   targets; typing any rig's name, database or target finds it.
 
 ## Changed
+
+- Disk use and the storage folders have their own **Storage** tab in Settings,
+  instead of sitting under Stacking.
 
 - Automatic refresh restacks only the channels whose frames or grades
   changed, as one build per channel; after a Build stacks it no longer

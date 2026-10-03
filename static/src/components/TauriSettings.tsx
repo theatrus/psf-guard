@@ -52,7 +52,7 @@ import PathField from './PathField';
 /**
  * Settings groups unrelated jobs into named tabs so each stays easy to find.
  */
-type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'stacking' | 'review' | 'rigs' | 'templates' | 'users';
+type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'stacking' | 'storage' | 'review' | 'rigs' | 'templates' | 'users';
 
 const DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE =
   '%YEAR%/%TARGET%/%NIGHT%/%TYPE%';
@@ -161,7 +161,7 @@ export default function TauriSettings({
   const [formRemoteUploadTokenCopyState, setFormRemoteUploadTokenCopyState] =
     useState<'idle' | 'copied' | 'failed'>('idle');
   const [showAddForm, setShowAddForm] = useState(false);
-  const [activeTab, setActiveTab] = useState<SettingsTab>(initialIntent === 'rigs' || initialIntent === 'templates' || initialIntent === 'stacking' ? initialIntent : 'databases');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialIntent === 'rigs' || initialIntent === 'templates' || initialIntent === 'stacking' || initialIntent === 'storage' ? initialIntent : 'databases');
   const director = useDirectorStatus();
   const planningEnabled = !!director.data?.enabled && director.data.protocol_version === 1;
   // true = "create a brand-new TS database from image folders" flow (no
@@ -467,7 +467,7 @@ export default function TauriSettings({
   useEffect(() => {
     if (initialIntent === 'create') { setActiveTab('databases'); startCreate(); }
     if (initialIntent === 'add') { setActiveTab('databases'); void startAdd(); }
-    if (initialIntent === 'rigs' || initialIntent === 'templates' || initialIntent === 'stacking') setActiveTab(initialIntent);
+    if (initialIntent === 'rigs' || initialIntent === 'templates' || initialIntent === 'stacking' || initialIntent === 'storage') setActiveTab(initialIntent);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialIntent]);
 
@@ -881,6 +881,9 @@ export default function TauriSettings({
     { id: 'setups', label: 'Setups' },
     // Server-wide, like the setups, and not management-gated either.
     { id: 'stacking', label: 'Stacking' },
+    // Where generated files live and how full their volumes may get; shown
+    // to everyone, changes need database management.
+    { id: 'storage', label: 'Storage' },
     // Review preferences are stored in this browser, so no gate either.
     { id: 'review', label: 'Review' },
     // Rig setup and the exposure template library are Planning's configuration.
@@ -1856,6 +1859,11 @@ export default function TauriSettings({
               <StackMethodSettings />
               <StackAutomationSettings />
               <WorkerShareSettings />
+            </div>
+          )}
+
+          {currentTab === 'storage' && (
+            <div className="settings-setups">
               <StorageSettings canManage={managementAllowed} />
             </div>
           )}
