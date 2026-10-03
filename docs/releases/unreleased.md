@@ -459,6 +459,14 @@
   differ. Max HFR and Min stars still judge each frame on its own count. A
   scan taken from a file that has changed since is measured again.
 
+- Replaced stacks are now removed in every database, once an hour, not only
+  after that database builds again. The sweep also removes stretch and
+  deconvolution results a week after they were last selected or used,
+  artifact searches of removed stacks, and the stacks of deleted projects.
+  Merging projects keeps the merged project's stacks. A stack index that
+  cannot be read now keeps everything rather than leaving what it names
+  unprotected.
+
 - With previews set to JPEG, background pre-generation now writes the file
   the viewer asks for. It used to save JPEG data under a `.png` name, so the
   viewer missed it and rendered every image again.

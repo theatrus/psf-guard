@@ -105,24 +105,6 @@ pub(super) fn wbpp_index_path(stack_root: &Path, project_id: i32) -> PathBuf {
     crate::server::storage::stacks(stack_root).join(format!("wbpp-project-{project_id}.json"))
 }
 
-/// Every WBPP index below a stack root, for the janitor's keep-set.
-pub(super) fn read_wbpp_indices(directory: &Path) -> Vec<LatestStackPreviews> {
-    let Ok(entries) = std::fs::read_dir(directory) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.starts_with("wbpp-project-") && name.ends_with(".json"))
-        })
-        .filter_map(|entry| std::fs::read(entry.path()).ok())
-        .filter_map(|bytes| serde_json::from_slice(&bytes).ok())
-        .collect()
-}
-
 /// A project's WBPP stacks, empty when it has none.
 pub fn load_index(ctx: &DatabaseContext, project_id: i32) -> LatestStackPreviews {
     std::fs::read(wbpp_index_path(&ctx.stack_root, project_id))

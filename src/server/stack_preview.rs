@@ -1149,8 +1149,11 @@ impl StackPreviewManager {
 
     /// Everything on disk that is still referenced: jobs a panel may poll,
     /// and jobs a durable latest index still names. Reads every project's
-    /// index because a stack root hosts every project of a database.
-    fn cache_keep_set(&self, stack_root: &FsPath) -> janitor::KeepSet {
+    /// index because a stack root hosts every project of a database. Fails
+    /// with the index it could not read: without it, everything that index
+    /// names would look unreferenced.
+    fn cache_keep_set(&self, stack_root: &FsPath) -> Result<janitor::KeepSet, PathBuf> {
+        use crate::server::storage::{stack_folder, stack_kind, stacks};
         let mut mono_job_ids: std::collections::HashSet<String> =
             self.jobs.lock().unwrap().keys().cloned().collect();
         let mut color_job_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -1162,34 +1165,62 @@ impl StackPreviewManager {
                 color_input_ids.insert(input_id.clone());
             }
         }
-        for latest in
-            read_latest_indices::<LatestStackPreviews>(&crate::server::storage::stacks(stack_root))
-                .into_iter()
-                .chain(wbpp_stacks::read_wbpp_indices(
-                    &crate::server::storage::stacks(stack_root),
-                ))
+        let stacks = stacks(stack_root);
+        for latest in try_read_indices::<LatestStackPreviews>(&stacks, "latest-project-")?
+            .into_iter()
+            .chain(try_read_indices::<LatestStackPreviews>(
+                &stacks,
+                "wbpp-project-",
+            )?)
         {
             for group in latest.groups {
                 mono_job_ids.insert(group.job_id);
             }
         }
-        for (job_id, input_id) in color::latest_color_references(stack_root) {
-            color_job_ids.insert(job_id);
-            if let Some(input_id) = input_id {
-                color_input_ids.insert(input_id);
+        for latest in try_read_indices::<color::LatestStackColorPreviews>(
+            &stack_folder(stack_root, stack_kind::COLOR),
+            "latest-project-",
+        )? {
+            for job in latest.jobs {
+                color_job_ids.insert(job.job_id);
+                if let Some(input_id) = job.linear_input_id {
+                    color_input_ids.insert(input_id);
+                }
             }
         }
-        janitor::KeepSet {
+        let (stretch_ids, deconvolution_ids) = stretch::kept_processing(stack_root)?;
+        let mut artifact_search_ids: std::collections::HashSet<String> =
+            self.artifact_jobs.lock().unwrap().keys().cloned().collect();
+        artifact_search_ids.extend(artifact::kept_searches(
+            stack_root,
+            &mono_job_ids,
+            &color_job_ids,
+        ));
+        Ok(janitor::KeepSet {
             mono_job_ids,
             color_job_ids,
             color_input_ids,
-        }
+            stretch_ids,
+            deconvolution_ids,
+            artifact_search_ids,
+        })
     }
 
-    /// Sweep superseded artifacts after a build settles. Failures are logged;
-    /// pruning never fails a build.
+    /// Sweep superseded artifacts after a build settles, and each hour.
+    /// Failures are logged; pruning never fails a build.
     pub(super) fn prune_cache(&self, stack_root: &FsPath) {
-        let keep = self.cache_keep_set(stack_root);
+        let keep = match self.cache_keep_set(stack_root) {
+            Ok(keep) => keep,
+            Err(unreadable) => {
+                tracing::warn!(
+                    "Not pruning stacks below {}: {} could not be read, so what it names \
+                     cannot be told from what nothing names",
+                    stack_root.display(),
+                    unreadable.display()
+                );
+                return;
+            }
+        };
         janitor::prune(stack_root, &keep, SEIZA_STACKING_VERSION);
         let active_sources = self
             .jobs
@@ -4674,7 +4705,97 @@ fn manifest_path(stack_root: &FsPath, job_id: &str) -> PathBuf {
     stack_dir(stack_root, job_id).join("manifest.json")
 }
 
-/// Parse every `latest-project-*.json` directly inside a directory.
+/// Sweep every database's stack folder an hour apart: the sweep after each
+/// build only reaches databases that still build. Each pass also drops the
+/// indices of projects a catalog no longer has. The first pass waits ten
+/// minutes, past the journal restore. Holds the state weakly, so a server
+/// the desktop app restarted stops its janitor with it.
+pub async fn run_janitor(state: Arc<AppState>) {
+    let state = Arc::downgrade(&state);
+    tokio::time::sleep(std::time::Duration::from_secs(10 * 60)).await;
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
+    loop {
+        interval.tick().await;
+        let Some(live) = state.upgrade() else {
+            return;
+        };
+        for ctx in live.all_databases() {
+            let state = Arc::clone(&live);
+            let _ = tokio::task::spawn_blocking(move || sweep_database(&state, &ctx)).await;
+        }
+    }
+}
+
+/// Move a merged project's stacks onto the project it merged into, so the
+/// sweep does not take them as a gone project's.
+pub fn move_project_stacks(ctx: &DatabaseContext, from: i32, to: i32) {
+    janitor::move_project_indices(&ctx.stack_root, from, to);
+}
+
+fn sweep_database(state: &AppState, ctx: &DatabaseContext) {
+    // The shared request connection is only borrowed when it is free.
+    let live_projects: Option<std::collections::HashSet<i32>> = {
+        let connection = ctx.db();
+        let Ok(connection) = connection.try_lock() else {
+            return;
+        };
+        connection
+            .prepare("SELECT Id FROM project")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| row.get::<_, i32>(0))?
+                    .collect::<rusqlite::Result<_>>()
+            })
+            .ok()
+    };
+    let orphaned = live_projects
+        .as_ref()
+        .map(|live| janitor::drop_orphaned_indices(&ctx.stack_root, live))
+        .unwrap_or(0);
+    if orphaned > 0 {
+        tracing::info!(
+            db = %ctx.id,
+            orphaned_indices = orphaned,
+            "Dropped the stack indices of projects the catalog no longer has"
+        );
+    }
+    state.stack_previews.prune_cache(&ctx.stack_root);
+}
+
+/// Every `<prefix>*.json` index in a folder, or the first that could not be
+/// read or parsed. A missing folder holds none.
+pub(crate) fn try_read_indices<T: serde::de::DeserializeOwned>(
+    directory: &FsPath,
+    prefix: &str,
+) -> Result<Vec<T>, PathBuf> {
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => return Err(directory.to_path_buf()),
+    };
+    let mut indices = Vec::new();
+    for entry in entries.flatten() {
+        let named = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(prefix) && name.ends_with(".json"));
+        if !named {
+            continue;
+        }
+        let path = entry.path();
+        let parsed = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        match parsed {
+            Some(index) => indices.push(index),
+            None => return Err(path),
+        }
+    }
+    Ok(indices)
+}
+
+/// Parse every `latest-project-*.json` directly inside a directory,
+/// skipping any that cannot be read.
 pub(crate) fn read_latest_indices<T: serde::de::DeserializeOwned>(directory: &FsPath) -> Vec<T> {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return Vec::new();
@@ -4864,6 +4985,49 @@ mod tests {
         }
     }
     use super::*;
+
+    #[test]
+    fn an_unreadable_processing_selection_keeps_every_stretch() {
+        let cache = tempfile::tempdir().unwrap();
+        let stretch = crate::server::storage::stack_folder(
+            cache.path(),
+            crate::server::storage::stack_kind::STRETCH,
+        )
+        .join("e".repeat(64));
+        std::fs::create_dir_all(&stretch).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 86_400);
+        filetime::set_file_mtime(&stretch, filetime::FileTime::from_system_time(old)).unwrap();
+        let selections = crate::server::storage::stack_processing(cache.path());
+        std::fs::create_dir_all(&selections).unwrap();
+        // A selection torn by a crash: it might have named this stretch.
+        std::fs::write(selections.join("torn.json"), "").unwrap();
+
+        StackPreviewManager::default().prune_cache(cache.path());
+
+        assert!(stretch.exists());
+        std::fs::remove_file(selections.join("torn.json")).unwrap();
+        StackPreviewManager::default().prune_cache(cache.path());
+        assert!(!stretch.exists());
+    }
+
+    #[test]
+    fn an_unreadable_index_stops_the_sweep() {
+        let cache = tempfile::tempdir().unwrap();
+        let stacks = cache.path().join("stack-previews");
+        let job = stacks.join("d".repeat(64));
+        std::fs::create_dir_all(&job).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 86_400);
+        filetime::set_file_mtime(&job, filetime::FileTime::from_system_time(old)).unwrap();
+        // An index from a newer build, or a torn write: what does it name?
+        std::fs::write(stacks.join("latest-project-1.json"), "{not json").unwrap();
+
+        StackPreviewManager::default().prune_cache(cache.path());
+
+        assert!(job.exists());
+        std::fs::remove_file(stacks.join("latest-project-1.json")).unwrap();
+        StackPreviewManager::default().prune_cache(cache.path());
+        assert!(!job.exists());
+    }
 
     fn sky_orientation() -> StackSkyOrientation {
         StackSkyOrientation::source_frame(100, 80, orientation_source::SKY_ANCHOR)

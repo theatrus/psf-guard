@@ -19,6 +19,14 @@
 //! grace on top protects directories a build or an open inspector may still
 //! be touching.
 //!
+//! Stretch and deconvolution results are kept while a processing selection
+//! names them; a variant nobody selected goes a week after its last use. An
+//! artifact search goes with the stack it searched. Index files of projects
+//! the catalog no longer has go too, so their stacks follow (see
+//! [`drop_orphaned_indices`]); a merged project's indices move to the
+//! project it merged into first. An index or selection that cannot be read
+//! stops the sweep: everything it names would otherwise look unreferenced.
+//!
 //! Resume checkpoints are superseded in place per target/channel and are
 //! kept until then. The only checkpoints deleted outright are those that can
 //! never resume again — written by another pipeline version — and orphaned
@@ -33,12 +41,20 @@ use std::time::{Duration, SystemTime};
 /// swept out from under it.
 const UNREFERENCED_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// How long an unselected stretch or deconvolution stays after it was last
+/// selected or used: a person comparing variants may pick one again within
+/// days.
+const UNSELECTED_PROCESSING_GRACE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
 /// Everything the janitor must not delete, gathered by the caller from the
 /// latest indices and the in-memory job maps.
 pub(super) struct KeepSet {
     pub mono_job_ids: HashSet<String>,
     pub color_job_ids: HashSet<String>,
     pub color_input_ids: HashSet<String>,
+    pub stretch_ids: HashSet<String>,
+    pub deconvolution_ids: HashSet<String>,
+    pub artifact_search_ids: HashSet<String>,
 }
 
 /// A stack job directory name: the lowercase hex SHA-256 the job hash writes.
@@ -60,6 +76,15 @@ fn old_enough(path: &Path, now: SystemTime, age: Duration) -> bool {
 }
 
 fn prune_directories(root: &Path, keep: &HashSet<String>, now: SystemTime) -> usize {
+    prune_directories_older_than(root, keep, now, UNREFERENCED_GRACE)
+}
+
+fn prune_directories_older_than(
+    root: &Path,
+    keep: &HashSet<String>,
+    now: SystemTime,
+    grace: Duration,
+) -> usize {
     let Ok(entries) = std::fs::read_dir(root) else {
         return 0;
     };
@@ -71,7 +96,7 @@ fn prune_directories(root: &Path, keep: &HashSet<String>, now: SystemTime) -> us
             continue;
         }
         let path = entry.path();
-        if !path.is_dir() || !old_enough(&path, now, UNREFERENCED_GRACE) {
+        if !path.is_dir() || !old_enough(&path, now, grace) {
             continue;
         }
         match std::fs::remove_dir_all(&path) {
@@ -170,11 +195,29 @@ pub(super) fn prune(stack_root: &Path, keep: &KeepSet, stacking_version: &str) {
         now,
     );
     let removed_reference_scores = super::reference::prune(stack_root);
+    let removed_processing = prune_directories_older_than(
+        &stack_folder(stack_root, stack_kind::STRETCH),
+        &keep.stretch_ids,
+        now,
+        UNSELECTED_PROCESSING_GRACE,
+    ) + prune_directories_older_than(
+        &stack_folder(stack_root, stack_kind::DECONVOLUTION),
+        &keep.deconvolution_ids,
+        now,
+        UNSELECTED_PROCESSING_GRACE,
+    );
+    let removed_searches = prune_directories(
+        &stack_folder(stack_root, stack_kind::ARTIFACT_SEARCHES),
+        &keep.artifact_search_ids,
+        now,
+    );
     if removed_mono
         + removed_color
         + removed_inputs
         + removed_checkpoints
         + removed_reference_scores
+        + removed_processing
+        + removed_searches
         > 0
     {
         tracing::info!(
@@ -183,8 +226,128 @@ pub(super) fn prune(stack_root: &Path, keep: &KeepSet, stacking_version: &str) {
             removed_inputs,
             removed_checkpoints,
             removed_reference_scores,
+            removed_processing,
+            removed_searches,
             "Pruned superseded stack cache entries"
         );
+    }
+}
+
+/// Remove the stack indices of projects the catalog no longer has (merged
+/// or deleted), so the stacks they name stop being referenced. `live` is
+/// every project id the catalog holds.
+pub(super) fn drop_orphaned_indices(stack_root: &Path, live: &HashSet<i32>) -> usize {
+    use crate::server::storage::{stack_folder, stack_kind, stacks};
+    let mut removed = 0;
+    for (folder, prefix) in [
+        (stacks(stack_root), "latest-project-"),
+        (stacks(stack_root), "wbpp-project-"),
+        (
+            stack_folder(stack_root, stack_kind::COLOR),
+            "latest-project-",
+        ),
+    ] {
+        let Ok(entries) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(project_id) = name
+                .to_str()
+                .and_then(|name| name.strip_prefix(prefix))
+                .and_then(|rest| rest.strip_suffix(".json"))
+                .and_then(|id| id.parse::<i32>().ok())
+            else {
+                continue;
+            };
+            if live.contains(&project_id) {
+                continue;
+            }
+            match std::fs::remove_file(entry.path()) {
+                Ok(()) => removed += 1,
+                Err(error) => tracing::warn!(
+                    "Failed to remove the stack index of gone project {project_id}: {error}"
+                ),
+            }
+        }
+    }
+    removed
+}
+
+/// Move a merged project's stack indices onto the project it merged into,
+/// so its stacks stay referenced. Entries join the destination's own;
+/// a destination entry naming the same job wins. An index that cannot be
+/// read is left where it is, so nothing it names is lost.
+pub fn move_project_indices(stack_root: &Path, from: i32, to: i32) {
+    use crate::server::storage::{stack_folder, stack_kind, stacks};
+    for (folder, prefix, list) in [
+        (stacks(stack_root), "latest-project-", "groups"),
+        (stacks(stack_root), "wbpp-project-", "groups"),
+        (
+            stack_folder(stack_root, stack_kind::COLOR),
+            "latest-project-",
+            "jobs",
+        ),
+    ] {
+        let source = folder.join(format!("{prefix}{from}.json"));
+        let target = folder.join(format!("{prefix}{to}.json"));
+        let read = |path: &Path| -> Option<serde_json::Value> {
+            serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+        };
+        if !source.exists() {
+            continue;
+        }
+        let Some(mut moved) = read(&source) else {
+            tracing::warn!("Left {} in place: it could not be read", source.display());
+            continue;
+        };
+        let merged = if target.exists() {
+            let Some(mut kept) = read(&target) else {
+                tracing::warn!(
+                    "Left {} in place: {} could not be read",
+                    source.display(),
+                    target.display()
+                );
+                continue;
+            };
+            let known: HashSet<String> = kept[list]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| entry["job_id"].as_str().map(str::to_string))
+                .collect();
+            let incoming: Vec<serde_json::Value> = moved[list]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|entry| {
+                    entry["job_id"]
+                        .as_str()
+                        .is_none_or(|job| !known.contains(job))
+                })
+                .collect();
+            if let Some(entries) = kept[list].as_array_mut() {
+                entries.extend(incoming);
+            }
+            kept
+        } else {
+            moved["project_id"] = to.into();
+            moved
+        };
+        let staged = folder.join(format!(".{prefix}{to}.json.moving"));
+        let written = serde_json::to_vec(&merged)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| std::fs::write(&staged, bytes))
+            .and_then(|()| std::fs::rename(&staged, &target))
+            .and_then(|()| std::fs::remove_file(&source));
+        if let Err(error) = written {
+            let _ = std::fs::remove_file(&staged);
+            tracing::warn!(
+                "Could not move {} onto project {to}: {error}",
+                source.display()
+            );
+        }
     }
 }
 
@@ -206,6 +369,9 @@ mod tests {
 
     fn keep(mono: &[&str]) -> KeepSet {
         KeepSet {
+            stretch_ids: HashSet::new(),
+            deconvolution_ids: HashSet::new(),
+            artifact_search_ids: HashSet::new(),
             mono_job_ids: mono.iter().map(|id| (*id).to_string()).collect(),
             color_job_ids: HashSet::new(),
             color_input_ids: HashSet::new(),
@@ -287,6 +453,9 @@ mod tests {
                 mono_job_ids: HashSet::new(),
                 color_job_ids: HashSet::new(),
                 color_input_ids: [hex_name('e')].into_iter().collect(),
+                stretch_ids: HashSet::new(),
+                deconvolution_ids: HashSet::new(),
+                artifact_search_ids: HashSet::new(),
             },
             "test",
         );
@@ -357,5 +526,87 @@ mod tests {
 
         assert!(fresh_orphan.exists(), "a save may be mid-flight");
         assert!(!old_orphan.exists(), "half a checkpoint resumes nothing");
+    }
+
+    #[test]
+    fn unselected_processing_stays_a_week_and_selected_processing_stays() {
+        let cache = tempfile::tempdir().unwrap();
+        let stretch = cache.path().join("stack-previews").join("stretch");
+        let selected = stretch.join(hex_name('a'));
+        let recent = stretch.join(hex_name('b'));
+        let old = stretch.join(hex_name('c'));
+        for path in [&selected, &recent, &old] {
+            fs::create_dir_all(path).unwrap();
+            age(path, 8 * 86_400);
+        }
+        age(&recent, 2 * 86_400);
+        let mut set = keep(&[]);
+        set.stretch_ids.insert(hex_name('a'));
+
+        prune(cache.path(), &set, "test");
+
+        assert!(selected.exists());
+        assert!(recent.exists());
+        assert!(!old.exists());
+    }
+
+    #[test]
+    fn indices_of_projects_the_catalog_no_longer_has_go() {
+        let cache = tempfile::tempdir().unwrap();
+        let stacks = cache.path().join("stack-previews");
+        fs::create_dir_all(stacks.join("color")).unwrap();
+        for name in [
+            "latest-project-1.json",
+            "latest-project-2.json",
+            "wbpp-project-2.json",
+            "color/latest-project-2.json",
+        ] {
+            fs::write(stacks.join(name), "{}").unwrap();
+        }
+
+        let removed = drop_orphaned_indices(cache.path(), &[1].into_iter().collect());
+
+        assert_eq!(removed, 3);
+        assert!(stacks.join("latest-project-1.json").exists());
+        assert!(!stacks.join("wbpp-project-2.json").exists());
+        assert!(!stacks.join("color/latest-project-2.json").exists());
+    }
+
+    #[test]
+    fn a_merged_projects_indices_join_the_project_it_merged_into() {
+        let cache = tempfile::tempdir().unwrap();
+        let stacks = cache.path().join("stack-previews");
+        fs::create_dir_all(stacks.join("color")).unwrap();
+        fs::write(
+            stacks.join("latest-project-2.json"),
+            r#"{"project_id":2,"groups":[{"job_id":"a"},{"job_id":"b"}]}"#,
+        )
+        .unwrap();
+        fs::write(
+            stacks.join("latest-project-1.json"),
+            r#"{"project_id":1,"groups":[{"job_id":"b"},{"job_id":"c"}]}"#,
+        )
+        .unwrap();
+        fs::write(
+            stacks.join("wbpp-project-2.json"),
+            r#"{"project_id":2,"groups":[{"job_id":"w"}]}"#,
+        )
+        .unwrap();
+
+        move_project_indices(cache.path(), 2, 1);
+
+        let read = |name: &str| -> serde_json::Value {
+            serde_json::from_slice(&fs::read(stacks.join(name)).unwrap()).unwrap()
+        };
+        let jobs: Vec<String> = read("latest-project-1.json")["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["job_id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(jobs, ["b", "c", "a"]);
+        assert_eq!(read("wbpp-project-1.json")["project_id"], 1);
+        assert!(!stacks.join("latest-project-2.json").exists());
+        assert!(!stacks.join("wbpp-project-2.json").exists());
     }
 }

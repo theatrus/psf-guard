@@ -1306,6 +1306,35 @@ fn artifact_dir(stack_root: &FsPath, search_id: &str) -> PathBuf {
     .join(search_id)
 }
 
+/// Artifact searches whose stack is still kept. A search whose manifest
+/// cannot be read is kept: it may still be writing.
+pub(super) fn kept_searches(
+    stack_root: &FsPath,
+    mono_job_ids: &std::collections::HashSet<String>,
+    color_job_ids: &std::collections::HashSet<String>,
+) -> std::collections::HashSet<String> {
+    let folder = crate::server::storage::stack_folder(
+        stack_root,
+        crate::server::storage::stack_kind::ARTIFACT_SEARCHES,
+    );
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return Default::default();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+        .filter(|search_id| {
+            std::fs::read(artifact_manifest_path(stack_root, search_id))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<ArtifactSearchJob>(&bytes).ok())
+                .is_none_or(|job| {
+                    mono_job_ids.contains(&job.source_job_id)
+                        || color_job_ids.contains(&job.source_job_id)
+                })
+        })
+        .collect()
+}
+
 fn artifact_manifest_path(stack_root: &FsPath, search_id: &str) -> PathBuf {
     artifact_dir(stack_root, search_id).join("manifest.json")
 }

@@ -435,6 +435,8 @@ async fn run_server_internal(
             cache_budget::run(state_clone).await;
         });
     }
+    // Remove superseded stacks in every database, not only those building.
+    tokio::spawn(stack_preview::run_janitor(Arc::clone(&state)));
 
     // Start background image pre-generation if enabled
     if config.pregeneration_config.is_enabled() {
