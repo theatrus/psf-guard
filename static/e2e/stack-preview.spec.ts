@@ -377,7 +377,10 @@ test('inspects exact calibration masters across mono sessions and color channels
 test('builds a real three-frame Seiza stack and exposes its frame decisions', async ({
   page,
 }) => {
-  test.setTimeout(240_000);
+  // Two real builds (each bounded at 210 s below), three artifact searches
+  // and several reloads: 240 s left a slow runner timing out in the last
+  // steps although every one of them passed.
+  test.setTimeout(480_000);
   await page.setViewportSize({ width: 1440, height: 1600 });
 
   // This spec is about the stack queue. Keep the ordinary image-preview queue
