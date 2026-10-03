@@ -99,6 +99,7 @@ import type { GuidFillReport, GuidReport,
   StackMethodSettings,
   WorkerSettings,
   StorageSettings,
+  StorageFoldersUpdate,
   ArtifactSearchJob,
   ReferenceRegion,
   LatestStackPreviews,
@@ -744,6 +745,18 @@ export const apiClient = {
       max_volume_percent: maxVolumePercent,
     });
     if (!data.data) throw new Error(data.error || 'Failed to save the disk limit');
+    return data.data;
+  },
+
+  /** Saves where the folders go from the next start on. */
+  updateStorageFolders: async (folders: StorageFoldersUpdate): Promise<StorageSettings> => {
+    const apiInstance = await getApi();
+    // The response interceptor turns a refusal into its own message.
+    const { data } = await apiInstance.put<ApiResponse<StorageSettings>>(
+      '/settings/storage/folders',
+      folders,
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to save the folders');
     return data.data;
   },
 

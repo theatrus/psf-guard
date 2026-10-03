@@ -14,7 +14,17 @@ function wrapper() {
 }
 
 const GiB = 2 ** 30;
-const settings = (limit: number, overLimit = false) => ({
+const folders = (stacksNext = '/cache') => [
+  { kind: 'cache', path: '/cache', next_path: '/cache', source: 'server_config', chosen: null },
+  {
+    kind: 'stacks', path: '/cache', next_path: stacksNext,
+    source: stacksNext === '/cache' ? 'default' : 'settings',
+    chosen: stacksNext === '/cache' ? null : stacksNext,
+  },
+  { kind: 'calibration', path: '/cache', next_path: '/cache', source: 'default', chosen: null },
+];
+
+const settings = (limit: number, overLimit = false, stacksNext = '/cache') => ({
   success: true,
   error: null,
   data: {
@@ -27,6 +37,9 @@ const settings = (limit: number, overLimit = false) => ({
       preview_bytes: 40 * GiB, stack_bytes: 120 * GiB, calibration_bytes: 8 * GiB, other_bytes: 0,
       culled_files: 1200, freed_bytes: 3 * GiB, over_limit: overLimit, checked_unix: 1,
     }],
+    folders: folders(stacksNext),
+    folder_notes: [],
+    can_choose_folders: true,
   },
 });
 
@@ -56,6 +69,25 @@ describe('StorageSettings', () => {
     fireEvent.change(slider, { target: { value: '80' } });
     fireEvent.pointerUp(slider);
     await waitFor(() => expect(saved).toEqual({ max_volume_percent: 80 }));
+  });
+
+  it('saves a stack folder for the next start and leaves a fixed cache alone', async () => {
+    let saved: unknown = null;
+    server.use(
+      http.get('/api/settings/storage', () => HttpResponse.json(settings(90))),
+      http.put('/api/settings/storage/folders', async ({ request }) => {
+        saved = await request.json();
+        return HttpResponse.json(settings(90, false, '/mnt/stacks'));
+      })
+    );
+    render(<StorageSettings canManage />, { wrapper: wrapper() });
+    expect(await screen.findByLabelText('Cache')).toBeDisabled();
+    expect(screen.getByText('Set by the server config file.')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Stacks'), { target: { value: ' /mnt/stacks ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save folders' }));
+    await waitFor(() => expect(saved).toEqual({ stack_dir: '/mnt/stacks', calibration_dir: '' }));
+    expect(await screen.findByText(/take effect when PSF Guard next starts/)).toBeInTheDocument();
+    expect(screen.getByText('/cache', { selector: 'code' })).toBeInTheDocument();
   });
 
   it('shows the limit but cannot change it without database management', async () => {

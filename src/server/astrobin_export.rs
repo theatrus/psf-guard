@@ -24,7 +24,9 @@ use crate::server::{
     api::ApiResponse,
     database_context::open_scheduler_connection_with_flags,
     extract::DbContext,
-    handlers::{require_database_management_allowed, require_registry_path, AppError},
+    handlers::{
+        require_database_management_allowed, require_registry_path, update_registry, AppError,
+    },
     state::AppState,
 };
 
@@ -69,10 +71,6 @@ pub async fn update_astrobin_settings(
     State(state): State<Arc<AppState>>,
     Json(request): Json<UpdateAstroBinSettingsRequest>,
 ) -> Result<Json<ApiResponse<AstroBinSettingsResponse>>, AppError> {
-    let path = require_registry_path(&state)?;
-    let _registry_guard = state.registry_write.lock().await;
-    let mut registry = DbRegistry::load_or_init(&path)
-        .map_err(|error| AppError::InternalError(error.to_string()))?;
     let filter_ids: BTreeMap<String, u32> = request
         .filter_ids
         .into_iter()
@@ -81,16 +79,14 @@ pub async fn update_astrobin_settings(
         .collect();
     // An empty map is what an absent block already means; storing nothing
     // keeps the registry clean for older builds reading the same file.
-    registry.astrobin = if filter_ids.is_empty() {
-        None
-    } else {
-        Some(AstroBinSettings {
-            filter_ids: filter_ids.clone(),
-        })
-    };
-    registry
-        .save(&path)
-        .map_err(|error| AppError::InternalError(error.to_string()))?;
+    let stored = (!filter_ids.is_empty()).then(|| AstroBinSettings {
+        filter_ids: filter_ids.clone(),
+    });
+    update_registry(&state, |registry| {
+        registry.astrobin = stored;
+        Ok(())
+    })
+    .await?;
     Ok(Json(ApiResponse::success(AstroBinSettingsResponse {
         filter_ids,
     })))

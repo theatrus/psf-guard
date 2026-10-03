@@ -25,7 +25,7 @@ fn register(
         None,
         None,
         None,
-        f._dir.path().join("cache").to_string_lossy().into(),
+        f._dir.path().join("cache"),
     )
     .unwrap();
     f.state
@@ -79,7 +79,7 @@ async fn every_database_project_becomes_a_plan_and_shared_guids_become_one_plan(
         None,
         None,
         None,
-        f._dir.path().join("cache").to_string_lossy().into(),
+        f._dir.path().join("cache"),
     )
     .unwrap();
     f.state
@@ -365,7 +365,7 @@ async fn a_copied_database_file_is_named_and_left_out_of_planning() {
         None,
         None,
         None,
-        a.f._dir.path().join("cache").to_string_lossy().into(),
+        a.f._dir.path().join("cache"),
     )
     .unwrap();
     a.f.state

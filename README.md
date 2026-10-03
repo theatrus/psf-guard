@@ -951,7 +951,9 @@ link_text = "Learn about PSF Guard"
 link_url = "https://psf-guard.com/"
 
 [cache]
-directory = "./cache"
+directory = "./cache"  # fixes the cache; omit it to choose one in Settings
+# stack_directory = "/mnt/nas/psf-guard/stacks"            # default: the cache
+# calibration_directory = "/mnt/nas/psf-guard/masters"     # default: the cache
 file_ttl = "5m"        # 30s, 5m, 1h, 2h30m, 1d ...
 directory_ttl = "5m"
 

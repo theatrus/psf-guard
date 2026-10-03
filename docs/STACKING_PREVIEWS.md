@@ -714,8 +714,42 @@ rebuild never replaces the last successful result.
 
 ## Disk use
 
-Each database caches below the server's cache folder (`--cache-dir`): stacks,
-color previews, WBPP stacks, calibration masters, and image previews.
+Each database keeps its generated files below three folders, one slug folder
+in each:
+
+| Folder | Holds | Set with |
+|---|---|---|
+| Cache | image previews, star lists, plate solves, other per-image results | `--cache-dir`, `[cache] directory` |
+| Stacks | stacks, color previews, WBPP stacks, saved processing, WBPP runs | `--stack-dir`, `[cache] stack_directory` |
+| Calibration masters | masters built from calibration frames | `--calibration-dir`, `[cache] calibration_directory` |
+
+Stacks and masters go in the cache unless something names their own folder.
+The command line wins over the config file. A folder neither names can be
+chosen in Settings → Stacking → **Disk use** → **Folders**, in the desktop
+app too; Settings shows a fixed folder but cannot change it. Choosing
+folders needs database management.
+
+A folder saved in Settings takes effect at the next full start, which moves
+the files there first. Saving records each move, from the folder in use to the
+new one, as `storage.moves` in the settings file. Before the databases open,
+PSF Guard renames each file, or, on another file system, copies it into a
+`.partial` folder that is renamed into place before the original is removed.
+Copies keep file times, which the disk limit reads. Folders merge: a file
+already at the target with the same size and time counts as moved, so a start
+that stops halfway finishes the move the next time. A file that differs is a
+conflict. A folder whose move fails is moved back, PSF Guard keeps using it,
+**Folders** says why, and the move is tried again at the next start. A folder
+that holds another of the three is never carried along with it, and Settings
+refuses folders that sit one inside another. Calibration master records in
+the catalog follow their files, so masters are not built again. A large move
+delays the start, and PSF Guard logs each folder it moves.
+
+Only Settings moves files. A folder changed on the command line or in the
+config file is used as it is, and its old files stay where they were. In the
+desktop app, **Restart now** restarts the whole app, because a server
+restarted inside a running app could still have the old server writing; such
+a restart keeps the old folders until the next full start.
+
 Settings → Stacking → **Disk use** shows the volume each cache sits on, how
 full it is, and how much the cache holds of each kind.
 
@@ -744,8 +778,8 @@ further until none are left. 100%
 turns culling off. Changing the limit needs database management. Windows
 servers do not read their volumes, so the limit does not apply there.
 
-To give stacks more room, point `--cache-dir` at a larger volume, such as a
-network share.
+To give stacks more room, put the stack folder on a larger volume, such as a
+network share, and keep the cache on a fast local disk.
 
 ## Inspect calibration masters
 

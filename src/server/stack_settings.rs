@@ -4,7 +4,7 @@
 
 use crate::db_registry::{DbRegistry, StackAutomationSettings};
 use crate::server::api::ApiResponse;
-use crate::server::handlers::{require_registry_path, AppError};
+use crate::server::handlers::{require_registry_path, update_registry, AppError};
 use crate::server::stack_preview::automatic::{
     self, AutomationPolicy, MAX_DELAY_MINUTES, MAX_NEW_CHANNEL_WINDOW_DAYS,
 };
@@ -152,15 +152,12 @@ pub async fn update_stack_settings(
     State(state): State<Arc<AppState>>,
     Json(request): Json<UpdateStackSettingsRequest>,
 ) -> Result<Json<ApiResponse<StackSettingsResponse>>, AppError> {
-    let path = require_registry_path(&state)?;
-    let _registry_guard = state.registry_write.lock().await;
-    let mut registry = DbRegistry::load_or_init(&path)
-        .map_err(|error| AppError::InternalError(error.to_string()))?;
-    let policy = requested_policy(&request, registry.stacking.as_ref())?;
-    registry.stacking = stored(policy, stored_method(registry.stacking.as_ref()));
-    registry
-        .save(&path)
-        .map_err(|error| AppError::InternalError(error.to_string()))?;
+    let policy = update_registry(&state, |registry| {
+        let policy = requested_policy(&request, registry.stacking.as_ref())?;
+        registry.stacking = stored(policy, stored_method(registry.stacking.as_ref()));
+        Ok(policy)
+    })
+    .await?;
     automatic::configure(policy);
     if !policy.enabled {
         state.auto_stacks.clear();
@@ -211,19 +208,16 @@ pub async fn update_stack_method(
     State(state): State<Arc<AppState>>,
     Json(method): Json<StackMethod>,
 ) -> Result<Json<ApiResponse<StackMethodResponse>>, AppError> {
-    let path = require_registry_path(&state)?;
-    let _registry_guard = state.registry_write.lock().await;
-    let mut registry = DbRegistry::load_or_init(&path)
-        .map_err(|error| AppError::InternalError(error.to_string()))?;
-    let policy = registry
-        .stacking
-        .as_ref()
-        .map(|settings| settings.policy())
-        .unwrap_or_default();
-    registry.stacking = stored(policy, method);
-    registry
-        .save(&path)
-        .map_err(|error| AppError::InternalError(error.to_string()))?;
+    update_registry(&state, |registry| {
+        let policy = registry
+            .stacking
+            .as_ref()
+            .map(|settings| settings.policy())
+            .unwrap_or_default();
+        registry.stacking = stored(policy, method);
+        Ok(())
+    })
+    .await?;
     method::configure(method);
     Ok(Json(ApiResponse::success(method_response(method))))
 }
@@ -300,16 +294,13 @@ pub async fn update_worker_settings(
     State(state): State<Arc<AppState>>,
     Json(request): Json<UpdateWorkerSettingsRequest>,
 ) -> Result<Json<ApiResponse<WorkerSettingsResponse>>, AppError> {
-    let path = require_registry_path(&state)?;
     let workers = stored_workers(&request, state.configured_worker_policy())?;
-    let _registry_guard = state.registry_write.lock().await;
-    let mut registry = DbRegistry::load_or_init(&path)
-        .map_err(|error| AppError::InternalError(error.to_string()))?;
-    registry.workers = workers;
-    registry
-        .save(&path)
-        .map_err(|error| AppError::InternalError(error.to_string()))?;
-    state.apply_worker_settings(registry.workers.as_ref());
+    update_registry(&state, |registry| {
+        registry.workers = workers;
+        Ok(())
+    })
+    .await?;
+    state.apply_worker_settings(workers.as_ref());
     Ok(Json(ApiResponse::success(worker_response(&state))))
 }
 

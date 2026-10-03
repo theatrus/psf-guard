@@ -796,7 +796,7 @@ pub(super) fn service(state: &AppState) -> Arc<SkyImageService> {
     SERVICE
         .get_or_init(|| {
             Arc::new(SkyImageService::new(
-                FilePath::new(&state.cache_dir_root),
+                state.storage_roots.cache.as_path(),
                 DEFAULT_BASE_URL,
             ))
         })

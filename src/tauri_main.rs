@@ -11,7 +11,6 @@ use tracing_subscriber;
 #[derive(Debug, Clone)]
 struct TauriServerConfig {
     static_dir: Option<String>,
-    cache_dir: Option<String>,
     pregeneration: PregenerationConfig,
 }
 
@@ -50,7 +49,6 @@ pub fn main() {
 
     let server_config = TauriServerConfig {
         static_dir: None,
-        cache_dir: None,
         pregeneration: PregenerationConfig::default(),
     };
 
@@ -64,28 +62,6 @@ pub fn main() {
 
     let server_databases = initial_registry.databases.clone();
     let server_astrometry = initial_registry.astrometry.clone();
-    crate::calibration::configure_rotation_tolerance(
-        initial_registry
-            .calibration
-            .as_ref()
-            .and_then(|calibration| calibration.rotation_tolerance_deg),
-    );
-    crate::calibration::configure_external_master_policy(
-        initial_registry
-            .calibration
-            .as_ref()
-            .and_then(|calibration| calibration.external_masters),
-    );
-    crate::calibration::configure_flat_star_masking(
-        initial_registry
-            .calibration
-            .as_ref()
-            .and_then(|calibration| calibration.flat_star_masking)
-            .unwrap_or(false),
-    );
-    crate::server::stack_preview::automatic::configure_from_registry(
-        initial_registry.stacking.as_ref(),
-    );
     let server_config_for_task = server_config.clone();
     let registry_path_for_task = registry_path.clone();
     rt.spawn(async move {
@@ -248,18 +224,11 @@ async fn start_server_for_tauri(
     registry_path: PathBuf,
     shutdown_rx: oneshot::Receiver<()>,
 ) -> anyhow::Result<()> {
-    use crate::config::Config;
-
-    let mut config = Config::default();
-
-    let cache_dir = server_config.cache_dir.clone().unwrap_or_else(|| {
-        let cache_dir = dirs::cache_dir()
-            .unwrap_or_else(|| std::env::temp_dir().join("psf-guard-cache"))
-            .join("psf-guard");
-        cache_dir.to_string_lossy().to_string()
-    });
-    std::fs::create_dir_all(&cache_dir)?;
-    println!("Cache directory: {}", cache_dir);
+    // No config file: Settings choose every folder, and the cache defaults
+    // to the platform cache folder.
+    let default_cache = dirs::cache_dir()
+        .unwrap_or_else(|| std::env::temp_dir().join("psf-guard-cache"))
+        .join("psf-guard");
 
     if databases.is_empty() {
         println!("No databases configured — open settings to add one.");
@@ -277,16 +246,13 @@ async fn start_server_for_tauri(
         println!("System config directory: {}", config_base.display());
     }
 
-    // Tauri server has no TOML config; pull port/host from defaults overridden
-    // by what we computed above.
-    // (host: the desktop app deliberately binds localhost below, not the config.)
-    config.merge_with_cli(None, None, Some(port), None, Some(cache_dir.clone()));
+    // The desktop app deliberately binds localhost.
     let host = "127.0.0.1".to_string();
 
     let server_config = crate::server::ServerConfig {
         databases,
         static_dir: server_config.static_dir,
-        cache_dir,
+        storage: crate::server::storage::StorageConfig::defaulting_to(default_cache),
         host,
         port,
         pregeneration_config: server_config.pregeneration,
@@ -301,7 +267,7 @@ async fn start_server_for_tauri(
         site_banner: None,
         // Tauri binds localhost and does not use browser authentication.
         auth: None,
-        worker_policy: config.get_worker_policy(),
+        worker_policy: crate::config::Config::default().get_worker_policy(),
         // The desktop app has disk to spare and no operator to ask, so it
         // keeps the exact rendition.
         preview_encoding: crate::preview_format::PreviewEncoding::png(),
@@ -478,10 +444,16 @@ async fn restart_server(
 ) -> Result<String, String> {
     tracing::info!("🔄 Server restart requested");
 
-    let (databases, astrometry_config) = {
-        let registry = state.registry.lock().map_err(|e| e.to_string())?;
-        (registry.databases.clone(), registry.astrometry.clone())
-    };
+    // From disk, not the in-memory mirror: Settings save through the
+    // server, which writes the file and never touches the mirror.
+    let registry_path = state
+        .registry_path
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
+    let registry = DbRegistry::load_or_init(&registry_path).map_err(|e| e.to_string())?;
+    let (databases, astrometry_config) = (registry.databases.clone(), registry.astrometry.clone());
+    *state.registry.lock().map_err(|e| e.to_string())? = registry;
 
     {
         let mut shutdown_guard = state.server_shutdown.lock().unwrap();
@@ -510,11 +482,6 @@ async fn restart_server(
     tracing::info!("🚀 Starting new server on {}", server_url);
 
     let base_clone = base.inner().clone();
-    let registry_path = state
-        .registry_path
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
     tokio::spawn(async move {
         if let Err(e) = start_server_for_tauri(
             server_port,

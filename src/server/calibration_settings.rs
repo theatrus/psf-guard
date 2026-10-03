@@ -14,7 +14,7 @@ use crate::calibration::ExternalMasterPolicy;
 use crate::db_registry::{CalibrationSettings, DbRegistry};
 use crate::server::{
     api::ApiResponse,
-    handlers::{require_registry_path, AppError},
+    handlers::{require_registry_path, update_registry, AppError},
     state::AppState,
 };
 
@@ -89,32 +89,28 @@ pub async fn update_calibration_settings(
             ));
         }
     }
-    let path = require_registry_path(&state)?;
-    let _registry_guard = state.registry_write.lock().await;
-    let mut registry = DbRegistry::load_or_init(&path)
-        .map_err(|error| AppError::InternalError(error.to_string()))?;
     // The default policy is not written down, so a registry that only ever
     // held defaults stays clean and older builds see nothing new.
     let external_masters = request
         .external_masters
         .filter(|policy| *policy != ExternalMasterPolicy::default());
-    let flat_star_masking = requested_flat_star_masking(&request, registry.calibration.as_ref());
-    registry.calibration = (request.rotation_tolerance_deg.is_some()
-        || external_masters.is_some()
-        || flat_star_masking)
-        .then_some(CalibrationSettings {
-            rotation_tolerance_deg: request.rotation_tolerance_deg,
-            external_masters,
-            flat_star_masking: flat_star_masking.then_some(true),
-        });
-    registry
-        .save(&path)
-        .map_err(|error| AppError::InternalError(error.to_string()))?;
-    crate::calibration::configure_rotation_tolerance(request.rotation_tolerance_deg);
-    crate::calibration::configure_external_master_policy(external_masters);
-    crate::calibration::configure_flat_star_masking(flat_star_masking);
+    let calibration = update_registry(&state, |registry| {
+        let flat_star_masking =
+            requested_flat_star_masking(&request, registry.calibration.as_ref());
+        registry.calibration = (request.rotation_tolerance_deg.is_some()
+            || external_masters.is_some()
+            || flat_star_masking)
+            .then_some(CalibrationSettings {
+                rotation_tolerance_deg: request.rotation_tolerance_deg,
+                external_masters,
+                flat_star_masking: flat_star_masking.then_some(true),
+            });
+        Ok(registry.calibration.clone())
+    })
+    .await?;
+    crate::calibration::configure(calibration.as_ref());
     Ok(Json(ApiResponse::success(current_response(
-        registry.calibration.as_ref(),
+        calibration.as_ref(),
     ))))
 }
 
