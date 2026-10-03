@@ -19,9 +19,12 @@ export interface ObservingSettings {
   overrides: ObservingOverrides;
   enabled: boolean | null;
   site_id: string | null;
+  project_order?: string[] | null;
 }
 export interface PreferenceSource { scope: PreferenceScope; id: string; revision: number }
 export interface EffectiveObserving {
+  project_order: string[] | null;
+  order_source: PreferenceSource | null;
   enabled: boolean;
   resolved: { policy: ObservingPolicy; provenance: {
     weights: Record<PreferenceFactor, PreferenceSource>;

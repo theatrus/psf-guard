@@ -38,6 +38,36 @@ const OVERHEAD_MS: u64 = 15_000;
 /// Extra attempts beyond the remaining frames, for rejects and aborts.
 const ATTEMPT_MARGIN: f64 = 1.5;
 
+/// Compile project precedence into the existing shared-core priority contract.
+/// Keep objective priority within a project; scores cannot invert project order.
+pub(super) fn apply_project_order(
+    goals: &mut [Goal],
+    projects: &BTreeMap<String, Uuid>,
+    order: &[Uuid],
+) -> Result<(), Error> {
+    let ranks: BTreeMap<_, _> = order.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+    let keys = goals
+        .iter()
+        .map(|g| {
+            let project = projects.get(&g.id).ok_or(Error::Internal)?;
+            Ok((
+                *ranks.get(project).ok_or(Error::Internal)?,
+                std::cmp::Reverse(g.priority),
+            ))
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    let distinct: std::collections::BTreeSet<_> = keys.iter().copied().collect();
+    let priorities: BTreeMap<_, _> = distinct
+        .iter()
+        .enumerate()
+        .map(|(i, key)| (*key, (distinct.len() - i) as u32))
+        .collect();
+    for (goal, key) in goals.iter_mut().zip(keys) {
+        goal.priority = priorities[&key];
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct PullQuery {
@@ -252,7 +282,7 @@ pub(super) fn assemble(
         .map(|(id, p)| Ok((id, p?)))
         .collect::<Result<_, StoreError>>()?;
     let saved: BTreeMap<String, u32> = store.saved_captures_by_goal(rig)?.into_iter().collect();
-    let built = build(
+    let mut built = build(
         &snapshot,
         rig,
         binding.catalog,
@@ -274,29 +304,52 @@ pub(super) fn assemble(
     // Persist the validity interval. A retry must return identical content,
     // while changed inputs or expiry must mint a different assignment identity.
     let assignment_revision = activations.iter().map(|a| a.revision).max().unwrap_or(1);
-    let observing_preferences = if store.effective_observing_preferences(rig, None)?.enabled {
-        let mut policies = BTreeMap::new();
-        let mut bindings = BTreeMap::new();
-        for link in &built.links {
-            let id = link.project_id.to_string();
-            if !policies.contains_key(&id) {
-                policies.insert(
-                    id.clone(),
-                    store
-                        .effective_observing_preferences(rig, Some(link.project_id))?
-                        .resolved,
-                );
+    let preference_settings = store.effective_observing_preferences(rig, None)?;
+    if let Some(order) = &preference_settings.project_order {
+        // Newly created projects follow the saved list, in the same name/ID
+        // order displayed by the editor. Never interleave their objectives.
+        let mut complete_order = order.clone();
+        let unlisted: std::collections::BTreeSet<_> = built
+            .links
+            .iter()
+            .filter(|link| !order.contains(&link.project_id))
+            .map(|link| (&link.project_name, link.project_id))
+            .collect();
+        complete_order.extend(unlisted.into_iter().map(|(_, id)| id));
+        apply_project_order(
+            &mut built.goals,
+            &built
+                .links
+                .iter()
+                .map(|l| (l.goal_id.clone(), l.project_id))
+                .collect(),
+            &complete_order,
+        )?;
+    }
+    let observing_preferences =
+        if preference_settings.project_order.is_none() && preference_settings.enabled {
+            let mut policies = BTreeMap::new();
+            let mut bindings = BTreeMap::new();
+            for link in &built.links {
+                let id = link.project_id.to_string();
+                if !policies.contains_key(&id) {
+                    policies.insert(
+                        id.clone(),
+                        store
+                            .effective_observing_preferences(rig, Some(link.project_id))?
+                            .resolved,
+                    );
+                }
+                bindings.insert(link.goal_id.clone(), id);
             }
-            bindings.insert(link.goal_id.clone(), id);
-        }
-        Some(psf_guard_director_core::priority::ProgramPreferences {
-            schema_version: 1,
-            policies,
-            bindings,
-        })
-    } else {
-        None
-    };
+            Some(psf_guard_director_core::priority::ProgramPreferences {
+                schema_version: 1,
+                policies,
+                bindings,
+            })
+        } else {
+            None
+        };
     let fingerprint = catalog_discovery::digest(
         &serde_json::to_vec(&(
             "program-v2",
@@ -309,6 +362,10 @@ pub(super) fn assemble(
             &built.bindings,
             &built.omitted,
             &observing_preferences,
+            (
+                &preference_settings.project_order,
+                &preference_settings.order_source,
+            ),
             &configuration,
             profile.as_ref().map(|p| p.revision),
         ))

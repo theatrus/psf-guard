@@ -130,6 +130,7 @@ describe('Plan editor', () => {
     expect(saves).toHaveLength(1);
     expect(saves[0].revision).toBe(0);
     expect(saves[0].objectives).toHaveLength(1);
+    expect(screen.queryByLabelText('Objective priority')).not.toBeInTheDocument();
     expect(saves[0].objectives[0]).toMatchObject({ bandpass_id: 'h_alpha', purpose: 'faint_detail', goal: { kind: 'hours', value: 6 }, priority: 1 });
     expect(saves[0].contributions).toHaveLength(1);
     expect(saves[0].contributions[0]).toMatchObject({ rig_id: redcat.rig.id, exposure_seconds: 600, template: { template_id: 2, filter_name: 'H-alpha' }, enabled: true, panel_ids: [] });

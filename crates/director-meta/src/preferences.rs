@@ -15,6 +15,9 @@ pub struct Settings {
     pub enabled: Option<bool>,
     /// Explicit site association for a rig; never guessed from coordinates/names.
     pub site_id: Option<Uuid>,
+    /// Ordered project identities; None inherits, an empty list ranks none first.
+    #[serde(default)]
+    pub project_order: Option<Vec<Uuid>>,
 }
 
 impl Settings {
@@ -26,6 +29,7 @@ impl Settings {
             overrides: Overrides::default(),
             enabled: None,
             site_id: None,
+            project_order: None,
         }
     }
     fn source(&self) -> Source {
@@ -42,6 +46,8 @@ pub struct Effective {
     pub enabled: bool,
     pub resolved: ResolvedPolicy,
     pub settings: Vec<Settings>,
+    pub project_order: Option<Vec<Uuid>>,
+    pub order_source: Option<Source>,
 }
 
 pub(crate) fn create_table(conn: &Connection) -> Result<(), Error> {
@@ -77,11 +83,18 @@ fn validate(conn: &Connection, instance: Uuid, value: &Settings) -> Result<(), E
     if value.revision >= i64::MAX as u64
         || value.scope == Scope::Project && value.enabled.is_some()
         || value.scope != Scope::Rig && value.site_id.is_some()
+        || value.scope == Scope::Project && value.project_order.is_some()
     {
         return Err(Error::InvalidInput);
     }
     if let Some(site) = value.site_id {
         check_scope(conn, instance, Scope::Site, site)?;
+    }
+    if let Some(order) = &value.project_order {
+        let unique: std::collections::BTreeSet<_> = order.iter().collect();
+        if order.len() > 256 || unique.len() != order.len() || order.iter().any(Uuid::is_nil) {
+            return Err(Error::InvalidInput);
+        }
     }
     value
         .overrides
@@ -179,6 +192,41 @@ pub(crate) fn attach_project(
         "DELETE FROM observing_preferences WHERE scope='project' AND scope_id=?1",
         [from.to_string()],
     )?;
+    let mut statement = conn.prepare("SELECT payload FROM observing_preferences")?;
+    let rows = statement
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for payload in rows {
+        let mut settings: Settings =
+            serde_json::from_str(&payload).map_err(|_| Error::CorruptDatabase)?;
+        if let Some(order) = &mut settings.project_order {
+            if !order.contains(&from) {
+                continue;
+            }
+            if order.contains(&into) {
+                order.retain(|id| *id != from);
+            } else {
+                for id in order {
+                    if *id == from {
+                        *id = into;
+                    }
+                }
+            }
+            settings.revision = settings
+                .revision
+                .checked_add(1)
+                .filter(|r| *r < i64::MAX as u64)
+                .ok_or(Error::InvalidInput)?;
+            conn.execute(
+                "UPDATE observing_preferences SET payload=?1 WHERE scope=?2 AND scope_id=?3",
+                params![
+                    serde_json::to_string(&settings).map_err(|_| Error::InvalidInput)?,
+                    scope_name(settings.scope),
+                    settings.scope_id.to_string()
+                ],
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -192,6 +240,11 @@ impl MetaStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         validate(&tx, self.instance_id, input)?;
+        if let Some(order) = &input.project_order {
+            for id in order {
+                check_scope(&tx, self.instance_id, Scope::Project, *id)?;
+            }
+        }
         let previous = read(&tx, self.instance_id, input.scope, input.scope_id)?;
         if previous.revision != input.revision {
             return Err(Error::Conflict);
@@ -239,10 +292,15 @@ impl MetaStore {
             .filter_map(|s| s.enabled)
             .next_back()
             .unwrap_or(false);
+        let ranked = settings.iter().rev().find(|s| s.project_order.is_some());
+        let project_order = ranked.and_then(|s| s.project_order.clone());
+        let order_source = ranked.map(Settings::source);
         Ok(Effective {
             enabled,
             resolved,
             settings,
+            project_order,
+            order_source,
         })
     }
 }

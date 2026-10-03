@@ -9,6 +9,27 @@ project, site and rig identities in a separate meta database. Director clients c
 receipts/status. Pairing does not allocate work or enable acquisition. The NINA
 runtime preview and PSF Guard Sync remain separate.
 
+## Project Priority
+
+Open a plan workspace and use **Project priority** to order projects with the
+up/down buttons. Save the **Global order** once for all rigs. A **Site override**
+or **Rig override** can replace that list; check **Use inherited order** to return
+to the parent order. A rig's **Planning site** supplies site inheritance without
+changing the native location, horizon or safety monitor.
+
+The highest eligible project runs first. Completed work, blocked filters,
+unsafe conditions, horizon and meridian limits still prevent acquisition.
+Objective priorities choose work within the selected project; they cannot move
+a lower-ranked project ahead. New projects follow the saved list in name/ID
+order until you rank them. The list supports up to 256 projects.
+
+Saving replaces the old score policy for newly issued programs, not active
+allocations. Without a saved order, existing scheduling behavior is preserved.
+Issued programs carry the order as shared-core priorities, so NINA follows it
+offline without needing a server request between exposures. Changed priorities
+take effect when the executor receives its next authorized program. The UI no
+longer exposes per-project importance, weights, presets or switching scores.
+
 ## Exposure Moon Rules
 
 Expand **Moon** in the exposure template library to enable per-filter avoidance.
@@ -38,8 +59,9 @@ Execution intersects the allocated windows, horizon/meridian limits and lunar
 windows for the entire preparation/exposure interval. Minute cells use shared
 ephemerides with a conservative parallax/model/motion margin and a half-day
 phase guard. These margins can defer work near a boundary. This is not precise
-lunar occultation planning. Inherited global/site/rig/project policies,
-adjustable soft-preference weights and detailed lunar telemetry are still pending.
+lunar occultation planning. Project order inherits globally with site/rig
+overrides; inherited exposure Moon rules and detailed lunar telemetry remain
+separate work.
 
 ## Where the store lives
 
@@ -652,7 +674,8 @@ the process that can read that folder.
 
 Below Framing, **Plan** says what the project wants and which rig shoots it.
 An objective is one bandpass and purpose (faint detail or unsaturated stars)
-with a goal in accepted hours or accepted frames per rig, and a priority. Tick a
+with a goal in accepted hours or accepted frames per rig. Project precedence is
+set in **Project priority**, not as a score on each objective. Tick a
 rig to have it take part: for every objective the editor picks the rig's first
 exposure template whose filter resolves to that bandpass, and starts the
 exposure length from the template's default, or from the rig's optics and sky

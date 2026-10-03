@@ -633,10 +633,11 @@ also still required.
 
 ### Inherited planning policy
 
-Smart filter selection, soft avoidance rules, priority/scoring strategy and
-weights, and other scheduling preferences start as global defaults. Sites,
-rigs and projects may override only the settings they need. Projects must not
-require a duplicate TS-style settings form to get normal scheduling behavior.
+Smart filter selection, soft avoidance rules and other scheduling preferences
+start as global defaults. Sites, rigs and projects may override only the
+settings they need. Project precedence is the ordered global list described
+below, with site/rig replacement lists, not project-specific weights. Projects
+must not require a duplicate TS-style settings form to get normal scheduling behavior.
 Resolve each field in this order: global default -> site override -> rig
 override -> project override. A multi-rig project therefore has an effective
 policy for each participating rig/site configuration, not one flattened policy
@@ -667,17 +668,52 @@ local. Site-level planning overrides do not make sites own rig hardware or
 horizons. The policy resolver selects behavior; N.I.N.A. remains the equipment
 and safety execution boundary.
 
-Observing preferences are opt-in. Existing programs keep concrete objective
-priorities. The project planning workspace exposes global, site, rig and project
-overrides, presets, field sources and reset-to-inherit controls. Enable observing
-preferences at global, site or rig scope; projects tune policy but cannot change
-executor mode. A rig explicitly selects an existing planning site for inheritance.
-This association does not replace its native location, horizon or safety limits.
+The project planning workspace exposes a global project order and optional
+site/rig replacement orders. A rig explicitly selects an existing planning
+site for inheritance. This association does not replace its native location,
+horizon or safety limits. Existing programs and installations without a saved
+order retain their previous scheduling policy.
 
 #### User-controlled observing priority
 
-Director should not make TS's Low/Normal/High ordinal the dominant rule for all
-observing. Use continuous **importance** (0-100) as one weighted preference.
+Rank projects, rather than requiring operators to tune scores. The global
+ordered list is the default for every rig. An optional site order replaces it;
+an optional rig order replaces the site/global order. There is no project-scope
+order or project weights editor. Null inherits; an explicit list replaces its
+parent. Projects not yet in the saved list follow it in deterministic name/ID
+order. Project merges replace a retired identity at its position, or remove it
+if the survivor already has a position, and increment the settings revision.
+
+Meta schema 20 adds optional `project_order` UUID lists to the existing
+revision-checked settings APIs. Orders are limited to 256 distinct existing
+projects; unknown/nil IDs and project-scope lists are rejected. Effective reads
+include `project_order` and `order_source`. No new NINA wire contract is needed:
+program assembly compiles project precedence and within-project objective
+priority into existing shared-core `Goal.priority` values. Every objective in
+a higher-ranked project outranks every objective in a lower-ranked project.
+New ranked programs omit `observing_preferences`; the normal local selector
+still applies hard eligibility, Moon rules, safety and completed-work checks.
+
+An order save changes the program fingerprint and applies to newly issued
+programs. It does not rewrite active grants or interrupt an exposure. Cached
+allocations execute the frozen order offline. Live corrections to an active
+grant remain backlog, with the same authorization and safe-boundary rules.
+Legacy weighted programs remain readable and executable, and saved weights
+remain in storage for compatibility, but are not used for new programs once
+a global/site/rig order resolves. The planner no longer exposes importance,
+presets, weights, dwell or switching-margin fields.
+
+2026-10-03 validation: all five Director crate suites, 79 server Director tests,
+704 frontend tests, Rust Clippy and frontend lint/build passed. The real-server
+Chromium test saved and reloaded global order, overrode and reset a rig order,
+and checked desktop/mobile layout. Shared-core selection tests verify strict
+project precedence, within-project ordering, blocked/completed fallthrough and
+unsafe stop. No NINA adapter or wire changes were needed; a new native NINA
+hardware run was not performed for this UI/server change.
+
+#### Legacy weighted-program compatibility
+
+The previous preview used continuous **importance** (0-100) as a weighted preference.
 Zero importance does not disable a project; activation and eligibility do that.
 When explicitly importing legacy priorities, map Low/Normal/High to 25/50/75;
 missing or unknown values map to 50. Do not reinterpret existing Director
@@ -699,8 +735,7 @@ missing-evidence flags, so a future UI can explain why one objective won.
 | Efficiency | Exposure time divided by exposure plus estimated overhead. Timing learning must later provide the same estimates on server and rig. |
 | Continuity | Prefer the current target, including another recipe for that target. |
 
-Start with editable presets, not fixed scheduling modes. The library presets
-are provisional defaults in the factor order above:
+The retained library presets use these defaults in the factor order above:
 
 - **Balanced:** 30 / 25 / 15 / 15 / 5 / 5 / 5.
 - **Finish objectives:** 25 / 15 / 10 / 10 / 25 / 5 / 10.
@@ -730,7 +765,7 @@ Meta schema 19 stores revision-checked overrides. Operator-only
 `GET /rigs/{rig}/preferences?project_id=...` returns effective policy and sources.
 All paths are under `/api/director/v1`. These APIs never write rig databases.
 
-New program snapshots carry optional `observing_preferences` schema 1: a
+Legacy-policy program snapshots carry optional `observing_preferences` schema 1: a
 deduplicated policy map and exact goal-to-policy bindings. The program fingerprint
 includes policy and source revisions. Existing grants remain immutable after
 settings change. Runtime 0.10.0 / IPC 10 uses these policies in geometry evaluation
@@ -3619,10 +3654,13 @@ separate workflow; these mappings alone do not resolve them.
   field provenance, seven editable weights/presets, score explanations,
   deterministic tie-breaking and bounded continuity. Geometry-bound preview
   retains hard limits.
-- [x] Persist observing overrides and expose planning controls; bind resolved
-  policies into new programs and use them in shared geometry execution and
-  durable preparation. Legacy mode remains the default. Cross-allocation
-  continuity and score explanations in UI/status remain open.
+- [x] Persist observing overrides and bind resolved policies into shared
+  geometry execution and durable preparation. Weighted-program support remains
+  for compatibility; the operator UI now uses global project ranking.
+- [x] Replace project score editors with an ordered global project list and
+  optional site/rig replacement orders. Compile precedence into shared-core
+  priorities for offline execution; keep active grants immutable. Cross-grant
+  corrections and score explanations for legacy programs remain open.
 - [ ] Add [filter-specific Moon avoidance](#filter-specific-moon-avoidance-in-exposure-settings)
   to exposure template/recipe settings, preserve TS rules and enforce them in
   shared-core selection and native dispatch. Gate on offline and mixed-filter

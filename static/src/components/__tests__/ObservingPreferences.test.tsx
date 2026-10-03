@@ -1,65 +1,80 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
 import ObservingPreferences from '../director/ObservingPreferences';
 import type { ObservingSettings } from '../../api/directorPreferences';
 
-const policy = { weights: { importance: 30, window_urgency: 25, altitude: 15, moon_opportunity: 15, completion: 5, efficiency: 5, continuity: 5 }, importance: 50, minimum_dwell_ms: 600000, switch_margin: 500 };
-const empty = (scope: ObservingSettings['scope'], scope_id: string): ObservingSettings => ({ scope, scope_id, revision: 0, enabled: null, site_id: null, overrides: { weights: {}, importance: null, minimum_dwell_ms: null, switch_margin: null } });
+const empty = (scope: ObservingSettings['scope'], scope_id: string): ObservingSettings => ({ scope, scope_id, revision: 0, enabled: null, site_id: null, project_order: null, overrides: { weights: {}, importance: null, minimum_dwell_ms: null, switch_margin: null } });
 const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: null });
-function mount(conflict = false) {
+function mount(conflict = false, rigs = [{ id: 'rig', name: 'RedCat' }]) {
   const saved: ObservingSettings[] = [];
   const rig = { ...empty('rig', 'rig'), site_id: 'site' };
+  const global = { ...empty('global', 'global'), project_order: ['andromeda', 'orion'] };
   server.use(
     http.get('/api/director/v1/rigs/profiles', () => ok([])),
-    http.get('/api/director/v1/preferences', () => ok({ global_id: 'global', sites: [{ id: 'site', name: 'Mountain' }], presets: { balanced: policy, finish_goals: policy, best_conditions: policy } })),
-    http.get('/api/director/v1/rigs/rig/preferences', () => ok({ enabled: true, resolved: { policy, provenance: {} }, settings: [empty('global', 'global'), empty('site', 'site'), rig, empty('project', 'project')] })),
-    http.get('/api/director/v1/preferences/:scope/:id', ({ params }) => ok(params.scope === 'rig' ? rig : empty(params.scope as ObservingSettings['scope'], String(params.id)))),
+    http.get('/api/director/v1/preferences', () => ok({ global_id: 'global', sites: [{ id: 'site', name: 'Mountain' }], presets: {} })),
+    http.get('/api/director/v1/rigs/rig/preferences', () => ok({ enabled: false, project_order: global.project_order, order_source: { scope: 'global' }, settings: [global, empty('site', 'site'), rig] })),
+    http.get('/api/director/v1/preferences/:scope/:id', ({ params }) => ok(params.scope === 'rig' ? rig : params.scope === 'global' ? global : empty('site', String(params.id)))),
     http.put('/api/director/v1/preferences/:scope/:id', async ({ request }) => { const body = await request.json() as ObservingSettings; saved.push(body); return conflict ? HttpResponse.json({ success: false, error: 'revision conflicts' }, { status: 409 }) : ok({ ...body, revision: body.revision + 1 }); }),
   );
-  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}><ObservingPreferences projectId="project" rigs={[{ id: 'rig', name: 'RedCat' }]} /></QueryClientProvider>);
+  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}><ObservingPreferences projectId="orion" rigs={rigs} projects={[{ id: 'orion', name: 'Orion' }, { id: 'andromeda', name: 'Andromeda' }]} /></QueryClientProvider>);
   return saved;
 }
 
-describe('observing preference controls', () => {
-  it('saves an explicit zero instead of inheriting it, with optimistic revision', async () => {
+describe('project priority controls', () => {
+  it('saves a global ordered list without project weights', async () => {
     const saved = mount();
-    const input = await screen.findByLabelText(/Importance/, { selector: '#observing-importance' });
-    expect(input).toBeDisabled();
-    fireEvent.click(within(input.parentElement!).getByRole('checkbox'));
-    fireEvent.change(input, { target: { value: '0' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save preferences' }));
-    expect(await screen.findByText('Preferences saved.')).toBeInTheDocument();
-    expect(saved[0].overrides.importance).toBe(0);
-    expect(saved[0].revision).toBe(0);
-    expect(saved[0].enabled).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: 'Move Orion up' }));
+    expect(within(screen.getByRole('list', { name: 'Ranked projects' })).getAllByRole('listitem')[0]).toHaveTextContent('Orion');
+    expect(screen.queryByRole('option', { name: 'Project override' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Importance/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save priority' }));
+    await screen.findByText('Project priority saved.');
+    expect(saved[0]).toMatchObject({ scope: 'global', project_order: ['orion', 'andromeda'], revision: 0, overrides: empty('global', 'global').overrides });
   });
-  it('supports rig opt-in and presets without changing project importance', async () => {
+  it('inherits globally by default and allows an explicit rig override', async () => {
     const saved = mount();
-    await screen.findByRole('button', { name: 'Save preferences' });
-    fireEvent.change(screen.getByLabelText('Preference scope'), { target: { value: 'rig' } });
-    const mode = await screen.findByLabelText('Scheduling mode');
-    fireEvent.change(mode, { target: { value: 'preferences' } });
-    fireEvent.change(screen.getByLabelText('Observing preset'), { target: { value: 'balanced' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save preferences' }));
-    await screen.findByText('Preferences saved.');
-    expect(saved[0].scope).toBe('rig');
-    expect(saved[0].enabled).toBe(true);
-    expect(saved[0].overrides.weights).toEqual(policy.weights);
-    expect(saved[0].overrides.importance).toBeNull();
+    await screen.findByText('Following global order');
+    fireEvent.change(screen.getByLabelText('Priority scope'), { target: { value: 'rig' } });
+    const inherit = await screen.findByLabelText('Use inherited order');
+    expect(inherit).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Move Orion up' })).toBeDisabled();
+    fireEvent.click(inherit);
+    fireEvent.click(screen.getByRole('button', { name: 'Move Orion up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save priority' }));
+    await screen.findByText('Project priority saved.');
+    expect(saved[0]).toMatchObject({ scope: 'rig', site_id: 'site', project_order: ['orion', 'andromeda'] });
+    fireEvent.click(inherit);
+    fireEvent.click(screen.getByRole('button', { name: 'Save priority' }));
+    await waitFor(() => expect(saved).toHaveLength(2));
+    expect(saved[1].project_order).toBeNull();
   });
   it('keeps a conflicted draft and allows explicit reload', async () => {
     mount(true);
-    const input = await screen.findByLabelText(/Importance/, { selector: '#observing-importance' });
-    fireEvent.click(within(input.parentElement!).getByRole('checkbox'));
-    fireEvent.change(input, { target: { value: '80' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save preferences' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Move Orion up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save priority' }));
     await screen.findByRole('alert');
-    expect(input).toHaveValue(80);
-    fireEvent.click(screen.getByRole('button', { name: 'Reload saved preferences' }));
-    await screen.findByDisplayValue('50');
-    expect(input).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Move Orion up' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Reload saved priority' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Move Orion up' })).toBeEnabled());
+  });
+  it('updates the inherited order when the draft planning site changes', async () => {
+    mount();
+    server.use(http.get('/api/director/v1/preferences/site/site', () => ok({ ...empty('site', 'site'), project_order: ['orion', 'andromeda'] })));
+    await screen.findByText('Following global order');
+    fireEvent.change(screen.getByLabelText('Priority scope'), { target: { value: 'rig' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Move Orion down' })).toBeDisabled());
+    const first = () => within(screen.getByRole('list', { name: 'Ranked projects' })).getAllByRole('listitem')[0];
+    await waitFor(() => expect(first()).toHaveTextContent('Orion'));
+    fireEvent.change(screen.getByLabelText('Planning site'), { target: { value: '' } });
+    await waitFor(() => expect(first()).toHaveTextContent('Andromeda'));
+  });
+  it('allows editing the global order before any rig is linked', async () => {
+    const saved = mount(false, []);
+    fireEvent.click(await screen.findByRole('button', { name: 'Save priority' }));
+    await screen.findByText('Project priority saved.');
+    expect(saved[0].scope).toBe('global');
   });
 });
