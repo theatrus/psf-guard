@@ -21,6 +21,8 @@
   Background stack refreshes, quality backfill in every database and preview
   pre-generation together stay within the background share, instead of each
   taking all of it.
+- Delete a stack checkpoint as soon as a build finds it must restack from
+  scratch, instead of keeping it until the new build saves its own.
 
 > Add a line here as each user-visible change merges. At release time this
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version

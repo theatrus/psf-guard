@@ -3618,6 +3618,15 @@ fn run_group(
             filter = %group_filter_name,
             "Full restack: {reason}"
         );
+        resume::discard_unusable(
+            &decision,
+            order,
+            stack_root,
+            database_id,
+            group_target_id,
+            &group_filter_name,
+            group_exposure_key.as_deref(),
+        );
         state.stack_previews.update(job_id, |job| {
             add_note(
                 &mut job.groups[group.index].resume_note,

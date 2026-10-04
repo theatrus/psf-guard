@@ -343,6 +343,34 @@ pub(super) fn discard(
     ));
 }
 
+/// Drop the checkpoint a build has just found it cannot extend, as the full
+/// restack starts rather than at the restack's first save, so the stale state
+/// file neither sits beside the new build's work nor outlives a build stopped
+/// before that save. A quality-ordered build leaves it: that build never
+/// writes a checkpoint, and the capture-order one it passed over still serves
+/// the next capture-order build. Returns whether one was dropped.
+pub(super) fn discard_unusable(
+    decision: &ResumeDecision,
+    order: snr::StackFrameOrder,
+    stack_root: &Path,
+    database_id: &str,
+    target_id: i32,
+    filter_name: &str,
+    exposure_group_key: Option<&str>,
+) -> bool {
+    if decision.fresh_reason().is_none() || !order.resumable() {
+        return false;
+    }
+    discard(
+        stack_root,
+        database_id,
+        target_id,
+        filter_name,
+        exposure_group_key,
+    );
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -627,6 +655,74 @@ mod tests {
             decision.fresh_reason(),
             Some("quality order integrates every frame again")
         );
+    }
+
+    fn restack_decision(stack_root: &Path, order: snr::StackFrameOrder) -> ResumeDecision {
+        load(
+            stack_root,
+            "db",
+            7,
+            "Ha",
+            None,
+            false,
+            StackScoringSettings::default(),
+            StackMethod::classic(),
+            "test",
+            "cal-1",
+            order,
+            &[(1, "f1", 300.0), (2, "f2", 300.0)],
+        )
+    }
+
+    fn checkpoint_files(stack_root: &Path) -> [PathBuf; 2] {
+        [
+            manifest_path(stack_root, "db", 7, "Ha", None),
+            context_path(stack_root, "db", 7, "Ha", None),
+        ]
+    }
+
+    #[test]
+    fn a_checkpoint_the_build_cannot_extend_goes_as_the_restack_starts() {
+        let cache = tempfile::tempdir().unwrap();
+        let mut recorded = manifest(vec![frame(1, "f1")]);
+        recorded.calibration_fingerprint = "cal-0".into();
+        store(cache.path(), &recorded);
+        let files = checkpoint_files(cache.path());
+        let discard = |decision: &ResumeDecision, order| {
+            discard_unusable(decision, order, cache.path(), "db", 7, "Ha", None)
+        };
+
+        // A quality build passes it over: the next capture build may still
+        // have extended it, had calibration not changed.
+        let quality = restack_decision(cache.path(), snr::StackFrameOrder::Quality);
+        assert!(!discard(&quality, snr::StackFrameOrder::Quality));
+        assert!(files.iter().all(|file| file.exists()));
+
+        let capture = restack_decision(cache.path(), snr::StackFrameOrder::Capture);
+        assert_eq!(capture.fresh_reason(), Some("calibration changed"));
+        assert!(discard(&capture, snr::StackFrameOrder::Capture));
+        assert!(files.iter().all(|file| !file.exists()));
+    }
+
+    #[test]
+    fn a_checkpoint_the_build_extends_stays() {
+        let cache = tempfile::tempdir().unwrap();
+        store(cache.path(), &manifest(vec![frame(1, "f1")]));
+        let decision = restack_decision(cache.path(), snr::StackFrameOrder::Capture);
+
+        assert!(!discard_unusable(
+            &decision,
+            snr::StackFrameOrder::Capture,
+            cache.path(),
+            "db",
+            7,
+            "Ha",
+            None
+        ));
+        assert!(checkpoint_files(cache.path())
+            .iter()
+            .all(|file| file.exists()));
+        assert!(decision.state().is_some());
     }
 
     #[test]
