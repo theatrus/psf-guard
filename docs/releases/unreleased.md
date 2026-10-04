@@ -683,3 +683,5 @@
 - Measure quality on a frame's calibrated copy instead of its raw file,
   per database in Settings. The frame's star metadata keeps the capture
   software's values.
+- The sky overlay stays as you last left it instead of turning on for every
+  solved frame, including frames quality analysis solved on its own.

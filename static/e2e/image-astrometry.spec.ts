@@ -186,6 +186,9 @@ test('renders the real Seiza solution and keeps the overlay aligned while zoomin
   const overlay = page.getByTestId('astrometry-overlay');
   await expect(page.getByText('Embedded FITS WCS')).toBeVisible();
   await expect(page.getByTestId('astrometry-panel').getByText('M 44')).toBeVisible();
+  // A solution on file does not turn the overlay on; the viewer does.
+  await expect(overlay).toHaveCount(0);
+  await page.getByRole('button', { name: /Show sky overlay/ }).click();
   await expect(overlay).toBeVisible({ timeout: 30_000 });
   await expect(overlay).toHaveAttribute('data-overlay-version', '1');
   await expect(overlay.getByText('M 44')).toBeVisible();
@@ -232,4 +235,33 @@ test('renders the real Seiza solution and keeps the overlay aligned while zoomin
   await expect(overlay).toHaveCount(0);
   await page.getByRole('button', { name: /Show sky overlay/ }).click();
   await expect(page.getByTestId('astrometry-overlay')).toBeVisible();
+});
+
+test('the sky overlay stays as the viewer last left it', async ({ page }) => {
+  await page.goto(`/#/detail/1?db=${encodeURIComponent(dbId)}&project=1`);
+  const overlay = page.getByTestId('astrometry-overlay');
+  await expect(page.getByText('Embedded FITS WCS')).toBeVisible();
+  await expect(overlay).toHaveCount(0);
+
+  await page.keyboard.press('o');
+  await expect(overlay).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/O Sky ✓/)).toBeVisible();
+
+  // Stars take the image over, and the overlay comes back with them off.
+  await page.keyboard.press('s');
+  await expect(overlay).toHaveCount(0);
+  await page.keyboard.press('s');
+  await expect(overlay).toBeVisible({ timeout: 30_000 });
+
+  // Remembered across a reload.
+  await page.reload();
+  await expect(page.getByText('Embedded FITS WCS')).toBeVisible();
+  await expect(overlay).toBeVisible({ timeout: 30_000 });
+
+  await page.keyboard.press('o');
+  await expect(overlay).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByText('Embedded FITS WCS')).toBeVisible();
+  await expect(overlay).toHaveCount(0);
+  await expect(page.getByText(/O Sky ✓/)).toHaveCount(0);
 });
