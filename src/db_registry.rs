@@ -69,6 +69,10 @@ pub struct DbEntry {
     /// unless a person turns it off; see `docs/design/calibrated-subs.md`.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub pair_calibrated_copies: bool,
+    /// Measure quality on a light's calibrated copy, where it has one,
+    /// instead of its raw file. Off unless a person turns it on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scan_calibrated_copies: bool,
 }
 
 fn default_true() -> bool {
@@ -831,6 +835,7 @@ impl DbRegistry {
                 autoimport: None,
                 analyze_new_frames: false,
                 pair_calibrated_copies: true,
+                scan_calibrated_copies: false,
             });
         }
         reg.save(path)?;
@@ -903,6 +908,7 @@ impl DbRegistry {
             autoimport: None,
             analyze_new_frames: false,
             pair_calibrated_copies: true,
+            scan_calibrated_copies: false,
         });
         Ok(self.databases.last().unwrap())
     }
@@ -1145,6 +1151,7 @@ mod tests {
             autoimport: None,
             analyze_new_frames: false,
             pair_calibrated_copies: true,
+            scan_calibrated_copies: false,
         });
         reg.save(&path).unwrap();
 

@@ -29,6 +29,7 @@ async fn peer_server(dir: &std::path::Path) -> (String, Connection) {
         autoimport: None,
         analyze_new_frames: false,
         pair_calibrated_copies: true,
+        scan_calibrated_copies: false,
     };
     let state = Arc::new(
         AppState::from_databases(

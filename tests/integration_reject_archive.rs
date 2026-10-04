@@ -491,3 +491,147 @@ fn restore_targeted_by_guid_ignores_grade() {
     assert!(!fixture.img1_src.exists(), "img1 left archived");
     assert_eq!(archive_count(&fixture), 1);
 }
+
+// ── Paired calibrated / registered copies ───────────────────────────────────
+
+use psf_guard::frame_derivatives::{
+    derivatives_for_light, ensure_schema as ensure_derivative_schema, record_pairing,
+    DerivativeRecord,
+};
+use psf_guard::image_io::{FrameKind, KindEvidence, ProcessingSteps, Producer};
+
+/// Record a copy of guid-img-28 at `path`, as pairing would.
+fn pair_copy(fixture: &Fixture, uuid: &str, path: &std::path::Path, primary: bool) {
+    let conn = open_conn(&fixture.db_path);
+    ensure_derivative_schema(&conn).unwrap();
+    let registered = path.to_string_lossy().contains("_r.");
+    record_pairing(
+        &conn,
+        &DerivativeRecord {
+            derivative_uuid: uuid.into(),
+            acquired_image_guid: "guid-img-28".into(),
+            kind: if registered {
+                FrameKind::Registered
+            } else {
+                FrameKind::Calibrated
+            },
+            steps: if registered {
+                ProcessingSteps::CALIBRATED.with(ProcessingSteps::REGISTERED)
+            } else {
+                ProcessingSteps::CALIBRATED
+            },
+            primary_source: primary,
+            file_name: path.file_name().unwrap().to_string_lossy().into_owned(),
+            source_tail: psf_guard::frame_derivatives::source_tail(path),
+            size: fs::metadata(path).ok().map(|meta| meta.len() as i64),
+            mtime: None,
+            width: None,
+            height: None,
+            producer: Producer::Pixinsight,
+            evidence: KindEvidence::Header,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+}
+
+/// WBPP output for img_0028 under `images/_Process/M31/{calibrated,registered}`.
+fn wbpp_copies(fixture: &Fixture) -> (PathBuf, PathBuf) {
+    let process = fixture.image_dir.join("_Process").join("M31");
+    let calibrated = process.join("calibrated").join("img_0028_c.xisf");
+    let registered = process.join("registered").join("img_0028_c_r.xisf");
+    for path in [&calibrated, &registered] {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, b"copy pixels").unwrap();
+    }
+    pair_copy(fixture, "copy-c", &calibrated, false);
+    pair_copy(fixture, "copy-cr", &registered, false);
+    (calibrated, registered)
+}
+
+fn tail_of(fixture: &Fixture, uuid: &str) -> Option<String> {
+    let conn = open_conn(&fixture.db_path);
+    derivatives_for_light(&conn, "guid-img-28")
+        .unwrap()
+        .into_iter()
+        .find(|record| record.derivative_uuid == uuid)
+        .and_then(|record| record.source_tail)
+}
+
+#[test]
+fn copies_move_into_the_archive_of_their_own_folders_and_back() {
+    let fixture = build_fixture();
+    let (calibrated, registered) = wbpp_copies(&fixture);
+    let archived_calibrated = fixture
+        .image_dir
+        .join("_Process/REJECT/M31/calibrated/img_0028_c.xisf");
+    let archived_registered = fixture
+        .image_dir
+        .join("_Process/REJECT/M31/registered/img_0028_c_r.xisf");
+
+    // A dry run lists the copies and moves nothing.
+    let plan = run_archive(&fixture, true);
+    assert_eq!(plan.copies_moved, 2);
+    assert!(calibrated.exists() && registered.exists());
+    assert!(!archived_calibrated.exists());
+
+    let moved = run_archive(&fixture, false);
+    assert_eq!(moved.archived, 2);
+    assert_eq!((moved.copies_moved, moved.copies_left), (2, 0));
+    assert!(!calibrated.exists() && !registered.exists());
+    assert!(archived_calibrated.exists() && archived_registered.exists());
+    assert_eq!(
+        tail_of(&fixture, "copy-c").as_deref(),
+        Some("M31/calibrated"),
+        "the record follows its file"
+    );
+    let conn = open_conn(&fixture.db_path);
+    let record =
+        psf_guard::commands::reject_archive::get_archive_record_by_guid(&conn, "guid-img-28")
+            .unwrap()
+            .unwrap();
+    assert_eq!(record.copy_files.len(), 2);
+    drop(conn);
+
+    set_grade(&fixture, 1, 1);
+    let restored = run_restore(&fixture, RestoreRejectsOptions::default());
+    assert_eq!(restored.restored, 1);
+    assert_eq!(restored.copies_restored, 2);
+    assert!(calibrated.exists() && registered.exists());
+    assert!(!archived_calibrated.exists());
+    assert!(
+        !fixture.image_dir.join("_Process/REJECT").exists(),
+        "the emptied copy archive is pruned"
+    );
+    assert_eq!(
+        tail_of(&fixture, "copy-c").as_deref(),
+        Some("M31/calibrated")
+    );
+    let tail = tail_of(&fixture, "copy-cr").unwrap();
+    assert_eq!(tail, "M31/registered");
+}
+
+#[test]
+fn a_missing_copy_is_reported_and_the_light_still_moves() {
+    let fixture = build_fixture();
+    let (calibrated, _) = wbpp_copies(&fixture);
+    fs::remove_file(&calibrated).unwrap();
+
+    let moved = run_archive(&fixture, false);
+    assert_eq!(moved.archived, 2);
+    assert_eq!((moved.copies_moved, moved.copies_left), (1, 1));
+    assert!(!fixture.img1_src.exists(), "the light moved anyway");
+}
+
+#[test]
+fn a_primary_copy_moves_once_as_the_light() {
+    let fixture = build_fixture();
+    // The light's own file is its calibrated copy.
+    pair_copy(&fixture, "copy-primary", &fixture.img1_src, true);
+
+    let moved = run_archive(&fixture, false);
+    assert_eq!(moved.archived, 2);
+    assert_eq!((moved.copies_moved, moved.copies_left), (0, 0));
+    assert_eq!(moved.errors, 0);
+}

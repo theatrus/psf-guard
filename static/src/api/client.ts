@@ -2200,10 +2200,15 @@ export const apiClient = {
     return data.data!;
   },
 
-  getStarDetection: async (dbId: string, imageId: number): Promise<StarDetectionResponse> => {
+  getStarDetection: async (
+    dbId: string,
+    imageId: number,
+    copy?: string
+  ): Promise<StarDetectionResponse> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<StarDetectionResponse>>(
-      dbPath(dbId, `/images/${imageId}/stars`)
+      dbPath(dbId, `/images/${imageId}/stars`),
+      copy ? { params: { copy } } : undefined
     );
     if (!data.data) throw new Error('Star detection failed');
     return data.data;
@@ -2231,6 +2236,7 @@ export const apiClient = {
         shadow: d.shadow,
         max_stars: d.maxStars,
         color: d.color,
+        copy: d.copy,
       })),
     }).then(({ data }) => data.data?.statuses ?? []) : Promise.resolve([]);
     const masterRequest = masterRequests.length ? apiInstance.post<
@@ -2295,6 +2301,7 @@ export const apiClient = {
     // Sent explicitly either way, so the URL states what it wants rather than
     // depending on the server's default staying put.
     if (options?.color !== undefined) params.append('color', String(options.color));
+    if (options?.copy) params.append('copy', options.copy);
 
     const queryString = params.toString();
     const basePath = serverUrl ? `${serverUrl}/api` : '/api';
@@ -2307,7 +2314,8 @@ export const apiClient = {
     dbId: string,
     imageId: number,
     size: 'screen' | 'large' | 'original' = 'large',
-    maxStars?: number
+    maxStars?: number,
+    copy?: string
   ): string => {
     const serverUrl = getCachedServerUrl();
     const params = new URLSearchParams();
@@ -2316,6 +2324,7 @@ export const apiClient = {
     if (maxStars !== undefined) {
       params.append('max_stars', String(maxStars));
     }
+    if (copy) params.append('copy', copy);
     const basePath = serverUrl ? `${serverUrl}/api` : '/api';
     return `${basePath}${dbPath(dbId, `/images/${imageId}/annotated`)}?${params.toString()}`;
   },
@@ -2329,10 +2338,12 @@ export const apiClient = {
       sort_by?: string;
       grid_cols?: number;
       selection?: string;
+      copy?: string;
     }
   ): string => {
     const serverUrl = getCachedServerUrl();
     const params = new URLSearchParams();
+    if (options?.copy) params.append('copy', options.copy);
     if (options?.num_stars) params.append('num_stars', String(options.num_stars));
     if (options?.psf_type) params.append('psf_type', options.psf_type);
     if (options?.sort_by) params.append('sort_by', options.sort_by);
@@ -2504,11 +2515,15 @@ export const apiClient = {
     return data.data;
   },
 
-  setPairCalibratedCopies: async (dbId: string, pair: boolean): Promise<CalibratedCopies> => {
+  /** Change either setting; a field left out keeps its value. */
+  updateCalibratedCopies: async (
+    dbId: string,
+    settings: { pair?: boolean; scan_calibrated?: boolean }
+  ): Promise<CalibratedCopies> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.put<ApiResponse<CalibratedCopies>>(
       dbPath(dbId, '/calibrated-copies'),
-      { pair }
+      settings
     );
     if (!data.data) throw new Error(data.error || 'Failed to save the setting');
     return data.data;

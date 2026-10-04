@@ -99,6 +99,24 @@ export interface Image {
   reject_reason: string | null;
   metadata: Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
   filesystem_path: string | null;
+  /** Calibrated and registered copies of this light (absent when none). */
+  copies?: ImageCopy[];
+}
+
+/** A calibrated or registered copy of a light that other software wrote. */
+export interface ImageCopy {
+  /** Pass as `copy` to previews, stars and PSF to view this copy. */
+  uuid: string;
+  kind: 'calibrated' | 'registered';
+  /** `calibrated,cosmetic,registered`. */
+  steps: string;
+  /** "Calibrated + registered". */
+  label: string;
+  file_name: string;
+  /** The light's own file is this copy: no raw frame yet. */
+  primary: boolean;
+  /** Found on disk; only the image detail checks. */
+  available?: boolean;
 }
 
 export interface StarInfo {
@@ -377,6 +395,8 @@ export interface PreviewOptions {
   max_stars?: number;
   /** Render a one-shot-color mosaic in colour. Mono frames ignore it. */
   color?: boolean;
+  /** A calibrated or registered copy's uuid, to render it instead. */
+  copy?: string;
 }
 
 // Readiness of an on-demand preview/annotated artifact (the server generates
@@ -404,6 +424,8 @@ export interface ImagePreviewDescriptor {
    * the wrong artifact.
    */
   color?: boolean;
+  /** The copy the `<img>` requested, if any; keyed separately like colour. */
+  copy?: string;
 }
 
 export type CalibrationMasterSource =
@@ -2835,6 +2857,8 @@ export interface QualityBackfillStatus {
 export interface CalibratedCopies {
   /** Pair copies other software wrote with the light they came from. */
   pair: boolean;
+  /** Measure quality on a light's calibrated copy instead of its raw file. */
+  scan_calibrated: boolean;
   counts: {
     calibrated: number;
     registered: number;
