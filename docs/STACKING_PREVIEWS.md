@@ -202,7 +202,9 @@ final pass may differ. Removing a frame, regrading
 one in place, changing calibration or scoring, or upgrading Seiza rebuilds
 from scratch — and when a checkpoint existed but could not be extended, the
 card says why (`Full restack: the scoring policy changed`), so a slow rebuild
-is never a mystery. A stopped build checkpoints the frames it finished, so
+is never a mystery. The checkpoint it could not extend is deleted as the
+restack starts, rather than left beside it until the restack saves its own;
+only a quality-ordered build leaves it, as described below. A stopped build checkpoints the frames it finished, so
 building again continues where the stop landed instead of starting over.
 Checkpoints live in the project cache and cost one full-frame state file per
 target/channel.
