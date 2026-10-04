@@ -22,3 +22,9 @@
 .plan-panel { flex-direction: row !important; align-items: center; gap: 4px !important; color: var(--color-text-primary) !important; }
 .plan-panel input { width: 16px; height: 16px; accent-color: var(--color-primary); }
 .plan-gaps { margin: 0; padding-left: 18px; }
+.plan-rig-plan { border: 0; margin: 0; padding: 0; min-width: 0; }
+.plan-rig-place { color: var(--color-text-secondary); font-size: 13px; }
+.plan-rigs-heading { margin: 16px 0 4px; font-size: 15px; }
+.plan-other-rigs { margin-top: 10px; }
+.plan-other-rigs > summary { cursor: pointer; color: var(--color-text-secondary); }
+.director-rig-database { margin-top: 6px; }

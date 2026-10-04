@@ -53,6 +53,32 @@ function mount(canWrite = true) {
 }
 
 describe('Plan editor', () => {
+  it('shows each rig as one block with its project, and folds rigs outside the plan away', async () => {
+    fixture();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    render(<QueryClientProvider client={client}>
+      <PlanEditor
+        projectId="project"
+        linkedRigIds={[c925.rig.id]}
+        rigExtras={rig => rig.rig.id === c925.rig.id
+          ? { place: 'project “Heart subs”', below: <button type="button">Edit in Target Scheduler</button> }
+          : {}}
+        footer={<p>Attach area</p>}
+      />
+    </QueryClientProvider>);
+    // Wait for the loaded plan: until then only the linked rigs show.
+    await screen.findByText('Other rigs (1)');
+    const rigs = screen.getByRole('region', { name: 'Rigs' });
+    const linked = within(rigs).getByRole('group', { name: 'C925 data' });
+    expect(linked).toHaveTextContent('project “Heart subs”');
+    expect(within(linked).getByRole('button', { name: 'Edit in Target Scheduler' })).toBeInTheDocument();
+    // RedCat has no project here and takes no part: it waits under the fold.
+    const others = screen.getByText('Other rigs (1)').closest('details')!;
+    expect(others).not.toHaveAttribute('open');
+    expect(within(others).getByRole('group', { name: 'RedCat 61' })).toBeInTheDocument();
+    expect(within(rigs).getByText('Attach area')).toBeInTheDocument();
+  });
+
   it('gives a rig framed on its own its own panels, and leaves it out of the shared coverage check', async () => {
     const objective = { id: 'o1', bandpass_id: 'red', purpose: 'faint_detail', goal: { kind: 'hours' as const, value: 2 }, priority: 1 };
     const plan = { project_id: 'project', revision: 1, updated_at_ms: 1, objectives: [objective], contributions: [

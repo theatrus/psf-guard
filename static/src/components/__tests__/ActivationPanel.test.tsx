@@ -57,15 +57,14 @@ describe('Activation panel', () => {
     const { applies } = fixture(); mount();
     expect(screen.queryByRole('button', { name: /Apply to rig databases/ })).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: 'Preview activation' }));
-    expect(await screen.findByText('Preview')).toBeInTheDocument();
-    expect(screen.getAllByText('1 new', { selector: 'td' })).toHaveLength(2);
-    expect(screen.getAllByText('2 new', { selector: 'td' })).toHaveLength(2);
+    // Rigs no block shows elsewhere are listed here, each with its counts.
+    const redcat = await screen.findByLabelText('RedCat 61 activation');
+    expect(redcat).toHaveTextContent('Preview · Project: 1 new · Targets: 2 new · Exposure plans: 2 new');
     expect(screen.getByText(/push it through Sync later/)).toBeInTheDocument();
-    expect(screen.getByText('Will push to Observatory')).toBeInTheDocument();
-    expect(screen.getAllByText('This server', { selector: 'td' })).toHaveLength(2);
+    expect(screen.getByLabelText('Desert copy activation')).toHaveTextContent('Will push to Observatory');
     fireEvent.click(screen.getByRole('button', { name: 'Apply to rig databases' }));
-    expect(await screen.findByText('Applied')).toBeInTheDocument();
-    expect(screen.getByText('Pushed to Observatory')).toBeInTheDocument();
+    expect(await screen.findByText('Pushed to Observatory', { exact: false })).toBeInTheDocument();
+    expect(screen.getByLabelText('RedCat 61 activation')).toHaveTextContent('Applied');
     expect(applies).toEqual([{ preview_digest: 'd'.repeat(64) }]);
     expect(screen.getByText(/Activation revision 1/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Apply to rig databases' })).not.toBeInTheDocument();
@@ -83,9 +82,10 @@ describe('Activation panel', () => {
     ] }] };
     server.use(http.post('/api/director/v1/projects/project/activation/preview', () => HttpResponse.json(ok(takeover))));
     fireEvent.click(await screen.findByRole('button', { name: 'Preview activation' }));
-    expect(await screen.findByText('1 new, 1 taken over, 1 left as is', { selector: 'td' })).toBeInTheDocument();
-    expect(screen.getByText('1 taken over', { selector: 'td' })).toBeInTheDocument();
-    const changes = screen.getByText('RedCat 61: what changes').closest('details')!;
+    const rigSummary = await screen.findByLabelText('RedCat 61 activation');
+    expect(rigSummary).toHaveTextContent('Targets: 1 taken over');
+    expect(rigSummary).toHaveTextContent('Exposure plans: 1 new, 1 taken over, 1 left as is');
+    const changes = screen.getByText('What changes in RedCat 61').closest('details')!;
     expect(changes).toHaveAttribute('open');
     expect(changes).toHaveTextContent('Taken overIC 1805 r1c1 · Ha 300 · 300 s takes over plan #11 (12 of 40 frames taken); desired 40 → 72');
     expect(changes).toHaveTextContent('Left as isIC 1805 r1c1 · Ha 300 · 600 s plan #12');

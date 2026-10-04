@@ -11,7 +11,8 @@ runtime preview and PSF Guard Sync remain separate.
 
 ## Project Priority
 
-Open a plan workspace and use **Project priority** to order projects with the
+Open a plan workspace and unfold **Project priority**, which says where the
+plan stands in the global order while folded, to order projects with the
 up/down buttons. Save the **Global order** once for all rigs. A **Site override**
 or **Rig override** can replace that list; check **Use inherited order** to return
 to the parent order. A rig's **Planning site** supplies site inheritance without
@@ -181,9 +182,13 @@ status. **Setup** expands the database's planning setup in place: enable
 planning, the rig profile, and the project links. **Library** opens its
 catalog.
 
-The **workspace** for one plan shows its linked databases, each with the
-familiar targets and exposures editor a click away, then **Framing**, **Plan**
-and **Activation**. A plan with no linked database yet starts its framing
+The **workspace** for one plan shows **Framing**, then **Plan**: the
+objectives, and one block per rig with its database's project, its templates,
+exposures and frames for each objective, what the last activation preview or
+apply does there, and **Edit in Target Scheduler** for the familiar targets
+and exposures editor. Rigs with a project in the plan, or ticked, come first;
+the rest fold under **Other rigs**. **Activation** below holds the preview and
+apply buttons. A plan with no linked database yet starts its framing
 by looking a name up in the CDS catalogs or by typing a center; activation
 then creates and links the Target Scheduler project in each rig database.
 Its **Library** link goes back with the scope it came from. A project
@@ -246,8 +251,8 @@ or its identity table is dropped.
 ### Attaching a database's project to a plan
 
 Two databases that each made their own project for one target become two
-plans, since their GUIDs differ. In the plan's workspace, under
-**Databases**, **Attach a project from another database** lists the
+plans, since their GUIDs differ. In the plan's workspace, below the rigs,
+**Attach a project from another database** lists the
 projects of other plans in databases this plan has no project in yet.
 Attaching moves every database link of that other plan onto this one and
 retires it; this plan keeps its own framing and plan drafts and takes the

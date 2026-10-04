@@ -14,3 +14,6 @@
 .activation-action.is-create { background: var(--color-primary-alpha-20); color: var(--color-text-primary); }
 .activation-action.is-adopt { background: rgba(123, 228, 149, 0.15); color: #7be495; }
 .activation-action.is-update { background: var(--color-warning-alpha-20); color: var(--color-text-primary); }
+.activation-rig { margin: 6px 0 4px; font-size: 14px; }
+.activation-rig-summary { margin: 0 0 4px; }
+.activation-rig-name { margin: 8px 0 2px; font-size: 14px; }

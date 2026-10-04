@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ChevronDown, ChevronRight, Link2, Unlink } from 'lucide-react';
@@ -9,14 +9,17 @@ import { ProjectPlanEditor } from '../ProjectSchedulerDialog';
 import FramingView from './FramingView';
 import PlanEditor from './PlanEditor';
 import ObservingPreferences from './ObservingPreferences';
-import ActivationPanel from './ActivationPanel';
+import ActivationPanel, { RigActivation } from './ActivationPanel';
+import type { DirectorActivationReport, DirectorRigProfileSummary } from '../../api/directorTypes';
 import type { FramingSeed } from './framingModel';
 import { retryWhenBusy } from './retry';
 import { withoutPlanningParams } from '../../hooks/useUrlState';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
-/** One global project: its linked source projects, framing, plan and activation. */
+/** One global project: framing, then one block per rig with its plan, its
+ *  database project, what activation does there and its Target Scheduler
+ *  rows; then activation and the project priority. */
 export default function ProjectWorkspace({ instanceId, projectId }: { instanceId: string; projectId: string }) {
   const [params] = useSearchParams();
   const { canWrite } = useAccess();
@@ -82,55 +85,72 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
     onSuccess: fresh => { setDetachPick(null); setProblem(''); setNotice(`Detached: ${fresh.name} is a plan of its own again.`); void client.invalidateQueries({ queryKey: ['directorPlans'] }); },
     onError: error => setProblem(message(error)),
   });
+  const [report, setReport] = useState<DirectorActivationReport | null>(null);
+  const onReport = useCallback((next: DirectorActivationReport | null) => setReport(next), []);
+  const profiles = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
+  const profiledRigs = useMemo(() => new Set((profiles.data ?? []).map(profile => profile.rig.id)), [profiles.data]);
   if (plans.isPending) return <p role="status">Loading project...</p>;
   if (plans.isError) return <div role="alert"><p>{message(plans.error)}</p><button type="button" onClick={() => void plans.refetch()}>Retry</button></div>;
   if (!row) return <p role="alert">Project not found. <Link to={`/?${back}`}>Back to the Library</Link></p>;
+  const linkFor = (rigId: string) => row.links.find(link => link.rig.id === rigId);
+  // A database's project, its detach control and its Target Scheduler rows,
+  // shown with the rig in the plan or, for a database no rig profile covers,
+  // on their own below the rigs.
+  const databaseOf = (link: (typeof row.links)[number]) => {
+    const key = `${link.catalog_slug}:${link.source_project_guid}`;
+    const open = openKey === key;
+    return <div className="director-rig-database" key={key}>
+      <div className="director-actions">
+        {link.source_row_id !== null && <button type="button" aria-expanded={open} onClick={() => setOpenSource(open ? null : key)}>{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}Edit in Target Scheduler</button>}
+        {canWrite && row.links.length > 1 && <button type="button" aria-label={`Detach ${link.catalog_name}`} title="Give this database's project a plan of its own" onClick={() => { setDetachPick(detachPick === key ? null : key); setProblem(''); }}><Unlink size={16} />Detach</button>}
+      </div>
+      {detachPick === key && <p className="director-muted" role="note">{link.source_name ?? 'This project'} in {link.catalog_name} becomes a plan of its own; this plan keeps its drafts.
+        <span className="director-actions"><button type="button" disabled={detach.isPending} onClick={() => detach.mutate(link)}>{detach.isPending ? 'Detaching…' : 'Detach'}</button><button type="button" onClick={() => setDetachPick(null)}>Cancel</button></span></p>}
+      {open && link.source_row_id !== null && <ProjectPlanEditor dbId={link.catalog_slug} projectId={link.source_row_id} canEdit={canWrite && !!info.data?.allow_database_management} />}
+    </div>;
+  };
+  const reportFor = (rigId: string) => report?.rigs.find(entry => entry.rig.id === rigId);
+  const rigExtras = (rig: DirectorRigProfileSummary) => {
+    const link = linkFor(rig.rig.id);
+    const activation = reportFor(rig.rig.id);
+    return {
+      place: link ? link.source_name ? `project “${link.source_name}”` : 'Project row missing in this database' : 'no project yet',
+      below: (link || activation) && <>
+        {activation && report && <RigActivation rig={activation} applied={report.applied} />}
+        {link && databaseOf(link)}
+      </>,
+    };
+  };
+  const unprofiled = row.links.filter(link => !profiledRigs.has(link.rig.id));
+  const attachArea = <>
+    {canWrite && candidates.length > 0 && <div className="director-attach">
+      <label>Attach a project from another database
+        <select aria-label="Attach a project from another database" value={attachPick} onChange={event => { setAttachPick(event.target.value); setProblem(''); }}>
+          <option value="">Choose a project…</option>
+          {candidates.map(entry => <option key={entry.key} value={entry.key}>{entry.link.catalog_name}: {entry.link.source_name ?? entry.link.source_project_guid}{entry.plan.project.name !== (entry.link.source_name ?? '') ? ` (plan “${entry.plan.project.name}”)` : ''}</option>)}
+        </select></label>
+      {chosen && <p className="director-muted" role="note">
+        {chosen.plan.links.length > 1 ? `The plan “${chosen.plan.project.name}” and its ${chosen.plan.links.length} databases join this plan` : `“${chosen.plan.project.name}” joins this plan and is retired`}; the next activation takes its targets over.
+        <span className="director-actions"><button type="button" disabled={attach.isPending} onClick={() => attach.mutate(chosen.plan.project.id)}><Link2 size={16} />{attach.isPending ? 'Attaching…' : 'Attach'}</button><button type="button" onClick={() => setAttachPick('')}>Cancel</button></span>
+      </p>}
+    </div>}
+    {notice && <p role="status">{notice}</p>}
+    {problem && <p className="director-error" role="alert">{problem}</p>}
+    {row.links.length === 0 && <p className="director-muted">No database holds this project yet; activation creates it in each rig you tick, or attach a project a database already has.</p>}
+    {!manageable && row.links.length > 0 && <p className="director-muted">Target Scheduler rows are view only on this server.</p>}
+    {unprofiled.map(link => <div key={link.catalog_slug} className="plan-rig" role="group" aria-label={link.catalog_name}>
+      <p className="plan-rig-head"><strong>{link.catalog_name}</strong><span className="plan-rig-place">{link.source_name ? `project “${link.source_name}”` : 'Project row missing in this database'}</span></p>
+      {databaseOf(link)}
+    </div>)}
+  </>;
   return <section aria-label="Project planning" className="director-workspace">
     <div className="director-toolbar director-workspace-head"><Link to={`/?${back}`}><ArrowLeft size={16} />Library</Link><h2>{row.project.name}</h2></div>
     <h3 className="director-section-heading director-framing-heading">Framing</h3>
     {first && scheduler.isPending ? <p role="status">Loading targets...</p> : <FramingView projectId={projectId} seed={seed} preferredRigIds={row.links.map(link => link.rig.id)} />}
-    <div className="director-workspace-columns">
-      <div><h3 className="director-section-heading">Plan</h3><PlanEditor projectId={projectId} /></div>
-      <div><h3 className="director-section-heading">Activation</h3><ActivationPanel projectId={projectId} /></div>
-    </div>
+    <h3 className="director-section-heading">Plan</h3>
+    <PlanEditor projectId={projectId} linkedRigIds={row.links.map(link => link.rig.id)} rigExtras={rigExtras} footer={attachArea} />
+    <h3 className="director-section-heading">Activation</h3>
+    <ActivationPanel projectId={projectId} onReport={onReport} shownElsewhere={profiledRigs} />
     <ObservingPreferences projectId={projectId} rigs={row.links.map(link => ({ id: link.rig.id, name: link.catalog_name }))} projects={(plans.data?.rows ?? []).map(entry => entry.project)} />
-    <section aria-label="Linked databases">
-      <h3 className="director-section-heading">Databases</h3>
-      {!manageable && <p className="director-muted">This server cannot change rig databases, so the targets and exposures below are view only.</p>}
-      {row.links.length === 0 && <p className="director-muted">No database holds this project yet. Activation creates it in each rig you tick in the plan, or attach a project a database already has.</p>}
-      {canWrite && candidates.length > 0 && <div className="director-attach">
-        <label>Attach a project from another database
-          <select aria-label="Attach a project from another database" value={attachPick} onChange={event => { setAttachPick(event.target.value); setProblem(''); }}>
-            <option value="">Choose a project…</option>
-            {candidates.map(entry => <option key={entry.key} value={entry.key}>{entry.link.catalog_name}: {entry.link.source_name ?? entry.link.source_project_guid}{entry.plan.project.name !== (entry.link.source_name ?? '') ? ` (plan “${entry.plan.project.name}”)` : ''}</option>)}
-          </select></label>
-        {chosen && <p className="director-muted" role="note">
-          {chosen.plan.links.length > 1 ? `The plan “${chosen.plan.project.name}” and all ${chosen.plan.links.length} of its databases join this plan; ` : `“${chosen.plan.project.name}” is retired as a plan and its database joins this one; `}
-          its own framing and plan drafts are dropped unless this plan has none. The next activation takes the project's targets over where they stand.
-          <span className="director-actions"><button type="button" disabled={attach.isPending} onClick={() => attach.mutate(chosen.plan.project.id)}><Link2 size={16} />{attach.isPending ? 'Attaching…' : 'Attach'}</button><button type="button" onClick={() => setAttachPick('')}>Cancel</button></span>
-        </p>}
-      </div>}
-      {notice && <p role="status">{notice}</p>}
-      {problem && <p className="director-error" role="alert">{problem}</p>}
-      <ul className="director-list">
-        {row.links.map(link => {
-          const key = `${link.catalog_slug}:${link.source_project_guid}`;
-          const open = openKey === key;
-          return <li key={key}>
-            <div className="director-record director-record-wide">
-              <div className="director-record-name">
-                <strong>{link.catalog_name}</strong>
-                <span className="director-muted">{link.source_name ?? 'Project row missing in this database'}</span>
-              </div>
-              {link.source_row_id !== null && <button type="button" aria-expanded={open} onClick={() => setOpenSource(open ? null : key)}>{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}Targets and exposures</button>}
-              {canWrite && row.links.length > 1 && <button type="button" aria-label={`Detach ${link.catalog_name}`} title="Give this database's project a plan of its own" onClick={() => { setDetachPick(detachPick === key ? null : key); setProblem(''); }}><Unlink size={16} /></button>}
-            </div>
-            {detachPick === key && <p className="director-muted" role="note">{link.source_name ?? 'This project'} in {link.catalog_name} becomes a plan of its own; this plan keeps its drafts.
-              <span className="director-actions"><button type="button" disabled={detach.isPending} onClick={() => detach.mutate(link)}>{detach.isPending ? 'Detaching…' : 'Detach'}</button><button type="button" onClick={() => setDetachPick(null)}>Cancel</button></span></p>}
-            {open && link.source_row_id !== null && <ProjectPlanEditor dbId={link.catalog_slug} projectId={link.source_row_id} canEdit={canWrite && !!info.data?.allow_database_management} />}
-          </li>;
-        })}
-      </ul>
-    </section>
   </section>;
 }

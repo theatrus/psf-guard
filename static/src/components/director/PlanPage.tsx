@@ -36,13 +36,13 @@ export default function PlanPage() {
   const library = <Link to={back ? `/?${back}` : '/'}>Library</Link>;
   return (
     <main className="director-page">
-      <header className="director-heading"><h1>Planning</h1><span className="director-preview">Experimental</span></header>
+      <header className="director-heading"><h1>Planning</h1></header>
       {status.isPending && <p role="status">Loading plans...</p>}
       {status.isError && <div role="alert"><p>{message(status.error)}</p><button type="button" onClick={() => void status.refetch()}>Retry</button></div>}
       {status.data && !available && <p>Plans are unavailable on this server.</p>}
       {available && status.data && <>
         {!status.data.acquisition_available && <p className="director-muted">Acquisition is not yet available.</p>}
-        {!status.data.database_management && <p className="director-muted" role="note">Read only over the catalogs: this server was started without database management, so plans and framing can be drafted but activation and Target Scheduler edits are off.</p>}
+        {!status.data.database_management && <p className="director-muted" role="note">Read only: plans can be drafted here, but this server does not write to rig databases.</p>}
         {!key
           ? <Navigate to={back ? `/?${back}` : '/'} replace />
           : resolved.kind === 'plan'

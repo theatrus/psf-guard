@@ -26,8 +26,11 @@ export default function ObservingPreferences({ projectId, rigs, projects }: { pr
   const id = scope === 'rig' ? rig : scope === 'site' ? site : defaults.data?.global_id;
   const settings = useQuery({ queryKey: ['observingSettings', scope, id], queryFn: () => apiClient.getObservingSettings(scope, id!), enabled: !!id, refetchOnWindowFocus: false });
   const globalOrder = effective.data?.settings.find(s => s.scope === 'global')?.project_order ?? [];
+  // Folded, the ranking is about every plan; the line says where this one stands.
+  const place = ordered(projects, globalOrder).findIndex(project => project.id === projectId);
   return <section className="observing-preferences" aria-label="Project priority">
-    <h3>Project priority</h3>
+    <details className="observing-fold">
+    <summary><h3>Project priority</h3>{effective.data && place >= 0 && <span className="director-muted"> · this plan is {place + 1} of {projects.length} in the global order</span>}</summary>
     <div className="observing-context">
       <label>Scope<select aria-label="Priority scope" value={scope} onChange={e => setScope(e.target.value as PreferenceScope)}><option value="global">Global order</option><option value="site" disabled={!site}>Site override</option><option value="rig" disabled={!rig}>Rig override</option></select></label>
       <label>Rig<select aria-label="Priority rig" value={rig} onChange={e => setRigPick(e.target.value)}>{choices.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select></label>
@@ -36,6 +39,7 @@ export default function ObservingPreferences({ projectId, rigs, projects }: { pr
     {(settings.error || effective.error || defaults.error || available.error) && <p role="alert">{errorText(settings.error ?? effective.error ?? defaults.error ?? available.error)}</p>}
     {id && settings.isPending && <p role="status">Loading priority...</p>}
     {settings.data && defaults.data && (scope === 'global' || effective.data) && <PriorityEditor key={`${scope}:${id}`} initial={settings.data} globalOrder={globalOrder} projects={projects} currentProject={projectId} sites={defaults.data.sites} />}
+    </details>
   </section>;
 }
 
