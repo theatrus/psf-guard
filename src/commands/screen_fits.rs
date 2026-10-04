@@ -1010,6 +1010,7 @@ fn category_label(category: &Option<IssueCategory>) -> &'static str {
         Some(IssueCategory::SatelliteTrailDetected) => "satellite-trail",
         Some(IssueCategory::NoStarsDetected) => "no-stars",
         Some(IssueCategory::HfrAboveLimit) => "hfr-limit",
+        Some(IssueCategory::SoftStars) => "soft-stars",
         Some(IssueCategory::StarCountBelowLimit) => "star-limit",
         Some(IssueCategory::SensorTemperature) => "sensor-warm",
         Some(IssueCategory::UnknownDegradation) => "unknown",
