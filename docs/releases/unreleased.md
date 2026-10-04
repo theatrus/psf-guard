@@ -28,6 +28,11 @@
   longer see dawn flats a day late, or a night of lights split in two.
 - Open a project's or target's Sequence and Stacks straight from the Library,
   beside its image grid. A project with one target opens at that target.
+- Click a job in the header's background queue to open what it works on: a
+  build's stacks, a quality scan's sequence, or a refreshed database. A
+  quality scan that finished with errors now stays on the chip, with a link
+  to its target, until you dismiss it, instead of vanishing or sticking
+  while other work runs.
 
 > Add a line here as each user-visible change merges. At release time this
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version

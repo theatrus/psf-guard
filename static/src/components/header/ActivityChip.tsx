@@ -1,10 +1,11 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import { STACK_ACTIVITY_QUERY_KEY } from '../../hooks/useStackActivity';
 import { lineLengths, type ActivityControl, type ActivityItem, type ActivityQueue } from './activityItems';
-import { useHeaderActivity, WBPP_ACTIVITY_QUERY_KEY } from './useHeaderActivity';
+import { useHeaderActivity, WBPP_ACTIVITY_QUERY_KEY, type ScanErrorNote } from './useHeaderActivity';
 import './header.css';
 
 /** How long the list stays after the pointer leaves, so it can be reached. */
@@ -70,6 +71,44 @@ interface RowControls {
   run: (action: ActivityAction) => void;
   busy: boolean;
   lengths: Record<ActivityQueue, number>;
+  /** Close the list as a link takes the person away. */
+  leave: () => void;
+}
+
+/** A scan's frame errors, with the way to its target and to dismiss it. */
+function ScanErrorRow({
+  note,
+  onDismiss,
+  onLeave,
+}: {
+  note: ScanErrorNote;
+  onDismiss: (dbId: string) => void;
+  onLeave: () => void;
+}) {
+  return (
+    <div className="activity-error" role="note">
+      <span className="activity-error-text">
+        A quality scan finished with errors. {note.message}
+        {note.href && (
+          <>
+            {' '}
+            <Link to={note.href} className="activity-error-link" onClick={onLeave}>
+              Open the sequence
+            </Link>
+          </>
+        )}
+      </span>
+      <button
+        type="button"
+        className="activity-error-dismiss"
+        aria-label={`Dismiss the quality scan errors in ${note.dbName}`}
+        title="Dismiss"
+        onClick={() => onDismiss(note.dbId)}
+      >
+        ✕
+      </button>
+    </div>
+  );
 }
 
 function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowControls }) {
@@ -92,7 +131,19 @@ function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowCont
         </span>
       </div>
       <div className="activity-row-scope">
-        {item.scope}
+        {item.href ? (
+          <Link
+            to={item.href}
+            className="activity-row-link"
+            aria-label={`Go to ${name}`}
+            title="Go to it"
+            onClick={controls.leave}
+          >
+            {item.scope}
+          </Link>
+        ) : (
+          item.scope
+        )}
         {item.automatic && <span className="activity-row-tag">automatic</span>}
       </div>
       {!item.queued && (
@@ -203,9 +254,12 @@ function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowCont
  * Background work in the header, kept small: the overall progress and how
  * many jobs there are. Hover, focus or click opens the queue: every catalog
  * refresh, quality scan and stack build, running or queued, on any database.
+ * Each row links to what it works on. A scan's frame errors stay, on the
+ * busy chip or as "Finished with errors", until dismissed.
  */
 export default function ActivityChip() {
-  const { items, summary, finished, scanError } = useHeaderActivity();
+  const { items, summary, finished, scanErrors, dismissScanError } = useHeaderActivity();
+  const scanError = scanErrors[scanErrors.length - 1];
   const access = useAccess();
   const { data: serverInfo } = useQuery({
     queryKey: ['serverInfo'],
@@ -235,7 +289,7 @@ export default function ActivityChip() {
   const closeTimer = useRef<number | null>(null);
   const wrapper = useRef<HTMLDivElement>(null);
   const listId = useId();
-  const open = (pinned || hovered) && summary.count > 0;
+  const open = (pinned || hovered) && (summary.count > 0 || scanErrors.length > 0);
 
   useEffect(() => () => {
     if (closeTimer.current != null) window.clearTimeout(closeTimer.current);
@@ -257,34 +311,33 @@ export default function ActivityChip() {
 
   // Nothing left to show: forget the pin, so the next job starts closed.
   useEffect(() => {
-    if (summary.count === 0) {
+    if (summary.count === 0 && scanErrors.length === 0) {
       setPinned(false);
       setHovered(false);
     }
-  }, [summary.count]);
+  }, [summary.count, scanErrors.length]);
 
   // Always mounted, so a screen reader hears when work ends or fails.
   const announcement = finished
     ? finished.errors
-      ? `Background jobs finished with errors. ${finished.message ?? ''}`
+      ? `Background jobs finished with errors. ${scanErrors.map((note) => note.message).join('. ')}`
       : 'Background jobs finished.'
     : scanError?.message
       ? `A quality scan finished with errors. ${scanError.message}`
       : '';
   const live = <span className="activity-live" aria-live="polite">{announcement}</span>;
 
-  if (summary.count === 0 && !finished) return live;
+  // Idle with errors held: the chip stays, as a button that lists them.
+  const idleWithErrors = summary.count === 0 && scanErrors.length > 0;
+  if (summary.count === 0 && !idleWithErrors && !finished) return live;
 
-  if (summary.count === 0 && finished) {
+  if (summary.count === 0 && !idleWithErrors && finished) {
     return (
       <div className="activity-chip-slot">
         {live}
-        <span
-          className={`header-button utility-button activity-chip is-finished${finished.errors ? ' has-errors' : ''}`}
-          title={finished.message}
-        >
-          <span className="activity-chip-mark" aria-hidden="true">{finished.errors ? '!' : '✓'}</span>
-          <span className="activity-chip-text">{finished.errors ? 'Finished with errors' : 'Done'}</span>
+        <span className="header-button utility-button activity-chip is-finished">
+          <span className="activity-chip-mark" aria-hidden="true">✓</span>
+          <span className="activity-chip-text">Done</span>
         </span>
       </div>
     );
@@ -305,6 +358,10 @@ export default function ActivityChip() {
     },
     busy: action.isPending,
     lengths: lineLengths(items),
+    leave: () => {
+      setPinned(false);
+      setHovered(false);
+    },
   };
 
   const jobs = `${summary.count} job${summary.count === 1 ? '' : 's'}`;
@@ -343,10 +400,13 @@ export default function ActivityChip() {
       {live}
       <button
         type="button"
-        className={`header-button utility-button activity-chip${scanError ? ' has-errors' : ''}`}
+        className={`header-button utility-button activity-chip${scanError ? ' has-errors' : ''}${
+          idleWithErrors ? ' is-finished' : ''
+        }`}
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
-        aria-label={`Background jobs: ${label}`}
+        aria-label={idleWithErrors ? 'Background jobs: finished with errors' : `Background jobs: ${label}`}
+        title={idleWithErrors ? scanErrors.map((note) => note.message).join('\n') : undefined}
         // The first click keeps the list open after the pointer leaves; the
         // second closes it.
         onClick={() => {
@@ -363,29 +423,42 @@ export default function ActivityChip() {
         }}
       >
         {scanError && <span className="activity-chip-mark" aria-hidden="true" title={scanError.message}>!</span>}
-        <ProgressRing percent={summary.percent} idle={running === 0} />
-        {percent != null && <span className="activity-chip-percent">{percent}%</span>}
-        <span className="activity-chip-count">{jobs}</span>
+        {idleWithErrors ? (
+          <span className="activity-chip-text">Finished with errors</span>
+        ) : (
+          <>
+            <ProgressRing percent={summary.percent} idle={running === 0} />
+            {percent != null && <span className="activity-chip-percent">{percent}%</span>}
+            <span className="activity-chip-count">{jobs}</span>
+          </>
+        )}
       </button>
       {open && (
         <div id={listId} className="activity-popover" role="region" aria-label="Background jobs">
           <div className="activity-popover-head">
             <span>Background jobs</span>
             <span className="activity-popover-counts">
-              {running} running{summary.queued > 0 ? ` · ${summary.queued} queued` : ''}
+              {idleWithErrors
+                ? 'Nothing running'
+                : `${running} running${summary.queued > 0 ? ` · ${summary.queued} queued` : ''}`}
             </span>
           </div>
-          {scanError && (
-            <p className="activity-error" role="note">
-              A quality scan finished with errors. {scanError.message}
-            </p>
-          )}
+          {scanErrors.map((note) => (
+            <ScanErrorRow
+              key={note.dbId}
+              note={note}
+              onDismiss={dismissScanError}
+              onLeave={controls.leave}
+            />
+          ))}
           {action.isError && (
             <p className="activity-error" role="alert">{(action.error as Error).message}</p>
           )}
-          <ul className="activity-list">
-            {items.map((item) => <ActivityRow key={item.key} item={item} controls={controls} />)}
-          </ul>
+          {items.length > 0 && (
+            <ul className="activity-list">
+              {items.map((item) => <ActivityRow key={item.key} item={item} controls={controls} />)}
+            </ul>
+          )}
         </div>
       )}
     </div>
