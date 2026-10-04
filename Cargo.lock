@@ -5291,9 +5291,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-fits"
-version = "0.2.4"
+version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffdd290d89a261593ca4d876c01dd1f8249ec61795c30fec77cd77f3af96827e"
+checksum = "0730a3df667f44bd5db10e56900a21daeffada28212b95060f5606f0afb75c27"
 dependencies = [
  "multiversion",
  "seiza-stretch",

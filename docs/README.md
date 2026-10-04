@@ -28,6 +28,7 @@ work. Historical checklists record delivery; they do not track current work.
 - [Multi-database architecture](design/multi-database.md)
 - [Director: goal-driven acquisition and phased plan](design/director.md)
 - [Reject archive safety model](design/reject-archive.md)
+- [Calibrated subs](design/calibrated-subs.md)
 
 ## Component-specific guides
 
