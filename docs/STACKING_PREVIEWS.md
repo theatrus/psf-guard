@@ -305,15 +305,16 @@ asked for, decides what runs next. In the queue, **↑** and **↓** move a
 waiting build, **×** takes it out of the line, and **Stop** ends the running
 build after asking once. Mono and color builds share the line. A running color
 composition has no **Stop**: it only checks for one before it starts, and
-finishes within minutes. Automatic refreshes still settling after new frames,
-a sync or grade changes are listed too, with when they start; **Run now**
-starts one within seconds and **×** skips it until the next change. These
-controls need write access. `POST /api/stack-activity/{job_id}/move` with
+finishes within minutes. An automatic refresh still settling after new
+frames, a sync or grade changes is not listed or counted: nothing runs yet. It
+appears once it starts, as a build marked `automatic`. These controls need
+write access. `POST /api/stack-activity/{job_id}/move` with
 `{"position": n}` (0 is next) and `POST /api/stack-activity/{job_id}/cancel`
 do the same from scripts; `GET /api/stack-activity` lists builds running first,
 then the line in order, each waiting one with its `queue_position`, and the
 settling automatic refreshes under `scheduled`.
-`POST /api/stack-activity/scheduled/run-now` and `/scheduled/skip` take
+`POST /api/stack-activity/scheduled/run-now` starts one within seconds and
+`/scheduled/skip` drops it until the next change; both take
 `{"database_id": …, "project_id": …}`. Reopening **Stacks** re-attaches the stack panels to the
 running job, so leaving the page and coming back restores the live per-card
 progress instead of an idle panel.

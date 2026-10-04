@@ -66,14 +66,12 @@ describe('header activity items', () => {
         running: [],
         queued: [{ id: 'q1', db_id: 'db-a', db_name: 'Askar', scope: 'target IC 447', project_id: null, target_id: 9, position: 1, queued_at: 2 }],
       },
-      [{ database_id: 'db-a', database_name: 'Askar', project_id: 5, project_name: 'Heart', reason: 'arrival', due_in_seconds: 60 }],
       projectOf
     );
     expect(scanning.map((item) => item.href)).toEqual([
       '/sequence?db=db-a&project=4&target=42&filterName=Ha',
       '/stacks?db=db-a&project=1&target=7',
       '/stacks?db=db-a&project=2&target=9',
-      '/stacks?db=db-a&project=5',
     ]);
 
     // A catalog refresh works on the whole database; a backfill between
@@ -82,7 +80,6 @@ describe('header activity items', () => {
       [{ ...db, refresh: refresh({}), backfill: backfill(1, 3) }],
       [],
       undefined,
-      [],
       projectOf
     );
     expect(idle.map((item) => item.href)).toEqual(['/grid?db=db-a', '/grid?db=db-a']);
@@ -186,19 +183,10 @@ describe('header activity items', () => {
     expect(lineLengths(items)).toEqual({ stack: 0, wbpp: 2 });
   });
 
-  it('shows the final pass in words and lists refreshes still settling', () => {
+  it('shows the final pass in words', () => {
     const running = { ...stack('R', 'running', 21, 34), progress_label: 'Rejecting transients · pass 2/3 · frame 3/8' };
     const color = { ...stack('C', 'running', 1, 4), kind: 'color' as const };
-    const items = activityItems([], [running, color], undefined, [
-      {
-        database_id: 'a', database_name: 'Askar', project_id: 7, project_name: 'Heart',
-        reason: 'arrival', due_in_seconds: 170,
-      },
-      {
-        database_id: 'a', database_name: 'Askar', project_id: null, project_name: null,
-        reason: 'grade', due_in_seconds: 5,
-      },
-    ]);
+    const items = activityItems([], [running, color]);
     expect(items[0]).toMatchObject({
       detail: 'Rejecting transients · pass 2/3 · frame 3/8',
       percent: (21 / 34) * 100,
@@ -206,21 +194,6 @@ describe('header activity items', () => {
     });
     // A running color composition finishes once it starts.
     expect(items[1]).toMatchObject({ title: 'Composing color', stoppable: false });
-    expect(items[2]).toMatchObject({
-      kind: 'automatic',
-      title: 'Automatic refresh',
-      scope: 'Askar · Heart · after new frames',
-      detail: 'Restacks what changed',
-      state: 'in 3 min',
-      queued: true,
-      control: { kind: 'scheduled', dbId: 'a', projectId: 7 },
-    });
-    expect(items[3]).toMatchObject({
-      scope: 'Askar · every followed project · after grade changes',
-      detail: 'Restacks what changed',
-      state: 'starting now',
-    });
-    // Settling refreshes are not in a line a person reorders.
-    expect(lineLengths(items)).toEqual({ stack: 0, wbpp: 0 });
+    expect(items).toHaveLength(2);
   });
 });

@@ -36,6 +36,8 @@
   quality scan that finished with errors now stays on the chip, with a link
   to its target, until you dismiss it, instead of vanishing or sticking
   while other work runs.
+- Keep automatic refreshes that are still waiting to start out of the
+  header's background queue and its job count. They appear once they build.
 
 > Add a line here as each user-visible change merges. At release time this
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version

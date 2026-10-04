@@ -44,17 +44,10 @@ function ProgressRing({ percent, idle }: { percent: number | null; idle: boolean
 
 type ActivityAction =
   | { type: 'move'; control: ActivityControl; position: number }
-  | { type: 'stop'; control: ActivityControl }
-  | { type: 'run-now'; control: ActivityControl };
+  | { type: 'stop'; control: ActivityControl };
 
 function runAction(action: ActivityAction): Promise<unknown> {
   const { control } = action;
-  if (control.kind === 'scheduled') {
-    return action.type === 'run-now'
-      ? apiClient.runScheduledRefreshNow(control.dbId, control.projectId)
-      : apiClient.skipScheduledRefresh(control.dbId, control.projectId);
-  }
-  if (action.type === 'run-now') return Promise.resolve();
   if (action.type === 'move') {
     if (control.kind === 'stack') return apiClient.moveStackJob(control.jobId, action.position);
     if (control.kind === 'wbpp-queued') return apiClient.moveQueuedWbppRun(control.queueId, action.position);
@@ -126,7 +119,7 @@ function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowCont
           {item.queued
             ? waiting
               ? `queued · ${item.position! + 1}`
-              : item.state ?? (item.kind === 'automatic' ? 'waiting' : 'queued')
+              : 'queued'
             : item.percent != null ? `${Math.round(item.percent)}%` : 'working'}
         </span>
       </div>
@@ -156,30 +149,7 @@ function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowCont
       )}
       <div className="activity-row-foot">
         <div className="activity-row-detail">{item.detail}</div>
-        {allowed && control?.kind === 'scheduled' && (
-          <div className="activity-row-actions">
-            <button
-              type="button"
-              aria-label={`Run ${name} now`}
-              title="Run now"
-              disabled={controls.busy}
-              onClick={() => controls.run({ type: 'run-now', control })}
-            >
-              Run now
-            </button>
-            <button
-              type="button"
-              className="activity-row-stop"
-              aria-label={`Skip ${name}`}
-              title="Skip this refresh"
-              disabled={controls.busy}
-              onClick={() => controls.run({ type: 'stop', control })}
-            >
-              ✕
-            </button>
-          </div>
-        )}
-        {allowed && control && control.kind !== 'scheduled' && (item.queued || item.stoppable) && (
+        {allowed && control && (item.queued || item.stoppable) && (
           <div className="activity-row-actions">
             {waiting && (
               <>
@@ -273,7 +243,7 @@ export default function ActivityChip() {
     // once keeps a second click from acting on the old positions.
     onSuccess: (result, variables) => {
       if (!result || typeof result !== 'object') return;
-      if (variables.control.kind === 'stack' || variables.control.kind === 'scheduled') {
+      if (variables.control.kind === 'stack') {
         queryClient.setQueryData(STACK_ACTIVITY_QUERY_KEY, result);
       } else if (variables.type === 'move') {
         queryClient.setQueryData(WBPP_ACTIVITY_QUERY_KEY, result);
@@ -348,9 +318,7 @@ export default function ActivityChip() {
   const controls: RowControls = {
     allowed: (item) =>
       access.canWrite
-      && (item.control?.kind === 'stack'
-        || item.control?.kind === 'scheduled'
-        || !!serverInfo?.allow_database_management),
+      && (item.control?.kind === 'stack' || !!serverInfo?.allow_database_management),
     run: (next) => {
       // A control was used, so the list stays open after the pointer leaves.
       setPinned(true);

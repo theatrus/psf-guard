@@ -20,7 +20,6 @@ export function useStackActivity() {
   });
   return {
     active: query.data?.active ?? [],
-    scheduled: query.data?.scheduled ?? [],
     isRunning: (query.data?.active.length ?? 0) > 0,
   };
 }

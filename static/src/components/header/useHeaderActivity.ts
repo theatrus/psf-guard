@@ -53,7 +53,7 @@ export function useHeaderActivity() {
     return (dbId, targetId) => projects.get(`${dbId}:${targetId}`);
   }, [targets]);
   const queryClient = useQueryClient();
-  const { active: stacks, scheduled } = useStackActivity();
+  const { active: stacks } = useStackActivity();
   const wbpp = useQuery<WbppActivity>({
     queryKey: WBPP_ACTIVITY_QUERY_KEY,
     queryFn: apiClient.getWbppActivity,
@@ -103,7 +103,7 @@ export function useHeaderActivity() {
     scan: scans[index]?.data,
     backfill: backfills[index]?.data,
   }));
-  const items = activityItems(perDb, stacks, wbpp.data, scheduled, projectOf);
+  const items = activityItems(perDb, stacks, wbpp.data, projectOf);
   const summary = summarize(items);
 
   // A database whose work just finished has new images, metrics and grades
@@ -177,9 +177,7 @@ export function useHeaderActivity() {
   // each is dismissed.
   const [finished, setFinished] = useState<FinishedNote | null>(null);
   const finishedTimer = useRef<number | null>(null);
-  // Running and lined-up work; a refresh still settling is not, so
-  // skipping one does not say "Done".
-  const workCount = items.filter((item) => item.kind !== 'automatic').length;
+  const workCount = items.length;
   const previousCount = useRef(workCount);
   useEffect(() => {
     const before = previousCount.current;
