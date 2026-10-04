@@ -155,6 +155,33 @@ describe('TauriSettings import state', () => {
     expect(screen.getByRole('heading', { name: 'Folders' })).toBeInTheDocument();
   });
 
+  it('keeps processor use on its own Performance tab', async () => {
+    server.use(
+      http.get('/api/databases', () => HttpResponse.json({ success: true, data: [], error: null })),
+      http.get('/api/settings/workers', () =>
+        HttpResponse.json({
+          success: true,
+          error: null,
+          data: {
+            interactive_ratio: 0.5,
+            background_ratio: 0.25,
+            default_interactive_ratio: 0.5,
+            default_background_ratio: 0.25,
+            logical_cores: 16,
+          },
+        })
+      ),
+    );
+    render(<MemoryRouter><TauriSettings isOpen onClose={() => {}} initialIntent="stacking" /></MemoryRouter>, { wrapper: createWrapper() });
+    expect(await screen.findByRole('tab', { name: 'Stacking' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('heading', { name: 'Processor use' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Performance' }));
+
+    expect(await screen.findByRole('heading', { name: 'Processor use' })).toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: 'Background work share of cores' })).toBeInTheDocument();
+  });
+
   it('hides catalog management on a read-only server', async () => {
     render(<TauriSettings isOpen onClose={() => undefined} />, {
       wrapper: createWrapper(),

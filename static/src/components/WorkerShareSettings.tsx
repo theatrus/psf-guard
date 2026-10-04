@@ -11,12 +11,12 @@ const SHARES: Array<{ key: Share; label: string; help: string }> = [
   {
     key: 'interactive_ratio',
     label: 'Work you wait on',
-    help: 'Stack builds you start, quality scans, and previews being looked at.',
+    help: 'Stack builds, color and stretches you start, quality scans you start, and previews being looked at.',
   },
   {
     key: 'background_ratio',
     label: 'Background work',
-    help: 'Automatic stack refreshes, preview pre-generation, and quality backfill.',
+    help: 'Automatic stack refreshes, quality backfill and new-frame analysis in every database, and preview pre-generation. It pauses while you wait on work.',
   },
 ];
 
@@ -26,9 +26,10 @@ function cores(ratio: number, logical: number): number {
 
 /**
  * How much of the processor PSF Guard's work may take, as a share of the
- * logical cores. Saved on the server, over the config file's values, and used
- * by every pool sized from then on; work already running keeps its threads.
- * Memory can still lower the count.
+ * logical cores. Each share limits all such work together: jobs running at
+ * once split it. Saved on the server, over the config file's values, and used
+ * by every job that starts from then on; work already running keeps its
+ * threads. Memory can still lower the count.
  */
 export default function WorkerShareSettings() {
   const queryClient = useQueryClient();
@@ -69,8 +70,9 @@ export default function WorkerShareSettings() {
     <div className="stack-method-settings worker-share-settings">
       <h3>Processor use</h3>
       <p className="muted">
-        How many of this computer&apos;s {current.logical_cores} cores each kind of work may use.
-        A change applies to work that starts after it. Memory can lower the count further.
+        How many of this computer&apos;s {current.logical_cores} cores each kind of work may use,
+        all of it together: jobs running at the same time split the share. A change applies to
+        work that starts after it. Memory can lower the count further.
       </p>
       <fieldset className="calibration-settings-group" disabled={save.isPending}>
         {SHARES.map((share) => {

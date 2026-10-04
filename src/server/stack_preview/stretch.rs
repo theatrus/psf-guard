@@ -1126,15 +1126,17 @@ fn render_fits_variant(
         crate::concurrency::Priority::Interactive,
         Some(frame.image.pixel_count()),
     );
+    let lease = state.lease_workers(crate::concurrency::Priority::Interactive, budget.workers);
     let pool = ThreadPoolBuilder::new()
-        .num_threads(budget.workers)
+        .num_threads(lease.workers)
         .thread_name(|index| format!("stack-stretch-{index}"))
         .build()
         .map_err(|error| error.to_string())?;
     tracing::info!(
-        "Stack stretch {stretch_id}: {} worker(s) — {}",
-        budget.workers,
-        budget.rationale
+        "Stack stretch {stretch_id}: {} worker(s) — {}; {}",
+        lease.workers,
+        budget.rationale,
+        lease.summary()
     );
     let source_transfer = frame
         .headers
