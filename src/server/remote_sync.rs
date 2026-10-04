@@ -2041,9 +2041,10 @@ mod tests {
         connection
             .execute(
                 "INSERT INTO psf_guard_frame_derivative
-                     (derivative_uuid, acquired_image_guid, kind, file_name, producer, evidence,
-                      created_at, updated_at)
-                 VALUES ('d', 'ig', 'calibrated', 'a_c.xisf', 'pixinsight', 'header', 1, 1)",
+                     (derivative_uuid, acquired_image_guid, kind, steps, file_name, producer,
+                      evidence, created_at, updated_at)
+                 VALUES ('d', 'ig', 'calibrated', 'calibrated', 'a_c.xisf', 'pixinsight',
+                         'header', 1, 1)",
                 [],
             )
             .unwrap();

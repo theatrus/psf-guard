@@ -1560,7 +1560,18 @@ mod tests {
                 kind,
                 evidence: crate::image_io::KindEvidence::Header,
                 producer: crate::image_io::Producer::Pixinsight,
-                includes_calibration: suffix.contains("_c"),
+                steps: suffix.split('_').fold(
+                    crate::image_io::ProcessingSteps::NONE,
+                    |steps, token| {
+                        use crate::image_io::ProcessingSteps as S;
+                        steps.with(match token {
+                            "c" => S::CALIBRATED,
+                            "cc" => S::COSMETIC,
+                            "r" => S::REGISTERED,
+                            _ => S::NONE,
+                        })
+                    },
+                ),
             },
             ..raw.clone()
         }
@@ -1671,18 +1682,17 @@ mod tests {
         // One light for the acquisition, not one per copy.
         assert_eq!(outcome.imported, 1);
         assert_eq!(outcome.calibrated_lights, 1);
-        assert_eq!(outcome.derivatives.paired, 1, "the registered copy");
-        assert_eq!(
-            outcome.derivatives.superseded, 1,
-            "the other calibrated copy"
-        );
+        // The most processed calibrated copy is the light; the plain
+        // calibrated and the registered copies are its other options.
+        assert_eq!(outcome.derivatives.paired, 2);
+        assert_eq!(outcome.derivatives.superseded, 0);
         let (id, guid): (i64, String) = conn
             .query_row("SELECT Id, guid FROM acquiredimage", [], |row| {
                 Ok((row.get(0)?, row.get(1)?))
             })
             .unwrap();
         let primary = file_name_of(&conn, id);
-        assert!(primary.ends_with("_c.xisf") || primary.ends_with("_c_cc.xisf"));
+        assert!(primary.ends_with("_c_cc.xisf"), "{primary}");
         conn.execute("UPDATE acquiredimage SET gradingStatus = 1", [])
             .unwrap();
 

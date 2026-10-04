@@ -108,9 +108,15 @@ read from the derivative's folder. A source the catalog does not hold (an
 APP stack, a file on another machine) names no light, so its copies stay
 unpaired; a registered copy never becomes a light of its own.
 
-When several copies of one kind match one light (WBPP left both `_r` and
-`_c_r` of the same frame on the C925 run), the one that was calibrated
-wins, then the newer file; the rest are reported as superseded.
+Every distinct copy of a light pairs, and each is an option a view can
+show. A copy records its **steps** (calibrated, cosmetic, debayered,
+background, cropped, registered), read from the history and the name, and
+its image size. WBPP's `_c`, `_c_cc`, `_r` and `_c_r` of one frame hold
+different pixels, so on the C925 run 329 lights carry three options each
+(Calibrated, Calibrated + registered, Registered). Two copies are the same
+option only when their steps and size agree (an unknown size matches
+any); then the newer file takes the record over and keeps its uuid, and
+the other is reported as superseded.
 
 Pairing is **on by default**:
 
@@ -130,7 +136,8 @@ Pairing is **on by default**:
 
 A calibrated derivative with no raw light to pair with becomes a light row
 of its own, because the catalog, grading and stacking all need one: one row
-per exposure, choosing the newest of several calibrated copies. Its
+per exposure, choosing the most processed calibrated copy (`_c_cc` over
+`_c`), then the newest. Its
 side-table record marks it `primary`: the row's file *is* the derivative.
 Other copies of that exposure pair with the row. A registered copy never
 becomes a light.
@@ -154,17 +161,19 @@ PSF Guard tables; Target Scheduler tables are never altered.
 |---|---|
 | `derivative_uuid` TEXT PK | Stable identity, the sync key. |
 | `acquired_image_guid` TEXT | The light it belongs to (`acquiredimage.guid`). |
-| `kind` TEXT | `calibrated` or `registered`. |
+| `kind` TEXT | `calibrated` or `registered` (registered once the geometry changed). |
+| `steps` TEXT | The steps applied, `calibrated,cosmetic,registered`; names the option. |
 | `primary_source` INTEGER | 1 when the light row's own file is this derivative. |
 | `file_name` TEXT | Basename; resolved locally through the directory tree. |
 | `source_tail` TEXT | The last path segments where it was found, for the resolver. |
 | `size`, `mtime` INTEGER | The fingerprint the record was made from. |
+| `width`, `height` INTEGER | Image size, which with the steps tells two options apart. |
 | `producer` TEXT | `pixinsight`, `siril`, `app`, `dss`, `astap`, `maxim`, `unknown` (`psf-guard` later). |
 | `evidence` TEXT | `header` or `name`. |
 | `created_at`, `updated_at` INTEGER | Epoch seconds. |
 
-One record per (light, kind): a light has at most one calibrated and one
-registered copy. A newer file of the same kind replaces the record. The
+A light has one record per file, and at most one per option; a newer file
+of an option replaces that record. The
 table has its own version row (`psf_guard_frame_derivative_schema`); later
 changes follow the calibration library's ladder and backup, and a build
 refuses to write a table a newer build has upgraded.

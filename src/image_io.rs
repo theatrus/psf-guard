@@ -214,15 +214,107 @@ impl Producer {
     }
 }
 
+/// The steps a copy has been through, as far as its file says. Two copies
+/// of one light with different steps hold different pixels (WBPP's `_c`,
+/// `_c_cc`, `_r` and `_c_r` of one frame), so each is kept as its own
+/// option.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ProcessingSteps(u8);
+
+impl ProcessingSteps {
+    pub const NONE: Self = Self(0);
+    pub const CALIBRATED: Self = Self(1);
+    pub const COSMETIC: Self = Self(1 << 1);
+    pub const DEBAYERED: Self = Self(1 << 2);
+    pub const BACKGROUND: Self = Self(1 << 3);
+    pub const CROPPED: Self = Self(1 << 4);
+    pub const REGISTERED: Self = Self(1 << 5);
+
+    /// In the order a pipeline applies them; names are the stored form.
+    const NAMED: [(Self, &'static str); 6] = [
+        (Self::CALIBRATED, "calibrated"),
+        (Self::COSMETIC, "cosmetic"),
+        (Self::DEBAYERED, "debayered"),
+        (Self::BACKGROUND, "background"),
+        (Self::CROPPED, "cropped"),
+        (Self::REGISTERED, "registered"),
+    ];
+
+    pub fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0 && other.0 != 0
+    }
+
+    pub fn with(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// How many steps, to prefer the more processed of two copies.
+    pub fn count(self) -> u32 {
+        self.0.count_ones()
+    }
+
+    /// Whether the geometry no longer matches the light's.
+    pub fn changes_geometry(self) -> bool {
+        self.contains(Self::REGISTERED) || self.contains(Self::CROPPED)
+    }
+
+    /// `calibrated,cosmetic,registered`: the stored form.
+    pub fn as_text(self) -> String {
+        Self::NAMED
+            .iter()
+            .filter(|(step, _)| self.contains(*step))
+            .map(|(_, name)| *name)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    pub fn from_text(text: &str) -> Self {
+        text.split(',')
+            .map(str::trim)
+            .fold(Self::NONE, |steps, name| {
+                Self::NAMED
+                    .iter()
+                    .find(|(_, known)| *known == name)
+                    .map_or(steps, |(step, _)| steps.with(*step))
+            })
+    }
+
+    /// "Calibrated + cosmetic + registered", for a view's switch.
+    pub fn label(self) -> String {
+        let text = self.as_text().replace(',', " + ");
+        let mut chars = text.chars();
+        match chars.next() {
+            Some(first) => first.to_uppercase().chain(chars).collect(),
+            None => "Processed".to_string(),
+        }
+    }
+}
+
+impl serde::Serialize for ProcessingSteps {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.as_text())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ProcessingSteps {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Ok(Self::from_text(&text))
+    }
+}
+
 /// A frame's [`FrameKind`] with the evidence behind it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FrameClass {
     pub kind: FrameKind,
     pub evidence: KindEvidence,
     pub producer: Producer,
-    /// A registered frame that was calibrated first. WBPP can leave both a
-    /// `_r` and a `_c_r` copy of one light; the calibrated one is preferred.
-    pub includes_calibration: bool,
+    /// What was done to it. Empty for raw frames and integrations.
+    pub steps: ProcessingSteps,
 }
 
 impl Default for FrameClass {
@@ -236,16 +328,45 @@ impl FrameClass {
         kind: FrameKind::Raw,
         evidence: KindEvidence::None,
         producer: Producer::Unknown,
-        includes_calibration: false,
+        steps: ProcessingSteps::NONE,
     };
 
-    fn header(kind: FrameKind, producer: Producer, includes_calibration: bool) -> Self {
+    fn header(producer: Producer, steps: ProcessingSteps) -> Self {
+        Self::from_steps(KindEvidence::Header, producer, steps)
+    }
+
+    fn integration(evidence: KindEvidence, producer: Producer) -> Self {
         Self {
-            kind,
-            evidence: KindEvidence::Header,
+            kind: FrameKind::Integration,
+            evidence,
             producer,
-            includes_calibration: includes_calibration || kind == FrameKind::Calibrated,
+            steps: ProcessingSteps::NONE,
         }
+    }
+
+    /// A copy whose kind follows from its steps: registered once its
+    /// geometry changed, calibrated otherwise.
+    fn from_steps(evidence: KindEvidence, producer: Producer, steps: ProcessingSteps) -> Self {
+        let steps = if steps.is_empty() {
+            ProcessingSteps::CALIBRATED
+        } else {
+            steps
+        };
+        Self {
+            kind: if steps.changes_geometry() {
+                FrameKind::Registered
+            } else {
+                FrameKind::Calibrated
+            },
+            evidence,
+            producer,
+            steps,
+        }
+    }
+
+    /// Calibration was applied before any later step.
+    pub fn includes_calibration(&self) -> bool {
+        self.steps.contains(ProcessingSteps::CALIBRATED)
     }
 }
 
@@ -265,7 +386,7 @@ pub fn classify_frame(path: &Path, declared: impl AsRef<Path>, header: &FrameHea
     let headers = header.cards.as_slice();
     if has_integration_card(headers) || has_stack_count(headers) {
         let producer = fits_producer(headers, "");
-        return FrameClass::header(FrameKind::Integration, producer, false);
+        return FrameClass::integration(KindEvidence::Header, producer);
     }
     let name = declared
         .file_name()
@@ -346,18 +467,25 @@ fn has_stack_count(headers: &[(String, HeaderValue)]) -> bool {
         || header_text(headers, "CALSTAT").is_some_and(|text| text.contains('S'))
 }
 
-/// PixInsight process classes that produce each kind, as they appear in an
-/// XISF processing history.
+/// PixInsight process classes, as they appear in an XISF processing
+/// history: the integrations, and the step each other one applies.
 const PIXINSIGHT_INTEGRATION: &[&str] =
     &["ImageIntegration", "DrizzleIntegration", "FastIntegration"];
-const PIXINSIGHT_REGISTRATION: &[&str] = &["StarAlignment"];
-const PIXINSIGHT_CALIBRATION: &[&str] = &["ImageCalibration", "CosmeticCorrection", "Debayer"];
+const PIXINSIGHT_STEPS: &[(&str, ProcessingSteps)] = &[
+    ("ImageCalibration", ProcessingSteps::CALIBRATED),
+    ("CosmeticCorrection", ProcessingSteps::COSMETIC),
+    ("Debayer", ProcessingSteps::DEBAYERED),
+    ("StarAlignment", ProcessingSteps::REGISTERED),
+];
+/// Signatures PixInsight writes beside the history, and their steps.
+const PIXINSIGHT_SIGNATURES: &[(&str, ProcessingSteps)] = &[
+    ("Calibration", ProcessingSteps::CALIBRATED),
+    ("Registration", ProcessingSteps::REGISTERED),
+];
 
-fn history_names(history: &str, classes: &[&str]) -> bool {
-    classes.iter().any(|class| {
-        history.contains(&format!("class=\"{class}\""))
-            || history.contains(&format!("class=&quot;{class}&quot;"))
-    })
+fn history_names(history: &str, class: &str) -> bool {
+    history.contains(&format!("class=\"{class}\""))
+        || history.contains(&format!("class=&quot;{class}&quot;"))
 }
 
 /// Classify from an XISF image's properties, or `None` when PixInsight left
@@ -384,41 +512,38 @@ fn classify_xisf_properties(
     if !marked {
         return None;
     }
-    let calibrated = history_names(&history, PIXINSIGHT_CALIBRATION) || signed("Calibration");
-    if history_names(&history, PIXINSIGHT_INTEGRATION) || signed("Integration") {
-        return Some(FrameClass::header(
-            FrameKind::Integration,
+    if PIXINSIGHT_INTEGRATION
+        .iter()
+        .any(|class| history_names(&history, class))
+        || signed("Integration")
+    {
+        return Some(FrameClass::integration(
+            KindEvidence::Header,
             Producer::Pixinsight,
-            false,
         ));
     }
-    if history_names(&history, PIXINSIGHT_REGISTRATION) || signed("Registration") {
-        return Some(FrameClass::header(
-            FrameKind::Registered,
-            Producer::Pixinsight,
-            calibrated,
-        ));
+    let mut steps = ProcessingSteps::NONE;
+    for (class, step) in PIXINSIGHT_STEPS {
+        if history_names(&history, class) {
+            steps = steps.with(*step);
+        }
     }
-    if calibrated {
-        return Some(FrameClass::header(
-            FrameKind::Calibrated,
-            Producer::Pixinsight,
-            true,
-        ));
+    for (what, step) in PIXINSIGHT_SIGNATURES {
+        if signed(what) {
+            steps = steps.with(*step);
+        }
     }
-    // PixInsight processed it, but with nothing this list names (a noise
-    // evaluation, a format conversion). The name may still say what it is;
-    // otherwise it is called calibrated, the gentlest kind that keeps it out
-    // of the catalog as a second light, which is what this mark has always
-    // meant to import.
-    Some(match classify_name(name) {
-        Some(class) => FrameClass {
-            evidence: KindEvidence::Header,
-            producer: Producer::Pixinsight,
-            ..class
-        },
-        None => FrameClass::header(FrameKind::Calibrated, Producer::Pixinsight, true),
-    })
+    // The name may add what the history leaves out (`_cc` when only the
+    // signatures survived a format conversion).
+    if let Some(class) = classify_name(name)
+        && class.kind.is_derivative()
+    {
+        steps = steps.with(class.steps);
+    }
+    // PixInsight processed it with nothing this list names (a noise
+    // evaluation, a format conversion): called calibrated, the gentlest kind
+    // that keeps it out of the catalog as a second light.
+    Some(FrameClass::header(Producer::Pixinsight, steps))
 }
 
 /// Words in a FITS `HISTORY` card that name each kind of processing. Siril
@@ -441,11 +566,14 @@ const HISTORY_REGISTRATION: &[&str] = &[
     "staralignment",
     "star alignment",
     "aligned",
-    "crop (",
     "rotation (",
     "resampl",
     "mirror",
 ];
+const HISTORY_CROP: &[&str] = &["crop ("];
+const HISTORY_COSMETIC: &[&str] = &["cosmetic correction", "cosmeticcorrection"];
+const HISTORY_DEBAYER: &[&str] = &["debayer", "demosaic"];
+const HISTORY_BACKGROUND: &[&str] = &["background extraction", "background neutral"];
 const HISTORY_CALIBRATION: &[&str] = &[
     "calibrat",
     "bias subtract",
@@ -483,7 +611,7 @@ fn classify_fits_cards(
     let says = |words: &[&str]| words.iter().any(|word| history.contains(word));
     let producer = fits_producer(headers, &format!("{history}\n{comments}"));
     if says(HISTORY_INTEGRATION) {
-        return Some(FrameClass::header(FrameKind::Integration, producer, false));
+        return Some(FrameClass::integration(KindEvidence::Header, producer));
     }
     // CALSTAT letters: B bias, D dark, F flat (MaxIm, ASTAP).
     let calstat = header_text(headers, "CALSTAT")
@@ -496,14 +624,23 @@ fn classify_fits_cards(
         || CALIBRATION_COUNT_CARDS
             .iter()
             .any(|card| header_number(headers, card).is_some_and(|count| count > 0.0));
-    if says(HISTORY_REGISTRATION) || comments.contains(ASTAP_ALIGNED_COMMENT) {
-        return Some(FrameClass::header(
-            FrameKind::Registered,
-            producer,
-            calibrated,
-        ));
+    let mut steps = ProcessingSteps::NONE;
+    for (present, step) in [
+        (calibrated, ProcessingSteps::CALIBRATED),
+        (says(HISTORY_COSMETIC), ProcessingSteps::COSMETIC),
+        (says(HISTORY_DEBAYER), ProcessingSteps::DEBAYERED),
+        (says(HISTORY_BACKGROUND), ProcessingSteps::BACKGROUND),
+        (says(HISTORY_CROP), ProcessingSteps::CROPPED),
+        (
+            says(HISTORY_REGISTRATION) || comments.contains(ASTAP_ALIGNED_COMMENT),
+            ProcessingSteps::REGISTERED,
+        ),
+    ] {
+        if present {
+            steps = steps.with(step);
+        }
     }
-    calibrated.then(|| FrameClass::header(FrameKind::Calibrated, producer, true))
+    (!steps.is_empty()).then(|| FrameClass::header(producer, steps))
 }
 
 /// The processing program, from the cards that name software and the
@@ -538,86 +675,77 @@ fn fits_producer(headers: &[(String, HeaderValue)], commentary: &str) -> Produce
 /// Suffix tokens at the end of a stem: WBPP's `_c` calibrated, `_cc`
 /// cosmetic correction, `_d` debayered, `_r` registered; ASTAP's `_cal` and
 /// `_aligned`.
-const NAME_SUFFIXES: &[(&str, FrameKind, Producer)] = &[
-    ("c", FrameKind::Calibrated, Producer::Pixinsight),
-    ("cc", FrameKind::Calibrated, Producer::Pixinsight),
-    ("d", FrameKind::Calibrated, Producer::Pixinsight),
-    ("r", FrameKind::Registered, Producer::Pixinsight),
-    ("cal", FrameKind::Calibrated, Producer::Astap),
-    ("aligned", FrameKind::Registered, Producer::Astap),
+const NAME_SUFFIXES: &[(&str, ProcessingSteps, Producer)] = &[
+    ("c", ProcessingSteps::CALIBRATED, Producer::Pixinsight),
+    ("cc", ProcessingSteps::COSMETIC, Producer::Pixinsight),
+    ("d", ProcessingSteps::DEBAYERED, Producer::Pixinsight),
+    ("r", ProcessingSteps::REGISTERED, Producer::Pixinsight),
+    ("cal", ProcessingSteps::CALIBRATED, Producer::Astap),
+    ("aligned", ProcessingSteps::REGISTERED, Producer::Astap),
 ];
 
 /// Siril's sequence prefixes, which stack: `r_bkg_pp_light_00001`.
-/// `bkg_` (background extraction) keeps the geometry, so it reads as
-/// calibrated; `cropped_` changes it, so it reads as registered.
-const SIRIL_PREFIXES: &[(&str, FrameKind)] = &[
-    ("r_", FrameKind::Registered),
-    ("cropped_", FrameKind::Registered),
-    ("pp_", FrameKind::Calibrated),
-    ("bkg_", FrameKind::Calibrated),
+const SIRIL_PREFIXES: &[(&str, ProcessingSteps)] = &[
+    ("r_", ProcessingSteps::REGISTERED),
+    ("cropped_", ProcessingSteps::CROPPED),
+    ("pp_", ProcessingSteps::CALIBRATED),
+    ("bkg_", ProcessingSteps::BACKGROUND),
 ];
 
 /// DeepSkyStacker's `<base>.cal.fits` and `<base>.reg.fits`.
-const DSS_SUFFIXES: &[(&str, FrameKind)] = &[
-    (".cal", FrameKind::Calibrated),
-    (".reg", FrameKind::Registered),
+const DSS_SUFFIXES: &[(&str, ProcessingSteps)] = &[
+    (".cal", ProcessingSteps::CALIBRATED),
+    (".reg", ProcessingSteps::REGISTERED),
 ];
 
-fn suffix_kind(token: &str) -> Option<(FrameKind, Producer)> {
+fn suffix_steps(token: &str) -> Option<(ProcessingSteps, Producer)> {
     NAME_SUFFIXES
         .iter()
         .find(|(suffix, _, _)| *suffix == token)
-        .map(|(_, kind, producer)| (*kind, *producer))
-}
-
-fn name_class(kind: FrameKind, producer: Producer, includes_calibration: bool) -> FrameClass {
-    FrameClass {
-        kind,
-        evidence: KindEvidence::Name,
-        producer,
-        includes_calibration: includes_calibration || kind == FrameKind::Calibrated,
-    }
+        .map(|(_, steps, producer)| (*steps, *producer))
 }
 
 /// Classify from the file name alone.
 fn classify_name(stem: &str) -> Option<FrameClass> {
     // Stacks: Siril's `<sequence>_stacked`, ASTAP's `..._stacked`.
     if stem.ends_with("stacked") {
-        return Some(name_class(FrameKind::Integration, Producer::Unknown, false));
+        return Some(FrameClass::integration(
+            KindEvidence::Name,
+            Producer::Unknown,
+        ));
     }
-    for (suffix, kind) in DSS_SUFFIXES {
+    for (suffix, steps) in DSS_SUFFIXES {
         if stem.len() > suffix.len() && stem.ends_with(suffix) {
-            return Some(name_class(*kind, Producer::Dss, false));
+            return Some(FrameClass::from_steps(
+                KindEvidence::Name,
+                Producer::Dss,
+                *steps,
+            ));
         }
     }
-    let suffixes: Vec<(FrameKind, Producer)> = stem.rsplit('_').map_while(suffix_kind).collect();
+    let suffixes: Vec<(ProcessingSteps, Producer)> =
+        stem.rsplit('_').map_while(suffix_steps).collect();
     // A stem made only of suffix tokens ("r", "c_r") has no frame name left.
     if !suffixes.is_empty() && suffixes.len() < stem.split('_').count() {
-        let registered = suffixes
+        let steps = suffixes
             .iter()
-            .any(|(kind, _)| *kind == FrameKind::Registered);
-        let calibrated = suffixes
-            .iter()
-            .any(|(kind, _)| *kind == FrameKind::Calibrated);
-        let kind = if registered {
-            FrameKind::Registered
-        } else {
-            FrameKind::Calibrated
-        };
-        return Some(name_class(kind, suffixes[0].1, calibrated));
+            .fold(ProcessingSteps::NONE, |steps, (step, _)| steps.with(*step));
+        return Some(FrameClass::from_steps(
+            KindEvidence::Name,
+            suffixes[0].1,
+            steps,
+        ));
     }
     let mut rest = stem;
-    let mut kinds = Vec::new();
-    while let Some((prefix, kind)) = SIRIL_PREFIXES
+    let mut steps = ProcessingSteps::NONE;
+    while let Some((prefix, step)) = SIRIL_PREFIXES
         .iter()
         .find(|(prefix, _)| rest.len() > prefix.len() && rest.starts_with(prefix))
     {
         rest = &rest[prefix.len()..];
-        kinds.push(*kind);
+        steps = steps.with(*step);
     }
-    let first = *kinds.first()?;
-    let calibrated = kinds.contains(&FrameKind::Calibrated);
-    Some(name_class(first, Producer::Siril, calibrated))
+    (!steps.is_empty()).then(|| FrameClass::from_steps(KindEvidence::Name, Producer::Siril, steps))
 }
 
 /// Whether a file name alone looks like a calibrated or registered copy
@@ -644,7 +772,7 @@ pub fn derivative_base_stem(stem: &str) -> &str {
         }
     }
     while let Some((head, tail)) = base.rsplit_once('_') {
-        if head.is_empty() || suffix_kind(tail).is_none() {
+        if head.is_empty() || suffix_steps(tail).is_none() {
             break;
         }
         base = head;
@@ -966,13 +1094,13 @@ mod tests {
         )];
         let class = classify_xisf_properties(&registered, "x").unwrap();
         assert_eq!(class.kind, FrameKind::Registered);
-        assert!(class.includes_calibration);
+        assert!(class.includes_calibration());
 
         // A registered raw: WBPP's `_r` beside `_c_r`.
         let signed_only = [property("PCL:Signature:Registration", None)];
         let class = classify_xisf_properties(&signed_only, "x").unwrap();
         assert_eq!(class.kind, FrameKind::Registered);
-        assert!(!class.includes_calibration);
+        assert!(!class.includes_calibration());
 
         let integrated = [property(
             "PixInsight:ProcessingHistory",
@@ -1019,7 +1147,7 @@ mod tests {
 
         let class = classify_fits_cards(&[], &lines(&["Registration with shift"]), &[]).unwrap();
         assert_eq!(class.kind, FrameKind::Registered);
-        assert!(!class.includes_calibration);
+        assert!(!class.includes_calibration());
 
         let maxim = [text("CALSTAT", "BDF")];
         assert_eq!(
@@ -1044,7 +1172,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            (class.kind, class.producer, class.includes_calibration),
+            (class.kind, class.producer, class.includes_calibration()),
             (FrameKind::Registered, Producer::Astap, true)
         );
 
@@ -1092,12 +1220,12 @@ mod tests {
         assert_eq!(kind("frame_0042"), None);
         assert_eq!(kind("pp_"), None);
         assert_eq!(kind("c_r"), None, "no frame name left");
-        assert!(
-            classify_name("frame_0042_c_r")
-                .unwrap()
-                .includes_calibration
-        );
-        assert!(!classify_name("frame_0042_r").unwrap().includes_calibration);
+        assert!(classify_name("frame_0042_c_r")
+            .unwrap()
+            .includes_calibration());
+        assert!(!classify_name("frame_0042_r")
+            .unwrap()
+            .includes_calibration());
 
         assert_eq!(derivative_base_stem("frame_0042_c_cc_r"), "frame_0042");
         assert_eq!(derivative_base_stem("r_pp_light_00001"), "light_00001");
@@ -1246,7 +1374,7 @@ mod tests {
             assert_eq!(class.kind, kind, "{}", path.display());
             if kind != FrameKind::Raw {
                 assert_eq!(class.evidence, KindEvidence::Header, "{}", path.display());
-                assert_eq!(class.includes_calibration, includes_calibration);
+                assert_eq!(class.includes_calibration(), includes_calibration);
             }
         }
     }

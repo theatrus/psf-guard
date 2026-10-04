@@ -1386,11 +1386,18 @@ mod tests {
             derivative_uuid: format!("{guid}-{}", kind.as_str()),
             acquired_image_guid: guid.into(),
             kind,
+            steps: if kind == crate::image_io::FrameKind::Registered {
+                crate::image_io::ProcessingSteps::REGISTERED
+            } else {
+                crate::image_io::ProcessingSteps::CALIBRATED
+            },
             primary_source: primary,
             file_name: file.into(),
             source_tail: None,
             size: None,
             mtime: None,
+            width: None,
+            height: None,
             producer: crate::image_io::Producer::Pixinsight,
             evidence: crate::image_io::KindEvidence::Header,
             created_at: 1,
