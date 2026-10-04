@@ -108,7 +108,7 @@ describe('TauriSettings import state', () => {
   it('offers Rigs and Exposure templates tabs when Planning is on, and lands on the one asked for', async () => {
     const rig = { id: '22222222-2222-4222-8222-222222222222', name: 'C925', revision: 1 };
     server.use(
-      http.get('/api/director/v1/status', () => HttpResponse.json({ success: true, data: { protocol_version: 1, enabled: true, instance_id: '11111111-1111-4111-8111-111111111111', acquisition_available: false, database_management: true }, error: null })),
+      http.get('/api/director/v1/status', () => HttpResponse.json({ success: true, data: { protocol_version: 1, enabled: true, instance_id: '11111111-1111-4111-8111-111111111111', database_management: true }, error: null })),
       http.get('/api/databases', () => HttpResponse.json({ success: true, data: [{ id: 'c925', name: 'C925', path: '/c925.sqlite' }], error: null })),
       http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json({ success: true, data: [{ rig, catalog_slug: 'c925', catalog_name: 'C925', profile: null, field_of_view: { width_degrees: 0.7, height_degrees: 0.5, pixel_scale_arcsec: 0.41, focal_ratio: 10 }, default_exposure_seconds: { broadband: 120, narrowband: 300 } }], error: null })),
       http.get('/api/director/v1/rigs/status', () => HttpResponse.json({ success: true, data: [], error: null })),

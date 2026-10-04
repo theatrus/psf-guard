@@ -41,7 +41,7 @@ describe('ProjectTargetSelector on a merged view', () => {
 
   it("opens the chosen project's workspace when used from a workspace", async () => {
     server.use(
-      http.get('/api/director/v1/status', () => HttpResponse.json({ success: true, data: { protocol_version: 1, enabled: true, instance_id: '11111111-1111-4111-8111-111111111111', acquisition_available: false, database_management: true }, error: null })),
+      http.get('/api/director/v1/status', () => HttpResponse.json({ success: true, data: { protocol_version: 1, enabled: true, instance_id: '11111111-1111-4111-8111-111111111111', database_management: true }, error: null })),
       http.get('/api/director/v1/plans', () => HttpResponse.json({ success: true, data: { rows: [], warnings: [] }, error: null })),
     );
     renderAt('/plan?plan=elsewhere&dbfilter=attic');

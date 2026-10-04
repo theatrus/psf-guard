@@ -24,7 +24,7 @@ function mount(route: string, plans: DirectorPlanRow[] | null = null) {
     http.get('/api/db/rc51/projects', () => ok([project(7, 'M31', 'guid-1')])),
     http.get('/api/db/c925/targets', () => ok([target(10, 1, 'M31 panel 1'), target(11, 1, 'M31 panel 2'), target(20, 2, 'Pelican'), target(30, 3, 'Veil east'), target(31, 3, 'Veil west')])),
     http.get('/api/db/rc51/targets', () => ok([target(70, 7, 'M31')])),
-    http.get('/api/director/v1/status', () => HttpResponse.json({ success: true, data: plans ? { protocol_version: 1, enabled: true, instance_id: '11111111-1111-4111-8111-111111111111', acquisition_available: false, database_management: true } : { protocol_version: 1, enabled: false, instance_id: null, acquisition_available: false, database_management: true }, error: null })),
+    http.get('/api/director/v1/status', () => HttpResponse.json({ success: true, data: plans ? { protocol_version: 1, enabled: true, instance_id: '11111111-1111-4111-8111-111111111111', database_management: true } : { protocol_version: 1, enabled: false, instance_id: null, database_management: true }, error: null })),
     http.get('/api/director/v1/plans', () => HttpResponse.json({ success: true, data: { rows: plans ?? [], warnings: [] }, error: null })),
   );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });

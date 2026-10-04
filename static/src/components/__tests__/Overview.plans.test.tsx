@@ -49,7 +49,7 @@ function mount(route: string, puts: { path: string; body: unknown }[] = []) {
     http.get('/api/db/:dbId/targets/overview', () => ok([])),
     http.get('/api/db/:dbId/stats/overall', () => ok({ total_projects: 3, active_projects: 2, total_targets: 3, active_targets: 3, total_images: 40, accepted_images: 26, rejected_images: 4, pending_images: 6, total_desired: 80, files_found: 40, files_missing: 0, unique_filters: ['Ha'], date_range: { earliest: now - 86_400 * 3, latest: now - 3_600 * 5 }, recent_activity: [] })),
     http.get('/api/settings/export', () => ok({ default_layout: 'flat' })),
-    http.get('/api/director/v1/status', () => ok({ protocol_version: 1, enabled: true, instance_id: instance, acquisition_available: false, database_management: true })),
+    http.get('/api/director/v1/status', () => ok({ protocol_version: 1, enabled: true, instance_id: instance, database_management: true })),
     http.get('/api/director/v1/plans', () => ok({ rows: plans, warnings: [] })),
     http.put('/api/db/:dbId/projects/:id', async ({ request, params }) => { puts.push({ path: `${params.dbId}/${params.id}`, body: await request.json() }); return ok({ updated: true }); }),
   );

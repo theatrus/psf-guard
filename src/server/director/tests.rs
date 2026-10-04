@@ -321,7 +321,7 @@ async fn disabled_and_management_gates_apply_without_exposing_paths() {
     let app = router(state.clone());
     let (_, status) = call(&app, "GET", "/status", Value::Null, None).await;
     assert_eq!(status["data"]["enabled"], false);
-    assert_eq!(status["data"]["acquisition_available"], false);
+    assert!(status["data"].get("acquisition_available").is_none());
     assert_eq!(status["data"]["instance_id"], Value::Null);
     assert_eq!(status["data"]["database_management"], true);
     assert_eq!(
@@ -437,7 +437,7 @@ async fn requests_are_strict_bounded_and_do_not_claim_acquisition_authority() {
     let bytes = to_bytes(response.into_body(), 10_000).await.unwrap();
     let status: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(status["data"]["enabled"], true);
-    assert_eq!(status["data"]["acquisition_available"], false);
+    assert!(status["data"].get("acquisition_available").is_none());
     assert!(!String::from_utf8_lossy(&bytes).contains(&dir.path().to_string_lossy().to_string()));
 }
 

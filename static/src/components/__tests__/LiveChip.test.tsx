@@ -11,7 +11,7 @@ import { withoutPlanningParams } from '../../hooks/useUrlState';
 import type { DirectorRigStatusView } from '../../api/directorTypes';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
-const enabled = { protocol_version: 1, enabled: true, instance_id: '11111111-1111-4111-8111-111111111111', acquisition_available: false, database_management: true };
+const enabled = { protocol_version: 1, enabled: true, instance_id: '11111111-1111-4111-8111-111111111111', database_management: true };
 const view = (name: string, state: DirectorRigStatusView['connectivity']['state'], phase: string | null, stale = false): DirectorRigStatusView => ({
   rig: { id: `id-${name}`, name, revision: 1 }, catalog_slug: name.toLowerCase(), catalog_name: name, checkins: [],
   status: phase ? { rig_id: `id-${name}`, session_id: 's', reported_at_ms: 1_700_000_000_000, received_at_ms: 1_700_000_000_001, payload: { phase } } : null,
