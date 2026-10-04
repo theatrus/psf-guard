@@ -69,6 +69,7 @@ impl Fixture {
                 process_dir: None,
                 autoimport: None,
                 analyze_new_frames: false,
+                pair_calibrated_copies: true,
             },
             DbEntry {
                 id: "catalog-b".into(),
@@ -81,6 +82,7 @@ impl Fixture {
                 process_dir: None,
                 autoimport: None,
                 analyze_new_frames: false,
+                pair_calibrated_copies: true,
             },
         ];
         let state = Arc::new(
@@ -135,6 +137,7 @@ impl Fixture {
                     process_dir: None,
                     autoimport: None,
                     analyze_new_frames: false,
+                    pair_calibrated_copies: true,
                 }],
                 self._directory
                     .path()

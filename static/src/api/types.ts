@@ -2831,6 +2831,18 @@ export interface QualityBackfillStatus {
   analyze_new_frames?: boolean;
 }
 
+/** Calibrated and registered copies paired with their lights. */
+export interface CalibratedCopies {
+  /** Pair copies other software wrote with the light they came from. */
+  pair: boolean;
+  counts: {
+    calibrated: number;
+    registered: number;
+    /** Lights whose own file is a calibrated copy (no raw frame yet). */
+    calibrated_lights: number;
+  };
+}
+
 export interface QualityBackfillRequest {
   force?: boolean;
   /** Write measured star count/HFR into imported images' metadata

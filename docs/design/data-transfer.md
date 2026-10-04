@@ -126,6 +126,8 @@ filters remain available.
 | Rule weight | Project GUID plus name | Directional source wins |
 | Captured image | Stable GUID | Insert or update capture fields |
 | Captured image whose GUID the source has never seen, when the destination already holds a row it minted itself (import or upload) for the same target, file name, and capture time within 2 s | That row | Update it in place; it takes the source GUID and capture fields, keeps a reviewed grade |
+| Captured image whose GUID the source has never seen, when the destination catalogued the same frame from its calibrated copy (no raw frame yet) on the same target, with matching capture time, exposure and filter | That row | Update it in place; it takes the source GUID and the raw file name, keeps a reviewed grade, and its calibrated record stops being the light's own file |
+| Calibrated or registered copy record (`psf_guard_frame_derivative`) | `derivative_uuid`; its light by image GUID | Insert or update; skip a record whose light did not come across, or whose light already has its own record of that kind |
 | Existing reviewed grade during merge | Image GUID | Destination wins |
 | Existing Pending grade during merge | Image GUID | Fill from source |
 | Explicit grade push | Image GUID | Source grade and reason win |
@@ -335,6 +337,16 @@ Scheduler database and the read fails outright.
 Each database opts into this protocol on its own. Holding a valid key is not
 enough: the operator ticks **Accept remote scheduler sync** for that database,
 separately from **Accept remote image uploads**.
+
+### Calibrated copy records
+
+`frame_derivatives_v1` advertises that a peer reads and writes the pairing
+records of [calibrated subs](calibrated-subs.md). A merge bundle carries
+`psf_guard_frame_derivative` only when the receiver can read it: a client
+sends it on a push only to a server that advertises the capability, and asks
+for it on an export with `include_frame_derivatives`. An older peer rejects
+a bundle naming a table it does not know, so neither side sends one
+unasked. A bundle without the table leaves the receiver's records alone.
 
 ### Scheduler flat coverage
 

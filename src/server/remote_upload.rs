@@ -211,6 +211,9 @@ pub async fn upload_image(
         explicit: config.directory_layout.is_some(),
     };
     let registered_roots = ctx.image_dir_paths.clone();
+    let pair_derivatives = ctx
+        .pair_calibrated_copies
+        .load(std::sync::atomic::Ordering::Relaxed);
     let response_sha256 = sha256.clone();
     let response_filename = filename.clone();
     let published = tokio::task::spawn_blocking(move || {
@@ -226,6 +229,7 @@ pub async fn upload_image(
             bytes,
             sha256,
             calibration_kind,
+            pair_derivatives,
         )
     })
     .await
@@ -290,6 +294,7 @@ fn publish_and_import(
     bytes: u64,
     sha256: String,
     calibration_kind: Option<CalibrationKind>,
+    pair_derivatives: bool,
 ) -> Result<PublishedRemoteImage, AppError> {
     let mut connection = open_scheduler_connection_with_flags(
         database_path,
@@ -407,7 +412,10 @@ fn publish_and_import(
         match import::import_frames(
             &mut connection,
             vec![frame.clone()],
-            &ImportOptions::default(),
+            &ImportOptions {
+                pair_derivatives,
+                ..ImportOptions::default()
+            },
         ) {
             Ok(outcome) => {
                 let accepted = if calibration_kind.is_none() {
@@ -1408,7 +1416,12 @@ fn light_import_outcome_is_accepted(
     frame: &import::headers::FrameMeta,
     outcome: &ImportOutcome,
 ) -> Result<bool, AppError> {
-    if outcome.imported == 1 {
+    // A new light, a raw that took over the light its calibrated copy
+    // made, or a copy paired with its light: each one placed the frame.
+    if outcome.imported == 1
+        || outcome.raw_adopted == 1
+        || outcome.derivatives.paired + outcome.derivatives.already_recorded == 1
+    {
         return Ok(true);
     }
     if outcome.skipped_existing != 1 {

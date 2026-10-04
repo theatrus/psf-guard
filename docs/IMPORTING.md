@@ -147,11 +147,20 @@ The preview also carries the run's scope controls:
   night's folder imports exactly that folder. A folder inside a configured
   root needs no extra grant; only a path outside every configured root
   requires database management.
-- **Skip processing artifacts** (opt-in): leaves out integration masters
-  and PixInsight calibrated/registered intermediates, which repeat
-  exposures the catalog already has under new basenames. Off by default —
-  masters are worth cataloging, and later releases will surface a finished
-  project's master lights in its display.
+- **Calibrated and registered copies** are paired, not catalogued. A copy
+  that PixInsight's WBPP, Siril, ASTAP, DeepSkyStacker or another tool
+  wrote is recorded with the light it came from, matched by capture time,
+  exposure, filter, target and camera (see
+  [calibrated subs](design/calibrated-subs.md) for how a copy is
+  recognised). A calibrated copy with no raw light becomes the light, one
+  per exposure, and a raw frame imported or synced later takes that row
+  over, keeping its grade. A registered copy with no light is left out.
+  The database's **Pair calibrated and registered copies** setting turns
+  this off; the CLI takes `--no-pairing`.
+- **Skip processing artifacts** (opt-in): leaves out integration masters,
+  and with pairing off, calibrated and registered copies too. Off by
+  default — masters are worth cataloging, and later releases will surface a
+  finished project's master lights in its display.
 - **Include frames from other rigs** (opt-in): a catalog learns its rigs,
   the telescope and camera named in its frames' headers, from the
   calibration frames and lights it has accepted. Once it knows one, a light

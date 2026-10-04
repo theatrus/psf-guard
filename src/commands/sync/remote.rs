@@ -88,7 +88,16 @@ pub async fn sync_remote(options: RemoteSyncOptions) -> Result<RemoteSyncOutcome
     let summary = match options.direction {
         RemoteDirection::Pull => pull_from(&client, &catalog, &options).await?,
         RemoteDirection::PushPlanning | RemoteDirection::PushGrades => {
-            push_to(&client, &catalog, &options).await?
+            push_to(
+                &client,
+                &catalog,
+                &options,
+                capabilities
+                    .capabilities
+                    .iter()
+                    .any(|name| name == crate::server::remote_sync::FRAME_DERIVATIVES_CAPABILITY),
+            )
+            .await?
         }
     };
     Ok(RemoteSyncOutcome {
@@ -152,6 +161,7 @@ async fn push_to(
     client: &SyncClient,
     catalog: &str,
     options: &RemoteSyncOptions,
+    peer_reads_frame_derivatives: bool,
 ) -> Result<BTreeMap<String, i64>> {
     let operation = options.direction.operation();
     let bundle = local_bundle(
@@ -160,6 +170,7 @@ async fn push_to(
         operation,
         options.reviewed_only,
         options.with_image_data,
+        peer_reads_frame_derivatives,
     )
     .context("building a bundle from the local database")?;
     let rows: usize = bundle.tables.values().map(|table| table.rows.len()).sum();

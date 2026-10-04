@@ -336,6 +336,12 @@ pub enum Commands {
         #[arg(long)]
         skip_processed: bool,
 
+        /// Catalog calibrated and registered copies (WBPP, Siril, ASTAP,
+        /// DeepSkyStacker output) as lights of their own instead of pairing
+        /// them with the light they were made from.
+        #[arg(long)]
+        no_pairing: bool,
+
         /// Take lights from a rig this catalog has not recorded. Off by
         /// default: such frames are listed and left out, since a stranger's
         /// frame in this catalog's folders is usually a filing mistake.

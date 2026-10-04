@@ -85,6 +85,7 @@ import type { GuidFillReport, GuidReport,
   SpatialScanStatusRequest,
   QualityBackfillRequest,
   QualityBackfillStatus,
+  CalibratedCopies,
   PreviewDescriptor,
   GenerationStatus,
   AstrometryAnalysis,
@@ -2490,6 +2491,26 @@ export const apiClient = {
       request
     );
     if (!data.data) throw new Error('Failed to start database quality analysis');
+    return data.data;
+  },
+
+  /** Whether this database pairs calibrated copies, and how many it has. */
+  getCalibratedCopies: async (dbId: string): Promise<CalibratedCopies> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<CalibratedCopies>>(
+      dbPath(dbId, '/calibrated-copies')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read the calibrated copies');
+    return data.data;
+  },
+
+  setPairCalibratedCopies: async (dbId: string, pair: boolean): Promise<CalibratedCopies> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<CalibratedCopies>>(
+      dbPath(dbId, '/calibrated-copies'),
+      { pair }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to save the setting');
     return data.data;
   },
 

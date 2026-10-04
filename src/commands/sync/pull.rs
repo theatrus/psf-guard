@@ -67,6 +67,8 @@ pub struct PullSummary {
     pub calibration_rigs: TableCounts,
     pub calibration_rig_bindings: TableCounts,
     pub calibration_frames: TableCounts,
+    /// Calibrated and registered copies paired with their lights.
+    pub frame_derivatives: TableCounts,
     /// Destination acquiredimage IDs inserted or updated by this pull. Server
     /// callers use these to watch briefly for files copied after the database
     /// transaction; CLI reporting intentionally ignores them.
@@ -96,6 +98,7 @@ impl PullSummary {
             + self.calibration_rigs.inserted
             + self.calibration_rig_bindings.inserted
             + self.calibration_frames.inserted
+            + self.frame_derivatives.inserted
     }
 
     /// Total rows updated across every table.
@@ -110,6 +113,7 @@ impl PullSummary {
             + self.calibration_rigs.updated
             + self.calibration_rig_bindings.updated
             + self.calibration_frames.updated
+            + self.frame_derivatives.updated
     }
 }
 
@@ -544,23 +548,46 @@ type AdoptableRow = (i64, Option<i64>, Vec<Value>);
 
 struct AdoptableRows {
     by_target_and_name: HashMap<(i64, String), Vec<AdoptableRow>>,
+    /// Rows PSF Guard catalogued from a calibrated copy because it had no
+    /// raw frame, by target. Their file name is the copy's, so the raw's
+    /// name never finds them; the capture fields do.
+    calibrated_by_target:
+        HashMap<i64, Vec<(i64, crate::frame_derivatives::FrameIdentity, Vec<Value>)>>,
 }
 
 impl AdoptableRows {
     fn build(
         dest_map: &HashMap<String, (i64, Vec<Value>)>,
         source_guids: &HashSet<String>,
+        primary_guids: &HashSet<String>,
         target_w: usize,
         acquired_date_w: Option<usize>,
         metadata_w: Option<usize>,
     ) -> Self {
         let mut by_target_and_name: HashMap<(i64, String), Vec<AdoptableRow>> = HashMap::new();
+        let mut calibrated_by_target: HashMap<i64, Vec<_>> = HashMap::new();
         let Some(metadata_w) = metadata_w else {
-            return Self { by_target_and_name };
+            return Self {
+                by_target_and_name,
+                calibrated_by_target,
+            };
         };
         for (guid, (dest_id, values)) in dest_map {
             if source_guids.contains(guid) {
                 continue;
+            }
+            if primary_guids.contains(guid)
+                && let Some(target) = as_i64(&values[target_w])
+                && let Value::Text(metadata) = &values[metadata_w]
+            {
+                let acquired = acquired_date_w.and_then(|position| as_i64(&values[position]));
+                let identity =
+                    crate::frame_derivatives::light_identity(metadata, acquired, None, None);
+                calibrated_by_target.entry(target).or_default().push((
+                    *dest_id,
+                    identity,
+                    values.clone(),
+                ));
             }
             let (Some(target), Some(basename)) = (
                 as_i64(&values[target_w]),
@@ -574,7 +601,33 @@ impl AdoptableRows {
                 .or_default()
                 .push((*dest_id, acquired, values.clone()));
         }
-        Self { by_target_and_name }
+        Self {
+            by_target_and_name,
+            calibrated_by_target,
+        }
+    }
+
+    /// Take the row catalogued from this frame's calibrated copy, if exactly
+    /// one matches its capture fields.
+    fn take_calibrated(
+        &mut self,
+        target: i64,
+        incoming: &crate::frame_derivatives::FrameIdentity,
+    ) -> Option<(i64, Vec<Value>)> {
+        let candidates = self.calibrated_by_target.get_mut(&target)?;
+        let matches: Vec<usize> = candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, identity, _))| {
+                crate::frame_derivatives::identities_match(identity, incoming)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let [index] = matches.as_slice() else {
+            return None;
+        };
+        let (dest_id, _, values) = candidates.swap_remove(*index);
+        Some((dest_id, values))
     }
 
     /// Take the destination row this incoming frame is, if there is one.
@@ -637,8 +690,15 @@ fn upsert_acquired_images(
         guids.into_iter().collect()
     };
     let metadata_w = wpos("metadata");
-    let mut adoptable =
-        AdoptableRows::build(&dest_map, &source_guids, tgt_w, acquired_date_w, metadata_w);
+    let primary_guids = crate::frame_derivatives::primary_light_guids(tx)?;
+    let mut adoptable = AdoptableRows::build(
+        &dest_map,
+        &source_guids,
+        &primary_guids,
+        tgt_w,
+        acquired_date_w,
+        metadata_w,
+    );
 
     let insert_sql = format!(
         "INSERT INTO {} ({}) VALUES ({})",
@@ -757,9 +817,26 @@ fn upsert_acquired_images(
                 }
             }
             None => {
-                let adopted = metadata_w
+                let by_name = metadata_w
                     .and_then(|position| metadata_basename(&write_values[position]))
                     .and_then(|basename| adoptable.take(target_id, &basename, acquired_date));
+                // The raw frame behind a light first catalogued from its
+                // calibrated copy: that light takes the raw over.
+                let mut took_raw = false;
+                let adopted = by_name.or_else(|| {
+                    let Value::Text(metadata) = &write_values[metadata_w?] else {
+                        return None;
+                    };
+                    let identity = crate::frame_derivatives::light_identity(
+                        metadata,
+                        acquired_date,
+                        None,
+                        None,
+                    );
+                    let row = adoptable.take_calibrated(target_id, &identity)?;
+                    took_raw = true;
+                    Some(row)
+                });
                 if let Some((dest_id, cur_vals)) = adopted {
                     // The destination already holds this frame under a guid
                     // of its own making. Update that row rather than insert a
@@ -784,6 +861,10 @@ fn upsert_acquired_images(
                         write_values.iter().map(|v| v as &dyn ToSql).collect();
                     p.push(&dest_id);
                     upd_stmt.execute(p.as_slice())?;
+                    crate::frame_derivatives::rename_light_guid(tx, &old_guid, &guid)?;
+                    if took_raw {
+                        crate::frame_derivatives::release_primary(tx, &guid)?;
+                    }
                     summary.acquiredimage.updated += 1;
                     summary.adopted += 1;
                     summary.changed_acquiredimages.push(ChangedAcquiredImage {
@@ -1162,6 +1243,15 @@ pub(crate) fn sync_pull_in_transaction(
         skipped: 0,
     };
 
+    // Pairings follow their lights, which match across catalogs by guid.
+    let derivatives = crate::frame_derivatives::sync_records(src, tx)?;
+    summary.frame_derivatives = TableCounts {
+        inserted: derivatives.inserted,
+        updated: derivatives.updated,
+        unchanged: derivatives.unchanged,
+        skipped: derivatives.skipped,
+    };
+
     // Pulled rows carry grades; the destination's plans must count them.
     // Runs inside the transaction so the server's remote-sync apply path
     // (which manages its own transaction) reconciles too.
@@ -1284,6 +1374,118 @@ mod tests {
         let again = sync_pull(&src, &dest, &opts()).unwrap();
         assert_eq!(again.adopted, 0);
         assert_eq!(again.acquiredimage.inserted, 0);
+    }
+
+    fn derivative(
+        guid: &str,
+        kind: crate::image_io::FrameKind,
+        file: &str,
+        primary: bool,
+    ) -> crate::frame_derivatives::DerivativeRecord {
+        crate::frame_derivatives::DerivativeRecord {
+            derivative_uuid: format!("{guid}-{}", kind.as_str()),
+            acquired_image_guid: guid.into(),
+            kind,
+            steps: if kind == crate::image_io::FrameKind::Registered {
+                crate::image_io::ProcessingSteps::REGISTERED
+            } else {
+                crate::image_io::ProcessingSteps::CALIBRATED
+            },
+            primary_source: primary,
+            file_name: file.into(),
+            source_tail: None,
+            size: None,
+            mtime: None,
+            width: None,
+            height: None,
+            producer: crate::image_io::Producer::Pixinsight,
+            evidence: crate::image_io::KindEvidence::Header,
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    #[test]
+    fn pairing_records_follow_their_lights() {
+        use crate::frame_derivatives::{derivatives_for_light, ensure_schema, record_pairing};
+        use crate::image_io::FrameKind;
+        let src = telescope();
+        ensure_schema(&src).unwrap();
+        record_pairing(
+            &src,
+            &derivative("img1", FrameKind::Calibrated, "a_c.xisf", false),
+        )
+        .unwrap();
+        // A record whose light the source does not carry is left behind.
+        record_pairing(
+            &src,
+            &derivative("gone", FrameKind::Calibrated, "x_c.xisf", false),
+        )
+        .unwrap();
+        let dest = empty_local();
+
+        let s = sync_pull(&src, &dest, &opts()).unwrap();
+        assert_eq!(s.frame_derivatives.inserted, 1);
+        assert_eq!(s.frame_derivatives.skipped, 1);
+        let records = derivatives_for_light(&dest, "img1").unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].file_name, "a_c.xisf");
+
+        let again = sync_pull(&src, &dest, &opts()).unwrap();
+        assert_eq!(again.frame_derivatives.unchanged, 1);
+    }
+
+    #[test]
+    fn a_pulled_raw_takes_over_the_light_its_calibrated_copy_made() {
+        // The destination had only a WBPP-calibrated copy of a frame, so it
+        // catalogued the copy as the light. The telescope's row for the raw
+        // frame then arrives under its own guid and file name.
+        use crate::frame_derivatives::{derivatives_for_light, ensure_schema, record_pairing};
+        use crate::image_io::FrameKind;
+        let src = telescope();
+        src.execute(
+            "UPDATE acquiredimage SET metadata = '{\"FileName\":\"a.fits\",\"ExposureStartTime\":\"1970-01-01T00:16:40.1234567Z\",\"ExposureDuration\":300.0,\"FilterName\":\"Ha\"}' WHERE guid = 'img1'",
+            [],
+        )
+        .unwrap();
+        let structure = telescope();
+        structure
+            .execute_batch("DELETE FROM imagedata; DELETE FROM acquiredimage;")
+            .unwrap();
+        let dest = empty_local();
+        sync_pull(&structure, &dest, &opts()).unwrap();
+        dest.execute(
+            "INSERT INTO acquiredimage (projectId,targetId,acquireddate,filtername,gradingStatus,metadata,rejectreason,profileId,exposureId,guid)
+             VALUES (1,1,1000,'Ha',1,'{\"FileName\":\"/process/calibrated/a_c.xisf\",\"ExposureStartTime\":\"1970-01-01T00:16:40Z\",\"ExposureDuration\":300.0,\"FilterName\":\"Ha\"}',NULL,'p',1,'mine')",
+            [],
+        )
+        .unwrap();
+        ensure_schema(&dest).unwrap();
+        record_pairing(
+            &dest,
+            &derivative("mine", FrameKind::Calibrated, "a_c.xisf", true),
+        )
+        .unwrap();
+
+        let s = sync_pull(&src, &dest, &opts()).unwrap();
+        assert_eq!(s.adopted, 1);
+        assert_eq!(
+            one::<i64>(&dest, "SELECT count(*) FROM acquiredimage"),
+            2,
+            "b.fits is new"
+        );
+        let (file, grade): (String, i64) = dest
+            .query_row(
+                "SELECT json_extract(metadata,'$.FileName'), gradingStatus FROM acquiredimage WHERE guid = 'img1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(file, "a.fits");
+        assert_eq!(grade, 1, "the local grade stays");
+        let records = derivatives_for_light(&dest, "img1").unwrap();
+        assert_eq!(records.len(), 1, "the record follows the telescope's guid");
+        assert!(!records[0].primary_source);
     }
 
     #[test]
