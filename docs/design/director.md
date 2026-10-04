@@ -696,12 +696,36 @@ still applies hard eligibility, Moon rules, safety and completed-work checks.
 
 An order save changes the program fingerprint and applies to newly issued
 programs. It does not rewrite active grants or interrupt an exposure. Cached
-allocations execute the frozen order offline. Live corrections to an active
-grant remain backlog, with the same authorization and safe-boundary rules.
+allocations execute the frozen order offline. Live automatic Director sessions
+can detect changed ranked priorities for the same goal set at check-in, then
+finish the current preparation/exposure, run cleanup hooks, park and reconcile
+the complete ledger before releasing it and requesting a successor. This is
+an early clean release, not an in-place grant mutation. Manual/deferred sessions
+keep the held order. Broader goal/grade/configuration replacement remains backlog.
 Legacy weighted programs remain readable and executable, and saved weights
 remain in storage for compatibility, but are not used for new programs once
 a global/site/rig order resolves. The planner no longer exposes importance,
 presets, weights, dwell or switching-margin fields.
+
+The priority handoff reuses `GET /rigs/{rig}/program`, capture check-in and the
+existing workload release/request APIs. No new wire or runtime contract is
+needed. `program_changed` includes progress revisions and is not itself a reason
+to yield; the client compares priority intent for matching goals/configuration.
+An unready preview retains the current grant. A fully delivered, quiescent
+ledger must be sealed before the next request; pending capture credit and
+spent attempts carry forward and the old allocation remains unlaunchable.
+If release loses connectivity, the rig stays parked and batch check-in finishes
+that historical release. It cannot resume or replay old work. Continuous
+tracking through a handoff and cross-allocation continuity remain future work.
+
+Native priority-handoff validation (2026-10-03): NINA 3.3.0.1064, ASCOM OmniSim,
+the packaged Director plugin and runtime 0.10.0 / IPC 10 ran against isolated
+local PSF Guard. Global/site/rig replacement and inheritance executed offline.
+A live order change during exposure produced A, then B, then the remaining A
+capture across two sealed ledgers, preserving pending credit and spent attempts.
+The plugin's `docs/nina-smoke-test.md` records commands and retained evidence.
+The meta allocation regression also covers partial release, duplicate receipts,
+reopen and refusal to relaunch the old allocation.
 
 2026-10-03 validation: all five Director crate suites, 79 server Director tests,
 704 frontend tests, Rust Clippy and frontend lint/build passed. The real-server
@@ -3681,6 +3705,11 @@ separate workflow; these mappings alone do not resolve them.
   boundaries. Carry forward pending/accepted/rejected credit, spent attempts,
   uncertain operations and outstanding offline reservations; do not reset them
   on a new check-in, process restart or lost response.
+- [x] Add the ranked-priority increment: live automatic sessions finish the
+  current operation, park, seal a settled partial ledger and request a fresh
+  grant with the changed order. Preserve pending frames and spent attempts;
+  ignore progress-only revisions. Arbitrary goal/grade/configuration changes
+  and seamless mount continuity remain outside this increment.
 - [x] Implement the local ledger's durable reservation/preparation/outbox
   primitives and crash/reopen tests; these do not include remote acknowledgement.
 - [x] Implement separate scoped Director pairing, durable inspection history and

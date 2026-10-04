@@ -26,8 +26,12 @@ order until you rank them. The list supports up to 256 projects.
 Saving replaces the old score policy for newly issued programs, not active
 allocations. Without a saved order, existing scheduling behavior is preserved.
 Issued programs carry the order as shared-core priorities, so NINA follows it
-offline without needing a server request between exposures. Changed priorities
-take effect when the executor receives its next authorized program. The UI no
+offline without needing a server request between exposures. Director sessions
+with Automatic workloads and Live check-in detect changed priorities for the
+same goals, finish the current exposure, park and reconcile, then request a
+new authorized program. Manual/deferred sessions retain their original order.
+The handoff preserves pending frames and spent attempts; it cannot resume the
+old grant if the connection fails during release. The UI no
 longer exposes per-project importance, weights, presets or switching scores.
 
 ## Exposure Moon Rules

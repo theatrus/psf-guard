@@ -200,6 +200,86 @@ fn old_engine_terminal_receipts_are_accepted_only_for_non_lunar_programs() {
 }
 
 #[test]
+fn priority_handoff_releases_partial_work_without_refilling_attempts_or_losing_pending() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let (mut store, mut first) = fixture(&path);
+    first.snapshot["program"]["assignment"]["goals"][0]["requested"] = json!(3);
+    let policy = commission(&mut store, &path, &mut first);
+    store.admit_workload(&first, policy.revision).unwrap();
+    let ledger = Uuid::new_v4();
+    store
+        .start_allocation(
+            first.rig_id,
+            first.allocation_id,
+            first.client_id,
+            ledger,
+            1002,
+        )
+        .unwrap();
+    let events = receipts(&first, ledger, "saved");
+    store.store_receipts(&events, 1100).unwrap();
+    store
+        .release_workload(
+            first.rig_id,
+            first.client_id,
+            first.allocation_id,
+            ledger,
+            2,
+        )
+        .unwrap();
+    let mut next = first.clone();
+    next.allocation_id = Uuid::new_v4();
+    next.preview_revision = "c".repeat(64);
+    let mut program: psf_guard_director_core::program::Program =
+        serde_json::from_value(next.snapshot["program"].clone()).unwrap();
+    program.assignment.id = format!("allocation-{}", next.allocation_id);
+    program.assignment.goals[0].priority = 999;
+    let pending = store.saved_captures_by_goal(first.rig_id).unwrap();
+    assert_eq!(pending, vec![("short-ha".to_string(), 1)]);
+    program.assignment.goals[0].pending = pending[0].1;
+    store
+        .carry_workload_budget(first.rig_id, &mut program)
+        .unwrap();
+    assert_eq!(program.assignment.goals[0].attempts_remaining, 1);
+    assert_eq!(program.assignment.goals[0].accepted, 0);
+    assert_eq!(program.assignment.goals[0].requested, 3);
+    next.snapshot["program"] = serde_json::to_value(&program).unwrap();
+    store.admit_workload(&next, policy.revision).unwrap();
+    store
+        .release_workload(
+            first.rig_id,
+            first.client_id,
+            first.allocation_id,
+            ledger,
+            2,
+        )
+        .unwrap();
+    store.store_receipts(&events, 1101).unwrap();
+    assert_eq!(store.saved_captures_by_goal(first.rig_id).unwrap(), pending);
+    assert!(store
+        .start_allocation(
+            first.rig_id,
+            first.allocation_id,
+            first.client_id,
+            Uuid::new_v4(),
+            1102
+        )
+        .is_err());
+    drop(store);
+    let store = MetaStore::open(&path).unwrap();
+    assert_eq!(
+        store
+            .allocation(first.rig_id)
+            .unwrap()
+            .unwrap()
+            .allocation_id,
+        next.allocation_id
+    );
+    assert_eq!(store.saved_captures_by_goal(first.rig_id).unwrap(), pending);
+}
+
+#[test]
 fn uncertain_receipts_and_changed_commissioning_cannot_authorize_successors() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("meta.sqlite");
