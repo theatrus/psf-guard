@@ -5,7 +5,7 @@ complete. Shared-core, durable sidecar and native simulator building blocks are
 merged. The published Director 0.1.0.1 preview is runtime-only, not an acquisition
 scheduler. See the implementation audit below before treating a capability as
 available to users.
-Last updated: 2026-10-03.
+Last updated: 2026-10-04.
 
 ### Native imaging and local observability increment
 
@@ -24,8 +24,8 @@ returned boolean and exposed workflow-step completion before allowing another
 capture; it does not implement another flip algorithm. Runtime-installed
 defaults must not leak into saved/cloned user sequences. Native recovery steps
 can still be best effort (for example, recenter); workflow completion is not
-pixel-derived pointing evidence. Forced flip/rotation and real-sky acceptance
-remain open even when inherited-trigger integration tests pass.
+pixel-derived pointing evidence. The forced-flip simulator gate is now covered
+below; rotation and real-sky acceptance remain open.
 
 Workload API capability names are `native_single_target_v1` and
 `native_imaging_v1`. Old modes retain their old restrictions. Native device IDs
@@ -44,9 +44,31 @@ remain planned. Local history works without connectivity. Central operation
 telemetry must eventually batch the durable preparation receipts, not replay UI
 logs as current rig status.
 
-This does not close phase 2: optical solver/focus performance, a real forced
-meridian flip/rotator test, broad third-party hooks, quality recovery, calibration
-acquisition, offline cold start and uncertain-work recovery remain acceptance work.
+This does not close phase 2: optical solver/focus performance, native rotation,
+real-sky flip/recenter and guider recovery, broad third-party hooks, quality
+recovery, calibration acquisition, offline cold start and uncertain-work recovery
+remain acceptance work.
+
+#### Forced native meridian validation
+
+The packaged plugin and bundled shared-core runtime were tested against an
+isolated PSF Guard server, NINA 3.3.0.1064 and ASCOM OmniSim. After two saved
+exposures the native trigger enters the real NINA flip VM, waits through the
+actual meridian crossing, changes the mount from West to East, completes
+autofocus and settling, and resumes with a third saved exposure. The test checks
+ordered before/after flip events, live device pier side, workflow completion,
+capture identity and local action history.
+
+A second run injects a false mount-command result: Director detects the failed
+native `Flip` step, blocks the third exposure, parks, preserves the two earlier
+saves and releases local ownership. The pinned NINA VM still raises an overall
+successful result/event for this case, so the workflow-step guard is required.
+
+The timing deadline and optical focus/solve results are controlled test inputs;
+status/window presentation is headless. Recenter is disabled and Direct Guider
+does not exercise PHD2 reacquisition. This is orchestration evidence, not proof
+of optical quality or physical mount safety. See the plugin's
+`docs/nina-smoke-test.md` for commands and retained evidence.
 
 ### Operating goal after setup
 
@@ -3799,7 +3821,8 @@ separate workflow; these mappings alone do not resolve them.
   Director and plugin actions. Validate missing required devices/safety sources.
   Native center/AF/guide/dither/flip defaults, ownership checks, local chart and
   timed action history are now implemented. Keep this full gate open until
-  forced flip/rotation, real optical results and third-party combinations pass.
+  rotation, real optical results and third-party combinations pass. Forced
+  meridian crossing and resumed acquisition are simulator-validated above.
 - [x] Add the internal shared-core recovery states and separate durable per-rig
   store: cooldown/hysteresis, cumulative probe/hold/failure budgets, persisted
   night-stop latches, duplicate refusal and restart tests. This is not a shipped
