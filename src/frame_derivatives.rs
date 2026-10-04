@@ -717,6 +717,15 @@ pub fn light_identity(
     }
 }
 
+/// Whether the catalog's lights carry guids at all. Target Scheduler added
+/// the column in schema 22; an older catalog has nothing a record could
+/// point at, so pairing stands aside there and copies import as before.
+pub fn catalog_has_guids(conn: &Connection) -> bool {
+    conn.prepare("SELECT 1 FROM pragma_table_info('acquiredimage') WHERE lower(name) = 'guid'")
+        .and_then(|mut statement| statement.exists([]))
+        .unwrap_or(false)
+}
+
 /// Every light with a guid, as pairing candidates. A light without a guid
 /// cannot carry a record that survives sync; `fill-guids` repairs those.
 pub fn catalog_lights(conn: &Connection) -> Result<Vec<LightCandidate<CatalogLight>>> {
@@ -1051,7 +1060,7 @@ pub fn adopt_raw_frames(
     conn: &Connection,
     frames: &[crate::commands::import::headers::FrameMeta],
 ) -> Result<Vec<usize>> {
-    if !schema_exists(conn) || frames.is_empty() {
+    if !schema_exists(conn) || frames.is_empty() || !catalog_has_guids(conn) {
         return Ok(Vec::new());
     }
     let mut statement = conn.prepare(
@@ -1146,6 +1155,9 @@ pub fn pair_files_on_disk(
         .cloned()
         .collect();
     if files.is_empty() {
+        return Ok(PairingReport::default());
+    }
+    if !catalog_has_guids(conn) {
         return Ok(PairingReport::default());
     }
     let known = crate::commands::import::known_files(conn, &files)?;

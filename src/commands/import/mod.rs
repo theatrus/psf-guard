@@ -308,6 +308,13 @@ pub fn import_frames(
     };
 
     let tx = conn.transaction().context("starting import transaction")?;
+    // Pairing records point at a light's guid; a catalog without the column
+    // imports copies as it always has.
+    let options = &ImportOptions {
+        pair_derivatives: options.pair_derivatives
+            && crate::frame_derivatives::catalog_has_guids(&tx),
+        ..options.clone()
+    };
 
     let candidate_basenames: HashSet<String> = frames
         .iter()
@@ -1726,6 +1733,45 @@ mod tests {
         assert_eq!(outcome.imported, 0);
         assert_eq!(outcome.derivatives.unmatched, 1);
         assert_eq!(outcome.skipped_processed, 1);
+    }
+
+    #[test]
+    fn a_catalog_without_guids_imports_copies_as_before() {
+        // Target Scheduler before schema 22 has no acquiredimage.guid, so a
+        // record would have nothing to point at.
+        use crate::image_io::FrameKind;
+        let mut conn = fresh_conn();
+        let indexes: Vec<String> = conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'index'
+                 AND tbl_name = 'acquiredimage' AND sql LIKE '%guid%'",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        for index in indexes {
+            conn.execute_batch(&format!("DROP INDEX \"{index}\""))
+                .unwrap();
+        }
+        conn.execute_batch("ALTER TABLE acquiredimage DROP COLUMN guid")
+            .unwrap();
+        assert!(!crate::frame_derivatives::catalog_has_guids(&conn));
+        let raw = timed("M31", "Ha", 1_000_000);
+        let outcome = import_frames(
+            &mut conn,
+            vec![raw.clone(), copy_of(&raw, "_c", FrameKind::Calibrated)],
+            &ImportOptions::default(),
+        );
+        // Import itself may refuse a guid-less catalog; it must not fail on
+        // pairing.
+        if let Ok(outcome) = outcome {
+            assert_eq!(outcome.derivatives, Default::default());
+        } else {
+            let error = format!("{:#}", outcome.unwrap_err());
+            assert!(!error.contains("guid in SELECT"), "{error}");
+        }
     }
 
     #[test]
