@@ -457,6 +457,13 @@
 
 ## Fixed
 
+- The Docker image keeps everything it writes on the `/data` volume: the
+  database registry and browser users, the cache of previews, plate solves,
+  quality scans and stacks, and Seiza catalogs installed in Settings, so a
+  redeploy or an image update no longer loses them (issue #450). The image
+  includes `curl`, and the example `docker-compose.yml` uses a healthcheck that
+  works before the first login.
+
 - The quality scan no longer records zero stars for a frame it read while the
   file was still being copied, or one where HocusFocus finds the stars N.I.N.A.
   Fast missed (issue #616); such frames are measured again later. A frame

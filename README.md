@@ -306,17 +306,27 @@ command-line tools. Desktop review does not require them.
 
 ```bash
 docker run -d -p 3000:3000 \
+  -v psf-guard-data:/data \
   -v /path/to/catalog.sqlite:/data/database.sqlite \
   -v /path/to/images:/images:ro \
   ghcr.io/theatrus/psf-guard:latest
+docker exec -it <container> psf-guard users add admin --role read-write
 ```
 
+Or use [`docker-compose.yml`](docker-compose.yml), which does the same.
 `latest` is the newest release; a version tag such as `0.10.2` pins one, and
 `edge` follows the main branch with unreleased work. Then open
-http://localhost:3000/. The database mount must be **writable**
-because grading updates it. Mount a TOML config at
-`/data/config.toml` and append `server --config /data/config.toml
-/data/database.sqlite /images` to tune the port, cache, or preview
+http://localhost:3000/ and sign in: the server listens on every interface, so
+it asks for a login once a user exists, and answers 401 until one does.
+
+Keep `/data` on a volume. The image keeps everything it writes there: the
+database registry, browser users and Director store under `/data/config`; the
+cache of previews, plate solves, quality scans, stacks and calibration masters
+under `/data/cache`; and Seiza catalogs downloaded in Settings under
+`/data/seiza`. A redeploy or an image update then keeps all of it. A host
+folder works too if user 1000 can write it. The database mount must be
+**writable** because grading updates it. Mount a TOML config and add
+`--config <path>` to the server command to tune the port, preview format, or
 pre-generation (see [Configuration](#configuration)).
 
 ### Standalone CLI binaries
@@ -534,10 +544,14 @@ For Docker, mount the same directory read-only and point Seiza at the mount:
 docker run -d -p 3000:3000 \
   -e SEIZA_CATALOG_DIR=/catalogs \
   -v /path/to/seiza-data:/catalogs:ro \
+  -v psf-guard-data:/data \
   -v /path/to/catalog.sqlite:/data/database.sqlite \
   -v /path/to/images:/images:ro \
   ghcr.io/theatrus/psf-guard:latest
 ```
+
+Without the mount, catalogs installed from Settings land in `/data/seiza` on
+the data volume and survive updates.
 
 The prebuilt bundle includes everything. If you install individual files,
 their roles are distinct:

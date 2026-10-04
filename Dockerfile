@@ -68,9 +68,10 @@ RUN rm -rf target/release/.fingerprint/psf-guard-* && \
 # Runtime stage - use trixie to match the build stage
 FROM debian:trixie-slim
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
+# Install runtime dependencies. curl serves the compose healthcheck.
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
@@ -82,6 +83,18 @@ COPY --from=builder /app/target/release/psf-guard /usr/local/bin/psf-guard
 # Create directories for mounting
 RUN mkdir -p /data /images && \
     chown -R psfguard:psfguard /data /images
+
+# Keep everything the server writes on the /data volume, so a redeploy or an
+# image update keeps it:
+# - the database registry, browser users and Director store
+#   (/data/config/psf-guard);
+# - the cache of previews, plate solves, quality scans, stacks and masters
+#   (/data/cache: the default ./cache, relative to this working directory);
+# - Seiza catalogs the in-app installer downloads (/data/seiza).
+ENV XDG_CONFIG_HOME=/data/config \
+    XDG_DATA_HOME=/data/share \
+    SEIZA_CATALOG_DIR=/data/seiza
+WORKDIR /data
 
 USER psfguard
 
