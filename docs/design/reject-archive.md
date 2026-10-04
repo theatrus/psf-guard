@@ -145,6 +145,33 @@ Move every match alongside the primary into the same archive directory.
 Calibration masters (`Bias_*.fits`, `Dark_*.fits`, etc.) have a different
 stem and are therefore never selected.
 
+### 4.3a Paired calibrated and registered copies
+
+A light can have calibrated and registered copies paired with it (see
+[calibrated subs](calibrated-subs.md)). They move with the light:
+
+- Each recorded copy is found through the image directory index by its
+  name, its folder tail and its size (`frame_derivatives::resolve_record_path`).
+- It moves into the archive mirror of **its own** folder, by the same
+  segment and depth rules as the light: with depth 1, WBPP's
+  `<image_dir>/_Process/M31/calibrated/x_c.xisf` goes to
+  `<image_dir>/_Process/REJECT/M31/calibrated/x_c.xisf`.
+- A copy that cannot be found, lies outside every image directory, or would
+  overwrite something is listed and left where it is. It never stops the
+  light's move.
+- A primary copy (the light's own file is the copy) moves once, as the
+  light.
+- Dry runs list each copy (`+ copy src → dest`, or `! copy … left alone`).
+- The row's `copy_files` holds each moved copy's uuid, original path and
+  archive path. Restore brings them back by the same no-overwrite rule as
+  the light, and prunes the emptied copy archive folders.
+- After a move or restore, the copy's record gets the new folder tail, so
+  later lookups find it at once. Size and modification time survive a
+  rename.
+
+An older build reading a row with copies restores the light and leaves its
+copies in the archive.
+
 ### 4.4 State tracking — sibling table on the TS database
 
 The metadata-column stamping path is rejected (see §3). Use a sibling table:
@@ -159,10 +186,14 @@ CREATE TABLE IF NOT EXISTS psf_guard_archive (
   segment_name        TEXT NOT NULL,
   archive_depth       INTEGER NOT NULL,
   sidecar_files       TEXT NOT NULL DEFAULT '[]',  -- JSON array of relative sidecar names
-  source_db_slug      TEXT                          -- our registry slug, for cross-DB tooling later
+  source_db_slug      TEXT,                         -- our registry slug, for cross-DB tooling later
+  copy_files          TEXT NOT NULL DEFAULT '[]'    -- JSON array of moved copies (§4.3a)
 );
 CREATE INDEX IF NOT EXISTS idx_psf_guard_archive_image_id ON psf_guard_archive(acquired_image_id);
 ```
+
+`copy_files` is added to a table an older build created the first time a
+live move or restore runs; reads before then leave it out.
 
 The table is **owned by psf-guard**. It doesn't shadow the upstream
 `gradingStatus` field — `gradingStatus = 2` means "user marked rejected,"

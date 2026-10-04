@@ -673,3 +673,6 @@
   becomes the light, and the raw takes it over, grade and all, when it is
   imported or synced later. Copies already on disk pair after each folder
   refresh. Turn it off per database in Settings.
+- Take a rejected frame's calibrated and registered copies into the reject
+  archive with it, each beside its own folder, and bring them back when the
+  frame is restored.

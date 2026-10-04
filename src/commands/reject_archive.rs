@@ -360,6 +360,19 @@ pub struct ArchiveRecord {
     /// for forward-compatibility with non-multi-DB callers; in practice
     /// the v1 CLI always populates it.
     pub source_db_slug: Option<String>,
+    /// Calibrated and registered copies of the light that moved with it,
+    /// each into the archive mirror of its own folder. Empty for rows an
+    /// older build wrote.
+    pub copy_files: Vec<ArchivedCopy>,
+}
+
+/// One paired copy (see `crate::frame_derivatives`) that travelled with an
+/// archived light. Stored as JSON in `psf_guard_archive.copy_files`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ArchivedCopy {
+    pub derivative_uuid: String,
+    pub original_path: String,
+    pub archive_path: String,
 }
 
 /// Create the archive table + index if they don't already exist.
@@ -379,14 +392,53 @@ pub fn ensure_archive_schema(conn: &Connection) -> Result<()> {
             segment_name        TEXT NOT NULL,
             archive_depth       INTEGER NOT NULL,
             sidecar_files       TEXT NOT NULL DEFAULT '[]',
-            source_db_slug      TEXT
+            source_db_slug      TEXT,
+            copy_files          TEXT NOT NULL DEFAULT '[]'
         );
         CREATE INDEX IF NOT EXISTS idx_psf_guard_archive_image_id
             ON psf_guard_archive(acquired_image_id);
         "#,
     )
     .context("creating psf_guard_archive table")?;
+    if !archive_has_copy_files(conn) {
+        conn.execute(
+            "ALTER TABLE psf_guard_archive ADD COLUMN copy_files TEXT NOT NULL DEFAULT '[]'",
+            [],
+        )
+        .context("adding psf_guard_archive.copy_files")?;
+    }
     Ok(())
+}
+
+/// Whether the archive table has the `copy_files` column. A table an older
+/// build created lacks it until `ensure_archive_schema` adds it; reads
+/// that run before then (a dry run) leave it out.
+fn archive_has_copy_files(conn: &Connection) -> bool {
+    conn.prepare("SELECT copy_files FROM psf_guard_archive LIMIT 0")
+        .is_ok()
+}
+
+/// The archive columns a read selects, prefixed with `alias.` when given.
+fn archive_columns(conn: &Connection, alias: &str) -> String {
+    let mut columns: Vec<&str> = vec![
+        "acquired_image_guid",
+        "acquired_image_id",
+        "moved_at",
+        "original_path",
+        "archive_path",
+        "segment_name",
+        "archive_depth",
+        "sidecar_files",
+        "source_db_slug",
+    ];
+    if archive_has_copy_files(conn) {
+        columns.push("copy_files");
+    }
+    columns
+        .iter()
+        .map(|column| format!("{alias}{column}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Whether the `psf_guard_archive` table exists yet. Used by dry-run paths
@@ -428,11 +480,10 @@ pub fn require_target_scheduler_guid(conn: &Connection) -> Result<()> {
 /// `Ok(None)` if the image was never archived by psf-guard.
 pub fn get_archive_record_by_guid(conn: &Connection, guid: &str) -> Result<Option<ArchiveRecord>> {
     conn.query_row(
-        "SELECT acquired_image_guid, acquired_image_id, moved_at,
-                original_path, archive_path, segment_name, archive_depth,
-                sidecar_files, source_db_slug
-         FROM psf_guard_archive
-         WHERE acquired_image_guid = ?1",
+        &format!(
+            "SELECT {} FROM psf_guard_archive WHERE acquired_image_guid = ?1",
+            archive_columns(conn, "")
+        ),
         params![guid],
         row_to_record,
     )
@@ -449,11 +500,10 @@ pub fn get_archive_record_by_image_id(
     image_id: i64,
 ) -> Result<Option<ArchiveRecord>> {
     conn.query_row(
-        "SELECT acquired_image_guid, acquired_image_id, moved_at,
-                original_path, archive_path, segment_name, archive_depth,
-                sidecar_files, source_db_slug
-         FROM psf_guard_archive
-         WHERE acquired_image_id = ?1",
+        &format!(
+            "SELECT {} FROM psf_guard_archive WHERE acquired_image_id = ?1",
+            archive_columns(conn, "")
+        ),
         params![image_id],
         row_to_record,
     )
@@ -475,6 +525,12 @@ pub fn delete_archive_record_by_guid(conn: &Connection, guid: &str) -> Result<()
 fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArchiveRecord> {
     let sidecar_raw: String = row.get("sidecar_files")?;
     let sidecar_files = serde_json::from_str::<Vec<String>>(&sidecar_raw).unwrap_or_default();
+    // Absent from the selection on a table an older build created.
+    let copy_files = row
+        .get::<_, String>("copy_files")
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Vec<ArchivedCopy>>(&raw).ok())
+        .unwrap_or_default();
     Ok(ArchiveRecord {
         acquired_image_guid: row.get("acquired_image_guid")?,
         acquired_image_id: row.get("acquired_image_id")?,
@@ -485,6 +541,7 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArchiveRecord> {
         archive_depth: row.get::<_, i64>("archive_depth")? as u32,
         sidecar_files,
         source_db_slug: row.get("source_db_slug")?,
+        copy_files,
     })
 }
 
@@ -518,6 +575,94 @@ pub struct MoveRejectsSummary {
     pub missing_archive: usize,
     pub not_found_on_disk: usize,
     pub errors: usize,
+    /// Calibrated and registered copies moved with their lights (planned,
+    /// in a dry run).
+    pub copies_moved: usize,
+    /// Recorded copies left in place: not found, outside every image
+    /// directory, or with something already at their archive path.
+    pub copies_left: usize,
+}
+
+/// A paired copy to move with its light.
+#[derive(Debug, Clone)]
+struct PlannedCopy {
+    derivative_uuid: String,
+    source: PathBuf,
+    archive_path: PathBuf,
+}
+
+/// The recorded copies of a light, located through the image directory
+/// trees, with where each goes: the archive mirror of its own folder, by the
+/// same segment and depth rules as the light. A copy that cannot be placed
+/// is reported and left where it is; it never stops the light's move. A
+/// primary copy is the light's own file and moves as the light.
+fn plan_copies(
+    conn: &Connection,
+    guid: &str,
+    light_path: &Path,
+    image_dirs: &[String],
+    trees: &[Option<DirectoryTree>],
+    config: &RejectArchiveConfig,
+    summary: &mut MoveRejectsSummary,
+) -> Vec<PlannedCopy> {
+    let records = match crate::frame_derivatives::derivatives_for_light(conn, guid) {
+        Ok(records) => records,
+        Err(error) => {
+            eprintln!("⚠️  Could not read the paired copies of guid={guid}: {error:#}");
+            return Vec::new();
+        }
+    };
+    let mut planned = Vec::new();
+    for record in records.into_iter().filter(|record| !record.primary_source) {
+        let candidates = trees
+            .iter()
+            .flatten()
+            .filter_map(|tree| tree.find_file(&record.file_name))
+            .flatten();
+        let Some(source) = crate::frame_derivatives::resolve_record_path(&record, candidates)
+        else {
+            println!("       ! copy {} not found; left alone", record.file_name);
+            summary.copies_left += 1;
+            continue;
+        };
+        if source == light_path {
+            continue;
+        }
+        let archive_path = image_dirs
+            .iter()
+            .filter(|dir| source.starts_with(dir))
+            .find_map(|dir| {
+                archive_path_for(Path::new(dir), &source, config.depth, &config.segment_name)
+            });
+        let Some(archive_path) = archive_path else {
+            println!(
+                "       ! copy {} is outside every image directory; left alone",
+                source.display()
+            );
+            summary.copies_left += 1;
+            continue;
+        };
+        if archive_path.exists() {
+            println!(
+                "       ! copy {} would overwrite {}; left alone",
+                source.display(),
+                archive_path.display()
+            );
+            summary.copies_left += 1;
+            continue;
+        }
+        println!(
+            "       + copy {} → {}",
+            source.display(),
+            archive_path.display()
+        );
+        planned.push(PlannedCopy {
+            derivative_uuid: record.derivative_uuid,
+            source,
+            archive_path,
+        });
+    }
+    planned
 }
 
 /// Run the move-rejects pipeline. Locates each rejected image on disk under
@@ -705,8 +850,18 @@ pub fn move_rejects(
         for sc in &sidecars {
             println!("       + sidecar {}", sc.display());
         }
+        let copies = plan_copies(
+            conn,
+            guid,
+            &source_path,
+            image_dirs,
+            &trees,
+            &options.config,
+            &mut summary,
+        );
 
         if options.dry_run {
+            summary.copies_moved += copies.len();
             continue;
         }
 
@@ -719,11 +874,16 @@ pub fn move_rejects(
             archive_path: &archive_path,
             archive_root: &archive_root,
             sidecars: &sidecars,
+            copies: &copies,
             config: &options.config,
             source_db_slug: &options.source_db_slug,
         };
         match execute_one_move(conn, &ctx) {
-            Ok(()) => summary.archived += 1,
+            Ok(moved_copies) => {
+                summary.archived += 1;
+                summary.copies_moved += moved_copies;
+                summary.copies_left += copies.len() - moved_copies;
+            }
             Err(e) => {
                 eprintln!(
                     "❌ Failed to archive id={} guid={}: {:#}",
@@ -759,11 +919,16 @@ struct MoveContext<'a> {
     /// not in the leaf directory that holds the moved file.
     archive_root: &'a Path,
     sidecars: &'a [PathBuf],
+    copies: &'a [PlannedCopy],
     config: &'a RejectArchiveConfig,
     source_db_slug: &'a str,
 }
 
-fn execute_one_move(conn: &Connection, ctx: &MoveContext<'_>) -> Result<()> {
+/// Move one light, its sidecars and its paired copies, and record the move.
+/// Returns how many copies moved: a copy that fails to move is reported and
+/// left in place, while a failure on the light or a sidecar rolls back
+/// everything.
+fn execute_one_move(conn: &Connection, ctx: &MoveContext<'_>) -> Result<usize> {
     let MoveContext {
         guid,
         image_id,
@@ -771,6 +936,7 @@ fn execute_one_move(conn: &Connection, ctx: &MoveContext<'_>) -> Result<()> {
         archive_path,
         archive_root,
         sidecars,
+        copies,
         config,
         source_db_slug,
     } = *ctx;
@@ -817,16 +983,49 @@ fn execute_one_move(conn: &Connection, ctx: &MoveContext<'_>) -> Result<()> {
         moved.push((src.clone(), dest));
     }
 
+    // Paired copies last, each into the archive of its own folder. A copy
+    // that will not move stays where it is; the light still goes.
+    let mut copy_files: Vec<ArchivedCopy> = Vec::with_capacity(copies.len());
+    for copy in copies {
+        let moved_copy = copy
+            .archive_path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("archive path has no parent"))
+            .and_then(|parent| Ok(std::fs::create_dir_all(parent)?))
+            .and_then(|()| {
+                if copy.archive_path.exists() {
+                    anyhow::bail!("{} already exists", copy.archive_path.display());
+                }
+                Ok(std::fs::rename(&copy.source, &copy.archive_path)?)
+            });
+        match moved_copy {
+            Ok(()) => {
+                moved.push((copy.source.clone(), copy.archive_path.clone()));
+                copy_files.push(ArchivedCopy {
+                    derivative_uuid: copy.derivative_uuid.clone(),
+                    original_path: copy.source.to_string_lossy().into_owned(),
+                    archive_path: copy.archive_path.to_string_lossy().into_owned(),
+                });
+            }
+            Err(error) => eprintln!(
+                "⚠️  Left copy {} in place: {:#}",
+                copy.source.display(),
+                error
+            ),
+        }
+    }
+
     // Record in the DB. If this insert fails (e.g. constraint violation),
     // also roll the moves back so the on-disk state matches the DB.
     let sidecar_json = serde_json::to_string(&sidecar_names).unwrap_or_else(|_| "[]".to_string());
+    let copy_json = serde_json::to_string(&copy_files).unwrap_or_else(|_| "[]".to_string());
     let now = chrono::Utc::now().timestamp();
     if let Err(e) = conn.execute(
         "INSERT INTO psf_guard_archive
          (acquired_image_guid, acquired_image_id, moved_at,
           original_path, archive_path, segment_name, archive_depth,
-          sidecar_files, source_db_slug)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+          sidecar_files, source_db_slug, copy_files)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             guid,
             image_id,
@@ -837,10 +1036,23 @@ fn execute_one_move(conn: &Connection, ctx: &MoveContext<'_>) -> Result<()> {
             config.archive_depth_as_i64(),
             sidecar_json,
             source_db_slug,
+            copy_json,
         ],
     ) {
         rollback(&moved);
         return Err(anyhow::Error::new(e).context("inserting psf_guard_archive row"));
+    }
+    for copy in &copy_files {
+        if let Err(error) = crate::frame_derivatives::set_source_tail(
+            conn,
+            &copy.derivative_uuid,
+            Path::new(&copy.archive_path),
+        ) {
+            eprintln!(
+                "⚠️  Moved copy {} but could not note it: {error:#}",
+                copy.archive_path
+            );
+        }
     }
 
     // Single manifest at the archive root (best-effort; if it fails, we log
@@ -852,6 +1064,7 @@ fn execute_one_move(conn: &Connection, ctx: &MoveContext<'_>) -> Result<()> {
         original_path: source_path,
         archive_path,
         sidecar_files: &sidecar_names,
+        copy_files: &copy_files,
         config,
     };
     if let Err(e) = append_to_manifest(archive_root, &manifest_ctx) {
@@ -862,7 +1075,7 @@ fn execute_one_move(conn: &Connection, ctx: &MoveContext<'_>) -> Result<()> {
         );
     }
 
-    Ok(())
+    Ok(copy_files.len())
 }
 
 fn rollback(moved: &[(PathBuf, PathBuf)]) {
@@ -918,6 +1131,8 @@ pub struct RestoreRejectsSummary {
     /// suffix. Counted in `restored` too; this is just a heads-up tally.
     pub restored_with_suffix: usize,
     pub errors: usize,
+    /// Calibrated and registered copies brought back with their lights.
+    pub copies_restored: usize,
 }
 
 /// One archive row joined with the image's current grade (None if no
@@ -997,13 +1212,12 @@ fn load_restore_candidates(
     // LEFT JOIN so rows survive even if no acquiredimage matches the guid
     // (current_grade becomes NULL); the default filter treats unknown grade
     // as "not confirmed un-rejected" and skips it unless --all/targeted.
-    let mut sql = String::from(
-        "SELECT a.acquired_image_guid, a.acquired_image_id, a.moved_at,
-                a.original_path, a.archive_path, a.segment_name, a.archive_depth,
-                a.sidecar_files, a.source_db_slug, ai.gradingStatus
+    let mut sql = format!(
+        "SELECT {}, ai.gradingStatus
          FROM psf_guard_archive a
          LEFT JOIN acquiredimage ai ON ai.guid = a.acquired_image_guid
          WHERE 1=1",
+        archive_columns(conn, "a.")
     );
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
     if let Some(id) = options.image_id_filter {
@@ -1072,6 +1286,23 @@ fn restore_one(
         let desired = original_dir.join(name);
         plan.push((src, unique_restore_dest(&desired)));
     }
+    // Paired copies return to their own folders; `plan` keeps the light and
+    // sidecars first, so these follow it.
+    let mut copies: Vec<(&ArchivedCopy, PathBuf)> = Vec::new();
+    for copy in &record.copy_files {
+        let src = PathBuf::from(&copy.archive_path);
+        if !src.exists() {
+            eprintln!(
+                "⚠️  Copy {} missing in archive for guid={}; skipping it",
+                src.display(),
+                record.acquired_image_guid
+            );
+            continue;
+        }
+        let dest = unique_restore_dest(Path::new(&copy.original_path));
+        plan.push((src, dest.clone()));
+        copies.push((copy, dest));
+    }
 
     let kind = if options.dry_run { "PLAN" } else { "RESTORE" };
     for (src, dest) in &plan {
@@ -1093,6 +1324,12 @@ fn restore_one(
 
     std::fs::create_dir_all(&original_dir)
         .with_context(|| format!("creating original dir {}", original_dir.display()))?;
+    for (_, dest) in &copies {
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating original dir {}", parent.display()))?;
+        }
+    }
 
     // Move everything, tracking for rollback.
     let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
@@ -1114,6 +1351,21 @@ fn restore_one(
         rollback(&moved);
         return Err(e.context("deleting archive row after restore"));
     }
+
+    for (copy, dest) in &copies {
+        if let Err(error) =
+            crate::frame_derivatives::set_source_tail(conn, &copy.derivative_uuid, dest)
+        {
+            eprintln!(
+                "⚠️  Restored copy {} but could not note it: {error:#}",
+                dest.display()
+            );
+        }
+        if let Some(parent) = Path::new(&copy.archive_path).parent() {
+            prune_empty_dirs(parent, &record.segment_name);
+        }
+    }
+    summary.copies_restored += copies.len();
 
     prune_empty_dirs(&archive_dir, &record.segment_name);
     Ok(())
@@ -1205,6 +1457,8 @@ struct ManifestEntry {
     original_path: String,
     archive_path: String,
     sidecar_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    copy_files: Vec<ArchivedCopy>,
     segment_name: String,
     archive_depth: u32,
 }
@@ -1216,6 +1470,7 @@ struct ManifestEntryInput<'a> {
     original_path: &'a Path,
     archive_path: &'a Path,
     sidecar_files: &'a [String],
+    copy_files: &'a [ArchivedCopy],
     config: &'a RejectArchiveConfig,
 }
 
@@ -1229,6 +1484,7 @@ fn append_to_manifest(archive_root: &Path, entry: &ManifestEntryInput<'_>) -> Re
         original_path,
         archive_path,
         sidecar_files,
+        copy_files,
         config,
     } = *entry;
 
@@ -1250,6 +1506,7 @@ fn append_to_manifest(archive_root: &Path, entry: &ManifestEntryInput<'_>) -> Re
         original_path: original_path.to_string_lossy().into_owned(),
         archive_path: archive_path.to_string_lossy().into_owned(),
         sidecar_files: sidecar_files.to_vec(),
+        copy_files: copy_files.to_vec(),
         segment_name: config.segment_name.clone(),
         archive_depth: config.depth,
     });
@@ -1309,6 +1566,35 @@ mod tests {
             )
             .unwrap();
         assert_eq!(idx_count, 1);
+    }
+
+    #[test]
+    fn an_archive_table_from_an_older_build_reads_and_gains_copy_files() {
+        let conn = open_with_acquiredimage(true);
+        conn.execute_batch(
+            "CREATE TABLE psf_guard_archive (
+                acquired_image_guid TEXT PRIMARY KEY,
+                acquired_image_id   INTEGER NOT NULL,
+                moved_at            INTEGER NOT NULL,
+                original_path       TEXT NOT NULL,
+                archive_path        TEXT NOT NULL,
+                segment_name        TEXT NOT NULL,
+                archive_depth       INTEGER NOT NULL,
+                sidecar_files       TEXT NOT NULL DEFAULT '[]',
+                source_db_slug      TEXT
+            );
+            INSERT INTO psf_guard_archive VALUES
+                ('g', 1, 0, '/a/x.fits', '/a/REJECT/x.fits', 'REJECT', 1, '[]', NULL);",
+        )
+        .unwrap();
+        // A dry run reads before any schema change.
+        let old = get_archive_record_by_guid(&conn, "g").unwrap().unwrap();
+        assert!(old.copy_files.is_empty());
+        ensure_archive_schema(&conn).unwrap();
+        ensure_archive_schema(&conn).unwrap();
+        assert!(archive_has_copy_files(&conn));
+        let upgraded = get_archive_record_by_guid(&conn, "g").unwrap().unwrap();
+        assert_eq!(upgraded, old);
     }
 
     #[test]

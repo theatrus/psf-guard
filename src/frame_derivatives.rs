@@ -793,7 +793,7 @@ impl PairingReport {
 
 /// The last two folders above a file, to tell two files of one name apart
 /// when the record is found again.
-fn source_tail(path: &std::path::Path) -> Option<String> {
+pub fn source_tail(path: &std::path::Path) -> Option<String> {
     let parents: Vec<String> = path
         .parent()?
         .components()
@@ -1213,6 +1213,20 @@ pub fn resolve_record_path<'a>(
         .find(|path| tail_matches(path) && size_matches(path))
         .or_else(|| candidates.iter().find(|path| size_matches(path)))
         .map(|path| (*path).clone())
+}
+
+/// Note where a recorded copy lives now, after the reject archive moved it
+/// or brought it back. Size and modification time survive a rename.
+pub fn set_source_tail(conn: &Connection, uuid: &str, path: &std::path::Path) -> Result<()> {
+    if !schema_exists(conn) {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE psf_guard_frame_derivative SET source_tail = ?2, updated_at = ?3
+         WHERE derivative_uuid = ?1",
+        params![uuid, source_tail(path), now_epoch()],
+    )?;
+    Ok(())
 }
 
 /// How many copies a catalog has paired, for Settings.

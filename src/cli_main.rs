@@ -596,7 +596,7 @@ pub fn main() -> Result<()> {
 
             let summary = move_rejects(&conn, &entry.image_dirs, &options)?;
             println!(
-                "\nReject archive {}: planned={}, archived={}, already_archived={}, missing_archive={}, not_found={}, errors={}",
+                "\nReject archive {}: planned={}, archived={}, already_archived={}, missing_archive={}, not_found={}, errors={}, copies_moved={}, copies_left={}",
                 if dry_run { "(dry-run)" } else { "(live)" },
                 summary.planned,
                 summary.archived,
@@ -604,6 +604,8 @@ pub fn main() -> Result<()> {
                 summary.missing_archive,
                 summary.not_found_on_disk,
                 summary.errors,
+                summary.copies_moved,
+                summary.copies_left,
             );
         }
 
@@ -650,7 +652,7 @@ pub fn main() -> Result<()> {
 
             let summary = restore_rejects(&conn, &options)?;
             println!(
-                "\nRestore rejects {}: planned={}, restored={} (with_suffix={}), skipped_still_rejected={}, missing_archive={}, errors={}",
+                "\nRestore rejects {}: planned={}, restored={} (with_suffix={}), skipped_still_rejected={}, missing_archive={}, errors={}, copies_restored={}",
                 if dry_run { "(dry-run)" } else { "(live)" },
                 summary.planned,
                 summary.restored,
@@ -658,6 +660,7 @@ pub fn main() -> Result<()> {
                 summary.skipped_still_rejected,
                 summary.missing_archive,
                 summary.errors,
+                summary.copies_restored,
             );
         }
 
