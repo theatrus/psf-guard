@@ -18,6 +18,15 @@ Sequence ownership keeps custom/third-party instructions available and detects
 known duplicate native actions. Connect/cool and warm/disconnect stay in the
 outer NINA sequence; the Session requires connected commissioned devices.
 
+Meridian execution uses NINA's built-in trigger and flip VM, including profile
+timing/pier-side rules and before/after flip events. A thin adapter checks the
+returned boolean and exposed workflow-step completion before allowing another
+capture; it does not implement another flip algorithm. Runtime-installed
+defaults must not leak into saved/cloned user sequences. Native recovery steps
+can still be best effort (for example, recenter); workflow completion is not
+pixel-derived pointing evidence. Forced flip/rotation and real-sky acceptance
+remain open even when inherited-trigger integration tests pass.
+
 Workload API capability names are `native_single_target_v1` and
 `native_imaging_v1`. Old modes retain their old restrictions. Native device IDs
 and operation ownership participate in the local configuration fingerprint.
