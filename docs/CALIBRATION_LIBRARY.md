@@ -419,7 +419,7 @@ hour, while no stack build runs, PSF Guard removes from the master folder:
 
 - half-written files a stopped build left (`*.fits.tmp-*`), a day old;
 - masters a newer master built from exactly the same frames replaced, once
-  unused for a month and named by no stack index or job manifest. Masters
+  unused for a day and named by no stack index or job manifest. Masters
   from other frames, such as another night's flats or another gain's darks,
   never count as replacements.
 
