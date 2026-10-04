@@ -281,6 +281,16 @@ pub fn night_boundary(captures: impl IntoIterator<Item = i64>) -> i64 {
     ((start * 3_600 + length * 1_800) % 86_400) as i64
 }
 
+/// [`night_boundary`] over every light the catalog records.
+pub fn catalog_night_boundary(conn: &rusqlite::Connection) -> rusqlite::Result<i64> {
+    let mut statement =
+        conn.prepare("SELECT acquireddate FROM acquiredimage WHERE acquireddate IS NOT NULL")?;
+    let times = statement
+        .query_map([], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(night_boundary(times))
+}
+
 /// The civil date a capture's night began on, for a catalog whose nights
 /// split `boundary` seconds after 00:00 UTC: a local evening and the small
 /// hours that follow it share one key.
