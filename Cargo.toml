@@ -48,7 +48,7 @@ byteorder = "1.5"
 seiza = "0.19.2"
 seiza-download = "0.6.0"
 seiza-imgproc = { version = "0.3.2", features = ["parallel"] }
-seiza-fits = "=0.2.4"
+seiza-fits = "=0.2.5"
 seiza-satellites = { version = "0.8.0", features = ["serde"] }
 seiza-stacking = "0.21.0"
 seiza-stretch = "0.2.1"
