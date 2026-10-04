@@ -267,8 +267,11 @@ export interface DirectorPlanDraft {
 }
 export interface DirectorPlanView { project: DirectorIdentity; plan: DirectorPlanDraft | null }
 
-export type DirectorActivationAction = 'create' | 'update' | 'unchanged';
-export interface DirectorActivationChange { kind: 'project' | 'target' | 'plan'; action: DirectorActivationAction; name: string; detail: string }
+/** `adopt` takes over a row already in the rig's database instead of
+ *  adding a twin; `keep` is a plan on these targets activation leaves as
+ *  it is. */
+export type DirectorActivationAction = 'create' | 'update' | 'unchanged' | 'adopt' | 'keep';
+export interface DirectorActivationChange { kind: 'project' | 'target' | 'template' | 'plan'; action: DirectorActivationAction; name: string; detail: string }
 /** A rig on another PSF Guard: its rows go there by Sync once Apply has committed them here. */
 export interface DirectorActivationPush {
   peer_id: string;

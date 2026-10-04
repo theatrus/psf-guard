@@ -5,7 +5,7 @@ import { Check, Eye, Send } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
-import type { DirectorActivationPush, DirectorActivationPushReport, DirectorActivationReport } from '../../api/directorTypes';
+import type { DirectorActivationAction, DirectorActivationChange, DirectorActivationPush, DirectorActivationPushReport, DirectorActivationReport } from '../../api/directorTypes';
 import { retryWhenBusy } from './retry';
 import './ActivationPanel.css';
 
@@ -14,11 +14,54 @@ const message = (error: unknown) => isAxiosError(error) ? error.response?.data?.
 const httpStatus = (error: unknown) => isAxiosError(error) ? error.response?.status
   : error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined;
 
-function counts(changes: DirectorActivationReport['rigs'][number]['changes'], kind: 'project' | 'target' | 'plan') {
+/** What each action does to a row, in words, most consequential first. */
+const ACTIONS: Array<{ action: DirectorActivationAction; count: string; label: string }> = [
+  { action: 'create', count: 'new', label: 'New' },
+  { action: 'adopt', count: 'taken over', label: 'Taken over' },
+  { action: 'update', count: 'updated', label: 'Updated' },
+  { action: 'keep', count: 'left as is', label: 'Left as is' },
+  { action: 'unchanged', count: 'unchanged', label: 'Unchanged' },
+];
+
+const KINDS: Array<{ kind: DirectorActivationChange['kind']; label: string }> = [
+  { kind: 'project', label: 'Project' },
+  { kind: 'target', label: 'Targets' },
+  { kind: 'template', label: 'Exposure templates' },
+  { kind: 'plan', label: 'Exposure plans' },
+];
+
+function counts(changes: DirectorActivationChange[], kind: DirectorActivationChange['kind']) {
   const of = changes.filter(c => c.kind === kind);
-  const n = (action: string) => of.filter(c => c.action === action).length;
-  const parts = [n('create') && `${n('create')} new`, n('update') && `${n('update')} updated`, n('unchanged') && `${n('unchanged')} unchanged`].filter(Boolean);
+  const parts = ACTIONS
+    .map(({ action, count }) => [of.filter(c => c.action === action).length, count] as const)
+    .filter(([n]) => n > 0)
+    .map(([n, count]) => `${n} ${count}`);
   return parts.length ? parts.join(', ') : 'none';
+}
+
+/** Every row activation touches in one rig's database, by kind, saying what
+ *  happens to it and which existing row it lands on. */
+function RigChanges({ rig }: { rig: DirectorActivationReport['rigs'][number] }) {
+  if (rig.changes.length === 0) return null;
+  const busy = rig.changes.some(change => change.action !== 'unchanged' && change.action !== 'keep');
+  return <details className="activation-changes" open={busy}>
+    <summary>{rig.catalog_name}: what changes</summary>
+    {KINDS.map(({ kind, label }) => {
+      const of = rig.changes.filter(change => change.kind === kind);
+      if (of.length === 0) return null;
+      const order = (action: DirectorActivationAction) => ACTIONS.findIndex(entry => entry.action === action);
+      return <div key={kind} className="activation-changes-kind">
+        <h4>{label}</h4>
+        <ul>
+          {[...of].sort((left, right) => order(left.action) - order(right.action)).map((change, index) => <li key={`${change.name}-${index}`}>
+            <span className={`activation-action is-${change.action}`}>{ACTIONS.find(entry => entry.action === change.action)?.label ?? change.action}</span>
+            <strong>{change.name}</strong>
+            {change.detail && <span className="director-muted"> {change.detail}</span>}
+          </li>)}
+        </ul>
+      </div>;
+    })}
+  </details>;
 }
 
 /** One line on where a rig's rows go after this server: nowhere else, or a peer, and how that went. */
@@ -51,7 +94,7 @@ export default function ActivationPanel({ projectId }: { projectId: string }) {
   const pending = preview.isPending || apply.isPending || push.isPending;
   const error = preview.error ?? apply.error ?? push.error;
   return <section className="activation" aria-label="Activation">
-    <p className="director-muted">Activation writes the framing and plan into each participating rig's database: one Target Scheduler project, one target per panel, and one exposure plan per rig objective. Existing rows are updated in place; captured frames and grades are never touched. Preview first; Apply is refused when anything changed since the preview. A rig whose database lives on another PSF Guard gets the same rows there by Sync once Apply has committed them here.</p>
+    <p className="director-muted">Activation writes this plan into each rig's Target Scheduler database: a project, a target per panel and an exposure plan per objective. Rows already there for the same work are taken over, not doubled, and captured frames and grades are never touched. Preview first; Apply is refused if anything changed since, and a rig on another PSF Guard gets the rows by Sync once applied.</p>
     {last.data && <p className="director-muted">Last activated revision {last.data.revision} on {new Date(last.data.applied_at_ms).toLocaleString()} across {last.data.rigs.length} rig{last.data.rigs.length === 1 ? '' : 's'}.</p>}
     {error && !(apply.isError && httpStatus(apply.error) === 409) && <p className="director-error" role="alert">{message(error)}</p>}
     {apply.isError && httpStatus(apply.error) === 409 && <p className="director-error" role="alert">Something changed since the preview. Preview again before applying.</p>}
@@ -65,9 +108,10 @@ export default function ActivationPanel({ projectId }: { projectId: string }) {
           <td><span className="director-cell-label">Targets</span>{counts(rig.changes, 'target')}</td>
           <td><span className="director-cell-label">Exposure plans</span>{counts(rig.changes, 'plan')}</td>
           <td className={rig.push?.error ? 'director-error' : undefined}><span className="director-cell-label">Remote site</span>{describePush(rig.push, rig.applied)}</td>
-          <td><span className="director-cell-label">Notes</span>{rig.warnings.length ? rig.warnings.join(' ') : rig.changes.filter(c => c.action !== 'unchanged').map(c => `${c.name}: ${c.detail}`).slice(0, 4).join('; ')}</td>
+          <td><span className="director-cell-label">Notes</span>{rig.warnings.join(' ')}</td>
         </tr>)}
       </tbody></table></div>
+      {report.rigs.map(rig => <RigChanges key={rig.rig.id} rig={rig} />)}
     </div>}
     {pushed && <div className="activation-report" aria-label="Push result">
       <p><strong>Pushed again</strong>: activation revision {pushed.activation_revision}.</p>

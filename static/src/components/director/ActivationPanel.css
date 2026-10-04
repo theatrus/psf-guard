@@ -5,3 +5,12 @@
 .activation-table td { padding: 6px; vertical-align: top; border-top: 1px solid var(--color-border-secondary); }
 .activation-table .director-cell-label { display: none; }
 @media (max-width: 700px) { .activation-table thead { display: none; } .activation-table tr { display: grid; gap: 4px; padding: 8px 0; border-top: 1px solid var(--color-border-secondary); } .activation-table td { border: none; padding: 0; } .activation-table .director-cell-label { display: inline; color: var(--color-text-secondary); margin-right: 6px; } }
+.activation-changes { margin: 8px 0 0; font-size: 14px; }
+.activation-changes > summary { cursor: pointer; color: var(--color-text-secondary); }
+.activation-changes-kind h4 { margin: 8px 0 2px; font-size: 13px; font-weight: 500; color: var(--color-text-secondary); }
+.activation-changes-kind ul { margin: 0; padding-left: 0; list-style: none; }
+.activation-changes-kind li { padding: 2px 0; }
+.activation-action { display: inline-block; min-width: 6.5em; margin-right: 6px; padding: 0 6px; border-radius: 999px; font-size: 12px; text-align: center; background: var(--color-bg-tertiary); color: var(--color-text-secondary); }
+.activation-action.is-create { background: var(--color-primary-alpha-20); color: var(--color-text-primary); }
+.activation-action.is-adopt { background: rgba(123, 228, 149, 0.15); color: #7be495; }
+.activation-action.is-update { background: var(--color-warning-alpha-20); color: var(--color-text-primary); }

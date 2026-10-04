@@ -71,6 +71,28 @@ describe('Activation panel', () => {
     expect(screen.queryByRole('button', { name: 'Apply to rig databases' })).not.toBeInTheDocument();
   });
 
+  it('says which existing rows are taken over and which plans are left as they are', async () => {
+    fixture(); mount();
+    const takeover: DirectorActivationReport = { ...report(false), rigs: [{ rig, catalog_slug: 'redcat', catalog_name: 'RedCat 61', profile_id: 'p', applied: false, warnings: [], push: null, changes: [
+      { kind: 'project', action: 'update', name: 'Heart', detail: 'linked Target Scheduler project' },
+      { kind: 'target', action: 'adopt', name: 'IC 1805 r1c1', detail: 'takes over the existing target at 02h 32m +61° 27′' },
+      { kind: 'template', action: 'create', name: '#4 OIII 300', detail: 'OIII: no template in this database has these settings' },
+      { kind: 'plan', action: 'adopt', name: 'IC 1805 r1c1 · Ha 300 · 300 s', detail: 'takes over plan #11 (12 of 40 frames taken); desired 40 → 72' },
+      { kind: 'plan', action: 'create', name: 'IC 1805 r1c1 · OIII 300 · 300 s', detail: '72 frames, template #4 OIII 300' },
+      { kind: 'plan', action: 'keep', name: 'IC 1805 r1c1 · Ha 300 · 600 s', detail: 'plan #12 (0 of 10 frames taken) is not part of this plan; left as it is' },
+    ] }] };
+    server.use(http.post('/api/director/v1/projects/project/activation/preview', () => HttpResponse.json(ok(takeover))));
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview activation' }));
+    expect(await screen.findByText('1 new, 1 taken over, 1 left as is', { selector: 'td' })).toBeInTheDocument();
+    expect(screen.getByText('1 taken over', { selector: 'td' })).toBeInTheDocument();
+    const changes = screen.getByText('RedCat 61: what changes').closest('details')!;
+    expect(changes).toHaveAttribute('open');
+    expect(changes).toHaveTextContent('Taken overIC 1805 r1c1 · Ha 300 · 300 s takes over plan #11 (12 of 40 frames taken); desired 40 → 72');
+    expect(changes).toHaveTextContent('Left as isIC 1805 r1c1 · Ha 300 · 600 s plan #12');
+    expect(changes).toHaveTextContent('Exposure templates');
+    expect(changes).toHaveTextContent('New#4 OIII 300');
+  });
+
   it('drops a stale preview when apply is refused', async () => {
     const { previewCount } = fixture(true); mount();
     fireEvent.click(await screen.findByRole('button', { name: 'Preview activation' }));

@@ -510,6 +510,162 @@ async fn side_tables_an_earlier_build_made_strict_are_rebuilt_with_their_rows() 
 /// targets: activation takes them over by name, by place, or as the only
 /// target of a single-panel framing, and never writes a twin beside them.
 #[tokio::test]
+async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doubling_them() {
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    // The project as Target Scheduler holds it: both panels' targets, each
+    // with the Ha work the plan asks for already under way.
+    let source = Uuid::new_v4();
+    a.db.execute(
+        "INSERT INTO project (Id, profileId, name, description, state, priority, isMosaic, flatsHandling, guid)
+         VALUES (1, 'profile-a', 'Heart by hand', '', 1, 1, 1, 0, ?1)",
+        [source.to_string()],
+    )
+    .unwrap();
+    for (id, name) in [(1, "IC 1805 r1c1"), (2, "IC 1805 r2c1")] {
+        a.db.execute(
+            "INSERT INTO target (Id, name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+             VALUES (?1, ?2, 1, 0.0, 0.0, 2, 0.0, 100, 1, ?3)",
+            rusqlite::params![id, name, Uuid::new_v4().to_string()],
+        )
+        .unwrap();
+    }
+    // A copy of the plan's template under another name: same settings.
+    a.db.execute(
+        "INSERT INTO exposuretemplate (Id, profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel, moonavoidanceenabled,
+            moonavoidanceseparation, moonavoidancewidth, maximumhumidity, defaultexposure, moonrelaxscale, moonrelaxmaxaltitude,
+            moonrelaxminaltitude, moondownenabled, ditherevery, minutesOffset, guid)
+         VALUES (2, 'profile-a', 'Ha copy', 'ha ', 100, 30, 1, -1, 0, 0, 60, 7, 0, 300, 0, 5, -15, 0, -1, 0, ?1)",
+        [Uuid::new_v4().to_string()],
+    )
+    .unwrap();
+    // Target 1: Ha 300 s on the plan's own template, a third done, and Ha
+    // 600 s, which is other work. Target 2: Ha on the copy, at the
+    // template's default exposure, with no GUID yet.
+    a.db.execute_batch(
+        "INSERT INTO exposureplan (Id, profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, enabled, guid)
+         VALUES (11, 'profile-a', 300, 40, 12, 12, 1, 1, 1, 'aaaaaaaa-0000-4000-8000-000000000011'),
+                (12, 'profile-a', 600, 10, 0, 0, 1, 1, 1, 'aaaaaaaa-0000-4000-8000-000000000012'),
+                (13, 'profile-a', -1, 30, 5, 5, 2, 2, 0, NULL);",
+    )
+    .unwrap();
+    let catalog = crate::catalog_identity::read(&a.db).unwrap().unwrap().id;
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        store
+            .link_catalog_project(&psf_guard_director_meta::catalog::ProjectMapping {
+                catalog_id: catalog,
+                source_project_guid: source,
+                source_profile_id: "profile-a".into(),
+                project_id: a.project,
+                rig_id: a.rig,
+            })
+            .unwrap();
+    }
+
+    let preview = |label: &'static str| {
+        let app = a.f.app.clone();
+        let project = a.project;
+        async move {
+            let (status, preview) = call(
+                &app,
+                "POST",
+                &format!("/projects/{project}/activation/preview"),
+                json!({}),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{label}: {preview}");
+            preview["data"].clone()
+        }
+    };
+    let data = preview("first").await;
+    // Both plans taken over, and the 600 s work listed as left alone.
+    assert_eq!(actions(&data, "plan"), ["adopt", "adopt", "keep"], "{data}");
+    assert!(
+        actions(&data, "template").is_empty(),
+        "the plan's template exists: {data}"
+    );
+    let details: Vec<String> = data["rigs"][0]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|change| change["kind"] == "plan")
+        .map(|change| {
+            format!(
+                "{} | {}",
+                change["name"].as_str().unwrap(),
+                change["detail"].as_str().unwrap()
+            )
+        })
+        .collect();
+    assert!(
+        details[0].starts_with("IC 1805 r1c1 · Ha 300 · 300 s | takes over plan #11 (12 of 40 frames taken); desired 40 → 72"),
+        "{details:?}"
+    );
+    assert!(
+        details[1].contains("takes over plan #13 (5 of 30 frames taken)")
+            && details[1].contains("template #2 → #1 Ha 300 (same settings)")
+            && details[1].contains("turned on"),
+        "{details:?}"
+    );
+    assert_eq!(
+        details[2],
+        "IC 1805 r1c1 · Ha 300 · 600 s | plan #12 (0 of 10 frames taken) is not part of this plan; left as it is"
+    );
+    let digest = data["preview_digest"].as_str().unwrap().to_owned();
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/apply", a.project),
+        json!({"preview_digest": digest}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan"),
+        3,
+        "no twin plans"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE Id=11 AND desired=72 AND acquired=12 AND exposure=300"),
+        1,
+        "the taken-over plan keeps its frames"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE Id=12 AND desired=10 AND exposure=600"),
+        1,
+        "other work is left alone"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE Id=13 AND exposureTemplateId=1 AND enabled=1 AND exposure=300 AND guid IS NOT NULL"),
+        1
+    );
+    assert_eq!(count("SELECT count(*) FROM psf_guard_director_plan"), 2);
+    assert_eq!(
+        actions(&preview("again").await, "plan"),
+        ["unchanged", "unchanged", "keep"]
+    );
+
+    // A contribution made anew (a rig unticked and ticked again) gets new
+    // plans; the old ones stay in Target Scheduler, and the preview says so.
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut draft = store.plan_draft(a.project).unwrap().unwrap();
+        let revision = draft.revision;
+        draft.contributions[0].id = Uuid::new_v4();
+        store.save_plan_draft(&draft, revision).unwrap();
+    }
+    let data = preview("remade").await;
+    assert_eq!(
+        actions(&data, "plan"),
+        ["create", "create", "keep", "keep", "keep"],
+        "{data}"
+    );
+}
+
+#[tokio::test]
 async fn activation_takes_over_the_linked_projects_existing_targets_instead_of_doubling_them() {
     let a = activated().await;
     let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
@@ -604,8 +760,21 @@ async fn activation_takes_over_the_linked_projects_existing_targets_instead_of_d
     assert_eq!(status, StatusCode::OK, "{preview}");
     let data = &preview["data"];
     assert_eq!(actions(data, "project"), ["update"]);
-    // The named target moves to its panel; the one already in place is kept as it is.
-    assert_eq!(actions(data, "target"), ["update", "adopt"], "{data}");
+    // Both are taken over: the named target moves to its panel, the one
+    // already in place stays where it is, and the preview says which.
+    assert_eq!(actions(data, "target"), ["adopt", "adopt"], "{data}");
+    let details: Vec<&str> = data["rigs"][0]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|change| change["kind"] == "target")
+        .map(|change| change["detail"].as_str().unwrap())
+        .collect();
+    assert!(details[0].contains("moving it to"), "{details:?}");
+    assert!(
+        details[1].starts_with("takes over the existing target at"),
+        "{details:?}"
+    );
     let digest = data["preview_digest"].as_str().unwrap().to_owned();
     let (status, applied) = call(
         &a.f.app,
@@ -707,7 +876,7 @@ async fn a_single_panel_plan_takes_over_the_projects_only_target_by_any_name() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{preview}");
-    assert_eq!(actions(&preview["data"], "target"), ["update"], "{preview}");
+    assert_eq!(actions(&preview["data"], "target"), ["adopt"], "{preview}");
     let digest = preview["data"]["preview_digest"]
         .as_str()
         .unwrap()
