@@ -65,22 +65,27 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     await settings.getByRole('button', { name: '×' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
 
-    // The outer pill opens the workspace: both databases, each with its own editor.
+    // The outer pill opens the workspace: one block per rig, each with its
+    // database's project and its own editor.
     await andromeda.getByRole('button', { name: 'Open the Andromeda exposures plan' }).click();
     await expect(page.getByRole('heading', { name: 'Andromeda exposures' })).toBeVisible();
-    await expect(page.getByRole('region', { name: 'Linked databases' }).getByText('C925 data')).toBeVisible();
-    await expect(page.getByRole('region', { name: 'Linked databases' }).getByText('Redcat data')).toBeVisible();
+    const rigs = page.getByRole('region', { name: 'Rigs' });
+    await expect(rigs.getByRole('group', { name: 'C925 data' })).toContainText('project');
+    await expect(rigs.getByRole('group', { name: 'Redcat data' })).toContainText('project');
     // The outer pill passes the database it opened from, so that editor is already open.
     await expect(page.getByLabel('RA (decimal hours)')).toHaveValue('0.712313');
     await expect(page.getByLabel('Ha desired count')).toHaveValue('40');
     await expect(page.getByRole('region', { name: 'Acquisition plan' })).toBeVisible();
     await expect(page.getByRole('region', { name: 'Activation' })).toBeVisible();
     const preferences = page.getByRole('region', { name: 'Project priority' });
+    // Folded by default: it ranks every plan, not this one.
+    await preferences.locator('summary').click();
     await preferences.getByRole('button', { name: 'Move Andromeda older setup up' }).click();
     await preferences.getByRole('button', { name: 'Save priority' }).click();
     await expect(preferences.getByText('Project priority saved.')).toBeVisible();
     await expect(preferences.getByText('Following global order')).toBeVisible();
     await page.reload();
+    await preferences.locator('summary').click();
     await expect(preferences.getByRole('listitem').first()).toContainText('Andromeda older setup');
     await preferences.getByLabel('Priority scope').selectOption('rig');
     await expect(preferences.getByLabel('Use inherited order')).toBeChecked();

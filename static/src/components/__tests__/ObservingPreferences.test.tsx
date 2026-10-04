@@ -24,6 +24,13 @@ function mount(conflict = false, rigs = [{ id: 'rig', name: 'RedCat' }]) {
 }
 
 describe('project priority controls', () => {
+  it('starts folded, saying where this plan stands in the global order', async () => {
+    mount();
+    const fold = (await screen.findByText(/this plan is 2 of 2 in the global order/)).closest('details')!;
+    expect(fold).not.toHaveAttribute('open');
+    expect(within(fold).getByText('Project priority')).toBeInTheDocument();
+  });
+
   it('saves a global ordered list without project weights', async () => {
     const saved = mount();
     fireEvent.click(await screen.findByRole('button', { name: 'Move Orion up' }));

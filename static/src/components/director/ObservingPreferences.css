@@ -13,3 +13,5 @@
 .project-priority-list li[aria-current=true] .priority-project-name { font-weight: 600; color: var(--color-primary); }
 .priority-project-name { overflow-wrap: anywhere; }
 .priority-position { color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+.observing-fold > summary { cursor: pointer; list-style-position: inside; }
+.observing-fold > summary h3 { display: inline; margin: 0; }

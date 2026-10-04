@@ -50,6 +50,11 @@
   now lists every row by name, saying which plan it takes over (with its
   frames taken), what changes, which templates it creates, and which plans
   it leaves as they are.
+- Show each rig once in a plan's workspace: one block holds its database's
+  project, its templates and frames, what activation does there, and its
+  Target Scheduler editor, instead of three separate lists. Rigs outside the
+  plan fold away, Project priority folds to one line saying where the plan
+  stands, and the help text is shorter.
 
 > Add a line here as each user-visible change merges. At release time this
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version

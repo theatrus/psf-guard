@@ -12,7 +12,23 @@ vi.mock('../ProjectSchedulerDialog', () => ({
 vi.mock('../director/FramingView', () => ({
   default: ({ projectId, seed }: { projectId: string; seed: { name: string; center: { ra_degrees: number } } | null }) => <output>{`Framing ${projectId}:${seed ? `${seed.name}@${seed.center.ra_degrees}` : 'no seed'}`}</output>,
 }));
-vi.mock('../director/PlanEditor', () => ({ default: ({ projectId }: { projectId: string }) => <output>{`Plan ${projectId}`}</output> }));
+// The editor draws one block per rig; the stub draws what the workspace
+// gives each linked rig, and the list's footer.
+vi.mock('../director/PlanEditor', () => ({
+  default: ({ projectId, linkedRigIds = [], rigExtras, footer }: {
+    projectId: string;
+    linkedRigIds?: string[];
+    rigExtras?: (rig: { rig: { id: string; name: string; revision: number }; catalog_slug: string; catalog_name: string }) => { place?: React.ReactNode; below?: React.ReactNode };
+    footer?: React.ReactNode;
+  }) => <div>
+    <output>{`Plan ${projectId}`}</output>
+    {linkedRigIds.map(id => {
+      const extras = rigExtras?.({ rig: { id, name: id, revision: 1 }, catalog_slug: id, catalog_name: id }) ?? {};
+      return <div key={id}>{extras.place}{extras.below}</div>;
+    })}
+    {footer}
+  </div>,
+}));
 vi.mock('../director/ActivationPanel', () => ({ default: ({ projectId }: { projectId: string }) => <output>{`Activation ${projectId}`}</output> }));
 vi.mock('../director/ObservingPreferences', () => ({ default: () => <output>Observing preferences</output> }));
 const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: null });
@@ -20,8 +36,10 @@ const rig = { id: 'rig', name: 'C925', revision: 1 };
 
 function mount(links: Array<{ catalog_slug: string; catalog_name: string; source_row_id: number | null; source_name: string | null }>, route = '/plan?db=catalog&plan=project') {
   server.use(
+    // Every database is a rig of its own.
+    http.get('/api/director/v1/rigs/profiles', () => ok(links.map(link => ({ rig: { ...rig, id: `rig-${link.catalog_slug}` }, catalog_slug: link.catalog_slug, catalog_name: link.catalog_name })))),
     http.get('/api/director/v1/plans', () => ok({ warnings: [], rows: [{ project: { id: 'project', name: 'Andromeda', revision: 1 }, framing: null, plan: null, activation: null,
-      links: links.map(link => ({ ...link, rig, source_project_guid: 'guid' })) }] })),
+      links: links.map(link => ({ ...link, rig: { ...rig, id: `rig-${link.catalog_slug}` }, source_project_guid: 'guid' })) }] })),
     http.get('/api/db/catalog/projects/7/scheduler', () => ok({ id: 7, name: 'Andromeda subs', exposure_templates: [], targets: [{ id: 1, name: 'M31', active: true, ra_hours: 0.5, dec_degrees: 41.27, epoch_code: 2, rotation: 35, roi: 100, exposure_plans: [] }] })),
   );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -41,7 +59,7 @@ describe('project workspace', () => {
     expect(screen.getByText('Project row missing in this database')).toBeInTheDocument();
     // The Library's Planning button names its database in `db`; that editor is open on arrival.
     expect(screen.getByText('Source editor catalog:7')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Targets and exposures/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Edit in Target Scheduler/ }));
     expect(screen.queryByText('Source editor catalog:7')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Library' })).toHaveAttribute('href', '/?db=catalog');
   });
@@ -49,7 +67,7 @@ describe('project workspace', () => {
     mount(links, '/plan?db=elsewhere&plan=project');
     expect(await screen.findByRole('heading', { name: 'Andromeda' })).toBeInTheDocument();
     expect(screen.queryByText('Source editor catalog:7')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Targets and exposures/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Edit in Target Scheduler/ }));
     expect(screen.getByText('Source editor catalog:7')).toBeInTheDocument();
   });
   it('frames an unlinked project without a seed', async () => {
@@ -65,6 +83,10 @@ describe('attaching and detaching database projects', () => {
   function mountTwo() {
     const posts: Array<{ url: string; body: unknown }> = [];
     server.use(
+      http.get('/api/director/v1/rigs/profiles', () => ok([
+        { rig: rigA, catalog_slug: 'catalog', catalog_name: 'C925 data' },
+        { rig: { id: 'rig-c', name: 'Third', revision: 1 }, catalog_slug: 'third', catalog_name: 'Third data' },
+      ])),
       http.get('/api/director/v1/plans', () => ok({ warnings: [], rows: [
         { project: { id: 'project', name: 'Heart', revision: 1 }, framing: null, plan: null, activation: null,
           links: [{ catalog_slug: 'catalog', catalog_name: 'C925 data', rig: rigA, source_project_guid: 'guid-a', source_row_id: 7, source_name: 'Heart' }, { catalog_slug: 'third', catalog_name: 'Third data', rig: { id: 'rig-c', name: 'Third', revision: 1 }, source_project_guid: 'guid-c', source_row_id: 9, source_name: 'Heart' }] },
@@ -90,7 +112,7 @@ describe('attaching and detaching database projects', () => {
     const options = Array.from((pick as HTMLSelectElement).options).map(option => option.textContent);
     expect(options).toEqual(['Choose a project…', 'Redcat data: Heart by RedCat']);
     fireEvent.change(pick, { target: { value: 'other:redcat:guid-b' } });
-    expect(screen.getByRole('note')).toHaveTextContent('“Heart by RedCat” is retired as a plan and its database joins this one');
+    expect(screen.getByRole('note')).toHaveTextContent('“Heart by RedCat” joins this plan and is retired');
     fireEvent.click(screen.getByRole('button', { name: 'Attach' }));
     expect(await screen.findByText('Attached Heart by RedCat: 1 database joined this plan, and its framing came along.')).toBeInTheDocument();
     expect(posts).toEqual([{ url: 'attach', body: { from_project_id: 'other' } }]);

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { Check, Eye, Send } from 'lucide-react';
@@ -39,13 +39,32 @@ function counts(changes: DirectorActivationChange[], kind: DirectorActivationCha
   return parts.length ? parts.join(', ') : 'none';
 }
 
+type ReportRig = DirectorActivationReport['rigs'][number];
+
+/** What the last preview or apply did in one rig's database: a line of
+ *  counts, its warnings, where its rows go, and every row it touches. */
+export function RigActivation({ rig, applied }: { rig: ReportRig; applied: boolean }) {
+  const summary = KINDS
+    .filter(({ kind }) => rig.changes.some(change => change.kind === kind))
+    .map(({ kind, label }) => `${label}: ${counts(rig.changes, kind)}`);
+  return <div className="activation-rig" aria-label={`${rig.catalog_name} activation`}>
+    <p className="activation-rig-summary">
+      <strong>{applied ? 'Applied' : 'Preview'}</strong>{rig.applied && <> <Check size={14} aria-label="applied" /></>}
+      {summary.length > 0 ? ` · ${summary.join(' · ')}` : ''}
+      {rig.push && <span className={rig.push.error ? 'director-error' : 'director-muted'}> · {describePush(rig.push, rig.applied)}</span>}
+    </p>
+    {rig.warnings.map(warning => <p key={warning} className="director-muted" role="note">{warning}</p>)}
+    <RigChanges rig={rig} />
+  </div>;
+}
+
 /** Every row activation touches in one rig's database, by kind, saying what
  *  happens to it and which existing row it lands on. */
-function RigChanges({ rig }: { rig: DirectorActivationReport['rigs'][number] }) {
+function RigChanges({ rig }: { rig: ReportRig }) {
   if (rig.changes.length === 0) return null;
   const busy = rig.changes.some(change => change.action !== 'unchanged' && change.action !== 'keep');
   return <details className="activation-changes" open={busy}>
-    <summary>{rig.catalog_name}: what changes</summary>
+    <summary>What changes in {rig.catalog_name}</summary>
     {KINDS.map(({ kind, label }) => {
       const of = rig.changes.filter(change => change.kind === kind);
       if (of.length === 0) return null;
@@ -72,8 +91,14 @@ function describePush(push: DirectorActivationPush | null, applied: boolean): st
   return applied ? `Push to ${push.peer_name} pending` : `Will push to ${push.peer_name}`;
 }
 
-/** Push the framing and plan into each participating rig's database, with a preview first. */
-export default function ActivationPanel({ projectId }: { projectId: string }) {
+/** Push the framing and plan into each participating rig's database, with a
+ *  preview first. Each rig's part of the result is shown with that rig
+ *  (`onReport`); rigs not in `shownElsewhere` are listed here. */
+export default function ActivationPanel({ projectId, onReport, shownElsewhere }: {
+  projectId: string;
+  onReport?: (report: DirectorActivationReport | null) => void;
+  shownElsewhere?: ReadonlySet<string>;
+}) {
   const { canWrite } = useAccess();
   const status = useDirectorStatus();
   const manageable = status.data?.database_management ?? true;
@@ -91,27 +116,21 @@ export default function ActivationPanel({ projectId }: { projectId: string }) {
   const [pushed, setPushed] = useState<DirectorActivationPushReport | null>(null);
   const push = useMutation({ retry: false, mutationFn: () => apiClient.pushDirectorActivation(projectId), onSuccess: setPushed });
   const run = (action: () => void) => { if (busy.current) return; busy.current = true; try { action(); } finally { busy.current = false; } };
+  useEffect(() => { onReport?.(report); }, [report, onReport]);
   const pending = preview.isPending || apply.isPending || push.isPending;
   const error = preview.error ?? apply.error ?? push.error;
   return <section className="activation" aria-label="Activation">
-    <p className="director-muted">Activation writes this plan into each rig's Target Scheduler database: a project, a target per panel and an exposure plan per objective. Rows already there for the same work are taken over, not doubled, and captured frames and grades are never touched. Preview first; Apply is refused if anything changed since, and a rig on another PSF Guard gets the rows by Sync once applied.</p>
+    <p className="director-muted">Writes this plan into each rig's Target Scheduler database, taking over rows already there for the same work. Each rig above shows what changes.</p>
     {last.data && <p className="director-muted">Last activated revision {last.data.revision} on {new Date(last.data.applied_at_ms).toLocaleString()} across {last.data.rigs.length} rig{last.data.rigs.length === 1 ? '' : 's'}.</p>}
     {error && !(apply.isError && httpStatus(apply.error) === 409) && <p className="director-error" role="alert">{message(error)}</p>}
     {apply.isError && httpStatus(apply.error) === 409 && <p className="director-error" role="alert">Something changed since the preview. Preview again before applying.</p>}
     {report && <div className="activation-report">
       <p><strong>{report.applied ? 'Applied' : 'Preview'}</strong>: framing revision {report.framing_revision}, plan revision {report.plan_revision}, {report.panels} panel{report.panels === 1 ? '' : 's'}.{report.activation_revision !== null && ` Activation revision ${report.activation_revision}.`}</p>
       {report.warnings.map(warning => <p key={warning} className="director-error" role="alert">{warning}</p>)}
-      <div className="director-table-scroll"><table className="activation-table"><thead><tr><th>Rig database</th><th>Project</th><th>Targets</th><th>Exposure plans</th><th>Remote site</th><th>Notes</th></tr></thead><tbody>
-        {report.rigs.map(rig => <tr key={rig.rig.id}>
-          <td><span className="director-cell-label">Rig database</span>{rig.catalog_name}{rig.applied && <> <Check size={14} aria-label="applied" /></>}</td>
-          <td><span className="director-cell-label">Project</span>{counts(rig.changes, 'project')}</td>
-          <td><span className="director-cell-label">Targets</span>{counts(rig.changes, 'target')}</td>
-          <td><span className="director-cell-label">Exposure plans</span>{counts(rig.changes, 'plan')}</td>
-          <td className={rig.push?.error ? 'director-error' : undefined}><span className="director-cell-label">Remote site</span>{describePush(rig.push, rig.applied)}</td>
-          <td><span className="director-cell-label">Notes</span>{rig.warnings.join(' ')}</td>
-        </tr>)}
-      </tbody></table></div>
-      {report.rigs.map(rig => <RigChanges key={rig.rig.id} rig={rig} />)}
+      {report.rigs.filter(rig => !shownElsewhere?.has(rig.rig.id)).map(rig => <div key={rig.rig.id}>
+        <h4 className="activation-rig-name">{rig.catalog_name}</h4>
+        <RigActivation rig={rig} applied={report.applied} />
+      </div>)}
     </div>}
     {pushed && <div className="activation-report" aria-label="Push result">
       <p><strong>Pushed again</strong>: activation revision {pushed.activation_revision}.</p>
