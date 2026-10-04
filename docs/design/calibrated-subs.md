@@ -1,6 +1,6 @@
 # Calibrated subs
 
-Status: **Design; being built in three PRs (see the end)**
+Status: **Engine, import and sync built; the views that use a pair come next (see the end)**
 Last updated: 2026-10-04
 
 ## 1. Goal
@@ -103,8 +103,10 @@ the maintainer's share, Siril registered an APP stack, and the result has no
 stack count and carries the reference light's time, exposure and filter.
 Matching keywords alone would pair that stack with the light. Siril renames
 frames when it builds a sequence, so its `<sequence>_conversion.txt`
-(`'source' -> 'frame'` lines) is the record of where each frame came from;
-when that source is itself an integration, every derivative of it is one too.
+(`'source' -> 'frame'` lines) is the record of where each frame came from,
+read from the derivative's folder. A source the catalog does not hold (an
+APP stack, a file on another machine) names no light, so its copies stay
+unpaired; a registered copy never becomes a light of its own.
 
 When several copies of one kind match one light (WBPP left both `_r` and
 `_c_r` of the same frame on the C925 run), the one that was calibrated
@@ -112,18 +114,26 @@ wins, then the newer file; the rest are reported as superseded.
 
 Pairing is **on by default**:
 
-- import routes a derivative into pairing instead of cataloguing it;
-- a background pass after each directory refresh pairs derivatives already
-  on disk, off the request path, the way the calibration header backfill
-  runs (own connection, chunked commits, one pass at a time per catalog);
-- a database setting turns it off, for someone who wants their calibrated
-  files left alone.
+- import routes a derivative into pairing instead of cataloguing it, and
+  drops recorded copies by name before reading headers on an automatic run;
+- a background pass after each directory refresh pairs copies already on
+  disk with lights already catalogued. It reads only files named the way the
+  tools name their output (a refresh cannot read every header of a
+  calibration library), at most 2,000 headers a pass, on its own connection,
+  standing aside while an import runs. It never adds a light; a copy known
+  only by its header is paired when it is imported;
+- the database setting **Pair calibrated and registered copies**
+  (`pair_calibrated_copies` in the registry, `--no-pairing` on the CLI)
+  turns it off; copies then import as lights, as before.
 
 ## 4. Catalogs with only calibrated subs
 
-A derivative with no raw light to pair with becomes a light row of its own,
-because the catalog, grading and stacking all need one. Its side-table record
-marks it `primary`: the row's file *is* the derivative.
+A calibrated derivative with no raw light to pair with becomes a light row
+of its own, because the catalog, grading and stacking all need one: one row
+per exposure, choosing the newest of several calibrated copies. Its
+side-table record marks it `primary`: the row's file *is* the derivative.
+Other copies of that exposure pair with the row. A registered copy never
+becomes a light.
 
 When the raw arrives later, by import or sync, import pairs it with that row
 instead of adding a twin: the row keeps its id, GUID, grade and history; its
@@ -172,8 +182,12 @@ carry it explicitly:
   upsert records by `derivative_uuid` and remap `acquired_image_guid` through
   the image map, the way `calibration::sync_library` carries the library.
   A record whose light did not come across is skipped and counted.
-- **Remote HTTP sync**: add the table to the bundle's merge set and apply it
-  in the same step.
+- **Remote HTTP sync**: the table rides in a merge bundle only between peers
+  that advertise `frame_derivatives_v1`, since an older peer rejects a
+  bundle naming a table it does not know (see
+  [data transfer](data-transfer.md#calibrated-copy-records)).
+- **Adoption**: when sync gives a row PSF Guard minted the telescope's guid,
+  its records follow it.
 - **Grade push** needs nothing: grades live on the light.
 - A destination that already has a primary calibrated row and receives the
   raw from the source pairs them (section 4) rather than inserting a twin,

@@ -307,6 +307,73 @@ pub(crate) fn spawn_dark_level_backfill(path: String) {
     });
 }
 
+/// Pair calibrated and registered copies already on disk with their lights,
+/// after a directory refresh. One pass at a time per catalog, on its own
+/// connection; it stands aside while an import holds the catalog, and the
+/// next refresh runs it again.
+pub(crate) fn spawn_derivative_pairing(
+    path: String,
+    tree: Arc<DirectoryTree>,
+    enabled: Arc<AtomicBool>,
+    import_lock: Arc<TokioMutex<()>>,
+) {
+    type Checked = HashMap<PathBuf, crate::frame_derivatives::FileStamp>;
+    static RUNNING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static CHECKED: std::sync::LazyLock<Mutex<HashMap<String, Checked>>> =
+        std::sync::LazyLock::new(Default::default);
+    if !enabled.load(Ordering::Relaxed) {
+        return;
+    }
+    {
+        let mut running = RUNNING
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if running.contains(&path) {
+            return;
+        }
+        running.push(path.clone());
+    }
+    std::thread::spawn(move || {
+        let files: Vec<PathBuf> = tree.get_fits_files().into_iter().cloned().collect();
+        let outcome = match import_lock.try_lock() {
+            Err(_) => Ok(None),
+            Ok(_guard) => Connection::open_with_flags(&path, db_open_flags())
+                .and_then(|conn| {
+                    conn.busy_timeout(INDEX_BUILD_BUSY_TIMEOUT)?;
+                    Ok(conn)
+                })
+                .map_err(anyhow::Error::from)
+                .and_then(|mut conn| {
+                    let mut all = CHECKED
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let checked = all.entry(path.clone()).or_default();
+                    crate::frame_derivatives::pair_files_on_disk(&mut conn, &files, checked)
+                        .map(Some)
+                }),
+        };
+        match outcome {
+            Ok(Some(report)) if report.paired > 0 || report.ambiguous > 0 => tracing::info!(
+                "Paired {} calibrated or registered cop(ies) with their lights in {path} \
+                 ({} superseded, {} ambiguous, {} with no light yet)",
+                report.paired,
+                report.superseded,
+                report.ambiguous,
+                report.unmatched
+            ),
+            Ok(_) => {}
+            Err(error) => tracing::info!(
+                "Paused pairing calibrated copies in {path}: {error:#}. \
+                 The next directory refresh tries again."
+            ),
+        }
+        RUNNING
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|running| running != &path);
+    });
+}
+
 /// Identity of the on-disk database file: the `(device, inode)` pair on unix.
 ///
 /// This is deliberately file *identity*, not file *content*. When another
@@ -480,6 +547,9 @@ pub struct DatabaseContext {
     /// Scan frames that arrive by sync, upload or auto-import for quality.
     /// Shared so Settings can change it on the live context.
     pub analyze_new_frames: Arc<AtomicBool>,
+    /// Pair calibrated and registered copies with their lights, on import
+    /// and in the background pass. Shared so Settings can change it live.
+    pub pair_calibrated_copies: Arc<AtomicBool>,
     /// Per-DB cache directory: `<cache_root>/<slug>/`. Created on construction.
     /// Image previews, star lists, astrometry and the other per-image results
     /// for this database live below here, so two DBs with overlapping image
@@ -798,6 +868,9 @@ impl DatabaseContext {
         context
             .analyze_new_frames
             .store(entry.analyze_new_frames, Ordering::Relaxed);
+        context
+            .pair_calibrated_copies
+            .store(entry.pair_calibrated_copies, Ordering::Relaxed);
         Ok(context)
     }
 
@@ -901,6 +974,7 @@ impl DatabaseContext {
             process_dir,
             autoimport: None,
             analyze_new_frames: Arc::new(AtomicBool::new(false)),
+            pair_calibrated_copies: Arc::new(AtomicBool::new(true)),
             cache_dir_path,
             stack_root,
             calibration_root,
@@ -1176,7 +1250,14 @@ impl DatabaseContext {
             stats.format_age()
         );
 
-        Ok(Arc::new(tree))
+        let tree = Arc::new(tree);
+        spawn_derivative_pairing(
+            self.database_path.clone(),
+            Arc::clone(&tree),
+            Arc::clone(&self.pair_calibrated_copies),
+            Arc::clone(&self.image_import_mutex),
+        );
+        Ok(tree)
     }
 
     pub fn refresh_directory_tree_if_needed(&self) -> Result<Arc<DirectoryTree>> {
@@ -2106,6 +2187,7 @@ impl DatabaseContext {
             process_dir: None,
             autoimport: None,
             analyze_new_frames: Arc::new(AtomicBool::new(false)),
+            pair_calibrated_copies: Arc::new(AtomicBool::new(true)),
             cache_dir_path: PathBuf::from("/tmp/psf-guard-test"),
             stack_root: PathBuf::from("/tmp/psf-guard-test"),
             calibration_root: PathBuf::from("/tmp/psf-guard-test"),
@@ -2151,6 +2233,7 @@ impl Clone for DatabaseContext {
             process_dir: self.process_dir.clone(),
             autoimport: self.autoimport.clone(),
             analyze_new_frames: self.analyze_new_frames.clone(),
+            pair_calibrated_copies: self.pair_calibrated_copies.clone(),
             cache_dir_path: self.cache_dir_path.clone(),
             stack_root: self.stack_root.clone(),
             calibration_root: self.calibration_root.clone(),

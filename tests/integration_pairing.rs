@@ -80,6 +80,7 @@ fn harness() -> (Arc<AppState>, Router, PathBuf, tempfile::TempDir) {
         process_dir: None,
         autoimport: None,
         analyze_new_frames: false,
+        pair_calibrated_copies: true,
     };
     let registry_path = directory.path().join("registry.json");
     let mut registry = DbRegistry::default();

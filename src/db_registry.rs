@@ -64,6 +64,19 @@ pub struct DbEntry {
     /// pull, remote upload or auto-import. Off unless a person turns it on.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub analyze_new_frames: bool,
+    /// Pair calibrated and registered copies other software wrote with the
+    /// light they came from, instead of cataloguing them as lights. On
+    /// unless a person turns it off; see `docs/design/calibrated-subs.md`.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub pair_calibrated_copies: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 /// When and what an automatic import brings in. A run scans the database's
@@ -817,6 +830,7 @@ impl DbRegistry {
                 process_dir: None,
                 autoimport: None,
                 analyze_new_frames: false,
+                pair_calibrated_copies: true,
             });
         }
         reg.save(path)?;
@@ -888,6 +902,7 @@ impl DbRegistry {
             process_dir: None,
             autoimport: None,
             analyze_new_frames: false,
+            pair_calibrated_copies: true,
         });
         Ok(self.databases.last().unwrap())
     }
@@ -1129,6 +1144,7 @@ mod tests {
             process_dir: None,
             autoimport: None,
             analyze_new_frames: false,
+            pair_calibrated_copies: true,
         });
         reg.save(&path).unwrap();
 

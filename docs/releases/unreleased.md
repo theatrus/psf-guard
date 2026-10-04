@@ -667,3 +667,9 @@
   name, within reason, so long names show whole. Mosaic panels that share
   a long start show the part that sets them apart ("Panel 2"), with the
   full name as a tooltip.
+- Pair calibrated and registered copies from WBPP, Siril, ASTAP,
+  DeepSkyStacker and other tools with the light each came from, instead of
+  importing them as extra lights. A calibrated copy with no raw frame
+  becomes the light, and the raw takes it over, grade and all, when it is
+  imported or synced later. Copies already on disk pair after each folder
+  refresh. Turn it off per database in Settings.

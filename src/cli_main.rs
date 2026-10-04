@@ -469,6 +469,7 @@ pub fn main() -> Result<()> {
             lights_only,
             calibration_only,
             skip_processed,
+            no_pairing,
             accept_other_rigs,
             registry,
         } => {
@@ -517,6 +518,7 @@ pub fn main() -> Result<()> {
                     crate::commands::import::ImportScope::All
                 },
                 skip_processed,
+                pair_derivatives: !no_pairing,
                 accept_other_rigs,
                 only_new: false,
             };
@@ -1184,6 +1186,7 @@ pub fn main() -> Result<()> {
                 tc("calibration rigs", &summary.calibration_rigs);
                 tc("rig bindings", &summary.calibration_rig_bindings);
                 tc("calibration FITS", &summary.calibration_frames);
+                tc("calibrated copies", &summary.frame_derivatives);
 
                 // Human-readable byte size.
                 let human = |n: u64| -> String {

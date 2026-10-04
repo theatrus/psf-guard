@@ -75,6 +75,16 @@ const MERGE_TABLES: &[&str] = &[
     "acquiredimage",
     "imagedata",
 ];
+/// PSF Guard tables a merge carries only when both ends know them. An
+/// older peer rejects a bundle naming a table it does not know, so a sender
+/// includes these only for a receiver that advertises
+/// [`FRAME_DERIVATIVES_CAPABILITY`], and a receiver that gets none leaves
+/// its own records alone.
+const OPTIONAL_MERGE_TABLES: &[&str] = &["psf_guard_frame_derivative"];
+
+/// The capability that says a peer reads and writes pairing records.
+pub const FRAME_DERIVATIVES_CAPABILITY: &str = "frame_derivatives_v1";
+
 /// A grade push reads its source rows through the scheduler's own
 /// project/target join, so the bundle has to carry those two tables even
 /// though nothing in them is ever written. Without them the materialized
@@ -165,6 +175,10 @@ pub struct CreateExportRequest {
     /// must ask.
     #[serde(default)]
     pub include_thumbnails: bool,
+    /// Merge exports only: include PSF Guard's pairing records. Off unless
+    /// the client asks, since an older client cannot read them.
+    #[serde(default)]
+    pub include_frame_derivatives: bool,
 }
 
 fn default_true() -> bool {
@@ -434,6 +448,7 @@ pub async fn capabilities(
         "async_preview_jobs",
         "exports",
         "flat_history_v1",
+        FRAME_DERIVATIVES_CAPABILITY,
     ];
     if catalog
         .remote_image_upload
@@ -903,6 +918,7 @@ pub async fn create_export(
     let operation = request.operation;
     let reviewed_only = request.reviewed_only;
     let include_thumbnails = request.include_thumbnails;
+    let include_frame_derivatives = request.include_frame_derivatives;
     let audit = |outcome, detail: Option<&str>, summary| {
         state.remote_audit.record(
             &catalog.id,
@@ -923,6 +939,7 @@ pub async fn create_export(
             operation,
             reviewed_only,
             include_thumbnails,
+            include_frame_derivatives,
         )
     })
     .await
@@ -1077,9 +1094,12 @@ fn validate_bundle_within(bundle: &CatalogBundle, max_rows: usize) -> Result<(),
     }
 
     let allowed = allowed_tables(bundle.operation);
+    let optional = optional_tables(bundle.operation);
     let mut row_count = 0usize;
     for (name, table) in &bundle.tables {
-        if !allowed.contains(&name.as_str()) || !valid_identifier(name) {
+        if !(allowed.contains(&name.as_str()) || optional.contains(&name.as_str()))
+            || !valid_identifier(name)
+        {
             return Err(AppError::BadRequest(format!(
                 "table {name} is not syncable for this operation"
             )));
@@ -1157,6 +1177,14 @@ pub(crate) fn materialize_bundle(
                     table: (*table_name).to_string(),
                 },
             )?;
+        }
+    }
+    // Optional tables exist only when the sender sent them; the sync engine
+    // reads a missing one as "nothing to carry".
+    for table_name in optional_tables(bundle.operation) {
+        if let Some(table) = bundle.tables.get(*table_name) {
+            create_bundle_table(&transaction, table_name, table)?;
+            insert_bundle_rows(&transaction, table_name, table)?;
         }
     }
     transaction.pragma_update(None, "user_version", bundle.source.schema_version)?;
@@ -1356,6 +1384,7 @@ pub(crate) fn export_bundle(
     operation: SyncOperation,
     reviewed_only: bool,
     include_thumbnails: bool,
+    include_optional: bool,
 ) -> anyhow::Result<CatalogBundle> {
     let connection =
         open_scheduler_connection_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -1391,6 +1420,26 @@ pub(crate) fn export_bundle(
              narrow the operation or sync in smaller pieces"
         );
         tables.insert((*name).to_string(), table);
+    }
+    if include_optional {
+        for name in optional_tables(operation) {
+            let present: bool = connection.query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [name],
+                |row| row.get(0),
+            )?;
+            if !present {
+                continue;
+            }
+            let table = read_bundle_table(&connection, name, None)?;
+            row_count = row_count.saturating_add(table.rows.len());
+            anyhow::ensure!(
+                row_count <= MAX_BUNDLE_ROWS,
+                "this database exceeds the {MAX_BUNDLE_ROWS} row export limit; \
+                 narrow the operation or sync in smaller pieces"
+            );
+            tables.insert((*name).to_string(), table);
+        }
     }
     let mut bundle = CatalogBundle {
         protocol_version: PROTOCOL_VERSION,
@@ -1592,6 +1641,13 @@ fn detail_of(error: &AppError) -> String {
         | AppError::Forbidden(message)
         | AppError::InternalError(message) => message.clone(),
         AppError::NotImplemented => "not implemented".into(),
+    }
+}
+
+fn optional_tables(operation: SyncOperation) -> &'static [&'static str] {
+    match operation {
+        SyncOperation::Merge => OPTIONAL_MERGE_TABLES,
+        SyncOperation::PushPlanning | SyncOperation::PushGrades => &[],
     }
 }
 
@@ -1967,12 +2023,47 @@ mod tests {
 
         // Thumbnails dominate bundle size; a merge export leaves them out
         // unless the client opts in.
-        let lean = export_bundle(&path, "cat", SyncOperation::Merge, false, false).unwrap();
+        let lean = export_bundle(&path, "cat", SyncOperation::Merge, false, false, false).unwrap();
         assert!(!lean.tables.contains_key("imagedata"));
         assert_eq!(lean.tables["acquiredimage"].rows.len(), 1);
 
-        let full = export_bundle(&path, "cat", SyncOperation::Merge, false, true).unwrap();
+        let full = export_bundle(&path, "cat", SyncOperation::Merge, false, true, false).unwrap();
         assert_eq!(full.tables["imagedata"].rows.len(), 1);
+
+        // A catalog with no pairing records sends none, even when asked.
+        let asked = export_bundle(&path, "cat", SyncOperation::Merge, false, false, true).unwrap();
+        assert!(!asked.tables.contains_key("psf_guard_frame_derivative"));
+
+        // With records, they go only to a receiver that asked for them, and
+        // the receiver accepts and materializes them.
+        let connection = Connection::open(&path).unwrap();
+        crate::frame_derivatives::ensure_schema(&connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO psf_guard_frame_derivative
+                     (derivative_uuid, acquired_image_guid, kind, file_name, producer, evidence,
+                      created_at, updated_at)
+                 VALUES ('d', 'ig', 'calibrated', 'a_c.xisf', 'pixinsight', 'header', 1, 1)",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+        let lean = export_bundle(&path, "cat", SyncOperation::Merge, false, false, false).unwrap();
+        assert!(!lean.tables.contains_key("psf_guard_frame_derivative"));
+        let paired = export_bundle(&path, "cat", SyncOperation::Merge, false, false, true).unwrap();
+        assert_eq!(paired.tables["psf_guard_frame_derivative"].rows.len(), 1);
+        validate_bundle(&paired).unwrap();
+        let staged = path.with_extension("staged.sqlite");
+        materialize_bundle(&staged, &path, &paired).unwrap();
+        let staged_connection = Connection::open(&staged).unwrap();
+        assert_eq!(
+            crate::frame_derivatives::derivatives_for_light(&staged_connection, "ig")
+                .unwrap()
+                .len(),
+            1
+        );
+        drop(staged_connection);
+        let _ = std::fs::remove_file(&staged);
         let _ = std::fs::remove_file(&path);
     }
 

@@ -1829,6 +1829,7 @@ mod remote_image_layout_settings_tests {
             process_dir: None,
             autoimport: None,
             analyze_new_frames: false,
+            pair_calibrated_copies: true,
         }
     }
 
@@ -3042,6 +3043,8 @@ pub async fn start_import_route(
             .unwrap_or(crate::commands::import::DEFAULT_MATCH_RADIUS_DEG),
         scope: req.scope.unwrap_or_default(),
         skip_processed: req.skip_processed.unwrap_or(false),
+        // The database's setting decides; the import job applies it.
+        pair_derivatives: true,
         accept_other_rigs: req.accept_other_rigs.unwrap_or(false),
         only_new: false,
     };
@@ -3310,7 +3313,11 @@ fn run_import_blocking(
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_URI,
     )
     .map_err(|e| anyhow::anyhow!("opening {} for import: {}", ctx.database_path, e))?;
-    let mut outcome = imp::import_frames(&mut conn, frames, options)?;
+    let mut options = options.clone();
+    options.pair_derivatives &= ctx
+        .pair_calibrated_copies
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let mut outcome = imp::import_frames(&mut conn, frames, &options)?;
     outcome.scanned += prefiltered;
     outcome.skipped_existing += prefiltered;
     Ok(outcome)
@@ -3603,6 +3610,70 @@ pub async fn update_analyze_new_frames(
         crate::server::quality_arrival::note_arrival(&ctx.id);
     }
     get_quality_backfill_progress(ctx).await
+}
+
+#[derive(Debug, Serialize)]
+pub struct CalibratedCopiesResponse {
+    /// Pair calibrated and registered copies with their lights.
+    pub pair: bool,
+    pub counts: crate::frame_derivatives::PairingCounts,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CalibratedCopiesRequest {
+    pub pair: bool,
+}
+
+/// `GET /api/db/{db}/calibrated-copies` — whether this database pairs
+/// calibrated and registered copies with their lights, and how many it has.
+pub async fn get_calibrated_copies(
+    ctx: DbContext,
+) -> Result<Json<ApiResponse<CalibratedCopiesResponse>>, AppError> {
+    let path = ctx.database_path.clone();
+    let counts = tokio::task::spawn_blocking(move || {
+        let conn = crate::server::database_context::open_scheduler_connection_with_flags(
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )?;
+        crate::frame_derivatives::pairing_counts(&conn)
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("counting pairings: {error}")))?
+    .map_err(|error| AppError::InternalError(format!("counting pairings: {error:#}")))?;
+    Ok(Json(ApiResponse::success(CalibratedCopiesResponse {
+        pair: ctx
+            .pair_calibrated_copies
+            .load(std::sync::atomic::Ordering::Relaxed),
+        counts,
+    })))
+}
+
+/// `PUT /api/db/{db}/calibrated-copies` — turn pairing on or off. A
+/// database setting, so it sits behind database management.
+pub async fn update_calibrated_copies(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Json(request): Json<CalibratedCopiesRequest>,
+) -> Result<Json<ApiResponse<CalibratedCopiesResponse>>, AppError> {
+    require_database_management_allowed(&state)?;
+    let db_id = ctx.id.clone();
+    update_registry(&state, |registry| {
+        let entry = registry
+            .databases
+            .iter_mut()
+            .find(|entry| entry.id == db_id)
+            .ok_or(AppError::NotFound)?;
+        entry.pair_calibrated_copies = request.pair;
+        Ok(())
+    })
+    .await?;
+    if let Some(live) = state.get_database(&db_id) {
+        live.pair_calibrated_copies
+            .store(request.pair, std::sync::atomic::Ordering::Relaxed);
+    }
+    ctx.pair_calibrated_copies
+        .store(request.pair, std::sync::atomic::Ordering::Relaxed);
+    get_calibrated_copies(ctx).await
 }
 
 pub async fn get_quality_backfill_progress(
@@ -8059,6 +8130,7 @@ mod delayed_ready_tests {
                     process_dir: None,
                     autoimport: None,
                     analyze_new_frames: false,
+                    pair_calibrated_copies: true,
                 }],
                 temp.path().join("cache").to_string_lossy().into_owned(),
                 crate::cli::PregenerationConfig::default(),

@@ -1117,6 +1117,7 @@ directory = "./cache"
             process_dir: None,
             autoimport: None,
             analyze_new_frames: false,
+            pair_calibrated_copies: true,
         }
     }
 

@@ -719,6 +719,10 @@ async fn run_server_internal(
             "/import",
             post(handlers::start_import_route).get(handlers::get_import_progress),
         )
+        .route(
+            "/calibrated-copies",
+            get(handlers::get_calibrated_copies).put(handlers::update_calibrated_copies),
+        )
         .route("/autoimport", get(handlers::get_autoimport_status))
         .route("/autoimport/run", post(handlers::run_autoimport_now))
         .route("/import/folders", get(handlers::get_import_folders))

@@ -18,16 +18,20 @@ pub struct FrameMeta {
     pub readable: bool,
     /// IMAGETYP, uppercased ("LIGHT", "DARK", "FLAT", "BIAS", ...).
     pub image_type: Option<String>,
-    /// The output of processing (an integration master or a PixInsight
-    /// calibrated/registered intermediate) rather than an acquisition.
-    /// Skipped by import unless explicitly included.
+    /// The output of processing (an integration, or a calibrated or
+    /// registered copy) rather than an acquisition: `class.kind` is not raw.
     pub processed: bool,
+    /// What processing the frame has been through, and why we think so.
+    pub class: crate::image_io::FrameClass,
     pub object: Option<String>,
     pub filter: Option<String>,
     /// DATE-OBS as epoch seconds (UTC).
     pub timestamp: Option<i64>,
     /// DATE-OBS original text, for the metadata JSON.
     pub date_obs: Option<String>,
+    /// DATE-OBS only, never the local DATE-LOC fallback: the UTC instant
+    /// pairing compares to the precision the writer recorded.
+    pub date_obs_utc: Option<String>,
     /// DATE-LOC original text. N.I.N.A. directory templates use this local
     /// value for observing-night (`DATEMINUS12`) folders.
     pub date_local: Option<String>,
@@ -111,11 +115,13 @@ pub fn read_frame_meta_named(path: &Path, declared: &Path) -> FrameMeta {
         path: path.to_path_buf(),
         ..Default::default()
     };
-    let Ok(headers) = crate::image_io::read_header_named(path, declared) else {
+    let Ok(header) = crate::image_io::read_frame_header(path, declared) else {
         return meta;
     };
     meta.readable = true;
-    meta.processed = crate::image_io::is_processing_artifact(path, declared, &headers);
+    meta.class = crate::image_io::classify_frame(path, declared, &header);
+    meta.processed = meta.class.kind != crate::image_io::FrameKind::Raw;
+    let headers = header.cards;
 
     let find = |names: &[&str]| -> Option<&HeaderValue> {
         names.iter().find_map(|wanted| {
@@ -167,6 +173,7 @@ pub fn read_frame_meta_named(path: &Path, declared: &Path) -> FrameMeta {
     meta.filter = text(&["FILTER", "FILTERNAME"]);
     meta.date_obs = text(&["DATE-OBS", "DATE-LOC"]);
     meta.date_local = text(&["DATE-LOC"]);
+    meta.date_obs_utc = text(&["DATE-OBS"]);
     meta.timestamp = meta.date_obs.as_deref().and_then(parse_fits_datetime);
     meta.exposure_s = f64_of(&["EXPTIME", "EXPOSURE"]).filter(|v| *v > 0.0);
     meta.gain = i64_of(&["GAIN"]);

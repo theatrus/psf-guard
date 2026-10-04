@@ -64,12 +64,17 @@ pub struct ImportOptions {
     pub match_radius_deg: f64,
     /// Which frame kinds this run imports.
     pub scope: ImportScope,
-    /// Leave processing artifacts (integration masters, PixInsight
-    /// intermediates) out of the catalog. Off by default — masters are
-    /// worth cataloging for a finished project's display — but a sweep
-    /// over a processing tree can opt in to skip the derived files, which
-    /// repeat exposures the catalog already has under new basenames.
+    /// Leave processing output out of the catalog: integrations, and
+    /// calibrated or registered copies that pairing does not take. Off by
+    /// default — masters are worth cataloging for a finished project's
+    /// display — but a sweep over a processing tree can opt in.
     pub skip_processed: bool,
+    /// Pair calibrated and registered copies with the light they were made
+    /// from instead of cataloguing them as lights of their own (see
+    /// `docs/design/calibrated-subs.md`). A calibrated copy with no raw
+    /// light becomes the light, and a raw that arrives later takes that row
+    /// over. On by default; a database can turn it off.
+    pub pair_derivatives: bool,
     /// Take lights whose telescope (or camera, when no telescope is named)
     /// matches none of the rigs the catalog has recorded. Off by default: a
     /// frame from another rig in
@@ -97,6 +102,7 @@ impl Default for ImportOptions {
             match_radius_deg: DEFAULT_MATCH_RADIUS_DEG,
             scope: ImportScope::default(),
             skip_processed: false,
+            pair_derivatives: true,
             accept_other_rigs: false,
             only_new: false,
         }
@@ -114,7 +120,8 @@ pub fn known_files(conn: &Connection, files: &[PathBuf]) -> Result<HashSet<PathB
         .filter_map(|path| path.file_name())
         .map(|name| name.to_string_lossy().to_lowercase())
         .collect();
-    let existing = existing_basenames(conn, &candidate_basenames)?;
+    let mut existing = existing_basenames(conn, &candidate_basenames)?;
+    existing.extend(crate::frame_derivatives::recorded_file_names(conn)?);
     let calibration = crate::calibration::known_calibration_fingerprints(conn)?;
     let mut known = HashSet::new();
     for path in files {
@@ -173,6 +180,17 @@ pub struct ImportOutcome {
     /// left out of the catalog.
     #[serde(default)]
     pub skipped_processed: usize,
+    /// Calibrated and registered copies paired with their lights.
+    #[serde(default)]
+    pub derivatives: crate::frame_derivatives::PairingReport,
+    /// Calibrated copies with no raw light, catalogued as the light itself.
+    /// They are counted in `imported` or `attached` too.
+    #[serde(default)]
+    pub calibrated_lights: usize,
+    /// Raw frames that took over a light first catalogued from its
+    /// calibrated copy, instead of becoming a second row.
+    #[serde(default)]
+    pub raw_adopted: usize,
     /// Frames outside the run's scope (lights during a calibration-only
     /// run, and the reverse).
     #[serde(default)]
@@ -309,9 +327,17 @@ pub fn import_frames(
         std::collections::BTreeMap::new();
     let mut lights: Vec<FrameMeta> = Vec::new();
     let mut calibrations: Vec<FrameMeta> = Vec::new();
+    let mut derivatives: Vec<FrameMeta> = Vec::new();
     for frame in frames {
         if !frame.readable {
             outcome.unreadable += 1;
+        } else if options.pair_derivatives
+            && frame.class.kind.is_derivative()
+            && frame.is_light()
+            && options.scope != ImportScope::Calibration
+            && !existing.contains(&frame.basename().to_lowercase())
+        {
+            derivatives.push(frame);
         } else if frame.processed && options.skip_processed {
             outcome.skipped_processed += 1;
         } else if !frame.is_light() {
@@ -336,6 +362,62 @@ pub fn import_frames(
         } else {
             lights.push(frame);
         }
+    }
+    // A raw frame whose light the catalog first took from a calibrated copy
+    // takes that row over instead of becoming a second one.
+    if options.pair_derivatives {
+        let adopted: HashSet<usize> = crate::frame_derivatives::adopt_raw_frames(&tx, &lights)?
+            .into_iter()
+            .collect();
+        outcome.raw_adopted = adopted.len();
+        if !adopted.is_empty() {
+            lights = lights
+                .into_iter()
+                .enumerate()
+                .filter(|(index, _)| !adopted.contains(index))
+                .map(|(_, frame)| frame)
+                .collect();
+        }
+    }
+    // Copies that no light in the catalog or in this run matches: one
+    // calibrated copy per acquisition becomes the light.
+    let mut primaries: Vec<FrameMeta> = Vec::new();
+    if !derivatives.is_empty() {
+        let mut candidates = crate::frame_derivatives::catalog_lights(&tx)?;
+        candidates.extend(
+            lights
+                .iter()
+                .map(|frame| crate::frame_derivatives::LightCandidate {
+                    key: crate::frame_derivatives::CatalogLight {
+                        id: -1,
+                        guid: String::new(),
+                    },
+                    identity: crate::frame_derivatives::identity_of(frame),
+                }),
+        );
+        let unmatched = crate::frame_derivatives::derivative_candidates(&derivatives)
+            .into_iter()
+            .filter(|candidate| {
+                !candidates.iter().any(|light| {
+                    crate::frame_derivatives::identities_match(&light.identity, &candidate.identity)
+                })
+            })
+            .map(|candidate| candidate.key)
+            .collect::<Vec<_>>();
+        for index in crate::frame_derivatives::choose_primaries(&derivatives, &unmatched) {
+            let frame = derivatives[index].clone();
+            if from_other_rig(&frame, &known_rigs) {
+                outcome.skipped_other_rig += 1;
+                let entry = strangers
+                    .entry(crate::calibration::rig_label(&frame))
+                    .or_insert_with(|| (0, frame.path.display().to_string()));
+                entry.0 += 1;
+                continue;
+            }
+            primaries.push(frame.clone());
+            lights.push(frame);
+        }
+        outcome.calibrated_lights = primaries.len();
     }
     outcome.other_rigs = strangers
         .into_iter()
@@ -455,6 +537,23 @@ pub fn import_frames(
                 }
             }
         }
+    }
+
+    // Every light is in now. Record the calibrated lights, then pair the
+    // remaining copies against the whole catalog.
+    if !derivatives.is_empty() {
+        crate::frame_derivatives::record_primaries(&tx, &primaries)?;
+        let primary_paths: HashSet<&PathBuf> = primaries.iter().map(|frame| &frame.path).collect();
+        let rest: Vec<FrameMeta> = derivatives
+            .iter()
+            .filter(|frame| !primary_paths.contains(&frame.path))
+            .cloned()
+            .collect();
+        let lights = crate::frame_derivatives::catalog_lights(&tx)?;
+        let (report, unmatched) = crate::frame_derivatives::pair_into_catalog(&tx, &rest, &lights)?;
+        outcome.derivatives = report;
+        // A copy pairing could not place is processing output, not a light.
+        outcome.skipped_processed += unmatched.len();
     }
 
     outcome.profile_id = profile_id;
@@ -1235,6 +1334,29 @@ pub fn print_outcome(outcome: &ImportOutcome) {
     if outcome.skipped_out_of_scope > 0 {
         println!("  Out of scope:     {}", outcome.skipped_out_of_scope);
     }
+    let pairing = &outcome.derivatives;
+    if pairing.paired + pairing.already_recorded + pairing.superseded + pairing.ambiguous > 0 {
+        println!(
+            "  Calibrated/registered copies: {} paired, {} already paired, {} superseded, \
+             {} ambiguous",
+            pairing.paired, pairing.already_recorded, pairing.superseded, pairing.ambiguous
+        );
+        for example in &pairing.ambiguous_examples {
+            println!("    ambiguous: {example}");
+        }
+    }
+    if outcome.calibrated_lights > 0 {
+        println!(
+            "  Calibrated copies catalogued as lights (no raw frame): {}",
+            outcome.calibrated_lights
+        );
+    }
+    if outcome.raw_adopted > 0 {
+        println!(
+            "  Raw frames that took over a calibrated light: {}",
+            outcome.raw_adopted
+        );
+    }
     if outcome.calibration.imported > 0
         || outcome.calibration.updated > 0
         || outcome.calibration.skipped_existing > 0
@@ -1416,6 +1538,203 @@ mod tests {
         let outcome = import_frames(&mut conn, vec![artifact], &ImportOptions::default()).unwrap();
         assert_eq!(outcome.imported, 1);
         assert_eq!(outcome.skipped_processed, 0);
+    }
+
+    /// A light with its DATE-OBS, as the header reader fills it.
+    fn timed(object: &str, filter: &str, ts: i64) -> FrameMeta {
+        let mut frame = light(object, filter, ts);
+        frame.date_obs_utc = chrono::Utc
+            .timestamp_opt(ts, 0)
+            .single()
+            .map(|time| time.format("%Y-%m-%dT%H:%M:%S%.3f").to_string());
+        frame
+    }
+
+    /// A calibrated or registered copy of `raw`, named the way WBPP names it.
+    fn copy_of(raw: &FrameMeta, suffix: &str, kind: crate::image_io::FrameKind) -> FrameMeta {
+        let stem = crate::image_io::strip_image_extension(&raw.basename()).to_string();
+        FrameMeta {
+            path: raw.path.with_file_name(format!("{stem}{suffix}.xisf")),
+            processed: true,
+            class: crate::image_io::FrameClass {
+                kind,
+                evidence: crate::image_io::KindEvidence::Header,
+                producer: crate::image_io::Producer::Pixinsight,
+                includes_calibration: suffix.contains("_c"),
+            },
+            ..raw.clone()
+        }
+    }
+
+    fn file_name_of(conn: &Connection, id: i64) -> String {
+        conn.query_row(
+            "SELECT json_extract(metadata, '$.FileName') FROM acquiredimage WHERE Id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    fn records(conn: &Connection) -> Vec<(String, String, bool)> {
+        let mut statement = conn
+            .prepare(
+                "SELECT file_name, kind, primary_source FROM psf_guard_frame_derivative
+                 ORDER BY file_name",
+            )
+            .unwrap();
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn calibrated_copies_pair_with_their_light_instead_of_becoming_lights() {
+        use crate::image_io::FrameKind;
+        let mut conn = fresh_conn();
+        let raw = timed("M31", "Ha", 1_000_000);
+        import_frames(&mut conn, vec![raw.clone()], &ImportOptions::default()).unwrap();
+
+        let outcome = import_frames(
+            &mut conn,
+            vec![
+                copy_of(&raw, "_c", FrameKind::Calibrated),
+                copy_of(&raw, "_c_r", FrameKind::Registered),
+            ],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(outcome.imported, 0);
+        assert_eq!(outcome.derivatives.paired, 2);
+        let lights: i64 = conn
+            .query_row("SELECT COUNT(*) FROM acquiredimage", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(lights, 1);
+        assert_eq!(
+            records(&conn),
+            [
+                ("M31_Ha_1000000_c.xisf".into(), "calibrated".into(), false),
+                ("M31_Ha_1000000_c_r.xisf".into(), "registered".into(), false),
+            ]
+        );
+
+        // Importing the same copies again changes nothing, and an automatic
+        // run drops them before reading a header.
+        let again = import_frames(
+            &mut conn,
+            vec![copy_of(&raw, "_c", FrameKind::Calibrated)],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(again.derivatives.already_recorded, 1);
+        let known = known_files(&conn, &[copy_of(&raw, "_c", FrameKind::Calibrated).path]).unwrap();
+        assert_eq!(known.len(), 1);
+    }
+
+    #[test]
+    fn a_raw_and_its_copies_in_one_run_make_one_light() {
+        use crate::image_io::FrameKind;
+        let mut conn = fresh_conn();
+        let raw = timed("M31", "Ha", 1_000_000);
+        let outcome = import_frames(
+            &mut conn,
+            vec![
+                copy_of(&raw, "_c", FrameKind::Calibrated),
+                raw.clone(),
+                copy_of(&raw, "_c_r", FrameKind::Registered),
+            ],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(outcome.imported, 1);
+        assert_eq!(outcome.calibrated_lights, 0);
+        assert_eq!(outcome.derivatives.paired, 2);
+        assert!(file_name_of(&conn, 1).ends_with("M31_Ha_1000000.fits"));
+    }
+
+    #[test]
+    fn calibrated_only_frames_become_lights_and_a_later_raw_takes_them_over() {
+        use crate::image_io::FrameKind;
+        let mut conn = fresh_conn();
+        let raw = timed("M31", "Ha", 1_000_000);
+        let outcome = import_frames(
+            &mut conn,
+            vec![
+                copy_of(&raw, "_c", FrameKind::Calibrated),
+                copy_of(&raw, "_c_cc", FrameKind::Calibrated),
+                copy_of(&raw, "_c_r", FrameKind::Registered),
+            ],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        // One light for the acquisition, not one per copy.
+        assert_eq!(outcome.imported, 1);
+        assert_eq!(outcome.calibrated_lights, 1);
+        assert_eq!(outcome.derivatives.paired, 1, "the registered copy");
+        assert_eq!(
+            outcome.derivatives.superseded, 1,
+            "the other calibrated copy"
+        );
+        let (id, guid): (i64, String) = conn
+            .query_row("SELECT Id, guid FROM acquiredimage", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        let primary = file_name_of(&conn, id);
+        assert!(primary.ends_with("_c.xisf") || primary.ends_with("_c_cc.xisf"));
+        conn.execute("UPDATE acquiredimage SET gradingStatus = 1", [])
+            .unwrap();
+
+        // The raw arrives later: the light takes it over and keeps its row.
+        let outcome =
+            import_frames(&mut conn, vec![raw.clone()], &ImportOptions::default()).unwrap();
+        assert_eq!((outcome.imported, outcome.raw_adopted), (0, 1));
+        let (count, kept_id, kept_guid, grade): (i64, i64, String, i64) = conn
+            .query_row(
+                "SELECT COUNT(*), Id, guid, gradingStatus FROM acquiredimage",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!((count, kept_id, kept_guid, grade), (1, id, guid, 1));
+        assert!(file_name_of(&conn, id).ends_with("M31_Ha_1000000.fits"));
+        assert!(records(&conn).iter().all(|(_, _, primary)| !primary));
+    }
+
+    #[test]
+    fn a_registered_copy_with_no_light_is_left_out() {
+        use crate::image_io::FrameKind;
+        let mut conn = fresh_conn();
+        let raw = timed("M31", "Ha", 1_000_000);
+        let outcome = import_frames(
+            &mut conn,
+            vec![copy_of(&raw, "_c_r", FrameKind::Registered)],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(outcome.imported, 0);
+        assert_eq!(outcome.derivatives.unmatched, 1);
+        assert_eq!(outcome.skipped_processed, 1);
+    }
+
+    #[test]
+    fn without_pairing_a_calibrated_copy_imports_as_before() {
+        use crate::image_io::FrameKind;
+        let mut conn = fresh_conn();
+        let raw = timed("M31", "Ha", 1_000_000);
+        let options = ImportOptions {
+            pair_derivatives: false,
+            ..Default::default()
+        };
+        let outcome = import_frames(
+            &mut conn,
+            vec![raw.clone(), copy_of(&raw, "_c", FrameKind::Calibrated)],
+            &options,
+        )
+        .unwrap();
+        assert_eq!(outcome.imported, 2);
+        assert!(!crate::frame_derivatives::schema_exists(&conn));
     }
 
     #[test]

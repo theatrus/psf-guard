@@ -143,36 +143,6 @@ pub fn read_frame_header(
     }
 }
 
-/// Whether a frame is the OUTPUT of processing — an integration master or a
-/// calibrated/registered intermediate — rather than an acquisition.
-///
-/// Processing tools preserve the acquisition keywords (a WBPP-calibrated
-/// frame still says `IMAGETYP = LIGHT` with the original `DATE-OBS`), so an
-/// importer that trusts those alone catalogs every artifact as a new light.
-/// The reliable marks are the ones the tools ADD: `NCOMBINE` and
-/// master-type `IMAGETYP` values on integrations, `SEIZAMST` on Seiza
-/// masters, and PixInsight's processing-history and signature properties on
-/// everything its pipeline writes.
-pub fn is_processing_artifact(
-    path: &Path,
-    declared: impl AsRef<Path>,
-    headers: &[(String, HeaderValue)],
-) -> bool {
-    if has_integration_card(headers) {
-        return true;
-    }
-    if seiza_xisf::is_xisf_path(declared.as_ref())
-        && let Ok(info) = seiza_xisf::inspect(path)
-        && let Some(image) = info.images.first()
-    {
-        return image.properties.iter().any(|property| {
-            property.id.starts_with("PixInsight:ProcessingHistory")
-                || property.id.starts_with("PCL:Signature:")
-        });
-    }
-    false
-}
-
 /// What processing a frame has been through, as far as its file can tell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -255,8 +225,14 @@ pub struct FrameClass {
     pub includes_calibration: bool,
 }
 
+impl Default for FrameClass {
+    fn default() -> Self {
+        Self::RAW
+    }
+}
+
 impl FrameClass {
-    const RAW: Self = Self {
+    pub const RAW: Self = Self {
         kind: FrameKind::Raw,
         evidence: KindEvidence::None,
         producer: Producer::Unknown,
@@ -642,6 +618,13 @@ fn classify_name(stem: &str) -> Option<FrameClass> {
     let first = *kinds.first()?;
     let calibrated = kinds.contains(&FrameKind::Calibrated);
     Some(name_class(first, Producer::Siril, calibrated))
+}
+
+/// Whether a file name alone looks like a calibrated or registered copy
+/// (WBPP, ASTAP, DeepSkyStacker or Siril naming). A cheap filter for scans
+/// that cannot read every header; [`classify_frame`] decides.
+pub fn name_suggests_derivative(file_name: &str) -> bool {
+    classify_name(strip_image_extension(file_name)).is_some_and(|class| class.kind.is_derivative())
 }
 
 /// The name of the light a derivative was made from: the stem with the
