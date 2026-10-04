@@ -274,10 +274,20 @@ pub(super) fn load(
     if !exact_prefix {
         return ResumeDecision::Fresh(Some("the frame sequence changed since the last build"));
     }
+    mark_used(&manifest_path);
     ResumeDecision::Resume(Box::new(ResumeState {
         context_path,
         manifest,
     }))
+}
+
+/// Record that a build resumed from a checkpoint, so the janitor keeps one
+/// builds still extend even when the save that follows writes nothing new.
+/// It moves the manifest's modification time, which nothing else reads.
+pub(super) fn mark_used(manifest_path: &Path) {
+    if let Ok(file) = std::fs::File::options().write(true).open(manifest_path) {
+        let _ = file.set_modified(std::time::SystemTime::now());
+    }
 }
 
 /// Whether every admitted frame in a ledger carries its integration weight.
@@ -447,6 +457,22 @@ mod tests {
             requested,
         )
         .state()
+    }
+
+    #[test]
+    fn resuming_marks_the_checkpoint_as_used() {
+        let cache = tempfile::tempdir().unwrap();
+        store(cache.path(), &manifest(vec![frame(1, "f1")]));
+        let manifest = manifest_path(cache.path(), "db", 7, "Ha", None);
+        let month_ago = filetime::FileTime::from_system_time(
+            std::time::SystemTime::now() - std::time::Duration::from_secs(31 * 86_400),
+        );
+        filetime::set_file_mtime(&manifest, month_ago).unwrap();
+
+        assert!(try_load(cache.path(), &[(1, "f1"), (2, "f2")]).is_some());
+
+        let modified = std::fs::metadata(&manifest).unwrap().modified().unwrap();
+        assert!(modified.elapsed().unwrap() < std::time::Duration::from_secs(60));
     }
 
     #[test]

@@ -27,10 +27,12 @@
 //! project it merged into first. An index or selection that cannot be read
 //! stops the sweep: everything it names would otherwise look unreferenced.
 //!
-//! Resume checkpoints are superseded in place per target/channel and are
-//! kept until then. The only checkpoints deleted outright are those that can
-//! never resume again — written by another pipeline version — and orphaned
-//! halves of an interrupted save.
+//! Resume checkpoints are superseded in place per target/channel. One no
+//! build has written or resumed from for 30 days goes, like an unused master:
+//! the stack it led to is kept, and only a later build of the same group
+//! would have used it. Checkpoints that can never resume again — written by
+//! another pipeline version — go at once, and orphaned halves of an
+//! interrupted save after a day.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -45,6 +47,11 @@ const UNREFERENCED_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
 /// selected or used: a person comparing variants may pick one again within
 /// days.
 const UNSELECTED_PROCESSING_GRACE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// How long a resume checkpoint stays after a build last wrote it or resumed
+/// from it. A group that goes a month without a new frame has most likely
+/// finished, and its stack does not need the checkpoint.
+const CHECKPOINT_UNUSED: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 /// Everything the janitor must not delete, gathered by the caller from the
 /// latest indices and the in-memory job maps.
@@ -110,10 +117,11 @@ fn prune_directories_older_than(
     removed
 }
 
-/// A checkpoint is durable until its input set changes, which replaces it in
-/// place. Deletion is reserved for pairs that can never resume again: a
-/// manifest from another pipeline version, an unreadable manifest, or an
-/// orphaned half left by an interrupted save.
+/// A checkpoint lasts until its input set changes, which replaces it in place,
+/// or until no build has used it for [`CHECKPOINT_UNUSED`]. Pairs that can
+/// never resume again go at once: a manifest from another pipeline version or
+/// an unreadable one. An orphaned half left by an interrupted save goes after
+/// the grace.
 fn prune_checkpoints(resume_root: &Path, stacking_version: &str, now: SystemTime) -> usize {
     let Ok(entries) = std::fs::read_dir(resume_root) else {
         return 0;
@@ -156,7 +164,13 @@ fn prune_checkpoints(resume_root: &Path, stacking_version: &str, now: SystemTime
                     parsed.schema_version == super::resume::RESUME_SCHEMA_VERSION
                         && parsed.stacking_version == stacking_version
                 });
-            if !resumable {
+            // Use is the modification time: a build writes the pair and a
+            // resume marks the manifest. Access times would not do, since
+            // the read above moves them on a relatime mount.
+            let unused = [&context, &manifest]
+                .into_iter()
+                .all(|path| old_enough(path, now, CHECKPOINT_UNUSED));
+            if !resumable || unused {
                 remove(context);
                 remove(manifest);
             }
@@ -364,7 +378,7 @@ mod tests {
         let stamp = filetime::FileTime::from_system_time(
             SystemTime::now() - Duration::from_secs(seconds_ago),
         );
-        filetime::set_file_mtime(path, stamp).unwrap();
+        filetime::set_file_times(path, stamp, stamp).unwrap();
     }
 
     fn keep(mono: &[&str]) -> KeepSet {
@@ -478,21 +492,42 @@ mod tests {
     }
 
     #[test]
-    fn a_current_checkpoint_is_durable_regardless_of_age() {
+    fn a_current_checkpoint_stays_until_a_month_unused() {
         let cache = tempfile::tempdir().unwrap();
         let resume = cache.path().join("stack-previews").join("resume");
         fs::create_dir_all(&resume).unwrap();
-        let context = resume.join("group.seiza-stack");
-        let manifest = resume.join("group.json");
-        fs::write(&context, b"x").unwrap();
-        fs::write(&manifest, checkpoint_manifest("test")).unwrap();
-        age(&context, 90 * 24 * 60 * 60);
-        age(&manifest, 90 * 24 * 60 * 60);
+        let pair = |stem: &str| {
+            let context = resume.join(format!("{stem}.seiza-stack"));
+            let manifest = resume.join(format!("{stem}.json"));
+            fs::write(&context, b"x").unwrap();
+            fs::write(&manifest, checkpoint_manifest("test")).unwrap();
+            (context, manifest)
+        };
+        let (recent_context, recent_manifest) = pair("recent");
+        let (resumed_context, resumed_manifest) = pair("resumed");
+        let (idle_context, idle_manifest) = pair("idle");
+        for path in [&recent_context, &recent_manifest] {
+            age(path, 29 * 86_400);
+        }
+        for path in [
+            &resumed_context,
+            &resumed_manifest,
+            &idle_context,
+            &idle_manifest,
+        ] {
+            age(path, 31 * 86_400);
+        }
+        super::super::resume::mark_used(&resumed_manifest);
 
+        // Sweep twice: the first reads every manifest, which must not make
+        // a checkpoint look used to the second.
+        prune(cache.path(), &keep(&[]), "test");
         prune(cache.path(), &keep(&[]), "test");
 
-        assert!(context.exists(), "durable until its input set changes");
-        assert!(manifest.exists());
+        assert!(recent_context.exists() && recent_manifest.exists());
+        assert!(resumed_context.exists() && resumed_manifest.exists());
+        assert!(!idle_context.exists(), "a month with no build to resume");
+        assert!(!idle_manifest.exists());
     }
 
     #[test]
