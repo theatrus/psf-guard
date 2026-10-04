@@ -580,6 +580,29 @@ export default function Overview() {
     );
   };
 
+  // The review views beside Images. A project with one target opens at it,
+  // since Sequence analyzes one target at a time.
+  const openProjectView = (
+    view: 'sequence' | 'stacks',
+    project: WithDb<ProjectOverview>,
+    targets: WithDb<TargetOverview>[]
+  ) => {
+    markProjectSeen(project);
+    const params = new URLSearchParams({ db: project.db_id, project: String(project.id) });
+    if (targets.length === 1) params.set('target', String(targets[0].id));
+    navigate(`/${view}?${params.toString()}`);
+  };
+
+  const openTargetView = (view: 'sequence' | 'stacks', target: WithDb<TargetOverview>) => {
+    markTargetSeen(target);
+    const params = new URLSearchParams({
+      db: target.db_id,
+      project: String(target.project_id),
+      target: String(target.id),
+    });
+    navigate(`/${view}?${params.toString()}`);
+  };
+
   if (statsLoading || projectsLoading || targetsLoading) {
     return <div className="overview-loading">Loading overview...</div>;
   }
@@ -934,6 +957,8 @@ export default function Overview() {
                     {projectNewImages > 0 && <span className="new-images-badge"><span aria-hidden="true" />{projectNewImages} new</span>}
                     {!project.has_files && <span className="no-files-badge">No Files</span>}
                     {project.files_missing > 0 && <span className="library-pill files-missing">{project.files_missing} missing</span>}
+                    <button type="button" className="library-view" disabled={!project.has_files} aria-label={`Open ${project.display_name} sequence`} title="Sequence analysis" onClick={() => openProjectView('sequence', project, projectTargets)}>Sequence</button>
+                    <button type="button" className="library-view" disabled={!project.has_files} aria-label={`Open ${project.display_name} stacks`} title="Stack previews" onClick={() => openProjectView('stacks', project, projectTargets)}>Stacks</button>
                     {plans.enabled && !inFamily && <button type="button" className="library-planning" title="Open this project's plan: framing, rigs and activation" aria-label={`Open the ${project.display_name} plan`} onClick={() => openPlan(project, plan)}>⚙</button>}
                   </div>
                 );
@@ -981,6 +1006,32 @@ export default function Overview() {
                     </button>
                     <div className="project-header-actions">
                       {!project.has_files && <span className="no-files-badge">No Files</span>}
+                      <button
+                        type="button"
+                        className="project-settings-button"
+                        disabled={!project.has_files}
+                        aria-label={`Open ${project.display_name} sequence`}
+                        title="Sequence analysis of this project's targets"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openProjectView('sequence', project, projectTargets);
+                        }}
+                      >
+                        Sequence
+                      </button>
+                      <button
+                        type="button"
+                        className="project-settings-button"
+                        disabled={!project.has_files}
+                        aria-label={`Open ${project.display_name} stacks`}
+                        title="Stack previews of this project"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openProjectView('stacks', project, projectTargets);
+                        }}
+                      >
+                        Stacks
+                      </button>
                       {plans.enabled && !inFamily && (
                         <button
                           type="button"
@@ -1380,6 +1431,26 @@ export default function Overview() {
                             </button>
 
                             <div className="target-compact-actions">
+                              <button
+                                type="button"
+                                className="target-settings-button"
+                                disabled={!target.has_files}
+                                aria-label={`Open ${target.name} sequence`}
+                                title="Sequence analysis of this target"
+                                onClick={() => openTargetView('sequence', target)}
+                              >
+                                Sequence
+                              </button>
+                              <button
+                                type="button"
+                                className="target-settings-button"
+                                disabled={!target.has_files}
+                                aria-label={`Open ${target.name} stacks`}
+                                title="Stack previews of this target"
+                                onClick={() => openTargetView('stacks', target)}
+                              >
+                                Stacks
+                              </button>
                               {organizeAllowed && (
                                 <button
                                   type="button"

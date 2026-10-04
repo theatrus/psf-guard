@@ -289,6 +289,9 @@
 .project-header .library-expand { align-self: center; }
 .projects-list:not(.is-compact) .library-row { border-radius: 8px; }
 .library-expand:hover, .library-planning:hover { border-color: var(--color-border-tertiary); color: var(--color-text-primary); }
+.library-view { min-height: 26px; padding: 0 9px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--color-text-secondary); cursor: pointer; font: inherit; font-size: 12px; flex: 0 0 auto; }
+.library-view:hover:not(:disabled) { border-color: var(--color-border-tertiary); color: var(--color-text-primary); }
+.library-view:disabled { cursor: default; opacity: 0.6; }
 .library-name { flex: 1 1 12rem; min-width: 0; text-align: left; padding: 2px 4px; border: 0; background: transparent; color: var(--color-text-primary); font: inherit; font-weight: 600; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .library-name:disabled { cursor: default; }
 .library-pill { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 10px; border-radius: 999px; font-size: 12px; line-height: 1.2; background: var(--color-bg-tertiary); color: var(--color-text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }

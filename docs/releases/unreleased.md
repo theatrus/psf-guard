@@ -26,6 +26,8 @@
 - Date flats, darks and bias by the night they belong to in the calibration
   library, coverage report and export folders. Rigs west of Greenwich no
   longer see dawn flats a day late, or a night of lights split in two.
+- Open a project's or target's Sequence and Stacks straight from the Library,
+  beside its image grid. A project with one target opens at that target.
 
 > Add a line here as each user-visible change merges. At release time this
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
