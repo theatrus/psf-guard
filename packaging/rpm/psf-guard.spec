@@ -98,6 +98,8 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 - Frames with plenty of stars no longer score near zero because one measurement found none
 - The quality scan no longer records zero stars for a frame still being copied
 - Calibration frames are dated by the night they belong to; dawn flats west of Greenwich no longer land a day late
+- Frames far softer than their target's best score low, judged across every night
+- A rotator that slipped is caught: frames turned away from the target's framing without a reported turn score low and stay out of stacks
 
 * Sun Sep 27 2026 Yann Ramin <github@theatr.us> - 0.10.3-1
 - A server that ran a newer preview build starts again on 0.10: the browser user file keeps fields this version does not know, such as API tokens, instead of refusing to load

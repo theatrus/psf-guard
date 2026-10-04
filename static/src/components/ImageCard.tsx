@@ -1,6 +1,21 @@
 import { useCallback, useEffect } from 'react';
 import { useInView } from 'react-intersection-observer';
 import type { Image, ImageQualityResult } from '../api/types';
+
+/** How far a skewed frame turned, and against what. A rotator slip is
+ *  measured against the angle the rotator reported; its own run agrees with
+ *  itself, so the segment skew would read near zero. */
+function rotationSkew(
+  pointing: ImageQualityResult['pointing']
+): { degrees: number; against: string } | null {
+  if (pointing?.rotator_skew_deg != null) {
+    return { degrees: pointing.rotator_skew_deg, against: 'from the angle the rotator reported' };
+  }
+  if (pointing?.rotation_skew_deg != null) {
+    return { degrees: pointing.rotation_skew_deg, against: 'from the rest of the framing segment' };
+  }
+  return null;
+}
 import { GradingStatus } from '../api/types';
 import { apiClient } from '../api/client';
 import PreviewImage from './PreviewImage';
@@ -233,15 +248,19 @@ export default function ImageCard({
           </span>
         )}
         {qualityPresentation === 'full'
-          && quality?.pointing?.rotation_skew_deg != null
-          && (quality.flags ?? []).includes('rotation_skew') && (
-          <span
-            className="analysis-signal danger"
-            title={`Solved field rotation ${quality.pointing.field_rotation_deg?.toFixed(1) ?? '?'}°, ${quality.pointing.rotation_skew_deg > 0 ? '+' : ''}${quality.pointing.rotation_skew_deg.toFixed(1)}° from the rest of the framing segment`}
-          >
-            rotation {quality.pointing.rotation_skew_deg > 0 ? '+' : ''}{quality.pointing.rotation_skew_deg.toFixed(1)}°
-          </span>
-        )}
+          && (quality?.flags ?? []).includes('rotation_skew')
+          && rotationSkew(quality?.pointing) && (() => {
+            const skew = rotationSkew(quality?.pointing)!;
+            const signed = `${skew.degrees > 0 ? '+' : ''}${skew.degrees.toFixed(1)}°`;
+            return (
+              <span
+                className="analysis-signal danger"
+                title={`Solved field rotation ${quality?.pointing?.field_rotation_deg?.toFixed(1) ?? '?'}°, ${signed} ${skew.against}`}
+              >
+                rotation {signed}
+              </span>
+            );
+          })()}
         {qualityPresentation === 'full' && quality?.pointing?.solve_failed && (
           <span
             className="analysis-signal warning"
