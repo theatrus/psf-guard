@@ -5421,7 +5421,10 @@ mod tests {
         // Nothing in flight: the job's target, when it has only one.
         job.groups[1].state = StackGroupState::Ready;
         assert_eq!(mono_activity(&job).target_id, None);
-        let single = completed_job("single", vec![ready_group(9, "R", 1), ready_group(9, "G", 2)]);
+        let single = completed_job(
+            "single",
+            vec![ready_group(9, "R", 1), ready_group(9, "G", 2)],
+        );
         assert_eq!(mono_activity(&single).target_id, Some(9));
     }
 
