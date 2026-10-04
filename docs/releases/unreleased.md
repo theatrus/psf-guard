@@ -15,6 +15,8 @@
   instead of assigning priorities by filter name. Existing drafts stay unchanged.
 - Delete stack resume checkpoints that no build has written or resumed from
   for 30 days. The stacks they led to stay.
+- Plate-solve several frames at once during quality scans and backfill, up
+  to the processor share set in Settings, instead of one frame at a time.
 
 > Add a line here as each user-visible change merges. At release time this
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
