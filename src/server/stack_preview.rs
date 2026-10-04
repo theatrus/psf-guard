@@ -3171,14 +3171,16 @@ fn choose_references(
         if cancel.load(Ordering::Relaxed) {
             return;
         }
+        let priority = job_priority(state.stack_previews.is_automatic(job_id));
         let budget = crate::concurrency::plan_workers(
             None,
             worker_policy,
-            job_priority(state.stack_previews.is_automatic(job_id)),
+            priority,
             crate::concurrency::probe_frame_pixels(&group.frames[0].path),
         );
+        let lease = state.lease_workers(priority, budget.workers);
         let pool = match ThreadPoolBuilder::new()
-            .num_threads(budget.workers)
+            .num_threads(lease.workers)
             .thread_name(|index| format!("stack-reference-{index}"))
             .build()
         {
@@ -3430,9 +3432,12 @@ fn run_group(
         priority,
         crate::concurrency::probe_frame_pixels(reference_path),
     );
-    let threads = execution::ThreadBudget::from_total(budget.workers);
+    // Held until the group is built: its workers come out of the budget the
+    // other jobs of this priority share.
+    let lease = state.lease_workers(priority, budget.workers);
+    let threads = execution::ThreadBudget::from_total(lease.workers);
     let pool = ThreadPoolBuilder::new()
-        .num_threads(budget.workers)
+        .num_threads(lease.workers)
         .thread_name(|index| format!("stack-preview-{index}"))
         .build()
         .map_err(|error| error.to_string())?;
@@ -3440,11 +3445,12 @@ fn run_group(
         job_id,
         group_index = group.index,
         total_worker_budget = budget.workers,
-        phase_workers = budget.workers,
+        phase_workers = lease.workers,
         compute_workers = threads.compute_workers,
         preparation_workers = threads.preparation_workers,
         serial = threads.serial,
         rationale = %budget.rationale,
+        shared = %lease.summary(),
         "Stack worker budget configured"
     );
     let ctx = state

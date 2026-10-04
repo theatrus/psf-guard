@@ -1148,14 +1148,21 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
                 crate::concurrency::Priority::Background,
                 frame_pixels,
             );
-            let concurrency = budget.workers.max(1);
+            // Held for the cycle: the workers come out of the background
+            // budget that quality scans and automatic stack refreshes share.
+            let lease = state.lease_workers(
+                crate::concurrency::Priority::Background,
+                budget.workers.min(images.len()),
+            );
+            let concurrency = lease.workers;
 
             tracing::info!(
-                "🎯 Pre-generating up to {} images (db={}) with {} background worker(s) — {}",
+                "🎯 Pre-generating up to {} images (db={}) with {} background worker(s) — {}; {}",
                 images.len(),
                 ctx.id,
                 concurrency,
-                budget.rationale
+                budget.rationale,
+                lease.summary()
             );
 
             // Bound in-flight work to the background budget with a semaphore;

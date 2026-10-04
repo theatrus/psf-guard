@@ -52,7 +52,7 @@ import PathField from './PathField';
 /**
  * Settings groups unrelated jobs into named tabs so each stays easy to find.
  */
-type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'stacking' | 'storage' | 'review' | 'rigs' | 'templates' | 'users';
+type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'stacking' | 'storage' | 'performance' | 'review' | 'rigs' | 'templates' | 'users';
 
 const DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE =
   '%YEAR%/%TARGET%/%NIGHT%/%TYPE%';
@@ -884,6 +884,9 @@ export default function TauriSettings({
     // Where generated files live and how full their volumes may get; shown
     // to everyone, changes need database management.
     { id: 'storage', label: 'Storage' },
+    // How much of the processor stacking, quality scans and previews may use
+    // together; server-wide and not management-gated, like Stacking.
+    { id: 'performance', label: 'Performance' },
     // Review preferences are stored in this browser, so no gate either.
     { id: 'review', label: 'Review' },
     // Rig setup and the exposure template library are Planning's configuration.
@@ -1858,6 +1861,11 @@ export default function TauriSettings({
             <div className="settings-setups">
               <StackMethodSettings />
               <StackAutomationSettings />
+            </div>
+          )}
+
+          {currentTab === 'performance' && (
+            <div className="settings-setups">
               <WorkerShareSettings />
             </div>
           )}

@@ -17,6 +17,10 @@
   for 30 days. The stacks they led to stay.
 - Plate-solve several frames at once during quality scans and backfill, up
   to the processor share set in Settings, instead of one frame at a time.
+- Share each processor limit in Settings across all the work it covers.
+  Background stack refreshes, quality backfill in every database and preview
+  pre-generation together stay within the background share, instead of each
+  taking all of it.
 
 > Add a line here as each user-visible change merges. At release time this
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
@@ -58,7 +62,7 @@
   checked once after a start, so frames that arrived while the server was
   down still reach their stacks.
 
-- **Settings → Stacking → Processor use** sets the share of cores for work
+- **Settings → Performance → Processor use** sets the share of cores for work
   you wait on and for background work, without a restart. Automatic stack
   refreshes now use the background share instead of half the cores.
 

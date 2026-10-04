@@ -7604,6 +7604,10 @@ async fn start_spatial_scan_with_priority(
                 .and_then(|it| crate::concurrency::probe_frame_pixels(&it.0.fits_path));
             let budget =
                 crate::concurrency::plan_workers(None, &worker_policy, priority, frame_pixels);
+            // Workers come out of the budget other jobs of this priority
+            // share, and go back when the scan ends.
+            let lease =
+                scheduling_state.lease_workers(priority, budget.workers.min(items.len().max(1)));
             let wait_for_turn = || {
                 while priority == crate::concurrency::Priority::Background
                     && scheduling_state.interactive_job_active()
@@ -7613,15 +7617,16 @@ async fn start_spatial_scan_with_priority(
             };
             if !spatial_items.is_empty() {
                 tracing::info!(
-                    "📐 Spatial scan concurrency: {} worker(s) — {}",
-                    budget.workers,
-                    budget.rationale
+                    "📐 Spatial scan concurrency: {} worker(s) — {}; {}",
+                    lease.workers,
+                    budget.rationale,
+                    lease.summary()
                 );
                 crate::server::spatial_scan::run_scan(
                     &ctx_arc.spatial_metrics,
                     &ctx_arc.cache_dir_path,
                     &spatial_items,
-                    budget.workers,
+                    lease.workers,
                     &wait_for_turn,
                 );
             }
@@ -7642,10 +7647,11 @@ async fn start_spatial_scan_with_priority(
                 );
                 // Solves run side by side within the same budget as the
                 // spatial stage; Seiza's own threads stay inside it too.
-                let workers = budget.workers.min(astrometry_items.len());
+                let workers = lease.workers.min(astrometry_items.len());
                 tracing::info!(
-                    "📐 Astrometry concurrency: {workers} worker(s) — {}",
-                    budget.rationale
+                    "📐 Astrometry concurrency: {workers} worker(s) — {}; {}",
+                    budget.rationale,
+                    lease.summary()
                 );
                 crate::concurrency::parallel_in_pool(astrometry_items.len(), workers, |index| {
                     let (item, expected, _, need_astrometry, need_satellite) =

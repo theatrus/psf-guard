@@ -2038,22 +2038,20 @@ fn compose_color(
             estimate / (1024 * 1024)
         ));
     }
-    let budget = crate::concurrency::plan_workers(
-        None,
-        &policy,
-        super::job_priority(state.stack_previews.is_automatic(&job.job_id)),
-        Some(pixels),
-    );
+    let priority = super::job_priority(state.stack_previews.is_automatic(&job.job_id));
+    let budget = crate::concurrency::plan_workers(None, &policy, priority, Some(pixels));
+    let lease = state.lease_workers(priority, budget.workers);
     let pool = ThreadPoolBuilder::new()
-        .num_threads(budget.workers)
+        .num_threads(lease.workers)
         .thread_name(|index| format!("stack-color-{index}"))
         .build()
         .map_err(|error| error.to_string())?;
     tracing::info!(
-        "Stack color {}: {} worker(s) — {}",
+        "Stack color {}: {} worker(s) — {}; {}",
         job.job_id,
-        budget.workers,
-        budget.rationale
+        lease.workers,
+        budget.rationale,
+        lease.summary()
     );
 
     // Check the whole-pipeline budget after loading only the reference. Admit

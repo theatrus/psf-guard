@@ -283,6 +283,11 @@ impl AppState {
             // Bound concurrency to the interactive budget. A closed semaphore
             // (never happens — we never close it) would just skip the permit.
             let _permit = sem.acquire_owned().await;
+            // Counted against the interactive budget a person's stack build
+            // or quality scan also draws on, so a job started meanwhile plans
+            // around it. A lease never waits, so previews keep coming during
+            // a build that holds the whole budget.
+            let _lease = state.lease_workers(Priority::Interactive, 1);
 
             let cache_path = job.cache_path.clone();
             let attempted_source = source_fingerprint(&job.fits_path);

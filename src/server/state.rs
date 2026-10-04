@@ -83,6 +83,9 @@ pub struct AppState {
     /// scan the user is waiting on. An `Arc` so a [`InteractiveJobGuard`] can
     /// decrement it on drop from a `spawn_blocking` task.
     active_interactive_jobs: Arc<AtomicUsize>,
+    /// The interactive and background worker budgets every CPU-heavy job
+    /// leases its workers from (see [`crate::concurrency::WorkerBudgets`]).
+    worker_budgets: Arc<crate::concurrency::WorkerBudgets>,
     /// Bounded, interactive-priority queue for on-demand preview / annotated
     /// PNG generation (see `preview_queue`). Process-global so total concurrent
     /// generation is bounded regardless of how many databases are loaded.
@@ -462,6 +465,7 @@ impl AppState {
             preview_encoding: RwLock::new(crate::preview_format::PreviewEncoding::default()),
             preview_color_default: RwLock::new(true),
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
+            worker_budgets: Arc::default(),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
             auto_stacks: crate::server::stack_preview::automatic::AutomaticStackRefresh::default(),
@@ -577,6 +581,17 @@ impl AppState {
     /// Mark the start of an interactive CPU-heavy job (e.g. an occlusion
     /// scan). Hold the returned guard for the job's lifetime; background work
     /// yields while any guard is alive.
+    /// Lease up to `wanted` workers from the shared budget for `priority`.
+    /// Hold the lease for as long as the job runs that many workers.
+    pub fn lease_workers(
+        &self,
+        priority: crate::concurrency::Priority,
+        wanted: usize,
+    ) -> crate::concurrency::WorkerLease {
+        self.worker_budgets
+            .lease(&self.worker_policy(), priority, wanted)
+    }
+
     pub fn begin_interactive_job(&self) -> InteractiveJobGuard {
         self.active_interactive_jobs.fetch_add(1, Ordering::SeqCst);
         InteractiveJobGuard(Arc::clone(&self.active_interactive_jobs))
@@ -660,6 +675,7 @@ impl AppState {
             preview_encoding: RwLock::new(crate::preview_format::PreviewEncoding::default()),
             preview_color_default: RwLock::new(true),
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
+            worker_budgets: Arc::default(),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
             auto_stacks: crate::server::stack_preview::automatic::AutomaticStackRefresh::default(),

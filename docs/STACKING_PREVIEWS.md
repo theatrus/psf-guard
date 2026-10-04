@@ -665,7 +665,7 @@ moves, and peer pulls count as syncs.
 
 An automatic build uses the background share of the processor, 25% of the
 cores by default, while a build you start uses the interactive share, 50%.
-**Settings → Stacking → Processor use** sets both; see below.
+**Settings → Performance → Processor use** sets both; see below.
 
 ### After a restart
 
@@ -703,13 +703,22 @@ server without a registry keeps no journal.
 
 ## Processor use
 
-**Settings → Stacking → Processor use** sets how many cores each kind of work
+**Settings → Performance → Processor use** sets how many cores each kind of work
 may use, as a share of the logical cores:
 
 - **Work you wait on**: stack builds you start, quality scans, and previews
   being looked at. Default 50%, or the server config's `scan_worker_ratio`.
 - **Background work**: automatic stack refreshes, preview pre-generation, and
   quality backfill. Default 25%, or `background_worker_ratio`.
+
+Each share is a limit for all such work together, not for each job. Jobs
+running at once draw their workers from the same budget: a stack refresh,
+a quality backfill in every database and preview pre-generation split the
+background share between them, and a build you start shares the other with
+the previews you look at meanwhile. A job takes what is free when it starts
+and gives it back when it ends. It never waits for workers: one that starts
+while the budget is spent runs on one. Work you wait on also pauses
+background work, as before.
 
 A share chosen here is kept in the registry and wins over the config file;
 **Use the default** goes back to the file's value. A change applies to work

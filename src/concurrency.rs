@@ -20,6 +20,8 @@
 //!    uses all cores for its foreground scan; the server leaves headroom to
 //!    keep serving the UI (`interactive_ratio`, default 0.5) and throttles
 //!    background work harder (`background_ratio`, default 0.25).
+//!    In the server each budget is shared: jobs lease their workers from
+//!    [`WorkerBudgets`], so jobs running at once split it.
 //! 3. **Memory ceiling** — full-frame work holds several f64 buffers, so N
 //!    in-flight frames on a big sensor can consume many GB. We cap workers at
 //!    `budget_fraction * available_RAM / per_frame_peak` so a high-core box
@@ -70,6 +72,114 @@ pub enum Priority {
     /// Opportunistic cache pre-warming — use the smaller background budget and
     /// stay out of interactive work's way.
     Background,
+}
+
+impl Priority {
+    fn index(self) -> usize {
+        match self {
+            Priority::Interactive => 0,
+            Priority::Background => 1,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Priority::Interactive => "interactive",
+            Priority::Background => "background",
+        }
+    }
+}
+
+/// The server's two shared worker budgets, one per [`Priority`]. Each holds
+/// as many workers as its share of the cores allows. A job leases the workers
+/// it planned from the budget for its priority and gives them back when the
+/// lease drops, so jobs running at once split that share instead of each
+/// taking all of it: a stack build, a quality scan in every database and
+/// preview pre-generation together stay inside the background share.
+///
+/// A lease never waits. It gets what is free, and always at least one
+/// worker, so no job stalls behind a long one; a job started while its
+/// budget is spent runs on one worker. A changed share applies to the next
+/// lease.
+#[derive(Debug, Default)]
+pub struct WorkerBudgets {
+    /// Workers leased out, per priority.
+    in_use: std::sync::Mutex<[usize; 2]>,
+}
+
+/// Workers leased from [`WorkerBudgets`], returned when dropped.
+#[derive(Debug)]
+pub struct WorkerLease {
+    budgets: std::sync::Arc<WorkerBudgets>,
+    priority: Priority,
+    /// How many workers the job may run.
+    pub workers: usize,
+    /// The priority's whole budget when the lease was taken.
+    pub budget: usize,
+}
+
+impl WorkerBudgets {
+    /// Lease up to `wanted` workers (the job's own plan, memory included) from
+    /// the budget `policy` gives `priority`.
+    pub fn lease(
+        self: &std::sync::Arc<Self>,
+        policy: &WorkerPolicy,
+        priority: Priority,
+        wanted: usize,
+    ) -> WorkerLease {
+        let (budget, _) = compute_worker_count(
+            None,
+            logical_cores(),
+            None,
+            None,
+            policy,
+            policy.ratio_for(priority),
+        );
+        self.lease_from(budget, priority, wanted)
+    }
+
+    fn lease_from(
+        self: &std::sync::Arc<Self>,
+        budget: usize,
+        priority: Priority,
+        wanted: usize,
+    ) -> WorkerLease {
+        let mut in_use = self.in_use.lock().unwrap();
+        let leased = &mut in_use[priority.index()];
+        let workers = wanted.clamp(1, budget.saturating_sub(*leased).max(1));
+        *leased += workers;
+        WorkerLease {
+            budgets: std::sync::Arc::clone(self),
+            priority,
+            workers,
+            budget,
+        }
+    }
+
+    /// Workers leased out at `priority` now.
+    pub fn in_use(&self, priority: Priority) -> usize {
+        self.in_use.lock().unwrap()[priority.index()]
+    }
+}
+
+impl WorkerLease {
+    /// For logs: how much of the shared budget this job holds.
+    pub fn summary(&self) -> String {
+        format!(
+            "{} of the {} shared {} worker(s)",
+            self.workers,
+            self.budget,
+            self.priority.label()
+        )
+    }
+}
+
+impl Drop for WorkerLease {
+    fn drop(&mut self) {
+        let mut in_use = self.budgets.in_use.lock().unwrap();
+        let leased = &mut in_use[self.priority.index()];
+        *leased = leased.saturating_sub(self.workers);
+    }
 }
 
 /// Tunables for the CPU-bound parallel operations, grouped so the whole policy
@@ -388,6 +498,37 @@ pub fn probe_frame_pixels(path: &Path) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jobs_of_one_priority_split_its_budget() {
+        let budgets = std::sync::Arc::new(WorkerBudgets::default());
+        let build = budgets.lease_from(5, Priority::Background, 4);
+        let scan = budgets.lease_from(5, Priority::Background, 4);
+        assert_eq!((build.workers, scan.workers), (4, 1));
+        // Spent: the next job still runs, on one worker.
+        let pregeneration = budgets.lease_from(5, Priority::Background, 3);
+        assert_eq!(pregeneration.workers, 1);
+        assert_eq!(budgets.in_use(Priority::Background), 6);
+        // The other priority has its own budget.
+        let preview = budgets.lease_from(10, Priority::Interactive, 8);
+        assert_eq!(preview.workers, 8);
+
+        drop(build);
+        assert_eq!(budgets.in_use(Priority::Background), 2);
+        let next = budgets.lease_from(5, Priority::Background, 9);
+        assert_eq!(next.workers, 3);
+        drop((scan, pregeneration, next, preview));
+        assert_eq!(budgets.in_use(Priority::Background), 0);
+        assert_eq!(budgets.in_use(Priority::Interactive), 0);
+    }
+
+    #[test]
+    fn a_lease_never_takes_more_than_the_job_planned() {
+        let budgets = std::sync::Arc::new(WorkerBudgets::default());
+        let lease = budgets.lease_from(16, Priority::Interactive, 3);
+        assert_eq!(lease.workers, 3);
+        assert_eq!(lease.summary(), "3 of the 16 shared interactive worker(s)");
+    }
 
     #[test]
     fn a_pooled_job_runs_its_items_side_by_side_and_keeps_nested_work_inside() {
