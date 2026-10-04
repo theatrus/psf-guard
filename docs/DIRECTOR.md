@@ -1012,11 +1012,18 @@ or retroactively stop a disconnected executor.
 
 Paired `POST /rigs/{rig}/workloads/request` takes `coordinator_instance_id`,
 `catalog_id`, a durable `request_id` UUID, `configuration_id`, and
-`execution_mode: "prepared_target_v1"` or `"local_sequence_v1"`. Prepared mode
+`execution_mode` identifying the executor's supported behavior. Prepared mode
 requires one target. Local sequence mode accepts multiple targets for the
 on-rig Rust core to prioritize using live NINA constraints; native sequence
 hooks own target setup. Both refuse rotation and Director-owned
-centering/dithering before a new grant is stored. Historical retry replies are
+centering/dithering before a new grant is stored. The `*_v2` variants add Moon
+rules; `prepared_target_v3` and `local_sequence_v3` also accept observing policies.
+`native_single_target_v1` accepts one target with native preparation and
+`native_imaging_v1` accepts multiple targets. Both native modes accept dithering,
+Moon rules and observing policies; requested rotation requires centering enabled.
+The client additionally requires its configured rotator connected. These modes
+do not bypass reviewed equipment identity, commissioning, one-shot launch, or
+local safety/geometry checks. Historical retry replies are
 also checked against the requested capability. Local target switches do not
 require a workload request or coordinator check-in. Persist the
 UUID before sending. The response data contains `request_id`, `state`,

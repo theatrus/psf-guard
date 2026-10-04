@@ -2,6 +2,31 @@ use super::pairing::{client_call, credential, fixture};
 use super::*;
 
 #[test]
+fn native_imaging_requires_explicit_capability_and_centering_for_rotation() {
+    use crate::server::director::workload::ExecutionMode;
+    let mut p: psf_guard_director_core::program::Program = serde_json::from_str(include_str!(
+        "../../../../crates/director-core/tests/fixtures/execution-program.json"
+    ))
+    .unwrap();
+    p.configuration.enable_slew_center = true;
+    p.configuration.dither_every = 3;
+    p.targets[0].position_angle_mas = Some(90000000);
+    assert!(ExecutionMode::LocalSequenceV3.validate(&p).is_err());
+    assert!(ExecutionMode::NativeImagingV1.validate(&p).is_ok());
+    assert!(ExecutionMode::NativeSingleTargetV1.validate(&p).is_ok());
+    p.targets.push(p.targets[0].clone());
+    assert!(ExecutionMode::NativeImagingV1.validate(&p).is_ok());
+    assert!(ExecutionMode::NativeSingleTargetV1.validate(&p).is_err());
+    p.targets.pop();
+    p.configuration.enable_slew_center = false;
+    assert!(ExecutionMode::NativeImagingV1.validate(&p).is_err());
+    p.targets[0].position_angle_mas = None;
+    assert!(ExecutionMode::NativeImagingV1.validate(&p).is_ok());
+    p.targets.clear();
+    assert!(ExecutionMode::NativeImagingV1.validate(&p).is_err());
+}
+
+#[test]
 fn moon_rules_require_a_capable_executor_even_on_historical_requests() {
     use crate::server::director::workload::ExecutionMode;
     let mut p: psf_guard_director_core::program::Program = serde_json::from_str(include_str!(
