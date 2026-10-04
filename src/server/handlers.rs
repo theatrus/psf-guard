@@ -7196,11 +7196,30 @@ pub(crate) fn merge_astrometry_metrics(
     metrics.astrometry = crate::sequence_analysis::astrometry_metrics_from_analysis(&analysis);
     if let Some(astrometry) = metrics.astrometry.as_mut() {
         astrometry.planned_rotation_deg = planned_rotation_deg;
+        astrometry.rotator_position_deg = rotator_position_from_metadata(metadata_json);
     }
     metrics.satellite =
         crate::satellites::persisted_analysis(cache_dir, metrics.image_id, &analysis)
             .as_ref()
             .map(crate::sequence_analysis::SatelliteFrameMetrics::from);
+}
+
+/// The sky angle the rotator reported, from N.I.N.A.'s `RotatorPosition`.
+/// None when no rotator was connected: N.I.N.A. then writes the lowest
+/// double as the mechanical position, and its sky angle means nothing.
+fn rotator_position_from_metadata(metadata_json: &str) -> Option<f64> {
+    let metadata = serde_json::from_str::<serde_json::Value>(metadata_json).ok()?;
+    if let Some(mechanical) = metadata.get("RotatorMechanicalPosition")
+        && !mechanical
+            .as_f64()
+            .is_some_and(|degrees| degrees.is_finite() && degrees > -1e300)
+    {
+        return None;
+    }
+    metadata
+        .get("RotatorPosition")?
+        .as_f64()
+        .filter(|degrees| degrees.is_finite())
 }
 
 fn cached_pixel_source_matches(
@@ -7227,6 +7246,32 @@ fn cached_pixel_source_matches(
 #[cfg(test)]
 mod cached_pixel_source_tests {
     use super::cached_pixel_source_matches;
+
+    #[test]
+    fn a_rotator_nina_reports_as_absent_has_no_sky_angle() {
+        assert_eq!(
+            super::rotator_position_from_metadata(
+                r#"{"RotatorPosition": 179.99, "RotatorMechanicalPosition": 168.5}"#
+            ),
+            Some(179.99)
+        );
+        assert_eq!(
+            super::rotator_position_from_metadata(r#"{"RotatorPosition": 90.0}"#),
+            Some(90.0)
+        );
+        // N.I.N.A. writes the lowest double as the mechanical position when no
+        // rotator is connected, beside a sky angle of 0 that means nothing.
+        assert_eq!(
+            super::rotator_position_from_metadata(
+                r#"{"RotatorPosition": 0.0, "RotatorMechanicalPosition": -1.7976931348623157e308}"#
+            ),
+            None
+        );
+        assert_eq!(
+            super::rotator_position_from_metadata(r#"{"HFR": 2.1}"#),
+            None
+        );
+    }
 
     #[test]
     fn mapped_evidence_requires_the_exact_registered_source_path() {

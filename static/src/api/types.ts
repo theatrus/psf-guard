@@ -2732,6 +2732,9 @@ export interface ImageQualityResult {
     planned_rotation_deg?: number;
     /** Solved minus planned rotation, modulo a half turn; display only. */
     planned_rotation_offset_deg?: number;
+    /** Set when the field turned away from the target's framing while the
+     *  rotator reported no such turn: degrees from the reported angle. */
+    rotator_skew_deg?: number;
     matched_stars?: number;
     rms_arcsec?: number;
     error?: string;

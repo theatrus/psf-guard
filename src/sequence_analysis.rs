@@ -34,6 +34,10 @@ pub enum IssueCategory {
     NoStarsDetected,
     /// Measured HFR exceeded the operator's absolute reject limit.
     HfrAboveLimit,
+    /// Stars far softer than this target's best in the same filter, judged
+    /// across every night rather than against the frame's own session, so a
+    /// whole night of bad seeing or lost focus scores low too.
+    SoftStars,
     /// Measured star count fell below the operator's absolute reject limit.
     StarCountBelowLimit,
     /// The sensor ran far warmer than the rest of its session, or far above
@@ -113,6 +117,12 @@ pub struct PointingQuality {
     /// capture software records rotation by its own convention.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub planned_rotation_offset_deg: Option<f64>,
+    /// Set when the field turned away from the target's usual framing while
+    /// the rotator reported no matching turn: how far the solved rotation
+    /// sits from the reported angle beyond this rig's usual offset, modulo a
+    /// half turn. A slip, a lost sync, or a camera turned by hand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotator_skew_deg: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matched_stars: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -153,6 +163,10 @@ pub struct AstrometryFrameMetrics {
     /// The rotation the scheduler planned for the target, when it recorded one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub planned_rotation_deg: Option<f64>,
+    /// The sky angle the rotator reported for this frame (N.I.N.A.'s
+    /// `RotatorPosition`), when the rig has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotator_position_deg: Option<f64>,
     /// Large cataloged emission regions projected through this frame's fresh
     /// pixel-derived solution. These are context for background screening,
     /// not proof that the emission is visible in the pixels.
@@ -267,6 +281,7 @@ pub fn astrometry_metrics_from_analysis(
         field_rotation_deg: rotation.map(|(degrees, _)| degrees),
         field_mirrored: rotation.map(|(_, mirrored)| mirrored),
         planned_rotation_deg: None,
+        rotator_position_deg: None,
         cataloged_extended_emission,
         error: analysis.error.clone(),
     })
@@ -307,6 +322,154 @@ fn wrap_half_turn(degrees: f64) -> f64 {
 /// The rotation, modulo a half turn, that the fewest degrees separate the
 /// others from: the sample that minimizes the summed wrapped distance, so a
 /// single skewed frame cannot pull the center toward itself.
+/// What the whole target and filter says about each frame, beyond the
+/// session it was shot in: its best stars, and how its rotator's reported
+/// angle relates to the solved field. Built once from every frame.
+#[derive(Debug, Clone, Default)]
+struct TargetContext {
+    /// The robust best HFR of each capture profile: the 10th percentile of
+    /// its measured frames, once it has enough of them to trust.
+    best_hfr: HashMap<Option<String>, f64>,
+    /// The field rotation most frames share, modulo a half turn.
+    framing_deg: Option<f64>,
+    rotator: Option<RotatorAgreement>,
+}
+
+/// How this rig's solved field rotation follows the angle its rotator
+/// reported, when most frames agree on it.
+#[derive(Debug, Clone, Copy)]
+struct RotatorAgreement {
+    /// +1 when the reported angle turns the way the field does, -1 when it
+    /// turns the other way; capture software has its own convention.
+    sign: f64,
+    /// The usual solved-minus-reported rotation, modulo a half turn.
+    offset_deg: f64,
+}
+
+/// Frames a capture profile needs before its best HFR is trusted.
+const BEST_HFR_MIN_FRAMES: usize = 10;
+/// Frames that must carry both a solve and a rotator angle before their
+/// agreement is trusted.
+const ROTATOR_MIN_FRAMES: usize = 5;
+/// How far a frame must turn from the target's framing, and from what its
+/// rotator reported, before it counts as a slip. Above the 2° skew
+/// tolerance on purpose: across five catalogs, frames between 2° and 3° were
+/// marginal and harmless, while every real slip sat 10° or more away.
+const ROTATOR_SLIP_MIN_DEG: f64 = 5.0;
+
+impl TargetContext {
+    fn from_images(images: &[ImageMetrics], rotation_tolerance_deg: f64) -> Self {
+        let mut hfr_by_profile: HashMap<Option<String>, Vec<f64>> = HashMap::new();
+        for image in images {
+            if let Some(hfr) = image.hfr.filter(|hfr| hfr.is_finite() && *hfr > 0.0) {
+                hfr_by_profile
+                    .entry(image.capture_profile.clone())
+                    .or_default()
+                    .push(hfr);
+            }
+        }
+        let best_hfr = hfr_by_profile
+            .into_iter()
+            .filter(|(_, values)| values.len() >= BEST_HFR_MIN_FRAMES)
+            .filter_map(|(profile, values)| Some((profile, percentile(&values, 0.10)?)))
+            .collect();
+        let solved: Vec<f64> = images
+            .iter()
+            .filter_map(|image| sky_rotation(image.astrometry.as_ref()?))
+            .collect();
+        let pairs: Vec<(f64, f64)> = images
+            .iter()
+            .filter_map(|image| solved_and_reported_rotation(image.astrometry.as_ref()?))
+            .collect();
+        Self {
+            best_hfr,
+            framing_deg: (solved.len() >= ROTATOR_MIN_FRAMES).then(|| half_turn_median(&solved)),
+            rotator: rotator_agreement(&pairs, rotation_tolerance_deg),
+        }
+    }
+
+    /// This frame's HFR as a multiple of its profile's best, with the best.
+    fn hfr_ratio(&self, image: &ImageMetrics) -> Option<(f64, f64, f64)> {
+        let hfr = image.hfr.filter(|hfr| hfr.is_finite())?;
+        let best = *self.best_hfr.get(&image.capture_profile)?;
+        (best > 0.0).then(|| (hfr, best, hfr / best))
+    }
+
+    /// How far the solved rotation sits from the rotator's reported angle,
+    /// beyond the rig's usual offset, when the field also turned away from
+    /// the target's framing. Both are needed: a rotator whose reading drifts
+    /// while the camera holds still turns nothing in the pixels, and a turn
+    /// the rotator reported is framing someone chose.
+    fn rotator_slip(&self, astrometry: &AstrometryFrameMetrics) -> Option<f64> {
+        let agreement = self.rotator?;
+        let (solved, reported) = solved_and_reported_rotation(astrometry)?;
+        let skew = wrap_half_turn(solved - agreement.sign * reported - agreement.offset_deg);
+        let departure = wrap_half_turn(solved - self.framing_deg?);
+        (skew.abs() > ROTATOR_SLIP_MIN_DEG && departure.abs() > ROTATOR_SLIP_MIN_DEG)
+            .then_some(skew)
+    }
+}
+
+/// A solved frame's field rotation, turned to sky handedness.
+fn sky_rotation(astrometry: &AstrometryFrameMetrics) -> Option<f64> {
+    if !astrometry.pixel_solved {
+        return None;
+    }
+    let solved = astrometry
+        .field_rotation_deg
+        .filter(|value| value.is_finite())?;
+    // A mirrored field turns the other way for the same position angle.
+    Some(if astrometry.field_mirrored == Some(true) {
+        -solved
+    } else {
+        solved
+    })
+}
+
+/// A solved frame's field rotation, turned to sky handedness, and the angle
+/// its rotator reported.
+fn solved_and_reported_rotation(astrometry: &AstrometryFrameMetrics) -> Option<(f64, f64)> {
+    let solved = sky_rotation(astrometry)?;
+    let reported = astrometry
+        .rotator_position_deg
+        .filter(|value| value.is_finite())?;
+    Some((solved, reported))
+}
+
+/// The rotator convention and offset most frames agree on, or None when too
+/// few frames carry both angles or no majority agrees: a rotator whose angle
+/// means nothing must not condemn every frame.
+fn rotator_agreement(pairs: &[(f64, f64)], tolerance_deg: f64) -> Option<RotatorAgreement> {
+    if pairs.len() < ROTATOR_MIN_FRAMES {
+        return None;
+    }
+    [1.0, -1.0]
+        .into_iter()
+        .map(|sign| {
+            let offsets: Vec<f64> = pairs
+                .iter()
+                .map(|(solved, reported)| wrap_half_turn(solved - sign * reported))
+                .collect();
+            let offset_deg = half_turn_median(&offsets);
+            let agreeing = offsets
+                .iter()
+                .filter(|offset| wrap_half_turn(**offset - offset_deg).abs() <= tolerance_deg)
+                .count();
+            (RotatorAgreement { sign, offset_deg }, agreeing)
+        })
+        // The first sign wins a tie: with a rotator that never moved, both
+        // conventions agree equally and the offset is the same either way.
+        .reduce(|best, candidate| {
+            if candidate.1 > best.1 {
+                candidate
+            } else {
+                best
+            }
+        })
+        .filter(|(_, agreeing)| agreeing * 2 > pairs.len())
+        .map(|(agreement, _)| agreement)
+}
+
 fn half_turn_median(rotations: &[f64]) -> f64 {
     rotations
         .iter()
@@ -1256,11 +1419,21 @@ impl SequenceAnalyzer {
         filter_name: &str,
     ) -> Vec<ScoredSequence> {
         let images = choose_star_source(images);
-        let sequences = self.split_into_sequences(&images);
+        let context = TargetContext::from_images(&images, self.config.rotation_skew_tolerance_deg);
+        self.analyze_in_context(&images, &context, target_id, target_name, filter_name)
+    }
 
-        sequences
+    fn analyze_in_context(
+        &self,
+        images: &[ImageMetrics],
+        context: &TargetContext,
+        target_id: i32,
+        target_name: &str,
+        filter_name: &str,
+    ) -> Vec<ScoredSequence> {
+        self.split_into_sequences(images)
             .into_iter()
-            .map(|seq| self.score_sequence(seq, target_id, target_name, filter_name))
+            .map(|seq| self.score_sequence(seq, target_id, target_name, filter_name, context))
             .collect()
     }
 
@@ -1277,7 +1450,9 @@ impl SequenceAnalyzer {
         // Once for the whole target and filter, so the sessions and the
         // rollup compare the same kind of count.
         let images = &choose_star_source(images);
-        let sequences = self.analyze(images, target_id, target_name, filter_name);
+        let context = TargetContext::from_images(images, self.config.rotation_skew_tolerance_deg);
+        let sequences =
+            self.analyze_in_context(images, &context, target_id, target_name, filter_name);
         if sequences.len() < 2 {
             return (sequences, None);
         }
@@ -1329,6 +1504,7 @@ impl SequenceAnalyzer {
                     target_name,
                     filter_name,
                     ScoreScope::TargetFilter,
+                    &context,
                 )
                 .images,
             );
@@ -1381,6 +1557,15 @@ impl SequenceAnalyzer {
                 if let Some(cap) = absolute_cap_for(flag) {
                     result.quality_score = result.quality_score.min(cap);
                 }
+            }
+        }
+        // The soft-stars cap scales with each frame's HFR, so it is applied
+        // again from the measurement rather than read off its flag.
+        let image_by_id: HashMap<i32, &ImageMetrics> =
+            images.iter().map(|image| (image.image_id, image)).collect();
+        for result in &mut rollup_images {
+            if let Some(image) = image_by_id.get(&result.image_id) {
+                apply_soft_stars(result, image, &context);
             }
         }
 
@@ -1479,6 +1664,7 @@ impl SequenceAnalyzer {
         target_id: i32,
         target_name: &str,
         filter_name: &str,
+        context: &TargetContext,
     ) -> ScoredSequence {
         self.score_group(
             images,
@@ -1486,6 +1672,7 @@ impl SequenceAnalyzer {
             target_name,
             filter_name,
             ScoreScope::CaptureSequence,
+            context,
         )
     }
 
@@ -1496,6 +1683,7 @@ impl SequenceAnalyzer {
         target_name: &str,
         filter_name: &str,
         scope: ScoreScope,
+        context: &TargetContext,
     ) -> ScoredSequence {
         let image_count = images.len();
         let cataloged_extended_emission = images.iter().any(|image| {
@@ -1507,7 +1695,7 @@ impl SequenceAnalyzer {
         let session_start = images.first().and_then(|i| i.timestamp);
         let session_end = images.last().and_then(|i| i.timestamp);
         let pointing_quality = if scope == ScoreScope::CaptureSequence {
-            self.analyze_pointing(&images)
+            self.analyze_pointing(&images, context)
         } else {
             // The rollup reuses each session's pointing result below. Besides
             // preserving framing context, this avoids a second cross-night
@@ -1559,6 +1747,9 @@ impl SequenceAnalyzer {
             self.merge_satellite_issues(&mut results, &images);
             apply_zero_star_cap(&mut results, &images);
             self.apply_absolute_metric_limits(&mut results, &images);
+            for (result, image) in results.iter_mut().zip(&images) {
+                apply_soft_stars(result, image, context);
+            }
             let summary = self.build_summary(&results);
 
             return ScoredSequence {
@@ -1710,6 +1901,9 @@ impl SequenceAnalyzer {
 
         apply_zero_star_cap(&mut results, &images);
         self.apply_absolute_metric_limits(&mut results, &images);
+        for (result, image) in results.iter_mut().zip(&images) {
+            apply_soft_stars(result, image, context);
+        }
 
         // Build reference values
         let reference_values = ReferenceValues {
@@ -2063,7 +2257,11 @@ impl SequenceAnalyzer {
 
     /// Convert per-frame pixel solutions into absolute pointing quality plus
     /// robust sequence-relative jump/drift evidence.
-    fn analyze_pointing(&self, images: &[ImageMetrics]) -> Vec<Option<PointingQuality>> {
+    fn analyze_pointing(
+        &self,
+        images: &[ImageMetrics],
+        context: &TargetContext,
+    ) -> Vec<Option<PointingQuality>> {
         let solved_candidates: Vec<usize> = images
             .iter()
             .enumerate()
@@ -2149,6 +2347,7 @@ impl SequenceAnalyzer {
                     field_rotation_deg: a.field_rotation_deg,
                     field_mirrored: a.field_mirrored,
                     rotation_skew_deg: None,
+                    rotator_skew_deg: None,
                     planned_rotation_deg: planned_rotation,
                     planned_rotation_offset_deg: a.field_rotation_deg.zip(planned_rotation).map(
                         |(solved, planned)| {
@@ -2479,6 +2678,24 @@ impl SequenceAnalyzer {
             }
         }
 
+        // A frame whose field turned away from the target's framing while
+        // its rotator reported no such turn is skew however long the run
+        // lasted: the rotator slipped or lost its sync, or the camera was
+        // turned by hand, and none of that is framing anyone chose.
+        for (idx, image) in images.iter().enumerate() {
+            let Some(skew) = image
+                .astrometry
+                .as_ref()
+                .and_then(|astrometry| context.rotator_slip(astrometry))
+            else {
+                continue;
+            };
+            if let Some(pointing) = quality[idx].as_mut() {
+                pointing.rotator_skew_deg = Some(skew);
+                push_issue(&mut pointing.flags, IssueCategory::RotationSkew);
+            }
+        }
+
         quality
     }
 
@@ -2536,6 +2753,25 @@ impl SequenceAnalyzer {
                         "[Auto] Astrometry: Tracking drift - score {:.2}; {:.0} arcsec/hour",
                         result.quality_score,
                         pointing.drift_rate_arcsec_per_hour.unwrap_or(0.0)
+                    )),
+                )
+            } else if let Some(skew) = pointing
+                .rotator_skew_deg
+                .filter(|_| pointing.flags.contains(&IssueCategory::RotationSkew))
+            {
+                (
+                    Some(IssueCategory::RotationSkew),
+                    Some(format!(
+                        "Solved field rotation sits {skew:+.1}° from the angle the rotator \
+                         reported, beyond this rig's usual offset, and away from the framing \
+                         the rest of the target shares: the field turned while the rotator \
+                         claimed to hold still, so it slipped, lost its sync, or the camera \
+                         was turned by hand. This frame overlaps the others less and crops \
+                         the stack."
+                    )),
+                    Some(format!(
+                        "[Auto] Astrometry: Rotator slip - score {:.2}; field {skew:+.1}° from the rotator's angle",
+                        result.quality_score
                     )),
                 )
             } else if pointing.flags.contains(&IssueCategory::RotationSkew) {
@@ -3398,6 +3634,66 @@ fn apply_zero_star_cap(results: &mut [ImageQualityResult], images: &[ImageMetric
     }
 }
 
+/// HFR this many times the target's best begins to cap a frame's score.
+/// Across the 69 target/filter groups of one rig's catalog, 96.7% of frames
+/// sat within 1.3x of their best and 1.5% beyond 1.5x.
+const SOFT_STARS_START_RATIO: f64 = 1.5;
+/// At this multiple the cap reaches the operator-limit ceiling.
+const SOFT_STARS_FLOOR_RATIO: f64 = 2.0;
+/// From this multiple the frame is recommended for rejection and left out
+/// of stacks, as an operator limit would be.
+const SOFT_STARS_REJECT_RATIO: f64 = 1.75;
+
+/// The score ceiling for HFR at `ratio` times the target's best: none up to
+/// the start, falling to the operator-limit ceiling at the floor.
+fn soft_stars_cap(ratio: f64) -> Option<f64> {
+    (ratio > SOFT_STARS_START_RATIO).then(|| {
+        let reach = ((ratio - SOFT_STARS_START_RATIO)
+            / (SOFT_STARS_FLOOR_RATIO - SOFT_STARS_START_RATIO))
+            .clamp(0.0, 1.0);
+        1.0 - reach * (1.0 - ABSOLUTE_LIMIT_SCORE_CAP)
+    })
+}
+
+/// Cap a frame whose stars are far softer than this target's best in the
+/// same filter. The comparison spans every night: against its own session a
+/// whole night of poor seeing looks normal, and one soft-star measurement is
+/// outvoted by the other parts of the score however bad it is.
+fn apply_soft_stars(
+    result: &mut ImageQualityResult,
+    image: &ImageMetrics,
+    context: &TargetContext,
+) {
+    let Some((hfr, best, ratio)) = context.hfr_ratio(image) else {
+        return;
+    };
+    let Some(cap) = soft_stars_cap(ratio) else {
+        return;
+    };
+    result.quality_score = result.quality_score.min(cap);
+    if result.flags.contains(&IssueCategory::SoftStars) {
+        return;
+    }
+    result.flags.push(IssueCategory::SoftStars);
+    result.category.get_or_insert(IssueCategory::SoftStars);
+    prepend_detail(
+        &mut result.details,
+        &format!(
+            "HFR {hfr:.2} px is {ratio:.1}× this target's best {best:.2} px in this filter, \
+             across every night. Stars that soft blur the stack, however the rest of the \
+             night looked."
+        ),
+    );
+    if ratio >= SOFT_STARS_REJECT_RATIO {
+        append_regrade_reason(
+            &mut result.regrade_reason,
+            format!(
+                "[Auto] Soft stars - HFR {hfr:.2} px, {ratio:.1}× the target's best {best:.2} px"
+            ),
+        );
+    }
+}
+
 /// Score ceiling for a frame that violated an operator-set absolute limit
 /// (HFR ceiling or star-count floor). Low enough to read as rejected in
 /// every view (below the 0.35 screening default), above the zero-star cap
@@ -3810,6 +4106,86 @@ mod tests {
         }
     }
 
+    /// Frames `ids` of one night starting at `day`, every frame at `hfr`.
+    fn night(ids: std::ops::Range<i32>, day: i64, hfr: f64) -> Vec<ImageMetrics> {
+        ids.map(|id| make_image(id, day * 86_400 + id as i64 * 300, 500.0, hfr))
+            .collect()
+    }
+
+    #[test]
+    fn a_night_far_softer_than_the_targets_best_scores_low_however_its_own_night_looked() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        // A sharp night sets the best at 2.0 px. A whole night at 4.4 px
+        // looks normal against itself, and one at 3.2 px is merely soft.
+        let mut images = night(0..10, 1, 2.0);
+        images.extend(night(10..15, 2, 4.4));
+        images.extend(night(15..20, 3, 3.2));
+        let (sessions, rollup) =
+            analyzer.analyze_with_target_filter_rollup(&images, 1, "target", "L");
+        let session_score = |id: i32| {
+            sessions
+                .iter()
+                .flat_map(|session| &session.images)
+                .find(|result| result.image_id == id)
+                .unwrap()
+                .clone()
+        };
+        let rollup = rollup.expect("three nights roll up");
+        let rollup_score = |id: i32| {
+            rollup
+                .sequence
+                .images
+                .iter()
+                .find(|result| result.image_id == id)
+                .unwrap()
+                .clone()
+        };
+
+        let sharp = session_score(3);
+        assert!(sharp.quality_score > 0.9 && !sharp.flags.contains(&IssueCategory::SoftStars));
+
+        // 2.2x the best: down at the operator-limit ceiling, recommended for
+        // rejection, in the session and in the rollup alike.
+        for result in [session_score(12), rollup_score(12)] {
+            assert!(
+                result.quality_score <= ABSOLUTE_LIMIT_SCORE_CAP + 1e-9,
+                "{}",
+                result.quality_score
+            );
+            assert!(result.flags.contains(&IssueCategory::SoftStars));
+            let reason = result.regrade_reason.as_deref().unwrap_or_default();
+            assert!(
+                reason.contains("Soft stars") && reason.contains("2.2×"),
+                "{reason}"
+            );
+        }
+
+        // 1.6x: the score drops part way and the frame stays in stacks.
+        let soft = session_score(17);
+        assert!(soft.flags.contains(&IssueCategory::SoftStars));
+        assert!(
+            soft.quality_score <= 0.85 + 1e-9 && soft.quality_score > 0.8,
+            "{}",
+            soft.quality_score
+        );
+        assert!(soft.regrade_reason.is_none());
+    }
+
+    #[test]
+    fn soft_stars_need_enough_frames_to_trust_the_best() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images = night(0..4, 1, 2.0);
+        images.extend(night(4..8, 2, 4.4));
+        assert!(analyzer
+            .analyze(&images, 1, "target", "L")
+            .iter()
+            .flat_map(|session| &session.images)
+            .all(|result| !result.flags.contains(&IssueCategory::SoftStars)));
+        assert_eq!(soft_stars_cap(1.5), None);
+        assert!((soft_stars_cap(1.75).unwrap() - 0.625).abs() < 1e-9);
+        assert!((soft_stars_cap(3.0).unwrap() - ABSOLUTE_LIMIT_SCORE_CAP).abs() < 1e-9);
+    }
+
     fn make_full_image(
         id: i32,
         ts: i64,
@@ -3923,6 +4299,7 @@ mod tests {
             field_rotation_deg: None,
             field_mirrored: None,
             planned_rotation_deg: None,
+            rotator_position_deg: None,
             cataloged_extended_emission: Vec::new(),
             error: None,
         }
@@ -5092,6 +5469,82 @@ mod tests {
         // Measured against the nearest held framing, the 90° run.
         let skew = stray.pointing.as_ref().unwrap().rotation_skew_deg.unwrap();
         assert!((skew - (-45.0)).abs() < 0.2, "skew {skew}");
+    }
+
+    /// Twelve frames of one night: eight at 0° and four turned to 11°, with
+    /// the rotator reporting `reported` for each.
+    fn rotator_night(reported: [f64; 12]) -> Vec<ImageQualityResult> {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let rotations = [
+            0.0, 0.1, -0.1, 0.0, 0.05, 0.0, 0.1, -0.05, 11.0, 11.1, 10.9, 11.0,
+        ];
+        let mut images: Vec<_> = (0..12)
+            .map(|i| make_full_image(i, i as i64 * 300, 500.0, 2.5, 1000.0, 20.0, 0.4))
+            .collect();
+        for ((image, rotation), reported) in images.iter_mut().zip(rotations).zip(reported) {
+            image.astrometry = Some(AstrometryFrameMetrics {
+                rotator_position_deg: Some(reported),
+                ..rotated_astrometry(rotation)
+            });
+        }
+        analyzer
+            .analyze(&images, 1, "target", "SII")
+            .remove(0)
+            .images
+    }
+
+    #[test]
+    fn a_held_turn_the_rotator_never_reported_is_a_slip() {
+        // The rotator claimed 180° all night while the last four frames
+        // turned 11°: held for four frames, the run looks like framing, but
+        // nobody turned the rotator.
+        let results = rotator_night([180.0; 12]);
+        for result in &results[..8] {
+            assert!(!result.flags.contains(&IssueCategory::RotationSkew));
+        }
+        for result in &results[8..] {
+            assert!(
+                result.flags.contains(&IssueCategory::RotationSkew),
+                "{:?}",
+                result.flags
+            );
+            assert!(result.quality_score <= 0.30);
+            let skew = result.pointing.as_ref().unwrap().rotator_skew_deg.unwrap();
+            assert!((skew - 11.0).abs() < 0.3, "skew {skew}");
+            let reason = result.regrade_reason.as_deref().unwrap_or_default();
+            assert!(reason.contains("Rotator slip"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn a_turn_the_rotator_reported_is_framing_and_a_drifting_reading_alone_is_nothing() {
+        // The rotator moved 11° with the field: someone chose that framing.
+        let mut reported = [180.0; 12];
+        reported[8..].fill(191.0);
+        assert!(rotator_night(reported)
+            .iter()
+            .all(|result| !result.flags.contains(&IssueCategory::RotationSkew)));
+
+        // The reading jumped while the field held still: nothing turned in
+        // the pixels, so nothing is wrong with these frames.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..12)
+            .map(|i| make_full_image(i, i as i64 * 300, 500.0, 2.5, 1000.0, 20.0, 0.4))
+            .collect();
+        for (index, image) in images.iter_mut().enumerate() {
+            image.astrometry = Some(AstrometryFrameMetrics {
+                rotator_position_deg: Some(if index < 8 { 180.0 } else { 237.0 }),
+                ..rotated_astrometry(0.0)
+            });
+        }
+        let results = analyzer
+            .analyze(&images, 1, "target", "SII")
+            .remove(0)
+            .images;
+        assert!(results.iter().all(|result| {
+            !result.flags.contains(&IssueCategory::RotationSkew)
+                && result.pointing.as_ref().unwrap().rotator_skew_deg.is_none()
+        }));
     }
 
     #[test]
