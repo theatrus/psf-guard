@@ -23,6 +23,9 @@
   taking all of it.
 - Delete a stack checkpoint as soon as a build finds it must restack from
   scratch, instead of keeping it until the new build saves its own.
+- Date flats, darks and bias by the night they belong to in the calibration
+  library, coverage report and export folders. Rigs west of Greenwich no
+  longer see dawn flats a day late, or a night of lights split in two.
 
 > Add a line here as each user-visible change merges. At release time this
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version

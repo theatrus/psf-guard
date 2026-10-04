@@ -245,7 +245,11 @@ the boundary yourself: in the **Calibration library**, frames are grouped by
 imaging night, collapsed to one row per night until expanded, with flats
 (and their dark-flats) in one section and darks and bias in their own —
 those batches stay valid far longer than flats and should not interleave
-with per-night flat groups. Each night row can also **Forget night**,
+with per-night flat groups. A night splits where the catalog's lights are
+never captured, as in [Sky coverage](SKY_COVERAGE.md), so dusk and dawn
+flats share the date of the night between them, as N.I.N.A.'s
+`DATEMINUS12` folders do. The coverage report and export folders use the
+same nights. A catalog with no lights splits at noon UTC. Each night row can also **Forget night**,
 removing that section's records for the night (and dependent masters) in
 one step without touching the FITS files. Select a night (or several) and
 mark those frames usable

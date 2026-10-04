@@ -28,14 +28,18 @@ function formatDate(timestamp?: number | null): string {
   return new Date(timestamp * 1000).toLocaleString();
 }
 
+/** Where nights split when the server does not say: noon UTC. */
+const DEFAULT_NIGHT_BOUNDARY_SECONDS = 12 * 3600;
+
 /**
- * The imaging night a capture belongs to: twelve hours back, then the date,
- * so frames from one session share a group across local midnight — the same
- * rule the server's calibration report uses.
+ * The imaging night a capture belongs to: the date once the catalog's night
+ * boundary (seconds after 00:00 UTC, where its lights are never captured) is
+ * taken off, so an evening, the small hours after it and the flats at either
+ * end share a group — the same rule the server's calibration report uses.
  */
-function nightKey(timestamp?: number | null): string {
+function nightKey(timestamp: number | null | undefined, boundarySeconds: number): string {
   if (timestamp === undefined || timestamp === null) return 'unknown';
-  return new Date((timestamp - 12 * 3600) * 1000).toISOString().slice(0, 10);
+  return new Date((timestamp - boundarySeconds) * 1000).toISOString().slice(0, 10);
 }
 
 function nightLabel(key: string): string {
@@ -185,6 +189,7 @@ export default function CalibrationLibraryDialog({
     setSelectedGroups(new Set());
   }, [kind, missingOnly, rig]);
 
+  const nightBoundary = details.data?.night_boundary_seconds ?? DEFAULT_NIGHT_BOUNDARY_SECONDS;
   // Grouped display, collapsed first: flats (with their dark-flats) get one
   // group per imaging night; darks and bias sit in their own sections since
   // their batches stay valid far longer. Groups render as header rows only
@@ -193,7 +198,7 @@ export default function CalibrationLibraryDialog({
     const built = new Map<LibrarySection, Map<string, NightGroup>>();
     for (const frame of frames) {
       const section = sectionOf(frame.kind);
-      const night = nightKey(frame.captured_at);
+      const night = nightKey(frame.captured_at, nightBoundary);
       const key = `${section}:${night}`;
       const groups = built.get(section) ?? new Map<string, NightGroup>();
       const group = groups.get(key) ?? { key, night, frames: [] };
@@ -211,7 +216,7 @@ export default function CalibrationLibraryDialog({
       });
       return [{ section, groups: ordered }];
     });
-  }, [frames]);
+  }, [frames, nightBoundary]);
 
   const toggleSelected = (key: string) => {
     setSelectedGroups((current) => {

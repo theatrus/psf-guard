@@ -43,10 +43,14 @@ const summary = {
   ],
 };
 
-function serveLibrary(frames: unknown[]) {
+function serveLibrary(frames: unknown[], nightBoundarySeconds?: number) {
   server.use(
     http.get('/api/db/demo/calibrations/details', () =>
-      HttpResponse.json({ success: true, data: { summary, frames }, error: null })
+      HttpResponse.json({
+        success: true,
+        data: { summary, frames, night_boundary_seconds: nightBoundarySeconds },
+        error: null,
+      })
     ),
     http.get('/api/db/demo/calibrations', () =>
       HttpResponse.json({ success: true, data: summary, error: null })
@@ -92,6 +96,20 @@ describe('calibration validity marking', () => {
         direction: 'backward',
       })
     );
+  });
+
+  it('dates dawn flats to the night before at a site west of Greenwich', async () => {
+    // Lights between 03:00 and 13:00 UTC leave the catalog quiet around
+    // 20:00 UTC. Flats at 14:00 UTC on 2 June are 07:00 in California, the
+    // dawn after the night of 1 June — N.I.N.A.'s DATEMINUS12 date.
+    serveLibrary([flat('dawn', Math.floor(Date.UTC(2026, 5, 2, 14) / 1000))], 20 * 3600);
+    render(
+      <CalibrationLibraryDialog dbId="demo" dbName="Demo" canManage onClose={() => {}} />,
+      { wrapper: wrapper() }
+    );
+
+    expect(await screen.findByText('Night of 2026-06-01')).toBeInTheDocument();
+    expect(screen.queryByText('Night of 2026-06-02')).toBeNull();
   });
 
   it('shows the validity badge on marked frames', async () => {
