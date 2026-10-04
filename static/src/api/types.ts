@@ -872,6 +872,8 @@ export interface StackActivityEntry {
   job_id: string;
   database_id: string;
   project_id: number;
+  /** The target of the work in flight, when it has one target. */
+  target_id?: number | null;
   state: StackJobState;
   label: string;
   detail: string;
@@ -1623,6 +1625,8 @@ export interface WbppActiveRun {
   db_id: string;
   db_name: string;
   scope: string;
+  project_id?: number | null;
+  target_id?: number | null;
   stage: string;
   wbpp_stage: string | null;
   wbpp_steps: number;

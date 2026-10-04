@@ -55,6 +55,39 @@ function stack(
 }
 
 describe('header activity items', () => {
+  it('links each job to the view showing what it works on', () => {
+    const projectOf = (dbId: string, targetId: number) =>
+      dbId === 'db-a' && targetId === 42 ? 4 : dbId === 'db-a' && targetId === 9 ? 2 : undefined;
+    const db = { dbId: 'db-a', dbName: 'Askar' };
+    const scanning = activityItems(
+      [{ ...db, scan: { ...scan(3, 10), progress: { ...scan(3, 10).progress, filter_name: 'Ha' } } }],
+      [{ ...stack('R', 'running', 1, 3), target_id: 7 }],
+      {
+        running: [],
+        queued: [{ id: 'q1', db_id: 'db-a', db_name: 'Askar', scope: 'target IC 447', project_id: null, target_id: 9, position: 1, queued_at: 2 }],
+      },
+      [{ database_id: 'db-a', database_name: 'Askar', project_id: 5, project_name: 'Heart', reason: 'arrival', due_in_seconds: 60 }],
+      projectOf
+    );
+    expect(scanning.map((item) => item.href)).toEqual([
+      '/sequence?db=db-a&project=4&target=42&filterName=Ha',
+      '/stacks?db=db-a&project=1&target=7',
+      '/stacks?db=db-a&project=2&target=9',
+      '/stacks?db=db-a&project=5',
+    ]);
+
+    // A catalog refresh works on the whole database; a backfill between
+    // targets on one whose project is not loaded yet shows the database too.
+    const idle = activityItems(
+      [{ ...db, refresh: refresh({}), backfill: backfill(1, 3) }],
+      [],
+      undefined,
+      [],
+      projectOf
+    );
+    expect(idle.map((item) => item.href)).toEqual(['/grid?db=db-a', '/grid?db=db-a']);
+  });
+
   it('describes a quality scan by its frames, and folds it into a running backfill', () => {
     const alone = activityItems([{ dbId: 'a', dbName: 'Askar', scan: scan(4, 10) }], []);
     expect(alone).toMatchObject([

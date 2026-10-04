@@ -206,7 +206,10 @@ rescan. The target scan runs spatial/photometric screening and fresh plate
 solves in the background, then
 refreshes the sequence scores. The header's background jobs chip counts the
 scan while you move between views, in every database; hover or click it for
-the frame and solve progress. Results persist across restarts. The
+the frame and solve progress. A scan whose frames failed leaves a note there,
+with a link to the target's sequence, until you dismiss it; with nothing else
+running the chip reads **Finished with errors** until then. Results persist
+across restarts. The
 sequence analysis shows coverage badges, classifications, solved-center
 scatter, a session view, and an all-session stack comparison for each filter.
 When analysis names a cause, the same reason and supporting evidence appear on

@@ -1352,6 +1352,9 @@ pub struct WbppActiveRun {
     pub db_id: String,
     pub db_name: String,
     pub scope: String,
+    /// What the run stacks, so the header can link to it.
+    pub project_id: Option<i32>,
+    pub target_id: Option<i32>,
     /// PSF Guard's stage: `planning`, `running`, `publishing`.
     pub stage: String,
     /// WBPP's own step, from its log.
@@ -1396,6 +1399,8 @@ pub async fn get_wbpp_activity(
                 db_id: ctx.id.clone(),
                 db_name: ctx.name.clone(),
                 scope: store.progress.scope.clone(),
+                project_id: store.progress.project_id,
+                target_id: store.progress.target_id,
                 stage: store.progress.stage.clone(),
                 wbpp_stage: store.progress.wbpp_stage.clone(),
                 wbpp_steps: store.progress.wbpp_steps,

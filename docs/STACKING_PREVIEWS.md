@@ -290,7 +290,9 @@ queued or running, in every view and in every database. The chip shows only
 the overall progress and the number of jobs. Hover, focus or click it to open
 the queue: each build names its target and channel and how far it has got, and
 waiting builds say `queued` with their place in line. Catalog refreshes,
-quality scans and WBPP runs share the same chip.
+quality scans and WBPP runs share the same chip. Click what a row works on to
+go there: a build or WBPP run opens its target's stacks, a quality scan the
+target's sequence, and a catalog refresh the database's images.
 
 The overall percent and each build's bar count frame reads: the live pass
 reads each eligible frame once, and the final rejection pass three more times

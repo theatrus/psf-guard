@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import type {
@@ -7,9 +7,9 @@ import type {
   SpatialScanStatus,
   WbppActivity,
 } from '../../api/types';
-import { useAllDatabases } from '../../hooks/useDatabases';
+import { useAllDatabases, useMergedTargets } from '../../hooks/useDatabases';
 import { useStackActivity } from '../../hooks/useStackActivity';
-import { activityItems, summarize, type DatabaseActivity } from './activityItems';
+import { activityItems, summarize, type DatabaseActivity, type ProjectOf } from './activityItems';
 
 export const WBPP_ACTIVITY_QUERY_KEY = ['wbpp-activity'] as const;
 
@@ -20,6 +20,16 @@ export interface FinishedNote {
   /** A quality scan that just finished reported frame errors. */
   errors: boolean;
   message?: string;
+}
+
+/** Frame errors from a quality scan the header saw finish. It stays until
+ *  dismissed, however long the rest of the queue runs. */
+export interface ScanErrorNote {
+  dbId: string;
+  dbName: string;
+  message: string;
+  /** The sequence of the target the scan was on. */
+  href?: string;
 }
 
 function busy(db: DatabaseActivity): boolean {
@@ -34,6 +44,14 @@ function busy(db: DatabaseActivity): boolean {
  */
 export function useHeaderActivity() {
   const { data: databases = [] } = useAllDatabases();
+  // Shares its cache with the header's target picker.
+  const { data: targets } = useMergedTargets();
+  const projectOf = useMemo<ProjectOf>(() => {
+    const projects = new Map(
+      (targets ?? []).map((target) => [`${target.db_id}:${target.id}`, target.project_id])
+    );
+    return (dbId, targetId) => projects.get(`${dbId}:${targetId}`);
+  }, [targets]);
   const queryClient = useQueryClient();
   const { active: stacks, scheduled } = useStackActivity();
   const wbpp = useQuery<WbppActivity>({
@@ -85,7 +103,7 @@ export function useHeaderActivity() {
     scan: scans[index]?.data,
     backfill: backfills[index]?.data,
   }));
-  const items = activityItems(perDb, stacks, wbpp.data, scheduled);
+  const items = activityItems(perDb, stacks, wbpp.data, scheduled, projectOf);
   const summary = summarize(items);
 
   // A database whose work just finished has new images, metrics and grades
@@ -108,34 +126,55 @@ export function useHeaderActivity() {
     .sort()
     .join('|');
   const previousScanning = useRef<string[]>([]);
-  const [scanError, setScanError] = useState<FinishedNote | null>(null);
-  const scanErrorRef = useRef(scanError);
-  scanErrorRef.current = scanError;
+  const [scanErrors, setScanErrors] = useState<ScanErrorNote[]>([]);
+  const scanErrorsRef = useRef(scanErrors);
+  scanErrorsRef.current = scanErrors;
   useEffect(() => {
     const now = scanningIds ? scanningIds.split('|') : [];
     const ended = previousScanning.current.filter((id) => !now.includes(id));
     previousScanning.current = now;
+    let next = scanErrorsRef.current;
     for (const id of ended) {
       const db = perDb.find((entry) => entry.dbId === id);
       const progress = db?.scan?.progress;
       if (db && progress && !progress.running && progress.errors > 0) {
-        const note = {
-          errors: true,
+        const project =
+          progress.target_id != null ? projectOf(db.dbId, progress.target_id) : undefined;
+        const note: ScanErrorNote = {
+          dbId: db.dbId,
+          dbName: db.dbName,
           message: `${db.dbName}: ${progress.errors} frame${progress.errors === 1 ? '' : 's'} failed${
             progress.last_error ? ` — ${progress.last_error}` : ''
           }`,
+          href:
+            project != null
+              ? `/sequence?${new URLSearchParams({
+                  db: db.dbId,
+                  project: String(project),
+                  target: String(progress.target_id),
+                }).toString()}`
+              : undefined,
         };
-        // The finish effect below may run in this same commit, before the
-        // state lands, when the scan was the last job.
-        scanErrorRef.current = note;
-        setScanError(note);
+        // A database's newer scan replaces its older note.
+        next = [...next.filter((entry) => entry.dbId !== db.dbId), note];
       }
+    }
+    if (next !== scanErrorsRef.current) {
+      // The finish effect below may run in this same commit, before the
+      // state lands, when the scan was the last job.
+      scanErrorsRef.current = next;
+      setScanErrors(next);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- read when the scanning set changes, which is when a scan ends.
   }, [scanningIds]);
 
-  // When the whole queue empties, the chip says so for a moment, with any
-  // scan errors it has been holding; then it leaves and forgets them.
+  const dismissScanError = useCallback((dbId: string) => {
+    setScanErrors((current) => current.filter((entry) => entry.dbId !== dbId));
+  }, []);
+
+  // When the whole queue empties, the chip says "Done" for a moment and
+  // leaves. Scan errors it holds keep it as "Finished with errors" until
+  // each is dismissed.
   const [finished, setFinished] = useState<FinishedNote | null>(null);
   const finishedTimer = useRef<number | null>(null);
   // Running and lined-up work; a refresh still settling is not, so
@@ -154,16 +193,23 @@ export function useHeaderActivity() {
       return;
     }
     if (before === 0) return;
-    setFinished(scanErrorRef.current ?? { errors: false });
+    if (scanErrorsRef.current.length > 0) {
+      setFinished({ errors: true });
+      return;
+    }
+    setFinished({ errors: false });
     finishedTimer.current = window.setTimeout(() => {
       setFinished(null);
-      setScanError(null);
       finishedTimer.current = null;
     }, FINISHED_MS);
   }, [workCount]);
+  // The last error dismissed: nothing is left to say.
+  useEffect(() => {
+    if (scanErrors.length === 0) setFinished((current) => (current?.errors ? null : current));
+  }, [scanErrors.length]);
   useEffect(() => () => {
     if (finishedTimer.current != null) window.clearTimeout(finishedTimer.current);
   }, []);
 
-  return { items, summary, finished, scanError };
+  return { items, summary, finished, scanErrors, dismissScanError };
 }

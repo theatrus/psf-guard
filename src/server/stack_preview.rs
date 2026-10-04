@@ -688,6 +688,10 @@ pub struct StackActivityEntry {
     pub job_id: String,
     pub database_id: String,
     pub project_id: i32,
+    /// The target of the work in flight, when it has one target: the header
+    /// links the row to its stacks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<i32>,
     pub state: StackJobState,
     /// Target and channel of the work in flight.
     pub label: String,
@@ -814,11 +818,20 @@ fn mono_activity(job: &StackPreviewJob) -> StackActivityEntry {
         )),
         _ => None,
     });
+    // The group in flight, or the job's only target when nothing is.
+    let target_id = pending.map(|group| group.target_id).or_else(|| {
+        let first = job.groups.first()?.target_id;
+        job.groups
+            .iter()
+            .all(|group| group.target_id == first)
+            .then_some(first)
+    });
     StackActivityEntry {
         kind: StackActivityKind::Mono,
         job_id: job.job_id.clone(),
         database_id: job.database_id.clone(),
         project_id: job.project_id,
+        target_id,
         state: job.state,
         label,
         detail,
@@ -842,6 +855,7 @@ fn color_activity(job: &color::StackColorJob) -> StackActivityEntry {
         job_id: job.job_id.clone(),
         database_id: job.database_id.clone(),
         project_id: job.project_id,
+        target_id: Some(job.target_id),
         state: job.state,
         label: channel_label(&job.target_name, &job.label),
         detail: if job.phase.is_empty() {
@@ -5394,6 +5408,24 @@ mod tests {
             entry.progress_label.as_deref(),
             Some("Rejecting transients · pass 2/3 · frame 3/8")
         );
+    }
+
+    #[test]
+    fn a_queue_entry_names_the_target_it_works_on() {
+        let mut running = ready_group(42, "Ha", 2);
+        running.state = StackGroupState::Running;
+        let mut job = completed_job("targets", vec![ready_group(9, "R", 1), running]);
+        job.state = StackJobState::Running;
+        assert_eq!(mono_activity(&job).target_id, Some(42));
+
+        // Nothing in flight: the job's target, when it has only one.
+        job.groups[1].state = StackGroupState::Ready;
+        assert_eq!(mono_activity(&job).target_id, None);
+        let single = completed_job(
+            "single",
+            vec![ready_group(9, "R", 1), ready_group(9, "G", 2)],
+        );
+        assert_eq!(mono_activity(&single).target_id, Some(9));
     }
 
     #[test]

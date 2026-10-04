@@ -42,6 +42,38 @@ export interface ActivityItem {
   stoppable?: boolean;
   /** What the state corner says of a waiting job, such as when it starts. */
   state?: string;
+  /** The view showing what the job works on, scoped by URL. */
+  href?: string;
+}
+
+/** The project a target belongs to, from the header's target list, or
+ *  undefined while that list has not loaded. */
+export type ProjectOf = (dbId: string, targetId: number) => number | undefined;
+
+function viewPath(
+  view: 'grid' | 'sequence' | 'stacks',
+  params: Record<string, string | number | null | undefined>
+): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value != null) search.set(key, String(value));
+  }
+  return `/${view}?${search.toString()}`;
+}
+
+/** A view at one target, or the database's images while its project is not
+ *  known. */
+function targetPath(
+  view: 'sequence' | 'stacks',
+  dbId: string,
+  targetId: number | null | undefined,
+  projectOf: ProjectOf,
+  projectId?: number | null,
+  extra: Record<string, string | null | undefined> = {}
+): string {
+  const project = projectId ?? (targetId != null ? projectOf(dbId, targetId) : undefined);
+  if (project == null) return viewPath('grid', { db: dbId });
+  return viewPath(view, { db: dbId, project, target: targetId, ...extra });
 }
 
 export interface DatabaseActivity {
@@ -94,13 +126,20 @@ function refreshItem(db: DatabaseActivity, refresh: CacheRefreshProgress): Activ
     queued: false,
     percent: refresh.progress_percentage > 0 ? Math.min(refresh.progress_percentage, 100) : null,
     hint: refresh.current_directory_name ?? refresh.current_project_name ?? undefined,
+    href: viewPath('grid', { db: db.dbId }),
   };
 }
 
-function qualityItem(db: DatabaseActivity): ActivityItem | null {
+function qualityItem(db: DatabaseActivity, projectOf: ProjectOf): ActivityItem | null {
   const backfill = db.backfill?.progress;
   const scan = db.scan?.progress;
   const verb = scan?.stage === 'astrometry' ? 'Solving' : 'Scanning';
+  // The target the scan is on: its sequence shows the scores it writes.
+  const href = scan?.running
+    ? targetPath('sequence', db.dbId, scan.target_id, projectOf, null, {
+        filterName: scan.filter_name,
+      })
+    : targetPath('sequence', db.dbId, backfill?.current_target_id, projectOf);
   if (backfill?.running) {
     const frames = scan?.running ? ` · ${verb} ${scan.processed}/${scan.total} frames` : '';
     return {
@@ -112,6 +151,7 @@ function qualityItem(db: DatabaseActivity): ActivityItem | null {
       queued: false,
       percent: fraction(backfill.processed_targets, backfill.total_targets),
       hint: scan?.current_file ?? undefined,
+      href,
     };
   }
   if (scan?.running) {
@@ -124,6 +164,7 @@ function qualityItem(db: DatabaseActivity): ActivityItem | null {
       queued: false,
       percent: fraction(scan.processed, scan.total),
       hint: scan.current_file ?? undefined,
+      href,
     };
   }
   return null;
@@ -151,6 +192,11 @@ function stackItem(entry: StackActivityEntry): ActivityItem {
     percent: queued ? null : fraction(entry.processed_units, entry.total_units),
     automatic: entry.automatic,
     hint: entry.detail,
+    href: viewPath('stacks', {
+      db: entry.database_id,
+      project: entry.project_id,
+      target: entry.target_id,
+    }),
   };
 }
 
@@ -160,8 +206,11 @@ const WBPP_STAGES: Record<string, string> = {
   publishing: 'Saving masters',
 };
 
-function wbppItems(wbpp: WbppActivity | undefined): ActivityItem[] {
+function wbppItems(wbpp: WbppActivity | undefined, projectOf: ProjectOf): ActivityItem[] {
   if (!wbpp) return [];
+  // The stacks view carries a project's WBPP run and its outputs.
+  const href = (dbId: string, projectId?: number | null, targetId?: number | null) =>
+    targetPath('stacks', dbId, targetId, projectOf, projectId);
   const running = wbpp.running.map((run): ActivityItem => ({
     // The start time is part of the key, so the next run on the same
     // database is a new row and never inherits an armed Stop.
@@ -179,6 +228,7 @@ function wbppItems(wbpp: WbppActivity | undefined): ActivityItem[] {
     percent: null,
     queue: 'wbpp',
     control: { kind: 'wbpp-running', dbId: run.db_id },
+    href: href(run.db_id, run.project_id, run.target_id),
   }));
   const queued = wbpp.queued.map((run, index): ActivityItem => ({
     key: `wbpp-queued:${run.id}`,
@@ -192,6 +242,7 @@ function wbppItems(wbpp: WbppActivity | undefined): ActivityItem[] {
     queue: 'wbpp',
     position: index,
     control: { kind: 'wbpp-queued', dbId: run.db_id, queueId: run.id },
+    href: href(run.db_id, run.project_id, run.target_id),
   }));
   return [...running, ...queued];
 }
@@ -231,6 +282,9 @@ function scheduledItems(scheduled: ScheduledRefresh[]): ActivityItem[] {
     percent: null,
     automatic: true,
     control: { kind: 'scheduled', dbId: refresh.database_id, projectId: refresh.project_id },
+    href: refresh.project_id == null
+      ? viewPath('grid', { db: refresh.database_id })
+      : viewPath('stacks', { db: refresh.database_id, project: refresh.project_id }),
   }));
 }
 
@@ -240,12 +294,13 @@ export function activityItems(
   databases: DatabaseActivity[],
   stacks: StackActivityEntry[],
   wbpp?: WbppActivity,
-  scheduled: ScheduledRefresh[] = []
+  scheduled: ScheduledRefresh[] = [],
+  projectOf: ProjectOf = () => undefined
 ): ActivityItem[] {
   const items: ActivityItem[] = [];
   for (const db of databases) {
     if (db.refresh?.is_refreshing) items.push(refreshItem(db, db.refresh));
-    const quality = qualityItem(db);
+    const quality = qualityItem(db, projectOf);
     if (quality) items.push(quality);
   }
   // The server lists builds running first, then the line in order.
@@ -254,7 +309,7 @@ export function activityItems(
       || (left.queue_position ?? Infinity) - (right.queue_position ?? Infinity)
   );
   items.push(...ordered.map(stackItem));
-  items.push(...wbppItems(wbpp));
+  items.push(...wbppItems(wbpp, projectOf));
   items.push(...scheduledItems(scheduled));
   return items;
 }

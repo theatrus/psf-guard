@@ -3,6 +3,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../../test/msw-server';
 import type { StackActivityEntry } from '../../../api/types';
@@ -51,15 +52,32 @@ function mockServer({
 }) {
   server.use(
     http.get('/api/databases', () => ok([{ id: 'askar', name: 'Askar', database_path: '/x.sqlite' }])),
+    http.get('/api/db/:dbId/targets', () =>
+      ok([{ id: 42, project_id: 1, name: 'Alpha M44', active: true, has_files: true }])
+    ),
     http.get('/api/db/:dbId/analysis/quality-scan', () => ok(scan())),
     http.get('/api/stack-activity', () => ok({ schema_version: 1, active: stacks(), scheduled: scheduled() }))
   );
 }
 
-function renderChip() {
+function Location() {
+  const location = useLocation();
+  return <output aria-label="Location">{`${location.pathname}${location.search}`}</output>;
+}
+
+function renderChip({ showLocation = false } = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const Wrapper = ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={['/overview']}>
+        {children}
+        {showLocation && (
+          <Routes>
+            <Route path="*" element={<Location />} />
+          </Routes>
+        )}
+      </MemoryRouter>
+    </QueryClientProvider>
   );
   return render(<ActivityChip />, { wrapper: Wrapper });
 }
@@ -123,7 +141,7 @@ describe('ActivityChip', () => {
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Background jobs' })).toBeNull());
   });
 
-  it('says a scan finished with errors, then leaves', async () => {
+  it('keeps saying a scan finished with errors until they are dismissed', async () => {
     let running = true;
     mockServer({ scan: () => (running ? scanProgress(true, 9) : scanProgress(false, 10, 2)) });
     renderChip();
@@ -135,7 +153,52 @@ describe('ActivityChip', () => {
       'title',
       expect.stringContaining('Askar: 2 frames failed — no stars found')
     );
-    await waitFor(() => expect(screen.queryByText('Finished with errors')).toBeNull(), { timeout: 4000 });
+    // Well past the moment "Done" would have gone.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 3000)));
+    const finished = screen.getByRole('button', { name: 'Background jobs: finished with errors' });
+
+    await userEvent.click(finished);
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+    expect(within(list).getByRole('note')).toHaveTextContent('Askar: 2 frames failed — no stars found');
+    expect(within(list).getByRole('link', { name: 'Open the sequence' })).toHaveAttribute(
+      'href',
+      '/sequence?db=askar&project=1&target=42'
+    );
+    await userEvent.click(within(list).getByRole('button', { name: 'Dismiss the quality scan errors in Askar' }));
+    await waitFor(() => expect(screen.queryByText('Finished with errors')).toBeNull());
+    expect(screen.queryByRole('button', { name: /Background jobs/ })).toBeNull();
+  }, 10_000);
+
+  it('dismisses scan errors from the busy chip while other work runs', async () => {
+    let scanning = true;
+    mockServer({
+      scan: () => (scanning ? scanProgress(true, 9) : scanProgress(false, 10, 2)),
+      stacks: () => [stack('R', 'running', 1, 3)],
+    });
+    renderChip();
+    const chip = await screen.findByRole('button', { name: /Background jobs/ });
+    scanning = false;
+    await waitFor(() => expect(chip).toHaveAccessibleName(/a quality scan had errors/), { timeout: 3000 });
+    await userEvent.click(chip);
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+    await userEvent.click(within(list).getByRole('button', { name: 'Dismiss the quality scan errors in Askar' }));
+    await waitFor(() => expect(chip).not.toHaveAccessibleName(/had errors/));
+    expect(within(list).queryByRole('note')).toBeNull();
+    expect(chip).toHaveTextContent('1 job');
+  }, 10_000);
+
+  it('takes a row to the view showing what it works on', async () => {
+    mockServer({ stacks: () => [{ ...stack('R', 'running', 1, 3), target_id: 7 }] });
+    renderChip({ showLocation: true });
+    const chip = await screen.findByRole('button', { name: /Background jobs/ });
+    await userEvent.click(chip);
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+    await userEvent.click(within(list).getByRole('link', { name: 'Go to Stacking: Alpha M44 · R' }));
+    expect(screen.getByRole('status', { name: 'Location' })).toHaveTextContent(
+      '/stacks?db=askar&project=1&target=7'
+    );
+    // The list closes as the view changes.
+    expect(screen.queryByRole('region', { name: 'Background jobs' })).toBeNull();
   });
 
   it("does not report an old scan's errors when other work finishes", async () => {
