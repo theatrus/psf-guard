@@ -94,6 +94,8 @@ pub(super) enum ExecutionMode {
     LocalSequenceV2,
     PreparedTargetV3,
     LocalSequenceV3,
+    NativeImagingV1,
+    NativeSingleTargetV1,
 }
 
 pub(super) fn supports_prepared_target(p: &psf_guard_director_core::program::Program) -> bool {
@@ -134,6 +136,14 @@ impl ExecutionMode {
             }
             Self::PreparedTargetV3 => supports_prepared_target(p),
             Self::LocalSequenceV3 => supports_local_sequence(p),
+            Self::NativeImagingV1 => {
+                !p.targets.is_empty()
+                    && (p.configuration.enable_slew_center
+                        || p.targets.iter().all(|t| t.position_angle_mas.is_none()))
+            }
+            Self::NativeSingleTargetV1 => {
+                p.targets.len() == 1 && Self::NativeImagingV1.validate(p).is_ok()
+            }
         };
         if supported {
             Ok(())

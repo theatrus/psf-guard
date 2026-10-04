@@ -1,11 +1,52 @@
 # PSF Guard Director: goal-driven acquisition
 
-Status: phases 0 and 1 are partially implemented; no phase acceptance gate is
+Status: phases 0, 1 and 2 are partially implemented; no phase acceptance gate is
 complete. Shared-core, durable sidecar and native simulator building blocks are
 merged. The published Director 0.1.0.1 preview is runtime-only, not an acquisition
 scheduler. See the implementation audit below before treating a capability as
 available to users.
-Last updated: 2026-10-01.
+Last updated: 2026-10-03.
+
+### Native imaging and local observability increment
+
+The plugin now implements Director-owned native NINA centering/rotation,
+autofocus, guiding, dither and meridian-trigger integration. NINA owns device
+algorithms; the shared Rust core owns target choice, preparation issuance,
+cadence and fresh dispatch checks. Native filter/time/temperature autofocus and
+restore-guiding triggers remain in the normal sequence ancestry. Explicit
+Sequence ownership keeps custom/third-party instructions available and detects
+known duplicate native actions. Connect/cool and warm/disconnect stay in the
+outer NINA sequence; the Session requires connected commissioned devices.
+
+Meridian execution uses NINA's built-in trigger and flip VM, including profile
+timing/pier-side rules and before/after flip events. A thin adapter checks the
+returned boolean and exposed workflow-step completion before allowing another
+capture; it does not implement another flip algorithm. Runtime-installed
+defaults must not leak into saved/cloned user sequences. Native recovery steps
+can still be best effort (for example, recenter); workflow completion is not
+pixel-derived pointing evidence. Forced flip/rotation and real-sky acceptance
+remain open even when inherited-trigger integration tests pass.
+
+Workload API capability names are `native_single_target_v1` and
+`native_imaging_v1`. Old modes retain their old restrictions. Native device IDs
+and operation ownership participate in the local configuration fingerprint.
+Actual preparation durations/outcomes are journaled; learned duration estimates
+and preparation-feed upload to central PSF Guard remain unfinished.
+
+Target Scheduler inspiration is deliberately at the adapter/display boundary:
+its TargetSchedulerContainerTemplate uses NINA AltitudeChart with the native
+target DeepSkyObject and NighttimeData; TSLogger and PlanExecutionHistory retain
+action details and visit timing. Director reuses the same chart, adds a bounded
+local action/outcome/time history, and emits those entries to NINA's log. Neither
+view adds a second scheduling engine. The Sky tab displays the selected target
+and native horizon; complete per-candidate eligibility/Moon/meridian overlays
+remain planned. Local history works without connectivity. Central operation
+telemetry must eventually batch the durable preparation receipts, not replay UI
+logs as current rig status.
+
+This does not close phase 2: optical solver/focus performance, a real forced
+meridian flip/rotator test, broad third-party hooks, quality recovery, calibration
+acquisition, offline cold start and uncertain-work recovery remain acceptance work.
 
 ### Operating goal after setup
 
@@ -3756,6 +3797,9 @@ separate workflow; these mappings alone do not resolve them.
 - [ ] Ship capability-aware default operation policies through native N.I.N.A.
   without optional plugins. Expose policy ownership and prevent duplicate native,
   Director and plugin actions. Validate missing required devices/safety sources.
+  Native center/AF/guide/dither/flip defaults, ownership checks, local chart and
+  timed action history are now implemented. Keep this full gate open until
+  forced flip/rotation, real optical results and third-party combinations pass.
 - [x] Add the internal shared-core recovery states and separate durable per-rig
   store: cooldown/hysteresis, cumulative probe/hold/failure budgets, persisted
   night-stop latches, duplicate refusal and restart tests. This is not a shipped
