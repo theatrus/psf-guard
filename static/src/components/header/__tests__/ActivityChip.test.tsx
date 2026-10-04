@@ -328,47 +328,28 @@ describe('ActivityChip', () => {
     expect(await screen.findByRole('button', { name: 'Stop WBPP: Askar · project Bubble' })).toBeInTheDocument();
   });
 
-  it('lists a settling automatic refresh to run now or skip, without a spinning ring', async () => {
-    const calls: string[] = [];
+  it('neither lists nor counts an automatic refresh still settling', async () => {
+    let building = false;
     mockServer({
       scheduled: () => [{
         database_id: 'askar', database_name: 'Askar', project_id: 7, project_name: 'Heart',
         reason: 'arrival', due_in_seconds: 240,
       }],
+      stacks: () => (building ? [stack('R', 'running', 1, 3)] : []),
     });
-    server.use(
-      http.post('/api/stack-activity/scheduled/:action', async ({ params, request }) => {
-        calls.push(`${params.action} ${JSON.stringify(await request.json())}`);
-        return ok({ schema_version: 1, active: [], scheduled: [] });
-      })
-    );
-    renderChip();
-    const chip = await screen.findByRole('button', { name: /Background jobs/ });
+    const view = renderChip();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+    // Nothing runs yet: no chip at all.
+    expect(view.container.querySelector('.activity-chip')).toBeNull();
+
+    // Once it starts, it is an automatic build like any other.
+    building = true;
+    const chip = await screen.findByRole('button', { name: /Background jobs/ }, { timeout: 7000 });
     expect(chip).toHaveTextContent('1 job');
-    expect(chip.querySelector('.activity-ring.is-indeterminate')).toBeNull();
     await userEvent.click(chip);
     const list = await screen.findByRole('region', { name: 'Background jobs' });
-    expect(list).toHaveTextContent('Automatic refresh');
-    expect(list).toHaveTextContent('Askar · Heart · after new frames');
-    expect(list).toHaveTextContent('in 4 min');
-    await userEvent.click(within(list).getByRole('button', { name: 'Run Automatic refresh: Askar · Heart · after new frames now' }));
-    await waitFor(() => expect(calls).toEqual(['run-now {"database_id":"askar","project_id":7}']));
-  });
-
-  it('names the channels a waiting refresh will stack', async () => {
-    mockServer({
-      scheduled: () => [{
-        database_id: 'askar', database_name: 'Askar', project_id: 7, project_name: 'Heart',
-        reason: 'arrival', due_in_seconds: 240,
-        channels: ['Heart · R', 'Heart · G', 'Heart · B', 'Heart · L', 'Heart · Ha (new)'],
-      }],
-    });
-    renderChip();
-    await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
-    const list = await screen.findByRole('region', { name: 'Background jobs' });
-    expect(list).toHaveTextContent('Restacks Heart · R, Heart · G, Heart · B +2 more');
-    expect(list).toHaveTextContent('in 4 min');
-  });
+    expect(list).not.toHaveTextContent('Automatic refresh');
+  }, 10_000);
 
   it('offers no Stop on a running color composition', async () => {
     mockServer({ stacks: () => [{ ...stack('C', 'running', 1, 4), kind: 'color' }] });

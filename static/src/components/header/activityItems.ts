@@ -1,7 +1,6 @@
 import type {
   CacheRefreshProgress,
   QualityBackfillStatus,
-  ScheduledRefresh,
   SpatialScanStatus,
   StackActivityEntry,
   WbppActivity,
@@ -10,7 +9,6 @@ import type {
 /** What a row can do: stop its job, and move it in its line. */
 export type ActivityControl =
   | { kind: 'stack'; jobId: string }
-  | { kind: 'scheduled'; dbId: string; projectId: number | null }
   | { kind: 'wbpp-running'; dbId: string }
   | { kind: 'wbpp-queued'; dbId: string; queueId: string };
 
@@ -20,7 +18,7 @@ export type ActivityQueue = 'stack' | 'wbpp';
 /** One piece of background work the header reports. */
 export interface ActivityItem {
   key: string;
-  kind: 'refresh' | 'quality' | 'stack' | 'wbpp' | 'automatic';
+  kind: 'refresh' | 'quality' | 'stack' | 'wbpp';
   /** What is happening: "Stacking", "Analyzing quality". */
   title: string;
   /** What it happens to: a database, or a target and channel. */
@@ -40,8 +38,6 @@ export interface ActivityItem {
   control?: ActivityControl;
   /** Whether Stop can end it while it runs. A color composition cannot. */
   stoppable?: boolean;
-  /** What the state corner says of a waiting job, such as when it starts. */
-  state?: string;
   /** The view showing what the job works on, scoped by URL. */
   href?: string;
 }
@@ -247,54 +243,13 @@ function wbppItems(wbpp: WbppActivity | undefined, projectOf: ProjectOf): Activi
   return [...running, ...queued];
 }
 
-const REFRESH_REASONS: Record<ScheduledRefresh['reason'], string> = {
-  arrival: 'new frames',
-  sync: 'a sync',
-  grade: 'grade changes',
-};
-
-function startsIn(seconds: number): string {
-  if (seconds <= 15) return 'starting now';
-  const minutes = Math.ceil(seconds / 60);
-  return `in ${minutes} min`;
-}
-
-/** `T · R, T · G (new) +2 more`: what a waiting refresh will stack. */
-function channelsText(channels: string[]): string {
-  const shown = channels.slice(0, 3).join(', ');
-  return channels.length > 3 ? `${shown} +${channels.length - 3} more` : shown;
-}
-
-function scheduledItems(scheduled: ScheduledRefresh[]): ActivityItem[] {
-  return scheduled.map((refresh) => ({
-    key: `scheduled:${refresh.database_id}:${refresh.project_id ?? 'all'}`,
-    kind: 'automatic',
-    title: 'Automatic refresh',
-    scope: `${refresh.database_name} · ${
-      refresh.project_id == null
-        ? 'every followed project'
-        : refresh.project_name ?? `project ${refresh.project_id}`
-    } · after ${REFRESH_REASONS[refresh.reason]}`,
-    detail: refresh.channels?.length ? `Restacks ${channelsText(refresh.channels)}` : 'Restacks what changed',
-    hint: refresh.channels?.join('\n'),
-    state: startsIn(refresh.due_in_seconds),
-    queued: true,
-    percent: null,
-    automatic: true,
-    control: { kind: 'scheduled', dbId: refresh.database_id, projectId: refresh.project_id },
-    href: refresh.project_id == null
-      ? viewPath('grid', { db: refresh.database_id })
-      : viewPath('stacks', { db: refresh.database_id, project: refresh.project_id }),
-  }));
-}
-
 /** Every job the header reports: each line's running work, then its waiting
- *  work in the order it will run, then automatic refreshes still settling. */
+ *  work in the order it will run. An automatic refresh still settling is not
+ *  work yet; it shows once it starts, as an automatic build. */
 export function activityItems(
   databases: DatabaseActivity[],
   stacks: StackActivityEntry[],
   wbpp?: WbppActivity,
-  scheduled: ScheduledRefresh[] = [],
   projectOf: ProjectOf = () => undefined
 ): ActivityItem[] {
   const items: ActivityItem[] = [];
@@ -310,7 +265,6 @@ export function activityItems(
   );
   items.push(...ordered.map(stackItem));
   items.push(...wbppItems(wbpp, projectOf));
-  items.push(...scheduledItems(scheduled));
   return items;
 }
 
