@@ -8,7 +8,7 @@
 %global rustflags_debuginfo 0
 
 Name:           psf-guard
-Version:        0.10.3
+Version:        0.10.4
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -93,6 +93,12 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Sat Oct 03 2026 Yann Ramin <github@theatr.us> - 0.10.4-1
+- Analyze new frames as they arrive, an option per database, scores frames that sync, upload or import brings in
+- Frames with plenty of stars no longer score near zero because one measurement found none
+- The quality scan no longer records zero stars for a frame still being copied
+- Calibration frames are dated by the night they belong to; dawn flats west of Greenwich no longer land a day late
+
 * Sun Sep 27 2026 Yann Ramin <github@theatr.us> - 0.10.3-1
 - A server that ran a newer preview build starts again on 0.10: the browser user file keeps fields this version does not know, such as API tokens, instead of refusing to load
 
