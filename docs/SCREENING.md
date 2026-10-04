@@ -113,6 +113,17 @@ finds no stars where the capture software counted 20 or more, the scan failed,
 and its star count, HFR and dead cells for that frame are dropped, so the score
 renormalizes around them. The same holds the other way round.
 
+**Soft stars** are judged against the whole target, not the night. A frame's
+HFR is compared with the best of its target and filter across every night
+(the 10th percentile, once a capture profile has ten measured frames).
+Against its own night, a whole night of poor seeing or lost focus looks
+normal; and as one part of eight in the score, an HFR twice the best still
+left a frame near 0.8. From 1.5× the best the score is capped, falling to the
+condemned score at 2× and beyond, with a **Soft Stars** cause. From 1.75× the
+frame also gets an `[Auto]` reject recommendation, so stacks leave it out. On
+one rig's catalog, 96.7% of frames sat within 1.3× of their best, and 1.5%
+beyond 1.5×.
+
 The scan also refuses to record a zero it cannot trust. A frame written within
 the last hour whose data ends in a long run of one value is taken as a copy
 still under way (Windows copies, sync tools and moves between volumes create

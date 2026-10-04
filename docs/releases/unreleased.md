@@ -38,6 +38,13 @@
   while other work runs.
 - Keep automatic refreshes that are still waiting to start out of the
   header's background queue and its job count. They appear once they build.
+- Score frames far softer than their target's best low, whatever the rest of
+  their night looked like. From 1.5× the target's best HFR in that filter the
+  score is capped, reaching the reject level at 2×, with a **Soft Stars**
+  cause; from 1.75× they are recommended for rejection and left out of stacks.
+- Catch a rotator that slipped: frames whose field turned away from the
+  target's framing while the rotator reported no turn are flagged as
+  rotation skew, scored low and left out of stacks, however long the run.
 
 > Add a line here as each user-visible change merges. At release time this
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
