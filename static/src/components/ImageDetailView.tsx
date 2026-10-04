@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../api/client';
 import { GradingStatus } from '../api/types';
-import type { PreviewDescriptor } from '../api/types';
+import type { ImageCopy, PreviewDescriptor } from '../api/types';
 import { useImagePreloader } from '../hooks/useImagePreloader';
 import { useImageZoom } from '../hooks/useImageZoom';
 import { useAsyncImage } from '../hooks/useAsyncImage';
@@ -88,13 +88,37 @@ export default function ImageDetailView({
     height: number;
   } | null>(null);
 
+  // Fetch image details
+  const { data: image, isLoading } = useQuery({
+    queryKey: ['db', dbId, 'image', imageId],
+    queryFn: () => apiClient.getImage(dbId, imageId),
+    placeholderData: (previousData) => previousData, // Keep showing previous image while loading new one
+  });
+
+  // Which file to show: the light's own, or one of the calibrated or
+  // registered copies other software wrote. Held by name, so stepping
+  // through frames keeps showing the same kind of copy where one exists.
+  const [copyLabel, setCopyLabel] = useState<string | null>(null);
+  const copies: ImageCopy[] = image?.id === imageId ? image.copies ?? [] : [];
+  const ownCopy = copies.find((candidate) => candidate.primary);
+  const viewCopies = copies.filter(
+    (candidate) => !candidate.primary && candidate.available !== false
+  );
+  const selectedCopy = copyLabel
+    ? viewCopies.find((candidate) => candidate.label === copyLabel)
+    : undefined;
+  const copy = selectedCopy?.uuid;
+  // Sky, satellite and quality overlays are drawn on the light's own pixel
+  // grid; a registered copy has been resampled onto another one.
+  const geometryMatches = selectedCopy?.kind !== 'registered';
+
   // State machine to prevent feedback loops
   const imageStateRef = useRef<'large' | 'switching-to-original' | 'original'>('large');
   // Guard: request original-resolution generation at most once per image.
   const originalRequestedRef = useRef(false);
   const mainImageKey = `${dbId}:${imageId}:${showStars ? 'stars' : 'preview'}:${maxStars}:${
     showColor ? 'color' : 'mono'
-  }`;
+  }:${copy ?? 'own'}`;
   const mainImageKeyRef = useRef(mainImageKey);
   mainImageKeyRef.current = mainImageKey;
 
@@ -139,15 +163,15 @@ export default function ImageDetailView({
   // markers over a colour image compete with the pixels they annotate.
   const colorPreview = showColor && !showStars;
   const largeNonPsfSrc = showStars
-    ? apiClient.getAnnotatedUrl(dbId, imageId, 'large', maxStars)
-    : apiClient.getPreviewUrl(dbId, imageId, { size: 'large', color: colorPreview });
+    ? apiClient.getAnnotatedUrl(dbId, imageId, 'large', maxStars, copy)
+    : apiClient.getPreviewUrl(dbId, imageId, { size: 'large', color: colorPreview, copy });
   const originalNonPsfSrc = showStars
-    ? apiClient.getAnnotatedUrl(dbId, imageId, 'original', maxStars)
-    : apiClient.getPreviewUrl(dbId, imageId, { size: 'original', color: colorPreview });
+    ? apiClient.getAnnotatedUrl(dbId, imageId, 'original', maxStars, copy)
+    : apiClient.getPreviewUrl(dbId, imageId, { size: 'original', color: colorPreview, copy });
   const nonPsfSrc = mainSize === 'original' ? originalNonPsfSrc : largeNonPsfSrc;
   const nonPsfDescriptor: PreviewDescriptor = showStars
-    ? { imageId, kind: 'annotated', size: mainSize, maxStars }
-    : { imageId, kind: 'preview', size: mainSize, color: colorPreview };
+    ? { imageId, kind: 'annotated', size: mainSize, maxStars, copy }
+    : { imageId, kind: 'preview', size: mainSize, color: colorPreview, copy };
   const asyncImg = useAsyncImage(dbId, nonPsfSrc, nonPsfDescriptor);
   // `src` is what the <img> renders (may carry a `v=` cache-buster after a
   // generation-triggered reload); `baseSrc` is the stable identity used to
@@ -175,12 +199,6 @@ export default function ImageDetailView({
   const visibleMainSrcIsCurrent =
     currentNonPsfSources.includes(visibleMainBaseSrc);
 
-  // Fetch image details
-  const { data: image, isLoading } = useQuery({
-    queryKey: ['db', dbId, 'image', imageId],
-    queryFn: () => apiClient.getImage(dbId, imageId),
-    placeholderData: (previousData) => previousData, // Keep showing previous image while loading new one
-  });
 
   const qualityScope = useScopedQuality(dbId, projectId, targetId, qualityFilterName);
   const quality = qualityScope.qualityByImage.get(imageId);
@@ -253,8 +271,8 @@ export default function ImageDetailView({
 
   // Fetch star detection
   const { data: starData, isLoading: starDataLoading } = useQuery({
-    queryKey: ['db', dbId, 'stars', imageId],
-    queryFn: () => apiClient.getStarDetection(dbId, imageId),
+    queryKey: ['db', dbId, 'stars', imageId, copy ?? 'own'],
+    queryFn: () => apiClient.getStarDetection(dbId, imageId, copy),
     enabled: showStars,
   });
 
@@ -271,6 +289,13 @@ export default function ImageDetailView({
   useHotkeys('x,shift+x', (event) => onGrade('rejected', event.shiftKey), [onGrade]);
   useHotkeys('u,shift+u', (event) => onGrade('pending', event.shiftKey), [onGrade]);
   useHotkeys('i', () => setShowTilt(current => !current), []);
+  // V steps through the light's own file and its copies.
+  useHotkeys('v', () => {
+    if (viewCopies.length === 0) return;
+    const labels = [null, ...viewCopies.map((candidate) => candidate.label)];
+    const index = labels.indexOf(selectedCopy?.label ?? null);
+    setCopyLabel(labels[(index + 1) % labels.length]);
+  }, [viewCopies, selectedCopy]);
   useHotkeys('s', () => {
     setShowStars(s => !s);
     setShowPsf(false); // Turn off PSF when showing stars
@@ -577,6 +602,7 @@ export default function ImageDetailView({
                           psf_type: 'moffat',
                           sort_by: 'r2',
                           selection: 'top-n',
+                          copy,
                         })
                       : visibleMainSrc
                   }
@@ -620,6 +646,7 @@ export default function ImageDetailView({
                 />
                 {!showPsf &&
                   showAstrometry &&
+                  geometryMatches &&
                   !hideMainImage &&
                   displayedBitmapDimensions &&
                   astrometry?.solution && (
@@ -638,6 +665,7 @@ export default function ImageDetailView({
                   )}
                 {!showPsf &&
                   showSatellites &&
+                  geometryMatches &&
                   !hideMainImage &&
                   displayedBitmapDimensions &&
                   satelliteStatus?.analysis && (
@@ -656,6 +684,7 @@ export default function ImageDetailView({
                   )}
                 {!showPsf &&
                   showQualityRegions &&
+                  geometryMatches &&
                   !hideMainImage &&
                   displayedBitmapDimensions &&
                   quality?.spatial_overlay && (
@@ -794,6 +823,38 @@ export default function ImageDetailView({
               )}
             </div>
 
+            {viewCopies.length > 0 && (
+              <div className="detail-copy-switch" role="group" aria-label="File shown">
+                {[
+                  { label: null as string | null, text: ownCopy?.label ?? 'Raw' },
+                  ...viewCopies.map((candidate) => ({ label: candidate.label, text: candidate.label })),
+                ].map((option) => {
+                  const active = (selectedCopy?.label ?? null) === option.label;
+                  return (
+                    <button
+                      key={option.label ?? 'own'}
+                      type="button"
+                      className={`zoom-btn-compact${active ? ' active' : ''}`}
+                      aria-pressed={active}
+                      onClick={() => setCopyLabel(option.label)}
+                      title={
+                        option.label === null
+                          ? 'The light\'s own file'
+                          : viewCopies.find((candidate) => candidate.label === option.label)?.file_name
+                      }
+                    >
+                      {option.text}
+                    </button>
+                  );
+                })}
+                {!geometryMatches && (
+                  <small className="detail-copy-note">
+                    Registered onto another frame: sky, satellite and quality overlays are hidden.
+                  </small>
+                )}
+              </div>
+            )}
+
             <QualityAnalysisSummary
               quality={quality}
               statusMessage={qualityStatus}
@@ -892,6 +953,7 @@ export default function ImageDetailView({
                 <span>I Tilt {showTilt ? '✓' : ''}</span>
                 <span>P PSF {showPsf ? '✓' : ''}</span>
                 <span>O Sky {showAstrometry && astrometry?.solution ? '✓' : ''}</span>
+                {viewCopies.length > 0 && <span>V View</span>}
                 <span>Z Size</span>
                 {grading && <span>⌘Z Undo</span>}
                 {grading && <span>⌘Y Redo</span>}

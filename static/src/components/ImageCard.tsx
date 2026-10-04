@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from 'react';
 import { useInView } from 'react-intersection-observer';
-import type { Image, ImageQualityResult } from '../api/types';
+import type { Image, ImageCopy, ImageQualityResult } from '../api/types';
 
 /** How far a skewed frame turned, and against what. A rotator slip is
  *  measured against the angle the rotator reported; its own run agrees with
@@ -153,6 +153,7 @@ export default function ImageCard({
         ) : (
           <div className="image-preview-deferred" aria-hidden="true" />
         )}
+        <CopyMark copies={image.copies} />
         {quality && (
           <div
             className="quality-badge"
@@ -294,6 +295,32 @@ export default function ImageCard({
         )}
       </div>
     </div>
+  );
+}
+
+/** A small mark, always in the same corner, when other software left
+ *  calibrated or registered copies of this light, or when the light's own
+ *  file is such a copy. The detail view switches between them. */
+function CopyMark({ copies }: { copies?: ImageCopy[] }) {
+  if (!copies || copies.length === 0) return null;
+  const own = copies.find((copy) => copy.primary);
+  const others = copies.filter((copy) => !copy.primary);
+  const lines = [
+    own && `From a calibrated copy (${own.label}); no raw frame yet`,
+    others.length > 0 && `Copies: ${others.map((copy) => copy.label).join(', ')}`,
+  ].filter(Boolean);
+  return (
+    <span
+      className={`copy-mark${own ? ' copy-mark-own' : ''}`}
+      title={lines.join('. ')}
+      aria-label={lines.join('. ')}
+      role="img"
+    >
+      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+        <rect x="0.5" y="3.5" width="8" height="8" rx="1" fill={own ? 'currentColor' : 'none'} stroke="currentColor" />
+        <path d="M3.5 3.5V1.5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H8.5" fill="none" stroke="currentColor" />
+      </svg>
+    </span>
   );
 }
 

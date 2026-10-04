@@ -673,3 +673,13 @@
   becomes the light, and the raw takes it over, grade and all, when it is
   imported or synced later. Copies already on disk pair after each folder
   refresh. Turn it off per database in Settings.
+- Take a rejected frame's calibrated and registered copies into the reject
+  archive with it, each beside its own folder, and bring them back when the
+  frame is restored.
+- Switch the image detail between a frame and its calibrated and
+  registered copies, with V or the buttons beside the image; previews,
+  star markers and the PSF view follow. Grid cards mark frames that have
+  copies.
+- Measure quality on a frame's calibrated copy instead of its raw file,
+  per database in Settings. The frame's star metadata keeps the capture
+  software's values.

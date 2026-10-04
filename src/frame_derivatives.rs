@@ -323,6 +323,50 @@ pub fn derivatives_for_light(
     Ok(records)
 }
 
+/// Every copy recorded for these lights, by light guid.
+pub fn derivatives_for_lights(
+    conn: &Connection,
+    guids: &[&str],
+) -> Result<HashMap<String, Vec<DerivativeRecord>>> {
+    let mut by_light: HashMap<String, Vec<DerivativeRecord>> = HashMap::new();
+    if !schema_exists(conn) || guids.is_empty() {
+        return Ok(by_light);
+    }
+    for chunk in guids.chunks(500) {
+        let placeholders = vec!["?"; chunk.len()].join(",");
+        let mut statement = conn.prepare(&format!(
+            "SELECT {RECORD_COLUMNS} FROM psf_guard_frame_derivative
+             WHERE acquired_image_guid IN ({placeholders})"
+        ))?;
+        let rows =
+            statement.query_map(rusqlite::params_from_iter(chunk.iter()), record_from_row)?;
+        for record in rows {
+            let record = record?;
+            by_light
+                .entry(record.acquired_image_guid.clone())
+                .or_default()
+                .push(record);
+        }
+    }
+    for records in by_light.values_mut() {
+        records.sort_by(|left, right| {
+            (
+                left.kind.as_str(),
+                left.steps.count(),
+                left.steps,
+                &left.file_name,
+            )
+                .cmp(&(
+                    right.kind.as_str(),
+                    right.steps.count(),
+                    right.steps,
+                    &right.file_name,
+                ))
+        });
+    }
+    Ok(by_light)
+}
+
 /// One record by its uuid.
 pub fn record_by_uuid(conn: &Connection, uuid: &str) -> Result<Option<DerivativeRecord>> {
     if !schema_exists(conn) {
@@ -802,7 +846,7 @@ impl PairingReport {
 
 /// The last two folders above a file, to tell two files of one name apart
 /// when the record is found again.
-fn source_tail(path: &std::path::Path) -> Option<String> {
+pub fn source_tail(path: &std::path::Path) -> Option<String> {
     let parents: Vec<String> = path
         .parent()?
         .components()
@@ -1199,6 +1243,46 @@ pub fn pair_files_on_disk(
         );
     }
     Ok(report)
+}
+
+/// The file a record names, among the paths the directory tree holds under
+/// its name. A path whose last folders match the record's `source_tail`
+/// wins, then any path; either must still have the recorded size, so a
+/// rewritten or unrelated file of the same name is never taken for the copy.
+pub fn resolve_record_path<'a>(
+    record: &DerivativeRecord,
+    candidates: impl IntoIterator<Item = &'a std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    let size_matches = |path: &std::path::Path| match record.size {
+        Some(size) => std::fs::metadata(path).is_ok_and(|meta| meta.len() as i64 == size),
+        None => path.is_file(),
+    };
+    let tail_matches = |path: &std::path::Path| {
+        record
+            .source_tail
+            .as_deref()
+            .is_some_and(|tail| source_tail(path).as_deref() == Some(tail))
+    };
+    let candidates: Vec<&std::path::PathBuf> = candidates.into_iter().collect();
+    candidates
+        .iter()
+        .find(|path| tail_matches(path) && size_matches(path))
+        .or_else(|| candidates.iter().find(|path| size_matches(path)))
+        .map(|path| (*path).clone())
+}
+
+/// Note where a recorded copy lives now, after the reject archive moved it
+/// or brought it back. Size and modification time survive a rename.
+pub fn set_source_tail(conn: &Connection, uuid: &str, path: &std::path::Path) -> Result<()> {
+    if !schema_exists(conn) {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE psf_guard_frame_derivative SET source_tail = ?2, updated_at = ?3
+         WHERE derivative_uuid = ?1",
+        params![uuid, source_tail(path), now_epoch()],
+    )?;
+    Ok(())
 }
 
 /// How many copies a catalog has paired, for Settings.
@@ -1750,6 +1834,32 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM acquiredimage", [], |row| row.get(0))
             .unwrap();
         assert_eq!(lights, 1, "the pass never adds a light");
+    }
+
+    #[test]
+    fn a_record_finds_its_file_by_tail_and_size() {
+        let root = tempfile::tempdir().unwrap();
+        let calibrated = root.path().join("calibrated/Light_B");
+        let other = root.path().join("old/run");
+        std::fs::create_dir_all(&calibrated).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let right = calibrated.join("f_c.xisf");
+        let stale = other.join("f_c.xisf");
+        std::fs::write(&right, [0_u8; 10]).unwrap();
+        std::fs::write(&stale, [0_u8; 10]).unwrap();
+        let mut record = record("light", FrameKind::Calibrated, "f_c.xisf", "u");
+        record.source_tail = Some("calibrated/Light_B".into());
+        record.size = Some(10);
+        assert_eq!(
+            resolve_record_path(&record, [&stale, &right]),
+            Some(right.clone())
+        );
+        // A file of that name but another size is not the copy.
+        record.size = Some(11);
+        assert_eq!(resolve_record_path(&record, [&stale, &right]), None);
+        record.size = Some(10);
+        record.source_tail = Some("moved/away".into());
+        assert_eq!(resolve_record_path(&record, [&stale]), Some(stale));
     }
 
     fn record(guid: &str, kind: FrameKind, file_name: &str, uuid: &str) -> DerivativeRecord {

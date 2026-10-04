@@ -476,6 +476,7 @@ mod tests {
                 autoimport: None,
                 analyze_new_frames: false,
                 pair_calibrated_copies: true,
+                scan_calibrated_copies: false,
             }],
             active_db_id: None,
             astrometry: None,

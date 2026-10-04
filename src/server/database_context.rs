@@ -550,6 +550,8 @@ pub struct DatabaseContext {
     /// Pair calibrated and registered copies with their lights, on import
     /// and in the background pass. Shared so Settings can change it live.
     pub pair_calibrated_copies: Arc<AtomicBool>,
+    /// Measure quality on calibrated copies instead of raw files.
+    pub scan_calibrated_copies: Arc<AtomicBool>,
     /// Per-DB cache directory: `<cache_root>/<slug>/`. Created on construction.
     /// Image previews, star lists, astrometry and the other per-image results
     /// for this database live below here, so two DBs with overlapping image
@@ -871,6 +873,9 @@ impl DatabaseContext {
         context
             .pair_calibrated_copies
             .store(entry.pair_calibrated_copies, Ordering::Relaxed);
+        context
+            .scan_calibrated_copies
+            .store(entry.scan_calibrated_copies, Ordering::Relaxed);
         Ok(context)
     }
 
@@ -975,6 +980,7 @@ impl DatabaseContext {
             autoimport: None,
             analyze_new_frames: Arc::new(AtomicBool::new(false)),
             pair_calibrated_copies: Arc::new(AtomicBool::new(true)),
+            scan_calibrated_copies: Arc::new(AtomicBool::new(false)),
             cache_dir_path,
             stack_root,
             calibration_root,
@@ -2188,6 +2194,7 @@ impl DatabaseContext {
             autoimport: None,
             analyze_new_frames: Arc::new(AtomicBool::new(false)),
             pair_calibrated_copies: Arc::new(AtomicBool::new(true)),
+            scan_calibrated_copies: Arc::new(AtomicBool::new(false)),
             cache_dir_path: PathBuf::from("/tmp/psf-guard-test"),
             stack_root: PathBuf::from("/tmp/psf-guard-test"),
             calibration_root: PathBuf::from("/tmp/psf-guard-test"),
@@ -2234,6 +2241,7 @@ impl Clone for DatabaseContext {
             autoimport: self.autoimport.clone(),
             analyze_new_frames: self.analyze_new_frames.clone(),
             pair_calibrated_copies: self.pair_calibrated_copies.clone(),
+            scan_calibrated_copies: self.scan_calibrated_copies.clone(),
             cache_dir_path: self.cache_dir_path.clone(),
             stack_root: self.stack_root.clone(),
             calibration_root: self.calibration_root.clone(),

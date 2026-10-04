@@ -1,6 +1,6 @@
 # Calibrated subs
 
-Status: **Engine, import and sync built; the views that use a pair come next (see the end)**
+Status: **Built**. Still open: quality grading that knows a calibrated light's ADU is not raw (section 4), and stacking from supplied calibrated frames.
 Last updated: 2026-10-04
 
 ## 1. Goal
@@ -209,18 +209,29 @@ carry it explicitly:
 - **Reject archive**: `move-rejects` moves a light's derivatives with it,
   each into the archive mirror of its own folder, recorded beside the
   sidecars; `restore-rejects` brings them back. Dry runs list them.
-- **Previews and inspection**: the detail view gets a Raw / Calibrated /
-  Registered switch where copies exist. Previews, annotated previews, star
-  and PSF caches take a `source` parameter whose cache-key segment includes
-  the derivative's fingerprint, so raw keys stay where they are.
-- **Library and grid**: a light with a calibrated copy carries a small mark;
-  a primary calibrated light says so.
-- **Quality scans** measure the raw by default. A database option measures
-  the calibrated copy instead, for its flat-fielded background and its
+- **Previews and inspection**: the detail view shows one button per option
+  (Raw, Calibrated, Calibrated + registered, …) where copies exist on disk;
+  `V` steps through them, and the choice is kept by name from frame to
+  frame. Previews, annotated previews, stars and PSF take `copy=<uuid>`;
+  the copy is found by name, folder and size through the directory tree,
+  and its artifacts sit under the light's own key plus
+  `_copy_<uuid>_<fingerprint>`, so the light's keys stay where they are and
+  a rewritten copy renders anew. The sky, satellite and quality overlays
+  are drawn on the light's own pixel grid, so they are hidden while a
+  registered copy is shown. Image lists and the detail carry each light's
+  `copies`.
+- **Library and grid**: a grid card carries a small icon, always in the
+  bottom-left corner, when a light has copies; it is filled when the
+  light's own file is a calibrated copy.
+- **Quality scans** measure the raw by default. A database option
+  (**Measure quality on the calibrated copy**, `scan_calibrated_copies`)
+  measures the calibrated copy with the most steps instead, for its flat-fielded background and its
   hot-pixel-free stars. Its scan entries carry a `calibrated:` source
   revision, so raw and calibrated measurements never stand in for each
   other, and its star counts are not written into the light's metadata,
-  which keeps the capture software's meaning. A **registered** copy never
+  which keeps the capture software's meaning. Turning the option on or off
+  changes the expected revision, so frames are measured again on the next
+  run. A **registered** copy never
   feeds HFR, star, pointing or astrometry evidence: resampling changes all
   of them.
 - **Stacking** reads raw frames and calibrates them as today. Using

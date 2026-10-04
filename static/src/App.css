@@ -7583,3 +7583,37 @@
   align-items: center;
   gap: 0.75rem;
 }
+
+/* Detail: choose the light's own file or one of its calibrated or
+   registered copies. */
+.detail-copy-switch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 8px 0;
+}
+
+.detail-copy-note {
+  flex-basis: 100%;
+  color: var(--text-secondary, #999);
+}
+
+/* Grid: other software left copies of this light, or its own file is one. */
+.image-preview .copy-mark {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  padding: 0 4px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: auto;
+}
+
+.image-preview .copy-mark-own {
+  background: rgba(120, 80, 0, 0.75);
+}

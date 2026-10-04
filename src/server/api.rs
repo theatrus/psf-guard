@@ -205,6 +205,41 @@ pub struct ImageResponse {
     pub reject_reason: Option<String>,
     pub metadata: serde_json::Value,
     pub filesystem_path: Option<String>,
+    /// Calibrated and registered copies of this light, each a view the
+    /// detail can switch to.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub copies: Vec<ImageCopy>,
+}
+
+/// One calibrated or registered copy of a light.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImageCopy {
+    /// Pass as `copy=` to previews, stars and PSF to view this copy.
+    pub uuid: String,
+    pub kind: crate::image_io::FrameKind,
+    pub steps: crate::image_io::ProcessingSteps,
+    /// "Calibrated + registered".
+    pub label: String,
+    pub file_name: String,
+    /// The light's own file is this copy (no raw frame yet).
+    pub primary: bool,
+    /// Found on disk. Only the detail view checks; lists leave it out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub available: Option<bool>,
+}
+
+impl From<&crate::frame_derivatives::DerivativeRecord> for ImageCopy {
+    fn from(record: &crate::frame_derivatives::DerivativeRecord) -> Self {
+        Self {
+            uuid: record.derivative_uuid.clone(),
+            kind: record.kind,
+            steps: record.steps,
+            label: record.steps.label(),
+            file_name: record.file_name.clone(),
+            primary: record.primary_source,
+            available: None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -391,6 +426,15 @@ pub struct PreviewOptions {
     /// what the grader measures. A frame with no `BAYERPAT` has no colour to
     /// show and renders greyscale either way.
     pub color: Option<bool>,
+    /// A calibrated or registered copy's uuid, to render it instead of the
+    /// light's own file.
+    pub copy: Option<String>,
+}
+
+/// Pick a calibrated or registered copy of a light instead of its own file.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct CopyQuery {
+    pub copy: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

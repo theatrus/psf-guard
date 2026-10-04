@@ -1830,6 +1830,7 @@ mod remote_image_layout_settings_tests {
             autoimport: None,
             analyze_new_frames: false,
             pair_calibrated_copies: true,
+            scan_calibrated_copies: false,
         }
     }
 
@@ -3616,12 +3617,17 @@ pub async fn update_analyze_new_frames(
 pub struct CalibratedCopiesResponse {
     /// Pair calibrated and registered copies with their lights.
     pub pair: bool,
+    /// Measure quality on calibrated copies instead of raw files.
+    pub scan_calibrated: bool,
     pub counts: crate::frame_derivatives::PairingCounts,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CalibratedCopiesRequest {
-    pub pair: bool,
+    #[serde(default)]
+    pub pair: Option<bool>,
+    #[serde(default)]
+    pub scan_calibrated: Option<bool>,
 }
 
 /// `GET /api/db/{db}/calibrated-copies` — whether this database pairs
@@ -3644,12 +3650,16 @@ pub async fn get_calibrated_copies(
         pair: ctx
             .pair_calibrated_copies
             .load(std::sync::atomic::Ordering::Relaxed),
+        scan_calibrated: ctx
+            .scan_calibrated_copies
+            .load(std::sync::atomic::Ordering::Relaxed),
         counts,
     })))
 }
 
-/// `PUT /api/db/{db}/calibrated-copies` — turn pairing on or off. A
-/// database setting, so it sits behind database management.
+/// `PUT /api/db/{db}/calibrated-copies` — turn pairing, or quality
+/// measured on calibrated copies, on or off. Database settings, so they sit
+/// behind database management. A field left out keeps its value.
 pub async fn update_calibrated_copies(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
@@ -3663,16 +3673,28 @@ pub async fn update_calibrated_copies(
             .iter_mut()
             .find(|entry| entry.id == db_id)
             .ok_or(AppError::NotFound)?;
-        entry.pair_calibrated_copies = request.pair;
+        if let Some(pair) = request.pair {
+            entry.pair_calibrated_copies = pair;
+        }
+        if let Some(scan) = request.scan_calibrated {
+            entry.scan_calibrated_copies = scan;
+        }
         Ok(())
     })
     .await?;
-    if let Some(live) = state.get_database(&db_id) {
-        live.pair_calibrated_copies
-            .store(request.pair, std::sync::atomic::Ordering::Relaxed);
+    let live = state.get_database(&db_id);
+    for context in live.iter().map(|live| &**live).chain([&*ctx.0]) {
+        if let Some(pair) = request.pair {
+            context
+                .pair_calibrated_copies
+                .store(pair, std::sync::atomic::Ordering::Relaxed);
+        }
+        if let Some(scan) = request.scan_calibrated {
+            context
+                .scan_calibrated_copies
+                .store(scan, std::sync::atomic::Ordering::Relaxed);
+        }
     }
-    ctx.pair_calibrated_copies
-        .store(request.pair, std::sync::atomic::Ordering::Relaxed);
     get_calibrated_copies(ctx).await
 }
 
@@ -4134,9 +4156,24 @@ pub async fn get_images(
         );
     }
 
+    let guids: Vec<&str> = images
+        .iter()
+        .filter_map(|(image, _, _)| image.guid.as_deref())
+        .collect();
+    let mut copies = crate::frame_derivatives::derivatives_for_lights(&conn, &guids)
+        .map_err(|error| AppError::InternalError(format!("reading copies: {error:#}")))?;
+
     let response: Vec<ImageResponse> = images
         .into_iter()
         .map(|(img, proj_name, target_name)| {
+            let copies = img
+                .guid
+                .as_deref()
+                .and_then(|guid| copies.remove(guid))
+                .unwrap_or_default()
+                .iter()
+                .map(ImageCopy::from)
+                .collect();
             let metadata: serde_json::Value = serde_json::from_str(&img.metadata)
                 .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
@@ -4162,6 +4199,7 @@ pub async fn get_images(
                 reject_reason: img.reject_reason,
                 metadata,
                 filesystem_path: None, // Not calculated for bulk operations for performance
+                copies,
             }
         })
         .collect();
@@ -4346,6 +4384,7 @@ pub async fn get_image(
         Some(profile_id) => display_project_name(&proj_name, profile_id, &ambiguous_names),
         None => proj_name.clone(),
     };
+    let copies = image_copies_on_disk(&ctx.0, &image).await?;
 
     let response = ImageResponse {
         exposure_group,
@@ -4361,9 +4400,50 @@ pub async fn get_image(
         reject_reason: image.reject_reason,
         metadata,
         filesystem_path: filesystem_path_string,
+        copies,
     };
 
     Ok(Json(ApiResponse::success(response)))
+}
+
+/// A light's copies, each checked against the image folders.
+async fn image_copies_on_disk(
+    ctx: &Arc<DatabaseContext>,
+    image: &crate::models::AcquiredImage,
+) -> Result<Vec<ImageCopy>, AppError> {
+    let Some(guid) = image.guid.clone() else {
+        return Ok(Vec::new());
+    };
+    let ctx = Arc::clone(ctx);
+    tokio::task::spawn_blocking(move || {
+        let records = {
+            let connection = ctx.db();
+            let connection = connection.lock().map_err(AppError::db)?;
+            crate::frame_derivatives::derivatives_for_light(&connection, &guid)
+                .map_err(|error| AppError::InternalError(format!("reading copies: {error:#}")))?
+        };
+        if records.is_empty() {
+            return Ok(Vec::new());
+        }
+        let tree = ctx.get_directory_tree().map_err(|error| {
+            AppError::InternalError(format!("listing image folders: {error:#}"))
+        })?;
+        Ok(records
+            .iter()
+            .map(|record| ImageCopy {
+                available: Some(
+                    tree.find_file(&record.file_name)
+                        .and_then(|candidates| {
+                            crate::frame_derivatives::resolve_record_path(record, candidates)
+                        })
+                        .is_some(),
+                ),
+                ..ImageCopy::from(record)
+            })
+            .collect())
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("copy lookup failed: {error}")))?
 }
 
 fn source_file_cache_token(path: &FsPath) -> Option<String> {
@@ -4671,6 +4751,73 @@ pub(crate) fn annotated_cache_key(
     key
 }
 
+/// A light's calibrated or registered copy, found on disk for a view.
+pub(crate) struct ResolvedCopy {
+    pub record: crate::frame_derivatives::DerivativeRecord,
+    pub path: PathBuf,
+    /// The file's fingerprint, so a rewritten copy renders anew.
+    pub token: String,
+}
+
+/// Find copy `uuid` of this light. Not found when the copy belongs to
+/// another light, when the light has no guid, or when no file of its name
+/// and size is under the image roots.
+pub(crate) fn resolve_copy(
+    ctx: &DatabaseContext,
+    image: &crate::models::AcquiredImage,
+    uuid: &str,
+) -> Result<ResolvedCopy, AppError> {
+    let guid = image.guid.as_deref().ok_or(AppError::NotFound)?;
+    let record = {
+        let connection = ctx.db();
+        let connection = connection.lock().map_err(AppError::db)?;
+        crate::frame_derivatives::record_by_uuid(&connection, uuid)
+            .map_err(|error| AppError::InternalError(format!("reading copy: {error:#}")))?
+    }
+    .filter(|record| record.acquired_image_guid == guid)
+    .ok_or(AppError::NotFound)?;
+    let tree = ctx
+        .get_directory_tree()
+        .map_err(|error| AppError::InternalError(format!("listing image folders: {error:#}")))?;
+    let path = tree
+        .find_file(&record.file_name)
+        .and_then(|candidates| crate::frame_derivatives::resolve_record_path(&record, candidates))
+        .ok_or(AppError::NotFound)?;
+    let token = source_file_cache_token(&path)
+        .ok_or_else(|| AppError::Conflict("The copy is not ready".to_string()))?;
+    Ok(ResolvedCopy {
+        record,
+        path,
+        token,
+    })
+}
+
+async fn resolve_copy_async(
+    ctx: &Arc<DatabaseContext>,
+    image: &crate::models::AcquiredImage,
+    uuid: Option<&str>,
+) -> Result<Option<ResolvedCopy>, AppError> {
+    let Some(uuid) = uuid else {
+        return Ok(None);
+    };
+    let ctx = Arc::clone(ctx);
+    let image = image.clone();
+    let uuid = uuid.to_string();
+    tokio::task::spawn_blocking(move || resolve_copy(&ctx, &image, &uuid).map(Some))
+        .await
+        .map_err(|error| AppError::InternalError(format!("copy lookup failed: {error}")))?
+}
+
+/// A rendered artifact of a copy lives beside the light's own under a key
+/// that names the copy and its file fingerprint, so the light's keys stay
+/// where they are and a rewritten copy renders anew.
+pub(crate) fn with_copy(key: String, copy: Option<&ResolvedCopy>) -> String {
+    match copy {
+        Some(copy) => format!("{key}_copy_{}_{}", copy.record.derivative_uuid, copy.token),
+        None => key,
+    }
+}
+
 /// The durable upload mapping is part of rendered-artifact identity. A worker
 /// that started before a remap keeps writing its old key, while new requests
 /// immediately address the new mapping's key.
@@ -4867,17 +5014,38 @@ pub async fn get_image_preview(
 
     let (image, file_only, target_name) = resolve_image_meta(&ctx, image_id)?;
     let mapping_revision = rendered_artifact_mapping_revision(&ctx, &image)?;
-    let cache_key = preview_cache_key(
-        &image,
-        &file_only,
-        size,
-        stretch,
-        midtone,
-        shadow,
-        color,
-        mapping_revision.as_deref(),
+    let copy = resolve_copy_async(&ctx.0, &image, options.copy.as_deref()).await?;
+    let cache_key = with_copy(
+        preview_cache_key(
+            &image,
+            &file_only,
+            size,
+            stretch,
+            midtone,
+            shadow,
+            color,
+            mapping_revision.as_deref(),
+        ),
+        copy.as_ref(),
     );
     let cache_path = artifact_cache_path(&ctx, "previews", &cache_key, state.preview_encoding())?;
+    if let Some(copy) = copy {
+        if cache_path.exists() {
+            return serve_cached_png(&cache_path, &headers).await;
+        }
+        state.enqueue_preview(crate::server::preview_queue::GenJob {
+            fits_path: copy.path,
+            cache_path,
+            kind: crate::server::preview_queue::GenKind::Preview {
+                midtone,
+                shadow,
+                max_dimensions: crate::server::preview_queue::max_dimensions_for_size(size),
+                color,
+            },
+            encoding: state.preview_encoding(),
+        });
+        return Ok(generating_response());
+    }
 
     let delayed_probe = ctx.delayed_file_probe(image.id);
     if delayed_probe == crate::server::database_context::DelayedFileProbe::NotPending
@@ -5529,6 +5697,7 @@ fn basename_headers_match(path: &FsPath, image: &crate::models::AcquiredImage) -
 pub async fn get_image_stars(
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,
+    Query(copy_query): Query<CopyQuery>,
 ) -> Result<Json<ApiResponse<StarDetectionResponse>>, AppError> {
     use crate::hocus_focus_star_detection::detect_stars_hocus_focus;
     use crate::image_analysis::FitsImage;
@@ -5568,9 +5737,21 @@ pub async fn get_image_stars(
         (image, file_only, target_name)
     };
 
-    let fits_path = find_fits_file_async(&ctx.0, &image, &target_name, &file_only).await?;
-    let source_token = source_file_cache_token(&fits_path)
-        .ok_or_else(|| AppError::Conflict("Source file is not ready".to_string()))?;
+    let (fits_path, source_token) =
+        match resolve_copy_async(&ctx.0, &image, copy_query.copy.as_deref()).await? {
+            // A copy's results sit beside the light's under its own token.
+            Some(copy) => (
+                copy.path,
+                format!("{}_copy_{}", copy.token, copy.record.derivative_uuid),
+            ),
+            None => {
+                let fits_path =
+                    find_fits_file_async(&ctx.0, &image, &target_name, &file_only).await?;
+                let source_token = source_file_cache_token(&fits_path)
+                    .ok_or_else(|| AppError::Conflict("Source file is not ready".to_string()))?;
+                (fits_path, source_token)
+            }
+        };
 
     // Create comprehensive cache key for star detection results. v2: the
     // detector picks a telescope-class preset from the frame's headers, so
@@ -5701,14 +5882,33 @@ pub async fn get_annotated_image(
 
     let (image, file_only, target_name) = resolve_image_meta(&ctx, image_id)?;
     let mapping_revision = rendered_artifact_mapping_revision(&ctx, &image)?;
-    let cache_key = annotated_cache_key(
-        &image,
-        &file_only,
-        size,
-        max_stars,
-        mapping_revision.as_deref(),
+    let copy = resolve_copy_async(&ctx.0, &image, options.copy.as_deref()).await?;
+    let cache_key = with_copy(
+        annotated_cache_key(
+            &image,
+            &file_only,
+            size,
+            max_stars,
+            mapping_revision.as_deref(),
+        ),
+        copy.as_ref(),
     );
     let cache_path = artifact_cache_path(&ctx, "annotated", &cache_key, state.preview_encoding())?;
+    if let Some(copy) = copy {
+        if cache_path.exists() {
+            return serve_cached_png(&cache_path, &headers).await;
+        }
+        state.enqueue_preview(crate::server::preview_queue::GenJob {
+            fits_path: copy.path,
+            cache_path,
+            kind: crate::server::preview_queue::GenKind::Annotated {
+                max_stars,
+                size: size.to_string(),
+            },
+            encoding: state.preview_encoding(),
+        });
+        return Ok(generating_response());
+    }
 
     let delayed_probe = ctx.delayed_file_probe(image.id);
     if delayed_probe == crate::server::database_context::DelayedFileProbe::NotPending
@@ -5762,6 +5962,10 @@ pub async fn get_annotated_image(
 #[derive(Debug, Deserialize)]
 pub struct GenStatusItem {
     pub image_id: i32,
+    /// A calibrated or registered copy's uuid, to render it instead of the
+    /// light's own file.
+    #[serde(default)]
+    pub copy: Option<String>,
     /// "preview" (default) or "annotated".
     #[serde(default)]
     pub kind: Option<String>,
@@ -5945,16 +6149,31 @@ fn status_for_item(
         .get(&image.id)
         .and_then(|source| source.revision.strip_prefix("mapping:").map(str::to_owned));
 
+    let copy = match item.copy.as_deref() {
+        Some(uuid) => match resolve_copy(ctx, image, uuid) {
+            Ok(copy) => Some(copy),
+            Err(_) => return err("copy not found"),
+        },
+        None => None,
+    };
+    let delayed_probe = if copy.is_some() {
+        crate::server::database_context::DelayedFileProbe::NotPending
+    } else {
+        delayed_probe
+    };
     let size = item.size.clone().unwrap_or_else(|| "screen".to_string());
     let (cache_path, kind) = match item.kind.as_deref() {
         Some("annotated") => {
             let max_stars = item.max_stars.unwrap_or(1000) as usize;
-            let key = annotated_cache_key(
-                image,
-                &file_only,
-                &size,
-                max_stars,
-                mapping_revision.as_deref(),
+            let key = with_copy(
+                annotated_cache_key(
+                    image,
+                    &file_only,
+                    &size,
+                    max_stars,
+                    mapping_revision.as_deref(),
+                ),
+                copy.as_ref(),
             );
             match artifact_cache_path(ctx, "annotated", &key, encoding) {
                 Ok(p) => (
@@ -5972,15 +6191,18 @@ fn status_for_item(
             let midtone = item.midtone.unwrap_or(0.2);
             let shadow = item.shadow.unwrap_or(-2.8);
             let color = item.color.unwrap_or(color_default);
-            let key = preview_cache_key(
-                image,
-                &file_only,
-                &size,
-                stretch,
-                midtone,
-                shadow,
-                color,
-                mapping_revision.as_deref(),
+            let key = with_copy(
+                preview_cache_key(
+                    image,
+                    &file_only,
+                    &size,
+                    stretch,
+                    midtone,
+                    shadow,
+                    color,
+                    mapping_revision.as_deref(),
+                ),
+                copy.as_ref(),
             );
             match artifact_cache_path(ctx, "previews", &key, encoding) {
                 Ok(p) => (
@@ -6017,7 +6239,9 @@ fn status_for_item(
     }
 
     // Neither cached, in-flight, nor errored: ensure it's enqueued to generate.
-    let source = if delayed_probe == crate::server::database_context::DelayedFileProbe::Probe {
+    let source = if let Some(copy) = &copy {
+        Ok(copy.path.clone())
+    } else if delayed_probe == crate::server::database_context::DelayedFileProbe::Probe {
         let canonical_roots = canonical_roots.get_or_insert_with(|| canonical_image_roots(ctx));
         find_fits_file_cached_with_roots(ctx, image, target_name, &file_only, canonical_roots)
     } else {
@@ -6076,6 +6300,8 @@ fn status_for_item(
 // PSF multi image parameters
 #[derive(Deserialize)]
 pub struct PsfMultiOptions {
+    /// A calibrated or registered copy's uuid, to measure it instead.
+    pub copy: Option<String>,
     pub num_stars: Option<usize>,
     pub psf_type: Option<String>,
     pub sort_by: Option<String>,
@@ -6138,9 +6364,21 @@ pub async fn get_psf_visualization(
 
     let psf_type: PSFType = psf_type_str.parse().unwrap_or(PSFType::Moffat4);
 
-    let fits_path = find_fits_file_async(&ctx.0, &image, &target_name, &file_only).await?;
-    let source_token = source_file_cache_token(&fits_path)
-        .ok_or_else(|| AppError::Conflict("Source file is not ready".to_string()))?;
+    let (fits_path, source_token) =
+        match resolve_copy_async(&ctx.0, &image, options.copy.as_deref()).await? {
+            // A copy's results sit beside the light's under its own token.
+            Some(copy) => (
+                copy.path,
+                format!("{}_copy_{}", copy.token, copy.record.derivative_uuid),
+            ),
+            None => {
+                let fits_path =
+                    find_fits_file_async(&ctx.0, &image, &target_name, &file_only).await?;
+                let source_token = source_file_cache_token(&fits_path)
+                    .ok_or_else(|| AppError::Conflict("Source file is not ready".to_string()))?;
+                (fits_path, source_token)
+            }
+        };
 
     // Create comprehensive cache key for PSF multi image
     let cache_key = psf_multi_cache_key(
@@ -7293,6 +7531,56 @@ fn rotator_position_from_metadata(metadata_json: &str) -> Option<f64> {
         .filter(|degrees| degrees.is_finite())
 }
 
+/// The file a quality scan measures for this light and the revision it
+/// records. With the database's option on, a light with a calibrated copy
+/// is measured from it (`calibrated:<fingerprint>`); otherwise, or when no
+/// copy is on disk, from its own file. A registered copy is never measured:
+/// resampling changes the stars, the HFR and the pointing.
+fn quality_scan_source(
+    ctx: &DatabaseContext,
+    image: &crate::models::AcquiredImage,
+    target_name: &str,
+    file_only: &str,
+) -> Result<(PathBuf, Option<String>), AppError> {
+    if let Some(revision) = rendered_artifact_mapping_revision(ctx, image)? {
+        let path = find_fits_file(ctx, image, target_name, file_only)?;
+        return Ok((path, Some(format!("mapping:{revision}"))));
+    }
+    if ctx
+        .scan_calibrated_copies
+        .load(std::sync::atomic::Ordering::Relaxed)
+        && let Some(copy) = calibrated_copy_for_scan(ctx, image)
+    {
+        let revision = format!(
+            "{}{}",
+            crate::server::spatial_scan::CALIBRATED_SOURCE_PREFIX,
+            copy.token
+        );
+        return Ok((copy.path, Some(revision)));
+    }
+    let path = find_fits_file(ctx, image, target_name, file_only)?;
+    let revision = source_file_cache_token(&path).map(|revision| format!("file:{revision}"));
+    Ok((path, revision))
+}
+
+/// The light's calibrated copy with the most steps that is on disk.
+fn calibrated_copy_for_scan(
+    ctx: &DatabaseContext,
+    image: &crate::models::AcquiredImage,
+) -> Option<ResolvedCopy> {
+    let guid = image.guid.as_deref()?;
+    let mut records = {
+        let connection = ctx.db();
+        let connection = connection.lock().ok()?;
+        crate::frame_derivatives::derivatives_for_light(&connection, guid).ok()?
+    };
+    records.retain(|record| record.kind == crate::image_io::FrameKind::Calibrated);
+    records.sort_by_key(|record| std::cmp::Reverse(record.steps.count()));
+    records
+        .iter()
+        .find_map(|record| resolve_copy(ctx, image, &record.derivative_uuid).ok())
+}
+
 fn cached_pixel_source_matches(
     cached_path: &str,
     filename: &str,
@@ -7476,10 +7764,15 @@ async fn start_spatial_scan_with_priority(
             .filter(|(img, _, _)| mapped_sources.quality_revision(img.id).is_none())
             .filter_map(|(img, target_name, _)| {
                 let file_only = filename_from_metadata(&img.metadata)?;
-                let measured_from = scan::valid_entry(&ctx.spatial_metrics, img.id, &file_only)?
-                    .source_revision?
-                    .strip_prefix("file:")?
-                    .to_string();
+                let measured_from =
+                    scan::valid_entry(&ctx.spatial_metrics, img.id, &file_only)?.source_revision?;
+                // Only own-file and calibrated-copy measurements can go stale
+                // this way; a mapped upload has its own revision check.
+                if !(measured_from.starts_with("file:")
+                    || measured_from.starts_with(scan::CALIBRATED_SOURCE_PREFIX))
+                {
+                    return None;
+                }
                 Some((img.clone(), target_name.clone(), file_only, measured_from))
             })
             .collect();
@@ -7488,9 +7781,11 @@ async fn start_spatial_scan_with_priority(
             checks
                 .into_iter()
                 .filter(|(img, target_name, file_only, measured_from)| {
-                    find_fits_file(&check_ctx, img, target_name, file_only)
+                    // A changed file, or the option to measure calibrated
+                    // copies turned on or off, both mean another source.
+                    quality_scan_source(&check_ctx, img, target_name, file_only)
                         .ok()
-                        .and_then(|path| source_file_cache_token(&path))
+                        .and_then(|(_, revision)| revision)
                         .is_some_and(|now| now != *measured_from)
                 })
                 .map(|(img, ..)| img.id)
@@ -7650,14 +7945,8 @@ async fn start_spatial_scan_with_priority(
                     &ctx_arc.spatial_metrics,
                     img.id,
                 );
-                let resolved =
-                    find_fits_file(&ctx_arc, img, target_name, file_only).and_then(|path| {
-                        let source_revision = rendered_artifact_mapping_revision(&ctx_arc, img)?
-                            .map(|revision| format!("mapping:{revision}"))
-                            .or_else(|| {
-                                source_file_cache_token(&path)
-                                    .map(|revision| format!("file:{revision}"))
-                            });
+                let resolved = quality_scan_source(&ctx_arc, img, target_name, file_only).and_then(
+                    |(path, source_revision)| {
                         if source_generation
                             != crate::server::spatial_scan::source_generation(
                                 &ctx_arc.spatial_metrics,
@@ -7669,7 +7958,8 @@ async fn start_spatial_scan_with_priority(
                             ));
                         }
                         Ok((path, source_revision))
-                    });
+                    },
+                );
                 match resolved {
                     Ok((path, source_revision)) => items.push((
                         crate::server::spatial_scan::ScanWorkItem {
@@ -8131,6 +8421,7 @@ mod delayed_ready_tests {
                     autoimport: None,
                     analyze_new_frames: false,
                     pair_calibrated_copies: true,
+                    scan_calibrated_copies: false,
                 }],
                 temp.path().join("cache").to_string_lossy().into_owned(),
                 crate::cli::PregenerationConfig::default(),
@@ -8211,6 +8502,7 @@ mod delayed_ready_tests {
                 &ctx,
                 &GenStatusItem {
                     image_id: IMAGE_ID,
+                    copy: None,
                     kind: Some(kind.to_string()),
                     size: Some("screen".to_string()),
                     stretch: None,
@@ -8232,6 +8524,7 @@ mod delayed_ready_tests {
 
             let options = PreviewOptions {
                 size: Some("screen".into()),
+                copy: None,
                 stretch: None,
                 midtone: None,
                 shadow: None,
@@ -8442,8 +8735,8 @@ mod preview_cache_key_tests {
 mod file_resolution_tests {
     use super::{
         canonical_image_roots, fill_missing_star_metadata, find_fits_file, find_fits_file_cached,
-        mapped_file_sha256, metadata_suffix_candidates, resolve_mapped_remote_image_with, AppError,
-        DatabaseContext,
+        mapped_file_sha256, metadata_suffix_candidates, preview_cache_key, quality_scan_source,
+        resolve_copy, resolve_mapped_remote_image_with, with_copy, AppError, DatabaseContext,
     };
     use crate::commands::sync::ChangedAcquiredImage;
     use crate::models::AcquiredImage;
@@ -8531,6 +8824,132 @@ mod file_resolution_tests {
         let mut file = std::fs::File::create(path).unwrap();
         file.write_all(&header).unwrap();
         file.write_all(&[0u8; 2880]).unwrap();
+    }
+
+    /// A light with a calibrated and a registered copy recorded, both on
+    /// disk under the image root.
+    fn light_with_copies(
+        temp: &tempfile::TempDir,
+    ) -> (DatabaseContext, AcquiredImage, PathBuf, PathBuf, PathBuf) {
+        use crate::frame_derivatives::{ensure_schema, record_pairing, DerivativeRecord};
+        use crate::image_io::{FrameKind, KindEvidence, ProcessingSteps, Producer};
+        let (ctx, root) = context(temp);
+        let raw = root.join("LIGHT/frame_0115.fits");
+        let calibrated = root.join("calibrated/Light_B/frame_0115_c.fits");
+        let registered = root.join("registered/Light_B/frame_0115_c_r.fits");
+        for path in [&raw, &calibrated, &registered] {
+            write_fits(path, "B", "2026-07-24T05:00:00");
+        }
+        let mut light = image("D:\\pictures\\LIGHT\\frame_0115.fits", "B");
+        light.guid = Some("light-guid".into());
+        {
+            let connection = ctx.db();
+            let connection = connection.lock().unwrap();
+            ensure_schema(&connection).unwrap();
+            for (uuid, path, kind, steps) in [
+                (
+                    "copy-c",
+                    &calibrated,
+                    FrameKind::Calibrated,
+                    ProcessingSteps::CALIBRATED,
+                ),
+                (
+                    "copy-r",
+                    &registered,
+                    FrameKind::Registered,
+                    ProcessingSteps::CALIBRATED.with(ProcessingSteps::REGISTERED),
+                ),
+            ] {
+                record_pairing(
+                    &connection,
+                    &DerivativeRecord {
+                        derivative_uuid: uuid.into(),
+                        acquired_image_guid: "light-guid".into(),
+                        kind,
+                        steps,
+                        primary_source: false,
+                        file_name: path.file_name().unwrap().to_string_lossy().into_owned(),
+                        source_tail: None,
+                        size: Some(std::fs::metadata(path).unwrap().len() as i64),
+                        mtime: None,
+                        width: Some(10),
+                        height: Some(10),
+                        producer: Producer::Pixinsight,
+                        evidence: KindEvidence::Header,
+                        created_at: 1,
+                        updated_at: 1,
+                    },
+                )
+                .unwrap();
+            }
+        }
+        (ctx, light, raw, calibrated, registered)
+    }
+
+    #[test]
+    fn a_copy_renders_under_its_own_key_and_only_for_its_light() {
+        let temp = tempfile::tempdir().unwrap();
+        let (ctx, light, _, calibrated, _) = light_with_copies(&temp);
+        let copy = resolve_copy(&ctx, &light, "copy-c").unwrap();
+        assert_eq!(copy.path, calibrated);
+
+        let own = preview_cache_key(
+            &light,
+            "frame_0115.fits",
+            "screen",
+            true,
+            0.2,
+            -2.8,
+            false,
+            None,
+        );
+        let keyed = with_copy(own.clone(), Some(&copy));
+        assert!(
+            keyed.starts_with(&own),
+            "the light's own key stays where it is"
+        );
+        assert!(keyed.contains("copy-c"));
+        assert_ne!(keyed, own);
+
+        let mut other = light.clone();
+        other.guid = Some("another-light".into());
+        assert!(matches!(
+            resolve_copy(&ctx, &other, "copy-c"),
+            Err(AppError::NotFound)
+        ));
+        assert!(matches!(
+            resolve_copy(&ctx, &light, "no-such-copy"),
+            Err(AppError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn quality_scans_measure_the_calibrated_copy_only_when_asked() {
+        let temp = tempfile::tempdir().unwrap();
+        let (ctx, light, raw, calibrated, _) = light_with_copies(&temp);
+        let (path, revision) =
+            quality_scan_source(&ctx, &light, "Target", "frame_0115.fits").unwrap();
+        assert_eq!(path, raw);
+        assert!(revision.unwrap().starts_with("file:"));
+
+        ctx.scan_calibrated_copies
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let (path, revision) =
+            quality_scan_source(&ctx, &light, "Target", "frame_0115.fits").unwrap();
+        // The calibrated copy, never the registered one.
+        assert_eq!(path, calibrated);
+        let revision = revision.unwrap();
+        assert!(revision.starts_with(crate::server::spatial_scan::CALIBRATED_SOURCE_PREFIX));
+        // Its stars never fill the light's metadata.
+        assert_eq!(
+            crate::server::spatial_scan::star_metrics_metadata_patch(
+                "{\"FileName\":\"frame_0115.fits\"}",
+                120,
+                2.5,
+                Some(&revision),
+            ),
+            None
+        );
     }
 
     #[test]

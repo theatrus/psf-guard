@@ -822,12 +822,21 @@ pub fn metadata_wants_star_fill(metadata_json: &str) -> bool {
 /// must not keep its partial count once the whole file is measured. A frame
 /// with no detected stars gets no HFR: zero would read as an impossibly
 /// sharp measurement rather than "none". Returns `None` when nothing changed.
+/// The source revision of a measurement taken from a light's calibrated copy
+/// rather than its own file: `calibrated:<fingerprint>`.
+pub const CALIBRATED_SOURCE_PREFIX: &str = "calibrated:";
+
 pub fn star_metrics_metadata_patch(
     metadata_json: &str,
     star_count: usize,
     avg_hfr: f64,
     source_revision: Option<&str>,
 ) -> Option<String> {
+    // A calibrated copy's stars are not what the capture software counted;
+    // the light's metadata keeps the capture software's meaning.
+    if source_revision.is_some_and(|revision| revision.starts_with(CALIBRATED_SOURCE_PREFIX)) {
+        return None;
+    }
     let mut value: serde_json::Value = serde_json::from_str(metadata_json).ok()?;
     let map = value.as_object_mut()?;
     let missing = |map: &serde_json::Map<String, serde_json::Value>, key: &str| {

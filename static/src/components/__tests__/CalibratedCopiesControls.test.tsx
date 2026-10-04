@@ -10,11 +10,11 @@ const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: nu
 
 function mount(canManage: boolean, counts = { calibrated: 341, registered: 666, calibrated_lights: 2 }) {
   const saved = vi.fn(async ({ request }: { request: Request }) => {
-    const body = (await request.json()) as { pair: boolean };
-    return ok({ pair: body.pair, counts });
+    const body = (await request.json()) as { pair?: boolean; scan_calibrated?: boolean };
+    return ok({ pair: body.pair ?? true, scan_calibrated: body.scan_calibrated ?? false, counts });
   });
   server.use(
-    http.get('/api/db/c925/calibrated-copies', () => ok({ pair: true, counts })),
+    http.get('/api/db/c925/calibrated-copies', () => ok({ pair: true, scan_calibrated: false, counts })),
     http.put('/api/db/c925/calibrated-copies', saved),
   );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -35,9 +35,18 @@ describe('calibrated copies setting', () => {
     expect(toggle).not.toBeChecked();
   });
 
+  it('turns on measuring the calibrated copy', async () => {
+    const { saved } = mount(true);
+    const scan = await screen.findByRole('checkbox', { name: 'Measure quality on the calibrated copy' });
+    expect(scan).not.toBeChecked();
+    fireEvent.click(scan);
+    await screen.findByRole('checkbox', { name: 'Measure quality on the calibrated copy', checked: true });
+    expect(saved).toHaveBeenCalledTimes(1);
+  });
+
   it('is read-only without database management', async () => {
     mount(false, { calibrated: 0, registered: 0, calibrated_lights: 0 });
-    const toggle = await screen.findByRole('checkbox');
+    const toggle = await screen.findByRole('checkbox', { name: 'Pair calibrated and registered copies with their lights' });
     expect(toggle).toBeDisabled();
     expect(screen.getByText(/No copies paired yet/)).toBeInTheDocument();
     expect(screen.getByText(/needs database management/)).toBeInTheDocument();
