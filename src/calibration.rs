@@ -256,6 +256,9 @@ pub struct CalibrationFrameSummary {
 pub struct CalibrationLibraryDetails {
     pub summary: CalibrationLibrarySummary,
     pub frames: Vec<CalibrationFrameSummary>,
+    /// Where this catalog's nights split, in seconds after 00:00 UTC, so the
+    /// library groups frames by night as the server does.
+    pub night_boundary_seconds: i64,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -1319,6 +1322,7 @@ pub fn library_details(conn: &Connection) -> Result<CalibrationLibraryDetails> {
         return Ok(CalibrationLibraryDetails {
             summary,
             frames: Vec::new(),
+            night_boundary_seconds: catalog_night_boundary(conn),
         });
     }
     // The listing tolerates a catalog that could not be upgraded: an absent
@@ -1382,7 +1386,11 @@ pub fn library_details(conn: &Connection) -> Result<CalibrationLibraryDetails> {
             })
         })
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(CalibrationLibraryDetails { summary, frames })
+    Ok(CalibrationLibraryDetails {
+        summary,
+        frames,
+        night_boundary_seconds: catalog_night_boundary(conn),
+    })
 }
 
 /// Mark frames with a validity boundary (or clear one with `None`). Returns
@@ -1847,16 +1855,22 @@ pub struct CalibrationNightFilter {
     pub missing: Vec<String>,
 }
 
-/// The imaging night a timestamp belongs to: subtract twelve hours, take
-/// the date, so 01:30 belongs to the evening before.
-fn night_of(timestamp: i64) -> String {
-    chrono::DateTime::from_timestamp(timestamp - 12 * 3600, 0)
+/// The imaging night a timestamp belongs to, for a catalog whose nights split
+/// `boundary` seconds after 00:00 UTC (see
+/// [`crate::server::sky_coverage::night_boundary`]). An evening and the small
+/// hours after it share a date, and so do the flats shot at either end, the
+/// way N.I.N.A.'s local `DATEMINUS12` folders group them. Twelve hours off
+/// UTC would not: a site west of Greenwich would see its dawn flats a day
+/// late and its nights split at local evening.
+fn night_of(timestamp: i64, boundary: i64) -> String {
+    chrono::DateTime::from_timestamp(timestamp - boundary, 0)
         .map(|when| when.date_naive().to_string())
         .unwrap_or_else(|| "unknown".into())
 }
 
-fn day_of(timestamp: i64) -> String {
-    night_of(timestamp)
+/// Where this catalog's nights split; noon UTC when its lights cannot be read.
+fn catalog_night_boundary(conn: &Connection) -> i64 {
+    crate::server::sky_coverage::catalog_night_boundary(conn).unwrap_or(12 * 3600)
 }
 
 /// Build the calibration coverage report for one project's lights.
@@ -1877,6 +1891,7 @@ pub fn project_calibration_report(
 
     // Bucket lights by (night, filter) and pick the median exposure of each
     // bucket as its representative.
+    let boundary = catalog_night_boundary(conn);
     let mut buckets: HashMap<(String, String), Vec<(i64, String)>> = HashMap::new();
     for (image, _project, _target) in &rows {
         let Some(acquired) = image.acquired_date else {
@@ -1886,7 +1901,7 @@ pub fn project_calibration_report(
             continue;
         };
         buckets
-            .entry((night_of(acquired), image.filter_name.clone()))
+            .entry((night_of(acquired, boundary), image.filter_name.clone()))
             .or_default()
             .push((acquired, basename));
     }
@@ -1991,7 +2006,7 @@ pub fn project_calibration_report(
             dark_age_days: nearest_age(&selected.dark),
             dark_flat_frames: selected.dark_flat.len(),
             flat_frames: selected.flat.len(),
-            flat_session: flat_session_at.map(day_of),
+            flat_session: flat_session_at.map(|at| night_of(at, boundary)),
             flat_age_days: age_days(flat_session_at),
             nightly_flats,
             missing,
@@ -2020,7 +2035,7 @@ pub fn project_calibration_report(
         let frames = kind_frames.remove(&kind).unwrap_or_default();
         let mut sessions: Vec<String> = frames
             .values()
-            .filter_map(|at| at.map(day_of))
+            .filter_map(|at| at.map(|at| night_of(at, boundary)))
             .collect::<std::collections::HashSet<_>>()
             .into_iter()
             .collect();
@@ -5301,12 +5316,15 @@ pub struct ExportCalibration {
     pub flat_session: Option<String>,
 }
 
+/// Lights are matched one at a time, so the caller reads `night_boundary` once
+/// for the catalog ([`crate::server::sky_coverage::catalog_night_boundary`]).
 pub fn export_destinations(
     conn: &Connection,
     light: &FrameMeta,
     target_name: &str,
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
     layout: crate::commands::export::ExportLayout,
+    night_boundary: i64,
 ) -> Result<ExportCalibration> {
     use crate::commands::export::{session_component, ExportLayout};
     let mut selected = select_for_light(conn, light)?;
@@ -5322,7 +5340,7 @@ pub fn export_destinations(
         dark_flat: coherent_master_subset(CalibrationKind::DarkFlat, &selected.dark_flat),
         flat: coherent_master_subset(CalibrationKind::Flat, &selected.flat),
     };
-    let flat_session = flat_session_label(&selected.flat);
+    let flat_session = flat_session_label(&selected.flat, night_boundary);
     let target = crate::commands::export::sanitize_component(target_name);
     let filter =
         crate::commands::export::sanitize_component(light.filter.as_deref().unwrap_or("NONE"));
@@ -5429,7 +5447,7 @@ pub fn export_destinations(
 /// The night a flat set was shot, as one path component: the observing
 /// night of its earliest frame, or "undated" for frames without a capture
 /// time. `None` when there are no flats.
-pub fn flat_session_label(flats: &[CalibrationFrame]) -> Option<String> {
+pub fn flat_session_label(flats: &[CalibrationFrame], night_boundary: i64) -> Option<String> {
     if flats.is_empty() {
         return None;
     }
@@ -5438,7 +5456,7 @@ pub fn flat_session_label(flats: &[CalibrationFrame]) -> Option<String> {
             .iter()
             .filter_map(|frame| frame.captured_at)
             .min()
-            .map(night_of)
+            .map(|at| night_of(at, night_boundary))
             .unwrap_or_else(|| "undated".into()),
     )
 }
@@ -5594,6 +5612,32 @@ fn format_number(value: Option<f64>) -> String {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn a_western_catalog_keeps_its_night_and_dawn_flats_on_one_date() {
+        // Lights from 03:00 to 13:00 UTC: 20:00 to 06:00 in California.
+        let night = chrono::NaiveDate::from_ymd_opt(2026, 6, 2).unwrap();
+        let at = |hour: u32| night.and_hms_opt(hour, 0, 0).unwrap().and_utc().timestamp();
+        let conn = Connection::open_in_memory().unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        for hour in 3..=13 {
+            conn.execute(
+                "INSERT INTO acquiredimage (projectId, targetId, acquireddate, filtername, \
+                 gradingStatus, metadata, profileId) VALUES (1, 1, ?1, 'Ha', 0, '{}', 'p')",
+                [at(hour)],
+            )
+            .unwrap();
+        }
+        let boundary = catalog_night_boundary(&conn);
+
+        // The whole night is one date, the evening it began.
+        assert_eq!(night_of(at(3), boundary), "2026-06-01");
+        assert_eq!(night_of(at(13), boundary), "2026-06-01");
+        // Flats at 07:00 local, the dawn after, belong to that night too;
+        // twelve hours off UTC called them 2 June.
+        assert_eq!(night_of(at(14), boundary), "2026-06-01");
+        assert_eq!(night_of(at(14), 12 * 3600), "2026-06-02");
+    }
 
     fn frame(path: &str, kind: &str) -> FrameMeta {
         FrameMeta {

@@ -1933,6 +1933,8 @@ export type CalibrationValidDirection = 'forward' | 'backward';
 export interface CalibrationLibraryDetails {
   summary: CalibrationLibrarySummary;
   frames: CalibrationFrameSummary[];
+  /** Where this catalog's nights split, in seconds after 00:00 UTC. */
+  night_boundary_seconds?: number;
 }
 
 export interface CalibrationMutationOutcome {
