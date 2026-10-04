@@ -1027,6 +1027,28 @@ versioned constraint snapshot at check-in; server simulation uses that snapshot,
 and local execution always checks the current configuration. A remote project
 may tighten local limits, but cannot relax a rig's hard restrictions.
 
+The NINA executor also monitors the admitted native constraints while an
+operation or sequence hook runs. A read-only check once per second compares
+site and meridian settings, the loaded horizon, and the horizon file's content
+hash. A same-path edit cannot hide behind an unchanged size or timestamp.
+Missing or stalled evidence stops acquisition; a two-second read deadline is
+independent of the safety watchdog. This monitor supplements fresh shared-core
+feasibility checks at dispatch, rather than replacing them.
+
+Detected changes cancel work and use the configured enclosure-aware abort
+policy. They do not modify the active grant, refund attempts or auto-resume when
+old settings return. The operator must review/report the current configuration
+and reconcile interrupted work before obtaining new authority. This needs no
+new API or IPC message: existing immutable configuration fingerprints, one-shot
+launches and operation outcomes retain the boundary. Automatic context renewal
+and commissioning remain separate phase-2 work.
+
+2026-10-03 native validation: NINA 3.3.0.1064 with ASCOM OmniSim and isolated
+PSF Guard stopped a 45-second setup hook after offline horizon, site and
+meridian edits, saved no exposure, parked and stayed stopped after restoration.
+The live ranked-priority handoff still completed across two sealed ledgers.
+The plugin's `docs/nina-smoke-test.md` records commands and retained evidence.
+
 ### Meridian policy
 
 Use the local TS fork's asymmetric avoidance behavior as a reference when
@@ -3768,6 +3790,13 @@ separate workflow; these mappings alone do not resolve them.
   simulator sequences; report injected actions and durations back to the core.
 - [ ] Enforce the current rig meridian/horizon snapshot at dispatch and refresh
   it on profile changes, horizon changes, and same-path file edits.
+- [x] Add the active-operation constraint guard in the NINA plugin: read-only
+  checks of the admitted site, meridian settings, native horizon and file hash
+  during setup/capture; a changed, missing or stalled input cancels native work
+  and uses the existing enclosure-aware abort policy. Restoring old settings
+  cannot revive the consumed allocation. Dispatch still performs fresh shared-core
+  feasibility checks. Automatically reviewing and commissioning changed context
+  remains outside this increment; no new server or runtime interface is needed.
 
 Gate: a real N.I.N.A. instance using simulated equipment handles slow autofocus,
 failed centering, reprioritization, network loss, restart, and operator stop.
