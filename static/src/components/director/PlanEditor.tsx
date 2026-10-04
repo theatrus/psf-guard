@@ -1,7 +1,8 @@
-import { type ReactNode, useEffect, useId, useMemo, useState } from 'react';
+import { type MutableRefObject, type ReactNode, useEffect, useId, useMemo, useState } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { Check, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import NumberInput from '../NumberInput';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorContribution, DirectorObjective, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplate } from '../../api/directorTypes';
@@ -20,11 +21,17 @@ export interface RigExtras { place?: ReactNode; below?: ReactNode }
 /** Objectives per bandpass and depth, and each rig's template and exposure
  *  for them, one block per rig. Rigs with a project in this plan or ticked
  *  come first; the rest fold away. */
-export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, footer }: {
+export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, footer, onUnsavedChange, saveRef }: {
   projectId: string;
   linkedRigIds?: string[];
   rigExtras?: (rig: DirectorRigProfileSummary) => RigExtras;
   footer?: ReactNode;
+  /** Told whether the editor holds edits the server has not saved. */
+  onUnsavedChange?: (unsaved: boolean) => void;
+  /** Filled with a function that saves pending edits, resolving true when
+   *  the saved plan is now what the editor shows. Activation reads the saved
+   *  plan, so it saves through this first. */
+  saveRef?: MutableRefObject<(() => Promise<boolean>) | null>;
 }) {
   const formId = useId();
   const { canWrite } = useAccess();
@@ -69,6 +76,22 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
     onSuccess: saved => { setNotice(`Saved plan revision ${saved.plan?.revision ?? 0}.`); client.setQueryData<DirectorPlanView>(planKey, saved); },
   });
   const stale = httpStatus(save.error) === 409;
+  const baseline = loaded.data ? loaded.data.plan ?? emptyPlan(projectId) : null;
+  const unsaved = !!plan && !!baseline && JSON.stringify(plan) !== JSON.stringify(baseline);
+  useEffect(() => { onUnsavedChange?.(unsaved); }, [unsaved, onUnsavedChange]);
+  useEffect(() => {
+    if (!saveRef) return;
+    saveRef.current = async () => {
+      if (!unsaved) return true;
+      if (!canWrite || stale || !plan) return false;
+      const trouble = planProblem(plan);
+      setProblem(trouble ?? '');
+      if (trouble) return false;
+      setNotice('');
+      await save.mutateAsync();
+      return true;
+    };
+  });
   // Director's own templates: a rig whose database has none for a band shoots with one of these.
   const libraryQuery = useQuery({ queryKey: ['directorTemplateLibrary'], queryFn: apiClient.getDirectorTemplateLibrary, retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false });
   const library = useMemo(() => libraryQuery.data ?? [], [libraryQuery.data]);
@@ -188,7 +211,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
                 {contribution && templateValue(contribution, library).startsWith('lib:') && !shared.some(t => t.id === contribution.template.template_guid) && <option value={templateValue(contribution, library)}>{contribution.template.name} (library, since removed)</option>}
               </select>;
             })()}</td>
-            <td>{contribution && <span className="plan-goal"><input aria-label={`${rig.catalog_name} exposure for ${label}`} type="number" min={1} step="any" value={contribution.exposure_seconds} onChange={event => setContribution(rig, objective, current => current ? { ...current, exposure_seconds: number(event.target.value, current.exposure_seconds) } : current)} /><small>s</small></span>}</td>
+            <td>{contribution && <span className="plan-goal"><NumberInput aria-label={`${rig.catalog_name} exposure for ${label}`} min={1} step="any" value={contribution.exposure_seconds} onChange={event => setContribution(rig, objective, current => current ? { ...current, exposure_seconds: number(event.target.value, current.exposure_seconds) } : current)} /><small>s</small></span>}</td>
             <td>{contribution && frames !== null && <span data-testid={`frames-${rig.catalog_slug}-${objective.bandpass_id}`}>{frames}{panels.length > 1 && <small className="director-muted"> per panel</small>}<br /><small className="director-muted">{formatHours(hoursFor(frames, contribution.exposure_seconds))}{panels.length > 1 ? ' each' : ''}</small></span>}</td>
             <td>{contribution && <input type="checkbox" aria-label={`${rig.catalog_name} shoots ${label}`} checked={contribution.enabled} onChange={event => setContribution(rig, objective, current => current ? { ...current, enabled: event.target.checked } : current)} />}</td>
           </tr>;
@@ -217,7 +240,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
               {!PURPOSES.some(p => p.id === objective.purpose) && <option value={objective.purpose}>{objective.purpose}</option>}
             </select></label>
             <label>Goal<span className="plan-goal">
-              <input aria-label="Objective goal" type="number" min={0} step="any" value={objective.goal.value} onChange={event => changeObjective(objective.id, { goal: { ...objective.goal, value: number(event.target.value, 0) } as DirectorObjective['goal'] })} />
+              <NumberInput aria-label="Objective goal" min={0} step="any" value={objective.goal.value} onChange={event => changeObjective(objective.id, { goal: { ...objective.goal, value: number(event.target.value, 0) } as DirectorObjective['goal'] })} />
               <select aria-label="Objective goal unit" value={objective.goal.kind} title={`Switching units keeps the same goal, read through ${goalExposure(objective, plan, rigList, templatesByRig)} s exposures`}
                 onChange={event => changeObjective(objective.id, { goal: convertGoal(objective.goal, event.target.value as 'hours' | 'frames', goalExposure(objective, plan, rigList, templatesByRig)) })}>
                 <option value="hours">hours</option><option value="frames">frames per rig</option>

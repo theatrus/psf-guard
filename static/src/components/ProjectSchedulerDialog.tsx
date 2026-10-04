@@ -1,3 +1,4 @@
+import NumberInput from './NumberInput';
 import { useEffect, useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
@@ -155,13 +156,13 @@ function ProjectForm({
       <details className="scheduler-options">
         <summary>Scheduling limits</summary>
         <div className="scheduler-fields">
-          <label>Minimum time (min)<input type="number" min="0" value={form.minimum_time} disabled={!canEdit} onChange={(e) => setForm({ ...form, minimum_time: e.target.valueAsNumber })} /></label>
-          <label>Minimum altitude (°)<input type="number" min="-90" max="90" step="0.1" value={form.minimum_altitude} disabled={!canEdit} onChange={(e) => setForm({ ...form, minimum_altitude: e.target.valueAsNumber })} /></label>
-          <label>Maximum altitude (°)<input type="number" min="-90" max="90" step="0.1" value={form.maximum_altitude} disabled={!canEdit} onChange={(e) => setForm({ ...form, maximum_altitude: e.target.valueAsNumber })} /></label>
-          <label>Horizon offset (°)<input type="number" step="0.1" value={form.horizon_offset} disabled={!canEdit} onChange={(e) => setForm({ ...form, horizon_offset: e.target.valueAsNumber })} /></label>
-          <label>Meridian window<input type="number" value={form.meridian_window} disabled={!canEdit} onChange={(e) => setForm({ ...form, meridian_window: e.target.valueAsNumber })} /></label>
-          <label>Filter switch every<input type="number" min="0" value={form.filter_switch_frequency} disabled={!canEdit} onChange={(e) => setForm({ ...form, filter_switch_frequency: e.target.valueAsNumber })} /></label>
-          <label>Dither every<input type="number" min="0" value={form.dither_every} disabled={!canEdit} onChange={(e) => setForm({ ...form, dither_every: e.target.valueAsNumber })} /></label>
+          <label>Minimum time (min)<NumberInput min="0" value={form.minimum_time} disabled={!canEdit} onChange={(e) => setForm({ ...form, minimum_time: e.target.valueAsNumber })} /></label>
+          <label>Minimum altitude (°)<NumberInput min="-90" max="90" step="0.1" value={form.minimum_altitude} disabled={!canEdit} onChange={(e) => setForm({ ...form, minimum_altitude: e.target.valueAsNumber })} /></label>
+          <label>Maximum altitude (°)<NumberInput min="-90" max="90" step="0.1" value={form.maximum_altitude} disabled={!canEdit} onChange={(e) => setForm({ ...form, maximum_altitude: e.target.valueAsNumber })} /></label>
+          <label>Horizon offset (°)<NumberInput step="0.1" value={form.horizon_offset} disabled={!canEdit} onChange={(e) => setForm({ ...form, horizon_offset: e.target.valueAsNumber })} /></label>
+          <label>Meridian window<NumberInput value={form.meridian_window} disabled={!canEdit} onChange={(e) => setForm({ ...form, meridian_window: e.target.valueAsNumber })} /></label>
+          <label>Filter switch every<NumberInput min="0" value={form.filter_switch_frequency} disabled={!canEdit} onChange={(e) => setForm({ ...form, filter_switch_frequency: e.target.valueAsNumber })} /></label>
+          <label>Dither every<NumberInput min="0" value={form.dither_every} disabled={!canEdit} onChange={(e) => setForm({ ...form, dither_every: e.target.valueAsNumber })} /></label>
         </div>
         <div className="scheduler-checks">
           <label><input type="checkbox" checked={form.use_custom_horizon} disabled={!canEdit} onChange={(e) => setForm({ ...form, use_custom_horizon: e.target.checked })} /> Use custom horizon</label>
@@ -207,8 +208,8 @@ function PlanRow({ plan, dbId, canEdit, reload }: { plan: ExposurePlanDetails; d
   return (
     <tr>
       <td><strong>{plan.filter_name}</strong><small>{plan.template_name}</small></td>
-      <td><input aria-label={`${plan.filter_name} exposure seconds`} title="-1 uses the exposure template default" type="number" min="-1" step="0.1" value={exposure} disabled={!canEdit} onChange={(e) => setExposure(e.target.valueAsNumber)} /></td>
-      <td><input aria-label={`${plan.filter_name} desired count`} type="number" min="0" value={desired} disabled={!canEdit} onChange={(e) => setDesired(e.target.valueAsNumber)} /></td>
+      <td><NumberInput aria-label={`${plan.filter_name} exposure seconds`} title="-1 uses the exposure template default" min="-1" step="0.1" value={exposure} disabled={!canEdit} onChange={(e) => setExposure(e.target.valueAsNumber)} /></td>
+      <td><NumberInput aria-label={`${plan.filter_name} desired count`} min="0" value={desired} disabled={!canEdit} onChange={(e) => setDesired(e.target.valueAsNumber)} /></td>
       <td>{plan.acquired}</td>
       <td>{plan.accepted}</td>
       <td><input aria-label={`${plan.filter_name} enabled`} type="checkbox" checked={enabled} disabled={!canEdit} onChange={(e) => setEnabled(e.target.checked)} /></td>
@@ -271,11 +272,11 @@ function NewPlanForm({ target, templates, dbId, reload, onDone }: { target: Sche
         <label className="scheduler-wide">Exposure template<select aria-label="Exposure template" value={form.exposure_template_id ?? ''} onChange={(e) => chooseTemplate(e.target.value)}><option value="">Match settings or create a template</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name} · {template.filter_name} · {template.default_exposure}s</option>)}</select></label>
         <label>Template name<input value={form.template_name ?? ''} disabled={Boolean(selectedTemplate)} onChange={(e) => setForm({ ...form, template_name: e.target.value || undefined })} /></label>
         <label>Filter<input required value={form.filter_name ?? ''} disabled={Boolean(selectedTemplate)} onChange={(e) => setForm({ ...form, filter_name: e.target.value })} /></label>
-        <label>Exposure (s)<input required type="number" min="0.001" step="0.1" value={form.exposure} onChange={(e) => setForm({ ...form, exposure: e.target.valueAsNumber })} /></label>
-        <label>Desired<input required type="number" min="0" value={form.desired} onChange={(e) => setForm({ ...form, desired: e.target.valueAsNumber })} /></label>
+        <label>Exposure (s)<NumberInput required min="0.001" step="0.1" value={form.exposure} onChange={(e) => setForm({ ...form, exposure: e.target.valueAsNumber })} /></label>
+        <label>Desired<NumberInput required min="0" value={form.desired} onChange={(e) => setForm({ ...form, desired: e.target.valueAsNumber })} /></label>
         <label>Gain<input type="number" value={form.gain ?? ''} disabled={Boolean(selectedTemplate)} onChange={(e) => setForm({ ...form, gain: optionalNumber(e.target.value) })} /></label>
         <label>Offset<input type="number" value={form.offset ?? ''} disabled={Boolean(selectedTemplate)} onChange={(e) => setForm({ ...form, offset: optionalNumber(e.target.value) })} /></label>
-        <label>Bin<input required type="number" min="1" value={form.bin ?? 1} disabled={Boolean(selectedTemplate)} onChange={(e) => setForm({ ...form, bin: e.target.valueAsNumber })} /></label>
+        <label>Bin<NumberInput required min="1" value={form.bin ?? 1} disabled={Boolean(selectedTemplate)} onChange={(e) => setForm({ ...form, bin: e.target.valueAsNumber })} /></label>
         <label>Readout mode<input type="number" value={form.readout_mode ?? ''} disabled={Boolean(selectedTemplate)} onChange={(e) => setForm({ ...form, readout_mode: optionalNumber(e.target.value) })} /></label>
         <label className="scheduler-check"><input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} /> Enabled</label>
       </div>
@@ -313,11 +314,11 @@ function TargetSection({ target, templates, dbId, canEdit, reload }: { target: S
       <div className="scheduler-target-body">
         <div className="scheduler-fields scheduler-target-fields">
           <label>Name<input value={form.name} disabled={!canEdit} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
-          <label>RA (decimal hours)<input type="number" min="0" max="23.999999" step="0.000001" value={form.ra_hours} disabled={!canEdit} onChange={(e) => setForm({ ...form, ra_hours: e.target.valueAsNumber })} /></label>
-          <label>Dec (degrees)<input type="number" min="-90" max="90" step="0.000001" value={form.dec_degrees} disabled={!canEdit} onChange={(e) => setForm({ ...form, dec_degrees: e.target.valueAsNumber })} /></label>
+          <label>RA (decimal hours)<NumberInput min="0" max="23.999999" step="0.000001" value={form.ra_hours} disabled={!canEdit} onChange={(e) => setForm({ ...form, ra_hours: e.target.valueAsNumber })} /></label>
+          <label>Dec (degrees)<NumberInput min="-90" max="90" step="0.000001" value={form.dec_degrees} disabled={!canEdit} onChange={(e) => setForm({ ...form, dec_degrees: e.target.valueAsNumber })} /></label>
           <label>Epoch<select value={form.epoch_code} disabled={!canEdit} onChange={(e) => setForm({ ...form, epoch_code: Number(e.target.value) })}><option value={0}>JNow</option><option value={1}>B1950</option><option value={2}>J2000</option></select></label>
-          <label>Rotation (°)<input type="number" step="0.1" value={form.rotation} disabled={!canEdit} onChange={(e) => setForm({ ...form, rotation: e.target.valueAsNumber })} /></label>
-          <label>ROI (%)<input type="number" min="0.1" step="0.1" value={form.roi} disabled={!canEdit} onChange={(e) => setForm({ ...form, roi: e.target.valueAsNumber })} /></label>
+          <label>Rotation (°)<NumberInput step="0.1" value={form.rotation} disabled={!canEdit} onChange={(e) => setForm({ ...form, rotation: e.target.valueAsNumber })} /></label>
+          <label>ROI (%)<NumberInput min="0.1" step="0.1" value={form.roi} disabled={!canEdit} onChange={(e) => setForm({ ...form, roi: e.target.valueAsNumber })} /></label>
           <label className="scheduler-check"><input type="checkbox" checked={form.active} disabled={!canEdit} onChange={(e) => setForm({ ...form, active: e.target.checked })} /> Active</label>
         </div>
         {canEdit && <div className="scheduler-actions"><span role="status">{status}</span><button type="button" onClick={save}>Save target</button></div>}
