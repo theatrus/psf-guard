@@ -380,8 +380,9 @@ pub fn run_scan(
     let spatial_config = SpatialAnalysisConfig::default();
     let since_persist = AtomicUsize::new(0);
 
-    // Shared work-stealing pool sized by the caller's worker budget.
-    crate::concurrency::parallel_index(work.len(), workers, |i| {
+    // A pool sized by the caller's worker budget, which the detectors' own
+    // rayon work shares.
+    crate::concurrency::parallel_in_pool(work.len(), workers, |i| {
         wait_for_turn();
         let item = &work[i];
         {

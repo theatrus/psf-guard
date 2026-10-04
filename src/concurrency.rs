@@ -264,6 +264,33 @@ where
     });
 }
 
+/// Run `f(i)` for every `i` in `0..len` on a rayon pool of `workers` threads,
+/// blocking until all are done. Unlike [`parallel_index`], rayon work an item
+/// starts itself (Seiza's detectors and solvers) runs on the same threads, so
+/// the job keeps to its share of the machine rather than spreading over
+/// rayon's global pool. Falls back to [`parallel_index`] when the pool cannot
+/// be built.
+pub fn parallel_in_pool<F>(len: usize, workers: usize, f: F)
+where
+    F: Fn(usize) + Sync + Send,
+{
+    use rayon::prelude::*;
+    if len == 0 {
+        return;
+    }
+    let workers = workers.clamp(1, len);
+    match rayon::ThreadPoolBuilder::new().num_threads(workers).build() {
+        // One item per split, so a slow frame never holds others behind it.
+        Ok(pool) => pool.install(|| (0..len).into_par_iter().with_max_len(1).for_each(&f)),
+        Err(error) => {
+            tracing::warn!(
+                "Could not build a {workers}-thread pool ({error}); using plain threads"
+            );
+            parallel_index(len, workers, f);
+        }
+    }
+}
+
 /// Best-effort system memory in bytes, or `None` when the platform can't be
 /// probed (then the caller skips the memory ceiling).
 ///
@@ -361,6 +388,35 @@ pub fn probe_frame_pixels(path: &Path) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pooled_job_runs_its_items_side_by_side_and_keeps_nested_work_inside() {
+        use std::sync::Mutex;
+        let in_flight = AtomicUsize::new(0);
+        let most = AtomicUsize::new(0);
+        let nested = Mutex::new(Vec::new());
+        let done = Mutex::new(Vec::new());
+        parallel_in_pool(8, 3, |index| {
+            let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            most.fetch_max(now, Ordering::SeqCst);
+            // What a Seiza call inside the item would see.
+            nested.lock().unwrap().push(rayon::current_num_threads());
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            in_flight.fetch_sub(1, Ordering::SeqCst);
+            done.lock().unwrap().push(index);
+        });
+
+        let mut done = done.into_inner().unwrap();
+        done.sort_unstable();
+        assert_eq!(done, (0..8).collect::<Vec<_>>());
+        assert!(most.load(Ordering::SeqCst) > 1, "items ran one at a time");
+        assert!(most.load(Ordering::SeqCst) <= 3);
+        assert!(nested
+            .into_inner()
+            .unwrap()
+            .iter()
+            .all(|threads| *threads == 3));
+    }
 
     fn pol() -> WorkerPolicy {
         WorkerPolicy::default()

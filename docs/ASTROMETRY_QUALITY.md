@@ -19,6 +19,12 @@ scores:
    errant light; and
 2. a fresh pixel-derived plate solve for each frame.
 
+Both stages work on several frames at once, as many as **Settings → Stacking
+→ Processor use** allows (see [stack previews](STACKING_PREVIEWS.md#processor-use)).
+A scan you start uses the share for work you wait on. Quality backfill and
+analysis of new frames use the background share and pause before each frame
+while you wait on other work.
+
 The older `/analysis/spatial-scan` API remains as a compatibility alias, but
 the UI and new integrations use `/analysis/quality-scan`. Results are cached
 per database. PSF Guard checks the FITS size and modification timestamp plus

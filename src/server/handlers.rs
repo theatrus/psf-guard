@@ -7599,9 +7599,9 @@ async fn start_spatial_scan_with_priority(
             // Size the worker pool to the machine (configured core ratio) and
             // the sensor (peak memory of one in-flight frame, probed from the
             // first resolvable file). Leaves headroom for request serving.
-            let frame_pixels = spatial_items
+            let frame_pixels = items
                 .first()
-                .and_then(|it| crate::concurrency::probe_frame_pixels(&it.fits_path));
+                .and_then(|it| crate::concurrency::probe_frame_pixels(&it.0.fits_path));
             let budget =
                 crate::concurrency::plan_workers(None, &worker_policy, priority, frame_pixels);
             let wait_for_turn = || {
@@ -7640,24 +7640,30 @@ async fn start_spatial_scan_with_priority(
                     &ctx_arc.spatial_metrics,
                     astrometry_items.len(),
                 );
-                for (item, expected, _, need_astrometry, need_satellite) in astrometry_items {
+                // Solves run side by side within the same budget as the
+                // spatial stage; Seiza's own threads stay inside it too.
+                let workers = budget.workers.min(astrometry_items.len());
+                tracing::info!(
+                    "📐 Astrometry concurrency: {workers} worker(s) — {}",
+                    budget.rationale
+                );
+                crate::concurrency::parallel_in_pool(astrometry_items.len(), workers, |index| {
+                    let (item, expected, _, need_astrometry, need_satellite) =
+                        astrometry_items[index];
                     wait_for_turn();
                     crate::server::spatial_scan::begin_astrometry_item(
                         &ctx_arc.spatial_metrics,
                         &item.filename,
                     );
-                    // Acquire the per-database solve mutex per image, not for
-                    // the whole stage: a user-triggered on-demand solve must be
-                    // able to interleave with a long-running scan.
+                    // No per-database solve lock: the worker budget bounds the
+                    // scan's memory, and an on-demand solve is interactive, so
+                    // the scan waits for it before its next frame instead.
                     let outcome = if *need_astrometry {
-                        let solve_guard = ctx_arc.astrometry_solve_mutex.blocking_lock();
-                        let outcome = astrometry.solve_image_for_quality(
+                        astrometry.solve_image_for_quality(
                             item.image_id,
                             &item.fits_path,
                             *expected,
-                        );
-                        drop(solve_guard);
-                        outcome
+                        )
                     } else {
                         astrometry
                             .validated_persisted_pixel_analysis(
@@ -7735,7 +7741,7 @@ async fn start_spatial_scan_with_priority(
                             Some(error),
                         ),
                     }
-                }
+                });
             }
             record_frame_zero_points(&ctx_arc, &astrometry, &items);
             crate::server::spatial_scan::finalize_scan(&ctx_arc.spatial_metrics);
