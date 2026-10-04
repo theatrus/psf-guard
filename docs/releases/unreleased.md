@@ -481,7 +481,7 @@
 
 - Old calibration masters no longer pile up. Each hour PSF Guard removes
   half-written masters, and masters a newer one built from the same frames
-  replaced, once unused for a month and named by no stack. Over the disk
+  replaced, once unused for a day and named by no stack. Over the disk
   limit, masters unused for a week go too when that brings the volume back
   under. A master whose frames are gone, or that the catalog does not record,
   is always kept, and a removed master is built again when a stack needs it.

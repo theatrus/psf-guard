@@ -7,7 +7,9 @@
 //!
 //! - files a stopped build left half written (`*.fits.tmp-*`), a day old;
 //! - masters a newer master built from exactly the same frames replaced,
-//!   once unused for a month and named by no stack.
+//!   once unused for a day and named by no stack. The newer master serves
+//!   every light the older one did, and the older file's name carries a build
+//!   version no build reads again, so waiting longer only holds disk.
 //!
 //! Over its volume's limit the disk limit may also take masters unused for a
 //! week, least recently used first, those a stack names last
@@ -36,8 +38,9 @@ use std::time::{Duration, SystemTime};
 
 /// Age of a half-written file before it goes.
 const DEBRIS_AGE: Duration = Duration::from_secs(24 * 60 * 60);
-/// How long a replaced master stays unused before it goes.
-const REPLACED_UNUSED: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+/// How long a replaced master stays unused before it goes: past any build
+/// that was still reading it.
+const REPLACED_UNUSED: Duration = Duration::from_secs(24 * 60 * 60);
 /// How long a master stays unused before the disk limit may take it.
 const LRU_UNUSED: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
@@ -94,7 +97,7 @@ pub fn sweep(state: &AppState, ctx: &DatabaseContext, now: SystemTime) -> usize 
 }
 
 /// Masters in `folder` that a newer master from the same frames replaced,
-/// unused for a month and named by no stack.
+/// unused for a day and named by no stack.
 fn replaced_masters(ctx: &DatabaseContext, folder: &Path, now: SystemTime) -> Vec<PathBuf> {
     let Some(masters) = masters_in_folder(ctx, folder) else {
         return Vec::new();
@@ -433,10 +436,10 @@ mod tests {
             ('a', 1, present), // replaced by e
             ('b', 2, present), // replaced, but a stack's manifest names it
             ('c', 3, r#"["gone"]"#),
-            ('d', 4, present), // replaced, but used this week
+            ('d', 4, present), // replaced, but used today
             ('e', 5, present), // the newest from these frames
         ]);
-        aged(&f.folder.join(label_of('d')), 3);
+        aged(&f.folder.join(label_of('d')), 0);
         let stacks = storage::stacks(&f.ctx.stack_root);
         std::fs::create_dir_all(stacks.join("job")).unwrap();
         // An old job a color stack may still use names b.
