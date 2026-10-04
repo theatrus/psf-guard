@@ -1,5 +1,8 @@
 # Unreleased
 
+- Accept explicitly capable Director native-imaging workloads with centering,
+  dithering and rotation, without expanding the capabilities of older plugins.
+
 - Rank Director projects in one global list, with optional site or rig orders.
   Newly issued programs follow the highest eligible project offline, without
   per-project scoring weights. Existing allocations remain unchanged.
