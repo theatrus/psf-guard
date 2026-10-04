@@ -253,7 +253,8 @@ Attaching moves every database link of that other plan onto this one and
 retires it; this plan keeps its own framing and plan drafts and takes the
 other's only where it has none. Nothing in the rig databases moves: the next
 activation takes the attached project's targets over where they stand, by
-name, place, or as the lone target, and updates its exposure plans in place.
+name, place, or as the lone target, and takes over their exposure plans for
+the same work rather than adding twins.
 **Detach** beside a linked database hands that project a plan of its own
 again, named after the project; this plan keeps its drafts. A plan never
 holds two projects in one database, so attaching such a plan is refused.
@@ -743,10 +744,26 @@ rig's database, the same rows Target Scheduler and the Director plugin read:
   by hand) is taken over rather than doubled: the one with the panel's name,
   else the one at the panel's place, else, for a single-panel framing, the
   project's only target not yet owned by a panel. The preview lists these as
-  `adopt` when nothing about them changes and `update` when they move;
+  `adopt` and says whether they move;
 - one exposure plan per rig objective and panel, bound to the chosen template
   (or one matching its settings, created if needed; a library template is created under the library's own GUID, so every rig database carries the same one), with `desired` set to the
-  frames that objective needs at that rig's exposure length.
+  frames that objective needs at that rig's exposure length. A plan the
+  target already has for the same work is taken over rather than doubled:
+  one no activation owns, on the resolved template, else on a template with
+  the same filter, gain, offset, binning and readout mode, at the same
+  exposure length either way (a plan left at the template's default exposure
+  counts at that default). Another exposure length is other work and gets a
+  plan of its own. A taken-over plan keeps its `acquired` and `accepted`
+  counts; its `desired`, template and enabled flag follow the plan, and the
+  preview lists it as `adopt` with its row number and what changes.
+
+The preview accounts for every exposure plan on the targets: plans it adds
+(`create`), takes over (`adopt`), changes (`update`) or leaves alone
+(`unchanged`), and with `keep` the rest, which stay as they are in Target
+Scheduler: the rig's own plans no objective asks for, and plans an earlier
+activation made for a contribution the plan no longer has (a rig unticked and
+ticked again, or a bandpass changed). A template activation creates is listed
+under `template`.
 
 A second activation updates the same rows in place: coordinates, angle,
 exposure and desired counts change, names the operator edited stay, and

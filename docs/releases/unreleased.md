@@ -45,6 +45,11 @@
 - Catch a rotator that slipped: frames whose field turned away from the
   target's framing while the rotator reported no turn are flagged as
   rotation skew, scored low and left out of stacks, however long the run.
+- Take over a project's existing exposure plans when a plan is activated,
+  instead of adding a second plan next to each one. The activation preview
+  now lists every row by name, saying which plan it takes over (with its
+  frames taken), what changes, which templates it creates, and which plans
+  it leaves as they are.
 
 > Add a line here as each user-visible change merges. At release time this
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
