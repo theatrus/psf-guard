@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::directory_tree::DirectoryTree;
 use crate::models::{AcquiredImage, GradingStatus};
-use crate::server::sky_coverage::{night_boundary, night_of};
+use crate::server::sky_coverage::{catalog_night_boundary, night_of};
 
 /// How much of AstroBin's CSV to fill in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -591,7 +591,7 @@ pub fn export(
 
     // Nights split where the whole catalog is quiet, as the Sky view's do,
     // so one target's rows agree with every other's.
-    let boundary = night_boundary(catalog_capture_times(conn)?);
+    let boundary = catalog_night_boundary(conn).context("reading capture times")?;
 
     let mut notes = Vec::new();
     let mut lights_missing_files = 0usize;
@@ -643,18 +643,6 @@ pub fn export(
 }
 
 /// Every light's capture time, for the night split.
-fn catalog_capture_times(conn: &Connection) -> Result<Vec<i64>> {
-    let mut statement = conn
-        .prepare("SELECT acquireddate FROM acquiredimage WHERE acquireddate IS NOT NULL")
-        .context("preparing capture time query")?;
-    let times = statement
-        .query_map([], |row| row.get::<_, i64>(0))
-        .context("querying capture times")?
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .context("reading capture times")?;
-    Ok(times)
-}
-
 /// Read one representative light per night and filter for its f-number and
 /// its calibration match. The median frame stands for its group; when its
 /// file is missing the walk moves outward so one lost file does not blank a
@@ -732,6 +720,7 @@ fn file_stem(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::sky_coverage::night_boundary;
 
     fn frame(captured_at: i64, filter: &str, exposure_s: f64) -> AstroBinFrame {
         AstroBinFrame {

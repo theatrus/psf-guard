@@ -217,6 +217,8 @@ pub fn plan_export(
     // (same basename for a target+filter, e.g. after a manual file copy).
     let mut used_dests: HashMap<PathBuf, usize> = HashMap::new();
     let mut calibration_items = Vec::new();
+    let night_boundary = crate::server::sky_coverage::catalog_night_boundary(conn)
+        .context("reading capture times")?;
 
     for (image, _project_name, target_name) in rows {
         if options.project_id.is_some_and(|id| image.project_id != id)
@@ -247,6 +249,7 @@ pub fn plan_export(
                 &target_name,
                 Some(&tree),
                 options.layout,
+                night_boundary,
             )
             .context("matching export calibration frames")?;
             calibration_items.extend(calibration.items);

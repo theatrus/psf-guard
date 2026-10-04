@@ -15,6 +15,11 @@
 
 ## Fixed
 
+- The calibration library, coverage report and export folders date flats,
+  darks and bias by the night they belong to (issue #431). Rigs west of
+  Greenwich no longer see dawn flats a day late, or a night of lights split
+  in two.
+
 - The quality scan no longer records zero stars for a frame it read while the
   file was still being copied, or one where HocusFocus finds the stars N.I.N.A.
   Fast missed (issue #616); such frames are measured again later. A frame
