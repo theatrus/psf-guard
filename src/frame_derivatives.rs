@@ -1189,6 +1189,32 @@ pub fn pair_files_on_disk(
     Ok(report)
 }
 
+/// The file a record names, among the paths the directory tree holds under
+/// its name. A path whose last folders match the record's `source_tail`
+/// wins, then any path; either must still have the recorded size, so a
+/// rewritten or unrelated file of the same name is never taken for the copy.
+pub fn resolve_record_path<'a>(
+    record: &DerivativeRecord,
+    candidates: impl IntoIterator<Item = &'a std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    let size_matches = |path: &std::path::Path| match record.size {
+        Some(size) => std::fs::metadata(path).is_ok_and(|meta| meta.len() as i64 == size),
+        None => path.is_file(),
+    };
+    let tail_matches = |path: &std::path::Path| {
+        record
+            .source_tail
+            .as_deref()
+            .is_some_and(|tail| source_tail(path).as_deref() == Some(tail))
+    };
+    let candidates: Vec<&std::path::PathBuf> = candidates.into_iter().collect();
+    candidates
+        .iter()
+        .find(|path| tail_matches(path) && size_matches(path))
+        .or_else(|| candidates.iter().find(|path| size_matches(path)))
+        .map(|path| (*path).clone())
+}
+
 /// How many copies a catalog has paired, for Settings.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
 pub struct PairingCounts {
@@ -1738,6 +1764,32 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM acquiredimage", [], |row| row.get(0))
             .unwrap();
         assert_eq!(lights, 1, "the pass never adds a light");
+    }
+
+    #[test]
+    fn a_record_finds_its_file_by_tail_and_size() {
+        let root = tempfile::tempdir().unwrap();
+        let calibrated = root.path().join("calibrated/Light_B");
+        let other = root.path().join("old/run");
+        std::fs::create_dir_all(&calibrated).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let right = calibrated.join("f_c.xisf");
+        let stale = other.join("f_c.xisf");
+        std::fs::write(&right, [0_u8; 10]).unwrap();
+        std::fs::write(&stale, [0_u8; 10]).unwrap();
+        let mut record = record("light", FrameKind::Calibrated, "f_c.xisf", "u");
+        record.source_tail = Some("calibrated/Light_B".into());
+        record.size = Some(10);
+        assert_eq!(
+            resolve_record_path(&record, [&stale, &right]),
+            Some(right.clone())
+        );
+        // A file of that name but another size is not the copy.
+        record.size = Some(11);
+        assert_eq!(resolve_record_path(&record, [&stale, &right]), None);
+        record.size = Some(10);
+        record.source_tail = Some("moved/away".into());
+        assert_eq!(resolve_record_path(&record, [&stale]), Some(stale));
     }
 
     fn record(guid: &str, kind: FrameKind, file_name: &str, uuid: &str) -> DerivativeRecord {
