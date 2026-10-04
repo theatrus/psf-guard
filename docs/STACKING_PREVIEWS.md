@@ -275,11 +275,12 @@ cannot be read, from a newer build or a torn write, stops the sweep of that
 database, since what it names cannot be told from what nothing names; the
 server log says which file.
 
-Resume checkpoints follow the same rule: each is replaced in place when its
-group's input set changes and is otherwise kept, whatever its age. The only
-checkpoints deleted outright are ones that can never resume again — written
-by another stacking pipeline version, unreadable, or an orphaned half of an
-interrupted save.
+Resume checkpoints are replaced in place when their group's input set
+changes. One that no build has written or resumed from for 30 days is
+deleted, as an unused master is; the stack it led to stays. Checkpoints that
+can never resume again — written by another stacking pipeline version, or
+unreadable — go at once, and an orphaned half of an interrupted save after a
+day.
 
 A build belongs to the server, not to the page that started it. The header's
 background jobs chip counts it for as long as any mono or color build is
