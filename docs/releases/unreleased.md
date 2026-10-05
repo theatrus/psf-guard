@@ -1,5 +1,9 @@
 # Unreleased
 
+- Add shared Director weather/roof hold policy with persistent time and
+  interruption limits, stable Safe/Open checks and an explicit settled-ledger
+  resume gate. Existing clients retain stop-for-night behavior.
+
 - Let Director's shared planner fit complete setup and exposures before an
   observing-night deadline, independently of dispatch freshness. Work that no
   longer fits waits without consuming another capture attempt.

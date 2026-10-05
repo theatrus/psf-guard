@@ -1979,8 +1979,24 @@ recovery. Simulator evidence belongs in the plugin's validation guide.
 The requested observing-night behavior includes both poor-quality/cloud holds
 and weather/enclosure holds. These are **not implemented by recovery contract 1**:
 its safety transition is terminal. Do not relabel its stop as a resumable pause.
-The current native safety interlocks remain terminal until the next contract and
-its complete simulator gates are delivered.
+Runtime **0.12.0 / IPC 12 / recovery contract 2** adds an opt-in weather policy
+and a durable `weather_holding` phase. It records separate weather interruption
+and elapsed-hold budgets. Safe/Open ticks only build a stability interval; they
+never authorize acquisition by themselves. Bad readings and monitoring gaps
+reset stability. `resume_weather` is explicit, and the runtime refuses it unless
+the open capture ledger has no unresolved capture or active preparation. The
+host must additionally confirm equipment quiescence and sequence-hook outcomes.
+Terminal stops cannot be cleared. Legacy stored policy/snapshots without the new
+optional fields retain stop-for-night behavior and their existing encoding.
+
+The companion native adapter replaces canceled operation tokens only after this
+gate; old tokens remain canceled. It keeps monitoring current evidence while
+dispatch is latched off. Interrupted user instructions and uncertain native
+outcomes are not safe resume boundaries. Resuming a settled boundary uses the
+same night and allocation budget with fresh preparation/selection, not replayed
+hardware commands. Automatic reconciliation of uncertain capture/save outcomes,
+restart re-admission, rig-inherited policy and cloud classification remain
+separate work. Native simulator evidence belongs in the plugin validation guide.
 
 Add an explicit `hold_and_resume` policy alongside `stop_for_night`, inherited
 from rig defaults with a Session override. A closed roof is never permission to

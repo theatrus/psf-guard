@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
 pub const MAX_EVENT_PAGE: usize = 16;
 
 #[derive(Debug, Serialize, Deserialize)]
