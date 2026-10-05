@@ -117,30 +117,36 @@ fn clusters(values: &[f64], tolerance: f64) -> Vec<f64> {
     out
 }
 
-/// The mosaic grid the targets form, seen along the camera axes: rows by
-/// columns when every target sits on one, else a single panel.
-fn infer_layout(targets: &[SourceTarget], panel: Option<PanelSize>) -> (IcrsPosition, Mosaic) {
-    let first = &targets[0];
-    let single = (
-        first.center,
-        Mosaic {
-            rows: 1,
-            columns: 1,
-            overlap_percent: 20,
-        },
-    );
+/// A grid the targets form along the camera axes, with each target's cell.
+struct Grid {
+    center: IcrsPosition,
+    mosaic: Mosaic,
+    /// Per target, in input order: zero-based row from the top and column
+    /// from the left, as Director numbers panels.
+    cells: Vec<(u32, u32)>,
+}
+
+/// The index of the cluster `value` falls in. `starts` holds each cluster's
+/// smallest member, ascending, as `clusters` returns them.
+fn cluster_index(starts: &[f64], value: f64) -> usize {
+    starts
+        .iter()
+        .filter(|start| **start <= value)
+        .count()
+        .saturating_sub(1)
+}
+
+/// The mosaic grid the targets form, seen along the camera axes, when every
+/// target sits on one; `None` for a lone target or scattered ones.
+fn grid_layout(targets: &[SourceTarget], panel: Option<PanelSize>) -> Option<Grid> {
     if targets.len() < 2 {
-        return single;
+        return None;
     }
-    let Ok(plane) = TangentPlane::at(first.center) else {
-        return single;
-    };
+    let first = &targets[0];
+    let plane = TangentPlane::at(first.center).ok()?;
     let mut offsets = Vec::with_capacity(targets.len());
     for target in targets {
-        let Some(offset) = plane.project(target.center) else {
-            return single;
-        };
-        offsets.push(offset);
+        offsets.push(plane.project(target.center)?);
     }
     let mean = [
         offsets.iter().map(|o| o[0]).sum::<f64>() / offsets.len() as f64,
@@ -151,15 +157,10 @@ fn infer_layout(targets: &[SourceTarget], panel: Option<PanelSize>) -> (IcrsPosi
     // lays panels out. Seen from the first panel's plane instead, a grid far
     // from the equator bends: at +61° a 2×2 of 1.4° panels is off by 0.03°,
     // more than the tolerance, and would read as scattered targets.
-    let Ok(plane) = TangentPlane::at(center) else {
-        return single;
-    };
+    let plane = TangentPlane::at(center).ok()?;
     let mut offsets = Vec::with_capacity(targets.len());
     for target in targets {
-        let Some(offset) = plane.project(target.center) else {
-            return single;
-        };
-        offsets.push(offset);
+        offsets.push(plane.project(target.center)?);
     }
     // Camera frame: up along the position angle, right a quarter turn on.
     let (sin, cos) = first.rotation_degrees.to_radians().sin_cos();
@@ -172,7 +173,21 @@ fn infer_layout(targets: &[SourceTarget], panel: Option<PanelSize>) -> (IcrsPosi
     let rows = clusters(&along_y, tolerance);
     let (rows_n, columns_n) = (rows.len() as u32, columns.len() as u32);
     if rows_n * columns_n != targets.len() as u32 || rows_n > MAX_GRID || columns_n > MAX_GRID {
-        return single;
+        return None;
+    }
+    let cells: Vec<(u32, u32)> = along_y
+        .iter()
+        .zip(&along_x)
+        .map(|(y, x)| {
+            // Row 1 is the top: the largest distance up.
+            let row = rows.len() - 1 - cluster_index(&rows, *y);
+            (row as u32, cluster_index(&columns, *x) as u32)
+        })
+        .collect();
+    // Clusters can count right yet leave a cell empty and another doubled.
+    let mut seen = std::collections::HashSet::new();
+    if !cells.iter().all(|cell| seen.insert(*cell)) {
+        return None;
     }
     let overlap = match panel {
         Some(panel) => {
@@ -195,14 +210,64 @@ fn infer_layout(targets: &[SourceTarget], panel: Option<PanelSize>) -> (IcrsPosi
         }
         None => 0,
     };
-    (
+    Some(Grid {
         center,
-        Mosaic {
+        mosaic: Mosaic {
             rows: rows_n,
             columns: columns_n,
             overlap_percent: overlap,
         },
-    )
+        cells,
+    })
+}
+
+/// The mosaic grid the targets form, seen along the camera axes: rows by
+/// columns when every target sits on one, else a single panel.
+fn infer_layout(targets: &[SourceTarget], panel: Option<PanelSize>) -> (IcrsPosition, Mosaic) {
+    match grid_layout(targets, panel) {
+        Some(grid) => (grid.center, grid.mosaic),
+        None => (
+            targets[0].center,
+            Mosaic {
+                rows: 1,
+                columns: 1,
+                overlap_percent: 20,
+            },
+        ),
+    }
+}
+
+/// One panel of a mosaic a project's targets form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InferredPanel {
+    pub target_id: i64,
+    /// One-based, row 1 at the top and column 1 at the left.
+    pub row: u32,
+    pub column: u32,
+}
+
+/// The panels of the mosaic grid a Target Scheduler project's targets form,
+/// read from their coordinates and rotation the way a framing draft is
+/// imported. `None` when the targets are one or form no grid.
+pub(crate) fn inferred_mosaic(
+    connection: &Connection,
+    project_row: i64,
+) -> Result<Option<Vec<InferredPanel>>, StoreError> {
+    let targets = source_targets(connection, project_row)?;
+    let Some(grid) = grid_layout(&targets, None) else {
+        return Ok(None);
+    };
+    Ok(Some(
+        targets
+            .iter()
+            .zip(grid.cells)
+            .map(|(target, (row, column))| InferredPanel {
+                target_id: target.id,
+                row: row + 1,
+                column: column + 1,
+            })
+            .collect(),
+    ))
 }
 
 /// Whether the targets are one framing: a single target, or panels of one

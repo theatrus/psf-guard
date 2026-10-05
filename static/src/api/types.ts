@@ -2559,6 +2559,31 @@ export interface SkyPreview {
   } | null;
 }
 
+/** One panel of a project's mosaic: a target and its cell. */
+export interface MosaicPanel {
+  target_id: number;
+  target_name: string;
+  /** `r{row}c{column}`. */
+  panel_id: string;
+  /** One-based; row 1 at the top, column 1 at the left. */
+  row: number;
+  column: number;
+  preview?: SkyPreview | null;
+}
+
+/** A project's targets as one mosaic. `director` when Director's
+ *  activation record names the panels, `inferred` when the targets'
+ *  coordinates form the grid. */
+export interface ProjectMosaic {
+  project_id: number;
+  name: string;
+  source: 'director' | 'inferred';
+  rows: number;
+  columns: number;
+  /** Row by row from the top, left to right. */
+  panels: MosaicPanel[];
+}
+
 export interface SkyTarget {
   id: number;
   name: string;

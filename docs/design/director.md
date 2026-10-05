@@ -4243,17 +4243,14 @@ should now take into account:
   check-in or status report counts as contact, so a plugin that only
   reports status still reads online.
 
-### Later: a mosaic's targets as one view (design note)
+### A mosaic's targets as one view (built)
 
-Asked for 2026-09-30, not yet. Today a mosaic is several Target Scheduler
-targets, one per panel, and Images and Sequence show one target or all of a
-project's targets as separate frames. A meta-target mode would treat a
-mosaic's panels as one target: the grid grouped by panel in the mosaic's
-layout, Sequence interleaving the panels by capture time, and the stack
-previews placed side by side on the framing's sky. It belongs in the rig and
-target switcher as one more choice ("M31 mosaic"), beside "All targets" and
-the single panels, and it needs the panel layout from the plan's framing
-draft rather than guessing it from target names.
+Asked for 2026-09-30 and built 2026-10-05. The rig and target switcher
+offers a mosaic's panels as one choice; Images groups by panel, Sequence
+interleaves panels by capture time and Stacks places each panel's stack on
+the sky. The panel layout comes from Director's activation record, else the
+grid the targets' coordinates form, never from target names. Current
+behaviour: [A mosaic as one view](../DIRECTOR.md#a-mosaic-as-one-view).
 
 ### Later: review across a multi-rig project (design note)
 
