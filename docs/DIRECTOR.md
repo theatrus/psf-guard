@@ -705,18 +705,17 @@ optics from their own frames when they are adopted), and you can pick another
 or type a panel size. Drag the rectangle to move the target, drag its handle
 to turn it, and drag the sky to look around; scroll to zoom. The camera angle
 also takes a number, quarter turns, or the rig's fixed camera angle. Rows,
-columns and overlap lay out a mosaic; every panel is drawn and named, and the
-readout under the image gives the target, its coordinates, the angle, the
-panel size and the whole extent. **Compare rigs** overlays other rigs' fields
-on the center. A rig that should not follow the shared layout is framed on
-its own: **Frame a rig on its own** under Panels gives it its own grid, a
-camera angle of its own or the shared one, and a panel size from its optics
-or set by hand. It starts on the shared target center and follows it until
-it is given a center of its own, by dragging its rectangle on the sky, by
-typing one, or by **Move to view center**; ticking **same center as shared**
-puts it back in step. Its grid is drawn in a colour of its own, and
-**Framing for** switches the panel controls between the shared framing and
-each rig's. Every other rig keeps shooting the shared framing. **Move target to view center** and **Center view on target**
+columns and overlap under **Shared framing** lay out a mosaic; every panel is
+drawn and named. Coordinates show five decimals of a degree and angles two;
+the draft keeps every digit. **Rigs** has one card per rig, this plan's rigs
+first. Each card shows a swatch in the colour of the rig's outline on the
+sky, its field and pixel scale, and its part: **Sets panel size**, **Shared
+framing** or **Separate framing** with its grid and angle. **Use for panel
+size** makes it the panel rig, **Outline** draws its field on the sky, and
+**Frame separately** gives it a grid, camera angle and panel size of its own, edited
+in its card. A separate framing follows the shared center until it is dragged,
+typed or moved to the view center; **Shared center** puts it back in step.
+**Use shared** drops it. **Move target to view center** and **Center view on target**
 keep the two apart on purpose: panning the sky never moves the plan. **Save
 framing** keeps a draft on the project; a draft saved elsewhere since you
 loaded is refused until you reload. Survey imagery is attributed below the
@@ -925,8 +924,9 @@ program that does not bind is a `422` with the reason, never a partial pull.
 | Method | Route | Body or query |
 | --- | --- | --- |
 | POST | `/rigs/{rig}/checkin` | `coordinator_instance_id`, `catalog_id`, `ledger_id`, optional `program_revision` (the revision the plugin runs), and `events`: up to 256 ledger `ExecutionEvent`s from that one ledger in ascending sequence, sent verbatim. Returns `acknowledged_through` (every sequence up to it is stored), `highest_seen`, per-event `outcomes` (`applied`, `duplicate`, `conflict`), the sequences in `conflicts`, and `program_revision` with `program_changed`. `400` for a page that mixes ledgers or rigs, runs backwards or is empty; `403` on a tuple mismatch. |
+| POST | `/rigs/{rig}/operations` | Same envelope and acknowledgement as check-in, with up to 32 schema-1 preparation events. Independent contiguous cursor; gaps return `409`, changed duplicates report conflicts. Uses the paired client's existing `checkin:write` scope. Does not change capture credit or live status. |
 | POST | `/rigs/{rig}/status` | `coordinator_instance_id`, `catalog_id`, `session_id`, `reported_at_ms`, optional `program_revision`, and `status`: the plugin's coalesced live report (phase, goal and target IDs, elapsed time, wait reason, safety, connectivity, queue depth), stored verbatim. `accepted: false` means a newer report was already held for that session, or a newer session exists. |
-| GET | `/rigs/status` | Operator view, one row per bound rig (and any rig that reported and lost its binding): `catalog_slug` and `catalog_name`; `status` (or `null`) with `status_age_ms` and `status_stale` past ten minutes; `checkins` cursors per ledger; `contacts` (`program_pull`, `check_in`, `status`, each `{at_ms, detail}` or `null`, server receipt times); `connectivity` (`state` of `online`, `stale`, `offline` or `never`, `last_contact_ms`, `age_ms`); `assignments` (activated projects with revision); and `pending_receipts`. |
+| GET | `/rigs/status` | Operator view, one row per bound rig (and any rig that reported and lost its binding): `catalog_slug` and `catalog_name`; `status` (or `null`) with `status_age_ms` and `status_stale`; capture `checkins` cursors; `contacts` (`program_pull`, `check_in`, `status`, each `{at_ms, detail}` or `null`, server receipt times); `connectivity` (`state` of `online`, `stale`, `offline` or `never`, `last_contact_ms`, `age_ms`); `assignments`; `pending_receipts`; and up to 20 `recent_operations` (completed preparation events with their first server receipt time). |
 
 A receipt is stored once by ledger and sequence and never rewritten: a replay
 is acknowledged again, a replay with different content is reported as a
@@ -943,8 +943,15 @@ was taken, not that it passed.
 Every program pull, check-in and status report is noted as contact with its
 server receipt time, and the Live table derives connectivity from those alone.
 For the status payload the Live table reads `phase` (or `state`),
-`target_name` (or `target`), `operation` with `operation_started_ms`,
-`wait_reason`, `safety`, `queue_depth`, and `errors` (or `error`). The Sky
+`target_name` (or `target`), `operation` with monotonic `operation_elapsed_ms`
+(falling back to `operation_started_ms`), `wait_reason`, `safety`, `queue_depth`
+or `queue_state`, and `errors` (or `error`). `fresh_for_ms` declares the report's
+lifetime, bounded to 15 seconds through ten minutes; older clients default to
+ten minutes. Stale timers freeze at the reported duration. Completed operations
+are shown separately, with completion and receipt ages: a reconnect is not a
+new observation. Preparation history is metadata schema 22 and never affects
+capture accounting. Nested native hooks are currently aggregate preparation
+timings, not individual central receipts. The Sky
 places a rig from `pointing`, `{ "ra_degrees": …, "dec_degrees": … }` in
 ICRS (J2000) degrees with right ascension 0–360, when the plugin sends it:
 the mount's position now, whatever it is doing. Without it the Sky uses the

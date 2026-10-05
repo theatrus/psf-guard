@@ -15,6 +15,7 @@ pub mod equipment_report;
 pub mod framing;
 pub mod inbox;
 pub mod merge;
+pub mod operation_inbox;
 pub mod plan;
 pub mod preferences;
 pub mod profile;

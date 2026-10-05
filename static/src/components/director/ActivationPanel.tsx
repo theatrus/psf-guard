@@ -136,13 +136,12 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   const pending = preview.isPending || apply.isPending || push.isPending;
   const error = preview.error ?? apply.error ?? push.error;
   return <section className="activation" aria-label="Activation">
-    <p className="director-muted">Writes this plan into each rig's Target Scheduler database, taking over rows already there for the same work. The preview shows what changes in each.</p>
-    {last.data && <p className="director-muted">Last activated revision {last.data.revision} on {new Date(last.data.applied_at_ms).toLocaleString()} across {last.data.rigs.length} rig{last.data.rigs.length === 1 ? '' : 's'}.</p>}
-    {last.data && behind.length > 0 && <p className="activation-behind" role="note">The rig databases do not have the saved {behind.join(' and ')} yet. Preview and apply to send {behind.length === 1 ? 'it' : 'them'}.</p>}
-    {last.data && behind.length === 0 && !unsavedPlan && planRevision !== undefined && <p className="director-muted">The rig databases have the saved plan and framing.</p>}
-    {!last.data && last.isSuccess && <p className="director-muted">Not activated yet: the rig databases have none of this plan.</p>}
+    {last.data && <p className="director-muted">Last activated {new Date(last.data.applied_at_ms).toLocaleString()} · {last.data.rigs.length} rig{last.data.rigs.length === 1 ? '' : 's'}</p>}
+    {last.data && behind.length > 0 && <p className="activation-behind" role="note">Saved {behind.join(' and ')} not on the rigs yet</p>}
+    {last.data && behind.length === 0 && !unsavedPlan && planRevision !== undefined && <p className="director-muted">Rigs are up to date</p>}
+    {!last.data && last.isSuccess && <p className="director-muted">Not activated yet</p>}
     {error && !(apply.isError && httpStatus(apply.error) === 409) && <p className="director-error" role="alert">{message(error)}</p>}
-    {apply.isError && httpStatus(apply.error) === 409 && <p className="director-error" role="alert">Something changed since the preview. Preview again before applying.</p>}
+    {apply.isError && httpStatus(apply.error) === 409 && <p className="director-error" role="alert">Changed since the preview. Preview again.</p>}
     {report && <div className="activation-report">
       <p><strong>{report.applied ? 'Applied' : 'Preview'}</strong>: framing revision {report.framing_revision}, plan revision {report.plan_revision}, {report.panels} panel{report.panels === 1 ? '' : 's'}.{report.activation_revision !== null && ` Activation revision ${report.activation_revision}.`}</p>
       {report.warnings.map(warning => <p key={warning} className="director-error" role="alert">{warning}</p>)}
@@ -157,12 +156,12 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
       <ul>{pushed.rigs.map(rig => <li key={rig.rig.id} className={rig.push.error ? 'director-error' : undefined}>{rig.catalog_name}: {describePush(rig.push, true)}</li>)}</ul>
     </div>}
     {canWrite && <div className="director-actions">
-      <button type="button" disabled={pending} onClick={() => run(() => preview.mutate())}><Eye size={16} />{preview.isPending ? 'Previewing...' : unsavedPlan ? 'Save and preview activation' : report && !report.applied ? 'Preview again' : 'Preview activation'}</button>
-      {report && !report.applied && !unsavedPlan && <button type="button" disabled={pending || !manageable || report.rigs.every(r => r.warnings.length > 0 && r.changes.length === 0)} title={manageable ? undefined : 'This server cannot change rig databases'} onClick={() => run(() => apply.mutate())}><Check size={16} />{apply.isPending ? 'Applying...' : 'Apply to rig databases'}</button>}
-      {last.data && <button type="button" disabled={pending || !manageable} title={manageable ? 'Send the last activation\'s rows to each remote rig\'s peer again' : 'This server cannot change rig databases'} onClick={() => run(() => push.mutate())}><Send size={16} />{push.isPending ? 'Pushing...' : 'Push to remote sites again'}</button>}
+      <button type="button" disabled={pending} onClick={() => run(() => preview.mutate())}><Eye size={16} />{preview.isPending ? 'Previewing...' : unsavedPlan ? 'Save and preview' : report && !report.applied ? 'Preview again' : 'Preview'}</button>
+      {report && !report.applied && !unsavedPlan && <button type="button" disabled={pending || !manageable || report.rigs.every(r => r.warnings.length > 0 && r.changes.length === 0)} title={manageable ? undefined : 'This server cannot change rig databases'} onClick={() => run(() => apply.mutate())}><Check size={16} />{apply.isPending ? 'Applying...' : 'Apply'}</button>}
+      {last.data && <button type="button" disabled={pending || !manageable} title={manageable ? 'Send the last activation\'s rows to each remote rig\'s peer again' : 'This server cannot change rig databases'} onClick={() => run(() => push.mutate())}><Send size={16} />{push.isPending ? 'Pushing...' : 'Push again'}</button>}
     </div>}
-    {canWrite && unsavedPlan && <p className="director-muted" role="note">Unsaved changes in {unsavedLabels.join(', ')}. Previewing saves them first{report && !report.applied ? '; this preview is from before them' : ''}.</p>}
+    {canWrite && unsavedPlan && <p className="director-muted" role="note">Unsaved changes in {unsavedLabels.join(', ')}; preview saves them{report && !report.applied ? ' (this preview predates them)' : ''}</p>}
     {!canWrite && <p className="director-muted">Read only</p>}
-    {canWrite && !manageable && <p className="director-muted">Preview works here; applying and pushing need a server started with database management.</p>}
+    {canWrite && !manageable && <p className="director-muted">Preview only: this server cannot change rig databases</p>}
   </section>;
 }

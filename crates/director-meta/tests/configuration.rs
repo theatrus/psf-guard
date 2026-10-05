@@ -280,7 +280,7 @@ fn schema_one_migrates_without_changing_identities_and_old_backups_stay_read_onl
             .unwrap()
             .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        21
+        22
     );
 }
 

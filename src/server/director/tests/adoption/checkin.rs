@@ -10,6 +10,90 @@ fn event(ledger: &str, rig: Uuid, sequence: u64, goal: &str, capture: &str, stat
 }
 
 #[tokio::test]
+async fn operation_replay_acknowledges_history_without_overwriting_live_or_capture_state() {
+    let a = activated().await;
+    let instance = a.f.state.director.as_ref().unwrap().instance_id;
+    let ledger = Uuid::new_v4();
+    let status_path = format!("/rigs/{}/status", a.rig);
+    let report = json!({"coordinator_instance_id":instance,"catalog_id":a.rig,"session_id":"finished",
+        "reported_at_ms":100,"status":{"phase":"completed","fresh_for_ms":15000}});
+    assert_eq!(
+        call(&a.f.app, "POST", &status_path, report, None).await.0,
+        StatusCode::OK
+    );
+    let request = json!({"coordinator_instance_id":instance,"catalog_id":a.rig,"ledger_id":ledger,"events":[{
+        "schema_version":1,"contract_version":2,"engine_version":"0.3.0","rig_id":a.rig,"ledger_id":ledger,
+        "sequence":1,"assignment_id":"assignment","assignment_revision":1,"configuration_id":"config",
+        "preparation_id":"prep","event":{"kind":"completed","observation":{
+            "command":{"preparation_id":"prep","ordinal":1,"goal_id":"goal","target_id":"target",
+                "recipe_id":"recipe","operation":{"operation":"center","rotate":false}},
+            "issued_at_ms":10,"completion":{"preparation_id":"prep","ordinal":1,"ended_at_ms":90,
+                "elapsed_ms":75,"outcome":{"outcome":"succeeded"}}
+        }}
+    }]});
+    let path = format!("/rigs/{}/operations", a.rig);
+    for (applied, duplicates) in [(1, 0), (0, 1)] {
+        let (status, ack) = call(&a.f.app, "POST", &path, request.clone(), None).await;
+        assert_eq!(status, StatusCode::OK, "{ack}");
+        assert_eq!(ack["data"]["applied"], applied);
+        assert_eq!(ack["data"]["duplicates"], duplicates);
+        assert_eq!(ack["data"]["acknowledged_through"], 1);
+    }
+    let (_, listed) = call(&a.f.app, "GET", "/rigs/status", Value::Null, None).await;
+    let row = listed["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["rig"]["id"] == json!(a.rig))
+        .unwrap();
+    assert_eq!(row["status"]["session_id"], "finished");
+    assert_eq!(row["status"]["payload"]["phase"], "completed");
+    assert_eq!(row["recent_operations"].as_array().unwrap().len(), 1);
+    assert_eq!(row["checkins"], json!([]));
+    assert_eq!(row["pending_receipts"], 0);
+    let rig = a.rig;
+    a.f.state
+        .director
+        .as_ref()
+        .unwrap()
+        .clone()
+        .run(move |store| {
+            store
+                .record_status(&psf_guard_director_meta::inbox::RigStatus {
+                    rig_id: rig,
+                    session_id: "expired".into(),
+                    reported_at_ms: 200,
+                    received_at_ms: chrono::Utc::now().timestamp_millis() as u64 - 16000,
+                    payload: json!({"phase":"exposing","fresh_for_ms":15000}),
+                })
+                .map_err(Into::into)
+        })
+        .await
+        .unwrap();
+    let (_, expired) = call(&a.f.app, "GET", "/rigs/status", Value::Null, None).await;
+    assert!(expired["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["rig"]["id"] == json!(a.rig))
+        .unwrap()["status_stale"]
+        .as_bool()
+        .unwrap());
+    let mut wrong = request.clone();
+    wrong["events"][0]["rig_id"] = json!(Uuid::new_v4());
+    assert_eq!(
+        call(&a.f.app, "POST", &path, wrong, None).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let mut gap = request;
+    gap["events"][0]["sequence"] = json!(3);
+    assert_eq!(
+        call(&a.f.app, "POST", &path, gap, None).await.0,
+        StatusCode::CONFLICT
+    );
+}
+
+#[tokio::test]
 async fn check_in_stores_receipts_once_acknowledges_cursors_and_status_feeds_the_operator_view() {
     let a = activated().await;
     let instance = a.f.state.director.as_ref().unwrap().instance_id;

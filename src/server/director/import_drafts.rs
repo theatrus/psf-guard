@@ -304,6 +304,7 @@ pub(super) fn import_from_catalog(
             view_fov_degrees: view_fov,
             updated_at_ms: now_ms,
             rig_framings: vec![],
+            layout_revision: 0,
         };
         store.save_framing_draft(&draft, 0)?;
         imported.framing = true;

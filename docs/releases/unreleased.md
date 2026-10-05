@@ -1,5 +1,9 @@
 # Unreleased
 
+- Show Director's current native operation, elapsed time and mount pointing,
+  plus completed preparation history replayed after an outage. Batch receipts
+  never replace live status or add capture credit; stale operation timers freeze.
+
 - Accept explicitly capable Director native-imaging workloads with centering,
   dithering and rotation, without expanding the capabilities of older plugins.
 
@@ -323,6 +327,11 @@
   column shows what one dark master would use instead of every matching dark,
   and it lists masters from other software with whether they are used and,
   if not, which readings disagree.
+- The framing panel has one card per rig, this plan's rigs first, with the
+  colour of its outline on the sky and its part: sets panel size, shared
+  framing, or separate framing with its grid and angle. A separate framing is
+  edited in its card. Coordinates and angles show five and two decimals.
+  Planning labels are shorter, and the summary uses the Library's pills.
 - Disk use and the storage folders have their own **Storage** tab in Settings,
   instead of sitting under Stacking.
 
@@ -514,6 +523,9 @@
 
 ## Fixed
 
+- Choosing a sky map, or the offline N.I.N.A. map standing in for a saved
+  survey, no longer asks for another activation. Only a change to what
+  activation writes (target, angle, grid, panels) leaves the rigs behind.
 - A frame where N.I.N.A. Fast finds no stars but HocusFocus finds some is
   measured instead of reported as a failed scan. It scores on HocusFocus's
   star count, so a frame with a few dozen stars reads as poor, and its

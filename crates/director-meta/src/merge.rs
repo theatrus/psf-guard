@@ -59,6 +59,7 @@ impl MetaStore {
             |draft, id| {
                 draft.project_id = id;
                 draft.revision = 1;
+                draft.layout_revision = 1;
             },
             super::framing::read_draft,
         )?;
