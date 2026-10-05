@@ -773,6 +773,14 @@ pub async fn settled_for_weather_resume(
     storage: &mut Option<Storage>,
     rig_id: &str,
 ) -> Result<bool, ProtocolError> {
+    // Startup/workload waits own a private storage lease but have not admitted
+    // any execution ledger. A historical or unreadable path is not idle proof.
+    if storage
+        .as_ref()
+        .is_some_and(|owned| owned.ledger.is_none() && matches!(owned.path.try_exists(), Ok(false)))
+    {
+        return Ok(true);
+    }
     if !matches!(
         execute(storage, Operation::UnresolvedAttempt {}, rig_id).await?,
         StorageReply::Found { attempt: None }
