@@ -651,6 +651,27 @@ describe('Framing view', () => {
     expect(saves[0].position_angle_degrees).toBe(218.8412345);
   });
 
+  it('picks the panel rig from the swatch beside its name, and shows which one is active', async () => {
+    const rigC = { ...rigA, rig: { ...rigA.rig, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Askar' }, catalog_slug: 'askar', catalog_name: 'Askar 107',
+      field_of_view: { width_degrees: 1.2, height_degrees: 0.8, pixel_scale_arcsec: 1.9, focal_ratio: 7 } };
+    fixture();
+    server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB, rigC]))));
+    mount(true, true, [rigA.rig.id, rigC.rig.id]);
+    const active = await screen.findByRole('button', { name: 'RedCat 61 sets the panel size' });
+    expect(active).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('button', { name: 'Use for panel size' })).not.toBeInTheDocument();
+    // A rig without optics has nothing to pick.
+    expect(screen.queryByRole('button', { name: /C925 data/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Use Askar 107 for the panel size' }));
+    expect(screen.getByLabelText('Panel rig')).toHaveValue(rigC.rig.id);
+    expect(screen.getByRole('button', { name: 'Askar 107 sets the panel size' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Use RedCat 61 for the panel size' })).toHaveAttribute('aria-pressed', 'false');
+    // The whole card of the panel rig reads as selected.
+    expect(screen.getByRole('group', { name: 'Askar 107' })).toHaveClass('is-panel-rig');
+    expect(screen.getByRole('group', { name: 'RedCat 61' })).not.toHaveClass('is-panel-rig');
+    expect(screen.getByTestId('framing-extent')).toHaveTextContent('1 panel · 1.20° × 48.0′');
+  });
+
   it('does not call the same rigs in another order an edit', async () => {
     // Unticking a rig and ticking it again puts it last. The bar would have
     // nothing to list, so it must not say the framing is unsaved.
