@@ -81,7 +81,10 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     // Folded by default: it ranks every plan, not this one.
     await preferences.locator('summary').click();
     await preferences.getByRole('button', { name: 'Move Andromeda older setup up' }).click();
-    await preferences.getByRole('button', { name: 'Save priority' }).click();
+    // Every edit on the page saves from one bar, which names what changed.
+    await expect(page.getByRole('region', { name: 'Unsaved changes' })).toContainText('Unsaved changes in Project priority.');
+    await expect(preferences.getByLabel('Priority scope')).toBeDisabled();
+    await page.getByRole('region', { name: 'Unsaved changes' }).getByRole('button', { name: 'Save changes' }).click();
     await expect(preferences.getByText('Project priority saved.')).toBeVisible();
     await expect(preferences.getByText('Following global order')).toBeVisible();
     await page.reload();
@@ -92,10 +95,10 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     await expect(preferences.getByRole('button', { name: 'Move Andromeda exposures up' })).toBeDisabled();
     await preferences.getByLabel('Use inherited order').uncheck();
     await preferences.getByRole('button', { name: 'Move Andromeda exposures up' }).click();
-    await preferences.getByRole('button', { name: 'Save priority' }).click();
+    await page.getByRole('region', { name: 'Unsaved changes' }).getByRole('button', { name: 'Save changes' }).click();
     await expect(preferences.getByText('Following rig order')).toBeVisible();
     await preferences.getByLabel('Use inherited order').check();
-    await preferences.getByRole('button', { name: 'Save priority' }).click();
+    await page.getByRole('region', { name: 'Unsaved changes' }).getByRole('button', { name: 'Save changes' }).click();
     await expect(preferences.getByText('Following global order')).toBeVisible();
     await preferences.getByLabel('Priority scope').selectOption('global');
     await preferences.scrollIntoViewIfNeeded();

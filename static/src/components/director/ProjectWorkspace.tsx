@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ChevronDown, ChevronRight, Link2, Unlink } from 'lucide-react';
@@ -10,6 +10,8 @@ import FramingView from './FramingView';
 import PlanEditor from './PlanEditor';
 import ObservingPreferences from './ObservingPreferences';
 import ActivationPanel, { RigActivation } from './ActivationPanel';
+import { DraftProvider, EditedMark, SaveBar } from './pageDrafts';
+import { usePageDrafts } from './pageDraftsState';
 import type { DirectorActivationReport, DirectorRigProfileSummary } from '../../api/directorTypes';
 import type { FramingSeed } from './framingModel';
 import { retryWhenBusy } from './retry';
@@ -59,11 +61,9 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
   const [attachPick, setAttachPick] = useState('');
   const [detachPick, setDetachPick] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
-  // The plan editor's unsaved edits, and the way to save them before an
-  // activation preview reads the saved plan.
-  const [unsavedPlan, setUnsavedPlan] = useState(false);
-  const savePlanRef = useRef<(() => Promise<boolean>) | null>(null);
-  const savePlan = useCallback(() => savePlanRef.current?.() ?? Promise.resolve(true), []);
+  // Framing, plan and priority edits wait in one draft for the save bar;
+  // activation saves them before it reads the saved plan.
+  const drafts = usePageDrafts();
   const [problem, setProblem] = useState('');
   const candidates = useMemo(() => {
     if (!plans.data || !row) return [];
@@ -148,14 +148,15 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
       {databaseOf(link)}
     </div>)}
   </>;
-  return <section aria-label="Project planning" className="director-workspace">
+  return <DraftProvider drafts={drafts}><section aria-label="Project planning" className="director-workspace">
+    <SaveBar drafts={drafts} canWrite={canWrite} />
     <div className="director-toolbar director-workspace-head"><Link to={`/?${back}`}><ArrowLeft size={16} />Library</Link><h2>{row.project.name}</h2></div>
-    <h3 className="director-section-heading director-framing-heading">Framing</h3>
+    <h3 className="director-section-heading director-framing-heading">Framing<EditedMark drafts={drafts} id="framing" /></h3>
     {first && scheduler.isPending ? <p role="status">Loading targets...</p> : <FramingView projectId={projectId} seed={seed} preferredRigIds={row.links.map(link => link.rig.id)} />}
-    <h3 className="director-section-heading">Plan</h3>
-    <PlanEditor projectId={projectId} linkedRigIds={row.links.map(link => link.rig.id)} rigExtras={rigExtras} footer={attachArea} onUnsavedChange={setUnsavedPlan} saveRef={savePlanRef} />
+    <h3 className="director-section-heading">Plan<EditedMark drafts={drafts} id="plan" /></h3>
+    <PlanEditor projectId={projectId} linkedRigIds={row.links.map(link => link.rig.id)} rigExtras={rigExtras} footer={attachArea} />
     <h3 className="director-section-heading">Activation</h3>
-    <ActivationPanel projectId={projectId} onReport={onReport} shownElsewhere={profiledRigs} unsavedPlan={unsavedPlan} savePlan={savePlan} />
+    <ActivationPanel projectId={projectId} onReport={onReport} shownElsewhere={profiledRigs} />
     <ObservingPreferences projectId={projectId} rigs={row.links.map(link => ({ id: link.rig.id, name: link.catalog_name }))} projects={(plans.data?.rows ?? []).map(entry => entry.project)} />
-  </section>;
+  </section></DraftProvider>;
 }

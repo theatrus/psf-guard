@@ -7,6 +7,7 @@ import { useAccess } from '../../auth/access';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import type { DirectorActivationAction, DirectorActivationChange, DirectorActivationPush, DirectorActivationPushReport, DirectorActivationReport } from '../../api/directorTypes';
 import { retryWhenBusy } from './retry';
+import { useDrafts } from './pageDraftsState';
 import './ActivationPanel.css';
 
 const message = (error: unknown) => isAxiosError(error) ? error.response?.data?.error || error.message
@@ -94,15 +95,16 @@ function describePush(push: DirectorActivationPush | null, applied: boolean): st
 /** Push the framing and plan into each participating rig's database, with a
  *  preview first. Each rig's part of the result is shown with that rig
  *  (`onReport`); rigs not in `shownElsewhere` are listed here. */
-export default function ActivationPanel({ projectId, onReport, shownElsewhere, unsavedPlan = false, savePlan }: {
+export default function ActivationPanel({ projectId, onReport, shownElsewhere }: {
   projectId: string;
   onReport?: (report: DirectorActivationReport | null) => void;
   shownElsewhere?: ReadonlySet<string>;
-  /** The plan editor holds edits the server has not saved yet. */
-  unsavedPlan?: boolean;
-  /** Save those edits; resolves false when the plan has a problem to fix. */
-  savePlan?: () => Promise<boolean>;
 }) {
+  // The page's unsaved edits: activation reads what is saved, so it saves
+  // them first and never offers Apply over a preview they have outdated.
+  const drafts = useDrafts();
+  const unsavedLabels = drafts?.unsaved.map(section => section.label) ?? [];
+  const unsavedPlan = unsavedLabels.length > 0;
   const { canWrite } = useAccess();
   const status = useDirectorStatus();
   const manageable = status.data?.database_management ?? true;
@@ -115,7 +117,8 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, u
   const preview = useMutation({
     retry: false,
     mutationFn: async () => {
-      if (savePlan && !(await savePlan())) throw new Error('The plan above could not be saved. Fix what it shows, then preview again.');
+      const failed = drafts ? await drafts.saveAll() : null;
+      if (failed) throw new Error(`${failed} could not be saved. Fix what it shows above, then preview again.`);
       return apiClient.previewDirectorActivation(projectId);
     },
     onSuccess: setReport,
@@ -131,10 +134,22 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, u
   const run = (action: () => void) => { if (busy.current) return; busy.current = true; try { action(); } finally { busy.current = false; } };
   useEffect(() => { onReport?.(report); }, [report, onReport]);
   const pending = preview.isPending || apply.isPending || push.isPending;
+  // What the rig databases hold against what is saved here.
+  const savedPlan = useQuery({ queryKey: ['directorPlan', projectId], queryFn: () => apiClient.getDirectorPlan(projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
+  const savedFraming = useQuery({ queryKey: ['directorFraming', projectId], queryFn: () => apiClient.getDirectorFramingDraft(projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
+  const planRevision = savedPlan.data?.plan?.revision;
+  const framingRevision = savedFraming.data?.draft?.revision;
+  const behind = last.data ? [
+    planRevision !== undefined && planRevision > last.data.plan_revision && 'plan',
+    framingRevision !== undefined && framingRevision > last.data.framing_revision && 'framing',
+  ].filter((part): part is string => !!part) : [];
   const error = preview.error ?? apply.error ?? push.error;
   return <section className="activation" aria-label="Activation">
     <p className="director-muted">Writes this plan into each rig's Target Scheduler database, taking over rows already there for the same work. Each rig above shows what changes.</p>
     {last.data && <p className="director-muted">Last activated revision {last.data.revision} on {new Date(last.data.applied_at_ms).toLocaleString()} across {last.data.rigs.length} rig{last.data.rigs.length === 1 ? '' : 's'}.</p>}
+    {last.data && behind.length > 0 && <p className="activation-behind" role="note">The rig databases do not have the saved {behind.join(' and ')} yet. Preview and apply to send {behind.length === 1 ? 'it' : 'them'}.</p>}
+    {last.data && behind.length === 0 && !unsavedPlan && planRevision !== undefined && <p className="director-muted">The rig databases have the saved plan and framing.</p>}
+    {!last.data && last.isSuccess && <p className="director-muted">Not activated yet: the rig databases have none of this plan.</p>}
     {error && !(apply.isError && httpStatus(apply.error) === 409) && <p className="director-error" role="alert">{message(error)}</p>}
     {apply.isError && httpStatus(apply.error) === 409 && <p className="director-error" role="alert">Something changed since the preview. Preview again before applying.</p>}
     {report && <div className="activation-report">
@@ -151,11 +166,11 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, u
       <ul>{pushed.rigs.map(rig => <li key={rig.rig.id} className={rig.push.error ? 'director-error' : undefined}>{rig.catalog_name}: {describePush(rig.push, true)}</li>)}</ul>
     </div>}
     {canWrite && <div className="director-actions">
-      <button type="button" disabled={pending} onClick={() => run(() => preview.mutate())}><Eye size={16} />{preview.isPending ? 'Previewing...' : unsavedPlan ? 'Save plan and preview' : report && !report.applied ? 'Preview again' : 'Preview activation'}</button>
+      <button type="button" disabled={pending} onClick={() => run(() => preview.mutate())}><Eye size={16} />{preview.isPending ? 'Previewing...' : unsavedPlan ? 'Save and preview activation' : report && !report.applied ? 'Preview again' : 'Preview activation'}</button>
       {report && !report.applied && !unsavedPlan && <button type="button" disabled={pending || !manageable || report.rigs.every(r => r.warnings.length > 0 && r.changes.length === 0)} title={manageable ? undefined : 'This server cannot change rig databases'} onClick={() => run(() => apply.mutate())}><Check size={16} />{apply.isPending ? 'Applying...' : 'Apply to rig databases'}</button>}
       {last.data && <button type="button" disabled={pending || !manageable} title={manageable ? 'Send the last activation\'s rows to each remote rig\'s peer again' : 'This server cannot change rig databases'} onClick={() => run(() => push.mutate())}><Send size={16} />{push.isPending ? 'Pushing...' : 'Push to remote sites again'}</button>}
     </div>}
-    {canWrite && unsavedPlan && <p className="director-muted" role="note">The plan has unsaved changes. Previewing saves them first{report && !report.applied ? '; this preview is of the plan before them' : ''}.</p>}
+    {canWrite && unsavedPlan && <p className="director-muted" role="note">Unsaved changes in {unsavedLabels.join(', ')}. Previewing saves them first{report && !report.applied ? '; this preview is from before them' : ''}.</p>}
     {!canWrite && <p className="director-muted">Read only</p>}
     {canWrite && !manageable && <p className="director-muted">Preview works here; applying and pushing need a server started with database management.</p>}
   </section>;

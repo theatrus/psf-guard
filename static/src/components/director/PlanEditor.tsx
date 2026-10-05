@@ -1,4 +1,5 @@
-import { type MutableRefObject, type ReactNode, useEffect, useId, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useId, useMemo, useState } from 'react';
+import { useDraftSection } from './pageDraftsState';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { Check, Plus, RefreshCw, Trash2 } from 'lucide-react';
@@ -21,17 +22,11 @@ export interface RigExtras { place?: ReactNode; below?: ReactNode }
 /** Objectives per bandpass and depth, and each rig's template and exposure
  *  for them, one block per rig. Rigs with a project in this plan or ticked
  *  come first; the rest fold away. */
-export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, footer, onUnsavedChange, saveRef }: {
+export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, footer }: {
   projectId: string;
   linkedRigIds?: string[];
   rigExtras?: (rig: DirectorRigProfileSummary) => RigExtras;
   footer?: ReactNode;
-  /** Told whether the editor holds edits the server has not saved. */
-  onUnsavedChange?: (unsaved: boolean) => void;
-  /** Filled with a function that saves pending edits, resolving true when
-   *  the saved plan is now what the editor shows. Activation reads the saved
-   *  plan, so it saves through this first. */
-  saveRef?: MutableRefObject<(() => Promise<boolean>) | null>;
 }) {
   const formId = useId();
   const { canWrite } = useAccess();
@@ -78,19 +73,24 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
   const stale = httpStatus(save.error) === 409;
   const baseline = loaded.data ? loaded.data.plan ?? emptyPlan(projectId) : null;
   const unsaved = !!plan && !!baseline && JSON.stringify(plan) !== JSON.stringify(baseline);
-  useEffect(() => { onUnsavedChange?.(unsaved); }, [unsaved, onUnsavedChange]);
-  useEffect(() => {
-    if (!saveRef) return;
-    saveRef.current = async () => {
+  // On the project page the save bar saves the plan with the framing;
+  // activation reads the saved plan, so nothing here may look applied
+  // before it is saved.
+  const managed = useDraftSection('plan', {
+    label: 'Plan',
+    order: 2,
+    unsaved: canWrite && unsaved,
+    save: async () => {
       if (!unsaved) return true;
       if (!canWrite || stale || !plan) return false;
       const trouble = planProblem(plan);
       setProblem(trouble ?? '');
       if (trouble) return false;
       setNotice('');
-      await save.mutateAsync();
+      try { await save.mutateAsync(); } catch { return false; }
       return true;
-    };
+    },
+    discard: () => { if (baseline) setPlan(baseline); setProblem(''); save.reset(); },
   });
   // Director's own templates: a rig whose database has none for a band shoots with one of these.
   const libraryQuery = useQuery({ queryKey: ['directorTemplateLibrary'], queryFn: apiClient.getDirectorTemplateLibrary, retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false });
@@ -272,7 +272,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
       {stale && <p className="director-error" role="alert">This plan changed since you loaded it. Reload to see the saved plan before editing again.</p>}
       {(problem || (save.isError && !stale)) && <p className="director-error" role="alert">{problem || message(save.error)}</p>}
       <div className="director-actions">
-        {canWrite && <button type="submit" form={formId} disabled={save.isPending || stale}><Check size={16} />{save.isPending ? 'Saving...' : 'Save plan'}</button>}
+        {canWrite && !managed && <button type="submit" form={formId} disabled={save.isPending || stale}><Check size={16} />{save.isPending ? 'Saving...' : 'Save plan'}</button>}
         <button type="button" aria-label="Reload plan" title="Reload plan" onClick={() => { setNotice(''); setProblem(''); save.reset(); void loaded.refetch(); }}><RefreshCw size={16} /></button>
         {!canWrite && <span className="director-muted">Read only</span>}
       </div>

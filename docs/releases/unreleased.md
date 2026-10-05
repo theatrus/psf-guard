@@ -693,3 +693,8 @@
   Apply waits for a fresh preview after any later edit.
 - Type a new number over an old one in the plan, framing and Target
   Scheduler plan fields, instead of the field snapping to 0 when emptied.
+- Save a plan's framing, goals and project priority from one bar at the top
+  of the page, which names every section with unsaved changes and marks
+  them "edited". Leaving the page or closing the tab with unsaved changes
+  asks first, and Activation says when the rig databases are behind the
+  saved plan or framing.
