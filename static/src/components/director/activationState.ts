@@ -12,9 +12,12 @@ export function useActivationState(projectId: string) {
   const savedFraming = useQuery({ queryKey: ['directorFraming', projectId], queryFn: () => apiClient.getDirectorFramingDraft(projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
   const planRevision = savedPlan.data?.plan?.revision;
   const framingRevision = savedFraming.data?.draft?.revision;
+  // The survey, view width and compared rigs are the view's; only a change
+  // to what activation writes leaves the rigs behind.
+  const layoutRevision = savedFraming.data?.draft?.layout_revision ?? framingRevision;
   const behind = last.data ? [
     planRevision !== undefined && planRevision > last.data.plan_revision && 'plan',
-    framingRevision !== undefined && framingRevision > last.data.framing_revision && 'framing',
+    layoutRevision !== undefined && layoutRevision > last.data.framing_revision && 'framing',
   ].filter((part): part is string => !!part) : [];
   return { last, savedPlan, savedFraming, planRevision, framingRevision, behind };
 }

@@ -50,29 +50,29 @@ export default function WorkspaceSummary({ projectId, projectName, back, rigs, o
       : { ok: true, text: `Activated revision ${last.data.revision} · rig databases up to date` }
     : last.isSuccess ? { ok: false, text: 'Not activated yet' } : null;
   return <div className="workspace-summary" aria-label="Plan summary" role="region">
-    <div className="workspace-summary-line">
-      <Link to={`/?${back}`}><ArrowLeft size={16} />Library</Link>
+    <div className="workspace-summary-head">
+      <Link className="workspace-pill workspace-back" to={`/?${back}`}><ArrowLeft size={14} />Library</Link>
       <h2 className="workspace-summary-name">{projectName}</h2>
-      {framing
-        ? <span data-testid="summary-target">{framing.target_name} · {formatRaHours(framing.center.ra_degrees)} {formatDec(framing.center.dec_degrees)}</span>
-        : savedFraming.isSuccess && <span className="director-muted">No framing saved yet</span>}
-      {objectives.length > 0
-        ? <span data-testid="summary-goals">{objectives.map(goalText).join(' · ')}</span>
-        : savedPlan.isSuccess && <span className="director-muted">No objectives yet</span>}
+      {activation && (onActivation
+        ? <button type="button" className={`workspace-pill workspace-activation${activation.ok ? ' is-ok' : ' is-behind'}`} data-testid="summary-activation" title="Preview an activation, or push the last one again" onClick={onActivation}>{activation.ok ? <Check size={14} aria-hidden="true" /> : <TriangleAlert size={14} aria-hidden="true" />}{activation.text}</button>
+        : <span className={`workspace-pill workspace-activation${activation.ok ? ' is-ok' : ' is-behind'}`} data-testid="summary-activation">{activation.text}</span>)}
     </div>
-    <p className="workspace-summary-line">
+    <div className="workspace-summary-line">
+      {framing
+        ? <span className="workspace-pill is-strong" data-testid="summary-target">{framing.target_name} <small>{formatRaHours(framing.center.ra_degrees)} {formatDec(framing.center.dec_degrees)}</small></span>
+        : savedFraming.isSuccess && <span className="workspace-pill">No framing saved yet</span>}
+      {objectives.length > 0
+        ? <span className="workspace-pills" data-testid="summary-goals">{objectives.map(objective => <span key={objective.id} className="workspace-pill">{goalText(objective)}</span>)}</span>
+        : savedPlan.isSuccess && <span className="workspace-pill">No objectives yet</span>}
       {rigs.map(rig => {
         const gaps = profiles.data ? rigGaps(profiles.data.find(entry => entry.rig.id === rig.id)) : [];
-        return <span key={rig.id} className={`workspace-rig${gaps.length ? ' is-missing' : ''}`}
+        return <span key={rig.id} className={`workspace-pill workspace-rig${gaps.length ? ' is-missing' : ' is-ok'}`}
           title={gaps.length ? `${rig.name}: ${gaps.join(', ')}. Set it up under Settings → Rigs.` : `${rig.name} is set up`}>
           {gaps.length ? <TriangleAlert size={14} aria-hidden="true" /> : <Check size={14} aria-hidden="true" />}
           {rig.name}{gaps.length > 0 && <small> · {gaps.join(', ')}</small>}
         </span>;
       })}
-      {rigs.length === 0 && <span className="director-muted">No rig in this plan yet</span>}
-      {activation && (onActivation
-        ? <button type="button" className={`link-button workspace-activation${activation.ok ? '' : ' is-behind'}`} data-testid="summary-activation" title="Preview an activation, or push the last one again" onClick={onActivation}>{activation.text}</button>
-        : <span className={`workspace-activation${activation.ok ? '' : ' is-behind'}`} data-testid="summary-activation">{activation.text}</span>)}
-    </p>
+      {rigs.length === 0 && <span className="workspace-pill">No rig in this plan yet</span>}
+    </div>
   </div>;
 }

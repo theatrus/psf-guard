@@ -93,6 +93,7 @@ pub(super) async fn activated() -> Activated {
                     view_fov_degrees: 5.0,
                     updated_at_ms: 1,
                     rig_framings: vec![],
+                    layout_revision: 0,
                 },
                 0,
             )

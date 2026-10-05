@@ -705,18 +705,21 @@ optics from their own frames when they are adopted), and you can pick another
 or type a panel size. Drag the rectangle to move the target, drag its handle
 to turn it, and drag the sky to look around; scroll to zoom. The camera angle
 also takes a number, quarter turns, or the rig's fixed camera angle. Rows,
-columns and overlap lay out a mosaic; every panel is drawn and named, and the
-readout under the image gives the target, its coordinates, the angle, the
-panel size and the whole extent. **Compare rigs** overlays other rigs' fields
-on the center. A rig that should not follow the shared layout is framed on
-its own: **Frame a rig on its own** under Panels gives it its own grid, a
-camera angle of its own or the shared one, and a panel size from its optics
-or set by hand. It starts on the shared target center and follows it until
-it is given a center of its own, by dragging its rectangle on the sky, by
-typing one, or by **Move to view center**; ticking **same center as shared**
-puts it back in step. Its grid is drawn in a colour of its own, and
-**Framing for** switches the panel controls between the shared framing and
-each rig's. Every other rig keeps shooting the shared framing. **Move target to view center** and **Center view on target**
+columns and overlap under **Shared framing** lay out a mosaic; every panel is
+drawn and named. The fields show coordinates to five decimals of a degree and
+angles to two; the draft keeps every digit. **Rigs** lists one card per rig,
+the plan's rigs first and the rest folded away. A swatch in the colour of the
+rig's outline on the sky, its field and pixel scale, and one line say what it
+does: sizes the shared framing, shoots the shared framing, or has its own
+framing, with that grid, overlap and angle. From the card, **Size the panels
+from it** makes it the panel rig, a tick draws its field over the center for
+comparison, and **Frame it on its own** gives it its own grid, a camera angle
+of its own or the shared one, and a panel size from its optics or set by hand.
+Its editor opens in its card. It starts on the shared target center and
+follows it until it is given a center of its own, by dragging its rectangle
+on the sky, by typing one, or by **Move to view center**; ticking **same
+center as shared** puts it back in step. **Back to the shared framing** drops
+its own layout. Every other rig keeps shooting the shared framing. **Move target to view center** and **Center view on target**
 keep the two apart on purpose: panning the sky never moves the plan. **Save
 framing** keeps a draft on the project; a draft saved elsewhere since you
 loaded is refused until you reload. Survey imagery is attributed below the

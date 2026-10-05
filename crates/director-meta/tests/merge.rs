@@ -37,6 +37,7 @@ fn draft(project: Uuid, name: &str) -> FramingDraft {
         view_fov_degrees: 4.0,
         updated_at_ms: 1,
         rig_framings: vec![],
+        layout_revision: 0,
     }
 }
 

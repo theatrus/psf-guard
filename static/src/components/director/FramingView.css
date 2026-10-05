@@ -126,3 +126,24 @@
 .framing-stage-zoom { position: absolute; right: 10px; bottom: 34px; display: flex; flex-direction: column; gap: 4px; }
 .framing-stage-zoom button { width: 30px; min-height: 30px; padding: 0; background: rgba(0, 0, 0, 0.65); color: #fff; border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 4px; }
 .framing-stage-zoom button:hover:not(:disabled) { background: rgba(40, 40, 40, 0.85); }
+
+/* One card per rig, its swatch the colour of its outline on the sky. */
+.framing-rig-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.framing-rig-card { display: grid; gap: 4px; padding: 8px 10px; border: 1px solid var(--color-border-secondary); border-radius: 10px; background: var(--color-bg-secondary); }
+.framing-rig-card.is-editing { border-color: var(--color-primary); }
+.framing-rig-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.framing-rig-head small { color: var(--color-text-secondary); }
+.framing-rig-role { margin: 0; font-size: 13px; color: var(--color-text-secondary); }
+.framing-rig-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 13px; }
+.framing-rig-swatch { flex: none; width: 14px; height: 10px; border-radius: 3px; border: 2px solid var(--color-border-tertiary); }
+.framing-rig-swatch.is-shared { border-color: #5ab4ff; background: rgba(80, 180, 255, 0.25); }
+.framing-rig-swatch.is-compared { border-color: #ffc56b; border-style: dashed; }
+.framing-rig-swatch.is-own-0 { border-color: #ffc56b; background: rgba(255, 197, 107, 0.2); }
+.framing-rig-swatch.is-own-1 { border-color: #7be495; background: rgba(123, 228, 149, 0.2); }
+.framing-rig-swatch.is-own-2 { border-color: #ff8ad4; background: rgba(255, 138, 212, 0.2); }
+.framing-rig-swatch.is-own-3 { border-color: #c9a7ff; background: rgba(201, 167, 255, 0.2); }
+.framing-rig-swatch.is-none { border-style: dotted; }
+.framing-other-rigs { margin-top: 8px; }
+.framing-other-rigs > summary { cursor: pointer; color: var(--color-text-secondary); margin-bottom: 8px; }
+.framing-rig-card .framing-own { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--color-border-secondary); }
+.director-page .framing-rig-actions button { min-height: 28px; padding: 2px 10px; font-size: 13px; }

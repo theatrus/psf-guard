@@ -136,7 +136,10 @@ describe('Framing view', () => {
     expect(document.querySelectorAll('.framing-panel text')).toHaveLength(2);
     fireEvent.click(screen.getByRole('checkbox', { name: /RedCat 61/ }));
     expect(document.querySelectorAll('.framing-overlay')).toHaveLength(1);
-    expect(screen.getByRole('checkbox', { name: /C925 data/ })).toBeDisabled();
+    // A rig without optics has no outline to show, and says why.
+    expect(screen.queryByRole('checkbox', { name: /C925 data/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'C925 data' })).toHaveTextContent('No optics in its rig profile yet.');
+    expect(screen.getByRole('group', { name: 'RedCat 61' })).toHaveTextContent('Sizes the shared framing, and shoots it: 2 × 1 panels, 15% overlap.');
 
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
     expect(await screen.findByText('Saved framing revision 1.')).toBeInTheDocument();
@@ -193,7 +196,7 @@ describe('Framing view', () => {
     // rigB has no optics, so rigA frames by default; no click needed.
     await waitFor(() => expect(screen.getByLabelText('Panel rig')).toHaveValue(rigA.rig.id));
     expect(screen.getByLabelText('Target name')).toHaveValue('M31');
-    expect(screen.getByTestId('framing-readout')).toHaveTextContent('angle 35.0°');
+    expect(screen.getByLabelText('Position angle degrees')).toHaveValue(35);
     const stage = screen.getByTestId('framing-stage');
     stage.setPointerCapture = vi.fn();
     stage.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1024, height: 768, right: 1024, bottom: 768, x: 0, y: 0, toJSON: () => ({}) });
@@ -236,9 +239,10 @@ describe('Framing view', () => {
     await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
     expect(screen.queryByTestId('framing-rig-panels')).not.toBeInTheDocument();
     // C925 has no optics, so its own framing starts from the shared size.
-    fireEvent.change(screen.getByLabelText('Frame a rig on its own'), { target: { value: rigB.rig.id } });
-    expect(screen.getByLabelText('Framing for')).toHaveValue(rigB.rig.id);
-    expect(screen.getByTestId('framing-own-rig')).toBeInTheDocument();
+    const c925 = () => screen.getByRole('group', { name: 'C925 data' });
+    fireEvent.click(within(c925()).getByRole('button', { name: 'Frame it on its own' }));
+    // Its editor opens in its own card.
+    expect(within(c925()).getByTestId('framing-own-rig')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('C925 data columns'), { target: { value: '3' } });
     fireEvent.click(screen.getByLabelText('C925 data follows the shared angle'));
     fireEvent.change(screen.getByLabelText('C925 data camera angle degrees'), { target: { value: '90' } });
@@ -257,19 +261,22 @@ describe('Framing view', () => {
     expect(screen.getByTestId('framing-rig-panels').querySelector('polygon')!.getAttribute('points')).not.toBe(before);
     // The shared target did not move with it.
     expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(seed.center.ra_degrees);
-    fireEvent.change(screen.getByLabelText('Framing for'), { target: { value: '' } });
+    fireEvent.click(within(c925()).getByRole('button', { name: 'Done' }));
+    expect(screen.queryByTestId('framing-own-rig')).not.toBeInTheDocument();
+    // Its card says what it shoots; the shared grid is still one panel.
+    expect(c925()).toHaveTextContent('Its own framing: 1 × 3 panels, 20% overlap, camera at 90°, its own center.');
     expect(screen.getByLabelText('Mosaic columns')).toHaveValue(1);
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
     await waitFor(() => expect(saves).toHaveLength(1));
     expect(saves[0].rig_framings).toEqual([{ rig_id: rigB.rig.id, center: { ra_degrees: 12, dec_degrees: seed.center.dec_degrees }, position_angle_degrees: 90, mosaic: { rows: 1, columns: 3, overlap_percent: 20 }, panel: { width_degrees: 5.38, height_degrees: 3.6 } }]);
     // One tick puts it back in step with the shared center.
-    fireEvent.change(screen.getByLabelText('Framing for'), { target: { value: rigB.rig.id } });
+    fireEvent.click(within(c925()).getByRole('button', { name: 'Edit its framing' }));
     fireEvent.click(screen.getByLabelText('C925 data follows the shared center'));
     expect(screen.getByLabelText('C925 data right ascension degrees')).toHaveValue(seed.center.ra_degrees);
     // Back to the shared framing drops the rig's own grid.
-    fireEvent.click(screen.getByRole('button', { name: 'Back to the shared framing for C925 data' }));
+    fireEvent.click(within(c925()).getByRole('button', { name: 'Back to the shared framing' }));
     expect(screen.queryByTestId('framing-rig-panels')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Framing for')).not.toBeInTheDocument();
+    expect(within(c925()).getByRole('button', { name: 'Frame it on its own' })).toBeInTheDocument();
   });
 
   it('is read only without write access and explains a missing seed', async () => {
@@ -625,6 +632,23 @@ describe('Framing view', () => {
     fireEvent.change(screen.getByLabelText('Position angle degrees'), { target: { value: '15' } });
     await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(1));
     expect(drafts.current!.unsaved[0].changes).toEqual(['camera angle 0° → 15°']);
+  });
+
+  it('shows coordinates and angles to the places that matter, and saves them whole', async () => {
+    const stored: DirectorFramingDraft = { project_id: 'project', revision: 2, target_name: 'Medusa Nebula', center: { ra_degrees: 112.26128933333334, dec_degrees: 13.246830369444444 }, position_angle_degrees: 218.8412345,
+      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: null, panel: { width_degrees: 0.5727744486363814, height_degrees: 0.3828274803946109 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 0.9164391178182103, updated_at_ms: 1 };
+    const { saves } = fixture(stored);
+    mount();
+    expect(await screen.findByLabelText('Right ascension degrees')).toHaveValue(112.26129);
+    expect(screen.getByLabelText('Declination degrees')).toHaveValue(13.24683);
+    expect(screen.getByLabelText('Position angle degrees')).toHaveValue(218.84);
+    expect(screen.getByLabelText('Panel width degrees')).toHaveValue(0.573);
+    expect(screen.getByLabelText('View width degrees')).toHaveValue(0.92);
+    fireEvent.change(screen.getByLabelText('Target name'), { target: { value: 'Medusa' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].center).toEqual(stored.center);
+    expect(saves[0].position_angle_degrees).toBe(218.8412345);
   });
 
   it('does not call the same rigs in another order an edit', async () => {

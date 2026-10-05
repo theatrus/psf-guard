@@ -314,6 +314,12 @@
 
 ## Changed
 
+- The framing panel lists one card per rig, the plan's rigs first, each with
+  the colour of its outline on the sky and a line saying whether it sizes the
+  shared framing, shoots it, or has its own grid and angle. Its own framing
+  is edited in its card. Coordinates and angles show five and two decimals.
+  The planning summary uses the Library's pills for the target, goals, rigs
+  and activation.
 - Disk use and the storage folders have their own **Storage** tab in Settings,
   instead of sitting under Stacking.
 
@@ -505,6 +511,9 @@
 
 ## Fixed
 
+- Choosing a sky map, or the offline N.I.N.A. map standing in for a saved
+  survey, no longer asks for another activation. Only a change to what
+  activation writes (target, angle, grid, panels) leaves the rigs behind.
 - Save and activate a plan whose framing shows an offline N.I.N.A. sky map.
   The framing save refused those survey names, so activation stopped with
   "Invalid Director metadata request". When a save fails, the save bar and

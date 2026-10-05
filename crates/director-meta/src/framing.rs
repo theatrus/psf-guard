@@ -35,6 +35,25 @@ pub struct FramingDraft {
     /// size and camera angle. A rig not listed shoots the shared framing.
     #[serde(default)]
     pub rig_framings: Vec<RigFraming>,
+    /// The revision that last changed what activation writes: the target,
+    /// angle, grid and panels. The view's survey, width and compared rigs
+    /// move only `revision`, so choosing a sky map asks for no activation.
+    /// Set by the store; a draft saved before it existed reads its revision.
+    #[serde(default)]
+    pub layout_revision: u64,
+}
+
+impl FramingDraft {
+    /// Whether two drafts lay out the same targets for activation.
+    pub fn same_layout(&self, other: &Self) -> bool {
+        self.target_name == other.target_name
+            && self.center == other.center
+            && self.position_angle_degrees == other.position_angle_degrees
+            && self.mosaic == other.mosaic
+            && self.panel_rig_id == other.panel_rig_id
+            && self.panel == other.panel
+            && self.rig_framings == other.rig_framings
+    }
 }
 
 /// One rig's own layout over the shared target.
@@ -203,15 +222,22 @@ impl MetaStore {
         }
         let mut next = draft.clone();
         next.revision = current;
-        if let Some(stored) = stored {
+        next.layout_revision = stored.as_ref().map_or(0, |value| value.layout_revision);
+        if let Some(stored) = &stored {
             let mut same = stored.clone();
             same.updated_at_ms = next.updated_at_ms;
             if same == next {
                 tx.commit()?;
-                return Ok(stored);
+                return Ok(stored.clone());
             }
         }
         next.revision = current.checked_add(1).ok_or(Error::Conflict)?;
+        if stored
+            .as_ref()
+            .is_none_or(|stored| !stored.same_layout(&next))
+        {
+            next.layout_revision = next.revision;
+        }
         let payload = super::configuration::encode(&next)?;
         tx.execute(
             "INSERT INTO framing_draft(project_id,revision,payload) VALUES(?1,?2,?3)
@@ -240,10 +266,18 @@ pub(crate) fn read_draft(conn: &Connection, project: Uuid) -> Result<Option<Fram
         )
         .optional()?;
     row.map(|(revision, payload)| {
-        let value: FramingDraft = super::configuration::decode(payload)?;
+        let mut value: FramingDraft = super::configuration::decode(payload)?;
         validate_draft(&value).map_err(|_| Error::CorruptDatabase)?;
-        if value.project_id != project || revision <= 0 || value.revision != revision as u64 {
+        if value.project_id != project
+            || revision <= 0
+            || value.revision != revision as u64
+            || value.layout_revision > value.revision
+        {
             return Err(Error::CorruptDatabase);
+        }
+        // Saved before layouts were tracked: assume its layout is as new as it.
+        if value.layout_revision == 0 {
+            value.layout_revision = value.revision;
         }
         Ok(value)
     })
