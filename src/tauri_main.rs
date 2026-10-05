@@ -64,25 +64,7 @@ pub fn main() {
 
     let server_databases = initial_registry.databases.clone();
     let server_astrometry = initial_registry.astrometry.clone();
-    crate::calibration::configure_rotation_tolerance(
-        initial_registry
-            .calibration
-            .as_ref()
-            .and_then(|calibration| calibration.rotation_tolerance_deg),
-    );
-    crate::calibration::configure_external_master_policy(
-        initial_registry
-            .calibration
-            .as_ref()
-            .and_then(|calibration| calibration.external_masters),
-    );
-    crate::calibration::configure_flat_star_masking(
-        initial_registry
-            .calibration
-            .as_ref()
-            .and_then(|calibration| calibration.flat_star_masking)
-            .unwrap_or(false),
-    );
+    crate::calibration::configure(initial_registry.calibration.as_ref());
     crate::server::stack_preview::automatic::configure_from_registry(
         initial_registry.stacking.as_ref(),
     );

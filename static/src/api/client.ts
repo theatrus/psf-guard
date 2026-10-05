@@ -307,6 +307,8 @@ export const apiClient = {
     rotation_tolerance_deg: number | null;
     external_masters: ExternalMasterPolicy;
     flat_star_masking: boolean;
+    dark_reach_days?: number | null;
+    complete_dark_frames?: number | null;
   }): Promise<CalibrationSettings> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.put<ApiResponse<CalibrationSettings>>(
