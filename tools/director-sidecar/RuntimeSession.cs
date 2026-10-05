@@ -13,7 +13,7 @@ internal sealed class RuntimeSession : IAsyncDisposable
     internal const string EngineVersion = "0.3.0";
     internal const int ContractVersion = 2;
     internal const int ProtocolVersion = 11;
-    internal const string RuntimeVersion = "0.11.1";
+    internal const string RuntimeVersion = "0.11.2";
     private readonly NamedPipeServerStream pipe;
     private readonly Process process;
     private readonly SemaphoreSlim gate = new(1, 1);
