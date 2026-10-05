@@ -23,6 +23,7 @@ import {
   setColorPreview,
   useColorPreview,
 } from '../hooks/useColorPreview';
+import { setSkyOverlay, useSkyOverlay } from '../hooks/useSkyOverlay';
 import { useAccess } from '../auth/access';
 
 interface ImageDetailViewProps {
@@ -80,7 +81,17 @@ export default function ImageDetailView({
   const [isOriginalLoaded, setIsOriginalLoaded] = useState(false);
   const [useOriginalImage, setUseOriginalImage] = useState(false);
   const [imageError, setImageError] = useState(false);
-  const [showAstrometry, setShowAstrometry] = useState(true);
+  // The viewer's remembered choice; stars and PSF take the image over while
+  // they are on, and the overlay comes back with them off.
+  const skyOverlay = useSkyOverlay();
+  const showAstrometry = skyOverlay && !showStars && !showPsf;
+  const toggleSkyOverlay = () => {
+    // Toggle what is on screen: with stars or PSF hiding a remembered "on",
+    // pressing O asks to see the sky.
+    setSkyOverlay(!showAstrometry);
+    setShowStars(false);
+    setShowPsf(false);
+  };
   const [showQualityRegions, setShowQualityRegions] = useState(false);
   const [showSatellites, setShowSatellites] = useState(false);
   const [displayedBitmapDimensions, setDisplayedBitmapDimensions] = useState<{
@@ -228,8 +239,10 @@ export default function ImageDetailView({
         ['db', scope.dbId, 'image', scope.imageId, 'astrometry'],
         analysis
       );
+      // The viewer asked for this solve, so show what it found, and keep
+      // showing it: that is a choice like pressing the toggle.
       if (analysis.solution && scope.dbId === dbId && scope.imageId === imageId) {
-        setShowAstrometry(true);
+        setSkyOverlay(true);
         setShowStars(false);
         setShowPsf(false);
       }
@@ -299,7 +312,6 @@ export default function ImageDetailView({
   useHotkeys('s', () => {
     setShowStars(s => !s);
     setShowPsf(false); // Turn off PSF when showing stars
-    setShowAstrometry(false);
     setShowSatellites(false);
   }, [showStars]);
   // Colour is a view of the same exposure, not a different analysis, so it
@@ -309,7 +321,6 @@ export default function ImageDetailView({
     const newPsfState = !showPsf;
     setShowPsf(newPsfState);
     setShowStars(false); // Turn off stars when showing PSF
-    setShowAstrometry(false);
     setShowSatellites(false);
     if (newPsfState) {
       setPsfImageLoading(true);
@@ -317,13 +328,11 @@ export default function ImageDetailView({
   }, [showPsf]);
   useHotkeys('o', () => {
     if (astrometry?.solution) {
-      setShowAstrometry((visible) => !visible);
-      setShowStars(false);
-      setShowPsf(false);
+      toggleSkyOverlay();
     } else if (canCompute && !(solveMatchesCurrent && solveAstrometry.isPending)) {
       solveAstrometry.mutate({ dbId, imageId });
     }
-  }, [astrometry?.solution, canCompute, solveAstrometry.isPending, solveMatchesCurrent]);
+  }, [astrometry?.solution, canCompute, solveAstrometry.isPending, solveMatchesCurrent, showAstrometry]);
   useHotkeys('t', () => {
     if (satelliteStatus?.analysis) {
       setShowSatellites((visible) => !visible);
@@ -876,11 +885,7 @@ export default function ImageDetailView({
               isSolving={solveMatchesCurrent && solveAstrometry.isPending}
               canSolve={canCompute}
               overlayVisible={showAstrometry && !!astrometry?.solution}
-              onToggleOverlay={() => {
-                setShowAstrometry((visible) => !visible);
-                setShowStars(false);
-                setShowPsf(false);
-              }}
+              onToggleOverlay={toggleSkyOverlay}
               onSolve={() => solveAstrometry.mutate({ dbId, imageId })}
             />
 
