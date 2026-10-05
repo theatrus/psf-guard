@@ -29,13 +29,15 @@ function goalText(objective: DirectorObjective): string {
  *  where it points, what it asks for, each rig and whether it is ready, and
  *  whether the rig databases have what is saved. Each fact lives here so
  *  the tabs need not repeat it. */
-export default function WorkspaceSummary({ projectId, projectName, back, rigs }: {
+export default function WorkspaceSummary({ projectId, projectName, back, rigs, onActivation }: {
   projectId: string;
   projectName: string;
   /** The Library address to go back to. */
   back: string;
   /** Rigs the plan names: a linked database, or a contribution. */
   rigs: Array<{ id: string; name: string }>;
+  /** Open the activation preview from the line that says where it stands. */
+  onActivation?: () => void;
 }) {
   const { last, savedPlan, savedFraming, behind } = useActivationState(projectId);
   const profiles = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
@@ -67,7 +69,9 @@ export default function WorkspaceSummary({ projectId, projectName, back, rigs }:
         </span>;
       })}
       {rigs.length === 0 && <span className="director-muted">No rig in this plan yet</span>}
-      {activation && <span className={`workspace-activation${activation.ok ? '' : ' is-behind'}`} data-testid="summary-activation">{activation.text}</span>}
+      {activation && (onActivation
+        ? <button type="button" className={`link-button workspace-activation${activation.ok ? '' : ' is-behind'}`} data-testid="summary-activation" title="Preview an activation, or push the last one again" onClick={onActivation}>{activation.text}</button>
+        : <span className={`workspace-activation${activation.ok ? '' : ' is-behind'}`} data-testid="summary-activation">{activation.text}</span>)}
     </p>
   </div>;
 }

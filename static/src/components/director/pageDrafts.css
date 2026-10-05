@@ -57,3 +57,11 @@
   font-size: 13px;
   color: var(--color-text-secondary);
 }
+
+.draft-bar.is-due {
+  border-color: var(--color-primary);
+}
+
+.activation-dialog {
+  width: min(56rem, calc(100vw - 2rem));
+}

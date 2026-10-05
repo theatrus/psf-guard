@@ -5,7 +5,7 @@ import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
 import { AccessContext, useAccess } from '../../auth/access';
-import PlanEditor from '../director/PlanEditor';
+import PlanEditor, { type PlanRigControls } from '../director/PlanEditor';
 import { DraftProvider } from '../director/pageDrafts';
 import { usePageDrafts } from '../director/pageDraftsState';
 import type { DirectorPlanDraft } from '../../api/directorTypes';
@@ -130,6 +130,29 @@ describe('Plan editor', () => {
     expect(screen.getByLabelText('RedCat 61 template for H-alpha')).toHaveValue('lib:11111111-1111-4111-8111-111111111111');
   });
 
+  it('lets the Rigs tab add and drop rigs, listing only the rigs that shoot the plan', async () => {
+    fixture(null, null, []);
+    const controls: MutableRefObject<PlanRigControls | null> = { current: null };
+    const reported: Array<{ rigIds: string[]; objectives: number }> = [];
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    render(<QueryClientProvider client={client}><PlanEditor projectId="project" controls={controls} onRigsChange={state => reported.push(state)} /></QueryClientProvider>);
+    expect(await screen.findByText('No rig shoots this plan yet.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add objective' }));
+    fireEvent.change(screen.getByLabelText('Objective bandpass'), { target: { value: 'h_alpha' } });
+    await waitFor(() => expect(reported.at(-1)).toEqual({ rigIds: [], objectives: 1 }));
+    await waitFor(() => expect(controls.current).not.toBeNull());
+    // Rigs join from elsewhere, with a template for each objective as a tick gives them.
+    act(() => controls.current!.setRig(redcat.rig.id, true));
+    const rig = await screen.findByRole('group', { name: 'RedCat 61' });
+    expect(within(rig).getByLabelText('RedCat 61 template for H-alpha')).toHaveValue('db:1');
+    expect(within(rig).queryByRole('checkbox', { name: /takes part/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'C925 data' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Other rigs/)).not.toBeInTheDocument();
+    await waitFor(() => expect(reported.at(-1)).toEqual({ rigIds: [redcat.rig.id], objectives: 1 }));
+    act(() => controls.current!.setRig(redcat.rig.id, false));
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'RedCat 61' })).not.toBeInTheDocument());
+    expect(reported.at(-1)).toEqual({ rigIds: [], objectives: 1 });
+  });
   it('adds an objective in hours, binds a rig through its matching template, and saves frames per rig', async () => {
     const { saves } = fixture(null, null, []); mount();
     expect(await screen.findByText('No objectives yet.')).toBeInTheDocument();
@@ -241,7 +264,7 @@ describe('Plan editor', () => {
     expect(goal).toHaveValue(null);
     fireEvent.change(goal, { target: { value: '120' } });
     expect(goal).toHaveValue(120);
-    await waitFor(() => expect(drafts.current!.unsaved.map(section => section.label)).toEqual(['Plan']));
+    await waitFor(() => expect(drafts.current!.unsaved.map(section => section.label)).toEqual(['Exposures']));
 
     expect(await drafts.current!.saveAll()).toBeNull();
     expect(saves).toHaveLength(1);

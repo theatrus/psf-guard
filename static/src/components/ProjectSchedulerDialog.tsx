@@ -332,8 +332,10 @@ function TargetSection({ target, templates, dbId, canEdit, reload }: { target: S
   );
 }
 
-export function ProjectPlanEditor({ open = true, dbId, projectId, canEdit }: {
+export function ProjectPlanEditor({ open = true, dbId, projectId, canEdit, withTemplates = true }: {
   open?: boolean; dbId: string; projectId: number; canEdit: boolean;
+  /** The database's exposure templates; planning picks templates elsewhere. */
+  withTemplates?: boolean;
 }) {
   const queryClient = useQueryClient();
   const queryKey = ['db', dbId, 'project-scheduler', projectId] as const;
@@ -354,7 +356,7 @@ export function ProjectPlanEditor({ open = true, dbId, projectId, canEdit }: {
       {query.data && (
         <div className="scheduler-content">
           <ProjectForm project={query.data} dbId={dbId} canEdit={canEdit} reload={reload} />
-          <TemplateSection templates={query.data.exposure_templates ?? []} />
+          {withTemplates && <TemplateSection templates={query.data.exposure_templates ?? []} />}
           <div className="scheduler-targets-heading"><h3>Targets and coordinates</h3><span>{query.data.targets.length} target{query.data.targets.length === 1 ? '' : 's'}</span></div>
           {query.data.targets.map((target) => <TargetSection key={target.id} target={target} templates={query.data.exposure_templates ?? []} dbId={dbId} canEdit={canEdit} reload={reload} />)}
           {query.data.targets.length === 0 && <p className="scheduler-empty">This project has no targets.</p>}
