@@ -1,6 +1,6 @@
 # Calibrated subs
 
-Status: **Built**. Still open: quality grading that knows a calibrated light's ADU is not raw (section 4), and stacking from supplied calibrated frames.
+Status: **Built**. Still open: stacking from supplied calibrated frames.
 Last updated: 2026-10-04
 
 ## 1. Goal
@@ -148,9 +148,16 @@ instead of adding a twin: the row keeps its id, GUID, grade and history; its
 primary. This is the one place PSF Guard rewrites a light's file name, and
 only on a row it marked itself.
 
-Quality screening treats a primary calibrated light as calibrated: the
-statistics that assume raw ADU (sky level against the zero point, the
-sensor-temperature limits) skip or renormalise rather than punish it.
+Quality grading treats a primary calibrated light as calibrated. Its scan
+records a `calibrated:` source revision, whatever the database's option,
+and every frame measured from calibrated pixels (this light, or a raw light
+measured from its copy) carries the calibrated pixel domain. Calibrated
+pixels have the pedestal and dark removed and are flat-divided, so their
+background, flux, star count and SNR differ from raw frames of the same
+sky: sessions and the target rollup form within one domain, and a
+calibrated frame is never scored against a raw one. Sensor temperature
+comes from the header, which calibration keeps, so its limits apply as
+before. A frame not yet scanned counts as raw until it is.
 
 ## 5. The side table
 

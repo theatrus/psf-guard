@@ -2,7 +2,7 @@ import { type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import { AccessContext, useAccess } from '../../auth/access';
 import ActivationPanel from '../director/ActivationPanel';
@@ -43,13 +43,13 @@ function fixture(conflict = false, activated = false) {
   );
   return { applies, previewCount: () => previews, pushCount: () => pushes };
 }
-function mount(canWrite = true) {
+function mount(canWrite = true, plan: { unsavedPlan?: boolean; savePlan?: () => Promise<boolean> } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   function Wrapper({ children }: { children: ReactNode }) {
     const access = useAccess();
     return <QueryClientProvider client={client}><AccessContext.Provider value={{ ...access, canWrite }}>{children}</AccessContext.Provider></QueryClientProvider>;
   }
-  return render(<ActivationPanel projectId="project" />, { wrapper: Wrapper });
+  return render(<ActivationPanel projectId="project" {...plan} />, { wrapper: Wrapper });
 }
 
 describe('Activation panel', () => {
@@ -115,5 +115,30 @@ describe('Activation panel', () => {
     fixture(); mount(false);
     expect(await screen.findByText('Read only')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Preview activation' })).not.toBeInTheDocument();
+  });
+  it('saves unsaved plan edits before previewing, and hides Apply until it does', async () => {
+    // Activation writes the saved plan: a goal raised in the editor but not
+    // saved would otherwise be applied as it was before, and look lost.
+    const { previewCount } = fixture();
+    const order: string[] = [];
+    const savePlan = vi.fn(async () => { order.push(`save at ${previewCount()} previews`); return true; });
+    const view = mount(true, { unsavedPlan: true, savePlan });
+    expect(await screen.findByRole('note')).toHaveTextContent('unsaved changes');
+    fireEvent.click(screen.getByRole('button', { name: 'Save plan and preview' }));
+    await waitFor(() => expect(previewCount()).toBe(1));
+    expect(order).toEqual(['save at 0 previews']);
+
+    // An edit after the preview: the preview is of the plan before it.
+    expect(screen.queryByRole('button', { name: /Apply to rig databases/ })).not.toBeInTheDocument();
+    view.rerender(<ActivationPanel projectId="project" unsavedPlan={false} savePlan={savePlan} />);
+    expect(await screen.findByRole('button', { name: /Apply to rig databases/ })).toBeInTheDocument();
+  });
+
+  it('does not preview a plan that could not be saved', async () => {
+    const { previewCount } = fixture();
+    mount(true, { unsavedPlan: true, savePlan: async () => false });
+    fireEvent.click(await screen.findByRole('button', { name: 'Save plan and preview' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('could not be saved');
+    expect(previewCount()).toBe(0);
   });
 });

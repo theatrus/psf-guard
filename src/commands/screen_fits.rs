@@ -914,6 +914,7 @@ fn score_records(
                 });
                 ImageMetrics {
                     image_id: idx as i32,
+                    pixel_domain: crate::sequence_analysis::PixelDomain::Raw,
                     timestamp: r.timestamp,
                     session_id: None,
                     capture_profile: r.exposure_s.map(|e| format!("exposure={e:.3}")),

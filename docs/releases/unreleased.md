@@ -685,3 +685,11 @@
   software's values.
 - The sky overlay stays as you last left it instead of turning on for every
   solved frame, including frames quality analysis solved on its own.
+- Score frames measured from calibrated pixels only against each other, so
+  a frame catalogued from its calibrated copy, or measured from one, is not
+  marked down beside raw frames of the same night.
+- Save plan edits before an activation preview, so raising a goal and then
+  applying writes the new frame counts instead of the plan as last saved.
+  Apply waits for a fresh preview after any later edit.
+- Type a new number over an old one in the plan, framing and Target
+  Scheduler plan fields, instead of the field snapping to 0 when emptied.
