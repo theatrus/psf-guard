@@ -39,10 +39,14 @@ longer exposes per-project importance, weights, presets or switching scores.
 
 A plan carries Target Scheduler's per-project scheduling limits: minimum time,
 minimum and maximum altitude, custom horizon and its offset, meridian window,
-filter switch frequency, dither interval and smart exposure order. Each is a
-default set once in the observing settings of the **global**, **site** or
-**rig** scope, or an override for one **project**, under the `scheduling` key
-of `PUT /preferences/{scope}/{id}`. The nearest scope that sets a limit wins
+filter switch frequency, dither interval and smart exposure order. Set the defaults once on
+a plan's **Priority and defaults** tab, for every plan, a site or a rig (pick
+the scope at the top); set one plan's own on its **Plan** tab under
+**Scheduling limits**, where a table shows what each rig gets and where each
+value comes from. An empty field inherits and says from where. Both save from
+the page's save bar. Over the API they are the `scheduling` key of
+`PUT /preferences/{scope}/{id}` for the **global**, **site**, **rig** or
+**project** scope. The nearest scope that sets a limit wins
 (project, then rig, then the rig's site, then global); one nobody sets keeps
 Target Scheduler's default. `GET /rigs/{rig}/preferences?project_id=...`
 returns the resolved values in `scheduling.values` and, in

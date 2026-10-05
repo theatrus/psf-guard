@@ -83,14 +83,20 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     await expect(page.getByLabel('Ha desired count').first()).toHaveValue('40');
     await tab('Plan').click();
     await expect(page.getByRole('region', { name: 'Acquisition plan' })).toBeVisible();
+    // The plan's own scheduling limit, saved from the bar and shown per rig.
+    const limits = page.getByRole('region', { name: 'Scheduling limits' });
+    await limits.getByRole('spinbutton', { name: 'Minimum altitude' }).fill('30');
+    await expect(tab('Plan')).toContainText('●');
+    await page.getByRole('region', { name: 'Unsaved changes' }).getByRole('button', { name: 'Save changes' }).click();
+    await expect(limits.getByRole('row', { name: /^Minimum altitude/ })).toContainText('30°from this plan');
     await tab('Activate').click();
     await expect(page.getByRole('region', { name: 'Activation' })).toBeVisible();
     expect(new URL(page.url().split('#')[1], 'http://test').searchParams.get('planTab')).toBe('activate');
-    await tab('Priority').click();
+    await tab('Priority and defaults').click();
     const preferences = page.getByRole('region', { name: 'Project priority' });
     await preferences.getByRole('button', { name: 'Move Andromeda older setup up' }).click();
     // Every edit on the page saves from one bar, which names what changed.
-    await expect(page.getByRole('region', { name: 'Unsaved changes' })).toContainText('Unsaved changes in Project priority.');
+    await expect(page.getByRole('region', { name: 'Unsaved changes' })).toContainText('Unsaved changes in Priority and defaults.');
     await expect(preferences.getByLabel('Priority scope')).toBeDisabled();
     await page.getByRole('region', { name: 'Unsaved changes' }).getByRole('button', { name: 'Save changes' }).click();
     await expect(preferences.getByText('Project priority saved.')).toBeVisible();

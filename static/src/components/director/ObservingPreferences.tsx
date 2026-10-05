@@ -5,7 +5,9 @@ import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import { EditedMark } from './pageDrafts';
 import { useDraftSection, useDrafts } from './pageDraftsState';
-import type { ObservingSettings, PreferenceScope } from '../../api/directorPreferences';
+import type { ObservingSettings, PreferenceScope, SchedulingOverrides } from '../../api/directorPreferences';
+import SchedulingFields from './SchedulingFields';
+import { compactOverrides, inheritedLimits } from './schedulingModel';
 import './ObservingPreferences.css';
 
 type Project = { id: string; name: string };
@@ -42,7 +44,7 @@ export default function ObservingPreferences({ projectId, rigs, projects, folded
     </div>
     {(settings.error || effective.error || defaults.error || available.error) && <p role="alert">{errorText(settings.error ?? effective.error ?? defaults.error ?? available.error)}</p>}
     {id && settings.isPending && <p role="status">Loading priority...</p>}
-    {settings.data && defaults.data && (scope === 'global' || effective.data) && <PriorityEditor key={`${scope}:${id}`} initial={settings.data} globalOrder={globalOrder} projects={projects} currentProject={projectId} sites={defaults.data.sites} onEditing={setEditing} />}
+    {settings.data && defaults.data && (scope === 'global' || effective.data) && <PriorityEditor key={`${scope}:${id}`} initial={settings.data} globalOrder={globalOrder} globalScheduling={effective.data?.settings.find(s => s.scope === 'global')?.scheduling} projects={projects} currentProject={projectId} sites={defaults.data.sites} onEditing={setEditing} />}
   </>;
   return <section className="observing-preferences" aria-label="Project priority">
     {folded
@@ -54,7 +56,7 @@ export default function ObservingPreferences({ projectId, rigs, projects, folded
   </section>;
 }
 
-function PriorityEditor({ initial, globalOrder, projects, currentProject, sites, onEditing }: { initial: ObservingSettings; globalOrder: string[]; projects: Project[]; currentProject: string; sites: Project[]; onEditing?: (editing: boolean) => void }) {
+function PriorityEditor({ initial, globalOrder, globalScheduling, projects, currentProject, sites, onEditing }: { initial: ObservingSettings; globalOrder: string[]; globalScheduling?: SchedulingOverrides; projects: Project[]; currentProject: string; sites: Project[]; onEditing?: (editing: boolean) => void }) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const [draft, setDraft] = useState(initial);
@@ -66,6 +68,12 @@ function PriorityEditor({ initial, globalOrder, projects, currentProject, sites,
   const parentPending = needsSite && (site.isPending || !!site.error);
   const inherited = initial.scope === 'rig' && draft.site_id ? site.data?.project_order ?? globalOrder : globalOrder;
   const list = ordered(projects, draft.project_order ?? inherited);
+  // The scheduling defaults this scope inherits: Target Scheduler's, then
+  // every plan's, then the rig's site.
+  const parentLimits = inheritedLimits([
+    initial.scope !== 'global' ? { overrides: globalScheduling, from: 'from every plan' } : null,
+    initial.scope === 'rig' && draft.site_id ? { overrides: site.data?.scheduling, from: 'from the site' } : null,
+  ]);
   const reload = useMutation({ mutationFn: () => apiClient.getObservingSettings(initial.scope, initial.scope_id), retry: false, onSuccess: fresh => { setDraft(fresh); setStored(fresh); setSaved(false); save.reset(); } });
   const save = useMutation({ mutationFn: () => apiClient.saveObservingSettings({ ...draft, project_order: inherit ? null : list.map(p => p.id) }), retry: false, onSuccess: result => {
     setSaved(true); setDraft(result); setStored(result);
@@ -77,7 +85,7 @@ function PriorityEditor({ initial, globalOrder, projects, currentProject, sites,
   useEffect(() => () => onEditing?.(false), [onEditing]);
   const savable = !parentPending && list.length > 0 && list.length <= 256;
   const managed = useDraftSection('priority', {
-    label: 'Project priority',
+    label: 'Priority and defaults',
     order: 3,
     unsaved,
     changes: [
@@ -114,6 +122,12 @@ function PriorityEditor({ initial, globalOrder, projects, currentProject, sites,
       {needsSite && site.isPending && <p role="status">Loading site priority...</p>}
       {needsSite && site.error && <p role="alert">{errorText(site.error)} <button type="button" onClick={() => void site.refetch()}><RefreshCw size={16} />Retry</button></p>}
       {list.length > 256 && <p role="alert">A priority order supports up to 256 projects.</p>}
+    </fieldset>
+    <fieldset disabled={!canWrite || save.isPending || reload.isPending} className="scheduling-defaults">
+      <legend>Scheduling defaults{initial.scope === 'global' ? ' for every plan' : initial.scope === 'site' ? ' for this site' : ' for this rig'}</legend>
+      <p className="director-muted">Target Scheduler limits each plan starts from{initial.scope === 'global' ? '' : '; empty fields follow the scope above'}. A plan can set its own on its Plan tab, and activation writes the result into each rig's Target Scheduler project.</p>
+      <SchedulingFields label={`${initial.scope} scheduling defaults`} overrides={draft.scheduling ?? {}} onChange={next => change({ scheduling: compactOverrides(next) })}
+        inherited={parentLimits.values} inheritedFrom={limit => parentLimits.from[limit]} disabled={!canWrite} />
     </fieldset>
     {save.error && <p role="alert">{errorText(reload.error ?? save.error)} <button type="button" disabled={reload.isPending} onClick={() => reload.mutate()}><RefreshCw size={16} />Reload saved priority</button></p>}
     {saved && <p role="status">Project priority saved.</p>}

@@ -8,9 +8,10 @@ import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import { ProjectPlanEditor } from '../ProjectSchedulerDialog';
 import FramingView from './FramingView';
 import PlanEditor from './PlanEditor';
+import PlanScheduling from './PlanScheduling';
 import ObservingPreferences from './ObservingPreferences';
 import ActivationPanel from './ActivationPanel';
-import { DraftProvider, SaveBar } from './pageDrafts';
+import { DraftProvider, EditedMark, SaveBar } from './pageDrafts';
 import WorkspaceSummary from './WorkspaceSummary';
 import { usePageDrafts } from './pageDraftsState';
 import type { DirectorRigProfileSummary } from '../../api/directorTypes';
@@ -24,11 +25,11 @@ const message = (error: unknown) => error instanceof Error ? error.message : 'Di
  *  when not shown, so an unsaved edit survives a switch; `draft` names the
  *  save-bar section a tab holds. */
 const TABS = [
-  { id: 'framing', label: 'Framing', draft: 'framing' },
-  { id: 'plan', label: 'Plan', draft: 'plan' },
-  { id: 'activate', label: 'Activate', draft: null },
-  { id: 'databases', label: 'Rig databases', draft: null },
-  { id: 'priority', label: 'Priority', draft: 'priority' },
+  { id: 'framing', label: 'Framing', drafts: ['framing'] },
+  { id: 'plan', label: 'Plan', drafts: ['plan', 'scheduling'] },
+  { id: 'activate', label: 'Activate', drafts: [] },
+  { id: 'databases', label: 'Rig databases', drafts: [] },
+  { id: 'priority', label: 'Priority and defaults', drafts: ['priority'] },
 ] as const;
 type TabId = (typeof TABS)[number]['id'];
 
@@ -165,7 +166,7 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
   </>;
   // The arrival database first, then the rest in the plan's order.
   const databases = arrival ? [arrival, ...row.links.filter(link => link !== arrival)] : row.links;
-  const drafted = (id: string | null) => !!id && drafts.unsaved.some(section => section.id === id);
+  const drafted = (ids: readonly string[]) => drafts.unsaved.some(section => ids.includes(section.id));
   const summaryRigs = [...new Map(row.links.map(link => [link.rig.id, { id: link.rig.id, name: link.catalog_name }])).values()];
   const panel = (id: TabId) => ({ role: 'tabpanel' as const, id: `workspace-panel-${id}`, 'aria-labelledby': `workspace-tab-${id}`, hidden: tab !== id, className: 'workspace-panel' });
   return <DraftProvider drafts={drafts}><section aria-label="Project planning" className="director-workspace">
@@ -175,7 +176,7 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
       <div className="workspace-tabs" role="tablist" aria-label="Plan sections" onKeyDown={onTabKey}>
         {TABS.map(entry => <button key={entry.id} type="button" role="tab" id={`workspace-tab-${entry.id}`} aria-selected={entry.id === tab} aria-controls={`workspace-panel-${entry.id}`}
           tabIndex={entry.id === tab ? 0 : -1} className={`workspace-tab${entry.id === tab ? ' active' : ''}`} onClick={() => chooseTab(entry.id)}>
-          {entry.label}{drafted(entry.draft) && <span className="workspace-tab-edited" aria-label="edited" title="Unsaved changes">●</span>}
+          {entry.label}{drafted(entry.drafts) && <span className="workspace-tab-edited" aria-label="edited" title="Unsaved changes">●</span>}
         </button>)}
       </div>
     </div>
@@ -184,12 +185,14 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
     </div>
     <div {...panel('plan')}>
       <PlanEditor projectId={projectId} linkedRigIds={row.links.map(link => link.rig.id)} rigExtras={rigExtras} footer={attachArea} />
+      <h3 className="director-section-heading">Scheduling limits<EditedMark drafts={drafts} id="scheduling" /></h3>
+      <PlanScheduling projectId={projectId} rigs={summaryRigs} />
     </div>
     <div {...panel('activate')}>
       <ActivationPanel projectId={projectId} />
     </div>
     <div {...panel('databases')}>
-      <p className="director-muted">Each database's own Target Scheduler rows for this project. Activation writes the plan's targets and exposure plans here; everything else is Target Scheduler's.</p>
+      <p className="director-muted">Each database's own Target Scheduler rows for this project. Activation writes the plan's targets, exposure plans and scheduling limits here; everything else is Target Scheduler's.</p>
       {row.links.length === 0 && <p className="director-muted">No database holds this project yet; activation creates it in each rig you tick, or attach a project a database already has.</p>}
       {!manageable && row.links.length > 0 && <p className="director-muted">Target Scheduler rows are view only on this server.</p>}
       {databases.map(databaseOf)}

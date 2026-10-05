@@ -11,7 +11,7 @@ const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: nu
 function mount(conflict = false, rigs = [{ id: 'rig', name: 'RedCat' }]) {
   const saved: ObservingSettings[] = [];
   const rig = { ...empty('rig', 'rig'), site_id: 'site' };
-  const global = { ...empty('global', 'global'), project_order: ['andromeda', 'orion'] };
+  const global = { ...empty('global', 'global'), project_order: ['andromeda', 'orion'], scheduling: { minimum_altitude_degrees: 25 } };
   server.use(
     http.get('/api/director/v1/rigs/profiles', () => ok([])),
     http.get('/api/director/v1/preferences', () => ok({ global_id: 'global', sites: [{ id: 'site', name: 'Mountain' }], presets: {} })),
@@ -83,5 +83,24 @@ describe('project priority controls', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Save priority' }));
     await screen.findByText('Project priority saved.');
     expect(saved[0].scope).toBe('global');
+  });
+  it('sets scheduling defaults for a scope, showing what each empty field inherits', async () => {
+    const saved = mount();
+    // Global: an empty field falls back to Target Scheduler's own default.
+    const globalDefaults = await screen.findByRole('group', { name: 'global scheduling defaults' });
+    expect(within(globalDefaults).getByRole('spinbutton', { name: 'Minimum altitude' })).toHaveValue(25);
+    expect(within(globalDefaults).getByRole('spinbutton', { name: 'Meridian window' })).toHaveAttribute('placeholder', 'off');
+    fireEvent.change(within(globalDefaults).getByRole('spinbutton', { name: 'Dither every' }), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save priority' }));
+    await screen.findByText('Project priority saved.');
+    expect(saved[0].scheduling).toEqual({ minimum_altitude_degrees: 25, dither_every: 3 });
+
+    // A rig inherits every plan's default and says so.
+    fireEvent.change(screen.getByLabelText('Priority scope'), { target: { value: 'rig' } });
+    const rigDefaults = await screen.findByRole('group', { name: 'rig scheduling defaults' });
+    const altitude = within(rigDefaults).getByRole('spinbutton', { name: 'Minimum altitude' });
+    expect(altitude).toHaveValue(null);
+    expect(altitude).toHaveAttribute('placeholder', '25°');
+    expect(within(rigDefaults).getAllByText('25° · from every plan')).toHaveLength(1);
   });
 });

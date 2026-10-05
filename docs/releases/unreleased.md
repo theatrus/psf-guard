@@ -703,8 +703,10 @@
   exposure order) as defaults for every plan, a site or a rig, or as one
   plan's own. Activation writes them into each rig's Target Scheduler project,
   so they hold without Director, and leaves values nobody planned as they are.
+  Set the defaults on a plan's Priority and defaults tab and a plan's own
+  under Scheduling limits on its Plan tab, which shows what each rig gets.
 - Work on a plan one tab at a time: Framing, Plan, Activate, Rig databases
-  and Priority, below a summary of the target, goals, each rig's setup and
+  and Priority and defaults, below a summary of the target, goals, each rig's setup and
   the activation. The page no longer scrolls through every section, the
   tab is kept in the address, and unsaved edits survive switching tabs.
 - Stop the planning save bar from reporting unsaved changes nobody made: a
