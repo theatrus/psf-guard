@@ -3407,7 +3407,10 @@ fn fill_missing_star_metadata(
                 *image_id,
                 filename,
                 mapped_source_revision.as_deref(),
-            )?;
+            )
+            // HocusFocus's stand-in values stay in the scan cache: written
+            // into the catalog they would read as N.I.N.A.'s own scale.
+            .filter(|entry| entry.detector == scan::QUALITY_DETECTOR)?;
             scan::star_metrics_metadata_patch(
                 metadata,
                 entry.star_count,
@@ -7417,8 +7420,9 @@ pub(crate) fn merge_spatial_metrics(
         &file_only,
         mapped_source_revision,
     ) {
-        let current_detector = entry.detector == crate::server::spatial_scan::QUALITY_DETECTOR
+        let current_detector = crate::server::spatial_scan::is_quality_detector(&entry.detector)
             && entry.detector_version == crate::server::spatial_scan::QUALITY_DETECTOR_VERSION;
+        let fallback = entry.detector == crate::server::spatial_scan::FALLBACK_DETECTOR;
         // Measured on calibrated pixels: bias and dark removed, flat
         // divided. Such a frame is scored only against others like it.
         if entry.source_revision.as_deref().is_some_and(|revision| {
@@ -7455,6 +7459,17 @@ pub(crate) fn merge_spatial_metrics(
             metrics.scan_stars = Some(if corroborates_zero {
                 crate::sequence_analysis::StarMeasure {
                     star_count: Some(0.0),
+                    hfr: None,
+                }
+            } else if fallback {
+                // HocusFocus's HFR is on another scale from Fast's; scored
+                // beside the set's it could become the reference for all.
+                metrics.fallback_stars = Some(crate::sequence_analysis::StarMeasure {
+                    star_count: Some(measured),
+                    hfr: (entry.avg_hfr > 0.0).then_some(entry.avg_hfr),
+                });
+                crate::sequence_analysis::StarMeasure {
+                    star_count: Some(measured),
                     hfr: None,
                 }
             } else {
