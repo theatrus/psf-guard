@@ -1,0 +1,70 @@
+.scheduling-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px 16px;
+}
+
+.scheduling-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.scheduling-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.scheduling-control input,
+.scheduling-control select {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 7px 9px;
+  border: 1px solid var(--color-border-tertiary);
+  border-radius: 4px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-secondary);
+  font: inherit;
+}
+
+.scheduling-control input::placeholder {
+  color: var(--color-text-secondary);
+}
+
+.scheduling-control small {
+  white-space: nowrap;
+  opacity: 0.7;
+}
+
+.scheduling-field.is-set label { color: var(--color-primary); }
+.scheduling-source { color: var(--color-text-secondary); }
+
+.director-page .scheduling-clear {
+  min-height: 28px;
+  padding: 2px 6px;
+}
+
+.plan-scheduling-rigs {
+  margin-top: 16px;
+  overflow-x: auto;
+}
+
+.plan-scheduling-rigs table {
+  border-collapse: collapse;
+  min-width: 100%;
+}
+
+.plan-scheduling-rigs th,
+.plan-scheduling-rigs td {
+  padding: 4px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border-secondary);
+}
+
+.plan-scheduling-rigs caption {
+  text-align: left;
+  padding-bottom: 4px;
+}

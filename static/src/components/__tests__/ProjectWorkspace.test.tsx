@@ -93,7 +93,7 @@ describe('project workspace', () => {
   });
   it('keeps the tab in the address and opens the one a link names', async () => {
     mount(links, '/plan?plan=project&planTab=priority');
-    expect(await screen.findByRole('tab', { name: 'Priority' })).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByRole('tab', { name: 'Priority and defaults' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText('Observing preferences').closest('[role="tabpanel"]')).not.toHaveAttribute('hidden');
     expect(screen.getByText('Plan project').closest('[role="tabpanel"]')).toHaveAttribute('hidden');
     fireEvent.click(screen.getByRole('tab', { name: 'Plan' }));
