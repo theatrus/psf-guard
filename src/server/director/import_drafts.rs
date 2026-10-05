@@ -413,6 +413,7 @@ pub(super) fn import_from_catalog(
                 exposure_seconds: exposure,
                 panel_ids: vec![],
                 enabled: true,
+                goal: None,
             });
             objectives.push(objective);
         }

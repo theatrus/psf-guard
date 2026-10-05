@@ -80,6 +80,10 @@ export function describePlanChanges(before: DirectorPlanDraft | null, after: Dir
     if (old.enabled !== contribution.enabled) changes.push(`${label} ${contribution.enabled ? 'on' : 'off'}`);
     if (old.exposure_seconds !== contribution.exposure_seconds) changes.push(`${label} exposure ${old.exposure_seconds} s → ${contribution.exposure_seconds} s`);
     if (!same(old.template, contribution.template)) changes.push(`${label} template ${old.template.name} → ${contribution.template.name}`);
+    if (!same(old.goal ?? null, contribution.goal ?? null)) {
+      const text = (goal: DirectorGoal | null | undefined) => goal ? (goal.kind === 'hours' ? `${goal.value} h` : `${goal.value} frames`) : "plan's goal";
+      changes.push(`${label} goal ${text(old.goal)} → ${text(contribution.goal)}`);
+    }
     if (!same([...old.panel_ids].sort(), [...contribution.panel_ids].sort())) changes.push(`${label} panels`);
   }
   for (const [part, contribution] of oldParts) {
