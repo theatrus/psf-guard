@@ -90,9 +90,11 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     await expect(tab('Rigs')).toContainText('●');
     await page.getByRole('region', { name: 'Unsaved changes' }).getByRole('button', { name: 'Save changes' }).click();
     await expect(limits.getByRole('row', { name: /^Minimum altitude/ })).toContainText('30°from this plan');
-    // Activation is no tab: the summary line opens it over the page.
+    // Activation is no tab: with the plan not yet on the rigs, the bar at
+    // the top asks for it, and the summary leaves that to the bar.
     await expect(page.getByRole('tab', { name: /^Activate/ })).toHaveCount(0);
-    await page.getByTestId('summary-activation').click();
+    await expect(page.getByTestId('summary-activation')).toHaveCount(0);
+    await page.getByRole('region', { name: 'Activation due' }).getByRole('button', { name: 'Activate…' }).click();
     const activation = page.getByRole('dialog', { name: 'Activate on the rigs' });
     await expect(activation.getByRole('region', { name: 'Activation' })).toBeVisible();
     await activation.getByRole('button', { name: /close/i }).click();
