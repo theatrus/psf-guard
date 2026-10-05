@@ -1,5 +1,5 @@
 import type { DirectorContribution, DirectorGoal, DirectorPlanDraft } from '../../api/directorTypes';
-import type { FramingState } from './framingModel';
+import { formatDegrees, type FramingState } from './framingModel';
 import { KNOWN_BANDPASSES, PURPOSES } from './planModel';
 
 /** What the save bar says changed: a few words per change, against the
@@ -31,7 +31,7 @@ export function describeFramingChanges(before: FramingState | null, after: Frami
   }
   if (before.panelRigId !== after.panelRigId) changes.push(`panel rig ${before.panelRigId ? rigName(before.panelRigId) : 'none'} → ${after.panelRigId ? rigName(after.panelRigId) : 'none'}`);
   else if (!same(before.panel, after.panel)) {
-    const size = (p: FramingState['panel']) => p ? `${angle(p.width_degrees)} × ${angle(p.height_degrees)}` : 'none';
+    const size = (p: FramingState['panel']) => p ? `${formatDegrees(p.width_degrees)} × ${formatDegrees(p.height_degrees)}` : 'none';
     changes.push(`panel size ${size(before.panel)} → ${size(after.panel)}`);
   }
   if (!same([...before.shownRigIds].sort(), [...after.shownRigIds].sort())) changes.push('rigs compared');
@@ -40,10 +40,10 @@ export function describeFramingChanges(before: FramingState | null, after: Frami
   const was = framed(before);
   const now = framed(after);
   for (const [id, own] of now) {
-    if (!was.has(id)) changes.push(`${rigName(id)} framed on its own`);
-    else if (!same(was.get(id), own)) changes.push(`${rigName(id)}'s own framing`);
+    if (!was.has(id)) changes.push(`${rigName(id)} framed separately`);
+    else if (!same(was.get(id), own)) changes.push(`${rigName(id)} framing`);
   }
-  for (const id of was.keys()) if (!now.has(id)) changes.push(`${rigName(id)} back on the shared framing`);
+  for (const id of was.keys()) if (!now.has(id)) changes.push(`${rigName(id)} back to shared`);
   return changes;
 }
 

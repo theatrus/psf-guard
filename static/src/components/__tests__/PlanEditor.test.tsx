@@ -98,7 +98,7 @@ describe('Plan editor', () => {
     await screen.findByText(/1 template/);
     // C925 owns its own three panels; RedCat would own the shared two.
     const own = screen.getByRole('group', { name: 'C925 data panels' });
-    expect(own).toHaveTextContent('Its own panels:');
+    expect(own).toHaveTextContent('Separate panels:');
     expect(within(own).getByLabelText('C925 data shoots panel r1c3')).toBeChecked();
     expect(within(own).queryByLabelText('C925 data shoots panel r2c1')).not.toBeInTheDocument();
     // Three panels at 60 frames each.
@@ -136,7 +136,7 @@ describe('Plan editor', () => {
     const reported: Array<{ rigIds: string[]; objectives: number }> = [];
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     render(<QueryClientProvider client={client}><PlanEditor projectId="project" controls={controls} onRigsChange={state => reported.push(state)} /></QueryClientProvider>);
-    expect(await screen.findByText('No rig shoots this plan yet.')).toBeInTheDocument();
+    expect(await screen.findByText('No rigs yet')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Add objective' }));
     fireEvent.change(screen.getByLabelText('Objective bandpass'), { target: { value: 'h_alpha' } });
     await waitFor(() => expect(reported.at(-1)).toEqual({ rigIds: [], objectives: 1 }));
@@ -155,7 +155,7 @@ describe('Plan editor', () => {
   });
   it('adds an objective in hours, binds a rig through its matching template, and saves frames per rig', async () => {
     const { saves } = fixture(null, null, []); mount();
-    expect(await screen.findByText('No objectives yet.')).toBeInTheDocument();
+    expect(await screen.findByText('No objectives yet')).toBeInTheDocument();
     await screen.findByText(/3 templates/);
     fireEvent.click(screen.getByRole('button', { name: 'Add objective' }));
     fireEvent.change(screen.getByLabelText('Objective bandpass'), { target: { value: 'h_alpha' } });

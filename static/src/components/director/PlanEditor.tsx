@@ -200,7 +200,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
       {on && panels.length > 1 && (() => {
         const owned = rigPanels(plan, rig.rig.id, panels);
         return <div className="plan-panels" role="group" aria-label={`${rig.catalog_name} panels`}>
-          <span className="director-muted">{ownGrid ? 'Its own panels:' : 'Panels:'}</span>
+          <span className="director-muted">{ownGrid ? 'Separate panels:' : 'Panels:'}</span>
           <label className="plan-panel"><input type="checkbox" aria-label={`${rig.catalog_name} shoots every panel`} checked={owned.length === panels.length} onChange={event => setRigPanels(rig, event.target.checked ? panels : [])} />All</label>
           {panels.map(id => <label key={id} className="plan-panel"><input type="checkbox" aria-label={`${rig.catalog_name} shoots panel ${id}`} checked={owned.includes(id)} onChange={event => setRigPanels(rig, event.target.checked ? [...owned, id] : owned.filter(p => p !== id))} />{id}</label>)}
           {owned.length === 0 && <span className="director-error">No panel chosen; this rig shoots nothing.</span>}
@@ -250,8 +250,8 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
     <form id={formId} onSubmit={event => { event.preventDefault(); if (!canWrite || save.isPending || stale) return; setNotice(''); const trouble = planProblem(plan); setProblem(trouble ?? ''); if (!trouble) save.mutate(); }}>
       <fieldset disabled={!canWrite || stale}>
         <legend>Objectives</legend>
-        <p className="director-muted">Accepted hours or frames per bandpass; hours become frames through each rig's exposure.</p>
-        {plan.objectives.length === 0 && <p className="director-muted">No objectives yet.</p>}
+        <p className="director-muted">Hours or frames per filter</p>
+        {plan.objectives.length === 0 && <p className="director-muted">No objectives yet</p>}
         <ul className="plan-objectives">
           {plan.objectives.map(objective => <li key={objective.id} className="plan-objective">
             <label>Bandpass<select aria-label="Objective bandpass" value={objective.bandpass_id} onChange={event => changeObjective(objective.id, { bandpass_id: event.target.value })}>
@@ -276,8 +276,8 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
     </form>
     <section className="plan-rigs" aria-label={controls ? 'Exposures per rig' : 'Rigs'}>
       <h4 className="plan-rigs-heading">{controls ? 'Each rig' : 'Rigs'}</h4>
-      <p className="director-muted">{controls ? 'Each rig shoots the objectives with a template from its database or the shared library. Add or drop rigs on the Rigs tab.' : 'Tick a rig to shoot the objectives with a template from its database or the shared library.'}</p>
-      {controls && !rigs.isPending && inPlan.length === 0 && <p className="director-muted">No rig shoots this plan yet.</p>}
+      <p className="director-muted">{controls ? 'Add or drop rigs on the Rigs tab' : 'Tick a rig to shoot the objectives with a template from its database or the shared library.'}</p>
+      {controls && !rigs.isPending && inPlan.length === 0 && <p className="director-muted">No rigs yet</p>}
       {rigs.isError && <p className="director-error" role="alert">Rigs could not be loaded: {message(rigs.error)} <button type="button" onClick={() => void rigs.refetch()}>Retry</button></p>}
       {!rigs.isError && rigList.length === 0 && <p className="director-muted">{rigs.isPending ? 'Loading rigs...' : 'No rig has planning enabled yet.'}</p>}
       {inPlan.map(rigBlock)}
