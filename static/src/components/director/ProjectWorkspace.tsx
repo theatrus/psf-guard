@@ -9,6 +9,7 @@ import PlanRigs from './PlanRigs';
 import PlanScheduling from './PlanScheduling';
 import ObservingPreferences from './ObservingPreferences';
 import ActivationBar from './ActivationBar';
+import { useActivationDue } from './activationState';
 import { DraftProvider, EditedMark, SaveBar } from './pageDrafts';
 import WorkspaceSummary from './WorkspaceSummary';
 import { usePageDrafts } from './pageDraftsState';
@@ -70,6 +71,7 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
   const [planRigs, setPlanRigs] = useState<{ rigIds: string[]; objectives: number }>({ rigIds: [], objectives: 0 });
   const reportRigs = useCallback((next: { rigIds: string[]; objectives: number }) => setPlanRigs(next), []);
   const [activating, setActivating] = useState(false);
+  const activationDue = useActivationDue(projectId, canWrite, drafts.unsaved.length);
   // The tab lives in the address, so a reload or a shared link opens it.
   // Without one, the page opens on the framing.
   const named = params.get('planTab');
@@ -104,7 +106,7 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
     <div className="workspace-top">
       <SaveBar drafts={drafts} canWrite={canWrite} />
       <ActivationBar projectId={projectId} drafts={drafts} canWrite={canWrite} open={activating} onOpen={() => setActivating(true)} onClose={() => setActivating(false)} />
-      <WorkspaceSummary projectId={projectId} projectName={row.project.name} back={back.toString()} rigs={summaryRigs} onActivation={() => setActivating(true)} />
+      <WorkspaceSummary projectId={projectId} projectName={row.project.name} back={back.toString()} rigs={summaryRigs} onActivation={() => setActivating(true)} hideActivation={activationDue} />
       <div className="workspace-tabs" role="tablist" aria-label="Plan sections" onKeyDown={onTabKey}>
         {TABS.map(entry => <button key={entry.id} type="button" role="tab" id={`workspace-tab-${entry.id}`} aria-selected={entry.id === tab} aria-controls={`workspace-panel-${entry.id}`}
           tabIndex={entry.id === tab ? 0 : -1} className={`workspace-tab${entry.id === tab ? ' active' : ''}`} onClick={() => chooseTab(entry.id)}>
@@ -113,7 +115,7 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
       </div>
     </div>
     <div {...panel('framing')}>
-      {first && scheduler.isPending ? <p role="status">Loading targets...</p> : <FramingView projectId={projectId} seed={seed} preferredRigIds={row.links.map(link => link.rig.id)} />}
+      {first && scheduler.isPending ? <p role="status">Loading targets...</p> : <FramingView projectId={projectId} seed={seed} preferredRigIds={summaryRigs.map(rig => rig.id)} />}
     </div>
     <div {...panel('exposures')}>
       <PlanEditor projectId={projectId} linkedRigIds={row.links.map(link => link.rig.id)} controls={planControls} onRigsChange={reportRigs} />

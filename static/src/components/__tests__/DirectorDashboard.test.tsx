@@ -6,7 +6,7 @@ import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import DirectorDashboard from '../director/DirectorDashboard';
-import { describeNow, formatAge } from '../director/dashboardModel';
+import { describeNow, formatAge, isExposing } from '../director/dashboardModel';
 import type { DirectorRigStatusView } from '../../api/directorTypes';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
@@ -76,5 +76,29 @@ describe('Director live dashboard', () => {
     expect(formatAge(3 * 86_400_000)).toBe('3 d ago');
     expect(describeNow({ ...never, connectivity: { state: 'online', last_contact_ms: NOW, age_ms: 0 } }, NOW)).toBe('No status report yet');
     expect(describeNow({ ...online, status: { ...online.status!, payload: { state: 'idle', wait_reason: 'clouds', safety: 'unsafe' } } }, NOW)).toBe('idle, waiting: clouds, safety unsafe');
+  });
+
+  it('freezes stale operation duration and keeps replay history distinct from current status', async () => {
+    const row: DirectorRigStatusView = { ...quiet, status: { ...quiet.status!, payload: {
+      phase: 'completed', operation: 'Autofocus', operation_elapsed_ms: 120_000, queue_state: 'Deferred',
+    } }, recent_operations: [{ received_at_ms: NOW - 1000, event: { ledger_id: 'ledger', sequence: 1,
+      preparation_id: 'prep', event: { kind: 'completed', observation: {
+        command: { target_id: 'target', operation: { operation: 'before_target' } },
+        completion: { ended_at_ms: NOW - 3_600_000, elapsed_ms: 90000, outcome: { outcome: 'succeeded' } },
+      } } } }] };
+    expect(describeNow(row, NOW)).toContain('Autofocus for 2 min');
+    expect(describeNow(row, NOW + 600_000)).toContain('Autofocus for 2 min');
+    mount([row]);
+    expect(await screen.findByText('Completed operations (1)')).toBeInTheDocument();
+    expect(screen.getByText(/before target: succeeded, 90 s/)).toBeInTheDocument();
+    expect(screen.getByText(/completed 1 h ago · received 1 s ago/)).toBeInTheDocument();
+  });
+
+  it('expires an explicit lease even when the cached server response was fresh', () => {
+    const row = { ...online, status: { ...online.status!, payload: { phase: 'exposing', fresh_for_ms: 45000,
+      operation: 'Exposure', operation_elapsed_ms: 10000 } } };
+    expect(isExposing(row, NOW)).toBe(true);
+    expect(isExposing(row, NOW + 6000)).toBe(false);
+    expect(describeNow(row, NOW + 6000)).toContain('Exposure for 10 s (stale');
   });
 });
