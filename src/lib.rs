@@ -13,6 +13,7 @@ pub mod config;
 pub mod db;
 pub mod db_registry;
 pub mod debug;
+pub mod desktop_log;
 pub mod directory_tree;
 pub mod ephemeris;
 pub mod frame_derivatives;

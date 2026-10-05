@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
-use tracing_subscriber;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 /// Tauri-side server bootstrap parameters. Built once at startup; rebuilt
 /// (with the latest registry contents) on `restart_server`.
@@ -25,16 +25,7 @@ struct ServerState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn main() {
-    // Initialize tracing once for the entire Tauri application
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::filter::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::filter::EnvFilter::new("info")),
-        )
-        .with_target(false)
-        .with_level(true)
-        .with_thread_ids(false)
-        .init();
+    init_logging();
 
     let registry_path = DbRegistry::default_path().expect("Could not resolve config path");
     let initial_registry = DbRegistry::load_or_init(&registry_path).unwrap_or_else(|err| {
@@ -97,10 +88,112 @@ pub fn main() {
             show_image_in_folder,
             restart_application,
             restart_server,
-            is_configuration_valid
+            is_configuration_valid,
+            get_log_folder,
+            open_log_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Log to the console, as the server does, and to the daily file in the
+/// app's log folder: a window has no console on Windows or macOS. `RUST_LOG`
+/// sets both levels; info by default. Without a writable folder the app
+/// still starts, logging to the console alone.
+fn init_logging() {
+    let filter = || {
+        tracing_subscriber::filter::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::filter::EnvFilter::new("info"))
+    };
+    let console = tracing_subscriber::fmt::layer()
+        .with_target(false)
+        .with_level(true)
+        .with_thread_ids(false)
+        .with_filter(filter());
+    let dir = psf_guard_log_dir();
+    let appender = dir
+        .as_deref()
+        .map(crate::desktop_log::file_appender)
+        .transpose();
+    match appender {
+        Ok(appender) => {
+            let file = appender.map(|appender| {
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_target(false)
+                    .with_writer(appender)
+                    .with_filter(filter())
+            });
+            tracing_subscriber::registry()
+                .with(console)
+                .with(file)
+                .init();
+            if let Some(dir) = dir {
+                tracing::info!("logging to {}", dir.display());
+            }
+        }
+        Err(error) => {
+            tracing_subscriber::registry().with(console).init();
+            tracing::warn!("no log file: {error}");
+        }
+    }
+}
+
+fn psf_guard_log_dir() -> Option<PathBuf> {
+    crate::desktop_log::log_dir()
+}
+
+/// The folder the log files are written to.
+#[tauri::command]
+fn get_log_folder() -> Option<String> {
+    psf_guard_log_dir().map(|dir| dir.display().to_string())
+}
+
+/// Open the log folder in the file manager.
+#[tauri::command]
+async fn open_log_folder() -> Result<(), String> {
+    let dir = psf_guard_log_dir().ok_or_else(|| "This system has no log folder".to_string())?;
+    tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+        let status = folder_command(&dir)?
+            .status()
+            .map_err(|e| format!("Could not open the file manager: {e}"))?;
+        if status.success() || cfg!(target_os = "windows") {
+            // Explorer exits 1 even when it opened the folder.
+            Ok(())
+        } else {
+            Err(format!("The file manager exited with status {status}"))
+        }
+    })
+    .await
+    .map_err(|e| format!("File manager task failed: {e}"))?
+}
+
+#[cfg(target_os = "macos")]
+fn folder_command(dir: &Path) -> Result<Command, String> {
+    let mut command = Command::new("open");
+    command.arg(dir);
+    Ok(command)
+}
+
+#[cfg(target_os = "windows")]
+fn folder_command(dir: &Path) -> Result<Command, String> {
+    let mut command = Command::new("explorer.exe");
+    command.arg(dir);
+    Ok(command)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn folder_command(dir: &Path) -> Result<Command, String> {
+    let mut command = Command::new("xdg-open");
+    command.arg(dir);
+    Ok(command)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", unix)))]
+fn folder_command(_dir: &Path) -> Result<Command, String> {
+    Err("Opening folders is not supported on this platform".to_string())
 }
 
 #[tauri::command]
