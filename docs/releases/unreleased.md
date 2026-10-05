@@ -4,6 +4,12 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+## Added
+
+- The desktop app writes a daily log file and keeps a week of them, on
+  Windows, macOS and Linux. **Settings › Open logs** opens the folder. The log
+  names each frame a stack leaves out or rejects, and why.
+
 ## Changed
 
 - Dark masters use the nearest complete night of darks, and otherwise pool
