@@ -139,6 +139,27 @@ fn moon_blocked_high_priority_recipe_yields_to_eligible_work() {
         blocked.evaluate(&request, &constraints).unwrap(),
         Decision::Wait { reason } if reason == "moon_avoidance"
     ));
+    request.state.completion_deadline_ms = Some(request.state.now_ms + 1);
+    let expected = Decision::Wait {
+        reason: "observing_night_window_too_short".into(),
+    };
+    assert_eq!(blocked.evaluate(&request, &constraints).unwrap(), expected);
+    assert_eq!(
+        blocked
+            .preview_priority(&request, &constraints, &Default::default(), None)
+            .unwrap()
+            .decision,
+        expected
+    );
+    request.state.now_ms += 1;
+    assert!(
+        matches!(blocked.evaluate(&request, &constraints).unwrap(), Decision::Complete { reason } if reason == "observing_night_ended")
+    );
+    request.state.safety = Safety::Unsafe;
+    assert!(matches!(
+        blocked.evaluate(&request, &constraints).unwrap(),
+        Decision::Stop { .. }
+    ));
 }
 
 #[test]

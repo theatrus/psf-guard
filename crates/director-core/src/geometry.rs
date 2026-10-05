@@ -300,13 +300,18 @@ impl BoundGeometry {
             for goal in &mut without_moon.assignment.goals {
                 goal.eligible_windows = self.non_lunar_windows[&goal.id].clone();
             }
-            if matches!(
-                crate::evaluate(&without_moon).map_err(Error::Planning)?,
-                Decision::Acquire { .. }
-            ) {
-                return Ok(Decision::Wait {
-                    reason: "moon_avoidance".into(),
-                });
+            match crate::evaluate(&without_moon).map_err(Error::Planning)? {
+                Decision::Acquire { .. } => {
+                    return Ok(Decision::Wait {
+                        reason: "moon_avoidance".into(),
+                    });
+                }
+                // Moon blocking cannot turn the approaching night boundary
+                // into an error once even the non-lunar work no longer fits.
+                Decision::Wait { reason } if reason == "observing_night_window_too_short" => {
+                    return Ok(Decision::Wait { reason })
+                }
+                _ => {}
             }
         }
         Ok(result)

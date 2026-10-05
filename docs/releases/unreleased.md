@@ -3,6 +3,7 @@
 - Let Director's shared planner fit complete setup and exposures before an
   observing-night deadline, independently of dispatch freshness. Work that no
   longer fits waits without consuming another capture attempt.
+  Moon-blocked targets keep waiting normally as that deadline approaches.
 
 - Show Director's current native operation, elapsed time and mount pointing,
   plus completed preparation history replayed after an outage. Batch receipts
