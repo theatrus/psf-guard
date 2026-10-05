@@ -314,12 +314,11 @@
 
 ## Changed
 
-- The framing panel lists one card per rig, the plan's rigs first, each with
-  the colour of its outline on the sky and a line saying whether it sizes the
-  shared framing, shoots it, or has its own grid and angle. Its own framing
-  is edited in its card. Coordinates and angles show five and two decimals.
-  The planning summary uses the Library's pills for the target, goals, rigs
-  and activation.
+- The framing panel has one card per rig, this plan's rigs first, with the
+  colour of its outline on the sky and its part: sets panel size, shared
+  framing, or separate framing with its grid and angle. A separate framing is
+  edited in its card. Coordinates and angles show five and two decimals.
+  Planning labels are shorter, and the summary uses the Library's pills.
 - Disk use and the storage folders have their own **Storage** tab in Settings,
   instead of sitting under Stacking.
 

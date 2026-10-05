@@ -28,7 +28,7 @@ describe('what the save bar says changed', () => {
       'panel rig RedCat → C925',
     ]);
     expect(describeFramingChanges(framing, { ...framing, rigFramings: [{ rig_id: 'rig-b', center: null, position_angle_degrees: 10, mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel: null }] }, rigName))
-      .toEqual(['C925 framed on its own']);
+      .toEqual(['C925 framed separately']);
   });
 
   it('names plan changes by bandpass and rig', () => {

@@ -112,7 +112,7 @@ describe('Framing view', () => {
     // The first rig with optics frames on its own once rigs load; choosing it
     // by hand before or after that draws the same one rectangle, at once.
     fireEvent.change(screen.getByLabelText('Panel rig'), { target: { value: rigA.rig.id } });
-    expect(screen.getByTestId('framing-extent')).toHaveTextContent('1 panel, 5.38° × 3.60° in all.');
+    expect(screen.getByTestId('framing-extent')).toHaveTextContent('1 panel · 5.38° × 3.60°');
     expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1);
     // The rectangle is the rig's field, turned 35°: its corners are not axis-aligned.
     const points = document.querySelector('.framing-panel polygon')!.getAttribute('points')!.split(' ').map(pair => pair.split(',').map(Number));
@@ -132,14 +132,14 @@ describe('Framing view', () => {
 
     fireEvent.change(screen.getByLabelText('Mosaic rows'), { target: { value: '2' } });
     fireEvent.change(screen.getByLabelText('Panel overlap percent'), { target: { value: '15' } });
-    expect(screen.getByTestId('framing-extent')).toHaveTextContent('2 panels, 5.38° × 6.66° in all.');
+    expect(screen.getByTestId('framing-extent')).toHaveTextContent('2 panels · 5.38° × 6.66°');
     expect(document.querySelectorAll('.framing-panel text')).toHaveLength(2);
     fireEvent.click(screen.getByRole('checkbox', { name: /RedCat 61/ }));
     expect(document.querySelectorAll('.framing-overlay')).toHaveLength(1);
     // A rig without optics has no outline to show, and says why.
     expect(screen.queryByRole('checkbox', { name: /C925 data/ })).not.toBeInTheDocument();
-    expect(screen.getByRole('group', { name: 'C925 data' })).toHaveTextContent('No optics in its rig profile yet.');
-    expect(screen.getByRole('group', { name: 'RedCat 61' })).toHaveTextContent('Sizes the shared framing, and shoots it: 2 × 1 panels, 15% overlap.');
+    expect(screen.getByRole('group', { name: 'C925 data' })).toHaveTextContent('No optics');
+    expect(screen.getByRole('group', { name: 'RedCat 61' })).toHaveTextContent('Sets panel size · 2 × 1, 15%');
 
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
     expect(await screen.findByText('Saved framing revision 1.')).toBeInTheDocument();
@@ -240,7 +240,7 @@ describe('Framing view', () => {
     expect(screen.queryByTestId('framing-rig-panels')).not.toBeInTheDocument();
     // C925 has no optics, so its own framing starts from the shared size.
     const c925 = () => screen.getByRole('group', { name: 'C925 data' });
-    fireEvent.click(within(c925()).getByRole('button', { name: 'Frame it on its own' }));
+    fireEvent.click(within(c925()).getByRole('button', { name: 'Frame separately' }));
     // Its editor opens in its own card.
     expect(within(c925()).getByTestId('framing-own-rig')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('C925 data columns'), { target: { value: '3' } });
@@ -249,7 +249,7 @@ describe('Framing view', () => {
     const own = screen.getByTestId('framing-rig-panels');
     expect(own.querySelectorAll('polygon')).toHaveLength(3);
     expect(own).toHaveTextContent('C925 data r1c1');
-    expect(screen.getByTestId('framing-own-extent')).toHaveTextContent('3 panels for C925 data');
+    expect(screen.getByTestId('framing-own-extent')).toHaveTextContent('3 panels');
     // The shared framing is untouched: one panel for RedCat.
     expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1);
     // Its center follows the shared one until it is given one of its own.
@@ -264,19 +264,19 @@ describe('Framing view', () => {
     fireEvent.click(within(c925()).getByRole('button', { name: 'Done' }));
     expect(screen.queryByTestId('framing-own-rig')).not.toBeInTheDocument();
     // Its card says what it shoots; the shared grid is still one panel.
-    expect(c925()).toHaveTextContent('Its own framing: 1 × 3 panels, 20% overlap, camera at 90°, its own center.');
+    expect(c925()).toHaveTextContent('Separate framing · 1 × 3, 20% · 90° · moved center');
     expect(screen.getByLabelText('Mosaic columns')).toHaveValue(1);
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
     await waitFor(() => expect(saves).toHaveLength(1));
     expect(saves[0].rig_framings).toEqual([{ rig_id: rigB.rig.id, center: { ra_degrees: 12, dec_degrees: seed.center.dec_degrees }, position_angle_degrees: 90, mosaic: { rows: 1, columns: 3, overlap_percent: 20 }, panel: { width_degrees: 5.38, height_degrees: 3.6 } }]);
     // One tick puts it back in step with the shared center.
-    fireEvent.click(within(c925()).getByRole('button', { name: 'Edit its framing' }));
+    fireEvent.click(within(c925()).getByRole('button', { name: 'Edit' }));
     fireEvent.click(screen.getByLabelText('C925 data follows the shared center'));
     expect(screen.getByLabelText('C925 data right ascension degrees')).toHaveValue(seed.center.ra_degrees);
     // Back to the shared framing drops the rig's own grid.
-    fireEvent.click(within(c925()).getByRole('button', { name: 'Back to the shared framing' }));
+    fireEvent.click(within(c925()).getByRole('button', { name: 'Use shared' }));
     expect(screen.queryByTestId('framing-rig-panels')).not.toBeInTheDocument();
-    expect(within(c925()).getByRole('button', { name: 'Frame it on its own' })).toBeInTheDocument();
+    expect(within(c925()).getByRole('button', { name: 'Frame separately' })).toBeInTheDocument();
   });
 
   it('is read only without write access and explains a missing seed', async () => {

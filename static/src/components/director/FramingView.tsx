@@ -510,24 +510,24 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
               <label>RA<span className="framing-input"><NumberInput aria-label={`${rigName(editing.rig_id)} right ascension degrees`} step="any" min={0} max={359.99999} value={Number(center.ra_degrees.toFixed(5))} onChange={event => editOwn({ center: { ra_degrees: ((number(event.target.value, center.ra_degrees) % 360) + 360) % 360, dec_degrees: center.dec_degrees } })} /><small>°</small></span></label>
               <label>Dec<span className="framing-input"><NumberInput aria-label={`${rigName(editing.rig_id)} declination degrees`} step="any" min={-90} max={90} value={Number(center.dec_degrees.toFixed(5))} onChange={event => editOwn({ center: { ra_degrees: center.ra_degrees, dec_degrees: Math.max(-90, Math.min(90, number(event.target.value, center.dec_degrees))) } })} /><small>°</small></span></label>
             </div>
-            <p className="director-muted"><label className="framing-check"><input type="checkbox" aria-label={`${rigName(editing.rig_id)} follows the shared center`} checked={editing.center === null} onChange={event => editOwn({ center: event.target.checked ? null : state.center })} />same center as shared</label>
+            <p className="director-muted"><label className="framing-check"><input type="checkbox" aria-label={`${rigName(editing.rig_id)} follows the shared center`} checked={editing.center === null} onChange={event => editOwn({ center: event.target.checked ? null : state.center })} />Shared center</label>
               {editing.center && <> <button type="button" className="link-button" onClick={() => editOwn({ center: state.viewCenter })}>Move to view center</button></>}
-              {editing.center === null ? ' Drag this rig\'s rectangle on the sky to give it a center of its own.' : ''}</p>
+              </p>
             <label>Camera angle<span className="framing-input">
               <NumberInput aria-label={`${rigName(editing.rig_id)} camera angle degrees`} step="any" min={0} max={359.99} value={Number((editing.position_angle_degrees ?? state.positionAngle).toFixed(2))} onChange={event => editOwn({ position_angle_degrees: ((number(event.target.value, 0) % 360) + 360) % 360 })} /><small>° E of N</small>
-              <label className="framing-check"><input type="checkbox" aria-label={`${rigName(editing.rig_id)} follows the shared angle`} checked={editing.position_angle_degrees === null} onChange={event => editOwn({ position_angle_degrees: event.target.checked ? null : state.positionAngle })} />same as shared</label>
+              <label className="framing-check"><input type="checkbox" aria-label={`${rigName(editing.rig_id)} follows the shared angle`} checked={editing.position_angle_degrees === null} onChange={event => editOwn({ position_angle_degrees: event.target.checked ? null : state.positionAngle })} />Shared angle</label>
             </span></label>
             <div className="framing-grid">
               <label>Panel width<span className="framing-input"><NumberInput aria-label={`${rigName(editing.rig_id)} panel width degrees`} step="any" min={0.01} max={30} value={size?.width_degrees ?? ''} onChange={event => editOwn({ panel: { width_degrees: number(event.target.value, size?.width_degrees ?? 1), height_degrees: size?.height_degrees ?? 1 } })} /><small>°</small></span></label>
               <label>Panel height<span className="framing-input"><NumberInput aria-label={`${rigName(editing.rig_id)} panel height degrees`} step="any" min={0.01} max={30} value={size?.height_degrees ?? ''} onChange={event => editOwn({ panel: { width_degrees: size?.width_degrees ?? 1, height_degrees: number(event.target.value, size?.height_degrees ?? 1) } })} /><small>°</small></span></label>
             </div>
-            <p className="director-muted">{editing.panel ? <>Size set by hand. {field && <button type="button" className="link-button" onClick={() => editOwn({ panel: null })}>Use the rig's field</button>}</> : field ? `The rig's own field, ${formatDegrees(field.width_degrees)} × ${formatDegrees(field.height_degrees)}.` : 'No optics in this rig\'s profile yet; enter a size.'}</p>
+            <p className="director-muted">{editing.panel ? <>Typed size {field && <button type="button" className="link-button" onClick={() => editOwn({ panel: null })}>Use rig field</button>}</> : field ? `Rig field ${formatDegrees(field.width_degrees)} × ${formatDegrees(field.height_degrees)}` : 'No optics: type a size'}</p>
             <div className="framing-grid">
               <label>Rows<NumberInput aria-label={`${rigName(editing.rig_id)} rows`} min={1} max={16} step={1} value={editing.mosaic.rows} onChange={event => editOwn({ mosaic: { ...editing.mosaic, rows: Math.max(1, Math.min(16, Math.round(number(event.target.value, 1)))) } })} /></label>
               <label>Columns<NumberInput aria-label={`${rigName(editing.rig_id)} columns`} min={1} max={16} step={1} value={editing.mosaic.columns} onChange={event => editOwn({ mosaic: { ...editing.mosaic, columns: Math.max(1, Math.min(16, Math.round(number(event.target.value, 1)))) } })} /></label>
               <label>Overlap<span className="framing-input"><NumberInput aria-label={`${rigName(editing.rig_id)} overlap percent`} min={0} max={90} step={1} value={editing.mosaic.overlap_percent} onChange={event => editOwn({ mosaic: { ...editing.mosaic, overlap_percent: Math.max(0, Math.min(90, Math.round(number(event.target.value, 0)))) } })} /><small>%</small></span></label>
             </div>
-            <p className="director-muted" data-testid="framing-own-extent">{own ? `${own.geometry.panels.length} panel${own.geometry.panels.length === 1 ? '' : 's'} for ${rigName(editing.rig_id)}, ${formatDegrees(own.geometry.extent.width_degrees)} × ${formatDegrees(own.geometry.extent.height_degrees)} in all.` : 'Enter a size to see this rig\'s footprint.'}</p>
+            <p className="director-muted" data-testid="framing-own-extent">{own ? `${own.geometry.panels.length} panel${own.geometry.panels.length === 1 ? '' : 's'} · ${formatDegrees(own.geometry.extent.width_degrees)} × ${formatDegrees(own.geometry.extent.height_degrees)}` : 'Type a size'}</p>
           </div>;
   })();
   /** One rig: its outline colour, its field, and what it shoots. */
@@ -538,11 +538,11 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     const sizes = state.panelRigId === id;
     const shown = state.shownRigIds.includes(id);
     const field = entry.field_of_view;
-    const grid = (m: DirectorRigFraming['mosaic']) => m.rows * m.columns > 1 ? `${m.rows} × ${m.columns} panels, ${m.overlap_percent}% overlap` : 'one panel';
+    const grid = (m: DirectorRigFraming['mosaic']) => m.rows * m.columns > 1 ? `${m.rows} × ${m.columns}, ${m.overlap_percent}%` : '1 panel';
     const role = own
-      ? `Its own framing: ${grid(own.mosaic)}, camera at ${round(own.position_angle_degrees ?? state.positionAngle, 1)}°${own.center ? ', its own center' : ''}.`
-      : sizes ? `Sizes the shared framing, and shoots it: ${grid(state.mosaic)}.`
-      : field ? `Shoots the shared framing: ${grid(state.mosaic)}.` : 'No optics in its rig profile yet.';
+      ? `Separate framing · ${grid(own.mosaic)} · ${round(own.position_angle_degrees ?? state.positionAngle, 1)}°${own.center ? ' · moved center' : ''}`
+      : sizes ? `Sets panel size · ${grid(state.mosaic)}`
+      : field ? `Shared framing · ${grid(state.mosaic)}` : 'No optics';
     const swatch = own ? `is-own-${ownIndex % 4}` : sizes ? 'is-shared' : shown ? 'is-compared' : 'is-none';
     return <li key={id} className={`framing-rig-card${editingRig === id ? ' is-editing' : ''}`} role="group" aria-label={entry.catalog_name}>
       <div className="framing-rig-head">
@@ -552,11 +552,11 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
       </div>
       <p className="framing-rig-role">{role}</p>
       {canWrite && <div className="framing-rig-actions">
-        {!own && field && !sizes && <button type="button" className="link-button" onClick={() => chooseRig(id)}>Size the panels from it</button>}
-        {!own && field && <label className="framing-check"><input type="checkbox" checked={shown} onChange={event => update(current => ({ shownRigIds: event.target.checked ? [...current.shownRigIds, id] : current.shownRigIds.filter(other => other !== id) }))} />{entry.catalog_name} outline on the sky</label>}
-        {!own && <button type="button" className="link-button" onClick={() => frameRig(id)}>Frame it on its own</button>}
-        {own && <button type="button" className="link-button" aria-expanded={editingRig === id} onClick={() => setEditingRig(editingRig === id ? null : id)}>{editingRig === id ? 'Done' : 'Edit its framing'}</button>}
-        {own && <button type="button" className="link-button" onClick={() => { update(current => ({ rigFramings: current.rigFramings.filter(framing => framing.rig_id !== id) })); if (editingRig === id) setEditingRig(null); }}>Back to the shared framing</button>}
+        {!own && field && !sizes && <button type="button" className="link-button" onClick={() => chooseRig(id)}>Use for panel size</button>}
+        {!own && field && <label className="framing-check" title="Draw its field on the sky"><input type="checkbox" aria-label={`${entry.catalog_name} outline`} checked={shown} onChange={event => update(current => ({ shownRigIds: event.target.checked ? [...current.shownRigIds, id] : current.shownRigIds.filter(other => other !== id) }))} />Outline</label>}
+        {!own && <button type="button" className="link-button" onClick={() => frameRig(id)}>Frame separately</button>}
+        {own && <button type="button" className="link-button" aria-expanded={editingRig === id} onClick={() => setEditingRig(editingRig === id ? null : id)}>{editingRig === id ? 'Done' : 'Edit'}</button>}
+        {own && <button type="button" className="link-button" onClick={() => { update(current => ({ rigFramings: current.rigFramings.filter(framing => framing.rig_id !== id) })); if (editingRig === id) setEditingRig(null); }}>Use shared</button>}
       </div>}
       {editingRig === id && ownEditor}
     </li>;
@@ -642,7 +642,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
         {mosaic.data.warnings.map(warning => <p key={warning} className="director-muted">{warning}</p>)}
         <ul>{mosaic.data.panels.map(panel => <li key={`${panel.rig.id}-${panel.panel_id}`}>{describeStack(panel)}</li>)}</ul>
       </div>}
-      <p className="director-muted framing-attribution">{survey ? `${survey.name}: ${survey.bandpass}. ${survey.attribution}.` : 'Choose a survey.'} Imagery is a composition aid, not pointing evidence.</p>
+      <p className="director-muted framing-attribution">{survey ? `${survey.name}: ${survey.bandpass}. ${survey.attribution}.` : 'Choose a survey.'} For composition only.</p>
       <VisibilityPanel projectId={projectId} center={state.center} compact />
     </div>
     <form className="framing-controls" onSubmit={event => { event.preventDefault(); if (canWrite && !save.isPending && !stale) { setNotice(''); setProblem(''); save.mutate(); } }}>
@@ -668,19 +668,18 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
       <fieldset className="framing-rigs">
         <legend>Rigs</legend>
         {rigs.isError && <p className="director-error" role="alert">Rigs could not be loaded: {message(rigs.error)} <button type="button" onClick={() => void rigs.refetch()}>Retry</button></p>}
-        {!rigs.isError && rigList.length === 0 && <p className="director-muted">{rigs.isPending ? 'Loading rigs...' : 'No rig has planning enabled yet.'}</p>}
+        {!rigs.isError && rigList.length === 0 && <p className="director-muted">{rigs.isPending ? 'Loading rigs...' : 'No rigs yet'}</p>}
         {planRigs.length > 0 && <ul className="framing-rig-list">{planRigs.map(rigCard)}</ul>}
         {otherRigs.length > 0 && <details className="framing-other-rigs" open={planRigs.length === 0}>
-          <summary>Rigs not in this plan ({otherRigs.length})</summary>
+          <summary>Other rigs ({otherRigs.length})</summary>
           <ul className="framing-rig-list">{otherRigs.map(rigCard)}</ul>
         </details>}
       </fieldset>
       <fieldset>
-        <legend>Shared framing</legend>
-        <p className="director-muted">The blue outline. Every rig shoots it unless it is framed on its own.</p>
+        <legend>Shared framing <span className="framing-legend-swatch" title="Its outline on the sky" aria-hidden="true" /></legend>
         <label>Panel size from
           <select aria-label="Panel rig" value={state.panelRigId ?? ''} onChange={event => chooseRig(event.target.value)}>
-            <option value="">A size entered by hand</option>
+            <option value="">Typed size</option>
             {state.panelRigId && !panelRig && <option value={state.panelRigId} disabled>{rigs.isPending ? 'Loading rig...' : rigs.isError ? 'Saved rig (list unavailable)' : 'Saved rig is no longer listed'}</option>}
             {rigList.map(entry => <option key={entry.rig.id} value={entry.rig.id} disabled={!entry.field_of_view}>{entry.catalog_name}{entry.field_of_view ? ` (${formatDegrees(entry.field_of_view.width_degrees)} × ${formatDegrees(entry.field_of_view.height_degrees)})` : ' (no optics yet)'}</option>)}
           </select>
@@ -694,7 +693,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
           <label>Columns<NumberInput aria-label="Mosaic columns" min={1} max={16} step={1} value={state.mosaic.columns} onChange={event => update(current => ({ mosaic: { ...current.mosaic, columns: Math.max(1, Math.min(16, Math.round(number(event.target.value, 1)))) } }))} /></label>
           <label>Overlap<span className="framing-input"><NumberInput aria-label="Panel overlap percent" min={0} max={90} step={1} value={state.mosaic.overlap_percent} onChange={event => update(current => ({ mosaic: { ...current.mosaic, overlap_percent: Math.max(0, Math.min(90, Math.round(number(event.target.value, 0)))) } }))} /><small>%</small></span></label>
         </div>
-        <p className="director-muted" data-testid="framing-extent">{geometry ? `${geometry.panels.length} panel${geometry.panels.length === 1 ? '' : 's'}, ${formatDegrees(geometry.extent.width_degrees)} × ${formatDegrees(geometry.extent.height_degrees)} in all.` : 'Choose a rig for the panel size, or enter one, to see the footprint.'}</p>
+        <p className="director-muted" data-testid="framing-extent">{geometry ? `${geometry.panels.length} panel${geometry.panels.length === 1 ? '' : 's'} · ${formatDegrees(geometry.extent.width_degrees)} × ${formatDegrees(geometry.extent.height_degrees)}` : 'Pick a rig or type a size'}</p>
       </fieldset>
       <fieldset>
         <legend>View</legend>

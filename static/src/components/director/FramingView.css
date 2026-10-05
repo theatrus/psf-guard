@@ -147,3 +147,4 @@
 .framing-other-rigs > summary { cursor: pointer; color: var(--color-text-secondary); margin-bottom: 8px; }
 .framing-rig-card .framing-own { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--color-border-secondary); }
 .director-page .framing-rig-actions button { min-height: 28px; padding: 2px 10px; font-size: 13px; }
+.framing-legend-swatch { display: inline-block; width: 14px; height: 10px; margin-left: 4px; border: 2px solid #5ab4ff; border-radius: 3px; background: rgba(80, 180, 255, 0.25); vertical-align: middle; }

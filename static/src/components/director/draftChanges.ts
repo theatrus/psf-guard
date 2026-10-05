@@ -40,10 +40,10 @@ export function describeFramingChanges(before: FramingState | null, after: Frami
   const was = framed(before);
   const now = framed(after);
   for (const [id, own] of now) {
-    if (!was.has(id)) changes.push(`${rigName(id)} framed on its own`);
-    else if (!same(was.get(id), own)) changes.push(`${rigName(id)}'s own framing`);
+    if (!was.has(id)) changes.push(`${rigName(id)} framed separately`);
+    else if (!same(was.get(id), own)) changes.push(`${rigName(id)} framing`);
   }
-  for (const id of was.keys()) if (!now.has(id)) changes.push(`${rigName(id)} back on the shared framing`);
+  for (const id of was.keys()) if (!now.has(id)) changes.push(`${rigName(id)} back to shared`);
   return changes;
 }
 

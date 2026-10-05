@@ -21,3 +21,12 @@ export function useActivationState(projectId: string) {
   ].filter((part): part is string => !!part) : [];
   return { last, savedPlan, savedFraming, planRevision, framingRevision, behind };
 }
+
+/** Whether the page should ask for an activation: someone may write, the
+ *  saved plan shoots something, and the rigs lack the saved plan or layout.
+ *  The save bar comes first, so the page also waits for unsaved edits. */
+export function useActivationDue(projectId: string, canWrite: boolean, unsaved: number): boolean {
+  const { last, savedPlan, behind } = useActivationState(projectId);
+  const shoots = (savedPlan.data?.plan?.contributions.length ?? 0) > 0;
+  return canWrite && unsaved === 0 && last.isSuccess && shoots && (!last.data || behind.length > 0);
+}
