@@ -6,7 +6,7 @@ import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import type { DirectorActivationAction, DirectorActivationChange, DirectorActivationPush, DirectorActivationPushReport, DirectorActivationReport } from '../../api/directorTypes';
-import { useDrafts } from './pageDraftsState';
+import { describeFailure, useDrafts } from './pageDraftsState';
 import { useActivationState } from './activationState';
 import './ActivationPanel.css';
 
@@ -118,7 +118,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
     retry: false,
     mutationFn: async () => {
       const failed = drafts ? await drafts.saveAll() : null;
-      if (failed) throw new Error(`${failed} could not be saved. Fix what it shows above, then preview again.`);
+      if (failed) throw new Error(`${describeFailure(failed)} Fix it, then preview again.`);
       return apiClient.previewDirectorActivation(projectId);
     },
     onSuccess: setReport,

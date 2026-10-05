@@ -13,22 +13,30 @@ export interface DraftSection {
    *  catalog, a panel rig picked for it). Saved with the rest, never shown
    *  as an unsaved change. */
   pending?: boolean;
-  /** Save the section's edits; resolve false when it could not, having
-   *  shown why in the section itself. */
-  save: () => Promise<boolean>;
+  /** Save the section's edits; resolve true, or why it could not in a few
+   *  words (false when the section has nothing to add to what it shows). */
+  save: () => Promise<boolean | string>;
   /** Drop the section's edits and show what is saved. */
   discard: () => void;
 }
 
 export interface Registered extends DraftSection { id: string }
 
+/** The section a save stopped at, and why, so the message can say both
+ *  wherever the save was asked for. */
+export interface SaveFailure { label: string; reason: string | null }
+
+export function describeFailure(failure: SaveFailure): string {
+  return failure.reason ? `${failure.label} was not saved: ${failure.reason}` : `${failure.label} was not saved; its tab shows why.`;
+}
+
 export interface Drafts {
   sections: Registered[];
   unsaved: Registered[];
   register: (id: string, section: DraftSection | null) => void;
   /** Save every section with edits, in order, stopping at the first that
-   *  cannot be saved. Resolves the label of that section, or null. */
-  saveAll: () => Promise<string | null>;
+   *  cannot be saved. Resolves that section and why, or null. */
+  saveAll: () => Promise<SaveFailure | null>;
   discardAll: () => void;
 }
 
@@ -59,9 +67,9 @@ export function usePageDrafts(): Drafts {
   const saveAll = useCallback(async () => {
     const pending = Object.values(live.current).filter(section => section.unsaved || section.pending).sort((left, right) => left.order - right.order);
     for (const section of pending) {
-      let saved = false;
-      try { saved = await section.save(); } catch { saved = false; }
-      if (!saved) return section.label;
+      let saved: boolean | string = false;
+      try { saved = await section.save(); } catch (error) { saved = error instanceof Error ? error.message : false; }
+      if (saved !== true) return { label: section.label, reason: typeof saved === 'string' ? saved : null };
     }
     return null;
   }, []);

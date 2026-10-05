@@ -39,7 +39,7 @@ export default function PlanScheduling({ projectId, rigs }: { projectId: string;
     unsaved,
     save: async () => {
       if (!stored.data) return false;
-      try { await save.mutateAsync({ ...stored.data, scheduling: compactOverrides(draft) }); } catch { return false; }
+      try { await save.mutateAsync({ ...stored.data, scheduling: compactOverrides(draft) }); } catch (error) { return message(error); }
       return true;
     },
     discard: () => { setDraft(stored.data?.scheduling ?? {}); save.reset(); },

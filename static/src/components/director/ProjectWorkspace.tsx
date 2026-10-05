@@ -71,12 +71,10 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
   const reportRigs = useCallback((next: { rigIds: string[]; objectives: number }) => setPlanRigs(next), []);
   const [activating, setActivating] = useState(false);
   // The tab lives in the address, so a reload or a shared link opens it.
-  // Without one, a plan with no framing yet starts there; any other on its plan.
-  const framingDraft = useQuery({ queryKey: ['directorFraming', projectId], queryFn: () => apiClient.getDirectorFramingDraft(projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
+  // Without one, the page opens on the framing.
   const named = params.get('planTab');
   const asked = named && RENAMED[named] ? RENAMED[named] : named;
-  const tab: TabId = TABS.some(entry => entry.id === asked) ? asked as TabId
-    : framingDraft.data && !framingDraft.data.draft ? 'framing' : 'exposures';
+  const tab: TabId = TABS.some(entry => entry.id === asked) ? asked as TabId : 'framing';
   // The rig database editors read every database's rows, so they load
   // once their tab is first opened rather than with the page.
   const [visited, setVisited] = useState<Set<TabId>>(() => new Set([tab]));

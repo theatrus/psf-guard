@@ -150,7 +150,7 @@ describe('Activation panel', () => {
     const { previewCount } = fixture();
     mount(true, { unsavedPlan: true, savePlan: async () => false });
     fireEvent.click(await screen.findByRole('button', { name: 'Save and preview activation' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('could not be saved');
+    expect(await screen.findByRole('alert')).toHaveTextContent('was not saved');
     expect(previewCount()).toBe(0);
   });
 });

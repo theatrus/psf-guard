@@ -370,10 +370,11 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     pending: canWrite && firstSave,
     changes,
     save: async () => {
-      if (!state || !draft.data || stale) return false;
+      if (stale) return 'the framing changed elsewhere; reload it first';
+      if (!state || !draft.data) return false;
       setNotice('');
       setProblem('');
-      try { await save.mutateAsync(); } catch { return false; }
+      try { await save.mutateAsync(); } catch (error) { return message(error); }
       return true;
     },
     discard: () => {

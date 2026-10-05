@@ -147,9 +147,14 @@ describe('project workspace', () => {
     expect(within(summary).getAllByText(/no rig profile/).length).toBe(2);
     expect(await screen.findByTestId('summary-activation')).toHaveTextContent('saved plan not sent yet');
   });
-  it('opens on framing when no framing is saved yet', async () => {
+  it('opens on framing, saved or not, unless the address names a tab', async () => {
     mount(links, '/plan?plan=project', { framing: false });
     expect(await screen.findByRole('tab', { name: 'Framing' })).toHaveAttribute('aria-selected', 'true');
+  });
+  it('opens on framing when a framing is saved too', async () => {
+    mount(links, '/plan?plan=project', { framing: true, planRevision: 1 });
+    expect(await screen.findByTestId('summary-target')).toHaveTextContent('M31');
+    expect(screen.getByRole('tab', { name: 'Framing' })).toHaveAttribute('aria-selected', 'true');
   });
   it('frames an unlinked project without a seed', async () => {
     mount([]);
