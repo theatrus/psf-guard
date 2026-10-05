@@ -129,8 +129,14 @@ the last hour whose data ends in a long run of one value is taken as a copy
 still under way (Windows copies, sync tools and moves between volumes create
 the file at full size and fill it in after), and is measured on a later pass,
 once the finished copy changes the file. And before it records no stars, the
-scan runs HocusFocus on the same pixels; if that finds 20 stars or more, the
-measurement failed and nothing is recorded.
+scan runs HocusFocus on the same pixels. If that finds 20 stars or more, the
+frame has stars and is poor, not starless: the scan records HocusFocus's
+count under HocusFocus's name, and the frame scores on it like any other
+count. A frame with a few dozen stars beside frames with hundreds scores
+low. HocusFocus measures HFR on another scale from N.I.N.A. Fast, so that
+frame's HFR is shown in its details but not scored, and neither number is
+written back into the catalog's metadata. The frame's details say "N.I.N.A.
+Fast found no stars; HocusFocus found 68, used instead".
 
 Star counts and HFR come from one source per target and filter. The quality
 scan and the capture software count on different scales (HocusFocus and

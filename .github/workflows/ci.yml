@@ -98,17 +98,19 @@ jobs:
         npm run test:release
 
     - name: Check formatting
-      run: cargo fmt -- --check
+      run: cargo fmt --all -- --check
 
     # No separate `cargo build`. Clippy type-checks every target with every
     # feature, and `cargo test` builds the binaries anyway — the integration
     # tests reach for them through CARGO_BIN_EXE_psf-guard. The extra step
     # cost 485s on Windows and proved nothing the other two miss.
+    # `--workspace` takes in the Director crates: the workspace's default
+    # member is the app alone, so without it their own tests never run.
     - name: Run clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
+      run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test --workspace --verbose
 
     # Only Linux needs a release binary, because only the e2e job consumes
     # one. Release builds its own assets from release.yml, and the Windows and
