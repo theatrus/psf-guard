@@ -66,6 +66,9 @@
 
 ## Added
 
+- The desktop app writes a daily log file and keeps a week of them, on
+  Windows, macOS and Linux. **Settings › Open logs** opens the folder. The log
+  names each frame a stack leaves out or rejects, and why.
 - Sites hold a location and a horizon. Paste or upload a N.I.N.A. `.hrz`
   horizon file for a site, or for one rig that differs, and download it back.
   Each rig picks its planning site and takes the site's location and horizon

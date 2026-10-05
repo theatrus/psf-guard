@@ -3007,6 +3007,44 @@ fn fallback_quality(image_id: i32) -> ImageQualityResult {
     }
 }
 
+/// Log once, as a group starts, the frames left out before stacking and
+/// why. Preparation runs on every preview request, so it cannot log them
+/// without repeating itself.
+fn log_excluded_frames(state: &Arc<AppState>, job_id: &str, group_index: usize) {
+    let Some(job) = state.stack_previews.get(job_id) else {
+        return;
+    };
+    let Some(group) = job.groups.get(group_index) else {
+        return;
+    };
+    let excluded: Vec<_> = group
+        .frames
+        .iter()
+        .filter(|frame| frame.disposition == "excluded")
+        .collect();
+    if excluded.is_empty() {
+        return;
+    }
+    tracing::info!(
+        job_id,
+        group_index,
+        target = %group.target_name,
+        filter = %group.filter_name,
+        "Stack left out {} of {} frames before stacking",
+        excluded.len(),
+        group.total_candidates
+    );
+    for frame in excluded {
+        tracing::info!(
+            job_id,
+            group_index,
+            image_id = frame.image_id,
+            "Stack left out a frame: {}",
+            frame.reason.as_deref().unwrap_or("no reason recorded")
+        );
+    }
+}
+
 fn excluded_decision(
     image: &AcquiredImage,
     scored: &ImageQualityResult,
@@ -3467,6 +3505,7 @@ fn run_group(
         shared = %lease.summary(),
         "Stack worker budget configured"
     );
+    log_excluded_frames(state, job_id, group.index);
     let ctx = state
         .get_database(database_id)
         .ok_or_else(|| format!("Database {database_id} is no longer configured"))?;
@@ -4112,9 +4151,25 @@ fn run_group(
                         {
                             calibration_rejections.push(message.clone());
                         }
+                        tracing::info!(
+                            job_id,
+                            group_index = group.index,
+                            image_id = frame.image_id,
+                            file = %frame.path.display(),
+                            "Stack rejected a frame: {reason}"
+                        );
                         (rejected_decision(frame, reason.to_string()), false)
                     }
-                    Err(error) => (rejected_decision(frame, error.to_string()), true),
+                    Err(error) => {
+                        tracing::warn!(
+                            job_id,
+                            group_index = group.index,
+                            image_id = frame.image_id,
+                            file = %frame.path.display(),
+                            "Stack could not read a frame: {error}"
+                        );
+                        (rejected_decision(frame, error.to_string()), true)
+                    }
                 };
                 ledger.push(resume::ResumeFrame {
                     decision: decision.clone(),

@@ -920,6 +920,11 @@ Before handing frames to Seiza, PSF Guard excludes:
    including confirmed cloud/obstruction, off-target, tracking-loss, and
    corroborated no-solve decisions.
 
+The server log names each frame a build leaves out, once as each group
+starts, and each frame Seiza rejects or cannot read, with the reason. The
+desktop app writes that log to a file; see the README's desktop install
+section.
+
 That analysis runs with the caller's scoring preferences (penalty scales and
 reject limits), so stack exclusion agrees with every other scoring surface:
 a satellite penalty of 0% keeps trailed frames in the stack, and a frame
