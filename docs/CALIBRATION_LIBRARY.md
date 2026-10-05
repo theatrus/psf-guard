@@ -207,7 +207,7 @@ PSF Guard only uses candidates that agree with every known hard setting:
 | Master | Required match |
 |---|---|
 | Bias | camera, dimensions, channels, binning, gain, offset, readout mode, Bayer layout |
-| Dark | bias fields, exposure within 0.05 seconds, temperature within 3 C |
+| Dark | bias fields, exposure within 0.05 seconds, temperature within 3 C, shot within the dark reach of the light |
 | Dark-flat | flat sensor settings, exposure, and temperature |
 | Flat | bias fields, filter, telescope, and focal length within 1 mm |
 
@@ -235,6 +235,16 @@ same gate the stacker itself enforces), and flats also cluster into one
 session (within a day of each other — dust moves between sessions). The
 nearest cluster with enough frames builds the master, so a stray single flat
 near the lights cannot orphan a complete session from a week earlier.
+
+Darks keep for months, so a dark master can pool several nights, nearest
+first. Two settings under **Settings › Calibration › Dark masters** bound it:
+
+- **Dark reach** (default 183 days): a dark shot further than this from the
+  light does not match. A dark marked to serve only lights before or after it
+  follows its mark instead, however old.
+- **Complete night** (default 10 darks): when the nearest night alone has
+  this many matching darks, the master uses that night only. With fewer, the
+  nights within reach pool.
 
 ### Validity boundaries
 
@@ -379,7 +389,15 @@ Each project card on the Library has a **Calibration** action that reports
 how the library covers that project's lights: per kind, how many frames
 match and which capture sessions they span; and per imaging night and
 filter, the flat session a master would build from, its distance from the
-lights, and whether the night has its own flats. One representative light
+lights, and whether the night has its own flats. The dark column gives what
+one dark master would use: its frames, the nights they span and the nearest
+night's distance; hover for every matching dark within reach. A night with
+no flat names the nearest flat refused only for its rotator angle, how far
+off it is and the limit, which is the usual cause when a rotator moved.
+Masters from other software for the lights' camera, sensor size and (for
+flats) filter are listed under the night: used, matching but not used under
+the external-master setting, or not used with the readings that disagree,
+such as `rotation light=92.6deg master=94.7deg`. One representative light
 per night and filter is matched exactly as a stack build would match it, so
 the report describes what WOULD apply, not just what files exist. Warnings
 call out kinds with no matches, nights without same-night flats, and flats

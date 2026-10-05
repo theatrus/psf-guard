@@ -27,6 +27,28 @@ const current = (rotation: number | null, flatStarMasking = false) => ({
 });
 
 describe('CalibrationMatchingSettings', () => {
+  it('saves the dark reach and the darks in a complete night, and refuses out-of-range values', async () => {
+    let saved: Record<string, unknown> | null = null;
+    server.use(
+      http.get('/api/settings/calibration', () => HttpResponse.json(current(null))),
+      http.put('/api/settings/calibration', async ({ request }) => {
+        saved = await request.json() as Record<string, unknown>;
+        return HttpResponse.json({ success: true, data: { ...current(null).data, dark_reach_days: 90, complete_dark_frames: 20 }, error: null });
+      }),
+    );
+    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
+    const reach = await screen.findByLabelText('Dark reach in days');
+    expect(reach).toHaveAttribute('placeholder', '183');
+    fireEvent.change(reach, { target: { value: '5000' } });
+    expect(screen.getByText('Enter 1 to 3650 days.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    fireEvent.change(reach, { target: { value: '90' } });
+    fireEvent.change(screen.getByLabelText('Darks in a complete night'), { target: { value: '20' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(saved).toMatchObject({ dark_reach_days: 90, complete_dark_frames: 20 }));
+  });
+
+
   it('shows the default as the placeholder, not as a configured value', async () => {
     server.use(
       http.get('/api/settings/calibration', () => HttpResponse.json(current(null)))
@@ -58,6 +80,8 @@ describe('CalibrationMatchingSettings', () => {
         rotation_tolerance_deg: 3.5,
         external_masters: 'prefer',
         flat_star_masking: false,
+        dark_reach_days: null,
+        complete_dark_frames: null,
       })
     );
     // The response is the new truth; the button falls back to disabled.
@@ -88,6 +112,8 @@ describe('CalibrationMatchingSettings', () => {
         rotation_tolerance_deg: null,
         external_masters: 'fallback',
         flat_star_masking: false,
+        dark_reach_days: null,
+        complete_dark_frames: null,
       })
     );
     await waitFor(() =>
@@ -144,6 +170,8 @@ describe('CalibrationMatchingSettings', () => {
       rotation_tolerance_deg: 3.5,
       external_masters: 'prefer',
       flat_star_masking: enabled,
+      dark_reach_days: null,
+      complete_dark_frames: null,
     })));
   });
 

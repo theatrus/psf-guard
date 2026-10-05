@@ -1469,6 +1469,12 @@ export interface CalibrationSettings {
   external_masters: ExternalMasterPolicy;
   /** Mask detected stars when building flat masters; off by default. */
   flat_star_masking: boolean;
+  /** Days a dark may be from a light; null when the default applies. */
+  dark_reach_days?: number | null;
+  default_dark_reach_days?: number;
+  /** Darks from one night that make a master alone; null for the default. */
+  complete_dark_frames?: number | null;
+  default_complete_dark_frames?: number;
 }
 
 /** How much of the processor work may take, as fractions of logical cores. */
@@ -2247,6 +2253,31 @@ export interface CalibrationNightFilter {
   flat_age_days?: number | null;
   nightly_flats: boolean;
   missing: string[];
+  /** What one dark master would build from, and the nights it spans. */
+  dark_master_frames?: number;
+  dark_master_nights?: number;
+  /** With no flat, the nearest one refused only for its rotator angle. */
+  flat_near_miss?: CalibrationFlatNearMiss | null;
+  /** Masters from other software for this camera, sensor and filter. */
+  external_masters?: CalibrationExternalMaster[];
+}
+
+export interface CalibrationFlatNearMiss {
+  filter: string | null;
+  flat_rotation_deg: number;
+  light_rotation_deg: number;
+  off_by_deg: number;
+  tolerance_deg: number;
+  session: string | null;
+  frames: number;
+}
+
+export interface CalibrationExternalMaster {
+  kind: 'bias' | 'dark' | 'flat';
+  file: string;
+  matches: boolean;
+  used: boolean;
+  reason: string | null;
 }
 
 /** Which frames an import run touches. */

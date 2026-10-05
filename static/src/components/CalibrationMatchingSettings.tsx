@@ -41,6 +41,8 @@ export default function CalibrationMatchingSettings() {
   const [draft, setDraft] = useState<string>('');
   const [policy, setPolicy] = useState<ExternalMasterPolicy>('prefer');
   const [flatStarMasking, setFlatStarMasking] = useState(false);
+  const [reachDraft, setReachDraft] = useState('');
+  const [completeDraft, setCompleteDraft] = useState('');
   useEffect(() => {
     if (settings.data) {
       setDraft(
@@ -50,6 +52,8 @@ export default function CalibrationMatchingSettings() {
       );
       setPolicy(settings.data.external_masters);
       setFlatStarMasking(settings.data.flat_star_masking ?? false);
+      setReachDraft(settings.data.dark_reach_days == null ? '' : String(settings.data.dark_reach_days));
+      setCompleteDraft(settings.data.complete_dark_frames == null ? '' : String(settings.data.complete_dark_frames));
     }
   }, [settings.data]);
 
@@ -58,6 +62,8 @@ export default function CalibrationMatchingSettings() {
       rotation_tolerance_deg: number | null;
       external_masters: ExternalMasterPolicy;
       flat_star_masking: boolean;
+      dark_reach_days: number | null;
+      complete_dark_frames: number | null;
     }) => apiClient.updateCalibrationSettings(update),
     onSuccess: (updated) => {
       queryClient.setQueryData(['calibration-settings'], updated);
@@ -78,7 +84,13 @@ export default function CalibrationMatchingSettings() {
   const parsed = draft.trim() === '' ? null : Number(draft);
   const invalid =
     parsed !== null && (!Number.isFinite(parsed) || parsed < 0 || parsed > 180);
+  const reach = reachDraft.trim() === '' ? null : Number(reachDraft);
+  const reachInvalid = reach !== null && (!Number.isFinite(reach) || reach < 1 || reach > 3650);
+  const complete = completeDraft.trim() === '' ? null : Number(completeDraft);
+  const completeInvalid = complete !== null && (!Number.isInteger(complete) || complete < 2 || complete > 64);
   const dirty =
+    reach !== (current.dark_reach_days ?? null) ||
+    complete !== (current.complete_dark_frames ?? null) ||
     (parsed === null) !== (current.rotation_tolerance_deg === null) ||
     (parsed !== null && parsed !== current.rotation_tolerance_deg) ||
     policy !== current.external_masters ||
@@ -141,6 +153,27 @@ export default function CalibrationMatchingSettings() {
         </label>
       </fieldset>
       <fieldset className="calibration-settings-group" disabled={save.isPending}>
+        <legend>Dark masters</legend>
+        <label className="review-preference">
+          <span>
+            Dark reach (days)
+            <small>Darks this close to the lights. Marked darks follow their mark. Empty: {current.default_dark_reach_days ?? 183}.</small>
+          </span>
+          <input type="number" min={1} max={3650} step={1} value={reachDraft} placeholder={String(current.default_dark_reach_days ?? 183)}
+            aria-label="Dark reach in days" aria-invalid={reachInvalid} onChange={(event) => setReachDraft(event.target.value)} />
+        </label>
+        {reachInvalid && <p className="error-text">Enter 1 to 3650 days.</p>}
+        <label className="review-preference">
+          <span>
+            Complete night (darks)
+            <small>The nearest night with this many matching darks is used alone. Fewer: nights pool. Empty: {current.default_complete_dark_frames ?? 10}.</small>
+          </span>
+          <input type="number" min={2} max={64} step={1} value={completeDraft} placeholder={String(current.default_complete_dark_frames ?? 10)}
+            aria-label="Darks in a complete night" aria-invalid={completeInvalid} onChange={(event) => setCompleteDraft(event.target.value)} />
+        </label>
+        {completeInvalid && <p className="error-text">Enter 2 to 64 frames.</p>}
+      </fieldset>
+      <fieldset className="calibration-settings-group" disabled={save.isPending}>
         <legend>Flat masters</legend>
         <label className="review-preference">
           <input
@@ -157,12 +190,14 @@ export default function CalibrationMatchingSettings() {
       <button
         type="button"
         className="save-button"
-        disabled={invalid || !dirty || save.isPending}
+        disabled={invalid || reachInvalid || completeInvalid || !dirty || save.isPending}
         onClick={() =>
           save.mutate({
             rotation_tolerance_deg: parsed,
             external_masters: policy,
             flat_star_masking: flatStarMasking,
+            dark_reach_days: reach,
+            complete_dark_frames: complete,
           })
         }
       >

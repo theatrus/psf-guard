@@ -656,6 +656,14 @@ pub struct CalibrationSettings {
     /// Mask stars in raw flats before integration. Absent means disabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flat_star_masking: Option<bool>,
+    /// How far from a light a dark may have been shot, in days. Absent uses
+    /// [`crate::calibration::DEFAULT_DARK_REACH_DAYS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dark_reach_days: Option<f64>,
+    /// Darks from one night that make a master without older nights. Absent
+    /// uses [`crate::calibration::DEFAULT_COMPLETE_DARK_FRAMES`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub complete_dark_frames: Option<usize>,
 }
 
 /// What the export dialog starts from. The dialog still offers every layout
@@ -1188,6 +1196,8 @@ mod tests {
                 rotation_tolerance_deg: Some(3.5),
                 external_masters: Some(crate::calibration::ExternalMasterPolicy::Fallback),
                 flat_star_masking: Some(true),
+                dark_reach_days: Some(90.0),
+                complete_dark_frames: Some(20),
             }),
             ..Default::default()
         };
