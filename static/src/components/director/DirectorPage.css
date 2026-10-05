@@ -142,11 +142,14 @@ select.library-pill-state option { color: var(--color-text-primary); background:
 .workspace-rig.is-missing svg { color: var(--color-warning-light); }
 .workspace-activation { font-size: 13px; color: var(--color-text-secondary); }
 .workspace-activation.is-behind { color: var(--color-warning-light); }
-.workspace-tabs { display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--color-border-secondary); scrollbar-width: thin; }
-.director-page .workspace-tabs button.workspace-tab { flex: none; min-height: 36px; border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--color-text-secondary); }
-.director-page .workspace-tabs button.workspace-tab.active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
-.workspace-tab-edited { margin-left: 4px; font-size: 10px; color: var(--color-warning-light); }
-.workspace-panel { padding-top: 12px; }
+.workspace-tabs { display: flex; gap: 6px; margin-top: 8px; overflow-x: auto; border-bottom: 1px solid var(--color-border-secondary); scrollbar-width: thin; }
+.director-page .workspace-tabs button.workspace-tab { flex: none; min-height: 44px; padding: 10px 20px; border: none; border-bottom: 3px solid transparent; border-radius: 6px 6px 0 0; background: none; color: var(--color-text-secondary); font-size: 15px; font-weight: 500; }
+.director-page .workspace-tabs button.workspace-tab:hover { color: var(--color-text-primary); background: var(--color-bg-secondary); }
+.director-page .workspace-tabs button.workspace-tab:focus { outline: none; }
+.director-page .workspace-tabs button.workspace-tab:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+.director-page .workspace-tabs button.workspace-tab.active { color: var(--color-primary); border-bottom-color: var(--color-primary); background: var(--color-bg-secondary); }
+.workspace-tab-edited { margin-left: 6px; font-size: 10px; color: var(--color-warning-light); }
+.workspace-panel { padding-top: 20px; }
 .workspace-panel[hidden] { display: none; }
 .observing-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
 

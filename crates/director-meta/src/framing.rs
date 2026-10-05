@@ -98,17 +98,19 @@ impl FramingDraft {
 
 const MAX_TIME_MS: u64 = 4_102_444_800_000; // 2100-01-01
 
+const MAX_SURVEY_ID_LEN: usize = 256;
+
 pub(crate) fn validate_draft(draft: &FramingDraft) -> Result<(), Error> {
     valid_id(draft.project_id)?;
     if draft.target_name.len() > 256
         || draft.target_name.trim() != draft.target_name
         || draft.target_name.chars().any(char::is_control)
+        // A layer is found by exact match, so any printable id will do. The
+        // offline N.I.N.A. maps are `nina:` and their folder name.
         || draft.survey_id.is_empty()
-        || draft.survey_id.len() > 64
-        || !draft
-            .survey_id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        || draft.survey_id.len() > MAX_SURVEY_ID_LEN
+        || draft.survey_id.trim() != draft.survey_id
+        || draft.survey_id.chars().any(char::is_control)
         || !draft.view_fov_degrees.is_finite()
         || !(0.02..=40.0).contains(&draft.view_fov_degrees)
         || draft.shown_rig_ids.len() > 64

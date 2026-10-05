@@ -505,6 +505,10 @@
 
 ## Fixed
 
+- Save and activate a plan whose framing shows an offline N.I.N.A. sky map.
+  The framing save refused those survey names, so activation stopped with
+  "Invalid Director metadata request". When a save fails, the save bar and
+  the activation now say which section failed and why.
 - The Docker image keeps everything it writes on the `/data` volume: the
   database registry and browser users, the cache of previews, plate solves,
   quality scans and stacks, and Seiza catalogs installed in Settings, so a

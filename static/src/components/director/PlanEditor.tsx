@@ -94,12 +94,13 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
     changes: describePlanChanges(baseline, plan, id => rigList.find(rig => rig.rig.id === id)?.catalog_name ?? 'a rig'),
     save: async () => {
       if (!unsaved) return true;
-      if (!canWrite || stale || !plan) return false;
+      if (stale) return 'the plan changed elsewhere; reload it first';
+      if (!canWrite || !plan) return false;
       const trouble = planProblem(plan);
       setProblem(trouble ?? '');
-      if (trouble) return false;
+      if (trouble) return trouble;
       setNotice('');
-      try { await save.mutateAsync(); } catch { return false; }
+      try { await save.mutateAsync(); } catch (error) { return message(error); }
       return true;
     },
     discard: () => { if (baseline) setPlan(baseline); setProblem(''); save.reset(); },

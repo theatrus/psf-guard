@@ -94,7 +94,7 @@ function PriorityEditor({ initial, globalOrder, globalScheduling, projects, curr
     ].filter((change): change is string => !!change),
     save: async () => {
       if (!savable) return false;
-      try { await save.mutateAsync(); } catch { return false; }
+      try { await save.mutateAsync(); } catch (error) { return error instanceof Error ? error.message : false; }
       return true;
     },
     discard: () => { setDraft(stored); setSaved(false); save.reset(); },

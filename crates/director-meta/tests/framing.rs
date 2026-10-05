@@ -91,12 +91,14 @@ fn bad_geometry_and_survey_ids_are_refused() {
         store.save_framing_draft(&bad, 0),
         Err(Error::InvalidInput)
     ));
-    let mut bad = draft(project.id);
-    bad.survey_id = "../dss".into();
-    assert!(matches!(
-        store.save_framing_draft(&bad, 0),
-        Err(Error::InvalidInput)
-    ));
+    for survey in ["", " dss2_color", "dss2\ncolor", &"x".repeat(257)] {
+        let mut bad = draft(project.id);
+        bad.survey_id = survey.into();
+        assert!(matches!(
+            store.save_framing_draft(&bad, 0),
+            Err(Error::InvalidInput)
+        ));
+    }
     let mut bad = draft(project.id);
     bad.view_fov_degrees = 0.0;
     assert!(matches!(
@@ -106,6 +108,15 @@ fn bad_geometry_and_survey_ids_are_refused() {
     let mut no_panel = draft(project.id);
     no_panel.panel = None;
     assert_eq!(store.save_framing_draft(&no_panel, 0).unwrap().revision, 1);
+    // An offline N.I.N.A. map is `nina:` and its folder name, which is
+    // longer than the online ids and has a colon.
+    let mut offline = draft(project.id);
+    offline.survey_id =
+        "nina:FramingAssistantCache_NorthernSkyNarrowbandSurvey_OHS_withStars".into();
+    assert_eq!(
+        store.save_framing_draft(&offline, 1).unwrap().survey_id,
+        offline.survey_id
+    );
 }
 
 #[test]

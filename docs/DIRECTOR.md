@@ -208,8 +208,9 @@ status. **Setup** expands the database's planning setup in place: enable
 planning, the rig profile, and the project links. **Library** opens its
 catalog.
 
-The **workspace** for one plan has a summary at the top and four tabs.
-**Framing** places the target. **Exposures** holds the objectives and, for
+The **workspace** for one plan has a summary at the top and four tabs. It
+opens on **Framing**, which places the target, unless the address names
+another tab. **Exposures** holds the objectives and, for
 each rig shooting the plan, its template, exposure and frames per objective.
 **Rigs** lists each rig with its database's project and whether activation
 has reached it. **Add a rig** offers every rig with a new project, which

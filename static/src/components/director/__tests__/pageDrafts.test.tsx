@@ -6,18 +6,18 @@ import { DraftProvider, EditedMark, SaveBar } from '../pageDrafts';
 import { useDraftSection, usePageDrafts } from '../pageDraftsState';
 
 /** A section holding one value, saved by a stand-in for its API call. */
-function Field({ id, label, order, saved: stored, saves, fail = false }: { id: string; label: string; order: number; saved: string; saves: string[]; fail?: boolean }) {
+function Field({ id, label, order, saved: stored, saves, fail = false }: { id: string; label: string; order: number; saved: string; saves: string[]; fail?: boolean | string }) {
   const [saved, setSaved] = useState(stored);
   const [value, setValue] = useState(stored);
   useDraftSection(id, {
     label, order, unsaved: value !== saved, changes: value !== saved ? [`${saved} → ${value}`] : [],
-    save: async () => { if (fail) return false; saves.push(`${label}=${value}`); setSaved(value); return true; },
+    save: async () => { if (fail !== false) return fail === true ? false : fail; saves.push(`${label}=${value}`); setSaved(value); return true; },
     discard: () => setValue(saved),
   });
   return <input aria-label={label} value={value} onChange={event => setValue(event.target.value)} />;
 }
 
-function Page({ saves, failPlan = false }: { saves: string[]; failPlan?: boolean }) {
+function Page({ saves, failPlan = false }: { saves: string[]; failPlan?: boolean | string }) {
   const drafts = usePageDrafts();
   return <DraftProvider drafts={drafts}>
     <SaveBar drafts={drafts} canWrite />
@@ -29,7 +29,7 @@ function Page({ saves, failPlan = false }: { saves: string[]; failPlan?: boolean
   </DraftProvider>;
 }
 
-function mount(failPlan = false) {
+function mount(failPlan: boolean | string = false) {
   const saves: string[] = [];
   const router = createMemoryRouter([
     { path: '/', element: <Page saves={saves} failPlan={failPlan} /> },
@@ -73,8 +73,15 @@ describe('page save bar', () => {
     fireEvent.change(screen.getByLabelText('Plan'), { target: { value: '120' } });
     fireEvent.change(screen.getByLabelText('Framing'), { target: { value: 'M 57' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
-    await waitFor(() => expect(bar()).toHaveTextContent('Plan was not saved'));
+    await waitFor(() => expect(bar()).toHaveTextContent('Plan was not saved; its tab shows why.'));
     expect(saves).toEqual(['Framing=M 57']);
+  });
+
+  it('says why a section could not be saved when it knows', async () => {
+    mount('Invalid Director metadata request');
+    fireEvent.change(screen.getByLabelText('Plan'), { target: { value: '120' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(bar()).toHaveTextContent('Plan was not saved: Invalid Director metadata request'));
   });
 
   it('discards every edit after asking', () => {
