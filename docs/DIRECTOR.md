@@ -718,10 +718,10 @@ the draft keeps every digit. **Rigs** has one card per rig, this plan's rigs
 first. Each card shows a swatch in the colour of the rig's outline on the
 sky, its field and pixel scale, and its part: **Sets panel size**, **Shared
 framing** or **Separate framing** with its grid and angle. On the planning
-page, a rig's heading (its check box, swatch, name and field) adds it to the
-plan or drops it, so several rigs can shoot one plan; rigs not in it are listed
-below, open. **Use size** makes a rig's field the shared panel size, and the
-rig that has it shows **Sets size**. **Shared framing** names the rig its size
+page, each rig has an **On** switch: rigs that shoot the plan are listed under
+**On**, the rest under **Off**, and several can be on. **Frame** makes an on
+rig's field the shared framing's panel size; the rig that frames the plan shows
+**Framing**. **Shared framing** names the rig its size
 comes from; **Type a size** sets one by hand instead, starting from that rig's. **Outline** draws its field on the sky, and
 **Frame separately** gives it a grid, camera angle and panel size of its own, edited
 in its card. A separate framing follows the shared center until it is dragged,
