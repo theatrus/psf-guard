@@ -40,10 +40,10 @@ vi.mock('../director/ObservingPreferences', () => ({ default: () => <output>Obse
 const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: null });
 function Where() { return <output data-testid="where">{useLocation().search}</output>; }
 /** The saved framing, plan and last activation the summary reads. */
-function summaryHandlers(saved: { framing?: boolean; planRevision?: number; shoots?: boolean; activated?: { plan_revision: number } } = {}) {
+function summaryHandlers(saved: { framing?: boolean; framingRevision?: number; layoutRevision?: number; planRevision?: number; shoots?: boolean; activated?: { plan_revision: number } } = {}) {
   return [
     http.get('/api/director/v1/projects/project/framing', () => ok({ project: { id: 'project', name: 'Andromeda', revision: 1 }, draft: saved.framing ? {
-      project_id: 'project', revision: 2, target_name: 'M31', center: { ra_degrees: 10.68, dec_degrees: 41.27 }, position_angle_degrees: 0, mosaic: { rows: 1, columns: 1, overlap_percent: 20 },
+      project_id: 'project', revision: saved.framingRevision ?? 2, layout_revision: saved.layoutRevision, target_name: 'M31', center: { ra_degrees: 10.68, dec_degrees: 41.27 }, position_angle_degrees: 0, mosaic: { rows: 1, columns: 1, overlap_percent: 20 },
       panel_rig_id: null, panel: null, shown_rig_ids: [], survey_id: 'dss2', view_fov_degrees: 4, updated_at_ms: 1, rig_framings: [] } : null })),
     http.get('/api/director/v1/projects/project/plan', () => ok({ project: { id: 'project', name: 'Andromeda', revision: 1 }, plan: saved.planRevision === undefined ? null : {
       project_id: 'project', revision: saved.planRevision, updated_at_ms: 1, contributions: saved.shoots ? [{ id: 'c1', rig_id: 'rig-catalog', objective_id: 'o1', enabled: true, exposure_seconds: 300, panel_ids: [], template: { template_guid: 't', template_id: 1, name: 'Ha', filter_name: 'Ha', gain: null, offset: null, bin: 1, readout_mode: null } }] : [],
@@ -85,7 +85,7 @@ describe('project workspace', () => {
     expect(within(rigs).getByText('Source editor catalog:7')).toBeInTheDocument();
     expect(within(rigs).getByText(/opened from here/)).toBeInTheDocument();
     // A database whose project row is gone has nothing to edit until activation makes one.
-    expect(within(rigs).getByRole('group', { name: 'Redcat data' })).toHaveTextContent('Activate to create this project in Redcat data');
+    expect(within(rigs).getByRole('group', { name: 'Redcat data' })).toHaveTextContent('Created on activation');
     fireEvent.click(within(rigs).getByRole('button', { name: /Target Scheduler settings/ }));
     expect(screen.queryByText('Source editor catalog:7')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Library' })).toHaveAttribute('href', '/?db=catalog');
@@ -121,6 +121,8 @@ describe('project workspace', () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 1, shoots: true });
     const due = await screen.findByRole('region', { name: 'Activation due' });
     expect(due).toHaveTextContent('Not activated yet');
+    // Said once: the summary leaves it to the bar.
+    expect(screen.queryByTestId('summary-activation')).not.toBeInTheDocument();
     expect(screen.queryByText('Activation project')).not.toBeInTheDocument();
     fireEvent.click(within(due).getByRole('button', { name: 'Activate…' }));
     expect(within(screen.getByRole('dialog', { name: 'Activate on the rigs' })).getByText('Activation project')).toBeInTheDocument();
@@ -130,9 +132,19 @@ describe('project workspace', () => {
     expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Unsaved changes' })).toBeInTheDocument();
   });
+  it('does not ask for an activation when only the view of the framing changed', async () => {
+    // Revision 5 changed the survey; the layout the rigs have is still revision 2's.
+    mount(links, '/plan?plan=project', { framing: true, framingRevision: 5, layoutRevision: 2, planRevision: 4, shoots: true, activated: { plan_revision: 4 } });
+    expect(await screen.findByTestId('summary-activation')).toHaveTextContent('Active');
+    expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
+  });
+  it('asks for one when the layout moved after the activation', async () => {
+    mount(links, '/plan?plan=project', { framing: true, framingRevision: 5, layoutRevision: 5, planRevision: 4, shoots: true, activated: { plan_revision: 4 } });
+    expect(await screen.findByRole('region', { name: 'Activation due' })).toHaveTextContent('Saved framing not on the rigs yet');
+  });
   it('does not ask for an activation the rigs already have', async () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4 } });
-    expect(await screen.findByTestId('summary-activation')).toHaveTextContent('rig databases up to date');
+    expect(await screen.findByTestId('summary-activation')).toHaveTextContent('Active');
     expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
     // The summary line still opens the activation, to push it again.
     fireEvent.click(screen.getByTestId('summary-activation'));
@@ -145,7 +157,7 @@ describe('project workspace', () => {
     const summary = screen.getByRole('region', { name: 'Plan summary' });
     expect(await within(summary).findByText('C925 data')).toBeInTheDocument();
     expect(within(summary).getAllByText(/no rig profile/).length).toBe(2);
-    expect(await screen.findByTestId('summary-activation')).toHaveTextContent('saved plan not sent yet');
+    expect(await screen.findByTestId('summary-activation')).toHaveTextContent('plan not activated');
   });
   it('opens on framing, saved or not, unless the address names a tab', async () => {
     mount(links, '/plan?plan=project', { framing: false });
@@ -159,7 +171,7 @@ describe('project workspace', () => {
   it('frames an unlinked project without a seed', async () => {
     mount([]);
     expect(await screen.findByText('Framing project:no seed')).toBeInTheDocument();
-    expect(screen.getByText('No rig shoots this plan yet.')).toBeInTheDocument();
+    expect(screen.getByText('No rigs yet')).toBeInTheDocument();
   });
 });
 
@@ -201,7 +213,7 @@ describe('attaching and detaching database projects', () => {
     const options = Array.from((pick as HTMLSelectElement).options).map(option => option.textContent);
     expect(options).toEqual(['Choose a rig…', 'Spare data', 'Redcat data: Heart by RedCat']);
     fireEvent.change(pick, { target: { value: 'attach:other:redcat:guid-b' } });
-    expect(screen.getByRole('note')).toHaveTextContent('“Heart by RedCat” joins this plan and is retired');
+    expect(screen.getByRole('note')).toHaveTextContent('Merge “Heart by RedCat” into this plan?');
     fireEvent.click(screen.getByRole('button', { name: 'Attach' }));
     expect(await screen.findByText('Attached Heart by RedCat: 1 database joined this plan, and its framing came along.')).toBeInTheDocument();
     expect(posts).toEqual([{ url: 'attach', body: { from_project_id: 'other' } }]);
@@ -211,9 +223,9 @@ describe('attaching and detaching database projects', () => {
     const posts = mountTwo();
     fireEvent.click(await screen.findByRole('tab', { name: 'Rigs' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Detach Third data' }));
-    expect(screen.getByRole('note')).toHaveTextContent('Heart in Third data becomes a plan of its own');
+    expect(screen.getByRole('note')).toHaveTextContent('Make Heart in Third data a separate plan?');
     fireEvent.click(screen.getByRole('button', { name: 'Detach' }));
-    expect(await screen.findByText('Detached: Heart is a plan of its own again.')).toBeInTheDocument();
+    expect(await screen.findByText('Detached: Heart is a separate plan.')).toBeInTheDocument();
     expect(posts).toEqual([{ url: 'detach', body: { catalog_slug: 'third', source_project_guid: 'guid-c', name: 'Heart' } }]);
   });
 
@@ -223,7 +235,7 @@ describe('attaching and detaching database projects', () => {
     fireEvent.change(await screen.findByLabelText('Add a rig'), { target: { value: 'new:rig-s' } });
     const spare = await screen.findByRole('group', { name: 'Spare data' });
     expect(spare).toHaveTextContent('new project on activation');
-    expect(spare).toHaveTextContent('Activate to create this project in Spare data');
+    expect(spare).toHaveTextContent('Created on activation');
     expect(screen.getByText('Plan project: rig-s')).toBeInTheDocument();
     fireEvent.click(within(spare).getByRole('button', { name: 'Drop Spare data from the plan' }));
     expect(screen.queryByRole('group', { name: 'Spare data' })).not.toBeInTheDocument();

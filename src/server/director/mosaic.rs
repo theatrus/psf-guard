@@ -93,7 +93,10 @@ pub(super) async fn get(
         .clone()
         .with_reader(move |store| {
             let project = store.project(id)?.ok_or(Error::Missing)?;
-            let framing_revision = store.framing_draft(id)?.map(|draft| draft.revision);
+            let framing = store.framing_draft(id)?;
+            let framing_revision = framing.as_ref().map(|draft| draft.revision);
+            // Only a change activation writes moves the rectangles off the stacks.
+            let layout_revision = framing.as_ref().map(|draft| draft.layout_revision);
             let Some(activation) = store.activation(id)? else {
                 return Ok(Mosaic {
                     project,
@@ -108,7 +111,7 @@ pub(super) async fn get(
                 });
             };
             let framing_stale =
-                framing_revision.is_some_and(|revision| revision != activation.framing_revision);
+                layout_revision.is_some_and(|revision| revision > activation.framing_revision);
             // One preview index read per rig database, however many panels it owns.
             let mut previews: BTreeMap<String, std::collections::HashMap<i32, SkyPreview>> =
                 BTreeMap::new();

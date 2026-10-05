@@ -169,6 +169,8 @@ export interface DirectorFramingDraft {
   updated_at_ms: number;
   /** Absent in drafts saved before rigs could be framed on their own. */
   rig_framings?: DirectorRigFraming[];
+  /** The revision that last changed what activation writes; the view's survey, width and compared rigs leave it alone. */
+  layout_revision?: number;
 }
 export interface DirectorFramingDraftView { project: DirectorIdentity; draft: DirectorFramingDraft | null }
 export interface DirectorRigProfileSummary {

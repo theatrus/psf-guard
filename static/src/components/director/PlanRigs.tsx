@@ -74,7 +74,7 @@ export default function PlanRigs({ row, rows, joined, objectives, controls, came
   const detach = useMutation({
     retry: false,
     mutationFn: (link: DirectorPlanLink) => apiClient.detachDirectorProject(projectId, link.catalog_slug, link.source_project_guid, link.source_name ?? row.project.name),
-    onSuccess: plan => { setDetachPick(null); setProblem(''); setNotice(`Detached: ${plan.name} is a plan of its own again.`); void client.invalidateQueries({ queryKey: ['directorPlans'] }); },
+    onSuccess: plan => { setDetachPick(null); setProblem(''); setNotice(`Detached: ${plan.name} is a separate plan.`); void client.invalidateQueries({ queryKey: ['directorPlans'] }); },
     onError: error => setProblem(message(error)),
   });
   const addRig = (value: string) => {
@@ -97,9 +97,8 @@ export default function PlanRigs({ row, rows, joined, objectives, controls, came
   const canEditRows = canWrite && !!info.data?.allow_database_management;
 
   return <section aria-label="Rigs" className="plan-rig-list">
-    <p className="director-muted">Each rig shoots the plan from a project in its own Target Scheduler database. Activation writes the plan's targets, exposure plans and scheduling limits there; the rest of each project's settings are Target Scheduler's, edited below.</p>
-    {entries.length === 0 && <p className="director-muted">No rig shoots this plan yet.</p>}
-    {!manageable && row.links.length > 0 && <p className="director-muted">Target Scheduler rows are view only on this server.</p>}
+    {entries.length === 0 && <p className="director-muted">No rigs yet</p>}
+    {!manageable && row.links.length > 0 && <p className="director-muted">View only on this server</p>}
     {entries.map(({ rigId, name, link }) => {
       const key = link ? `${link.catalog_slug}:${link.source_project_guid}` : `new:${rigId}`;
       const shooting = joined.includes(rigId);
@@ -108,35 +107,35 @@ export default function PlanRigs({ row, rows, joined, objectives, controls, came
       const place = link ? link.source_name ? `project “${link.source_name}”` : 'project row missing in this database' : 'new project on activation';
       return <div className="director-rig-database plan-rig" role="group" aria-label={name} key={key}>
         <p className="plan-rig-head"><strong>{name}</strong><span className="plan-rig-place">{place}</span>
-          <span className="director-muted">{activated.has(rigId) ? `activated, revision ${last.data?.revision}` : 'not activated yet'}{shooting ? '' : ' · not shooting this plan'}</span>
+          <span className="director-muted">{activated.has(rigId) ? 'active' : 'not activated'}{shooting ? '' : ' · not shooting'}</span>
           {link && cameFrom === link.catalog_slug && <span className="director-muted"> · opened from here</span>}</p>
         <div className="director-actions">
           {canWrite && !shooting && <button type="button" disabled={objectives === 0} title={objectives === 0 ? 'Add an objective on Exposures first' : undefined} onClick={() => controls.current?.setRig(rigId, true)}><Plus size={16} />Shoot this plan</button>}
           {canWrite && shooting && <button type="button" aria-label={`Drop ${name} from the plan`} title={link ? 'Stop shooting this plan here; the project stays in its database' : 'Leave this rig out of the plan'} onClick={() => controls.current?.setRig(rigId, false)}><Minus size={16} />Drop from plan</button>}
-          {canWrite && link && row.links.length > 1 && <button type="button" aria-label={`Detach ${name}`} title="Give this database's project a plan of its own" onClick={() => { setDetachPick(detachPick === key ? null : key); setProblem(''); }}><Unlink size={16} />Detach</button>}
+          {canWrite && link && row.links.length > 1 && <button type="button" aria-label={`Detach ${name}`} title="Make it a separate plan" onClick={() => { setDetachPick(detachPick === key ? null : key); setProblem(''); }}><Unlink size={16} />Detach</button>}
           {link && link.source_row_id !== null && <button type="button" aria-expanded={open} onClick={toggle}>{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}Target Scheduler settings</button>}
         </div>
-        {link && detachPick === key && <p className="director-muted" role="note">{link.source_name ?? 'This project'} in {link.catalog_name} becomes a plan of its own; this plan keeps its drafts.
+        {link && detachPick === key && <p className="director-muted" role="note">Make {link.source_name ?? 'this project'} in {link.catalog_name} a separate plan?
           <span className="director-actions"><button type="button" disabled={detach.isPending} onClick={() => detach.mutate(link)}>{detach.isPending ? 'Detaching…' : 'Detach'}</button><button type="button" onClick={() => setDetachPick(null)}>Cancel</button></span></p>}
         {link && link.source_row_id !== null
           ? open && load && <ProjectPlanEditor dbId={link.catalog_slug} projectId={link.source_row_id} canEdit={canEditRows} withTemplates={false} />
-          : <p className="director-muted">Activate to create this project in {name}'s database; its Target Scheduler settings show here then.</p>}
+          : <p className="director-muted">Created on activation</p>}
       </div>;
     })}
     {canWrite && (fresh.length > 0 || candidates.length > 0) && <div className="director-attach">
       <label>Add a rig
         <select aria-label="Add a rig" value={pick} onChange={event => addRig(event.target.value)}>
           <option value="">Choose a rig…</option>
-          {fresh.length > 0 && <optgroup label="With a new project">
+          {fresh.length > 0 && <optgroup label="New project">
             {fresh.map(rig => <option key={rig.rig.id} value={`new:${rig.rig.id}`} disabled={objectives === 0}>{rig.catalog_name}</option>)}
           </optgroup>}
-          {candidates.length > 0 && <optgroup label="With a project its database has">
+          {candidates.length > 0 && <optgroup label="Existing project">
             {candidates.map(entry => <option key={entry.key} value={entry.key}>{entry.link.catalog_name}: {entry.link.source_name ?? entry.link.source_project_guid}{entry.plan.project.name !== (entry.link.source_name ?? '') ? ` (plan “${entry.plan.project.name}”)` : ''}</option>)}
           </optgroup>}
         </select></label>
-      {objectives === 0 && fresh.length > 0 && <p className="director-muted">A rig joins with a new project by shooting the objectives; add one on Exposures first.</p>}
+      {objectives === 0 && fresh.length > 0 && <p className="director-muted">Add an objective first</p>}
       {chosen && <p className="director-muted" role="note">
-        {chosen.plan.links.length > 1 ? `The plan “${chosen.plan.project.name}” and its ${chosen.plan.links.length} databases join this plan` : `“${chosen.plan.project.name}” joins this plan and is retired`}; the next activation takes its targets over.
+        {chosen.plan.links.length > 1 ? `Merge “${chosen.plan.project.name}” and its ${chosen.plan.links.length} databases into this plan?` : `Merge “${chosen.plan.project.name}” into this plan?`}
         <span className="director-actions"><button type="button" disabled={attach.isPending} onClick={() => attach.mutate(chosen.plan.project.id)}><Link2 size={16} />{attach.isPending ? 'Attaching…' : 'Attach'}</button><button type="button" onClick={() => setPick('')}>Cancel</button></span>
       </p>}
     </div>}

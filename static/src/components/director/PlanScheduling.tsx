@@ -46,14 +46,14 @@ export default function PlanScheduling({ projectId, rigs }: { projectId: string;
   });
   const first = inherited[0]?.data?.scheduling;
   return <section className="plan-scheduling" aria-label="Scheduling limits">
-    <p className="director-muted">Target Scheduler's limits for this plan. Leave a field empty to use the default set for every plan, the rig's site or the rig; activation writes the result into each rig's Target Scheduler project.</p>
+    <p className="director-muted">Empty fields inherit</p>
     {stored.isError && <p className="director-error" role="alert">{message(stored.error)}</p>}
     {stored.data && <SchedulingFields label="This plan's limits" overrides={draft} onChange={setDraft} disabled={!canWrite}
       inherited={first?.values ?? TS_DEFAULTS} inheritedFrom={limit => rigs.length > 1 ? 'per rig, below' : describeSource(first?.sources[limit])} />}
     {save.isError && <p className="director-error" role="alert">{message(save.error)}</p>}
     {rigs.length > 0 && <div className="plan-scheduling-rigs">
       <table>
-        <caption className="director-muted">What each rig gets{unsaved ? ', from the saved limits' : ''}</caption>
+        <caption className="director-muted">Per rig{unsaved ? ' (saved)' : ''}</caption>
         <thead><tr><th scope="col">Limit</th>{rigs.map(rig => <th key={rig.id} scope="col">{rig.name}</th>)}</tr></thead>
         <tbody>{LIMITS.map(spec => <tr key={spec.key}>
           <th scope="row">{spec.label}</th>

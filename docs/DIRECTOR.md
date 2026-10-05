@@ -705,18 +705,17 @@ optics from their own frames when they are adopted), and you can pick another
 or type a panel size. Drag the rectangle to move the target, drag its handle
 to turn it, and drag the sky to look around; scroll to zoom. The camera angle
 also takes a number, quarter turns, or the rig's fixed camera angle. Rows,
-columns and overlap lay out a mosaic; every panel is drawn and named, and the
-readout under the image gives the target, its coordinates, the angle, the
-panel size and the whole extent. **Compare rigs** overlays other rigs' fields
-on the center. A rig that should not follow the shared layout is framed on
-its own: **Frame a rig on its own** under Panels gives it its own grid, a
-camera angle of its own or the shared one, and a panel size from its optics
-or set by hand. It starts on the shared target center and follows it until
-it is given a center of its own, by dragging its rectangle on the sky, by
-typing one, or by **Move to view center**; ticking **same center as shared**
-puts it back in step. Its grid is drawn in a colour of its own, and
-**Framing for** switches the panel controls between the shared framing and
-each rig's. Every other rig keeps shooting the shared framing. **Move target to view center** and **Center view on target**
+columns and overlap under **Shared framing** lay out a mosaic; every panel is
+drawn and named. Coordinates show five decimals of a degree and angles two;
+the draft keeps every digit. **Rigs** has one card per rig, this plan's rigs
+first. Each card shows a swatch in the colour of the rig's outline on the
+sky, its field and pixel scale, and its part: **Sets panel size**, **Shared
+framing** or **Separate framing** with its grid and angle. **Use for panel
+size** makes it the panel rig, **Outline** draws its field on the sky, and
+**Frame separately** gives it a grid, camera angle and panel size of its own, edited
+in its card. A separate framing follows the shared center until it is dragged,
+typed or moved to the view center; **Shared center** puts it back in step.
+**Use shared** drops it. **Move target to view center** and **Center view on target**
 keep the two apart on purpose: panning the sky never moves the plan. **Save
 framing** keeps a draft on the project; a draft saved elsewhere since you
 loaded is refused until you reload. Survey imagery is attributed below the

@@ -30,6 +30,7 @@ fn draft(project: Uuid) -> FramingDraft {
         view_fov_degrees: 6.0,
         updated_at_ms: 1_000,
         rig_framings: vec![],
+        layout_revision: 0,
     }
 }
 
@@ -222,4 +223,38 @@ fn rigs_framed_on_their_own_are_kept_checked_and_laid_out_over_the_shared_target
     // A draft saved before rigs could be framed on their own still reads.
     let stored = store.framing_draft(project).unwrap().unwrap();
     assert_eq!(stored.rig_framings.len(), 1);
+}
+
+#[test]
+fn only_a_layout_change_moves_the_layout_revision() {
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let project = store.create_project(Uuid::new_v4(), "Medusa").unwrap();
+    let first = store.save_framing_draft(&draft(project.id), 0).unwrap();
+    assert_eq!((first.revision, first.layout_revision), (1, 1));
+    // The view's survey, width and compared rigs are the view's own.
+    let mut view = first.clone();
+    view.survey_id = "nina:FramingAssistantCache".into();
+    view.view_fov_degrees = 3.0;
+    let viewed = store.save_framing_draft(&view, 1).unwrap();
+    assert_eq!((viewed.revision, viewed.layout_revision), (2, 1));
+    // Turning the camera changes what activation writes.
+    let mut turned = viewed.clone();
+    turned.position_angle_degrees = 90.0;
+    let turned = store.save_framing_draft(&turned, 2).unwrap();
+    assert_eq!((turned.revision, turned.layout_revision), (3, 3));
+    // A client never sets it: what it sends is ignored.
+    let mut sent = turned.clone();
+    sent.layout_revision = 0;
+    sent.survey_id = "dss2_color".into();
+    let resaved = store.save_framing_draft(&sent, 3).unwrap();
+    assert_eq!((resaved.revision, resaved.layout_revision), (4, 3));
+    assert_eq!(
+        store
+            .framing_draft(project.id)
+            .unwrap()
+            .unwrap()
+            .layout_revision,
+        3
+    );
 }

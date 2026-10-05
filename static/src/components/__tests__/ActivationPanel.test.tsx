@@ -67,19 +67,19 @@ function mount(canWrite = true, plan: { unsavedPlan?: boolean; savePlan?: () => 
 describe('Activation panel', () => {
   it('previews per rig, applies with the preview digest, and reports what landed', async () => {
     const { applies } = fixture(); mount();
-    expect(screen.queryByRole('button', { name: /Apply to rig databases/ })).not.toBeInTheDocument();
-    fireEvent.click(await screen.findByRole('button', { name: 'Preview activation' }));
+    expect(screen.queryByRole('button', { name: /^Apply$/ })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview' }));
     // Rigs no block shows elsewhere are listed here, each with its counts.
     const redcat = await screen.findByLabelText('RedCat 61 activation');
     expect(redcat).toHaveTextContent('Preview · Project: 1 new · Targets: 2 new · Exposure plans: 2 new');
     expect(screen.getByText(/push it through Sync later/)).toBeInTheDocument();
     expect(screen.getByLabelText('Desert copy activation')).toHaveTextContent('Will push to Observatory');
-    fireEvent.click(screen.getByRole('button', { name: 'Apply to rig databases' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
     expect(await screen.findByText('Pushed to Observatory', { exact: false })).toBeInTheDocument();
     expect(screen.getByLabelText('RedCat 61 activation')).toHaveTextContent('Applied');
     expect(applies).toEqual([{ preview_digest: 'd'.repeat(64) }]);
     expect(screen.getByText(/Activation revision 1/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Apply to rig databases' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument();
   });
 
   it('says which existing rows are taken over and which plans are left as they are', async () => {
@@ -93,7 +93,7 @@ describe('Activation panel', () => {
       { kind: 'plan', action: 'keep', name: 'IC 1805 r1c1 · Ha 300 · 600 s', detail: 'plan #12 (0 of 10 frames taken) is not part of this plan; left as it is' },
     ] }] };
     server.use(http.post('/api/director/v1/projects/project/activation/preview', () => HttpResponse.json(ok(takeover))));
-    fireEvent.click(await screen.findByRole('button', { name: 'Preview activation' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview' }));
     const rigSummary = await screen.findByLabelText('RedCat 61 activation');
     expect(rigSummary).toHaveTextContent('Targets: 1 taken over');
     expect(rigSummary).toHaveTextContent('Exposure plans: 1 new, 1 taken over, 1 left as is');
@@ -107,17 +107,17 @@ describe('Activation panel', () => {
 
   it('drops a stale preview when apply is refused', async () => {
     const { previewCount } = fixture(true); mount();
-    fireEvent.click(await screen.findByRole('button', { name: 'Preview activation' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply to rig databases' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Preview again before applying');
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Apply to rig databases' })).not.toBeInTheDocument());
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Preview again.');
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument());
     expect(previewCount()).toBe(1);
   });
 
   it('pushes the last activation again and shows a peer that refused', async () => {
     const { pushCount } = fixture(false, true); mount();
-    expect(await screen.findByText(/Last activated revision 2/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Push to remote sites again' }));
+    expect(await screen.findByText(/^Last activated /)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Push again' }));
     expect(await screen.findByText(/Pushed again/)).toBeInTheDocument();
     expect(screen.getByText('Desert copy: Push to Observatory failed: peer refused the key')).toBeInTheDocument();
     expect(pushCount()).toBe(1);
@@ -126,7 +126,7 @@ describe('Activation panel', () => {
   it('offers nothing to a read-only account', async () => {
     fixture(); mount(false);
     expect(await screen.findByText('Read only')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Preview activation' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument();
   });
   it('saves unsaved plan edits before previewing, and hides Apply until it does', async () => {
     // Activation writes the saved plan: a goal raised in the editor but not
@@ -136,20 +136,20 @@ describe('Activation panel', () => {
     const savePlan = vi.fn(async () => { order.push(`save at ${previewCount()} previews`); return true; });
     const view = mount(true, { unsavedPlan: true, savePlan });
     expect(await screen.findByRole('note')).toHaveTextContent('Unsaved changes in Plan');
-    fireEvent.click(screen.getByRole('button', { name: 'Save and preview activation' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save and preview' }));
     await waitFor(() => expect(previewCount()).toBe(1));
     expect(order).toEqual(['save at 0 previews']);
 
     // An edit after the preview: the preview is of the plan before it.
-    expect(screen.queryByRole('button', { name: /Apply to rig databases/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Apply$/ })).not.toBeInTheDocument();
     view.rerender(<Page unsaved={false} save={savePlan} />);
-    expect(await screen.findByRole('button', { name: /Apply to rig databases/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^Apply$/ })).toBeInTheDocument();
   });
 
   it('does not preview a plan that could not be saved', async () => {
     const { previewCount } = fixture();
     mount(true, { unsavedPlan: true, savePlan: async () => false });
-    fireEvent.click(await screen.findByRole('button', { name: 'Save and preview activation' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save and preview' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('was not saved');
     expect(previewCount()).toBe(0);
   });
