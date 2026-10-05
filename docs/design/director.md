@@ -1916,11 +1916,25 @@ events; the original allocation still cannot launch again. All 771 plugin tests,
 packaging, format and manifest checks passed. Native Session/settings screenshots
 were reviewed. Exact run evidence is in the plugin's `docs/nina-smoke-test.md`.
 
-The next native recovery increment must keep one persistent per-rig recovery
-directory across allocations, admit an explicit
-observing night, prevent downgrade after commissioning, classify local quality
-evidence, and bind original suggestions to one-shot native checks. UI work must
-not offer an enabled recovery policy before that acquisition path is tested.
+The native focus/guide increment adds an opt-in Session setting with cooldown,
+session-wide attempt count and total hold time. It uses recovery contract 1 in
+the pinned runtime 0.10.0, retains one per-rig journal across allocations and
+targets, and refreshes Safe/motion-permitted evidence at dispatch boundaries.
+Only known-completed native target-setup focus/guide failures can retry. A guider
+stop must return success; moving focusers, cancelled/timed-out/unknown operations,
+captures, slews, user hooks and trigger failures remain non-retryable. Exhaustion
+uses the configured local park/stop policy. The mount stays on target during
+cooldown; no park/unpark probe loop is introduced.
+
+The night is the explicit Run's maximum-duration window, not UTC midnight or an
+allocation. New Runs, workload changes and disabling the setting cannot reset a
+recorded night's budget or stop latch; a different Run is refused until that
+window expires. Recovery admission is checked before requesting another workload.
+Native simulator tests cover a failed autofocus followed by recovery and three
+saved science frames, plus repeated autofocus failure, exactly one allowed
+retry, no science frame and terminal park. Actual Advanced Sequencer screenshots
+and evidence are in the plugin guide. The separate recovery journal is local;
+its coordinator batch feed and cloud classification/probes remain unfinished.
 
 #### Remaining acquisition integration
 
@@ -1941,8 +1955,61 @@ cannot clear it.
 | Corroborated cloud/transparency loss or sustained poor frames | Finish the current exposure by default, retain its evidence, then hold acquisition; configurable immediate abort for severe loss | Wait for the configured cooldown, then perform bounded recovery probes; require sustained good evidence before resuming |
 | Guide loss, failed settling, autofocus or centering | Cancel dependent work and record whether the native operation stopped cleanly | Allow only configured, bounded recovery for a known outcome; repeated failures hold or park and stop |
 | Slew failure, unknown mount state or uncertain operation completion | Stop dispatch and reconcile the actual device state | No blind repeated slew or implicit retry; park only when the commissioned mount/enclosure policy permits it |
-| Required safety monitor Unsafe, disconnected or stale; enclosure closing/closed | Immediately block dispatch and cancel exposure, guiding and other active work through native APIs | Execute the commissioned shutdown policy and latch stopped; Safe/Open alone never restarts the interrupted owner |
+| Required safety monitor Unsafe, disconnected or stale; enclosure closing/closed | Immediately block dispatch and cancel exposure, guiding and other active work through native APIs; stop motion when enclosure clearance is absent | With an explicitly commissioned resumable policy, hold the observing night, then re-admit work only after fresh stable Safe/Open evidence and reconciliation. Otherwise latch stopped. Never replay the interrupted owner |
 | Hold deadline, recovery budget or latest useful observing time reached | End recovery attempts and execute configured shutdown | Stop for the session/night, or explicit operator recovery |
+
+#### Safe reopening and night completion
+
+The requested observing-night behavior includes both poor-quality/cloud holds
+and weather/enclosure holds. These are **not implemented by recovery contract 1**:
+its safety transition is terminal. Do not relabel its stop as a resumable pause.
+The current native safety interlocks remain terminal until the next contract and
+its complete simulator gates are delivered.
+
+Add an explicit `hold_and_resume` policy alongside `stop_for_night`, inherited
+from rig defaults with a Session override. A closed roof is never permission to
+park: independent motion clearance still governs every mount action. Retain
+the observing-night identity, spent retry/hold budgets, and immutable interrupted
+capture/preparation IDs across the hold, server outage, and process restart.
+Safe/Open alone is necessary but insufficient. Require a configurable continuous
+stability interval (initial simulator default: 300 seconds), fresh monitor and
+enclosure evidence, unchanged device/configuration binding, current geometry,
+and enough time for the complete next operation before the night deadline.
+Missing or stale readings reset that interval; rapid weather flapping cannot
+generate repeated slews, unparks or guider starts.
+
+Reconcile cancellation to a confirmed saved, confirmed not-saved, or uncertain
+result before requesting fresh work. Uncertain work remains blocked. The
+coordinator and offline ledger need an explicit interrupted-work disposition;
+the existing clean terminal-release endpoint cannot be used to disguise an
+aborted allocation as complete. Reopening gets new core-issued preparation and
+capture commands, never a replay of the cancelled command. User instructions,
+native triggers and operation ownership still apply to the new target visit.
+
+The configured end of the observing night ends holds as well as acquisition.
+Complete bounded shutdown, retain unsent receipts for batch delivery, finish the
+Director container, and let NINA execute the following sequence/end-area steps.
+Do not expose a normal night deadline as an instruction error or wait forever
+for weather to clear. Operator cancellation, failed shutdown and unresolved
+operations remain distinct visible outcomes.
+
+Deliver and verify in order:
+
+1. Native, opt-in bounded focus/guide retries using the existing durable shared
+   recovery budget, with configurable park/stop on exhaustion.
+2. A versioned resumable safety hold and interrupted-work reconciliation,
+   stable-safe/open re-admission, and normal night-end continuation. Test roof
+   closure during exposure/setup/wait, weather flapping, offline reopen,
+   restart, failed park, and uncertain cancellation with actual NINA simulators.
+3. Compatible local image-quality classification and separately accounted
+   recovery probes. Test transient and persistent clouds, reference changes,
+   missing metrics and timer expiry without positive recovery evidence.
+
+The focus/guide increment must not claim cloud classification, resumable weather
+holds or complete observing-night automation. Central live status needs typed
+hold cause, evidence age, stable-safe countdown, spent/remaining budget and night
+deadline. Durable recovery-event batch delivery remains a separate feed from
+capture and preparation receipts; historical replay cannot make a rig live.
 
 Quality observations must identify the rig/configuration, target, filter,
 exposure/binning, capture ID, observation time, source and algorithm revision.
