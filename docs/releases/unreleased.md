@@ -505,6 +505,10 @@
 
 ## Fixed
 
+- A frame where N.I.N.A. Fast finds no stars but HocusFocus finds some is
+  measured instead of reported as a failed scan. It scores on HocusFocus's
+  star count, so a frame with a few dozen stars reads as poor, and its
+  details say which detector counted them.
 - Save and activate a plan whose framing shows an offline N.I.N.A. sky map.
   The framing save refused those survey names, so activation stopped with
   "Invalid Director metadata request". When a save fails, the save bar and

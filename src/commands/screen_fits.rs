@@ -938,6 +938,7 @@ fn score_records(
                     spatial_evidence,
                     scan_stars: None,
                     own_stars: None,
+                    fallback_stars: None,
                 }
             })
             .collect();

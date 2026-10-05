@@ -159,6 +159,11 @@ impl StoredSpatialMetrics {
 /// fast detector. Rescans must use the same detector family so sequence
 /// baselines do not mix incompatible measurements.
 pub const QUALITY_DETECTOR: &str = "nina_fast";
+/// Recorded when N.I.N.A. Fast found no stars and HocusFocus found some:
+/// the frame's count and HFR are HocusFocus's, on its scale, not Fast's.
+/// The frame still scores on them, and reads as poor, rather than having
+/// its stars go unmeasured.
+pub const FALLBACK_DETECTOR: &str = "hocusfocus";
 /// Bump when any cached pixel-quality input or measurement rule changes.
 pub const QUALITY_DETECTOR_VERSION: u32 = 1;
 
@@ -701,43 +706,78 @@ fn compute_one(
     let result =
         detect_stars_with_original(&stretched, &fits.data, fits.width, fits.height, &params);
     // No stars is a strong verdict that condemns a frame. Ask the second
-    // detector before recording it: when that one finds stars, this
-    // measurement failed, and recording it would cap a good frame.
-    if result.star_list.is_empty() {
+    // detector before recording it: when that one finds stars, Fast missed
+    // them, and the frame is poor rather than starless. Its count and HFR
+    // are recorded under its own name, on its own scale.
+    let fallback = if result.star_list.is_empty() {
         let (second, _) = crate::hocus_focus_star_detection::params_for_frame_path(&item.fits_path);
         let found = crate::hocus_focus_star_detection::detect_stars_hocus_focus(
             &fits.data,
             fits.width,
             fits.height,
             &second,
-        )
-        .stars
-        .len();
-        if found >= SECOND_OPINION_STARS {
-            anyhow::bail!(
-                "N.I.N.A. Fast found no stars where HocusFocus found {found}: the measurement \
-                 failed and is not recorded"
+        );
+        (found.stars.len() >= SECOND_OPINION_STARS).then_some(found)
+    } else {
+        None
+    };
+    let (detector, star_count, avg_hfr, positions, mut stars) = match &fallback {
+        Some(found) => {
+            tracing::info!(
+                image_id = item.image_id,
+                stars = found.stars.len(),
+                "N.I.N.A. Fast found no stars; recording HocusFocus's measurement instead"
             );
+            let positions: Vec<(f64, f64)> = found.stars.iter().map(|s| s.position).collect();
+            // HocusFocus fluxes are background-subtracted sums in stored
+            // units; there is no aperture photometry for this frame.
+            let stars: Vec<CatalogStar> = found
+                .stars
+                .iter()
+                .filter(|s| s.flux > 0.0)
+                .map(|s| CatalogStar {
+                    x: s.position.0,
+                    y: s.position.1,
+                    flux: s.flux / fits.raw_scale,
+                    aperture_flux: None,
+                })
+                .collect();
+            (
+                FALLBACK_DETECTOR,
+                found.stars.len(),
+                found.average_hfr,
+                positions,
+                stars,
+            )
         }
-    }
-    let positions: Vec<(f64, f64)> = result.star_list.iter().map(|s| s.position).collect();
-    // N.I.N.A. measures each accepted star on the full-resolution original.
-    // Convert its background-subtracted aperture flux from stored units to
-    // physical ADU for cross-frame photometry.
-    let aperture_fluxes =
-        measure_unsaturated_stars(&fits, &result.star_list, stats.max, result.average_hfr);
-    let mut stars: Vec<CatalogStar> = result
-        .star_list
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| s.flux > 0.0)
-        .map(|(index, s)| CatalogStar {
-            x: s.position.0,
-            y: s.position.1,
-            flux: s.flux / fits.raw_scale,
-            aperture_flux: aperture_fluxes.get(&index).copied(),
-        })
-        .collect();
+        None => {
+            let positions: Vec<(f64, f64)> = result.star_list.iter().map(|s| s.position).collect();
+            // N.I.N.A. measures each accepted star on the full-resolution
+            // original. Convert its background-subtracted aperture flux from
+            // stored units to physical ADU for cross-frame photometry.
+            let aperture_fluxes =
+                measure_unsaturated_stars(&fits, &result.star_list, stats.max, result.average_hfr);
+            let stars: Vec<CatalogStar> = result
+                .star_list
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.flux > 0.0)
+                .map(|(index, s)| CatalogStar {
+                    x: s.position.0,
+                    y: s.position.1,
+                    flux: s.flux / fits.raw_scale,
+                    aperture_flux: aperture_fluxes.get(&index).copied(),
+                })
+                .collect();
+            (
+                QUALITY_DETECTOR,
+                result.star_list.len(),
+                result.average_hfr,
+                positions,
+                stars,
+            )
+        }
+    };
     // Keep the brightest for cross-frame matching, and every measured star:
     // in a deep frame the brightest are saturated, so the measured ones sit
     // further down the list.
@@ -766,10 +806,10 @@ fn compute_one(
         image_id: item.image_id,
         filename: item.filename.clone(),
         source_revision: item.source_revision.clone(),
-        detector: QUALITY_DETECTOR.to_string(),
+        detector: detector.to_string(),
         detector_version: QUALITY_DETECTOR_VERSION,
-        star_count: result.star_list.len(),
-        avg_hfr: result.average_hfr,
+        star_count,
+        avg_hfr,
         dead_cell_fraction: spatial.star_dead_cell_fraction,
         star_uniformity: spatial.star_uniformity,
         bg_cell_spread: spatial.bg_cell_spread,
@@ -958,11 +998,17 @@ pub fn valid_quality_entry_for_source(
         .filter(|entry| quality_entry_is_current(entry, filename))
 }
 
+/// Whether a scan entry's stars came from the quality scan: N.I.N.A. Fast,
+/// or HocusFocus where Fast found none.
+pub fn is_quality_detector(detector: &str) -> bool {
+    detector == QUALITY_DETECTOR || detector == FALLBACK_DETECTOR
+}
+
 /// Whether a cached entry matches the source and current quality model.
 pub fn quality_entry_is_current(entry: &StoredSpatialMetrics, filename: &str) -> bool {
     let cells = entry.grid_cols.saturating_mul(entry.grid_rows);
     entry.filename == filename
-        && entry.detector == QUALITY_DETECTOR
+        && is_quality_detector(&entry.detector)
         && entry.detector_version == QUALITY_DETECTOR_VERSION
         && entry.width > 0
         && entry.height > 0
@@ -1211,6 +1257,48 @@ mod tests {
         );
         // The dead cells came from the same failed measurement.
         assert_eq!(metrics.dead_cell_fraction, None);
+    }
+
+    #[test]
+    fn hocusfocus_stands_in_where_fast_found_no_stars() {
+        let mut frame = entry(1, "light.fits");
+        frame.detector = FALLBACK_DETECTOR.into();
+        frame.detector_version = QUALITY_DETECTOR_VERSION;
+        frame.star_count = 68;
+        frame.avg_hfr = 1.4;
+        // A complete entry is current under either detector's name.
+        let mut complete = frame.clone();
+        complete.width = 100;
+        complete.height = 100;
+        let cells = complete.grid_cols * complete.grid_rows;
+        complete.star_cell_counts = vec![Default::default(); cells];
+        complete.bg_cell_medians = vec![Default::default(); cells];
+        assert!(quality_entry_is_current(&complete, "light.fits"));
+        complete.detector = "other".into();
+        assert!(!quality_entry_is_current(&complete, "light.fits"));
+        let store = std::sync::Arc::new(store_with(vec![frame]));
+        let metadata = r#"{"FileName":"light.fits","DetectedStars":416,"HFR":1.68}"#;
+        let mut metrics =
+            crate::sequence_analysis::extract_metrics_from_metadata(1, metadata, None);
+
+        crate::server::handlers::merge_spatial_metrics(&mut metrics, &store, metadata, None);
+
+        // The count scores; HocusFocus's HFR, on its own scale, does not.
+        assert_eq!(
+            metrics.scan_stars,
+            Some(crate::sequence_analysis::StarMeasure {
+                star_count: Some(68.0),
+                hfr: None
+            })
+        );
+        assert_eq!(
+            metrics.fallback_stars,
+            Some(crate::sequence_analysis::StarMeasure {
+                star_count: Some(68.0),
+                hfr: Some(1.4)
+            })
+        );
+        assert_eq!(metrics.star_count, Some(416.0));
     }
 
     #[test]

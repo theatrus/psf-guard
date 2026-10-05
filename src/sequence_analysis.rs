@@ -787,6 +787,11 @@ pub struct ImageMetrics {
     /// [`choose_star_source`].
     #[serde(default)]
     pub own_stars: Option<StarMeasure>,
+    /// HocusFocus's count and HFR, when the scan's N.I.N.A. Fast found no
+    /// stars and HocusFocus found some. The count scores in `scan_stars`;
+    /// the HFR is on HocusFocus's scale, so it is shown, not scored.
+    #[serde(default)]
+    pub fallback_stars: Option<StarMeasure>,
     pub eccentricity: Option<f64>,
     pub snr: Option<f64>,
     pub background: Option<f64>,
@@ -1773,6 +1778,7 @@ impl SequenceAnalyzer {
             self.apply_absolute_metric_limits(&mut results, &images);
             for (result, image) in results.iter_mut().zip(&images) {
                 apply_soft_stars(result, image, context);
+                note_fallback_stars(result, image);
             }
             let summary = self.build_summary(&results);
 
@@ -1927,6 +1933,7 @@ impl SequenceAnalyzer {
         self.apply_absolute_metric_limits(&mut results, &images);
         for (result, image) in results.iter_mut().zip(&images) {
             apply_soft_stars(result, image, context);
+            note_fallback_stars(result, image);
         }
 
         // Build reference values
@@ -3611,6 +3618,24 @@ fn own_stars(image: &ImageMetrics) -> StarMeasure {
 /// and pointing evidence can still rank multiple ruined frames.
 const ZERO_STAR_SCORE_CAP: f64 = 0.05;
 
+/// Say where a frame's stars came from when N.I.N.A. Fast found none and
+/// HocusFocus's count stood in, so a low score reads as a poor frame, not a
+/// failed measurement.
+fn note_fallback_stars(result: &mut ImageQualityResult, image: &ImageMetrics) {
+    let Some(stars) = image.fallback_stars.and_then(|stars| stars.star_count) else {
+        return;
+    };
+    let hfr = image
+        .fallback_stars
+        .and_then(|stars| stars.hfr)
+        .map(|hfr| format!(" at HFR {hfr:.2} on its own scale"))
+        .unwrap_or_default();
+    prepend_detail(
+        &mut result.details,
+        &format!("N.I.N.A. Fast found no stars; HocusFocus found {stars:.0}{hfr}, used instead."),
+    );
+}
+
 /// Prepend new evidence text to a result's details, keeping existing text.
 /// One helper so every cap and merge presents its evidence the same way.
 fn prepend_detail(details: &mut Option<String>, text: &str) {
@@ -4108,6 +4133,7 @@ pub fn extract_metrics_from_metadata(
         spatial_evidence: None,
         scan_stars,
         own_stars: None,
+        fallback_stars: None,
     }
 }
 
@@ -4142,6 +4168,7 @@ mod tests {
             spatial_evidence: None,
             scan_stars: None,
             own_stars: None,
+            fallback_stars: None,
         }
     }
 
@@ -4260,6 +4287,7 @@ mod tests {
             spatial_evidence: None,
             scan_stars: None,
             own_stars: None,
+            fallback_stars: None,
         }
     }
 
@@ -4379,6 +4407,7 @@ mod tests {
             spatial_evidence: None,
             scan_stars: None,
             own_stars: None,
+            fallback_stars: None,
         }
     }
 
@@ -4730,6 +4759,37 @@ mod tests {
         assert_eq!(chosen[1].own_stars.unwrap().star_count, Some(260.0));
         assert_eq!(chosen[7].own_stars.unwrap().star_count, Some(1100.0));
         assert_all_good(&images);
+    }
+
+    #[test]
+    fn a_frame_hocusfocus_measured_where_fast_found_none_scores_poor_and_says_so() {
+        let mut images = two_scale_nights();
+        // Fast found no stars; HocusFocus found 68. The count scores; the
+        // HFR is on HocusFocus's scale and is only shown.
+        images[4] = scanned(images[4].clone(), Some(68.0), None);
+        images[4].fallback_stars = Some(StarMeasure {
+            star_count: Some(68.0),
+            hfr: Some(1.4),
+        });
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let sequence = &analyzer.analyze(&images, 1, "target", "Ha")[0];
+        let poor = sequence.images.iter().find(|r| r.image_id == 4).unwrap();
+        assert!(poor.quality_score < 0.5, "scored {}", poor.quality_score);
+        // Poor, not starless: no zero-star verdict.
+        assert!(!poor.flags.contains(&IssueCategory::NoStarsDetected));
+        assert!(poor.details.as_deref().is_some_and(|d| d.contains(
+            "N.I.N.A. Fast found no stars; HocusFocus found 68 at HFR 1.40 on its own scale, used instead."
+        )));
+        // Its HFR stays out of the set's reference.
+        assert_eq!(sequence.reference_values.best_hfr, Some(3.2));
+        for result in sequence.images.iter().filter(|r| r.image_id != 4) {
+            assert!(
+                result.quality_score > 0.9,
+                "frame {} scored {}",
+                result.image_id,
+                result.quality_score
+            );
+        }
     }
 
     #[test]
