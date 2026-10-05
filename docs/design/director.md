@@ -1362,10 +1362,6 @@ deleted from a database N.I.N.A. shares.
 
 **Open questions.**
 
-- Which fields count for "matches" on a Target Scheduler rig? Proposed:
-  target name, coordinates, rotation, panel grid, each exposure plan's
-  template, exposure, desired count and enabled flag, the project's
-  scheduling limits, and the project state.
 - How is an edit from the Target Scheduler side shown before it changes the
   plan: applied, then announced in the save bar, or held for review?
 - A rig switching from Target Scheduler to Director: are its Target Scheduler
@@ -1374,10 +1370,69 @@ deleted from a database N.I.N.A. shares.
 - Can one project mix modes, with some rigs on Target Scheduler and others on
   Director? Proposed: yes, each rig in its own mode.
 
+**What "matches" means on a Target Scheduler rig.** A plan matches when
+activating it would write nothing to Target Scheduler, judged by the same
+comparison activation makes, so "Matches" and "Activate" cannot disagree.
+
+| What | Compared | Tolerance |
+| --- | --- | --- |
+| Project | exists; active, not a draft; mosaic flag equals the plan's | exact |
+| Scheduling limits | each limit the plan or its defaults set | 1e-9 |
+| Targets | one per panel; name, RA, Dec, rotation | RA 1e-7 h, Dec 1e-6°, rotation 0.001°, name exact |
+| Exposure plans | one per rig, objective and panel; exposure, desired count, template, enabled | exposure 1e-6 s, others exact |
+| Templates | every template the plan uses is present, library ones under their GUID | exact |
+| GUIDs | every row Director would claim has one | — |
+
+Director never writes ROI, epoch, acquired and accepted counts, priority,
+description, profile, sort order or template settings such as Moon avoidance,
+so they do not count. Targets and exposure plans in the project that are not in
+the plan are left alone; they are listed under the rig as "not in this plan".
+A project inactive or closed in Target Scheduler matches, and reads "Inactive
+in Target Scheduler".
+
+Three activation fixes come first: write the plan's enabled flag instead of
+always `enabled=1`; report "unchanged" instead of "taken over" when an existing
+row already holds the plan's values; and leave rows without a GUID unmatched
+until `fill-guids` repairs them.
+
+**Director names targets.** Names help, so they are planned: activation sets
+each target's name to the plan's, on existing rows as well as new ones, and
+"matches" compares names. Rows are found by GUID first, so a rename never
+loses a row.
+
+**One planning update, by origin.** Every change to planning goes through one
+update that knows where the change came from and takes each field from that
+field's source of truth:
+
+| Origin | Source of truth for | Updates |
+| --- | --- | --- |
+| N.I.N.A. Sync plugin pull (Target Scheduler rig) | captures and grades; edits made in Target Scheduler: desired count, exposure, enabled flag, coordinates | the plan from the rows, except a field also edited in Director since the last activation, which is shown as a conflict |
+| Director activation (the Planning page) | intent: targets, names, panels, goals, exposures, limits | Target Scheduler rows on a Target Scheduler rig; the program and the rig's Director records on a Director rig |
+| Director plugin check-in (Director rig) | captures, progress, equipment reports | the rig's Director records and the meta store, never the plan's intent |
+| PSF Guard to PSF Guard Sync | the coordinating server for intent; the server holding the rig for captures and grades | each side by the existing per-direction rules |
+
+**Several targets in one plan.** Today a plan holds one framing: one center,
+optionally a mosaic grid. A Target Scheduler project often holds several
+separate objects that share filters, exposures and a schedule: a galaxy
+season list, a set of variable stars or comparison fields, a short survey of
+nebulae. They differ only in where they point. A plan can hold several
+targets, each with its own name, center, camera angle and optional mosaic,
+sharing the plan's objectives, rigs and limits. The goals apply to every
+target, and a rig can shoot only some of them, as it can shoot only some
+panels today.
+
+One target stays the plain case. A plan starts with one target and the
+Framing tab looks as it does now; there is no target list to manage until
+**Add a target** is used. A mosaic stays a property of one target. Importing
+a Target Scheduler project of separate targets brings each across as a target
+of the plan, replacing the stopgap that drafts only the first (#712).
+
 **Delivery.** Target Scheduler rigs first, since they are every rig today:
-the rig mode, the bookkeeping in the meta store, matching plans recorded as
-active, then edits read back from Target Scheduler. Director rigs follow with
-the native records for their captures and `director_tables_v1`.
+the activation fixes and target names; the rig mode, the bookkeeping in the
+meta store and matching plans recorded as active; the planning update by
+origin, which reads edits back from Target Scheduler; then several targets in
+one plan. Director rigs follow with the native records for their captures and
+`director_tables_v1`.
 
 ### Native catalogs and Target Scheduler exchange
 
