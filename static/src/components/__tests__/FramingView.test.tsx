@@ -138,7 +138,7 @@ describe('Framing view', () => {
     // A rig without optics has no outline to show, and says why.
     expect(screen.queryByRole('checkbox', { name: /C925 data/ })).not.toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'C925 data' })).toHaveTextContent('No optics');
-    expect(screen.getByRole('group', { name: 'RedCat 61' })).toHaveTextContent('Sets panel size · 2 × 1, 15%');
+    expect(screen.getByRole('group', { name: 'RedCat 61' })).toHaveTextContent('Framing · 2 × 1, 15%');
 
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
     expect(await screen.findByText('Saved framing revision 1.')).toBeInTheDocument();
@@ -657,18 +657,18 @@ describe('Framing view', () => {
     server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB, rigC]))));
     // Askar 107 is not in this plan: it still shows, open, and can be picked.
     mount(true, true, [rigA.rig.id]);
-    const active = await screen.findByRole('button', { name: 'RedCat 61 sets the panel size' });
+    const active = await screen.findByRole('radio', { name: 'RedCat 61 frames the plan' });
     expect(screen.getByText(/^Other rigs/).closest('details')).toHaveAttribute('open');
 
-    expect(active).toHaveAttribute('aria-pressed', 'true');
+    expect(active).toHaveAttribute('aria-checked', 'true');
     expect(screen.queryByRole('button', { name: 'Use for panel size' })).not.toBeInTheDocument();
     // A rig without optics has nothing to pick.
     expect(screen.queryByRole('button', { name: /C925 data/ })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Use Askar 107 for the panel size' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Frame with Askar 107' }));
     expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from Askar 107');
     expect(screen.queryByLabelText('Panel rig')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Askar 107 sets the panel size' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: 'Use RedCat 61 for the panel size' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('radio', { name: 'Askar 107 frames the plan' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: 'Frame with RedCat 61' })).toHaveAttribute('aria-checked', 'false');
 
     expect(screen.getByTestId('framing-extent')).toHaveTextContent('1 panel · 1.20° × 48.0′');
     // Typing a size keeps the rig's numbers to start from, and drops the pick.
@@ -676,12 +676,12 @@ describe('Framing view', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Type a size' }));
     expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Typed size · or pick a rig by its swatch');
     expect(screen.getByLabelText('Panel width degrees')).toHaveValue(1.2);
-    expect(screen.getByRole('button', { name: 'Use Askar 107 for the panel size' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('radio', { name: 'Frame with Askar 107' })).toHaveAttribute('aria-checked', 'false');
     fireEvent.change(screen.getByLabelText('Panel width degrees'), { target: { value: '2' } });
     expect(screen.getByTestId('framing-extent')).toHaveTextContent('1 panel · 2.00° × 48.0′');
   });
 
-  it('adds and drops several rigs from their rows on a page that keeps the plan', async () => {
+  it('turns several rigs on and off with their switches, and frames with one that is on', async () => {
     const rigC = { ...rigA, rig: { ...rigA.rig, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Askar' }, catalog_slug: 'askar', catalog_name: 'Askar 107' };
     fixture();
     server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB, rigC]))));
@@ -690,21 +690,27 @@ describe('Framing view', () => {
     const view = (shooting: string[]) => <QueryClientProvider client={client}><FramingView projectId="project" seed={seed} preferredRigIds={[rigA.rig.id]}
       shootingRigIds={shooting} onToggleRig={(id, on) => toggled.push([id, on])} /></QueryClientProvider>;
     const { rerender } = render(view([rigA.rig.id]));
-    const redcat = await screen.findByRole('button', { name: 'RedCat 61 shoots this plan' });
-    expect(redcat).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('group', { name: 'RedCat 61' })).toHaveClass('is-shooting');
-    // The whole row is the click target, name included.
-    fireEvent.click(within(screen.getByRole('button', { name: 'Add Askar 107 to this plan' })).getByText('Askar 107'));
-    fireEvent.click(screen.getByRole('button', { name: 'Add C925 data to this plan' }));
+    const redcat = await screen.findByRole('switch', { name: 'RedCat 61 on' });
+    expect(redcat).toHaveAttribute('aria-checked', 'true');
+    // Rigs are grouped On and Off.
+    expect(screen.getByRole('heading', { name: 'On' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Off' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Askar 107' })).toHaveTextContent('Not in this plan');
+    // A rig that is off cannot frame the plan.
+    expect(screen.queryByRole('radio', { name: 'Frame with Askar 107' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('switch', { name: 'Askar 107 on' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'C925 data on' }));
     expect(toggled).toEqual([[rigC.rig.id, true], [rigB.rig.id, true]]);
-    // Several rigs at once, each shown as on; dropping one is the same click.
     rerender(view([rigA.rig.id, rigC.rig.id, rigB.rig.id]));
-    expect(screen.getByRole('button', { name: 'Askar 107 shoots this plan' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: 'C925 data shoots this plan' })).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(screen.getByRole('button', { name: 'Askar 107 shoots this plan' }));
+    expect(screen.getByRole('switch', { name: 'Askar 107 on' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.queryByRole('heading', { name: 'Off' })).not.toBeInTheDocument();
+    // One rig frames the plan; any other that is on can take over.
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'RedCat 61 frames the plan' })).toHaveTextContent('Framing'));
+    fireEvent.click(screen.getByRole('radio', { name: 'Frame with Askar 107' }));
+    expect(screen.getByRole('radio', { name: 'Askar 107 frames the plan' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('group', { name: 'Askar 107' })).toHaveClass('is-framing');
+    fireEvent.click(screen.getByRole('switch', { name: 'Askar 107 on' }));
     expect(toggled.at(-1)).toEqual([rigC.rig.id, false]);
-    // The panel size is its own pill, one rig at a time.
-    expect(screen.getByRole('button', { name: 'RedCat 61 sets the panel size' })).toHaveTextContent('Sets size');
   });
 
   it('does not call the same rigs in another order an edit', async () => {

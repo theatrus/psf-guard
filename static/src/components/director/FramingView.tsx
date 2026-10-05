@@ -503,6 +503,8 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   const inPlan = (id: string) => preferredRigIds.includes(id) || (shootingRigIds ?? []).includes(id);
   const planRigs = rigList.filter(entry => inPlan(entry.rig.id));
   const otherRigs = rigList.filter(entry => !inPlan(entry.rig.id));
+  const onRigs = rigList.filter(entry => (shootingRigIds ?? []).includes(entry.rig.id));
+  const offRigs = rigList.filter(entry => !(shootingRigIds ?? []).includes(entry.rig.id));
   if (draft.isPending) return <p role="status">Loading framing...</p>;
   if (draft.isError) return <p className="director-error" role="alert">{message(draft.error)}</p>;
   if (!state) return <StartFraming canWrite={canWrite} onStart={setStarted} />;
@@ -548,32 +550,28 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     const grid = (m: DirectorRigFraming['mosaic']) => m.rows * m.columns > 1 ? `${m.rows} × ${m.columns}, ${m.overlap_percent}%` : '1 panel';
     const role = own
       ? `Separate framing · ${grid(own.mosaic)} · ${round(own.position_angle_degrees ?? state.positionAngle, 1)}°${own.center ? ' · moved center' : ''}`
-      : sizes ? `Sets panel size · ${grid(state.mosaic)}`
+      : sizes ? `Framing · ${grid(state.mosaic)}`
       : field ? `Shared framing · ${grid(state.mosaic)}` : 'No optics';
     const swatch = own ? `is-own-${ownIndex % 4}` : sizes ? 'is-shared' : shown ? 'is-compared' : 'is-none';
     const shooting = shootingRigIds?.includes(id) ?? false;
-    const inner = <>
-      <span className={`framing-rig-swatch ${swatch}`} aria-hidden="true" />
-      <strong>{entry.catalog_name}</strong>
-      {field && <small>{formatDegrees(field.width_degrees)} × {formatDegrees(field.height_degrees)}, {field.pixel_scale_arcsec.toFixed(2)}″/px</small>}
-    </>;
     const blocked = !shooting && !!joinBlocked;
-    return <li key={id} className={`framing-rig-card${editingRig === id ? ' is-editing' : ''}${shooting ? ' is-shooting' : ''}`} role="group" aria-label={entry.catalog_name}>
-      {/* On a page that keeps the plan, the heading (swatch, name and
-          field) adds the rig to the plan or drops it. */}
-      {onToggleRig
-        ? <button type="button" className="framing-rig-head is-toggle" aria-pressed={shooting}
-            aria-label={shooting ? `${entry.catalog_name} shoots this plan` : `Add ${entry.catalog_name} to this plan`}
-            title={blocked ? joinBlocked : shooting ? 'Shoots this plan; click to drop it' : 'Add to this plan'}
-            disabled={!canWrite || blocked} onClick={() => onToggleRig(id, !shooting)}>
-            <span className="framing-rig-check" aria-hidden="true">{shooting ? '✓' : ''}</span>{inner}
-          </button>
-        : <div className="framing-rig-head">{inner}</div>}
-      <p className="framing-rig-role">{role}</p>
+    const shownRole = onToggleRig && !shooting && !own ? 'Not in this plan' : role;
+    // Only a rig that is on frames the plan, on a page that keeps one.
+    const canFrame = !own && !!field && (!onToggleRig || shooting);
+    return <li key={id} className={`framing-rig-card${editingRig === id ? ' is-editing' : ''}${sizes && !own ? ' is-framing' : ''}`} role="group" aria-label={entry.catalog_name}>
+      <div className="framing-rig-head">
+        {onToggleRig && <button type="button" role="switch" className="framing-rig-switch" aria-checked={shooting}
+          aria-label={`${entry.catalog_name} on`} title={blocked ? joinBlocked : shooting ? 'Shoots this plan' : 'Off: not in this plan'}
+          disabled={!canWrite || blocked} onClick={() => onToggleRig(id, !shooting)}><span aria-hidden="true" /></button>}
+        <span className={`framing-rig-swatch ${swatch}`} aria-hidden="true" />
+        <strong>{entry.catalog_name}</strong>
+        {field && <small>{formatDegrees(field.width_degrees)} × {formatDegrees(field.height_degrees)}, {field.pixel_scale_arcsec.toFixed(2)}″/px</small>}
+      </div>
+      <p className="framing-rig-role">{shownRole}</p>
       {canWrite && <div className="framing-rig-actions">
-        {!own && field && <button type="button" className={`framing-size-pill${sizes ? ' is-active' : ''}`} aria-pressed={sizes}
-          aria-label={sizes ? `${entry.catalog_name} sets the panel size` : `Use ${entry.catalog_name} for the panel size`}
-          title={sizes ? 'Its field sets the shared panel size' : 'Use its field for the shared panel size'} disabled={sizes} onClick={() => chooseRig(id)}>{sizes ? 'Sets size' : 'Use size'}</button>}
+        {canFrame && <button type="button" role="radio" className={`framing-frame-pick${sizes ? ' is-active' : ''}`} aria-checked={sizes}
+          aria-label={sizes ? `${entry.catalog_name} frames the plan` : `Frame with ${entry.catalog_name}`}
+          title={sizes ? 'Its field sets the shared framing' : 'Use its field for the shared framing'} disabled={sizes} onClick={() => chooseRig(id)}>{sizes ? 'Framing' : 'Frame'}</button>}
         {!own && field && <label className="framing-check" title="Draw its field on the sky"><input type="checkbox" aria-label={`${entry.catalog_name} outline`} checked={shown} onChange={event => update(current => ({ shownRigIds: event.target.checked ? [...current.shownRigIds, id] : current.shownRigIds.filter(other => other !== id) }))} />Outline</label>}
         {!own && <button type="button" className="link-button" onClick={() => frameRig(id)}>Frame separately</button>}
         {own && <button type="button" className="link-button" aria-expanded={editingRig === id} onClick={() => setEditingRig(editingRig === id ? null : id)}>{editingRig === id ? 'Done' : 'Edit'}</button>}
@@ -690,11 +688,18 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         <legend>Rigs</legend>
         {rigs.isError && <p className="director-error" role="alert">Rigs could not be loaded: {message(rigs.error)} <button type="button" onClick={() => void rigs.refetch()}>Retry</button></p>}
         {!rigs.isError && rigList.length === 0 && <p className="director-muted">{rigs.isPending ? 'Loading rigs...' : 'No rigs yet'}</p>}
-        {planRigs.length > 0 && <ul className="framing-rig-list">{planRigs.map(rigCard)}</ul>}
-        {otherRigs.length > 0 && <details className="framing-other-rigs" open>
-          <summary>Other rigs ({otherRigs.length})</summary>
-          <ul className="framing-rig-list">{otherRigs.map(rigCard)}</ul>
-        </details>}
+        {onToggleRig ? <>
+          {/* On a page that keeps the plan: rigs that shoot it, then the rest. */}
+          <h4 className="framing-rig-group">On</h4>
+          {onRigs.length > 0 ? <ul className="framing-rig-list">{onRigs.map(rigCard)}</ul> : <p className="director-muted">No rigs on</p>}
+          {offRigs.length > 0 && <><h4 className="framing-rig-group">Off</h4><ul className="framing-rig-list">{offRigs.map(rigCard)}</ul></>}
+        </> : <>
+          {planRigs.length > 0 && <ul className="framing-rig-list">{planRigs.map(rigCard)}</ul>}
+          {otherRigs.length > 0 && <details className="framing-other-rigs" open>
+            <summary>Other rigs ({otherRigs.length})</summary>
+            <ul className="framing-rig-list">{otherRigs.map(rigCard)}</ul>
+          </details>}
+        </>}
       </fieldset>
       <fieldset>
         <legend>Shared framing <span className="framing-legend-swatch" title="Its outline on the sky" aria-hidden="true" /></legend>
