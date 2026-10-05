@@ -162,3 +162,28 @@ fn upgrades_version_21_and_preserves_existing_status() {
         .store_operation_receipts(rig, &[event(rig, Uuid::new_v4(), 1)], 10)
         .unwrap();
 }
+
+#[test]
+fn corrupt_cursor_and_history_fail_closed() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let mut store = MetaStore::create(&path).unwrap();
+    let rig = store.create_rig(Uuid::new_v4(), "Rig").unwrap().id;
+    let ledger = Uuid::new_v4();
+    store
+        .store_operation_receipts(rig, &[event(rig, ledger, 1)], 10)
+        .unwrap();
+    let conn = rusqlite::Connection::open(path).unwrap();
+    conn.execute("UPDATE rig_operation_feed SET highest_contiguous=-1", [])
+        .unwrap();
+    assert!(matches!(
+        store.store_operation_receipts(rig, &[event(rig, ledger, 1)], 20),
+        Err(Error::CorruptDatabase)
+    ));
+    conn.execute("UPDATE rig_operation_event SET received_at_ms=-1", [])
+        .unwrap();
+    assert!(matches!(
+        store.recent_operations(rig),
+        Err(Error::CorruptDatabase)
+    ));
+}

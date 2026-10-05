@@ -176,7 +176,10 @@ impl MetaStore {
         if stored.as_ref().is_some_and(|(saved, _)| saved != &expected) {
             return Err(Error::Conflict);
         }
-        let mut through = stored.as_ref().map_or(0, |(_, n)| *n as u64);
+        let mut through = match stored.as_ref() {
+            Some((_, n)) => u64::try_from(*n).map_err(|_| Error::CorruptDatabase)?,
+            None => 0,
+        };
         if first.sequence > through + 1 {
             return Err(Error::Conflict);
         }
@@ -234,7 +237,7 @@ impl MetaStore {
     pub fn recent_operations(&self, rig: Uuid) -> Result<Vec<OperationReceipt>, Error> {
         valid_id(rig)?;
         let mut query = self.connection.prepare(
-            "SELECT payload,received_at_ms FROM rig_operation_event WHERE rig_id=?1 AND completed=1 ORDER BY received_at_ms DESC,sequence DESC LIMIT 20")?;
+            "SELECT payload,received_at_ms FROM rig_operation_event WHERE rig_id=?1 AND completed=1 ORDER BY received_at_ms DESC,sequence DESC,ledger_id LIMIT 20")?;
         let rows = query
             .query_map([rig.to_string()], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
@@ -242,9 +245,14 @@ impl MetaStore {
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
             .map(|(payload, time)| {
+                let event: Event =
+                    serde_json::from_str(&payload).map_err(|_| Error::CorruptDatabase)?;
+                if !matches!(event.event, EventKind::Completed { .. }) {
+                    return Err(Error::CorruptDatabase);
+                }
                 Ok(OperationReceipt {
-                    event: serde_json::from_str(&payload).map_err(|_| Error::CorruptDatabase)?,
-                    received_at_ms: time as u64,
+                    event,
+                    received_at_ms: u64::try_from(time).map_err(|_| Error::CorruptDatabase)?,
                 })
             })
             .collect()
