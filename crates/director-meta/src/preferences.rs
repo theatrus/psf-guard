@@ -4,7 +4,135 @@ use psf_guard_director_core::priority::{
     self, Layer, Overrides, Policy, Preset, ResolvedPolicy, Scope, Source,
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Target Scheduler's per-project scheduling limits, as Director plans them.
+/// Each is a default set once at a scope (global, site, rig) or an override
+/// for one project; `None` inherits. Activation writes the resolved values
+/// into each rig's Target Scheduler project, so they also hold when Target
+/// Scheduler runs a rig without Director.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulingOverrides {
+    /// Shortest time worth starting the project for, in minutes.
+    pub minimum_time_minutes: Option<u32>,
+    /// Lowest altitude to image at, in degrees.
+    pub minimum_altitude_degrees: Option<f64>,
+    /// Highest altitude to image at, in degrees; 0 means no upper limit.
+    pub maximum_altitude_degrees: Option<f64>,
+    /// Use the profile's custom horizon instead of a flat minimum altitude.
+    pub use_custom_horizon: Option<bool>,
+    /// Degrees added to the custom horizon.
+    pub horizon_offset_degrees: Option<f64>,
+    /// Minutes either side of the meridian to avoid; 0 turns it off.
+    pub meridian_window_minutes: Option<u32>,
+    /// Exposures before switching filter; 0 lets Target Scheduler decide.
+    pub filter_switch_frequency: Option<u32>,
+    /// Exposures between dithers; 0 dithers per the exposure template.
+    pub dither_every: Option<u32>,
+    /// Let Target Scheduler order exposures for the best conditions.
+    pub smart_exposure_order: Option<bool>,
+}
+
+/// Every scheduling limit with a value: an override, else a default from a
+/// scope, else Target Scheduler's own default.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SchedulingValues {
+    pub minimum_time_minutes: u32,
+    pub minimum_altitude_degrees: f64,
+    pub maximum_altitude_degrees: f64,
+    pub use_custom_horizon: bool,
+    pub horizon_offset_degrees: f64,
+    pub meridian_window_minutes: u32,
+    pub filter_switch_frequency: u32,
+    pub dither_every: u32,
+    pub smart_exposure_order: bool,
+}
+
+impl Default for SchedulingValues {
+    /// What Target Scheduler gives a new project.
+    fn default() -> Self {
+        Self {
+            minimum_time_minutes: 30,
+            minimum_altitude_degrees: 0.0,
+            maximum_altitude_degrees: 0.0,
+            use_custom_horizon: false,
+            horizon_offset_degrees: 0.0,
+            meridian_window_minutes: 0,
+            filter_switch_frequency: 0,
+            dither_every: 0,
+            smart_exposure_order: false,
+        }
+    }
+}
+
+/// The resolved limits and, for each, the scope that set it: `None` is
+/// Target Scheduler's default, which activation writes only into a project
+/// it creates, never over a value set by hand.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedScheduling {
+    pub values: SchedulingValues,
+    pub sources: std::collections::BTreeMap<String, Source>,
+}
+
+impl SchedulingOverrides {
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+
+    fn validate(&self) -> Result<(), Error> {
+        let altitude =
+            |value: Option<f64>| value.is_none_or(|v| v.is_finite() && (0.0..=90.0).contains(&v));
+        let offset = self
+            .horizon_offset_degrees
+            .is_none_or(|v| v.is_finite() && (-90.0..=90.0).contains(&v));
+        let within = |value: Option<u32>, max: u32| value.is_none_or(|v| v <= max);
+        let ordered = match (self.minimum_altitude_degrees, self.maximum_altitude_degrees) {
+            (Some(low), Some(high)) => high == 0.0 || high > low,
+            _ => true,
+        };
+        if altitude(self.minimum_altitude_degrees)
+            && altitude(self.maximum_altitude_degrees)
+            && offset
+            && ordered
+            && within(self.minimum_time_minutes, 24 * 60)
+            && within(self.meridian_window_minutes, 12 * 60)
+            && within(self.filter_switch_frequency, 10_000)
+            && within(self.dither_every, 10_000)
+        {
+            Ok(())
+        } else {
+            Err(Error::InvalidInput)
+        }
+    }
+}
+
+/// Resolve the limits through `layers`, most general first: each set value
+/// replaces what came before it.
+pub fn resolve_scheduling(layers: &[(&SchedulingOverrides, Source)]) -> ResolvedScheduling {
+    let mut values = SchedulingValues::default();
+    let mut sources = std::collections::BTreeMap::new();
+    for (overrides, source) in layers {
+        macro_rules! take {
+            ($field:ident) => {
+                if let Some(value) = overrides.$field {
+                    values.$field = value;
+                    sources.insert(stringify!($field).to_string(), source.clone());
+                }
+            };
+        }
+        take!(minimum_time_minutes);
+        take!(minimum_altitude_degrees);
+        take!(maximum_altitude_degrees);
+        take!(use_custom_horizon);
+        take!(horizon_offset_degrees);
+        take!(meridian_window_minutes);
+        take!(filter_switch_frequency);
+        take!(dither_every);
+        take!(smart_exposure_order);
+    }
+    ResolvedScheduling { values, sources }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     pub scope: Scope,
@@ -18,6 +146,9 @@ pub struct Settings {
     /// Ordered project identities; None inherits, an empty list ranks none first.
     #[serde(default)]
     pub project_order: Option<Vec<Uuid>>,
+    /// Target Scheduler scheduling limits set at this scope.
+    #[serde(default, skip_serializing_if = "SchedulingOverrides::is_empty")]
+    pub scheduling: SchedulingOverrides,
 }
 
 impl Settings {
@@ -30,6 +161,7 @@ impl Settings {
             enabled: None,
             site_id: None,
             project_order: None,
+            scheduling: SchedulingOverrides::default(),
         }
     }
     fn source(&self) -> Source {
@@ -48,6 +180,8 @@ pub struct Effective {
     pub settings: Vec<Settings>,
     pub project_order: Option<Vec<Uuid>>,
     pub order_source: Option<Source>,
+    /// Target Scheduler limits for this rig, and this project when given.
+    pub scheduling: ResolvedScheduling,
 }
 
 pub(crate) fn create_table(conn: &Connection) -> Result<(), Error> {
@@ -100,6 +234,7 @@ fn validate(conn: &Connection, instance: Uuid, value: &Settings) -> Result<(), E
         .overrides
         .apply_to(Policy::preset(Preset::Balanced))
         .map_err(|_| Error::InvalidInput)?;
+    value.scheduling.validate()?;
     Ok(())
 }
 
@@ -295,12 +430,19 @@ impl MetaStore {
         let ranked = settings.iter().rev().find(|s| s.project_order.is_some());
         let project_order = ranked.and_then(|s| s.project_order.clone());
         let order_source = ranked.map(Settings::source);
+        let scheduling = resolve_scheduling(
+            &settings
+                .iter()
+                .map(|s| (&s.scheduling, s.source()))
+                .collect::<Vec<_>>(),
+        );
         Ok(Effective {
             enabled,
             resolved,
             settings,
             project_order,
             order_source,
+            scheduling,
         })
     }
 }

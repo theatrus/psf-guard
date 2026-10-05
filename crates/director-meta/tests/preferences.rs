@@ -279,3 +279,109 @@ fn schema_19_preferences_without_order_keep_legacy_behavior() {
     assert!(effective.enabled);
     assert!(effective.project_order.is_none());
 }
+
+#[test]
+fn scheduling_limits_inherit_and_say_where_each_came_from() {
+    use psf_guard_director_meta::preferences::{
+        resolve_scheduling, SchedulingOverrides, SchedulingValues,
+    };
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let rig = store.create_rig(Uuid::new_v4(), "Rig").unwrap().id;
+    let site = store.create_site(Uuid::new_v4(), "Site").unwrap().id;
+    let project = store.create_project(Uuid::new_v4(), "Project").unwrap().id;
+    let untouched = store
+        .effective_observing_preferences(rig, Some(project))
+        .unwrap()
+        .scheduling;
+    assert_eq!(untouched.values, SchedulingValues::default());
+    assert!(
+        untouched.sources.is_empty(),
+        "nothing set, so activation leaves existing projects alone"
+    );
+
+    let mut global = Settings::empty(Scope::Global, store.instance_id());
+    global.scheduling.minimum_altitude_degrees = Some(20.0);
+    global.scheduling.dither_every = Some(5);
+    store.save_observing_settings(&global).unwrap();
+    let mut settings = Settings::empty(Scope::Site, site);
+    settings.scheduling.horizon_offset_degrees = Some(4.5);
+    settings.scheduling.use_custom_horizon = Some(true);
+    store.save_observing_settings(&settings).unwrap();
+    let mut settings = Settings::empty(Scope::Rig, rig);
+    settings.site_id = Some(site);
+    settings.scheduling.dither_every = Some(2);
+    store.save_observing_settings(&settings).unwrap();
+    let mut settings = Settings::empty(Scope::Project, project);
+    settings.scheduling.minimum_altitude_degrees = Some(35.0);
+    store.save_observing_settings(&settings).unwrap();
+
+    let resolved = store
+        .effective_observing_preferences(rig, Some(project))
+        .unwrap()
+        .scheduling;
+    assert_eq!(resolved.values.minimum_altitude_degrees, 35.0);
+    assert_eq!(resolved.values.dither_every, 2);
+    assert_eq!(resolved.values.horizon_offset_degrees, 4.5);
+    assert!(resolved.values.use_custom_horizon);
+    assert_eq!(
+        resolved.values.minimum_time_minutes, 30,
+        "Target Scheduler's default"
+    );
+    let scope = |field: &str| resolved.sources.get(field).map(|source| source.scope);
+    assert_eq!(scope("minimum_altitude_degrees"), Some(Scope::Project));
+    assert_eq!(scope("dither_every"), Some(Scope::Rig));
+    assert_eq!(scope("horizon_offset_degrees"), Some(Scope::Site));
+    assert_eq!(scope("minimum_time_minutes"), None);
+
+    // Another project on the same rig gets the defaults, not this override.
+    let other = store.create_project(Uuid::new_v4(), "Other").unwrap().id;
+    let defaults = store
+        .effective_observing_preferences(rig, Some(other))
+        .unwrap()
+        .scheduling;
+    assert_eq!(defaults.values.minimum_altitude_degrees, 20.0);
+
+    // Out of range or out of order is refused.
+    for bad in [
+        SchedulingOverrides {
+            minimum_altitude_degrees: Some(95.0),
+            ..Default::default()
+        },
+        SchedulingOverrides {
+            minimum_altitude_degrees: Some(40.0),
+            maximum_altitude_degrees: Some(30.0),
+            ..Default::default()
+        },
+        SchedulingOverrides {
+            horizon_offset_degrees: Some(f64::NAN),
+            ..Default::default()
+        },
+        SchedulingOverrides {
+            meridian_window_minutes: Some(24 * 60),
+            ..Default::default()
+        },
+    ] {
+        let mut settings = store
+            .observing_settings(Scope::Global, store.instance_id())
+            .unwrap();
+        settings.scheduling = bad;
+        assert!(matches!(
+            store.save_observing_settings(&settings),
+            Err(Error::InvalidInput)
+        ));
+    }
+    // A maximum of 0 means no upper limit, so it never conflicts.
+    let mut settings = store
+        .observing_settings(Scope::Global, store.instance_id())
+        .unwrap();
+    settings.scheduling.maximum_altitude_degrees = Some(0.0);
+    store.save_observing_settings(&settings).unwrap();
+
+    // Settings with no limits serialise as before.
+    let empty = Settings::empty(Scope::Rig, rig);
+    assert!(!serde_json::to_string(&empty)
+        .unwrap()
+        .contains("scheduling"));
+    assert!(resolve_scheduling(&[]).sources.is_empty());
+}

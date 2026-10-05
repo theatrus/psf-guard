@@ -20,6 +20,7 @@ use psf_guard_director_meta::{
     catalog::ProjectMapping,
     framing::FramingDraft,
     plan::{Contribution, Goal, Objective, PlanDraft},
+    preferences::{ResolvedScheduling, SchedulingValues},
     CatalogIdentity,
 };
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
@@ -379,6 +380,8 @@ async fn execute(
             };
             let mut warnings = Vec::new();
             let profile = store.rig_profile(*rig_id)?;
+            // Global, then this rig's site, the rig, and this project.
+            let scheduling = store.effective_observing_preferences(*rig_id, Some(id))?.scheduling;
             // This rig's own layout, or the shared one; its field stands in
             // for a panel size its own framing leaves unset.
             let field = profile
@@ -476,6 +479,7 @@ async fn execute(
                         existing_link,
                         instance: service.instance_id,
                         now,
+                        scheduling: &scheduling,
                     },
                 );
                 match outcome {
@@ -772,6 +776,8 @@ struct Inputs<'a> {
     existing_link: Option<Uuid>,
     instance: Uuid,
     now: u64,
+    /// Target Scheduler scheduling limits for this rig and project.
+    scheduling: &'a ResolvedScheduling,
 }
 
 struct Outcome {
@@ -846,6 +852,9 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
         )
         .optional()?;
     let mut created_project = false;
+    // A row made here takes every resolved limit; an existing one only those
+    // someone set, so a value edited by hand in Target Scheduler stays.
+    let mut fresh_row = false;
     let project_guid = match owned {
         Some(guid) => {
             if project_row(tx, &guid)?.is_some() {
@@ -861,6 +870,7 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                 });
                 guid
             } else {
+                fresh_row = true;
                 let guid = insert_project(tx, &profile_id, &project_name, mosaic, Some(&guid))?;
                 changes.push(Change {
                     kind: "project",
@@ -892,6 +902,7 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
             }
             None => {
                 created_project = true;
+                fresh_row = true;
                 let guid = insert_project(tx, &profile_id, &project_name, mosaic, None)?;
                 changes.push(Change {
                     kind: "project",
@@ -903,6 +914,14 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
             }
         },
     };
+    write_scheduling(
+        tx,
+        &project_guid,
+        inputs.scheduling,
+        fresh_row,
+        &project_name,
+        &mut changes,
+    )?;
     tx.execute(
         "INSERT INTO psf_guard_director_project(project_guid,global_project_id,coordinator_instance_id,activation_revision,applied_at_ms)
          VALUES(?1,?2,?3,?4,?5)
@@ -1409,6 +1428,154 @@ fn project_row(tx: &Connection, guid: &str) -> rusqlite::Result<Option<(i64, Str
         |row| Ok((row.get(0)?, row.get(1)?)),
     )
     .optional()
+}
+
+/// One Target Scheduler scheduling limit: its plan field, its project
+/// column, how it reads in the report, and the resolved value.
+struct Limit {
+    field: &'static str,
+    column: &'static str,
+    label: &'static str,
+    value: f64,
+}
+
+fn limits(values: &SchedulingValues) -> [Limit; 9] {
+    let flag = |v: bool| if v { 1.0 } else { 0.0 };
+    [
+        Limit {
+            field: "minimum_time_minutes",
+            column: "minimumtime",
+            label: "minimum time",
+            value: values.minimum_time_minutes.into(),
+        },
+        Limit {
+            field: "minimum_altitude_degrees",
+            column: "minimumaltitude",
+            label: "minimum altitude",
+            value: values.minimum_altitude_degrees,
+        },
+        Limit {
+            field: "maximum_altitude_degrees",
+            column: "maximumAltitude",
+            label: "maximum altitude",
+            value: values.maximum_altitude_degrees,
+        },
+        Limit {
+            field: "use_custom_horizon",
+            column: "usecustomhorizon",
+            label: "custom horizon",
+            value: flag(values.use_custom_horizon),
+        },
+        Limit {
+            field: "horizon_offset_degrees",
+            column: "horizonoffset",
+            label: "horizon offset",
+            value: values.horizon_offset_degrees,
+        },
+        Limit {
+            field: "meridian_window_minutes",
+            column: "meridianwindow",
+            label: "meridian window",
+            value: values.meridian_window_minutes.into(),
+        },
+        Limit {
+            field: "filter_switch_frequency",
+            column: "filterswitchfrequency",
+            label: "filter switch",
+            value: values.filter_switch_frequency.into(),
+        },
+        Limit {
+            field: "dither_every",
+            column: "ditherevery",
+            label: "dither",
+            value: values.dither_every.into(),
+        },
+        Limit {
+            field: "smart_exposure_order",
+            column: "smartexposureorder",
+            label: "smart exposure order",
+            value: flag(values.smart_exposure_order),
+        },
+    ]
+}
+
+/// A limit's value as the activation report shows it.
+fn describe(field: &str, value: f64) -> String {
+    let whole = value.round() as i64;
+    match field {
+        "minimum_time_minutes" => format!("{whole} min"),
+        "maximum_altitude_degrees" if value == 0.0 => "none".into(),
+        "minimum_altitude_degrees" | "maximum_altitude_degrees" | "horizon_offset_degrees" => {
+            format!("{value}°")
+        }
+        "meridian_window_minutes" if whole == 0 => "off".into(),
+        "meridian_window_minutes" => format!("{whole} min"),
+        "filter_switch_frequency" if whole == 0 => "automatic".into(),
+        "dither_every" if whole == 0 => "per template".into(),
+        "filter_switch_frequency" | "dither_every" => format!("every {whole}"),
+        _ => {
+            if value != 0.0 {
+                "on".into()
+            } else {
+                "off".into()
+            }
+        }
+    }
+}
+
+/// Write the plan's scheduling limits into the Target Scheduler project.
+/// A project made by this activation takes every resolved limit; an existing
+/// one only the limits someone set at a scope, so a value edited by hand in
+/// Target Scheduler is not reset to a default nobody chose. Columns an older
+/// Target Scheduler schema lacks are skipped.
+fn write_scheduling(
+    tx: &Connection,
+    project_guid: &str,
+    scheduling: &ResolvedScheduling,
+    fresh_row: bool,
+    project_name: &str,
+    changes: &mut Vec<Change>,
+) -> Result<(), RigError> {
+    let present: std::collections::BTreeSet<String> = {
+        let mut statement = tx.prepare("SELECT lower(name) FROM pragma_table_info('project')")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    let mut notes = Vec::new();
+    for limit in limits(&scheduling.values) {
+        if !present.contains(&limit.column.to_ascii_lowercase())
+            || !(fresh_row || scheduling.sources.contains_key(limit.field))
+        {
+            continue;
+        }
+        let current: Option<f64> = tx.query_row(
+            &format!("SELECT \"{}\" FROM project WHERE guid=?1", limit.column),
+            [project_guid],
+            |row| row.get(0),
+        )?;
+        if current.is_some_and(|now| (now - limit.value).abs() < 1e-9) {
+            continue;
+        }
+        tx.execute(
+            &format!("UPDATE project SET \"{}\"=?2 WHERE guid=?1", limit.column),
+            params![project_guid, limit.value],
+        )?;
+        let was = current.map_or_else(|| "unset".to_string(), |now| describe(limit.field, now));
+        notes.push(format!(
+            "{} {was} → {}",
+            limit.label,
+            describe(limit.field, limit.value)
+        ));
+    }
+    if !notes.is_empty() {
+        changes.push(Change {
+            kind: "project",
+            action: if fresh_row { "create" } else { "update" },
+            name: format!("{project_name} · scheduling limits"),
+            detail: notes.join(", "),
+        });
+    }
+    Ok(())
 }
 
 fn insert_project(
