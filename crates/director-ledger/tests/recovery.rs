@@ -27,6 +27,7 @@ fn policy() -> Policy {
         maximum_consecutive_failures: 2,
         maximum_total_failures: 3,
         park_on_stop: true,
+        weather: None,
     }
 }
 fn request(revision: u64, now: u64, event: Event) -> Request {
@@ -81,6 +82,42 @@ fn setup() -> (TempDir, SessionStore) {
 fn hold(store: &mut SessionStore) {
     store.apply(&request(0, 1001, quality(1001))).unwrap();
     store.apply(&request(1, 1002, quality(1002))).unwrap();
+}
+
+#[test]
+fn weather_hold_restart_and_replay_preserve_the_night_and_spent_budget() {
+    let temp = TempDir::new().unwrap();
+    let mut store = open(&temp);
+    let mut p = policy();
+    p.weather = Some(WeatherPolicy {
+        stable_safe_ms: 200,
+        maximum_hold_ms: 2000,
+        maximum_interruptions: 2,
+    });
+    store.begin_night(identity(), p, 1000).unwrap();
+    let interruption = request(0, 1001, Event::WeatherInterrupted { enclosure: true });
+    store.apply(&interruption).unwrap();
+    store.apply(&request(1, 1010, Event::Tick {})).unwrap();
+    drop(store);
+    let mut store = open(&temp);
+    let restored = store.current().unwrap().unwrap();
+    assert!(matches!(
+        restored.snapshot.phase,
+        Phase::WeatherHolding { .. }
+    ));
+    assert_eq!(restored.snapshot.weather_interruptions, 1);
+    assert!(!store.apply(&interruption).unwrap().newly_applied);
+    let tick = store.apply(&request(2, 1300, Event::Tick {})).unwrap();
+    assert!(matches!(
+        tick.record.snapshot.phase,
+        Phase::WeatherHolding {
+            stable_since_ms: Some(1300),
+            ..
+        }
+    ));
+    assert!(store
+        .apply(&request(3, 1300, Event::ResumeWeather {}))
+        .is_err());
 }
 
 #[test]

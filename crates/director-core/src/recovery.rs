@@ -1,7 +1,7 @@
 //! Session recovery policy, independent of allocations and hardware adapters.
 //! Decisions describe required work, never grant permission to move equipment.
 //! Quality verdicts require an upstream evidence classifier; grades alone are
-//! not quality observations. There is deliberately no clear-stop/resume event.
+//! not quality observations. Terminal stops cannot be cleared by a resume event.
 
 use crate::Safety;
 use serde::{Deserialize, Serialize};
@@ -46,6 +46,16 @@ pub struct Policy {
     pub maximum_total_failures: u32,
     /// A commissioned preference, still subordinate to current roof clearance.
     pub park_on_stop: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weather: Option<WeatherPolicy>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WeatherPolicy {
+    pub stable_safe_ms: u64,
+    pub maximum_hold_ms: u64,
+    pub maximum_interruptions: u32,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -158,6 +168,11 @@ pub enum Shutdown {
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Phase {
     Acquiring {},
+    WeatherHolding {
+        cause: Cause,
+        started_at_ms: u64,
+        stable_since_ms: Option<u64>,
+    },
     Holding {
         hold: Hold,
     },
@@ -199,6 +214,10 @@ pub enum ParkResult {
 #[serde(tag = "event", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Event {
     Tick {},
+    WeatherInterrupted {
+        enclosure: bool,
+    },
+    ResumeWeather {},
     Quality {
         sample: QualitySample,
     },
@@ -246,6 +265,17 @@ pub struct Snapshot {
     pub total_failures: u32,
     pub total_hold_ms: u64,
     pub probes_spent: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub weather_interruptions: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub weather_hold_ms: u64,
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -293,6 +323,14 @@ impl Identity {
 
 impl Policy {
     pub fn validate(&self, identity: &Identity) -> Result<(), Error> {
+        if self.weather.as_ref().is_some_and(|w| {
+            w.stable_safe_ms == 0
+                || w.stable_safe_ms >= w.maximum_hold_ms
+                || w.maximum_hold_ms > DAY_MS
+                || !(1..=100).contains(&w.maximum_interruptions)
+        }) {
+            return Err(Error::InvalidInput);
+        }
         if self.revision == 0
             || (self.quality_mode == QualityMode::ParkAndStop && !self.park_on_stop)
             || !(1..=100).contains(&self.bad_samples)
@@ -364,6 +402,12 @@ impl Snapshot {
     pub fn validate(&self) -> Result<(), Error> {
         self.identity.validate()?;
         self.policy.validate(&self.identity)?;
+        if self.policy.weather.as_ref().map_or(
+            self.weather_interruptions != 0 || self.weather_hold_ms != 0,
+            |weather| self.weather_interruptions > weather.maximum_interruptions,
+        ) {
+            return Err(Error::InvalidInput);
+        }
         if self.schema_version != VERSION
             || self.last_event_ms < self.identity.starts_at_ms
             || self.last_event_ms > i64::MAX as u64
@@ -396,6 +440,24 @@ impl Snapshot {
             return Err(Error::InvalidInput);
         }
         match &self.phase {
+            Phase::WeatherHolding {
+                cause,
+                started_at_ms,
+                stable_since_ms,
+            } => {
+                let weather = self.policy.weather.as_ref().ok_or(Error::InvalidInput)?;
+                if !matches!(cause, Cause::Safety {} | Cause::Enclosure {})
+                    || *started_at_ms < self.identity.starts_at_ms
+                    || *started_at_ms > self.last_event_ms
+                    || stable_since_ms.is_some_and(|t| t < *started_at_ms || t > self.last_event_ms)
+                    || self.weather_interruptions == 0
+                    || self.weather_interruptions > weather.maximum_interruptions
+                    || self.weather_hold_ms >= weather.maximum_hold_ms
+                    || self.last_event_ms >= self.identity.ends_at_ms
+                {
+                    return Err(Error::InvalidInput);
+                }
+            }
             Phase::Holding { hold } | Phase::Recovering { hold, .. } => {
                 hold.cause.validate()?;
                 if !matches!(hold.cause, Cause::Quality { .. } | Cause::Equipment { .. })
@@ -468,6 +530,8 @@ impl Snapshot {
             total_failures: 0,
             total_hold_ms: 0,
             probes_spent: 0,
+            weather_interruptions: 0,
+            weather_hold_ms: 0,
         })
     }
 
@@ -492,6 +556,25 @@ impl Snapshot {
         if matches!(self.phase, Phase::Stopping { .. }) {
             next.shutdown(now, conditions.motion, event)?;
             return Ok(next);
+        }
+        if self.policy.weather.is_some() {
+            if matches!(self.phase, Phase::WeatherHolding { .. }) {
+                next.weather_hold_ms = next
+                    .weather_hold_ms
+                    .saturating_add(now - self.last_event_ms);
+            }
+            // Operator and night-end stops remain terminal, even during bad weather.
+            if matches!(event, Event::StopNight {}) {
+                next.stop(Cause::Operator {}, now, conditions.motion);
+                return Ok(next);
+            }
+            if now >= self.identity.ends_at_ms {
+                next.stop(Cause::NightEnded {}, now, conditions.motion);
+                return Ok(next);
+            }
+            if self.weather_transition(&mut next, now, conditions, event)? {
+                return Ok(next);
+            }
         }
         // Safety and a closing roof preempt recovery, including operator stop.
         if conditions.safety != Safety::Safe {
@@ -527,6 +610,9 @@ impl Snapshot {
             _ => {}
         }
         match event {
+            Event::WeatherInterrupted { .. } | Event::ResumeWeather {} => {
+                return Err(Error::WrongPhase)
+            }
             Event::Tick {} => {}
             Event::Quality { sample } => {
                 if !matches!(self.phase, Phase::Acquiring {}) {
@@ -687,6 +773,80 @@ impl Snapshot {
             _ => return Err(Error::WrongPhase),
         }
         Ok(next)
+    }
+
+    fn weather_transition(
+        &self,
+        next: &mut Self,
+        now: u64,
+        conditions: Conditions,
+        event: &Event,
+    ) -> Result<bool, Error> {
+        let weather = self.policy.weather.as_ref().ok_or(Error::InvalidInput)?;
+        let interrupted = matches!(event, Event::WeatherInterrupted { .. });
+        let clear = conditions.safety == Safety::Safe && conditions.motion == Motion::Permitted;
+        if let Phase::WeatherHolding {
+            cause,
+            started_at_ms,
+            stable_since_ms,
+        } = &self.phase
+        {
+            if next.weather_hold_ms >= weather.maximum_hold_ms
+                || now >= self.policy.latest_resume_ms
+            {
+                next.stop(Cause::HoldExpired {}, now, conditions.motion);
+                return Ok(true);
+            }
+            let since = if !clear || interrupted {
+                None
+            } else if now - self.last_event_ms > self.policy.evidence_max_age_ms {
+                Some(now)
+            } else {
+                Some(stable_since_ms.unwrap_or(now))
+            };
+            if matches!(event, Event::ResumeWeather {}) {
+                if !clear || since.is_none_or(|since| now - since < weather.stable_safe_ms) {
+                    return Err(Error::WrongPhase);
+                }
+                next.phase = Phase::Acquiring {};
+            } else if matches!(event, Event::Tick {} | Event::WeatherInterrupted { .. }) {
+                next.phase = Phase::WeatherHolding {
+                    cause: cause.clone(),
+                    started_at_ms: *started_at_ms,
+                    stable_since_ms: since,
+                };
+            } else {
+                return Err(Error::WrongPhase);
+            }
+            return Ok(true);
+        }
+        if !clear || interrupted {
+            // A retry already in flight is uncertain, not a weather-resumable boundary.
+            if !matches!(self.phase, Phase::Acquiring {}) {
+                next.stop(Cause::RecoveryUncertain {}, now, conditions.motion);
+                return Ok(true);
+            }
+            if self.weather_interruptions >= weather.maximum_interruptions
+                || self.weather_hold_ms >= weather.maximum_hold_ms
+            {
+                next.stop(Cause::HoldExpired {}, now, conditions.motion);
+                return Ok(true);
+            }
+            next.weather_interruptions += 1;
+            let enclosure = conditions.motion != Motion::Permitted
+                || matches!(event, Event::WeatherInterrupted { enclosure: true });
+            next.phase = Phase::WeatherHolding {
+                cause: if enclosure {
+                    Cause::Enclosure {}
+                } else {
+                    Cause::Safety {}
+                },
+                started_at_ms: now,
+                stable_since_ms: None,
+            };
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     fn sample(&mut self, sample: &QualitySample, now: u64) -> Result<(), Error> {

@@ -24,6 +24,7 @@ fn policy() -> Policy {
         maximum_consecutive_failures: 2,
         maximum_total_failures: 3,
         park_on_stop: true,
+        weather: None,
     }
 }
 fn safe() -> Conditions {
@@ -34,6 +35,113 @@ fn safe() -> Conditions {
 }
 fn initial() -> Snapshot {
     Snapshot::new(identity(), policy(), 1000).unwrap()
+}
+
+fn weather() -> Snapshot {
+    let mut p = policy();
+    p.weather = Some(WeatherPolicy {
+        stable_safe_ms: 200,
+        maximum_hold_ms: 2000,
+        maximum_interruptions: 2,
+    });
+    Snapshot::new(identity(), p, 1000).unwrap()
+}
+
+#[test]
+fn weather_resume_requires_continuous_clear_evidence_and_explicit_settled_resume() {
+    let closed = Conditions {
+        safety: Safety::Unsafe,
+        motion: Motion::Prohibited,
+    };
+    let held = weather().apply(1001, closed, &Event::Tick {}).unwrap();
+    held.validate().unwrap();
+    assert!(matches!(
+        held.phase,
+        Phase::WeatherHolding {
+            cause: Cause::Enclosure {},
+            ..
+        }
+    ));
+    let mut state = step(&held, 1010, Event::Tick {});
+    assert_eq!(
+        state.apply(1100, safe(), &Event::ResumeWeather {}),
+        Err(Error::WrongPhase)
+    );
+    state = step(&state, 1110, Event::Tick {});
+    // Unsafe/unknown evidence resets the stability clock, without refilling budgets.
+    state = state.apply(1111, closed, &Event::Tick {}).unwrap();
+    state = step(&state, 1120, Event::Tick {});
+    state = step(&state, 1220, Event::Tick {});
+    state = step(&state, 1320, Event::Tick {});
+    assert!(matches!(state.phase, Phase::WeatherHolding { .. }));
+    state = step(&state, 1320, Event::ResumeWeather {});
+    assert!(matches!(state.phase, Phase::Acquiring {}));
+    assert_eq!(state.weather_interruptions, 1);
+    assert_eq!(state.weather_hold_ms, 319);
+    assert_eq!(state.probes_spent, 0);
+}
+
+#[test]
+fn weather_restart_gap_and_interruption_reset_stability_and_terminal_stops_stay_terminal() {
+    let mut state = step(
+        &weather(),
+        1001,
+        Event::WeatherInterrupted { enclosure: false },
+    );
+    state = step(&state, 1010, Event::Tick {});
+    state = step(&state, 1211, Event::Tick {}); // Monitoring gap cannot count as clear.
+    assert_eq!(
+        state.apply(1211, safe(), &Event::ResumeWeather {}),
+        Err(Error::WrongPhase)
+    );
+    state = step(&state, 1212, Event::WeatherInterrupted { enclosure: true });
+    assert!(matches!(
+        state.phase,
+        Phase::WeatherHolding {
+            stable_since_ms: None,
+            ..
+        }
+    ));
+    let stopped = step(&state, 1213, Event::StopNight {});
+    assert_eq!(
+        stopped.apply(1220, safe(), &Event::ResumeWeather {}),
+        Err(Error::WrongPhase)
+    );
+    let ended = step(&state, 10000, Event::Tick {});
+    assert!(matches!(
+        ended.phase,
+        Phase::Stopping {
+            cause: Cause::NightEnded {},
+            ..
+        }
+    ));
+    let expired = step(&state, 4000, Event::Tick {});
+    assert!(matches!(
+        expired.phase,
+        Phase::Stopping {
+            cause: Cause::HoldExpired {},
+            ..
+        }
+    ));
+}
+
+#[test]
+fn weather_policy_is_opt_in_and_legacy_serialization_stays_unchanged() {
+    let state = initial();
+    let json = serde_json::to_value(&state).unwrap();
+    assert!(json.get("weather_hold_ms").is_none());
+    assert!(json["policy"].get("weather").is_none());
+    let stopped = state
+        .apply(
+            1001,
+            Conditions {
+                safety: Safety::Unsafe,
+                motion: Motion::Permitted,
+            },
+            &Event::Tick {},
+        )
+        .unwrap();
+    assert!(matches!(stopped.phase, Phase::Stopping { .. }));
 }
 fn sample(now: u64, verdict: Verdict) -> QualitySample {
     QualitySample {

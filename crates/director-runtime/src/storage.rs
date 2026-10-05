@@ -769,6 +769,22 @@ fn acquisition_io_error(error: std::io::Error) -> StorageError {
 /// Run SQLite off the async pipe executor. An abandoned request may have committed:
 /// keep evidence, release ownership only when the operation finishes, and require
 /// the next session to recover by capture ID instead of replaying dispatch.
+pub async fn settled_for_weather_resume(
+    storage: &mut Option<Storage>,
+    rig_id: &str,
+) -> Result<bool, ProtocolError> {
+    if !matches!(
+        execute(storage, Operation::UnresolvedAttempt {}, rig_id).await?,
+        StorageReply::Found { attempt: None }
+    ) {
+        return Ok(false);
+    }
+    Ok(matches!(
+        execute(storage, Operation::ActivePreparation {}, rig_id).await?,
+        StorageReply::PreparationFound { record: None }
+    ))
+}
+
 pub async fn execute(
     storage: &mut Option<Storage>,
     operation: Operation,
