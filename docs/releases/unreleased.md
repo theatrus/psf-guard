@@ -707,3 +707,7 @@
   and Priority, below a summary of the target, goals, each rig's setup and
   the activation. The page no longer scrolls through every section, the
   tab is kept in the address, and unsaved edits survive switching tabs.
+- Stop the planning save bar from reporting unsaved changes nobody made: a
+  framing taken from the catalog, a survey the server stands in for, or a
+  panel rig picked for an empty framing is saved quietly with the next save.
+  The bar now lists what changed in each section.

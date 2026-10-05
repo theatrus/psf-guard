@@ -10,7 +10,7 @@ function Field({ id, label, order, saved: stored, saves, fail = false }: { id: s
   const [saved, setSaved] = useState(stored);
   const [value, setValue] = useState(stored);
   useDraftSection(id, {
-    label, order, unsaved: value !== saved,
+    label, order, unsaved: value !== saved, changes: value !== saved ? [`${saved} → ${value}`] : [],
     save: async () => { if (fail) return false; saves.push(`${label}=${value}`); setSaved(value); return true; },
     discard: () => setValue(saved),
   });
@@ -52,6 +52,10 @@ describe('page save bar', () => {
     expect(screen.getByText('edited')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Framing'), { target: { value: 'M 57' } });
     expect(bar()).toHaveTextContent('Unsaved changes in Framing and Plan.');
+    // And what changed in each.
+    const changed = screen.getByRole('list', { name: 'What changed' });
+    expect(changed).toHaveTextContent('Framing: M 1 → M 57');
+    expect(changed).toHaveTextContent('Plan: 40 → 120');
   });
 
   it('saves every section in order and says so', async () => {

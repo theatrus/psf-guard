@@ -80,6 +80,10 @@ function PriorityEditor({ initial, globalOrder, projects, currentProject, sites,
     label: 'Project priority',
     order: 3,
     unsaved,
+    changes: [
+      JSON.stringify(draft.project_order ?? null) !== JSON.stringify(stored.project_order ?? null) && (draft.project_order == null ? 'back to the inherited order' : 'project order'),
+      draft.site_id !== stored.site_id && 'planning site',
+    ].filter((change): change is string => !!change),
     save: async () => {
       if (!savable) return false;
       try { await save.mutateAsync(); } catch { return false; }
