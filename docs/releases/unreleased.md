@@ -1,5 +1,9 @@
 # Unreleased
 
+- Allow Director's shared runtime to resume bounded startup weather holds before
+  any workload is admitted, while refusing missing storage or unopened historical
+  execution ledgers as proof that equipment work has settled.
+
 - Add shared Director weather/roof hold policy with persistent time and
   interruption limits, stable Safe/Open checks and an explicit settled-ledger
   resume gate. Existing clients retain stop-for-night behavior.
