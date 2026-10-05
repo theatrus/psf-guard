@@ -685,3 +685,6 @@
   software's values.
 - The sky overlay stays as you last left it instead of turning on for every
   solved frame, including frames quality analysis solved on its own.
+- Score frames measured from calibrated pixels only against each other, so
+  a frame catalogued from its calibrated copy, or measured from one, is not
+  marked down beside raw frames of the same night.

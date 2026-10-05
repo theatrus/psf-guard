@@ -7419,6 +7419,13 @@ pub(crate) fn merge_spatial_metrics(
     ) {
         let current_detector = entry.detector == crate::server::spatial_scan::QUALITY_DETECTOR
             && entry.detector_version == crate::server::spatial_scan::QUALITY_DETECTOR_VERSION;
+        // Measured on calibrated pixels: bias and dark removed, flat
+        // divided. Such a frame is scored only against others like it.
+        if entry.source_revision.as_deref().is_some_and(|revision| {
+            revision.starts_with(crate::server::spatial_scan::CALIBRATED_SOURCE_PREFIX)
+        }) {
+            metrics.pixel_domain = crate::sequence_analysis::PixelDomain::Calibrated;
+        }
         let measured = entry.star_count as f64;
         let recorded = metrics.star_count;
         // One measurement that finds no stars where the other finds plenty
@@ -7532,9 +7539,11 @@ fn rotator_position_from_metadata(metadata_json: &str) -> Option<f64> {
 }
 
 /// The file a quality scan measures for this light and the revision it
-/// records. With the database's option on, a light with a calibrated copy
-/// is measured from it (`calibrated:<fingerprint>`); otherwise, or when no
-/// copy is on disk, from its own file. A registered copy is never measured:
+/// records. A light whose own file is a calibrated copy (no raw frame yet)
+/// records `calibrated:<fingerprint>` for that file. With the database's
+/// option on, a light with a calibrated copy is measured from it, under the
+/// same prefix; otherwise, or when no copy is on disk, from its own file.
+/// The prefix is what keeps calibrated measurements out of a raw cohort. A registered copy is never measured:
 /// resampling changes the stars, the HFR and the pointing.
 fn quality_scan_source(
     ctx: &DatabaseContext,
@@ -7545,6 +7554,17 @@ fn quality_scan_source(
     if let Some(revision) = rendered_artifact_mapping_revision(ctx, image)? {
         let path = find_fits_file(ctx, image, target_name, file_only)?;
         return Ok((path, Some(format!("mapping:{revision}"))));
+    }
+    let calibrated = |token: String| {
+        format!(
+            "{}{token}",
+            crate::server::spatial_scan::CALIBRATED_SOURCE_PREFIX
+        )
+    };
+    if own_file_is_calibrated(ctx, image) {
+        let path = find_fits_file(ctx, image, target_name, file_only)?;
+        let revision = source_file_cache_token(&path).map(calibrated);
+        return Ok((path, revision));
     }
     if ctx
         .scan_calibrated_copies
@@ -7563,6 +7583,20 @@ fn quality_scan_source(
     Ok((path, revision))
 }
 
+/// Whether the light's own file is a calibrated copy: the catalog took it
+/// from one because it had no raw frame.
+fn own_file_is_calibrated(ctx: &DatabaseContext, image: &crate::models::AcquiredImage) -> bool {
+    let Some(guid) = image.guid.as_deref() else {
+        return false;
+    };
+    let connection = ctx.db();
+    let Ok(connection) = connection.lock() else {
+        return false;
+    };
+    crate::frame_derivatives::derivatives_for_light(&connection, guid)
+        .is_ok_and(|records| records.iter().any(|record| record.primary_source))
+}
+
 /// The light's calibrated copy with the most steps that is on disk.
 fn calibrated_copy_for_scan(
     ctx: &DatabaseContext,
@@ -7574,7 +7608,9 @@ fn calibrated_copy_for_scan(
         let connection = connection.lock().ok()?;
         crate::frame_derivatives::derivatives_for_light(&connection, guid).ok()?
     };
-    records.retain(|record| record.kind == crate::image_io::FrameKind::Calibrated);
+    records.retain(|record| {
+        record.kind == crate::image_io::FrameKind::Calibrated && !record.primary_source
+    });
     records.sort_by_key(|record| std::cmp::Reverse(record.steps.count()));
     records
         .iter()
@@ -8950,6 +8986,33 @@ mod file_resolution_tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn a_light_whose_own_file_is_calibrated_is_measured_as_calibrated() {
+        // The catalog took this light from its calibrated copy (no raw
+        // frame yet): its scan is marked calibrated whatever the option, so
+        // scoring keeps it out of the raw frames' cohort.
+        let temp = tempfile::tempdir().unwrap();
+        let (ctx, mut light, _, calibrated, _) = light_with_copies(&temp);
+        light.metadata = serde_json::json!({ "FileName": "frame_0115_c.fits" }).to_string();
+        {
+            let connection = ctx.db();
+            let connection = connection.lock().unwrap();
+            connection
+                .execute(
+                    "UPDATE psf_guard_frame_derivative SET primary_source = 1
+                     WHERE derivative_uuid = 'copy-c'",
+                    [],
+                )
+                .unwrap();
+        }
+        let (path, revision) =
+            quality_scan_source(&ctx, &light, "Target", "frame_0115_c.fits").unwrap();
+        assert_eq!(path, calibrated);
+        assert!(revision
+            .unwrap()
+            .starts_with(crate::server::spatial_scan::CALIBRATED_SOURCE_PREFIX));
     }
 
     #[test]

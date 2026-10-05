@@ -744,10 +744,26 @@ pub struct TargetFilterRollup {
     pub unavailable_image_count: usize,
 }
 
+/// Whether a frame's measurements come from the camera's pixels or from a
+/// calibrated copy (bias and dark removed, flat divided). Background, flux
+/// and star counts differ between the two for the same sky, so frames are
+/// compared only with frames of the same domain.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PixelDomain {
+    #[default]
+    Raw,
+    Calibrated,
+}
+
 /// Raw metric values extracted from an image's metadata for analysis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageMetrics {
     pub image_id: i32,
+    /// Which pixels the measurements came from. Sessions and the target
+    /// rollup never mix the two.
+    #[serde(default)]
+    pub pixel_domain: PixelDomain,
     pub timestamp: Option<i64>,
     #[serde(default)]
     pub session_id: Option<String>,
@@ -1431,10 +1447,17 @@ impl SequenceAnalyzer {
         target_name: &str,
         filter_name: &str,
     ) -> Vec<ScoredSequence> {
-        self.split_into_sequences(images)
+        // Raw and calibrated measurements of the same sky differ in
+        // background, flux and star count, so each domain forms its own
+        // sessions; a calibrated frame among raw ones would read as an
+        // outlier, and the other way round.
+        let mut sequences: Vec<ScoredSequence> = split_by_pixel_domain(images)
             .into_iter()
+            .flat_map(|domain| self.split_into_sequences(&domain))
             .map(|seq| self.score_sequence(seq, target_id, target_name, filter_name, context))
-            .collect()
+            .collect();
+        sequences.sort_by_key(|sequence| sequence.session_start.unwrap_or(0));
+        sequences
     }
 
     /// Score each capture session and the full target/filter stack candidate
@@ -1472,10 +1495,11 @@ impl SequenceAnalyzer {
             })
             .collect();
 
-        let mut by_profile: HashMap<Option<String>, Vec<ImageMetrics>> = HashMap::new();
+        let mut by_profile: HashMap<(PixelDomain, Option<String>), Vec<ImageMetrics>> =
+            HashMap::new();
         for image in images {
             by_profile
-                .entry(image.capture_profile.clone())
+                .entry((image.pixel_domain, image.capture_profile.clone()))
                 .or_default()
                 .push(image.clone());
         }
@@ -3516,6 +3540,19 @@ pub struct StarMeasure {
 /// dimension once most of its target is scanned. Otherwise the capture
 /// software's values are used for every frame. Each frame also keeps its own
 /// best measurement in `own_stars`. Idempotent.
+/// The frames of each pixel domain, raw first. A set with one domain comes
+/// back whole.
+fn split_by_pixel_domain(images: &[ImageMetrics]) -> Vec<Vec<ImageMetrics>> {
+    let (raw, calibrated): (Vec<ImageMetrics>, Vec<ImageMetrics>) = images
+        .iter()
+        .cloned()
+        .partition(|image| image.pixel_domain == PixelDomain::Raw);
+    [raw, calibrated]
+        .into_iter()
+        .filter(|domain| !domain.is_empty())
+        .collect()
+}
+
 pub fn choose_star_source(images: &[ImageMetrics]) -> Vec<ImageMetrics> {
     if images.iter().all(|image| image.own_stars.is_some()) {
         return images.to_vec();
@@ -4042,6 +4079,7 @@ pub fn extract_metrics_from_metadata(
 
     ImageMetrics {
         image_id,
+        pixel_domain: PixelDomain::Raw,
         timestamp,
         session_id: metadata_value_text(&metadata["SessionId"])
             .or_else(|| metadata_value_text(&metadata["SessionID"])),
@@ -4079,6 +4117,7 @@ mod tests {
 
     fn make_image(id: i32, ts: i64, stars: f64, hfr: f64) -> ImageMetrics {
         ImageMetrics {
+            pixel_domain: PixelDomain::Raw,
             image_id: id,
             timestamp: Some(ts),
             session_id: None,
@@ -4196,6 +4235,7 @@ mod tests {
         ecc: f64,
     ) -> ImageMetrics {
         ImageMetrics {
+            pixel_domain: PixelDomain::Raw,
             image_id: id,
             timestamp: Some(ts),
             session_id: None,
@@ -4223,6 +4263,88 @@ mod tests {
         }
     }
 
+    #[test]
+    fn calibrated_frames_are_scored_only_against_calibrated_frames() {
+        // A night where every other frame is a calibrated copy (its raw is
+        // gone): calibrated pixels have the pedestal and dark removed and
+        // are flat-divided, so their background, flux and star count sit
+        // far from the raw frames' for the same sky. Mixed into one cohort
+        // they would read as outliers; apart, every frame is good.
+        let images: Vec<ImageMetrics> = (0..20)
+            .map(|index| {
+                let calibrated = index % 2 == 1;
+                let mut image = make_full_image(
+                    index,
+                    1_000 + i64::from(index) * 300,
+                    if calibrated { 900.0 } else { 600.0 },
+                    if calibrated { 2.1 } else { 2.6 },
+                    if calibrated { 120.0 } else { 1_800.0 },
+                    if calibrated { 60.0 } else { 25.0 },
+                    0.3,
+                );
+                if calibrated {
+                    image.pixel_domain = PixelDomain::Calibrated;
+                }
+                image
+            })
+            .collect();
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let (sequences, rollup) =
+            analyzer.analyze_with_target_filter_rollup(&images, 1, "M31", "Ha");
+
+        assert_eq!(sequences.len(), 2, "one session per domain");
+        for sequence in &sequences {
+            let ids: Vec<i32> = sequence.images.iter().map(|image| image.image_id).collect();
+            let parity = ids[0] % 2;
+            assert!(
+                ids.iter().all(|id| id % 2 == parity),
+                "{ids:?} mixes domains"
+            );
+            assert_eq!(ids.len(), 10);
+        }
+        let scored: Vec<&ImageQualityResult> = sequences
+            .iter()
+            .flat_map(|sequence| &sequence.images)
+            .collect();
+        assert!(
+            scored.iter().all(|image| image.quality_score > 0.8),
+            "{:?}",
+            scored
+                .iter()
+                .map(|image| (image.image_id, image.quality_score))
+                .collect::<Vec<_>>()
+        );
+        // The target rollup keeps the domains apart too.
+        if let Some(rollup) = rollup {
+            assert!(rollup
+                .sequence
+                .images
+                .iter()
+                .all(|image| image.quality_score > 0.8));
+        }
+
+        // The same frames in one domain: the calibrated half stands out.
+        let mixed: Vec<ImageMetrics> = images
+            .iter()
+            .cloned()
+            .map(|mut image| {
+                image.pixel_domain = PixelDomain::Raw;
+                image
+            })
+            .collect();
+        let together = analyzer.analyze(&mixed, 1, "M31", "Ha");
+        assert_eq!(together.len(), 1);
+        let worst = together[0]
+            .images
+            .iter()
+            .map(|image| image.quality_score)
+            .fold(f64::INFINITY, f64::min);
+        assert!(
+            worst < 0.8,
+            "mixing domains should mislead the score: {worst}"
+        );
+    }
+
     fn make_spatial_image(
         id: i32,
         ts: i64,
@@ -4232,6 +4354,7 @@ mod tests {
         bg_spread: f64,
     ) -> ImageMetrics {
         ImageMetrics {
+            pixel_domain: PixelDomain::Raw,
             image_id: id,
             timestamp: Some(ts),
             session_id: None,
