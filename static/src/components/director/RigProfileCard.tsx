@@ -4,7 +4,8 @@ import { isAxiosError } from 'axios';
 import { Check, Download, RefreshCw } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
-import type { DirectorRigProfileView } from '../../api/directorTypes';
+import type { DirectorRigProfileView, DirectorRigSite } from '../../api/directorTypes';
+import HorizonEditor from './HorizonEditor';
 import { applyDefaults, describeSource, editFromForm, fieldOfView, formFromProfile, formatFieldOfView, opticsFromForm, type RigProfileForm } from './rigProfileForm';
 
 const message = (error: unknown) => isAxiosError(error)
@@ -29,19 +30,36 @@ export default function RigProfileCard({ slug }: { slug: string }) {
     // Director admits one metadata request at a time; a 503 means wait, not fail.
     retry: (count, error) => count < 5 && (isAxiosError(error) ? error.response?.status : error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined) === 503, retryDelay: 700 });
   const peers = useQuery({ queryKey: ['peers'], queryFn: apiClient.getPeers, retry: false, refetchOnWindowFocus: false });
+  // Where the rig stands for planning: the site it names, and what that
+  // gives it. The rig's own location and horizon still win.
+  const rigId = loaded.data?.rig.id;
+  const sites = useQuery({ queryKey: ['observingDefaults'], queryFn: apiClient.getObservingDefaults, refetchOnWindowFocus: false });
+  const rigSettings = useQuery({ queryKey: ['observingSettings', 'rig', rigId], queryFn: () => apiClient.getObservingSettings('rig', rigId!), enabled: !!rigId, refetchOnWindowFocus: false });
+  const summaries = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, refetchOnWindowFocus: false });
+  const placed = summaries.data?.find(entry => entry.catalog_slug === slug)?.site;
   const [form, setForm] = useState<RigProfileForm | null>(null);
+  const [siteId, setSiteId] = useState<string | null>(null);
   const [problem, setProblem] = useState('');
   const [notice, setNotice] = useState('');
   useEffect(() => { if (loaded.data) setForm(formFromProfile(loaded.data.profile)); }, [loaded.data]);
+  useEffect(() => { if (rigSettings.data) setSiteId(rigSettings.data.site_id); }, [rigSettings.data]);
   const save = useMutation({
     retry: false,
-    mutationFn: (view: DirectorRigProfileView) => {
+    mutationFn: async (view: DirectorRigProfileView) => {
       if (!form) throw new Error('Nothing to save');
       const edit = editFromForm(form, view.profile);
       if (typeof edit === 'string') throw new Error(edit);
-      return apiClient.saveDirectorRigProfile(slug, edit);
+      const saved = await apiClient.saveDirectorRigProfile(slug, edit);
+      // The planning site lives with the rig's observing settings.
+      if (rigSettings.data && siteId !== rigSettings.data.site_id) {
+        const settings = await apiClient.saveObservingSettings({ ...rigSettings.data, site_id: siteId });
+        client.setQueryData(['observingSettings', 'rig', settings.scope_id], settings);
+        void client.invalidateQueries({ queryKey: ['observingEffective'] });
+      }
+      return saved;
     },
     onSuccess: saved => {
+      void client.invalidateQueries({ queryKey: ['directorRigProfiles'] });
       setNotice(`Saved rig profile revision ${saved.profile.revision}.`);
       // Keep the header defaults from the last load; a save does not reread frames.
       client.setQueryData<DirectorRigProfileView>(queryKey, current => current ? { ...saved, defaults: current.defaults } : saved);
@@ -102,6 +120,16 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       </fieldset>
       <fieldset disabled={disabled}>
         <legend>Site</legend>
+        <label className="rig-profile-field" htmlFor={`${slug}-planning-site`}><span>Planning site</span>
+          <span className="rig-profile-input">
+            <select id={`${slug}-planning-site`} aria-label="Planning site" value={siteId ?? ''} disabled={!rigSettings.data} onChange={event => setSiteId(event.target.value || null)}>
+              <option value="">None</option>
+              {sites.data?.sites.map(site => <option key={site.id} value={site.id}>{site.name}</option>)}
+            </select>
+          </span>
+        </label>
+        <p className="director-muted" data-testid="rig-site-origin">{describePlacement(placed)}</p>
+        <p className="director-muted">The rig takes its site's location and horizon. Type a location or give a horizon here only when this rig differs; leave them empty to use the site's.</p>
         <p className="director-muted rig-profile-source">{describeSource(form.siteSource ?? data.profile.site?.source, data.profile.site?.reported_at_ms)}
           {canWrite && data.defaults.site && <button type="button" className="link-button" onClick={() => { update(applyDefaults(form, { ...data.defaults, optics: null })); setNotice(''); }}><Download size={14} />Use frame headers</button>}
         </p>
@@ -112,7 +140,13 @@ export default function RigProfileCard({ slug }: { slug: string }) {
           <Field id={`${slug}-bortle`} label="Bortle class" step="1" value={form.bortle} disabled={disabled} onChange={bortle => update({ bortle })} />
           <Field id={`${slug}-sqm`} label="Sky brightness" unit="mag/arcsec²" value={form.sqm} disabled={disabled} onChange={sqm => update({ sqm })} />
         </div>
-        <p className="director-muted">Horizon: {data.profile.horizon ? data.profile.horizon.value.mode === 'custom' ? `${data.profile.horizon.value.points.length} points, ${describeSource(data.profile.horizon.source, data.profile.horizon.reported_at_ms).toLowerCase()}` : 'flat at the minimum altitude' : 'flat at the minimum altitude until the plugin reports one'}.</p>
+        <HorizonEditor label="Rig horizon" name={data.rig.name} horizon={form.horizon?.value ?? null} disabled={disabled}
+          note={form.horizon
+            ? (form.horizon.source.kind === data.profile.horizon?.source.kind && form.horizon.value === data.profile.horizon?.value
+              ? describeSource(data.profile.horizon.source, data.profile.horizon.reported_at_ms).toLowerCase()
+              : 'not saved yet')
+            : placed?.horizon_from === 'site' ? `none of its own, so ${placed.site?.name ?? 'the site'}'s applies` : 'none of its own'}
+          onChange={horizon => update({ horizon: horizon ? { value: horizon, source: { kind: 'manual' } } : null })} />
       </fieldset>
       <fieldset disabled={disabled}>
         <legend>Limits</legend>
@@ -144,4 +178,13 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       {!canWrite && <p className="director-muted">Read only</p>}
     </form>}
   </section>;
+}
+
+/** Where planning takes this rig's location and horizon from. */
+function describePlacement(placed: DirectorRigSite | undefined): string {
+  if (!placed) return 'Planning reads the location and horizon once the rig list loads.';
+  const from = (origin: DirectorRigSite['location_from']) => origin === 'rig' ? 'this rig' : origin === 'site' ? (placed.site?.name ?? 'its site') : null;
+  const location = from(placed.location_from);
+  const horizon = from(placed.horizon_from);
+  return `Planning uses ${location ? `the location from ${location}` : 'no location yet'} and ${horizon ? `the horizon from ${horizon}` : 'a flat horizon at the minimum altitude'}.`;
 }

@@ -576,6 +576,37 @@ server folds both back to the sensor before offering them. Typed models:
 [optics](../crates/director-core/src/optics.rs) and
 [profile](../crates/director-meta/src/profile.rs).
 
+## Sites and horizons
+
+A site holds a location (latitude, east-positive longitude and elevation) and
+a horizon. Add and edit sites under **Settings**, **Rigs**, **Sites**. Each
+rig picks its **Planning site** in its Setup card and takes the site's
+location and horizon. A rig's own values win: a location typed into its card,
+and a horizon pasted there or reported by the N.I.N.A. plugin. Leave the
+rig's fields empty to use the site's. The card says where planning takes each
+from. Feasibility, the visibility chart and the program sent to the plugin all
+use this resolved location and horizon; without one, a rig has no location
+and the horizon is flat at its minimum altitude.
+
+A horizon is a N.I.N.A. `.hrz` file: one `azimuth altitude` pair per line in
+degrees, `#` for comments. Paste it or upload it, and download it back as a
+`.hrz` for N.I.N.A. The server reads the file, sorts the points, and closes
+the curve at 0° and 360°, taking the altitude where the line from the last
+point to the first crosses north. It refuses a line that is not two numbers,
+an azimuth outside 0 to 360, an altitude outside -90 to 90, and a repeated
+azimuth, naming the line.
+
+| Method | Route | Body or query |
+| --- | --- | --- |
+| GET | `/sites/{site}/profile` | The site and its profile: `location` and `horizon`, each `{value, source, reported_at_ms}` or `null`, and `revision` (0 when nothing is saved). `404` for an unknown site. |
+| PUT | `/sites/{site}/profile` | `expected_revision` plus `location` and `horizon`, each `{value, source}` or `null`. Sources may be `manual` or `frame_headers`; `409` when the revision moved. |
+| POST | `/horizons/parse` | `{text}` holding a `.hrz` file; returns the canonical `Horizon` or `400` naming the line it could not read. Stores nothing. |
+
+`GET /rigs/profiles` carries each rig's resolved `site`: the planning `site`
+it names, `location` and `horizon`, and `location_from` and `horizon_from`
+(`rig`, `site` or `none`). Typed model:
+[site profile](../crates/director-meta/src/site_profile.rs).
+
 ## Framing view
 
 Open a plan from its Planning button in the Library, or pick its project in the

@@ -179,6 +179,31 @@ export interface DirectorRigProfileSummary {
   field_of_view: DirectorFieldOfView | null;
   /** Starting exposure lengths for this rig's optics and sky. */
   default_exposure_seconds: { broadband: number; narrowband: number };
+  /** The location and horizon planning uses. Absent from older servers. */
+  site?: DirectorRigSite;
+}
+/** Which record a rig's location or horizon came from. */
+export type DirectorSiteOrigin = 'rig' | 'site' | 'none';
+export interface DirectorRigSite {
+  /** The planning site the rig names, if any. */
+  site: DirectorIdentity | null;
+  location: DirectorSite | null;
+  location_from: DirectorSiteOrigin;
+  horizon: DirectorHorizon;
+  horizon_from: DirectorSiteOrigin;
+}
+export interface DirectorSiteProfile {
+  site_id: string;
+  revision: number;
+  location: DirectorReported<DirectorSite> | null;
+  horizon: DirectorReported<DirectorHorizon> | null;
+  updated_at_ms: number;
+}
+export interface DirectorSiteProfileView { site: DirectorIdentity; profile: DirectorSiteProfile }
+export interface DirectorSiteProfileEdit {
+  expected_revision: number;
+  location: DirectorEdited<DirectorSite> | null;
+  horizon: DirectorEdited<DirectorHorizon> | null;
 }
 export interface DirectorCutoutRequest {
   survey: string;

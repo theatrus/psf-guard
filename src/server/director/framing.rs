@@ -8,7 +8,7 @@ use psf_guard_director_core::{
     framing::{FramingPreview, FramingRequest},
     optics::FieldOfView,
 };
-use psf_guard_director_meta::{framing::FramingDraft, profile::RigProfile};
+use psf_guard_director_meta::{framing::FramingDraft, profile::RigProfile, site_profile::RigSite};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) async fn preview(
@@ -76,6 +76,8 @@ pub(super) struct RigProfileSummary {
     field_of_view: Option<FieldOfView>,
     /// Starting exposure lengths for this rig's optics and sky, per band kind.
     default_exposure_seconds: DefaultExposures,
+    /// The location and horizon planning uses: the rig's own, else its site's.
+    site: RigSite,
 }
 
 #[derive(Serialize)]
@@ -123,6 +125,7 @@ pub(super) async fn rig_profiles(
                     continue;
                 };
                 let profile = store.rig_profile(binding.rig.id)?;
+                let site = store.rig_site(binding.rig.id, profile.as_ref())?;
                 let field_of_view = profile
                     .as_ref()
                     .and_then(|p| p.optics.as_ref())
@@ -137,6 +140,7 @@ pub(super) async fn rig_profiles(
                     ),
                     profile,
                     field_of_view,
+                    site,
                 });
             }
             summaries.sort_by(|a, b| a.catalog_name.cmp(&b.catalog_name));

@@ -36,6 +36,7 @@ mod plan;
 mod plans;
 mod program;
 mod rig_profile;
+mod site_profile;
 mod sky_image;
 mod sky_objects;
 mod sky_search;
@@ -556,6 +557,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .route("/projects/{id}/attach", axum::routing::post(attach_project))
         .route("/projects/{id}/detach", axum::routing::post(detach_project))
         .merge(configuration_api::routes())
+        .merge(site_profile::routes())
         .merge(preferences::routes())
         .merge(templates::routes())
         .layer(DefaultBodyLimit::max(4096))

@@ -17,6 +17,7 @@ mod configuration;
 mod equipment_report;
 mod pairing;
 mod preferences;
+mod site_profile;
 mod sky_image;
 mod workload;
 

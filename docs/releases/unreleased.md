@@ -62,6 +62,12 @@
 
 ## Added
 
+- Sites hold a location and a horizon. Paste or upload a N.I.N.A. `.hrz`
+  horizon file for a site, or for one rig that differs, and download it back.
+  Each rig picks its planning site and takes the site's location and horizon
+  unless it has its own; feasibility, the visibility chart and the program
+  sent to the plugin use them.
+
 - **Analyze new frames as they arrive**, a per-database option beside the
   quality backfill buttons, runs the background quality analysis on frames
   that arrive by sync, peer pull, remote upload or auto-import, so a target is

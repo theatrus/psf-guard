@@ -20,6 +20,7 @@ pub mod preferences;
 pub mod profile;
 pub mod program_issue;
 pub mod project;
+pub mod site_profile;
 mod storage;
 pub mod templates;
 pub mod workload;

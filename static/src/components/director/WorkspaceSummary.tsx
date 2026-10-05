@@ -14,7 +14,8 @@ function rigGaps(rig: DirectorRigProfileSummary | undefined): string[] {
   if (!rig?.profile) return ['no rig profile'];
   const gaps: string[] = [];
   if (!rig.profile.optics && !rig.field_of_view) gaps.push('no optics');
-  if (!rig.profile.site) gaps.push('no site');
+  // The rig's own location, else its planning site's.
+  if (!(rig.site ? rig.site.location : rig.profile.site)) gaps.push('no site');
   return gaps;
 }
 

@@ -237,6 +237,8 @@ pub(super) fn assemble(
         .filter(|binding| binding.rig.id == rig)
         .ok_or(Error::WrongRig)?;
     let profile = store.rig_profile(rig)?;
+    // The rig's own location and horizon, else its planning site's.
+    let placed = store.rig_site(rig, profile.as_ref())?;
     let configuration = profile
         .as_ref()
         .and_then(|p| p.configuration.as_ref())
@@ -448,15 +450,8 @@ pub(super) fn assemble(
         links: built.links,
         rig: RigContext {
             profile_revision: profile.as_ref().map_or(0, |p| p.revision),
-            site: profile
-                .as_ref()
-                .and_then(|p| p.site.as_ref())
-                .map(|s| s.value),
-            horizon: profile
-                .as_ref()
-                .and_then(|p| p.horizon.as_ref())
-                .map(|h| h.value.clone())
-                .unwrap_or(Horizon::FixedMinimum {}),
+            site: placed.location,
+            horizon: placed.horizon,
             limits,
             rotation: profile
                 .as_ref()

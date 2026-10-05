@@ -135,4 +135,48 @@ describe('Rig profile card', () => {
     expect(edit.optics?.source).toEqual({ kind: 'plugin' });
     expect(edit.horizon?.value).toEqual({ mode: 'custom', points: [{ azimuth_degrees: 0, altitude_degrees: 12 }] });
   });
+
+  it('takes its site from the planning site, and pastes a horizon of its own that wins', async () => {
+    const { saves } = fixture();
+    const settingsSaves: unknown[] = [];
+    const backyard = { id: '33333333-3333-4333-8333-333333333333', name: 'Backyard', revision: 1 };
+    const curve = { mode: 'custom' as const, points: [{ azimuth_degrees: 0, altitude_degrees: 15 }, { azimuth_degrees: 90, altitude_degrees: 25 }, { azimuth_degrees: 360, altitude_degrees: 15 }] };
+    let rigSettings = { scope: 'rig', scope_id: rig.id, revision: 0, overrides: { weights: {} }, enabled: null, site_id: null as string | null };
+    server.use(
+      http.get('/api/director/v1/preferences', () => HttpResponse.json(ok({ global_id: 'g', presets: {}, sites: [backyard] }))),
+      http.get(`/api/director/v1/preferences/rig/${rig.id}`, () => HttpResponse.json(ok(rigSettings))),
+      http.put(`/api/director/v1/preferences/rig/${rig.id}`, async ({ request }) => {
+        const body = await request.json() as typeof rigSettings;
+        settingsSaves.push(body);
+        rigSettings = { ...body, revision: body.revision + 1 };
+        return HttpResponse.json(ok(rigSettings));
+      }),
+      http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([{ rig, catalog_slug: 'catalog', catalog_name: 'RedCat 61', profile: empty, field_of_view: null, default_exposure_seconds: { broadband: 120, narrowband: 300 },
+        site: { site: rigSettings.site_id ? backyard : null, location: rigSettings.site_id ? site : null, location_from: rigSettings.site_id ? 'site' : 'none', horizon: { mode: 'fixed_minimum' }, horizon_from: 'none' } }]))),
+      http.post('/api/director/v1/horizons/parse', async ({ request }) => {
+        const { text } = await request.json() as { text: string };
+        return text.includes('north')
+          ? HttpResponse.json({ success: false, data: null, error: 'Horizon file not read: line 1 is not an azimuth and an altitude.' }, { status: 400 })
+          : HttpResponse.json(ok(curve));
+      }),
+    );
+    mount();
+    expect(await screen.findByTestId('rig-site-origin')).toHaveTextContent('Planning uses no location yet and a flat horizon at the minimum altitude.');
+    fireEvent.change(await screen.findByLabelText('Planning site'), { target: { value: backyard.id } });
+
+    fireEvent.change(screen.getByLabelText('Rig horizon file text'), { target: { value: 'north 5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use pasted horizon' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('line 1 is not an azimuth');
+    fireEvent.change(screen.getByLabelText('Rig horizon file text'), { target: { value: '90 25\n' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use pasted horizon' }));
+    await waitFor(() => expect(screen.getByTestId('horizon-summary')).toHaveTextContent('3 points, highest 25° at azimuth 90°, not saved yet.'));
+    expect(screen.getByRole('button', { name: /Download .hrz/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].horizon).toEqual({ value: curve, source: { kind: 'manual' } });
+    await waitFor(() => expect(settingsSaves).toHaveLength(1));
+    expect(settingsSaves[0]).toMatchObject({ scope: 'rig', site_id: backyard.id, revision: 0 });
+    await waitFor(() => expect(screen.getByTestId('rig-site-origin')).toHaveTextContent('the location from Backyard'));
+  });
 });

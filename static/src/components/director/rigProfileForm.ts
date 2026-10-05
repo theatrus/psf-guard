@@ -1,4 +1,4 @@
-import type { DirectorFieldOfView, DirectorOptics, DirectorReported, DirectorRigProfile, DirectorRigProfileEdit, DirectorRigProfileView, DirectorSource } from '../../api/directorTypes';
+import type { DirectorEdited, DirectorFieldOfView, DirectorHorizon, DirectorOptics, DirectorReported, DirectorRigProfile, DirectorRigProfileEdit, DirectorRigProfileView, DirectorSource } from '../../api/directorTypes';
 
 /** Text fields for every number the form edits, so a half-typed value never throws. */
 export interface RigProfileForm {
@@ -10,6 +10,8 @@ export interface RigProfileForm {
   minAltitude: string; maxAltitude: string; meridianBefore: string; meridianAfter: string;
   /** Registered peer id, or '' when the rig executes from this server. */
   peerId: string;
+  /** The rig's own horizon, which wins over its site's; null inherits. */
+  horizon: DirectorEdited<DirectorHorizon> | null;
 }
 
 const text = (value: number | null | undefined) => value === null || value === undefined ? '' : String(value);
@@ -30,6 +32,7 @@ export function formFromProfile(profile: DirectorRigProfile): RigProfileForm {
     minAltitude: text(limits.minimum_altitude_degrees), maxAltitude: text(limits.maximum_altitude_degrees),
     meridianBefore: text(limits.meridian_exclusion.before_ms / 60000), meridianAfter: text(limits.meridian_exclusion.after_ms / 60000),
     peerId: profile.peer_id ?? '',
+    horizon: profile.horizon ? { value: profile.horizon.value, source: profile.horizon.source } : null,
   };
 }
 
@@ -97,7 +100,7 @@ export function editFromForm(form: RigProfileForm, profile: DirectorRigProfile):
     expected_revision: profile.revision,
     optics: optics ? { value: optics, source: stored(profile.optics, form.opticsSource) } : null,
     site: finite(lat) && finite(lon) ? { value: { latitude_degrees: lat, longitude_degrees: lon, elevation_meters: finite(elev) ? elev : 0 }, source: stored(profile.site, form.siteSource) } : null,
-    horizon: profile.horizon ? { value: profile.horizon.value, source: profile.horizon.source } : null,
+    horizon: form.horizon,
     sky_quality: bortle !== null ? { value: { bortle_class: bortle, sqm_mag_per_arcsec2: finite(sqm) ? sqm : null }, source: manual } : null,
     limits: { value: { minimum_altitude_degrees: minAlt, maximum_altitude_degrees: maxAlt, meridian_exclusion: { before_ms: Math.round(before * 60000), after_ms: Math.round(after * 60000) } }, source: manual },
     peer_id: form.peerId || null,
