@@ -12,6 +12,10 @@
 
 ## Changed
 
+- WBPP exports and runs build the same dark masters a stack would. When
+  lights of one exposure were matched to different darks, each set of darks
+  gets its own `DARKSET_<night>` folder and grouping keyword, so WBPP no
+  longer averages every night's darks into one master.
 - Dark masters use the nearest complete night of darks, and otherwise pool
   nights within reach, nearest first. Darks more than six months from the
   lights no longer match unless marked for that side of them. Both the reach

@@ -13,7 +13,7 @@
 //!
 //! Checked against PixInsight 1.9.5 with WBPP 3.1.0.
 
-use super::{ExportPlan, SESSION_KEYWORD};
+use super::{ExportPlan, DARKSET_KEYWORD, SESSION_KEYWORD};
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 
@@ -316,12 +316,19 @@ fn trim_root(root: &str) -> &str {
 /// Whether any planned path carries a session component, which is what
 /// tells the runner to turn WBPP's keyword grouping on.
 fn has_sessions(plan: &ExportPlan) -> bool {
-    let prefix = format!("{SESSION_KEYWORD}_");
-    plan.items.iter().any(|item| {
-        item.relative_dest
-            .components()
-            .any(|component| component.as_os_str().to_string_lossy().starts_with(&prefix))
-    })
+    has_keyword(plan, SESSION_KEYWORD)
+}
+
+/// Whether any planned path carries a dark-set component: lights in this
+/// export were matched to different darks of one exposure and gain.
+fn has_dark_sets(plan: &ExportPlan) -> bool {
+    has_keyword(plan, DARKSET_KEYWORD)
+}
+
+fn has_keyword(plan: &ExportPlan, keyword: &str) -> bool {
+    plan.items
+        .iter()
+        .any(|item| keyword_of(&item.relative_dest, keyword).is_some())
 }
 
 /// The longest directory every planned source sits under. `None` for an
@@ -351,6 +358,8 @@ pub fn common_source_root(plan: &ExportPlan) -> Option<PathBuf> {
 struct ReferencedFile {
     place: ReferencedPlace,
     session: Option<String>,
+    /// The dark set the placed layout would have put in its path.
+    dark_set: Option<String>,
 }
 
 enum ReferencedPlace {
@@ -360,7 +369,12 @@ enum ReferencedPlace {
 
 /// The session label a placed path carries, if any.
 fn session_of(relative_dest: &Path) -> Option<String> {
-    let prefix = format!("{SESSION_KEYWORD}_");
+    keyword_of(relative_dest, SESSION_KEYWORD)
+}
+
+/// The value of a `<KEYWORD>_<value>` component in a placed path, if any.
+fn keyword_of(relative_dest: &Path, keyword: &str) -> Option<String> {
+    let prefix = format!("{keyword}_");
     relative_dest.components().find_map(|component| {
         component
             .as_os_str()
@@ -388,6 +402,7 @@ fn referenced_files(
                 Err(_) => ReferencedPlace::Outside(item.source.clone()),
             },
             session: session_of(&item.relative_dest),
+            dark_set: keyword_of(&item.relative_dest, DARKSET_KEYWORD),
         })
         .collect();
     Some((root, files))
@@ -507,6 +522,18 @@ pub fn batch_script(plan: &ExportPlan, spec: &WbppScriptSpec) -> String {
     script
 }
 
+/// Why the darks of one exposure sit in several folders.
+fn dark_set_note(comment: &str) -> String {
+    format!(
+        "{comment}\n\
+         {comment}Lights here were matched to different darks of one exposure and gain,\n\
+         {comment}so each set sits in a {DARKSET_KEYWORD}_<night> folder and each light in\n\
+         {comment}its set's. WBPP lets a dark serve a light only when their {DARKSET_KEYWORD}\n\
+         {comment}values agree, so it builds the masters PSF Guard would; bias, dark\n\
+         {comment}flats and flats carry none and serve every light.\n"
+    )
+}
+
 /// Why the runner turns keyword grouping on, for the reader of the script.
 fn session_grouping_note(comment: &str) -> String {
     format!(
@@ -535,15 +562,19 @@ fn preamble(comment: &str, plan: &ExportPlan, spec: &WbppScriptSpec) -> String {
             "{comment}Nothing was copied: {JS_RUNNER} names every frame where it already\n\
              {comment}is, and WBPP reads each one's type from its IMAGETYP header. The\n\
              {comment}script also tells WBPP which night's flats each light calibrates\n\
-             {comment}with, as a {SESSION_KEYWORD} grouping keyword, since the originals'\n\
-             {comment}paths carry none.\n"
+             {comment}with, as a {SESSION_KEYWORD} grouping keyword, and which darks, as\n\
+             {comment}{DARKSET_KEYWORD} when lights need different ones, since the originals'\n\
+             {comment}paths carry neither.\n"
         ),
     };
-    let sessions = if matches!(spec.files, WbppFiles::Placed) && has_sessions(plan) {
+    let mut sessions = if matches!(spec.files, WbppFiles::Placed) && has_sessions(plan) {
         session_grouping_note(comment)
     } else {
         String::new()
     };
+    if matches!(spec.files, WbppFiles::Placed) && has_dark_sets(plan) {
+        sessions.push_str(&dark_set_note(comment));
+    }
     let options: String = spec
         .options
         .describe()
@@ -624,13 +655,15 @@ fn include_bpp_main(bpp_main: Option<&Path>) -> String {
 /// the next `*/` wherever that is, so the script must not contain one; a
 /// glob in a comment once swallowed everything up to WBPP's own entry call.
 pub fn js_runner(plan: &ExportPlan, spec: &WbppScriptSpec) -> String {
-    let entry = |path: &Path, session: Option<&str>| match session {
-        Some(session) => format!(
-            "{{ path: {}, session: {} }}",
-            js_string(&slashed(path)),
-            js_string(session)
-        ),
-        None => format!("{{ path: {} }}", js_string(&slashed(path))),
+    let entry = |path: &Path, session: Option<&str>, dark_set: Option<&str>| {
+        let mut fields = vec![format!("path: {}", js_string(&slashed(path)))];
+        if let Some(session) = session {
+            fields.push(format!("session: {}", js_string(session)));
+        }
+        if let Some(dark_set) = dark_set {
+            fields.push(format!("darkset: {}", js_string(dark_set)));
+        }
+        format!("{{ {} }}", fields.join(", "))
     };
 
     let mut script = preamble("// ", plan, spec);
@@ -687,11 +720,14 @@ pub fn js_runner(plan: &ExportPlan, spec: &WbppScriptSpec) -> String {
                  var psfFrameRoots = [{roots}];\n\
                  // Whether the flats sit in {SESSION_KEYWORD}_<night> folders WBPP groups by.\n\
                  var psfSessionGrouping = {sessions};\n\
+                 // Whether darks sit in {DARKSET_KEYWORD}_<night> folders, one per set.\n\
+                 var psfDarkSetGrouping = {dark_sets};\n\
                  var psfSourceRoot = \"\";\n\
                  var psfFrames = [];\n\
                  var psfOutsideFrames = [];\n",
                 roots = roots.join(", "),
                 sessions = has_sessions(plan),
+                dark_sets = has_dark_sets(plan),
             ));
         }
         WbppFiles::Referenced {
@@ -710,17 +746,22 @@ pub fn js_runner(plan: &ExportPlan, spec: &WbppScriptSpec) -> String {
             let mut outside = Vec::new();
             for file in referenced {
                 match file.place {
-                    ReferencedPlace::Below(path) => {
-                        below.push(entry(&path, file.session.as_deref()))
-                    }
-                    ReferencedPlace::Outside(path) => {
-                        outside.push(entry(&path, file.session.as_deref()))
-                    }
+                    ReferencedPlace::Below(path) => below.push(entry(
+                        &path,
+                        file.session.as_deref(),
+                        file.dark_set.as_deref(),
+                    )),
+                    ReferencedPlace::Outside(path) => outside.push(entry(
+                        &path,
+                        file.session.as_deref(),
+                        file.dark_set.as_deref(),
+                    )),
                 }
             }
             script.push_str(&format!(
                 "var psfFrameRoots = [];\n\
                  var psfSessionGrouping = false;\n\
+                 var psfDarkSetGrouping = false;\n\
                  \n\
                  // The folder the frames are listed below, as PixInsight sees it. On the\n\
                  // machine that made this export it is\n\
@@ -731,7 +772,8 @@ pub fn js_runner(plan: &ExportPlan, spec: &WbppScriptSpec) -> String {
                  // The frames, relative to psfSourceRoot. A session is the night a\n\
                  // light's flats were shot; lights and flats of one night share it, and\n\
                  // WBPP calibrates each night with its own flats before integrating\n\
-                 // the nights together.\n\
+                 // the nights together. A darkset names the darks a light's master is\n\
+                 // built from, when lights here need different ones.\n\
                  var psfFrames = [\n",
                 source_root = js_string(&source_root),
             ));
@@ -764,6 +806,8 @@ pub fn js_runner(plan: &ExportPlan, spec: &WbppScriptSpec) -> String {
          \x20  var args = [\"automationMode=true\"];\n\
          \x20  var sessionByPath = {{}};\n\
          \x20  var withSession = psfSessionGrouping ? 1 : 0;\n\
+         \x20  var darkSetByPath = {{}};\n\
+         \x20  var withDarkSet = psfDarkSetGrouping ? 1 : 0;\n\
          \n\
          \x20  // Placed frames: the folders beside the runner, scanned by WBPP.\n\
          \x20  if (psfFrameRoots.length > 0) {{\n\
@@ -782,6 +826,7 @@ pub fn js_runner(plan: &ExportPlan, spec: &WbppScriptSpec) -> String {
          \x20  function take(frame, path) {{\n\
          \x20     paths.push(path);\n\
          \x20     if (frame.session) {{ sessionByPath[path] = frame.session; ++withSession; }}\n\
+         \x20     if (frame.darkset) {{ darkSetByPath[path] = frame.darkset; ++withDarkSet; }}\n\
          \x20  }}\n\
          \x20  for (var j = 0; j < psfFrames.length; ++j) take(psfFrames[j], root + \"/\" + psfFrames[j].path);\n\
          \x20  for (var k = 0; k < psfOutsideFrames.length; ++k) take(psfOutsideFrames[k], psfOutsideFrames[k].path);\n\
@@ -803,7 +848,12 @@ pub fn js_runner(plan: &ExportPlan, spec: &WbppScriptSpec) -> String {
          \x20     for (var m = 0; m < paths.length; ++m) args.push(\"file=\" + paths[m]);\n\
          \x20  }}\n\
          \n\
-         \x20  if (withSession > 0) args.push(\"groupingKeywordsEnabled=true\", \"keywords={SESSION_KEYWORD}\");\n\
+         \x20  // WBPP takes several keywords separated by ';', each pre-processing\n\
+         \x20  // only unless a mode follows it.\n\
+         \x20  var keywords = [];\n\
+         \x20  if (withSession > 0) keywords.push(\"{SESSION_KEYWORD}\");\n\
+         \x20  if (withDarkSet > 0) keywords.push(\"{DARKSET_KEYWORD}\");\n\
+         \x20  if (keywords.length > 0) args.push(\"groupingKeywordsEnabled=true\", \"keywords=\" + keywords.join(\";\"));\n\
          \x20  for (var s = 0; s < psfSettings.length; ++s) args.push(psfSettings[s]);\n\
          \x20  // Anything else the runner was given is a WBPP parameter, so a person\n\
          \x20  // can add one to PARAMS without editing this script.\n\
@@ -825,15 +875,16 @@ pub fn js_runner(plan: &ExportPlan, spec: &WbppScriptSpec) -> String {
          \n\
          \x20  // WBPP reads a grouping keyword's value out of a frame's path, and\n\
          \x20  // referenced paths are the originals', which carry none. So the reader\n\
-         \x20  // it consults answers {SESSION_KEYWORD} for our frames from the list above and\n\
+         \x20  // it consults answers {SESSION_KEYWORD} and {DARKSET_KEYWORD} for our frames from the list above and\n\
          \x20  // leaves every other question to WBPP. It is consulted again whenever\n\
          \x20  // WBPP regroups, so the value stays.\n\
-         \x20  if (paths.length > 0 && withSession > 0) {{\n\
+         \x20  if (paths.length > 0 && (withSession > 0 || withDarkSet > 0)) {{\n\
          \x20     var readKeyFromPath = WBPPUtils.smartNaming.getCustomKeyValueFromPath;\n\
          \x20     WBPPUtils.smartNaming.getCustomKeyValueFromPath = function (key, filePath) {{\n\
-         \x20        if (key == \"{SESSION_KEYWORD}\") {{\n\
-         \x20           var session = sessionByPath[filePath] || sessionByPath[String(filePath).replace(/\\\\/g, \"/\")];\n\
-         \x20           if (session !== undefined) return session;\n\
+         \x20        var byPath = key == \"{SESSION_KEYWORD}\" ? sessionByPath : key == \"{DARKSET_KEYWORD}\" ? darkSetByPath : null;\n\
+         \x20        if (byPath) {{\n\
+         \x20           var value = byPath[filePath] || byPath[String(filePath).replace(/\\\\/g, \"/\")];\n\
+         \x20           if (value !== undefined) return value;\n\
          \x20        }}\n\
          \x20        return readKeyFromPath.call(this, key, filePath);\n\
          \x20     }};\n\
@@ -1045,12 +1096,27 @@ mod tests {
         plan.items[1].relative_dest = PathBuf::from("flats/M42/Ha/SESSION_2026-09-10/flat.fits");
         let with = js_runner(&plan, &placed(WbppRun::LoadOnly));
         assert!(with.contains("var psfSessionGrouping = true;"), "{with}");
+        assert!(with.contains("var psfDarkSetGrouping = false;"), "{with}");
+        assert!(with.contains("keywords.push(\"SESSION\")"), "{with}");
         assert!(
-            with.contains("args.push(\"groupingKeywordsEnabled=true\", \"keywords=SESSION\")"),
+            with.contains(
+                "args.push(\"groupingKeywordsEnabled=true\", \"keywords=\" + keywords.join(\";\"))"
+            ),
             "{with}"
         );
         let shell = shell_script(&plan, &placed(WbppRun::LoadOnly));
         assert!(shell.contains("SESSION_<night> folder"), "{shell}");
+        assert!(!shell.contains("DARKSET_<night> folder"), "{shell}");
+
+        // Lights matched to different darks: the dark-set folders turn the
+        // second keyword on, and the script says why.
+        plan.items[0].relative_dest =
+            PathBuf::from("lights/M42/Ha/SESSION_2026-09-10/DARKSET_2026-09-09/a.fits");
+        let with = js_runner(&plan, &placed(WbppRun::LoadOnly));
+        assert!(with.contains("var psfDarkSetGrouping = true;"), "{with}");
+        assert!(with.contains("keywords.push(\"DARKSET\")"), "{with}");
+        let shell = shell_script(&plan, &placed(WbppRun::LoadOnly));
+        assert!(shell.contains("DARKSET_<night> folder"), "{shell}");
     }
 
     /// A referenced export puts the frame list in the PixInsight script,
@@ -1130,15 +1196,29 @@ mod tests {
             "/mnt/nas/astro/2026/M42/LIGHT/a.fits",
             "/mnt/nas/astro/_Calibration/FLAT/f.fits",
             "/mnt/nas/astro/_Calibration/BIAS/b.fits",
+            "/mnt/nas/astro/_Calibration/DARK/d.fits",
         ]);
-        plan.items[0].relative_dest = PathBuf::from("lights/M42/Ha/SESSION_2026-09-10/a.fits");
+        plan.items[0].relative_dest =
+            PathBuf::from("lights/M42/Ha/SESSION_2026-09-10/DARKSET_2026-09-09/a.fits");
         plan.items[1].relative_dest = PathBuf::from("flats/M42/Ha/SESSION_2026-09-10/f.fits");
         plan.items[2].relative_dest = PathBuf::from("bias/G100/b.fits");
+        plan.items[3].relative_dest = PathBuf::from("darks/300s_G100/DARKSET_2026-09-09/d.fits");
         let js = js_runner(&plan, &referenced(None, None));
         assert!(
-            js.contains("{ path: \"2026/M42/LIGHT/a.fits\", session: \"2026-09-10\" }"),
+            js.contains("{ path: \"2026/M42/LIGHT/a.fits\", session: \"2026-09-10\", darkset: \"2026-09-09\" }"),
             "{js}"
         );
+        assert!(
+            js.contains("{ path: \"_Calibration/DARK/d.fits\", darkset: \"2026-09-09\" }"),
+            "{js}"
+        );
+        assert!(
+            js.contains(
+                "if (frame.darkset) { darkSetByPath[path] = frame.darkset; ++withDarkSet; }"
+            ),
+            "{js}"
+        );
+        assert!(js.contains("key == \"DARKSET\" ? darkSetByPath"), "{js}");
         assert!(
             js.contains("{ path: \"_Calibration/FLAT/f.fits\", session: \"2026-09-10\" }"),
             "{js}"
@@ -1147,7 +1227,7 @@ mod tests {
             js.contains("{ path: \"_Calibration/BIAS/b.fits\" }"),
             "{js}"
         );
-        assert!(js.contains("keywords=SESSION"), "{js}");
+        assert!(js.contains("keywords.push(\"SESSION\")"), "{js}");
     }
 
     /// The person maps a folder they know to what the other machine calls

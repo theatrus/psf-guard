@@ -437,9 +437,9 @@ DARKFLAT/<exposure>_G<gain>/
 
 ```text
 bias/G<gain>/
-darks/<exposure>s_G<gain>/
+darks/<exposure>s_G<gain>/[DARKSET_<night>/]
 flats/<target>/<filter>/SESSION_<night>/
-lights/<target>/<filter>/SESSION_<night>/
+lights/<target>/<filter>/SESSION_<night>/[DARKSET_<night>/]
 ```
 
 Dark flats land in `darks/` beside the lights' darks. WBPP has no dark-flat
@@ -459,6 +459,19 @@ value out of the `SESSION_<night>` folder: each night's lights calibrate with
 that night's flats, bias and darks carry no session and serve every night, and
 the nights integrate together afterwards. A light with no flats has no session
 folder. The grouped-by-target layout only sorts the flats by night.
+
+Darks get the same treatment when lights in one export need different ones:
+when lights of one exposure and gain were matched to different dark masters
+(say, each to its own complete night), each set of darks goes in a
+`DARKSET_<night>` folder named for its nearest dark, with a short digest when
+two sets share a night, and each light's path names its set. The runner then
+passes `keywords=SESSION;DARKSET`. WBPP lets a calibration group serve a light
+only when every keyword the group carries equals the light's, and prefers the
+group matching the most (`keywordsMatchCount` in WBPP's
+`BPP-FrameGroup.js`), so tagged darks serve only their own lights while bias,
+dark flats and flats, which carry no `DARKSET`, serve every light. When the
+lights of an exposure share one set of darks, nothing changes. This rule was
+read from WBPP's source; it has not yet been run through PixInsight.
 
 Choose the layout with `--layout wbpp` on the CLI, the `layout` query parameter
 on the export download, or in the dialog every Export action on the overview
@@ -521,7 +534,8 @@ includes WBPP's entry file inside a function where a Proxy named `Runtime`
 answers `jsArguments` with the list built in the script and everything else
 from the real object, then calls WBPP's entry point as `WBPP.js` does. WBPP
 reads a grouping keyword's value out of a frame's path, so the script also
-replaces that reader with one that answers `SESSION` for its own frames;
+replaces that reader with one that answers `SESSION` and `DARKSET` for its
+own frames;
 WBPP consults it on every regroup, so the value holds. It also checks that
 every frame exists before handing the list over, because WBPP drops a frame
 it cannot find without a word, and a wrong root would otherwise open an
