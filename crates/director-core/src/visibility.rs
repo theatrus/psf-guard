@@ -12,7 +12,9 @@ mod span;
 pub use span::{check_altitude_span, AltitudeSpan};
 mod windows;
 pub use windows::{altitude_windows, AltitudeWindows};
+mod hrz;
 mod meridian;
+pub use hrz::HrzError;
 pub use meridian::{meridian_windows, MeridianWindows};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]

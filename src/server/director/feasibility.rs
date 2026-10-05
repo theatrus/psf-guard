@@ -8,7 +8,10 @@ use psf_guard_director_core::{
     night::{night_curve, night_summary, Night, NightCurve, NightRequest, NightTarget},
     visibility::{AltitudeLimits, Horizon, IcrsPosition, Site},
 };
-use psf_guard_director_meta::{plan::Goal, profile::Limits};
+use psf_guard_director_meta::{
+    plan::Goal,
+    profile::{Limits, RigProfile},
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_NIGHTS: u32 = 7;
@@ -147,24 +150,22 @@ pub(super) async fn evaluate(
         }
         let mut inputs = Vec::new();
         for (rig_id, (rig, catalog_name)) in names {
-            match store.rig_profile(rig_id)? {
-                Some(profile) => inputs.push((rig_id, rig, catalog_name, profile)),
-                None => warnings.push(format!("{catalog_name}: no rig profile yet; set its site under Setup.")),
-            }
+            // A rig with no profile yet can still take its site's location
+            // and horizon; its limits are the defaults until it has one.
+            let profile = store.rig_profile(rig_id)?;
+            let placed = store.rig_site(rig_id, profile.as_ref())?;
+            let profile = profile.unwrap_or_else(|| RigProfile::empty(rig_id, 0));
+            inputs.push((rig_id, rig, catalog_name, profile, placed));
         }
         // Everything below is arithmetic on what was read: each rig, and
         // each of its nights, on its own thread of the shared pool, since a
         // night is thousands of SOFA transforms and the browser is waiting.
         use rayon::prelude::*;
-        let outcomes: Vec<Result<RigFeasibility, String>> = inputs.into_par_iter().map(|(rig_id, rig, catalog_name, profile)| {
-            let Some(site) = profile.site.as_ref().map(|s| s.value) else {
-                return Err(format!("{catalog_name}: no site in its rig profile; set it under Setup or let the plugin report it."));
+        let outcomes: Vec<Result<RigFeasibility, String>> = inputs.into_par_iter().map(|(rig_id, rig, catalog_name, profile, placed)| {
+            let Some(site) = placed.location else {
+                return Err(format!("{catalog_name}: no site location; pick a site with one under Setup, type the rig's own, or let the plugin report it."));
             };
-            let horizon = profile
-                .horizon
-                .as_ref()
-                .map(|h| h.value.clone())
-                .unwrap_or(Horizon::FixedMinimum {});
+            let horizon = placed.horizon;
             let limits = profile.limits.value;
             let night_request = NightRequest {
                 site,
