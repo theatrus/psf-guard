@@ -156,7 +156,8 @@ impl MetaStore {
         // insert, including legacy feeds whose events/cursor disagree.
         let wrong_owner: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM rig_feed WHERE ledger_id=?1 AND rig_id!=?2)
-                 OR EXISTS(SELECT 1 FROM rig_event WHERE ledger_id=?1 AND rig_id!=?2)",
+                 OR EXISTS(SELECT 1 FROM rig_event WHERE ledger_id=?1 AND rig_id!=?2)
+                 OR EXISTS(SELECT 1 FROM rig_operation_feed WHERE ledger_id=?1 AND rig_id!=?2)",
             params![ledger, rig.to_string()],
             |row| row.get(0),
         )?;

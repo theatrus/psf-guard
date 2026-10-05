@@ -6,6 +6,7 @@ import { isSkyPath, withoutPlanningParams } from '../../hooks/useUrlState';
 import { liveSummary } from './liveSummary';
 import { retryWhenBusy } from '../director/retry';
 import './header.css';
+import { useDirectorClock } from '../../hooks/useDirectorClock';
 
 /** The fleet in the header: how many rigs, how many exposing, red when one
  *  has gone quiet. Opens Live on the Sky: each rig drawn where it points,
@@ -18,8 +19,9 @@ export default function LiveChip() {
   const location = useLocation();
   const navigate = useNavigate();
   const rows = statuses.data ?? [];
+  const now = useDirectorClock();
   if (!enabled || rows.length === 0) return null;
-  const summary = liveSummary(rows, Date.now());
+  const summary = liveSummary(rows, now);
   const onLive = isSkyPath(location.pathname) && new URLSearchParams(location.search).get('live') === '1';
   const open = () => {
     if (onLive) return;

@@ -103,7 +103,17 @@ async fn client_can_deliver_checkin_and_status_but_cannot_change_scope_in_payloa
         "attempt":{"capture_id":"capture-1","goal_id":"goal-1","reserved_at_ms":1,"evidence":{"state":"reserved"}}});
     let checkin = json!({"coordinator_instance_id":instance,"catalog_id":catalog,"ledger_id":"ledger-1","events":[event]});
     let status = json!({"coordinator_instance_id":instance,"catalog_id":catalog,"session_id":"session-1","reported_at_ms":1,"status":{"state":"idle"}});
-    for (suffix, input) in [("checkin", checkin), ("status", status)] {
+    let ledger = Uuid::new_v4();
+    let operations = json!({"coordinator_instance_id":instance,"catalog_id":catalog,"ledger_id":ledger,"events":[{
+        "schema_version":1,"ledger_id":ledger,"sequence":1,"contract_version":2,"engine_version":"0.3.0",
+        "assignment_id":"assignment-1","assignment_revision":1,"rig_id":rig,"configuration_id":"config-1",
+        "preparation_id":"prep-1","event":{"kind":"closed"}
+    }]});
+    for (suffix, input) in [
+        ("checkin", checkin),
+        ("status", status),
+        ("operations", operations),
+    ] {
         let path = format!("/rigs/{rig}/{suffix}");
         let (code, body) =
             client_call(&app, "POST", &path, input.clone(), token, Some(profile)).await;

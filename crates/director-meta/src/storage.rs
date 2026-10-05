@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 21;
+const SCHEMA_VERSION: i32 = 22;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -48,6 +48,7 @@ impl MetaStore {
         super::workload::create_tables(&tx)?;
         super::preferences::create_table(&tx)?;
         super::site_profile::create_table(&tx)?;
+        super::operation_inbox::create_tables(&tx)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         conn.close().map_err(|(_, error)| Error::Sqlite(error))?;
@@ -122,6 +123,9 @@ impl MetaStore {
             }
             if version < 21 {
                 super::site_profile::create_table(&tx)?;
+            }
+            if version < 22 {
+                super::operation_inbox::create_tables(&tx)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
@@ -306,6 +310,14 @@ fn validate(conn: &Connection) -> Result<Uuid, Error> {
     if version >= 21 {
         conn.prepare("SELECT site_id,revision,payload FROM site_profile LIMIT 0")
             .map_err(|_| Error::CorruptDatabase)?;
+    }
+    if version >= 22 {
+        for sql in [
+            "SELECT ledger_id,rig_id,identity,highest_contiguous,last_checkin_ms FROM rig_operation_feed LIMIT 0",
+            "SELECT ledger_id,sequence,rig_id,completed,payload,received_at_ms FROM rig_operation_event LIMIT 0",
+        ] {
+            conn.prepare(sql).map_err(|_| Error::CorruptDatabase)?;
+        }
     }
     let id: String = conn.query_row(
         "SELECT instance_id FROM meta WHERE singleton=1",

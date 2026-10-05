@@ -1,5 +1,9 @@
 # Unreleased
 
+- Show Director's current native operation, elapsed time and mount pointing,
+  plus completed preparation history replayed after an outage. Batch receipts
+  never replace live status or add capture credit; stale operation timers freeze.
+
 - Accept explicitly capable Director native-imaging workloads with centering,
   dithering and rotation, without expanding the capabilities of older plugins.
 

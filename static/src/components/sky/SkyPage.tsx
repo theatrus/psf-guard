@@ -35,6 +35,7 @@ import '../director/DirectorPage.css';
 import { placeRigs, type PlacedRig } from './liveRigs';
 import SkyLive from './SkyLive';
 import './SkyPage.css';
+import { useDirectorClock } from '../../hooks/useDirectorClock';
 
 const REPLAY_STEP_MS = 90;
 
@@ -48,7 +49,8 @@ export default function SkyPage() {
   const live = plans.enabled && getParam('live') === '1';
   const { canWrite } = useAccess();
   const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, enabled: plans.enabled, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 15_000, refetchOnWindowFocus: true });
-  const placed = useMemo(() => placeRigs(statuses.data ?? [], plans.rows, Date.now()), [statuses.data, plans.rows]);
+  const now = useDirectorClock();
+  const placed = useMemo(() => placeRigs(statuses.data ?? [], plans.rows, now), [statuses.data, plans.rows, now]);
   const [focus, setFocus] = useState<{ ra: number; dec: number; nonce: number } | null>(null);
   const focusOn = (rig: PlacedRig) => { if (rig.ra !== null && rig.dec !== null) setFocus({ ra: rig.ra, dec: rig.dec, nonce: Date.now() }); };
   const liveTable = live && (
