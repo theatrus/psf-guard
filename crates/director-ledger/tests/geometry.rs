@@ -53,6 +53,7 @@ impl Fixture {
             configuration_id: "config-1".into(),
             now_ms: START,
             conditions_valid_until_ms: START + 120_000,
+            completion_deadline_ms: None,
             safety: Safety::Safe,
             at_boundary: true,
             operator_stop: false,

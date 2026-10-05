@@ -72,6 +72,50 @@ fn refused_deadline_cannot_revive_after_conditions_recover() {
     );
 }
 
+#[test]
+fn night_deadline_charges_remaining_native_setup_and_capture() {
+    let mut r = request();
+    r.assignment.goals.truncate(1);
+    r.state.completion_deadline_ms = Some(70_000);
+    let mut p = Preparation::new(
+        "night-prep".into(),
+        &r,
+        context(),
+        Estimates {
+            unpark_ms: 2_000,
+            center_ms: 3_000,
+            before_target_ms: 4_000,
+            filter_ms: 5_000,
+            readout_ms: 6_000,
+            capture_overhead_ms: 1_000,
+            ..Estimates::default()
+        },
+    )
+    .unwrap();
+    let command = run(&mut p, &r);
+    assert_eq!(
+        p.check_pending_dispatch_deadline(&r, &command)
+            .unwrap()
+            .latest_start_ms,
+        Some(19_000)
+    );
+    r.state.now_ms = 19_001;
+    assert_eq!(
+        p.check_pending_dispatch_deadline(&r, &command)
+            .unwrap()
+            .latest_start_ms,
+        None
+    );
+    // A refused issued command cannot revive by extending the night later.
+    r.state.completion_deadline_ms = Some(100_000);
+    assert_eq!(
+        p.check_pending_dispatch_deadline(&r, &command)
+            .unwrap()
+            .latest_start_ms,
+        None
+    );
+}
+
 fn context() -> Context {
     Context {
         goal_id: "short-ha".into(),
