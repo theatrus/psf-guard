@@ -130,6 +130,18 @@ export const tauriFileSystem = {
 
   // Default N.I.N.A. database path (Windows only).
   getDefaultNinaPath: (): Promise<string | null> => invokeOr('get_default_nina_database_path', null),
+
+  /** The desktop app's log folder, or null outside it. */
+  getLogFolder: (): Promise<string | null> => invokeOr('get_log_folder', null),
+
+  /** Open the log folder in Finder, Explorer, or the Linux file manager. */
+  openLogFolder: async (): Promise<void> => {
+    if (!isTauriApp()) {
+      throw new Error('Logs are written by the desktop app only.');
+    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('open_log_folder');
+  },
 };
 
 // The registry and the desktop app's own server.

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
+import OpenLogsButton from './OpenLogsButton';
 import type {
   RemoteImageUploadDirectoryTemplateSource,
   ImportFolder,
@@ -1905,6 +1906,7 @@ export default function TauriSettings({
             <button onClick={onClose} className="save-button" disabled={isApplying}>
               Done
             </button>
+            {isTauri && <OpenLogsButton onError={setStatusMessage} />}
             <button
               onClick={handleRestart}
               className="cancel-button"
