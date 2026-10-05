@@ -35,6 +35,28 @@ The handoff preserves pending frames and spent attempts; it cannot resume the
 old grant if the connection fails during release. The UI no
 longer exposes per-project importance, weights, presets or switching scores.
 
+## Scheduling Limits
+
+A plan carries Target Scheduler's per-project scheduling limits: minimum time,
+minimum and maximum altitude, custom horizon and its offset, meridian window,
+filter switch frequency, dither interval and smart exposure order. Each is a
+default set once in the observing settings of the **global**, **site** or
+**rig** scope, or an override for one **project**, under the `scheduling` key
+of `PUT /preferences/{scope}/{id}`. The nearest scope that sets a limit wins
+(project, then rig, then the rig's site, then global); one nobody sets keeps
+Target Scheduler's default. `GET /rigs/{rig}/preferences?project_id=...`
+returns the resolved values in `scheduling.values` and, in
+`scheduling.sources`, the scope each came from.
+
+Activation writes the resolved limits into each rig's Target Scheduler
+project, so they hold when Target Scheduler runs the rig without Director. A
+project the activation creates takes every limit; an existing one takes only
+the limits some scope sets, so a value edited by hand in Target Scheduler that
+no scope plans is left alone. The preview lists each change as
+`<project> · scheduling limits`, for example
+`minimum altitude 10° → 30°`. Columns an older Target Scheduler schema lacks
+are skipped.
+
 ## Exposure Moon Rules
 
 Expand **Moon** in the exposure template library to enable per-filter avoidance.
@@ -741,7 +763,8 @@ rig's database, the same rows Target Scheduler and the Director plugin read:
 
 - one Target Scheduler project per rig, named after the global project, in
   the Active state, marked as a mosaic when there is more than one panel, under
-  the profile that owns the database's existing projects;
+  the profile that owns the database's existing projects, with the plan's
+  [scheduling limits](#scheduling-limits);
 - one target per panel the rig owns, named after the target with the panel
   id appended for mosaics, at the panel center with the plan's camera angle,
   or with the rig's own grid and angle when it is framed on its own.

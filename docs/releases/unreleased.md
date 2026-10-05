@@ -698,3 +698,8 @@
   them "edited". Leaving the page or closing the tab with unsaved changes
   asks first, and Activation says when the rig databases are behind the
   saved plan or framing.
+- Plan Target Scheduler's scheduling limits (altitude, custom horizon and
+  offset, meridian window, dither, filter switch, minimum time, smart
+  exposure order) as defaults for every plan, a site or a rig, or as one
+  plan's own. Activation writes them into each rig's Target Scheduler project,
+  so they hold without Director, and leaves values nobody planned as they are.

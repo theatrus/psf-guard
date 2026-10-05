@@ -1061,3 +1061,99 @@ async fn a_rig_framed_on_its_own_gets_its_own_panels_and_angle() {
     // The row sits on the rig's own center, not the shared one.
     assert!((mean_ra - 39.2 / 15.0).abs() < 1e-3, "{mean_ra}");
 }
+
+#[tokio::test]
+async fn activation_writes_the_plans_scheduling_limits_and_keeps_hand_edits_nobody_planned() {
+    use psf_guard_director_core::priority::Scope;
+    use psf_guard_director_meta::preferences::Settings;
+    let a = activated().await;
+    let preview_path = format!("/projects/{}/activation/preview", a.project);
+    let apply_path = format!("/projects/{}/activation/apply", a.project);
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        // A default for every plan, a rig's own, and one plan's override.
+        let mut global = Settings::empty(Scope::Global, store.instance_id());
+        global.scheduling.minimum_altitude_degrees = Some(25.0);
+        global.scheduling.meridian_window_minutes = Some(20);
+        store.save_observing_settings(&global).unwrap();
+        let mut rig = Settings::empty(Scope::Rig, a.rig);
+        rig.scheduling.dither_every = Some(3);
+        store.save_observing_settings(&rig).unwrap();
+        let mut project = Settings::empty(Scope::Project, a.project);
+        project.scheduling.minimum_altitude_degrees = Some(30.0);
+        store.save_observing_settings(&project).unwrap();
+    }
+    let apply = || async {
+        let (status, preview) = call(&a.f.app, "POST", &preview_path, json!({}), None).await;
+        assert_eq!(status, StatusCode::OK, "{preview}");
+        let digest = preview["data"]["preview_digest"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let (status, applied) = call(
+            &a.f.app,
+            "POST",
+            &apply_path,
+            json!({"preview_digest": digest}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{applied}");
+        preview
+    };
+    let limits = |report: &Value| {
+        report["data"]["rigs"][0]["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|change| {
+                change["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with("scheduling limits"))
+            })
+            .map(|change| {
+                (
+                    change["action"].as_str().unwrap().to_owned(),
+                    change["detail"].as_str().unwrap().to_owned(),
+                )
+            })
+    };
+    let row = || {
+        a.db.query_row(
+            "SELECT minimumtime, minimumaltitude, meridianwindow, ditherevery, horizonoffset FROM project WHERE name='Heart Nebula'",
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?, row.get::<_, f64>(4)?)),
+        )
+        .unwrap()
+    };
+
+    // A new project: the resolved limits, the project's override winning
+    // over the global default, and Target Scheduler's default elsewhere.
+    let first = apply().await;
+    let (action, detail) = limits(&first).expect("the preview names the limits it sets");
+    assert_eq!(action, "create");
+    assert_eq!(
+        detail,
+        "minimum altitude 0° → 30°, meridian window off → 20 min, dither per template → every 3"
+    );
+    assert_eq!(row(), (30, 30.0, 20, 3, 0.0));
+
+    // By hand in Target Scheduler: a planned limit and one nobody planned.
+    a.db.execute(
+        "UPDATE project SET minimumaltitude=10, horizonoffset=5 WHERE name='Heart Nebula'",
+        [],
+    )
+    .unwrap();
+    let again = apply().await;
+    let (action, detail) = limits(&again).unwrap();
+    assert_eq!(action, "update");
+    assert_eq!(detail, "minimum altitude 10° → 30°");
+    assert_eq!(
+        row(),
+        (30, 30.0, 20, 3, 5.0),
+        "the horizon offset nobody planned stays"
+    );
+
+    // Nothing differs: no scheduling change at all.
+    assert!(limits(&apply().await).is_none());
+}
