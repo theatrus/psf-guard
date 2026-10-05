@@ -1960,6 +1960,22 @@ cannot clear it.
 
 #### Safe reopening and night completion
 
+Runtime **0.11.0 / IPC 11** adds an optional
+`state.completion_deadline_ms` to the shared planner. It bounds the whole
+remaining preparation, exposure and overhead, not just the start of dispatch.
+`conditions_valid_until_ms` keeps its separate freshness meaning. The recovery
+gate always narrows the completion deadline to the persisted night end; a
+client may narrow it further, never extend it. Omitted deadlines preserve
+existing inputs and serialized ledger checkpoints. Recovery contract 1 and
+planner engine 0.3.0 remain unchanged.
+
+The companion NINA increment ends clean idle waits at the configured session
+deadline, verifies the ledger is settled, performs bounded shutdown and returns
+to the following native sequence step. An operation that overruns its deadline
+still fails closed; the clock does not prove it completed or saved an image.
+This is the night-end portion of increment 2, not resumable weather or cloud
+recovery. Simulator evidence belongs in the plugin's validation guide.
+
 The requested observing-night behavior includes both poor-quality/cloud holds
 and weather/enclosure holds. These are **not implemented by recovery contract 1**:
 its safety transition is terminal. Do not relabel its stop as a resumable pause.

@@ -82,6 +82,7 @@ impl Allocation {
             configuration_id: a.configuration_id.clone(),
             now_ms: self.admitted_at_ms,
             conditions_valid_until_ms: a.expires_at_ms,
+            completion_deadline_ms: None,
             safety: Safety::Unknown,
             at_boundary: true,
             operator_stop: false,

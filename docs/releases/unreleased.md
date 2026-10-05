@@ -1,5 +1,9 @@
 # Unreleased
 
+- Let Director's shared planner fit complete setup and exposures before an
+  observing-night deadline, independently of dispatch freshness. Work that no
+  longer fits waits without consuming another capture attempt.
+
 - Show Director's current native operation, elapsed time and mount pointing,
   plus completed preparation history replayed after an outage. Batch receipts
   never replace live status or add capture credit; stale operation timers freeze.
