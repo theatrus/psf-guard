@@ -712,4 +712,6 @@
 - Stop the planning save bar from reporting unsaved changes nobody made: a
   framing taken from the catalog, a survey the server stands in for, or a
   panel rig picked for an empty framing is saved quietly with the next save.
-  The bar now lists what changed in each section.
+  The bar now lists what changed in each section, and calls a section
+  unsaved only when it can say what changed: showing the same rigs in a new
+  order is no longer an edit.

@@ -358,14 +358,17 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   // someone's edit counts as unsaved; a framing taken from the catalog, or
   // one this view filled in, is saved quietly with the next save, since
   // activation needs it stored.
-  const edited = !!state && !!draft.data && (baseline ? planFields(state) !== planFields(baseline) : true);
+  // Unsaved means the bar can say what changed: a difference the list cannot
+  // name, such as the same rigs in another order, is no edit.
+  const changes = baseline ? describeFramingChanges(baseline, state, id => rigList.find(rig => rig.rig.id === id)?.catalog_name ?? 'a rig') : ['new framing'];
+  const edited = !!state && !!draft.data && changes.length > 0;
   const firstSave = !!state && !!draft.data && !edited && (!savedState || planFields(state) !== planFields(savedState));
   const managed = useDraftSection('framing', {
     label: 'Framing',
     order: 1,
     unsaved: canWrite && edited,
     pending: canWrite && firstSave,
-    changes: baseline ? describeFramingChanges(baseline, state, id => rigList.find(rig => rig.rig.id === id)?.catalog_name ?? 'a rig') : ['new framing'],
+    changes,
     save: async () => {
       if (!state || !draft.data || stale) return false;
       setNotice('');
