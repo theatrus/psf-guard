@@ -327,9 +327,9 @@
 
 ## Changed
 
-- On the planning page's Framing tab, clicking a rig's row adds it to the plan
-  or drops it, so several rigs can shoot one plan, and rigs outside it are
-  listed open. A **Use size** pill picks the rig whose field sizes the panels.
+- On the planning page's Framing tab, each rig has an **On** switch, with the
+  rigs grouped On and Off, so several rigs can shoot one plan. **Frame** picks
+  which rig that is on sets the shared framing's panel size.
 - WBPP exports and runs build the same dark masters a stack would. When
   lights of one exposure were matched to different darks, each set of darks
   gets its own `DARKSET_<night>` folder and grouping keyword, so WBPP no
