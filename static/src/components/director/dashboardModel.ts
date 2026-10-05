@@ -11,8 +11,15 @@ export function phaseOf(view: DirectorRigStatusView): string {
 }
 
 /** A fresh report of one of the exposing phases. */
-export function isExposing(view: DirectorRigStatusView): boolean {
-  return !view.status_stale && (EXPOSING_PHASES as readonly string[]).includes(phaseOf(view));
+export function statusIsStale(view: DirectorRigStatusView, nowMs: number): boolean {
+  const ttl = view.status?.payload.fresh_for_ms;
+  // Explicit client leases also expire while a cached query cannot reach the server.
+  return view.status_stale || (typeof ttl === 'number' && Number.isFinite(ttl) && !!view.status
+    && nowMs - view.status.received_at_ms > Math.min(600_000, Math.max(15_000, ttl)));
+}
+
+export function isExposing(view: DirectorRigStatusView, nowMs = Date.now()): boolean {
+  return !statusIsStale(view, nowMs) && (EXPOSING_PHASES as readonly string[]).includes(phaseOf(view));
 }
 
 /** "40 s ago", "12 min ago", "3 h ago", "2 d ago". */
@@ -35,6 +42,7 @@ export function describeNow(view: DirectorRigStatusView, nowMs: number): string 
   const { status } = view;
   if (!status) return view.connectivity.state === 'never' ? 'No report yet' : 'No status report yet';
   const p = status.payload;
+  const stale = statusIsStale(view, nowMs);
   const phase = text(p.phase) ?? text(p.state) ?? 'reported';
   const parts = [phase];
   const target = text(p.target_name) ?? text(p.target) ?? text(p.target_id);
@@ -42,15 +50,20 @@ export function describeNow(view: DirectorRigStatusView, nowMs: number): string 
   const operation = text(p.operation) ?? text(p.current_operation);
   if (operation) {
     const started = typeof p.operation_started_ms === 'number' ? p.operation_started_ms : null;
-    parts.push(started ? `${operation} for ${formatAge(nowMs - started).replace(' ago', '')}` : operation);
+    // Monotonic plugin time survives clock skew. Stale reports freeze at the snapshot.
+    const elapsed = typeof p.operation_elapsed_ms === 'number' ? p.operation_elapsed_ms
+      : started ? Math.max(0, status.reported_at_ms - started) : null;
+    const age = stale ? 0 : Math.max(0, nowMs - status.received_at_ms);
+    parts.push(elapsed !== null ? `${operation} for ${formatAge(elapsed + age).replace(' ago', '')}` : operation);
   }
   const wait = text(p.wait_reason);
   if (wait) parts.push(`waiting: ${wait}`);
   const safety = text(p.safety);
   if (safety) parts.push(`safety ${safety}`);
   if (typeof p.queue_depth === 'number') parts.push(`${p.queue_depth} queued`);
+  else if (text(p.queue_state)) parts.push(`check-in ${text(p.queue_state)}`);
   const line = parts.join(', ');
-  return view.status_stale ? `${line} (stale, reported ${formatAge(nowMs - status.received_at_ms)})` : line;
+  return stale ? `${line} (stale, reported ${formatAge(nowMs - status.received_at_ms)})` : line;
 }
 
 export function errorsOf(view: DirectorRigStatusView): string[] {

@@ -520,6 +520,12 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
                 psf_guard_director_core::MAX_REQUEST_BYTES,
             )),
         )
+        .route(
+            "/rigs/{rig}/operations",
+            axum::routing::post(checkin::operation_check_in).layer(DefaultBodyLimit::max(
+                psf_guard_director_core::MAX_REQUEST_BYTES,
+            )),
+        )
         .route("/rigs/status", get(checkin::statuses))
         .route("/plans", get(plans::list))
         .route(

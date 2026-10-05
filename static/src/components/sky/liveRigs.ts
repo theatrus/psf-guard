@@ -1,5 +1,5 @@
 import type { DirectorPlanRow, DirectorRigStatusView } from '../../api/directorTypes';
-import { describeNow, isExposing } from '../director/dashboardModel';
+import { describeNow, isExposing, statusIsStale } from '../director/dashboardModel';
 
 /** A rig as the Sky draws it: where it points now, if that can be told. */
 export interface PlacedRig {
@@ -47,11 +47,11 @@ export function placeRigs(views: DirectorRigStatusView[], plans: DirectorPlanRow
     const payload = view.status?.payload ?? {};
     const targetName = text(payload.target_name) ?? text(payload.target);
     const quiet = view.connectivity.state === 'stale' || view.connectivity.state === 'offline';
-    const staleReason = quiet ? 'quiet' as const : view.status_stale ? 'old report' as const : null;
+    const staleReason = quiet ? 'quiet' as const : statusIsStale(view, nowMs) ? 'old report' as const : null;
     const base = {
       id: view.rig.id,
       name: view.catalog_name ?? view.rig.name,
-      exposing: isExposing(view),
+      exposing: isExposing(view, nowMs),
       stale: staleReason !== null,
       staleReason,
       connectivity: view.connectivity.state,

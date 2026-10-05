@@ -40,6 +40,9 @@ describe('Live chip', () => {
     expect(liveSummary([view('C925', 'online', 'idle'), view('RC51', 'stale', 'exposing', true)], now)).toMatchObject({ label: '2 rigs · 1 online', alert: true });
     expect(liveSummary([view('C925', 'never', null)], now)).toMatchObject({ label: '1 rig · 0 online', alert: false });
     expect(liveSummary([view('C925', 'online', 'exposing')], now).title).toContain('C925: exposing');
+    const leased = view('C925', 'online', 'exposing');
+    leased.status!.payload.fresh_for_ms = 15000;
+    expect(liveSummary([leased], now).label).toBe('1 rig · 1 online');
   });
 
   it('shows the fleet from any view and opens Live on the Sky, keeping the scope', async () => {

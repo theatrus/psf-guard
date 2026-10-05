@@ -14,7 +14,7 @@ export interface LiveSummary {
  *  its last report says so and that report is not stale. */
 export function liveSummary(rows: DirectorRigStatusView[], nowMs: number): LiveSummary {
   const rigs = rows.length;
-  const exposing = rows.filter(isExposing).length;
+  const exposing = rows.filter(view => isExposing(view, nowMs)).length;
   const online = rows.filter(view => view.connectivity.state === 'online').length;
   const quiet = rows.filter(view => view.connectivity.state === 'stale' || view.connectivity.state === 'offline').length;
   const plural = rigs === 1 ? 'rig' : 'rigs';

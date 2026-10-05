@@ -410,6 +410,15 @@ export interface DirectorAttached { into: DirectorIdentity; absorbed: DirectorId
 export interface DirectorRigStatus { rig_id: string; session_id: string; reported_at_ms: number; payload: Record<string, unknown>; received_at_ms: number }
 export interface DirectorContact { at_ms: number; detail: string | null }
 export type DirectorConnectivityState = 'online' | 'stale' | 'offline' | 'never';
+export interface DirectorOperationReceipt {
+  received_at_ms: number;
+  event: { ledger_id: string; sequence: number; preparation_id: string; event: {
+    kind: 'completed'; observation: {
+      command: { target_id: string; operation: { operation: string } };
+      completion: { ended_at_ms: number; elapsed_ms: number; outcome: { outcome: string; reason?: string } };
+    };
+  } };
+}
 /** One rig as the operator sees it: connectivity from server receipt times, the newest report, and what it is assigned. */
 export interface DirectorRigStatusView {
   rig: DirectorIdentity;
@@ -417,13 +426,14 @@ export interface DirectorRigStatusView {
   catalog_name: string | null;
   status: DirectorRigStatus | null;
   status_age_ms: number | null;
-  /** The report is older than ten minutes; history, not now. */
+  /** The report exceeded its freshness window; history, not now. */
   status_stale: boolean;
   checkins: Array<{ rig_id: string; ledger_id: string; highest_contiguous: number; highest_seen: number; last_checkin_ms: number }>;
   contacts: { program_pull: DirectorContact | null; check_in: DirectorContact | null; status: DirectorContact | null };
   connectivity: { state: DirectorConnectivityState; last_contact_ms: number | null; age_ms: number | null };
   assignments: Array<{ project: DirectorIdentity; activation_revision: number; applied_at_ms: number }>;
   pending_receipts: number;
+  recent_operations?: DirectorOperationReceipt[];
 }
 
 export interface DirectorResolvedName { query: string; name: string; ra_degrees: number; dec_degrees: number; source: string }

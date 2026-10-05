@@ -62,18 +62,65 @@ pub(super) async fn check_in(
     Path(rig): Path<Uuid>,
     Json(request): Json<CheckIn>,
 ) -> Result<Json<ApiResponse<Acknowledgement>>, program::PullError> {
+    check_in_feed(state, rig, request, false).await
+}
+
+pub(super) async fn operation_check_in(
+    State(state): State<Arc<AppState>>,
+    Path(rig): Path<Uuid>,
+    Json(request): Json<CheckIn>,
+) -> Result<Json<ApiResponse<Acknowledgement>>, program::PullError> {
+    check_in_feed(state, rig, request, true).await
+}
+
+async fn check_in_feed(
+    state: Arc<AppState>,
+    rig: Uuid,
+    request: CheckIn,
+    operations: bool,
+) -> Result<Json<ApiResponse<Acknowledgement>>, program::PullError> {
     let service = enabled(&state)?;
     if request.coordinator_instance_id != service.instance_id {
         return Err(Error::WrongRig.into());
     }
-    if request.events.is_empty() || request.events.len() > MAX_PAGE {
+    let limit = if operations {
+        psf_guard_director_meta::operation_inbox::MAX_PAGE
+    } else {
+        MAX_PAGE
+    };
+    if request.events.is_empty() || request.events.len() > limit {
         return Err(Error::Invalid.into());
     }
-    let receipts = request
+    let receipts = if operations {
+        Vec::new()
+    } else {
+        request
+            .events
+            .iter()
+            .map(|event| receipt_from(event, rig, &request.ledger_id))
+            .collect::<Result<Vec<_>, Error>>()?
+    };
+    let operation_events = if operations {
+        request
+            .events
+            .iter()
+            .map(|value| {
+                let event: psf_guard_director_meta::operation_inbox::Event =
+                    serde_json::from_value(value.clone()).map_err(|_| Error::Invalid)?;
+                if event.ledger_id != request.ledger_id || event.rig_id != rig.to_string() {
+                    return Err(Error::Invalid);
+                }
+                Ok(event)
+            })
+            .collect::<Result<Vec<_>, Error>>()?
+    } else {
+        Vec::new()
+    };
+    let sequences: Vec<_> = request
         .events
         .iter()
-        .map(|event| receipt_from(event, rig, &request.ledger_id))
-        .collect::<Result<Vec<_>, Error>>()?;
+        .map(|event| event["sequence"].as_u64().ok_or(Error::Invalid))
+        .collect::<Result<_, _>>()?;
     let catalogs: Vec<_> = state
         .databases
         .read()
@@ -89,7 +136,11 @@ pub(super) async fn check_in(
                 .filter(|binding| binding.rig.id == rig)
                 .ok_or(Error::WrongRig)?;
             let now = now_ms();
-            let (outcomes, cursor) = store.store_receipts(&receipts, now)?;
+            let (outcomes, cursor) = if operations {
+                store.store_operation_receipts(rig, &operation_events, now)?
+            } else {
+                store.store_receipts(&receipts, now)?
+            };
             store.record_contact(rig, ContactKind::CheckIn, now, Some(&request.ledger_id))?;
             let program_revision = program::current_revision(
                 store,
@@ -114,9 +165,9 @@ pub(super) async fn check_in(
                 duplicates: outcomes.iter().filter(|o| **o == Stored::Duplicate).count(),
                 conflicts: outcomes
                     .iter()
-                    .zip(&receipts)
+                    .zip(&sequences)
                     .filter(|(o, _)| **o == Stored::Conflict)
-                    .map(|(_, r)| r.sequence)
+                    .map(|(_, sequence)| *sequence)
                     .collect(),
                 outcomes,
                 program_revision,
@@ -272,7 +323,7 @@ pub(super) struct RigStatusView {
     /// The newest coalesced report, or `None` before the first.
     status: Option<RigStatus>,
     status_age_ms: Option<u64>,
-    /// The report is older than ten minutes; show it as history, not as now.
+    /// The report exceeded its freshness lease; show it as history, not now.
     status_stale: bool,
     /// The last acknowledged cursor per ledger this rig has checked in with.
     checkins: Vec<psf_guard_director_meta::inbox::FeedCursor>,
@@ -283,6 +334,8 @@ pub(super) struct RigStatusView {
     /// Saved captures the rig has reported that grading has not yet turned
     /// into accepted frames.
     pending_receipts: u32,
+    /// Historical receipts, never a substitute for the coalesced live report.
+    recent_operations: Vec<psf_guard_director_meta::operation_inbox::OperationReceipt>,
 }
 
 fn contacts(list: Vec<Contact>) -> Contacts {
@@ -383,7 +436,13 @@ pub(super) async fn statuses(
                     rig,
                     catalog_slug,
                     catalog_name,
-                    status_stale: status_age_ms.is_some_and(|age| age > STATUS_FRESH_MS),
+                    status_stale: status_age_ms.is_some_and(|age| {
+                        age > status
+                            .as_ref()
+                            .and_then(|s| s.payload["fresh_for_ms"].as_u64())
+                            .unwrap_or(STATUS_FRESH_MS)
+                            .clamp(15_000, STATUS_FRESH_MS)
+                    }),
                     status_age_ms,
                     status,
                     checkins: store.feed_cursors_for_rig(rig_id)?,
@@ -391,6 +450,7 @@ pub(super) async fn statuses(
                     connectivity,
                     assignments,
                     pending_receipts,
+                    recent_operations: store.recent_operations(rig_id)?,
                 });
             }
             views.sort_by(|a, b| a.rig.name.cmp(&b.rig.name).then(a.rig.id.cmp(&b.rig.id)));
