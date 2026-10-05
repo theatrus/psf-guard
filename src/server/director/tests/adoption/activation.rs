@@ -666,6 +666,64 @@ async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doublin
     );
 }
 
+/// A linked project with more targets than the plan frames on this rig is
+/// left to Target Scheduler: taking it over would plan some targets and not
+/// others while rewriting its exposure plans.
+#[tokio::test]
+async fn a_linked_project_with_more_targets_than_panels_is_left_to_target_scheduler() {
+    let a = activated().await;
+    let source = Uuid::new_v4();
+    a.db.execute(
+        "INSERT INTO project (Id, profileId, name, description, state, priority, isMosaic, flatsHandling, guid)
+         VALUES (1, 'profile-a', 'Three galaxies', '', 1, 1, 0, 0, ?1)",
+        [source.to_string()],
+    )
+    .unwrap();
+    for (name, ra, dec) in [
+        ("M 31", 0.7123, 41.27),
+        ("M 33", 1.5642, 30.66),
+        ("M 101", 14.0535, 54.35),
+    ] {
+        a.db.execute(
+            "INSERT INTO target (name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+             VALUES (?1, 1, ?2, ?3, 2, 0.0, 100, 1, ?4)",
+            rusqlite::params![name, ra, dec, Uuid::new_v4().to_string()],
+        )
+        .unwrap();
+    }
+    let catalog = crate::catalog_identity::read(&a.db).unwrap().unwrap().id;
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        store
+            .link_catalog_project(&psf_guard_director_meta::catalog::ProjectMapping {
+                catalog_id: catalog,
+                source_project_guid: source,
+                source_profile_id: "profile-a".into(),
+                project_id: a.project,
+                rig_id: a.rig,
+            })
+            .unwrap();
+    }
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let rig = &preview["data"]["rigs"][0];
+    assert_eq!(rig["changes"].as_array().unwrap().len(), 0, "{rig}");
+    assert!(
+        rig["warnings"].as_array().unwrap().iter().any(|w| w
+            .as_str()
+            .unwrap()
+            .contains("Three galaxies has 3 targets in Target Scheduler")),
+        "{rig}"
+    );
+}
+
 #[tokio::test]
 async fn activation_takes_over_the_linked_projects_existing_targets_instead_of_doubling_them() {
     let a = activated().await;

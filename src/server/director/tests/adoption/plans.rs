@@ -526,6 +526,67 @@ async fn a_target_scheduler_project_is_imported_as_framing_and_plan_drafts_once(
         .all(|o| o["priority"] == 2));
 }
 
+/// Separate targets that are not one mosaic: the drafts frame the first
+/// alone, from its own exposure plans, and the listing says so. Merging the
+/// others' plans would raise the first target's desired counts.
+#[tokio::test]
+async fn a_project_of_separate_targets_is_imported_as_its_first_target_alone() {
+    let f = Fixture::new();
+    let path = register(
+        &f,
+        "galaxies",
+        "Galaxy rig",
+        &[(1, "Local group", Some(Uuid::new_v4()))],
+    );
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch(
+        "INSERT INTO exposuretemplate (Id, profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel, moonavoidanceenabled,
+            moonavoidanceseparation, moonavoidancewidth, maximumhumidity, defaultexposure, moonrelaxscale, moonrelaxmaxaltitude,
+            moonrelaxminaltitude, moondownenabled, ditherevery, minutesOffset, guid)
+         VALUES (1, 'profile-x', 'Ha 300', 'Ha', 100, 30, 1, -1, 0, 0, 60, 7, 0, 300, 0, 5, -15, 0, -1, 0, 'tmpl-ha');
+         INSERT INTO target (Id, name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+         VALUES (1, 'M 31', 1, 0.7123, 41.27, 2, 0.0, 100, 1, 'tgt-m31'),
+                (2, 'M 33', 1, 1.5642, 30.66, 2, 0.0, 100, 1, 'tgt-m33');
+         INSERT INTO exposureplan (profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, enabled, guid)
+         VALUES ('profile-x', 300, 20, 0, 0, 1, 1, 1, 'ep-m31'), ('profile-x', 300, 50, 0, 0, 2, 1, 1, 'ep-m33');",
+    )
+    .unwrap();
+    let (status, listed) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert!(
+        listed["data"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w
+                .as_str()
+                .unwrap()
+                .contains("Local group has 2 separate targets")),
+        "{listed}"
+    );
+    let row = listed["data"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["project"]["name"] == "Local group")
+        .unwrap();
+    assert_eq!(row["framing"]["target_name"], "M 31", "{row}");
+    assert_eq!(row["framing"]["panels"], 1);
+    let project = row["project"]["id"].as_str().unwrap();
+    let (_, plan) = call(
+        &f.app,
+        "GET",
+        &format!("/projects/{project}/plan"),
+        Value::Null,
+        None,
+    )
+    .await;
+    let objectives = plan["data"]["plan"]["objectives"].as_array().unwrap();
+    assert_eq!(objectives.len(), 1);
+    // M 31's own 20, not M 33's 50.
+    assert_eq!(objectives[0]["goal"]["value"], 20, "{plan}");
+}
+
 /// A server without database management still plans over its catalogs. The
 /// file is only read and gets a derived identity; the first managing server
 /// to list it writes that same identity into the file, so the rig is stable.
