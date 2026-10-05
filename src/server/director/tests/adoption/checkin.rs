@@ -58,15 +58,13 @@ async fn operation_replay_acknowledges_history_without_overwriting_live_or_captu
         .unwrap()
         .clone()
         .run(move |store| {
-            store
-                .record_status(&psf_guard_director_meta::inbox::RigStatus {
-                    rig_id: rig,
-                    session_id: "expired".into(),
-                    reported_at_ms: 200,
-                    received_at_ms: chrono::Utc::now().timestamp_millis() as u64 - 16000,
-                    payload: json!({"phase":"exposing","fresh_for_ms":15000}),
-                })
-                .map_err(Into::into)
+            store.record_status(&psf_guard_director_meta::inbox::RigStatus {
+                rig_id: rig,
+                session_id: "expired".into(),
+                reported_at_ms: 200,
+                received_at_ms: chrono::Utc::now().timestamp_millis() as u64 - 16000,
+                payload: json!({"phase":"exposing","fresh_for_ms":15000}),
+            })
         })
         .await
         .unwrap();
