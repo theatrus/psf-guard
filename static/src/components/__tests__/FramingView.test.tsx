@@ -655,8 +655,11 @@ describe('Framing view', () => {
       field_of_view: { width_degrees: 1.2, height_degrees: 0.8, pixel_scale_arcsec: 1.9, focal_ratio: 7 } };
     fixture();
     server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB, rigC]))));
-    mount(true, true, [rigA.rig.id, rigC.rig.id]);
+    // Askar 107 is not in this plan: it still shows, open, and can be picked.
+    mount(true, true, [rigA.rig.id]);
     const active = await screen.findByRole('button', { name: 'RedCat 61 sets the panel size' });
+    expect(screen.getByText(/^Other rigs/).closest('details')).toHaveAttribute('open');
+
     expect(active).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByRole('button', { name: 'Use for panel size' })).not.toBeInTheDocument();
     // A rig without optics has nothing to pick.
@@ -666,9 +669,7 @@ describe('Framing view', () => {
     expect(screen.queryByLabelText('Panel rig')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Askar 107 sets the panel size' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: 'Use RedCat 61 for the panel size' })).toHaveAttribute('aria-pressed', 'false');
-    // The whole card of the panel rig reads as selected.
-    expect(screen.getByRole('group', { name: 'Askar 107' })).toHaveClass('is-panel-rig');
-    expect(screen.getByRole('group', { name: 'RedCat 61' })).not.toHaveClass('is-panel-rig');
+
     expect(screen.getByTestId('framing-extent')).toHaveTextContent('1 panel · 1.20° × 48.0′');
     // Typing a size keeps the rig's numbers to start from, and drops the pick.
     expect(screen.queryByLabelText('Panel width degrees')).not.toBeInTheDocument();
@@ -678,6 +679,32 @@ describe('Framing view', () => {
     expect(screen.getByRole('button', { name: 'Use Askar 107 for the panel size' })).toHaveAttribute('aria-pressed', 'false');
     fireEvent.change(screen.getByLabelText('Panel width degrees'), { target: { value: '2' } });
     expect(screen.getByTestId('framing-extent')).toHaveTextContent('1 panel · 2.00° × 48.0′');
+  });
+
+  it('adds and drops several rigs from their rows on a page that keeps the plan', async () => {
+    const rigC = { ...rigA, rig: { ...rigA.rig, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Askar' }, catalog_slug: 'askar', catalog_name: 'Askar 107' };
+    fixture();
+    server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB, rigC]))));
+    const toggled: Array<[string, boolean]> = [];
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const view = (shooting: string[]) => <QueryClientProvider client={client}><FramingView projectId="project" seed={seed} preferredRigIds={[rigA.rig.id]}
+      shootingRigIds={shooting} onToggleRig={(id, on) => toggled.push([id, on])} /></QueryClientProvider>;
+    const { rerender } = render(view([rigA.rig.id]));
+    const redcat = await screen.findByRole('button', { name: 'RedCat 61 shoots this plan' });
+    expect(redcat).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('group', { name: 'RedCat 61' })).toHaveClass('is-shooting');
+    // The whole row is the click target, name included.
+    fireEvent.click(within(screen.getByRole('button', { name: 'Add Askar 107 to this plan' })).getByText('Askar 107'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add C925 data to this plan' }));
+    expect(toggled).toEqual([[rigC.rig.id, true], [rigB.rig.id, true]]);
+    // Several rigs at once, each shown as on; dropping one is the same click.
+    rerender(view([rigA.rig.id, rigC.rig.id, rigB.rig.id]));
+    expect(screen.getByRole('button', { name: 'Askar 107 shoots this plan' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'C925 data shoots this plan' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Askar 107 shoots this plan' }));
+    expect(toggled.at(-1)).toEqual([rigC.rig.id, false]);
+    // The panel size is its own pill, one rig at a time.
+    expect(screen.getByRole('button', { name: 'RedCat 61 sets the panel size' })).toHaveTextContent('Sets size');
   });
 
   it('does not call the same rigs in another order an edit', async () => {
