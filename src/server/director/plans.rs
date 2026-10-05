@@ -482,7 +482,7 @@ pub(super) async fn list(
                         // its plan: take it in as drafts the first time, once.
                         if let Some((row_id, name)) = row {
                             let label = name.as_deref().unwrap_or("Project");
-                            if let Err(error) = super::import_drafts::import_from_catalog(
+                            match super::import_drafts::import_from_catalog(
                                 &mut *store,
                                 &connection,
                                 binding.rig.id,
@@ -491,10 +491,17 @@ pub(super) async fn list(
                                 label,
                                 now,
                             ) {
-                                warnings.push(format!(
+                                Ok(imported) if imported.separate_targets > 1 => {
+                                    warnings.push(format!(
+                                        "{}: {label} has {} separate targets; its plan frames the first. Target Scheduler keeps running the others.",
+                                        catalog.name, imported.separate_targets
+                                    ));
+                                }
+                                Ok(_) => {}
+                                Err(error) => warnings.push(format!(
                                     "{}: {label} could not be imported into Director ({error})",
                                     catalog.name
-                                ));
+                                )),
                             }
                         }
                         links.entry(mapping.project_id).or_default().push(PlanLink {

@@ -250,7 +250,14 @@ holds for it becomes Director's own drafts: its targets become the framing
 (center and rotation from the rows, a grid of panels when the targets form
 one, the rig's field as the panel size when its optics are known) and its
 exposure plans become the plan (one objective per bandpass with the frames
-a panel wants, bound to the template each plan uses at its exposure). New
+a panel wants, bound to the template each plan uses at its exposure).
+Director plans one target or one mosaic per project. A project whose targets
+are separate, not panels of one grid, is drafted as its first target with
+that target's own exposure plans, and the listing says so; Target Scheduler
+keeps running the others. Activation leaves a rig to Target Scheduler, with
+a warning, when its linked project holds more targets than the plan frames
+there, so no target's exposure plans are taken over while others stay
+unplanned. New
 imports retain the source project's Low/Normal/High priority (0/1/2) on each
 objective; missing, null or unknown priorities use Normal. Filters do not gain
 priority from alphabetical ordering. From

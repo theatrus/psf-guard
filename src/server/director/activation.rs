@@ -888,6 +888,23 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
             .filter(|guid| project_row(tx, guid).ok().flatten().is_some())
         {
             Some(guid) => {
+                // Director plans one target or one mosaic per project. A
+                // project with more targets than this rig's panels would have
+                // some left unplanned while its exposure plans are taken over,
+                // so this rig is left to Target Scheduler until they agree.
+                if let Some((row_id, name)) = project_row(tx, &guid)? {
+                    let targets: i64 = tx.query_row(
+                        "SELECT COUNT(*) FROM target WHERE projectid=?1",
+                        [row_id],
+                        |row| row.get(0),
+                    )?;
+                    if targets > inputs.panels.len() as i64 {
+                        return Err(RigError::Skip(format!(
+                            "{name} has {targets} targets in Target Scheduler and this plan frames {} here. Director plans one target or one mosaic per project for now, so this rig is left to Target Scheduler.",
+                            inputs.panels.len()
+                        )));
+                    }
+                }
                 tx.execute(
                     "UPDATE project SET isMosaic=CASE WHEN ?2=1 THEN 1 ELSE isMosaic END WHERE guid=?1",
                     params![guid, i32::from(mosaic)],

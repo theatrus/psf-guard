@@ -23,9 +23,13 @@ const MAX_GRID: u32 = 16;
 pub(super) struct Imported {
     pub framing: bool,
     pub plan: bool,
+    /// How many separate targets the project held when they were not one
+    /// framing; the drafts then frame the first alone. Zero otherwise.
+    pub separate_targets: usize,
 }
 
 struct SourceTarget {
+    id: i64,
     name: String,
     center: IcrsPosition,
     rotation_degrees: f64,
@@ -74,7 +78,7 @@ fn source_targets(
     })?;
     let mut targets = Vec::new();
     for row in rows {
-        let (_id, name, ra_hours, dec, rotation) = row?;
+        let (id, name, ra_hours, dec, rotation) = row?;
         let (Some(ra_hours), Some(dec)) = (ra_hours, dec) else {
             continue;
         };
@@ -84,6 +88,7 @@ fn source_targets(
             continue;
         };
         targets.push(SourceTarget {
+            id,
             name: name.unwrap_or_default().trim().to_owned(),
             center: IcrsPosition {
                 ra_degrees,
@@ -200,6 +205,17 @@ fn infer_layout(targets: &[SourceTarget], panel: Option<PanelSize>) -> (IcrsPosi
     )
 }
 
+/// Whether the targets are one framing: a single target, or panels of one
+/// mosaic grid. Separate targets are not, and Director plans one framing per
+/// project.
+fn forms_one_framing(targets: &[SourceTarget], panel: Option<PanelSize>) -> bool {
+    if targets.len() < 2 {
+        return true;
+    }
+    let (_, mosaic) = infer_layout(targets, panel);
+    mosaic.rows * mosaic.columns == targets.len() as u32
+}
+
 /// A name for the whole: what the targets' names share, else the first.
 fn shared_name(targets: &[SourceTarget], project_name: &str) -> String {
     let names: Vec<&str> = targets
@@ -266,7 +282,7 @@ pub(super) fn import_from_catalog(
     if !need_framing && !need_plan {
         return Ok(imported);
     }
-    let targets = source_targets(connection, project_row)?;
+    let mut targets = source_targets(connection, project_row)?;
     if targets.is_empty() {
         return Ok(imported);
     }
@@ -278,6 +294,14 @@ pub(super) fn import_from_catalog(
             width_degrees: fov.width_degrees,
             height_degrees: fov.height_degrees,
         });
+    // Separate targets that are not one mosaic: Director plans one framing
+    // per project, so the draft is the first target alone. Merging the
+    // others' exposure plans into it would raise its desired counts.
+    let one_framing = forms_one_framing(&targets, panel);
+    if !one_framing {
+        imported.separate_targets = targets.len();
+        targets.truncate(1);
+    }
     if need_framing {
         let (center, mosaic) = infer_layout(&targets, panel);
         let extent = panel.map(|p| {
@@ -317,13 +341,20 @@ pub(super) fn import_from_catalog(
         } else {
             "1 = 1"
         };
+        // With separate targets, only the first target's plans: the draft
+        // frames that target alone.
+        let only_target = if one_framing {
+            None
+        } else {
+            Some(targets[0].id)
+        };
         let mut statement = connection.prepare(&format!(
             "SELECT e.exposureTemplateId, e.exposure, e.desired FROM exposureplan e
              JOIN target t ON t.Id = e.targetid
-             WHERE t.projectid = ?1 AND {enabled} ORDER BY e.Id LIMIT 1024"
+             WHERE t.projectid = ?1 AND (?2 IS NULL OR t.Id = ?2) AND {enabled} ORDER BY e.Id LIMIT 1024"
         ))?;
         let rows = statement
-            .query_map([project_row], |row| {
+            .query_map(rusqlite::params![project_row, only_target], |row| {
                 Ok((
                     row.get::<_, Option<i64>>(0)?,
                     row.get::<_, Option<f64>>(1)?,
@@ -426,6 +457,7 @@ mod tests {
 
     fn target(name: &str, ra: f64, dec: f64, rotation: f64) -> SourceTarget {
         SourceTarget {
+            id: 0,
             name: name.into(),
             center: IcrsPosition {
                 ra_degrees: ra,
