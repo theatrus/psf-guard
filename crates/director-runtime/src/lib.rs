@@ -9,7 +9,7 @@ use tokio::time::timeout;
 
 pub mod recovery;
 pub mod storage;
-pub const PROTOCOL_VERSION: u32 = 11;
+pub const PROTOCOL_VERSION: u32 = 12;
 pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_FRAME_BYTES: usize = psf_guard_director_core::MAX_REQUEST_BYTES + 4096;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -395,9 +395,18 @@ pub async fn serve_with_recovery<S: AsyncRead + AsyncWrite + Unpin>(
                         code: recovery::Error::InvalidInput,
                     }
                 } else {
-                    let request = serde_json::from_str(operation.get())
+                    let request: recovery::Request = serde_json::from_str(operation.get())
                         .map_err(|_| ProtocolError::InvalidMessage)?;
-                    recovery::execute(&mut recovery, request, &rig_id).await?
+                    let resume = matches!(&request.operation, recovery::Operation::Apply { request }
+                        if matches!(request.event, psf_guard_director_core::recovery::Event::ResumeWeather {}));
+                    if resume && !storage::settled_for_weather_resume(&mut storage, &rig_id).await?
+                    {
+                        recovery::Reply::Error {
+                            code: recovery::Error::AcquisitionBlocked,
+                        }
+                    } else {
+                        recovery::execute(&mut recovery, request, &rig_id).await?
+                    }
                 };
                 ResultMessage::Recovery { response }
             }

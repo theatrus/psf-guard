@@ -47,6 +47,44 @@ pub(super) fn fixture() -> Request {
     request
 }
 
+#[tokio::test]
+async fn weather_resume_requires_an_open_settled_capture_ledger() {
+    let dir = TempDir::new().unwrap();
+    let mut storage = Some(Storage::acquire(dir.path()).unwrap());
+    assert!(!settled_for_weather_resume(&mut storage, "rig-1")
+        .await
+        .unwrap());
+    let request = fixture();
+    assert!(matches!(
+        execute(
+            &mut storage,
+            Operation::Open {
+                request: request.clone()
+            },
+            "rig-1"
+        )
+        .await
+        .unwrap(),
+        StorageReply::Opened { .. }
+    ));
+    assert!(settled_for_weather_resume(&mut storage, "rig-1")
+        .await
+        .unwrap());
+    execute(
+        &mut storage,
+        Operation::Reserve {
+            capture_id: "interrupted".into(),
+            state: request.state,
+        },
+        "rig-1",
+    )
+    .await
+    .unwrap();
+    assert!(!settled_for_weather_resume(&mut storage, "rig-1")
+        .await
+        .unwrap());
+}
+
 pub(super) fn ledger_command(id: u64, operation: Operation) -> Message {
     command(
         id,

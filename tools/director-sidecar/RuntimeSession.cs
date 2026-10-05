@@ -12,8 +12,8 @@ internal sealed class RuntimeSession : IAsyncDisposable
     internal const int MaxFrameBytes = 262144 + 4096;
     internal const string EngineVersion = "0.3.0";
     internal const int ContractVersion = 2;
-    internal const int ProtocolVersion = 11;
-    internal const string RuntimeVersion = "0.11.2";
+    internal const int ProtocolVersion = 12;
+    internal const string RuntimeVersion = "0.12.0";
     private readonly NamedPipeServerStream pipe;
     private readonly Process process;
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -90,7 +90,7 @@ internal sealed class RuntimeSession : IAsyncDisposable
                 result["rig_id"]?.GetValue<string>() != rigId ||
                 result["storage_enabled"]?.GetValue<bool>() != (storageDirectory is not null) ||
                 result["recovery_enabled"]?.GetValue<bool>() != (recoveryDirectory is not null) ||
-                result["recovery_version"]?.GetValue<int>() != 1)
+                result["recovery_version"]?.GetValue<int>() != 2)
                 throw new InvalidDataException("Sidecar handshake identity/version mismatch.");
             session.ready = true;
             return session;

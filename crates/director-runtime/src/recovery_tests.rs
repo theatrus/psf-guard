@@ -28,6 +28,7 @@ fn open() -> Operation {
             maximum_consecutive_failures: 2,
             maximum_total_failures: 3,
             park_on_stop: true,
+            weather: None,
         },
         now_ms: 10000,
     }
@@ -76,7 +77,7 @@ async fn exchange(client: &mut DuplexStream, id: u64, operation: Operation) -> r
             id,
             Command::Recovery {
                 operation: to_raw_value(&recovery::Request {
-                    recovery_version: 1,
+                    recovery_version: recovery::CONTRACT_VERSION,
                     operation,
                 })
                 .unwrap(),
@@ -105,6 +106,57 @@ async fn start(
 }
 
 #[tokio::test]
+async fn weather_resume_ipc_cannot_bypass_missing_execution_evidence() {
+    let dir = TempDir::new().unwrap();
+    let (mut client, task) = start(&dir).await;
+    let mut begin = open();
+    let Operation::Open { policy, .. } = &mut begin else {
+        unreachable!()
+    };
+    policy.weather = Some(core::WeatherPolicy {
+        stable_safe_ms: 100,
+        maximum_hold_ms: 1000,
+        maximum_interruptions: 2,
+    });
+    exchange(&mut client, 1, begin).await;
+    exchange(
+        &mut client,
+        2,
+        apply(
+            0,
+            10001,
+            core::Event::WeatherInterrupted { enclosure: true },
+        ),
+    )
+    .await;
+    exchange(&mut client, 3, apply(1, 10002, core::Event::Tick {})).await;
+    exchange(&mut client, 4, apply(2, 10102, core::Event::Tick {})).await;
+    assert!(matches!(
+        exchange(
+            &mut client,
+            5,
+            apply(3, 10102, core::Event::ResumeWeather {})
+        )
+        .await,
+        recovery::Reply::Error {
+            code: recovery::Error::AcquisitionBlocked
+        }
+    ));
+    let recovery::Reply::Current {
+        record: Some(record),
+    } = exchange(&mut client, 6, Operation::Current {}).await
+    else {
+        panic!("missing hold")
+    };
+    assert!(matches!(
+        record.snapshot.phase,
+        core::Phase::WeatherHolding { .. }
+    ));
+    storage_tests::stop(&mut client, 7).await;
+    assert_eq!(task.await.unwrap(), Ok(()));
+}
+
+#[tokio::test]
 async fn disabled_and_wrong_version_do_not_open_database() {
     let (mut client, server) = duplex(MAX_FRAME_BYTES);
     let task = tokio::spawn(serve(server));
@@ -125,7 +177,7 @@ async fn disabled_and_wrong_version_do_not_open_database() {
             1,
             Command::Recovery {
                 operation: to_raw_value(&recovery::Request {
-                    recovery_version: 2,
+                    recovery_version: recovery::CONTRACT_VERSION + 1,
                     operation: open(),
                 })
                 .unwrap(),
@@ -574,7 +626,7 @@ async fn acquisition_needs_fresh_motion_evidence_and_cannot_outlive_the_night() 
     );
     assert!(!dir.path().join("recovery.sqlite").exists());
     let req = |operation| recovery::Request {
-        recovery_version: 1,
+        recovery_version: recovery::CONTRACT_VERSION,
         operation,
     };
     recovery::execute(&mut storage, req(open()), "rig-1")
