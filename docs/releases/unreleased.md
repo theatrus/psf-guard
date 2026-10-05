@@ -539,6 +539,11 @@
 
 ## Fixed
 
+- A Target Scheduler project with several separate targets is no longer
+  planned as one: Director drafts its first target from that target's own
+  exposure plans, instead of raising it to the largest desired count of any
+  target, and activation leaves such a project to Target Scheduler with a
+  warning.
 - Choosing a sky map, or the offline N.I.N.A. map standing in for a saved
   survey, no longer asks for another activation. Only a change to what
   activation writes (target, angle, grid, panels) leaves the rigs behind.
