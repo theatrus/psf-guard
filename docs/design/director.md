@@ -25,7 +25,8 @@ capture; it does not implement another flip algorithm. Runtime-installed
 defaults must not leak into saved/cloned user sequences. Native recovery steps
 can still be best effort (for example, recenter); workflow completion is not
 pixel-derived pointing evidence. The forced-flip simulator gate is now covered
-below; rotation and real-sky acceptance remain open.
+below, including simulator rotation and PHD2 recovery. Real-sky acceptance
+remains open.
 
 Workload API capability names are `native_single_target_v1` and
 `native_imaging_v1`. Old modes retain their old restrictions. Native device IDs
@@ -44,8 +45,8 @@ remain planned. Local history works without connectivity. Central operation
 telemetry must eventually batch the durable preparation receipts, not replay UI
 logs as current rig status.
 
-This does not close phase 2: optical solver/focus performance, native rotation,
-real-sky flip/recenter and guider recovery, broad third-party hooks, quality
+This does not close phase 2: optical solver/focus performance, real-sky rotation,
+flip/recenter and guider recovery, broad third-party hooks, quality
 recovery, calibration acquisition, offline cold start and uncertain-work recovery
 remain acceptance work.
 
@@ -69,6 +70,27 @@ status/window presentation is headless. Recenter is disabled and Direct Guider
 does not exercise PHD2 reacquisition. This is orchestration evidence, not proof
 of optical quality or physical mount safety. See the plugin's
 `docs/nina-smoke-test.md` for commands and retained evidence.
+
+The follow-on simulator campaign uses PSF Guard main `a035e56`, NINA nightly
+`3.3.0.1065`, the same runtime, ASCOM OmniSim and a private PHD2 2.6.14 instance.
+The server declares rotator-capable optics and a 30-degree framing angle; the
+native Center and Rotate action moves the simulator and the three saved capture
+intents preserve that angle. PHD2 calibrates and guides simulated stars. The
+native flip workflow stops it, captures a recenter snapshot, consumes a parsed
+synthetic solve, selects another guide star, resumes guiding and saves the next
+exposure. Neither an actual astrometric solver nor an optical autofocus curve is
+tested. PHD2's simulated mount is independent of OmniSim's pier change, so this
+does not validate physical flip calibration parity or real-sky guide recovery.
+
+The plugin retains a serial host-regression matrix for offline acquisition and
+check-in, unsafe park/stop policy, enclosure closure, changing rig constraints,
+Moon restrictions, ranked-priority handoff, and native operation failures. Keep
+using isolated registries/profiles and simulator-only device identities. No API
+or planning-engine contract changes are needed for these tests. The test solver,
+PHD2 launcher and NINA isolation hook must never ship in the plugin package.
+All 13 matrix scenarios passed on 2026-10-04, alongside 827 plugin unit tests.
+The plugin's focused smoke-test guide records the local evidence paths and the
+remaining field acceptance limits.
 
 ### Operating goal after setup
 
@@ -3821,8 +3843,9 @@ separate workflow; these mappings alone do not resolve them.
   Director and plugin actions. Validate missing required devices/safety sources.
   Native center/AF/guide/dither/flip defaults, ownership checks, local chart and
   timed action history are now implemented. Keep this full gate open until
-  rotation, real optical results and third-party combinations pass. Forced
-  meridian crossing and resumed acquisition are simulator-validated above.
+  real optical results and third-party combinations pass. Forced meridian
+  crossing, native rotation, PHD2 restart, synthetic recenter and resumed
+  acquisition are simulator-validated above; field acceptance remains open.
 - [x] Add the internal shared-core recovery states and separate durable per-rig
   store: cooldown/hysteresis, cumulative probe/hold/failure budgets, persisted
   night-stop latches, duplicate refusal and restart tests. This is not a shipped
