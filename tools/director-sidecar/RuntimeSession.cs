@@ -90,7 +90,7 @@ internal sealed class RuntimeSession : IAsyncDisposable
                 result["rig_id"]?.GetValue<string>() != rigId ||
                 result["storage_enabled"]?.GetValue<bool>() != (storageDirectory is not null) ||
                 result["recovery_enabled"]?.GetValue<bool>() != (recoveryDirectory is not null) ||
-                result["recovery_version"]?.GetValue<int>() != 1)
+                result["recovery_version"]?.GetValue<int>() != 2)
                 throw new InvalidDataException("Sidecar handshake identity/version mismatch.");
             session.ready = true;
             return session;

@@ -106,7 +106,7 @@ internal static class RecoveryChecks
     };
 
     private static async Task<JsonObject> Send(RuntimeSession session, JsonObject operation) =>
-        (await session.SendAsync(new JsonObject { ["type"] = "recovery", ["operation"] = new JsonObject { ["recovery_version"] = 1, ["operation"] = operation.DeepClone() } }))["response"]!.AsObject();
+        (await session.SendAsync(new JsonObject { ["type"] = "recovery", ["operation"] = new JsonObject { ["recovery_version"] = 2, ["operation"] = operation.DeepClone() } }))["response"]!.AsObject();
 
     private static void Assert(bool condition, string label)
     {
