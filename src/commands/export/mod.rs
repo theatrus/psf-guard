@@ -94,6 +94,65 @@ pub fn session_component(label: &str) -> String {
     format!("{SESSION_KEYWORD}_{}", sanitize_component(label))
 }
 
+/// The grouping keyword that keeps two dark masters of one exposure and gain
+/// apart, when lights in one export were matched to different darks. WBPP
+/// lets a calibration group serve a light only when every keyword the group
+/// carries equals the light's (`keywordsMatchCount`, strict direct), and
+/// prefers the group matching most keywords; a group without the keyword
+/// still serves every light. So tagged darks serve only their lights, and
+/// bias, dark-flats and flats, untagged, serve all.
+pub const DARKSET_KEYWORD: &str = "DARKSET";
+
+pub fn darkset_component(label: &str) -> String {
+    format!("{DARKSET_KEYWORD}_{}", sanitize_component(label))
+}
+
+/// Name each distinct dark set of one exposure and gain by its nearest
+/// night, with a short digest of its frames when two sets share a night.
+/// Only groups holding more than one set get names: one set needs no keyword.
+fn dark_set_labels(
+    sets: &[crate::calibration::DarkSet],
+) -> HashMap<crate::calibration::DarkSet, String> {
+    use sha2::{Digest, Sha256};
+    let mut by_group: std::collections::BTreeMap<
+        &str,
+        std::collections::BTreeSet<&crate::calibration::DarkSet>,
+    > = Default::default();
+    for set in sets {
+        by_group.entry(set.group.as_str()).or_default().insert(set);
+    }
+    let mut labels = HashMap::new();
+    for distinct in by_group.values().filter(|distinct| distinct.len() > 1) {
+        let mut nights: HashMap<&str, usize> = HashMap::new();
+        for set in distinct {
+            *nights.entry(set.night.as_str()).or_default() += 1;
+        }
+        for set in distinct {
+            let label = if nights[set.night.as_str()] > 1 {
+                let digest = Sha256::digest(set.frame_uuids.join(",").as_bytes());
+                let hex: String = digest
+                    .iter()
+                    .take(3)
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
+                format!("{}-{hex}", set.night)
+            } else {
+                set.night.clone()
+            };
+            labels.insert((*set).clone(), label);
+        }
+    }
+    labels
+}
+
+/// `path` with one more folder just above its file name.
+fn with_folder_before_file(path: &Path, folder: &str) -> PathBuf {
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => parent.join(folder).join(name),
+        _ => path.to_path_buf(),
+    }
+}
+
 impl ExportLayout {
     /// Where one light frame lands. `session` is the flat session the light
     /// calibrates in; the WBPP layout tags the light's path with it so WBPP
@@ -219,6 +278,10 @@ pub fn plan_export(
     // (same basename for a target+filter, e.g. after a manual file copy).
     let mut used_dests: HashMap<PathBuf, usize> = HashMap::new();
     let mut calibration_items = Vec::new();
+    // For the WBPP layout: which planned light, and which planned dark,
+    // belongs to which dark set, settled once every light is matched.
+    let mut light_dark_sets: Vec<(usize, crate::calibration::DarkSet)> = Vec::new();
+    let mut dark_item_sets: Vec<(usize, crate::calibration::DarkSet)> = Vec::new();
     let night_boundary = crate::server::sky_coverage::catalog_night_boundary(conn)
         .context("reading capture times")?;
 
@@ -244,6 +307,7 @@ pub fn plan_export(
         let size_bytes = std::fs::metadata(&source).map(|m| m.len()).unwrap_or(0);
         let light_meta = crate::commands::import::headers::read_frame_meta(&source);
         let mut flat_session = None;
+        let mut dark_set = None;
         if light_meta.readable {
             let calibration = crate::calibration::export_destinations(
                 conn,
@@ -254,9 +318,17 @@ pub fn plan_export(
                 night_boundary,
             )
             .context("matching export calibration frames")?;
+            if let Some(set) = &calibration.dark_set {
+                for (offset, (kind, _, _)) in calibration.items.iter().enumerate() {
+                    if *kind == crate::calibration::CalibrationKind::Dark {
+                        dark_item_sets.push((calibration_items.len() + offset, set.clone()));
+                    }
+                }
+            }
             calibration_items.extend(calibration.items);
             plan.stray_light.extend(calibration.stray_light);
             flat_session = calibration.flat_session;
+            dark_set = calibration.dark_set;
         }
 
         // The basename comes from the row's metadata JSON; sanitize it too so
@@ -282,6 +354,9 @@ pub fn plan_export(
             relative_dest = relative_dest.with_file_name(format!("{}.{}{}", stem, *clashes, ext));
         }
 
+        if let Some(set) = dark_set {
+            light_dark_sets.push((plan.items.len(), set));
+        }
         plan.items.push(ExportItem {
             image_id: image.id,
             calibration_frame_id: None,
@@ -290,6 +365,29 @@ pub fn plan_export(
             relative_dest,
             size_bytes,
         });
+    }
+
+    // Lights matched to different darks of one exposure and gain: give each
+    // set its own DARKSET folder, and each light its set's, so WBPP builds
+    // the same masters a stack would instead of averaging every night's.
+    if options.layout == ExportLayout::Wbpp {
+        let sets: Vec<_> = light_dark_sets.iter().map(|(_, set)| set.clone()).collect();
+        let labels = dark_set_labels(&sets);
+        if !labels.is_empty() {
+            for (index, set) in &light_dark_sets {
+                if let Some(label) = labels.get(set) {
+                    let item = &mut plan.items[*index];
+                    item.relative_dest =
+                        with_folder_before_file(&item.relative_dest, &darkset_component(label));
+                }
+            }
+            for (index, set) in &dark_item_sets {
+                if let Some(label) = labels.get(set) {
+                    let dest = &mut calibration_items[*index].2;
+                    *dest = with_folder_before_file(dest, &darkset_component(label));
+                }
+            }
+        }
     }
 
     let mut seen = HashSet::new();
@@ -725,6 +823,138 @@ mod tests {
                 "the standard tree leaked into a WBPP export: {path}"
             );
         }
+    }
+
+    /// Two lights, each with a complete night of darks of its own, in one
+    /// export: the darks go to two dark-set folders and each light names
+    /// its set, so WBPP builds the two masters a stack would. Lights sharing
+    /// one set keep the plain layout.
+    fn dark_set_export(second_light: &str) -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = seed(dir.path());
+        write_test_fits_with(
+            &dir.path().join("acc_Ha_0001.fits"),
+            "LIGHT",
+            &["DATE-OBS= '2026-01-10T03:00:00'"],
+        );
+        let second = dir.path().join("acc_Ha_0009.fits");
+        write_test_fits_with(&second, "LIGHT", &[&format!("DATE-OBS= '{second_light}'")]);
+        conn.execute(
+            "INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername,
+             gradingStatus, metadata) VALUES (9, 1, 1, 200, 'Ha', 1, ?1)",
+            [serde_json::json!({ "FileName": second.display().to_string() }).to_string()],
+        )
+        .unwrap();
+        let mut calibration = Vec::new();
+        for (night, day) in [("jan", "2026-01-09"), ("mar", "2026-03-09")] {
+            for index in 0..10 {
+                let path = dir.path().join(format!("dark-{night}-{index}.fits"));
+                write_test_fits_with(
+                    &path,
+                    "DARK",
+                    &[&format!("DATE-OBS= '{day}T20:{index:02}:00'")],
+                );
+                calibration.push(crate::commands::import::headers::read_frame_meta(&path));
+            }
+        }
+        {
+            let tx = conn.transaction().unwrap();
+            crate::calibration::import_calibration_frames(&tx, &calibration, Some("p")).unwrap();
+            tx.commit().unwrap();
+        }
+        let dirs = vec![dir.path().to_string_lossy().into_owned()];
+        let options = ExportOptions {
+            layout: ExportLayout::Wbpp,
+            ..ExportOptions::default()
+        };
+        plan_export(&conn, &dirs, &options)
+            .unwrap()
+            .items
+            .iter()
+            .map(|item| item.relative_dest.to_string_lossy().replace('\\', "/"))
+            .collect()
+    }
+
+    #[test]
+    fn dark_sets_are_named_by_night_with_a_digest_only_when_nights_collide() {
+        let set = |group: &str, night: &str, uuids: &[&str]| crate::calibration::DarkSet {
+            group: group.into(),
+            night: night.into(),
+            frame_uuids: uuids.iter().map(|uuid| uuid.to_string()).collect(),
+        };
+        let a = set("300s_G100", "2026-01-09", &["a1", "a2"]);
+        let b = set("300s_G100", "2026-03-09", &["b1", "b2"]);
+        let c = set("300s_G100", "2026-03-09", &["b1", "c2"]);
+        let lone = set("60s_G100", "2026-01-09", &["x"]);
+        let labels = dark_set_labels(&[a.clone(), a.clone(), b.clone(), lone.clone()]);
+        assert_eq!(labels[&a], "2026-01-09");
+        assert_eq!(labels[&b], "2026-03-09");
+        // One set in its group needs no keyword.
+        assert!(!labels.contains_key(&lone));
+        let labels = dark_set_labels(&[a, b.clone(), c.clone()]);
+        assert!(labels[&b].starts_with("2026-03-09-") && labels[&c].starts_with("2026-03-09-"));
+        assert_ne!(labels[&b], labels[&c]);
+    }
+
+    #[test]
+    fn lights_matched_to_different_darks_get_a_dark_set_folder_each() {
+        let destinations = dark_set_export("2026-03-10T03:00:00");
+        let set_of = |path: &str| {
+            path.split('/')
+                .find_map(|part| part.strip_prefix("DARKSET_"))
+                .map(str::to_string)
+        };
+        let darks: Vec<&String> = destinations
+            .iter()
+            .filter(|path| path.starts_with("darks/"))
+            .collect();
+        assert_eq!(darks.len(), 20, "{destinations:?}");
+        for dark in &darks {
+            let set = set_of(dark).unwrap_or_else(|| panic!("untagged dark {dark}"));
+            let month = if dark.contains("dark-jan") {
+                "2026-01"
+            } else {
+                "2026-03"
+            };
+            assert!(set.starts_with(month), "{dark}");
+            assert!(dark.starts_with("darks/300s_G100/DARKSET_"), "{dark}");
+        }
+        let light = |name: &str| {
+            destinations
+                .iter()
+                .find(|path| path.ends_with(name))
+                .unwrap()
+        };
+        assert!(
+            set_of(light("acc_Ha_0001.fits"))
+                .unwrap()
+                .starts_with("2026-01"),
+            "{destinations:?}"
+        );
+        assert!(
+            set_of(light("acc_Ha_0009.fits"))
+                .unwrap()
+                .starts_with("2026-03"),
+            "{destinations:?}"
+        );
+    }
+
+    #[test]
+    fn lights_sharing_one_dark_set_keep_the_plain_layout() {
+        // Both lights in January: both take January's complete night.
+        let destinations = dark_set_export("2026-01-11T03:00:00");
+        assert!(
+            destinations.iter().all(|path| !path.contains("DARKSET_")),
+            "{destinations:?}"
+        );
+        assert_eq!(
+            destinations
+                .iter()
+                .filter(|path| path.starts_with("darks/300s_G100/dark-jan"))
+                .count(),
+            10,
+            "{destinations:?}"
+        );
     }
 
     /// Two nights that need different flats get two session folders, and

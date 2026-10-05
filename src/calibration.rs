@@ -6312,6 +6312,20 @@ pub struct ExportCalibration {
     /// Darks and dark-flats that matched this light but were left out for
     /// stray light.
     pub stray_light: Vec<PathBuf>,
+    /// The darks this light's master is built from, so an export can keep
+    /// two lights' different sets from being integrated as one.
+    pub dark_set: Option<DarkSet>,
+}
+
+/// One light's dark master, as an export names it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DarkSet {
+    /// The folder the darks land in below `darks/`: exposure and gain.
+    pub group: String,
+    /// The night of the dark nearest the light.
+    pub night: String,
+    /// Which darks, sorted, so two lights with the same set compare equal.
+    pub frame_uuids: Vec<String>,
 }
 
 /// Lights are matched one at a time, so the caller reads `night_boundary` once
@@ -6345,6 +6359,22 @@ pub fn export_destinations(
         stray_light: Vec::new(),
     };
     let flat_session = flat_session_label(&selected.flat, night_boundary);
+    let dark_set = selected.dark.first().map(|nearest| {
+        let mut frame_uuids: Vec<String> = selected
+            .dark
+            .iter()
+            .map(|frame| frame.frame_uuid.clone())
+            .collect();
+        frame_uuids.sort();
+        DarkSet {
+            group: dark_group(nearest),
+            night: nearest
+                .captured_at
+                .map(|at| night_of(at, night_boundary))
+                .unwrap_or_else(|| "undated".into()),
+            frame_uuids,
+        }
+    });
     let target = crate::commands::export::sanitize_component(target_name);
     let filter =
         crate::commands::export::sanitize_component(light.filter.as_deref().unwrap_or("NONE"));
@@ -6373,14 +6403,7 @@ pub fn export_destinations(
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
-        let group = format!(
-            "{}s_G{}",
-            format_number(frame.exposure_s),
-            frame
-                .gain
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "unknown".into())
-        );
+        let group = dark_group(&frame);
         let destination = match layout {
             ExportLayout::Standard => PathBuf::from("DARK").join(&group).join(&name),
             ExportLayout::Wbpp => PathBuf::from("darks").join(&group).join(&name),
@@ -6446,7 +6469,21 @@ pub fn export_destinations(
         items: output,
         flat_session,
         stray_light,
+        dark_set,
     })
+}
+
+/// The folder a dark lands in below `darks/`: its exposure and gain, the
+/// settings a stacker pairs a dark to a light by.
+fn dark_group(frame: &CalibrationFrame) -> String {
+    format!(
+        "{}s_G{}",
+        format_number(frame.exposure_s),
+        frame
+            .gain
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".into())
+    )
 }
 
 /// The night a flat set was shot, as one path component: the observing
