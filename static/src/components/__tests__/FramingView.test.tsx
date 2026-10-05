@@ -627,6 +627,23 @@ describe('Framing view', () => {
     expect(drafts.current!.unsaved[0].changes).toEqual(['camera angle 0° → 15°']);
   });
 
+  it('does not call the same rigs in another order an edit', async () => {
+    // Unticking a rig and ticking it again puts it last. The bar would have
+    // nothing to list, so it must not say the framing is unsaved.
+    const rigC = { ...rigA, rig: { ...rigA.rig, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Askar' }, catalog_slug: 'askar', catalog_name: 'Askar 107' };
+    const stored: DirectorFramingDraft = { project_id: 'project', revision: 2, target_name: 'M33', center: { ra_degrees: 23.46, dec_degrees: 30.66 }, position_angle_degrees: 0,
+      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 }, shown_rig_ids: [rigA.rig.id, rigC.rig.id], survey_id: 'dss2_color', view_fov_degrees: 6, updated_at_ms: 1 };
+    fixture(stored);
+    server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigC]))));
+    const drafts = mountOnPage();
+    const redcat = await screen.findByRole('checkbox', { name: /RedCat 61/ });
+    await waitFor(() => expect(drafts.current?.sections.map(section => section.id)).toEqual(['framing']));
+    fireEvent.click(redcat);
+    await waitFor(() => expect(drafts.current!.unsaved[0]?.changes).toEqual(['rigs compared']));
+    fireEvent.click(redcat);
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(0));
+  });
+
   it('saves a framing taken from the catalog quietly, never as an unsaved edit', async () => {
     // No saved draft: the view starts from the catalog target and picks a
     // panel rig. Nothing to warn about, but activation needs it stored, so
