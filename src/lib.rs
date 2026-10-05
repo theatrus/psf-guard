@@ -12,6 +12,7 @@ pub mod config;
 pub mod db;
 pub mod db_registry;
 pub mod debug;
+pub mod desktop_log;
 pub mod directory_tree;
 pub mod grading;
 pub mod hocus_focus_star_detection;

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
-import type { CalibrationNightFilter, ProjectCalibrationReport } from '../api/types';
+import type { CalibrationExternalMaster, CalibrationNightFilter, ProjectCalibrationReport } from '../api/types';
 import Dialog from './Dialog';
 import './CalibrationReportDialog.css';
 
@@ -23,8 +23,15 @@ function formatAge(days: number | null | undefined): string {
   return `${Math.round(days)} d away`;
 }
 
+const angle = (value: number) => `${Math.round(value * 10) / 10}°`;
+
 function flatCell(filter: CalibrationNightFilter): string {
-  if (filter.flat_frames === 0) return 'none';
+  if (filter.flat_frames === 0) {
+    const miss = filter.flat_near_miss;
+    return miss
+      ? `none · nearest ${miss.filter ?? ''} ${angle(miss.flat_rotation_deg)}, ${angle(miss.off_by_deg)} off (limit ${angle(miss.tolerance_deg)})${miss.session ? ` · ${miss.session}` : ''}`
+      : 'none';
+  }
   const session = filter.flat_session ?? '?';
   return filter.nightly_flats
     ? `${filter.flat_frames} · same night`
@@ -33,7 +40,14 @@ function flatCell(filter: CalibrationNightFilter): string {
 
 function darkCell(filter: CalibrationNightFilter): string {
   if (filter.dark_frames === 0) return 'none';
-  return `${filter.dark_frames} · ${formatAge(filter.dark_age_days)}`;
+  const master = filter.dark_master_frames ?? filter.dark_frames;
+  const nights = filter.dark_master_nights ?? 1;
+  return `${master} · ${nights > 1 ? `${nights} nights, nearest ${formatAge(filter.dark_age_days)}` : formatAge(filter.dark_age_days)}`;
+}
+
+function masterNote(master: CalibrationExternalMaster): string {
+  const state = master.used ? 'used' : master.matches ? 'matches, not used' : `not used: ${master.reason ?? 'no match'}`;
+  return `${master.kind} master ${master.file} · ${state}`;
 }
 
 /**
@@ -113,14 +127,21 @@ export default function CalibrationReportDialog({
                         <td className={filter.flat_frames === 0 ? 'missing' : filter.nightly_flats ? 'nightly' : ''}>
                           {flatCell(filter)}
                         </td>
-                        <td className={filter.dark_frames === 0 ? 'missing' : ''}>
+                        <td className={filter.dark_frames === 0 ? 'missing' : ''} title={`${filter.dark_frames} matching darks within reach`}>
                           {darkCell(filter)}
                         </td>
                         <td className={filter.bias_frames === 0 ? 'missing' : ''}>
                           {filter.bias_frames || 'none'}
                         </td>
                       </tr>
-                    ))
+                    )).concat(night.filters.filter((filter) => (filter.external_masters ?? []).length > 0).map((filter) => (
+                      <tr key={`${night.night}:${filter.filter}:masters`} className="calibration-report-masters">
+                        <td />
+                        <td colSpan={5}>
+                          <ul>{(filter.external_masters ?? []).map((master) => <li key={`${master.kind}:${master.file}`} className={master.used ? 'nightly' : master.matches ? '' : 'missing'}>{filter.filter}: {masterNote(master)}</li>)}</ul>
+                        </td>
+                      </tr>
+                    )))
                   )}
                 </tbody>
               </table>

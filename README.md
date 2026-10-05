@@ -298,6 +298,19 @@ Windows NSIS installer (`-setup.exe`) that installs a console
 `psf-guard-cli.exe` and adds it to your user `PATH`, so the full CLI works
 from any terminal.
 
+The desktop app writes a log, one file per day, and keeps the last seven
+days. **Settings › Open logs** opens the folder:
+
+| Platform | Log folder |
+|----------|------------|
+| Windows | `%LOCALAPPDATA%\com.theatrus.psf-guard\logs` |
+| macOS | `~/Library/Logs/com.theatrus.psf-guard` |
+| Linux | `~/.local/share/com.theatrus.psf-guard/logs` |
+
+It holds what the server would print to a console, including each frame a
+stack leaves out or rejects and why. `RUST_LOG` sets the level; the default
+is info.
+
 The remaining install options serve the UI on another machine or provide
 command-line tools. Desktop review does not require them.
 

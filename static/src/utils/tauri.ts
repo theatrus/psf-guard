@@ -155,7 +155,28 @@ export const tauriFileSystem = {
       console.error('Failed to get default N.I.N.A. path:', error);
       return null;
     }
-  }
+  },
+
+  /** The desktop app's log folder, or null outside it. */
+  getLogFolder: async (): Promise<string | null> => {
+    if (!isTauriApp()) return null;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      return await invoke('get_log_folder');
+    } catch (error) {
+      console.error('Failed to get the log folder:', error);
+      return null;
+    }
+  },
+
+  /** Open the log folder in Finder, Explorer, or the Linux file manager. */
+  openLogFolder: async (): Promise<void> => {
+    if (!isTauriApp()) {
+      throw new Error('Logs are written by the desktop app only.');
+    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('open_log_folder');
+  },
 };
 
 // Configuration management functions

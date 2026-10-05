@@ -59,3 +59,9 @@
 .calibration-report td.missing {
   color: var(--color-error, #c0392b);
 }
+
+.calibration-report-masters ul {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+}
