@@ -188,7 +188,10 @@ have no stars is ruined whatever the preference. API callers pass
 `hfr_reject_above`, or `star_count_reject_below` on the analysis endpoints.
 
 Capture sessions split at a Target Scheduler session change, a capture-profile
-change, or a 60-minute gap. CLI screening still reports **OK**, **WARN**, and
+change, or a 60-minute gap. Frames measured from calibrated pixels (a light
+catalogued from its [calibrated copy](design/calibrated-subs.md), or measured
+from one) form sessions and stack comparisons of their own, since their
+background, flux and star counts differ from raw frames of the same sky. CLI screening still reports **OK**, **WARN**, and
 **REJECT** verdicts for its file-screening workflow.
 
 ## Quick start
