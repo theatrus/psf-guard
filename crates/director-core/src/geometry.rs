@@ -116,10 +116,14 @@ impl BoundGeometry {
         }
         // Retain the legacy transit contract too. Its input may further restrict
         // computed geometry, but cannot relax the independent rig calculation.
+        // Cache allocation geometry, not a transient session deadline. Each
+        // evaluation clips these windows to its current completion deadline.
+        let mut geometry_state = state.clone();
+        geometry_state.completion_deadline_ms = None;
         let permitted = crate::validate(&Request {
             contract_version: CONTRACT_VERSION,
             assignment: assignment.clone(),
-            state: state.clone(),
+            state: geometry_state,
         })
         .map_err(Error::Planning)?;
         let span = Interval {

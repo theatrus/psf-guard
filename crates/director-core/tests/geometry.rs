@@ -128,6 +128,7 @@ fn moon_blocked_high_priority_recipe_yields_to_eligible_work() {
         ..Default::default()
     });
     request.assignment = program.assignment.clone();
+    request.state.completion_deadline_ms = Some(request.state.now_ms + 30_000);
     let geometry = compile(program.clone(), &request, constraints.clone()).unwrap();
     assert!(geometry.windows("goal").unwrap().is_empty());
     assert!(
@@ -139,7 +140,7 @@ fn moon_blocked_high_priority_recipe_yields_to_eligible_work() {
         blocked.evaluate(&request, &constraints).unwrap(),
         Decision::Wait { reason } if reason == "moon_avoidance"
     ));
-    request.state.completion_deadline_ms = Some(request.state.now_ms + 1);
+    request.state.now_ms += 29_999;
     let expected = Decision::Wait {
         reason: "observing_night_window_too_short".into(),
     };
