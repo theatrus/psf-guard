@@ -48,10 +48,10 @@ pub(super) fn fixture() -> Request {
 }
 
 #[tokio::test]
-async fn weather_resume_requires_an_open_settled_capture_ledger() {
+async fn weather_resume_requires_unused_storage_or_an_open_settled_capture_ledger() {
     let dir = TempDir::new().unwrap();
     let mut storage = Some(Storage::acquire(dir.path()).unwrap());
-    assert!(!settled_for_weather_resume(&mut storage, "rig-1")
+    assert!(settled_for_weather_resume(&mut storage, "rig-1")
         .await
         .unwrap());
     let request = fixture();
@@ -80,6 +80,50 @@ async fn weather_resume_requires_an_open_settled_capture_ledger() {
     )
     .await
     .unwrap();
+    assert!(!settled_for_weather_resume(&mut storage, "rig-1")
+        .await
+        .unwrap());
+}
+
+#[tokio::test]
+async fn weather_resume_cannot_treat_disabled_or_historical_storage_as_idle() {
+    assert!(!settled_for_weather_resume(&mut None, "rig-1")
+        .await
+        .unwrap());
+    let dir = TempDir::new().unwrap();
+    let mut storage = Some(Storage::acquire(dir.path()).unwrap());
+    let request = fixture();
+    execute(
+        &mut storage,
+        Operation::Open {
+            request: request.clone(),
+        },
+        "rig-1",
+    )
+    .await
+    .unwrap();
+    execute(
+        &mut storage,
+        Operation::Reserve {
+            capture_id: "interrupted".into(),
+            state: request.state,
+        },
+        "rig-1",
+    )
+    .await
+    .unwrap();
+    drop(storage);
+    let mut reopened = Some(Storage::acquire(dir.path()).unwrap());
+    assert!(!settled_for_weather_resume(&mut reopened, "rig-1")
+        .await
+        .unwrap());
+}
+
+#[tokio::test]
+async fn weather_resume_cannot_treat_an_invalid_execution_path_as_idle() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir(dir.path().join("execution.sqlite")).unwrap();
+    let mut storage = Some(Storage::acquire(dir.path()).unwrap());
     assert!(!settled_for_weather_resume(&mut storage, "rig-1")
         .await
         .unwrap());
