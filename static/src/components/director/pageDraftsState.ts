@@ -7,6 +7,12 @@ export interface DraftSection {
   /** Saving order: the framing before the plan it is read with. */
   order: number;
   unsaved: boolean;
+  /** What differs from the saved state, in a few words each. */
+  changes?: string[];
+  /** Needs a first save though nobody edited it (a framing taken from the
+   *  catalog, a panel rig picked for it). Saved with the rest, never shown
+   *  as an unsaved change. */
+  pending?: boolean;
   /** Save the section's edits; resolve false when it could not, having
    *  shown why in the section itself. */
   save: () => Promise<boolean>;
@@ -43,14 +49,15 @@ export function usePageDrafts(): Drafts {
         return next;
       }
       const previous = current[id];
-      if (previous && previous.unsaved === section.unsaved && previous.label === section.label && previous.order === section.order) return current;
+      if (previous && previous.unsaved === section.unsaved && previous.pending === section.pending && previous.label === section.label && previous.order === section.order
+        && JSON.stringify(previous.changes ?? []) === JSON.stringify(section.changes ?? [])) return current;
       return { ...current, [id]: { ...section, id } };
     });
   }, []);
   const ordered = useMemo(() => Object.values(sections).sort((left, right) => left.order - right.order), [sections]);
   const unsaved = useMemo(() => ordered.filter(section => section.unsaved), [ordered]);
   const saveAll = useCallback(async () => {
-    const pending = Object.values(live.current).filter(section => section.unsaved).sort((left, right) => left.order - right.order);
+    const pending = Object.values(live.current).filter(section => section.unsaved || section.pending).sort((left, right) => left.order - right.order);
     for (const section of pending) {
       let saved = false;
       try { saved = await section.save(); } catch { saved = false; }
@@ -79,10 +86,15 @@ export function useDraftSection(id: string, section: DraftSection): boolean {
       label: section.label,
       order: section.order,
       unsaved: section.unsaved,
+      pending: section.pending,
+      changes: section.changes,
       save: () => latest.current.save(),
       discard: () => latest.current.discard(),
     });
-  }, [register, id, section.label, section.order, section.unsaved]);
+    // The change list is compared by value: a fresh array each render must
+    // not re-register.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [register, id, section.label, section.order, section.unsaved, section.pending, JSON.stringify(section.changes ?? [])]);
   useEffect(() => () => register?.(id, null), [register, id]);
   return !!drafts;
 }

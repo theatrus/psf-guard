@@ -4,6 +4,7 @@ import { isAxiosError } from 'axios';
 import { Check, Crosshair, Globe, Grid3x3, LocateFixed, Orbit, RefreshCw, RotateCw, Sparkles, SquareDashedMousePointer, Sun, Telescope, Undo2 } from 'lucide-react';
 import NumberInput from '../NumberInput';
 import { useDraftSection } from './pageDraftsState';
+import { describeFramingChanges } from './draftChanges';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorCutoutRequest, DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigFraming, DirectorRigProfileSummary, DirectorSkyMarks, DirectorSkyPosition } from '../../api/directorTypes';
@@ -134,6 +135,14 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   const surveys = useQuery({ queryKey: ['directorSurveys'], queryFn: apiClient.getDirectorSurveys, staleTime: Infinity, retry: retryWhenBusy, retryDelay: 700 });
   const rigs = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
   const [state, setState] = useState<FramingState | null>(null);
+  // What the framing was when it loaded, with the same automatic choices
+  // applied (a survey this server stands in for, a panel rig picked for an
+  // empty framing). Only a difference from this is an edit someone made.
+  const [baseline, setBaseline] = useState<FramingState | null>(null);
+  const adjust = useCallback((change: (current: FramingState | null) => FramingState | null) => {
+    setState(change);
+    setBaseline(change);
+  }, []);
   const [notice, setNotice] = useState('');
   const [problem, setProblem] = useState('');
   // A project with no linked catalog target starts from a typed or resolved
@@ -141,8 +150,17 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   const [started, setStarted] = useState<FramingSeed | null>(null);
   useEffect(() => {
     if (!draft.data) return;
-    if (draft.data.draft) setState(stateFromDraft(draft.data.draft));
-    else if (seed ?? started) setState(stateFromSeed((seed ?? started)!, DEFAULT_SURVEY));
+    const loaded = draft.data.draft ? stateFromDraft(draft.data.draft)
+      : seed ? stateFromSeed(seed, DEFAULT_SURVEY)
+      : null;
+    if (loaded) {
+      setState(loaded);
+      setBaseline(loaded);
+    } else if (started) {
+      // Typed into the start form: that is an edit, against nothing saved.
+      setState(stateFromSeed(started, DEFAULT_SURVEY));
+      setBaseline(null);
+    }
   }, [draft.data, seed, started]);
   // A fresh framing starts on the offline DSS map when the server has one,
   // and a saved survey gives way to the offline map that stands in for it.
@@ -150,13 +168,13 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   const surveyChosen = useRef(false);
   useEffect(() => {
     if (!surveys.data || surveyChosen.current) return;
-    setState(current => {
+    adjust(current => {
       if (!current) return current;
       const wanted = current.surveyId === DEFAULT_SURVEY && !draft.data?.draft ? defaultSurveyId(surveys.data, DEFAULT_SURVEY) : current.surveyId;
       const preferred = preferredSurveyId(wanted, surveys.data, DEFAULT_SURVEY);
       return preferred === current.surveyId ? current : { ...current, surveyId: preferred };
     });
-  }, [surveys.data, draft.data, state?.surveyId]);
+  }, [surveys.data, draft.data, state?.surveyId, adjust]);
   const rigList = useMemo(() => rigs.data ?? [], [rigs.data]);
   // Like the framing assistant, start with a rectangle: the first rig that
   // holds this project and knows its optics, else any rig that does.
@@ -164,8 +182,8 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     if (!state || state.panel || state.panelRigId || rigList.length === 0) return;
     const candidates = [...preferredRigIds.map(id => rigList.find(r => r.rig.id === id)).filter((r): r is DirectorRigProfileSummary => !!r), ...rigList];
     const first = candidates.find(r => r.field_of_view);
-    if (first) setState(current => current && !current.panel ? { ...current, panelRigId: first.rig.id, panel: panelForRig(rigList, first.rig.id) } : current);
-  }, [state, rigList, preferredRigIds]);
+    if (first) adjust(current => current && !current.panel ? { ...current, panelRigId: first.rig.id, panel: panelForRig(rigList, first.rig.id) } : current);
+  }, [state, rigList, preferredRigIds, adjust]);
   const update = useCallback((patch: Partial<FramingState> | ((current: FramingState) => Partial<FramingState>)) => {
     setState(current => current ? { ...current, ...(typeof patch === 'function' ? patch(current) : patch) } : current);
   }, []);
@@ -185,7 +203,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
     setNotice(`Moved the target to ${pick.name}.`);
   };
   const savedState = draft.data?.draft ? stateFromDraft(draft.data.draft) : null;
-  const planFields = (s: FramingState) => JSON.stringify([s.targetName, s.center, s.positionAngle, s.mosaic, s.panelRigId, s.panel, s.shownRigIds, s.surveyId]);
+  const planFields = (s: FramingState) => JSON.stringify([s.targetName, s.center, s.positionAngle, s.mosaic, s.panelRigId, s.panel, s.shownRigIds, s.surveyId, s.rigFramings]);
   const differsFromSaved = !!state && !!savedState && planFields(state) !== planFields(savedState);
   // The stage takes the shape of its element, so the sky fills whatever
   // width and height the window gives it.
@@ -336,12 +354,18 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   });
   const httpError = isAxiosError(save.error) ? save.error : save.error instanceof Error && isAxiosError(save.error.cause) ? save.error.cause : null;
   const stale = httpError?.response?.status === 409;
-  // On the project page the save bar saves the framing with the plan. A
-  // framing never saved counts as unsaved: activation needs it stored.
+  // On the project page the save bar saves the framing with the plan. Only
+  // someone's edit counts as unsaved; a framing taken from the catalog, or
+  // one this view filled in, is saved quietly with the next save, since
+  // activation needs it stored.
+  const edited = !!state && !!draft.data && (baseline ? planFields(state) !== planFields(baseline) : true);
+  const firstSave = !!state && !!draft.data && !edited && (!savedState || planFields(state) !== planFields(savedState));
   const managed = useDraftSection('framing', {
     label: 'Framing',
     order: 1,
-    unsaved: canWrite && !!state && !!draft.data && (savedState ? differsFromSaved : true),
+    unsaved: canWrite && edited,
+    pending: canWrite && firstSave,
+    changes: baseline ? describeFramingChanges(baseline, state, id => rigList.find(rig => rig.rig.id === id)?.catalog_name ?? 'a rig') : ['new framing'],
     save: async () => {
       if (!state || !draft.data || stale) return false;
       setNotice('');
@@ -350,7 +374,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
       return true;
     },
     discard: () => {
-      setState(savedState);
+      setState(baseline ?? savedState);
       setUndo(null);
       setNotice('');
       save.reset();

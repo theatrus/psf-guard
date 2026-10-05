@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useId, useMemo, useState } from 'react';
 import { useDraftSection } from './pageDraftsState';
+import { describePlanChanges } from './draftChanges';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { Check, Plus, RefreshCw, Trash2 } from 'lucide-react';
@@ -80,6 +81,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
     label: 'Plan',
     order: 2,
     unsaved: canWrite && unsaved,
+    changes: describePlanChanges(baseline, plan, id => rigList.find(rig => rig.rig.id === id)?.catalog_name ?? 'a rig'),
     save: async () => {
       if (!unsaved) return true;
       if (!canWrite || stale || !plan) return false;

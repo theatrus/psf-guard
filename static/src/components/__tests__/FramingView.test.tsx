@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react';
+import { type MutableRefObject, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import { AccessContext, useAccess } from '../../auth/access';
 import FramingView from '../director/FramingView';
+import { DraftProvider } from '../director/pageDrafts';
+import { usePageDrafts } from '../director/pageDraftsState';
 import type { DirectorFramingDraft, DirectorMosaicPreview } from '../../api/directorTypes';
 import type { SkyPreview } from '../../api/types';
 import { angleAt, moveBy, offsetFrom, skyAtStage, stackMatrix, thumbnailFov, toStage, viewAt } from '../director/framingModel';
@@ -72,6 +74,23 @@ function mount(canWrite = true, withSeed = true, preferredRigIds: string[] = [])
     return <QueryClientProvider client={client}><AccessContext.Provider value={{ ...access, canWrite }}>{children}</AccessContext.Provider></QueryClientProvider>;
   }
   return render(<FramingView projectId="project" seed={withSeed ? seed : null} preferredRigIds={preferredRigIds} />, { wrapper: Wrapper });
+}
+type Drafts = ReturnType<typeof usePageDrafts>;
+/** The view on a page that keeps drafts, as the project workspace does. */
+function mountOnPage(withSeed = true) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const out: MutableRefObject<Drafts | null> = { current: null };
+  function Page() {
+    const drafts = usePageDrafts();
+    out.current = drafts;
+    return <DraftProvider drafts={drafts}><FramingView projectId="project" seed={withSeed ? seed : null} /></DraftProvider>;
+  }
+  function Wrapper({ children }: { children: ReactNode }) {
+    const access = useAccess();
+    return <QueryClientProvider client={client}><AccessContext.Provider value={{ ...access, canWrite: true }}>{children}</AccessContext.Provider></QueryClientProvider>;
+  }
+  render(<Page />, { wrapper: Wrapper });
+  return out;
 }
 /** Point the stage at a stage-pixel position; the stage is laid out at its natural width. */
 function pointer(x: number, y: number) {
@@ -588,6 +607,39 @@ describe('Framing view', () => {
     expect(screen.queryByTestId('framing-graticule')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
     expect(screen.getByLabelText('View width degrees')).toHaveValue(80);
+  });
+
+  it('does not call a framing edited when only the view stood in a survey for the saved one', async () => {
+    // A draft saved on an online survey opens on the offline map that
+    // stands in for it: that is the view's choice, not an unsaved edit.
+    const stored: DirectorFramingDraft = { project_id: 'project', revision: 2, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.5 }, position_angle_degrees: 0,
+      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'nsns_ohs', view_fov_degrees: 6, updated_at_ms: 1 };
+    fixture(stored);
+    server.use(http.get('/api/director/v1/sky/surveys', () => HttpResponse.json(ok(offlineSurveys))));
+    const drafts = mountOnPage();
+    await waitFor(() => expect(screen.getByLabelText('Survey')).toHaveValue('nina:FramingAssistantCache_NorthernSkyNarrowbandSurvey_OHS_withStars'));
+    await waitFor(() => expect(drafts.current?.sections.map(section => section.id)).toEqual(['framing']));
+    expect(drafts.current!.unsaved).toHaveLength(0);
+
+    // A real edit is unsaved, and says what it is.
+    fireEvent.change(screen.getByLabelText('Position angle degrees'), { target: { value: '15' } });
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(1));
+    expect(drafts.current!.unsaved[0].changes).toEqual(['camera angle 0° → 15°']);
+  });
+
+  it('saves a framing taken from the catalog quietly, never as an unsaved edit', async () => {
+    // No saved draft: the view starts from the catalog target and picks a
+    // panel rig. Nothing to warn about, but activation needs it stored, so
+    // the next save stores it.
+    const { saves } = fixture(null);
+    const drafts = mountOnPage();
+    expect(await screen.findByLabelText('Target name')).toHaveValue('M31');
+    await waitFor(() => expect(drafts.current?.sections[0]?.pending).toBe(true));
+    expect(drafts.current!.unsaved).toHaveLength(0);
+    expect(await drafts.current!.saveAll()).toBeNull();
+    expect(saves).toHaveLength(1);
+    expect(saves[0].panel_rig_id).toBe(rigA.rig.id);
+    await waitFor(() => expect(drafts.current!.sections[0].pending).toBe(false));
   });
 
   it('projects sky positions onto the view plane the way the server does', () => {

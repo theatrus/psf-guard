@@ -8,6 +8,9 @@ export function DraftProvider({ drafts, children }: { drafts: Drafts; children: 
   return <DraftContext.Provider value={drafts}>{children}</DraftContext.Provider>;
 }
 
+/** A section's changes the bar lists before "and N more". */
+const MAX_CHANGES_SHOWN = 4;
+
 const listed = (labels: string[]) => labels.length <= 1 ? labels.join('') : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
 
 /** The one place a page's edits are saved or dropped. It stays on screen
@@ -61,6 +64,13 @@ function SaveBarView({ drafts, canWrite, blocker }: { drafts: Drafts; canWrite: 
       : dirty
         ? <p className="draft-bar-message">{state.kind === 'failed' ? `${state.label} was not saved: see what it shows below.` : `Unsaved changes in ${listed(labels)}.`}</p>
         : <p className="draft-bar-message" role="status"><Check size={16} />All changes saved.</p>}
+    {dirty && drafts.unsaved.some(section => (section.changes ?? []).length > 0) && <ul className="draft-bar-changes" aria-label="What changed">
+      {drafts.unsaved.filter(section => (section.changes ?? []).length > 0).map(section => {
+        const changes = section.changes ?? [];
+        const shown = changes.slice(0, MAX_CHANGES_SHOWN);
+        return <li key={section.id}><strong>{section.label}:</strong> {shown.join('; ')}{changes.length > shown.length ? `; and ${changes.length - shown.length} more` : ''}</li>;
+      })}
+    </ul>}
     {dirty && <div className="draft-bar-actions">
       {leaving
         ? <>
