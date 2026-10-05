@@ -4,12 +4,6 @@
   any workload is admitted, while refusing missing storage or unopened historical
   execution ledgers as proof that equipment work has settled.
 
-- Review a mosaic's panels together. The header's target switcher offers
-  "M31 mosaic (4 panels)" when a project's targets are one mosaic: Images
-  groups frames under each panel in grid order, Sequence shows every panel's
-  frames in capture order, and Stacks lays each panel's stack out as the
-  grid and on the sky. Grading and stacking stay per panel.
-
 - Add shared Director weather/roof hold policy with persistent time and
   interruption limits, stable Safe/Open checks and an explicit settled-ledger
   resume gate. Existing clients retain stop-for-night behavior.
@@ -85,6 +79,12 @@
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
 ## Added
+
+- Review a mosaic's panels together. The header's target switcher offers
+  "M31 mosaic (4 panels)" when a project's targets are one mosaic: Images
+  groups frames under each panel in grid order, Sequence shows every panel's
+  frames in capture order, and Stacks lays each panel's stack out as the
+  grid and on the sky. Grading and stacking stay per panel.
 
 - The desktop app writes a daily log file and keeps a week of them, on
   Windows, macOS and Linux. **Settings › Open logs** opens the folder. The log
