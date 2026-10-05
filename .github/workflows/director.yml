@@ -1,9 +1,32 @@
-name: Director planning spike
+# The Director library and runtime the N.I.N.A. plugin loads, built and
+# called from .NET on each platform. The Rust tests for these crates run in
+# ci.yml; this checks the native boundary, so it runs only when that changes.
+name: Director native library
 
 on:
   push:
     branches: [main]
+    paths:
+      - 'crates/director-core/**'
+      - 'crates/director-ffi/**'
+      - 'crates/director-runtime/**'
+      - 'crates/director-ledger/**'
+      - 'tools/director-interop/**'
+      - 'tools/director-sidecar/**'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/director.yml'
   pull_request:
+    paths:
+      - 'crates/director-core/**'
+      - 'crates/director-ffi/**'
+      - 'crates/director-runtime/**'
+      - 'crates/director-ledger/**'
+      - 'tools/director-interop/**'
+      - 'tools/director-sidecar/**'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/director.yml'
   workflow_dispatch:
 
 permissions:
@@ -11,7 +34,7 @@ permissions:
 
 jobs:
   parity:
-    name: Director parity (${{ matrix.os }})
+    name: Director native library (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -26,14 +49,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.97.1
-        with:
-          components: rustfmt, clippy
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --locked -p psf-guard-director-core -p psf-guard-director-ffi -p psf-guard-director-runtime -p psf-guard-director-ledger -p psf-guard-director-meta --all-targets -- -D warnings
-      - run: cargo test --locked -p psf-guard-director-core -p psf-guard-director-ffi -p psf-guard-director-runtime -p psf-guard-director-ledger -p psf-guard-director-meta
       - run: cargo build --locked --profile director -p psf-guard-director-ffi
       - run: dotnet run --project tools/director-interop --configuration Release -- target/director/${{ matrix.library }} crates/director-core/tests/fixtures/decisions.json crates/director-core/tests/fixtures/rig-windows.json
       - if: runner.os == 'Windows'

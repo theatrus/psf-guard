@@ -37,10 +37,10 @@ The repository uses the Rust toolchain pinned in `rust-toolchain.toml`, Rust
 
 ```bash
 # Rust checks used by CI
-cargo fmt -- --check
+cargo fmt --all -- --check
 cargo build
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace
 
 # Frontend checks
 cd static
