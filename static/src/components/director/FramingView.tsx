@@ -544,15 +544,20 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
       : sizes ? `Sets panel size · ${grid(state.mosaic)}`
       : field ? `Shared framing · ${grid(state.mosaic)}` : 'No optics';
     const swatch = own ? `is-own-${ownIndex % 4}` : sizes ? 'is-shared' : shown ? 'is-compared' : 'is-none';
-    return <li key={id} className={`framing-rig-card${editingRig === id ? ' is-editing' : ''}`} role="group" aria-label={entry.catalog_name}>
+    return <li key={id} className={`framing-rig-card${editingRig === id ? ' is-editing' : ''}${sizes && !own ? ' is-panel-rig' : ''}`} role="group" aria-label={entry.catalog_name}>
       <div className="framing-rig-head">
-        <span className={`framing-rig-swatch ${swatch}`} aria-hidden="true" />
+        {/* The swatch picks the rig that sizes the shared panels: filled
+            when it does, an empty outline to click when it could. */}
+        {!own && field
+          ? <button type="button" className={`framing-rig-swatch is-pick ${swatch}`} aria-pressed={sizes}
+              aria-label={sizes ? `${entry.catalog_name} sets the panel size` : `Use ${entry.catalog_name} for the panel size`}
+              title={sizes ? 'Sets the panel size' : 'Use for panel size'} disabled={!canWrite || sizes} onClick={() => chooseRig(id)} />
+          : <span className={`framing-rig-swatch ${swatch}`} aria-hidden="true" />}
         <strong>{entry.catalog_name}</strong>
         {field && <small>{formatDegrees(field.width_degrees)} × {formatDegrees(field.height_degrees)}, {field.pixel_scale_arcsec.toFixed(2)}″/px</small>}
       </div>
       <p className="framing-rig-role">{role}</p>
       {canWrite && <div className="framing-rig-actions">
-        {!own && field && !sizes && <button type="button" className="link-button" onClick={() => chooseRig(id)}>Use for panel size</button>}
         {!own && field && <label className="framing-check" title="Draw its field on the sky"><input type="checkbox" aria-label={`${entry.catalog_name} outline`} checked={shown} onChange={event => update(current => ({ shownRigIds: event.target.checked ? [...current.shownRigIds, id] : current.shownRigIds.filter(other => other !== id) }))} />Outline</label>}
         {!own && <button type="button" className="link-button" onClick={() => frameRig(id)}>Frame separately</button>}
         {own && <button type="button" className="link-button" aria-expanded={editingRig === id} onClick={() => setEditingRig(editingRig === id ? null : id)}>{editingRig === id ? 'Done' : 'Edit'}</button>}
@@ -677,13 +682,15 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
       </fieldset>
       <fieldset>
         <legend>Shared framing <span className="framing-legend-swatch" title="Its outline on the sky" aria-hidden="true" /></legend>
-        <label>Panel size from
-          <select aria-label="Panel rig" value={state.panelRigId ?? ''} onChange={event => chooseRig(event.target.value)}>
-            <option value="">Typed size</option>
-            {state.panelRigId && !panelRig && <option value={state.panelRigId} disabled>{rigs.isPending ? 'Loading rig...' : rigs.isError ? 'Saved rig (list unavailable)' : 'Saved rig is no longer listed'}</option>}
-            {rigList.map(entry => <option key={entry.rig.id} value={entry.rig.id} disabled={!entry.field_of_view}>{entry.catalog_name}{entry.field_of_view ? ` (${formatDegrees(entry.field_of_view.width_degrees)} × ${formatDegrees(entry.field_of_view.height_degrees)})` : ' (no optics yet)'}</option>)}
-          </select>
-        </label>
+        {/* The panel size comes from the rig picked by its swatch, or is typed. */}
+        <p className="framing-panel-source" data-testid="framing-panel-source">
+          {panelRig?.field_of_view
+            ? <>Size from <strong>{panelRig.catalog_name}</strong> · {formatDegrees(panelRig.field_of_view.width_degrees)} × {formatDegrees(panelRig.field_of_view.height_degrees)}
+              {canWrite && <> <button type="button" className="link-button" onClick={() => update(current => ({ panelRigId: null, panel: current.panel }))}>Type a size</button></>}</>
+            : state.panelRigId
+              ? rigs.isPending ? 'Loading the panel rig…' : 'The saved panel rig is no longer listed; pick a rig or type a size.'
+              : <>Typed size{rigList.some(entry => entry.field_of_view) ? ' · or pick a rig by its swatch' : ''}</>}
+        </p>
         {!panelRig && <div className="framing-grid">
           <label>Panel width<span className="framing-input"><NumberInput aria-label="Panel width degrees" step="any" min={0.01} max={30} value={state.panel ? round(state.panel.width_degrees, 3) : ''} onChange={event => update(current => ({ panel: { width_degrees: number(event.target.value, current.panel?.width_degrees ?? 1), height_degrees: current.panel?.height_degrees ?? 1 } }))} /><small>°</small></span></label>
           <label>Panel height<span className="framing-input"><NumberInput aria-label="Panel height degrees" step="any" min={0.01} max={30} value={state.panel ? round(state.panel.height_degrees, 3) : ''} onChange={event => update(current => ({ panel: { width_degrees: current.panel?.width_degrees ?? 1, height_degrees: number(event.target.value, current.panel?.height_degrees ?? 1) } }))} /><small>°</small></span></label>

@@ -710,8 +710,11 @@ drawn and named. Coordinates show five decimals of a degree and angles two;
 the draft keeps every digit. **Rigs** has one card per rig, this plan's rigs
 first. Each card shows a swatch in the colour of the rig's outline on the
 sky, its field and pixel scale, and its part: **Sets panel size**, **Shared
-framing** or **Separate framing** with its grid and angle. **Use for panel
-size** makes it the panel rig, **Outline** draws its field on the sky, and
+framing** or **Separate framing** with its grid and angle. The swatch is
+also the panel-size picker: the panel rig's is filled and ringed, and
+clicking another rig's outline makes that rig the panel rig. **Shared
+framing** names the rig its size comes from; **Type a size** sets one by hand
+instead, starting from that rig's. **Outline** draws its field on the sky, and
 **Frame separately** gives it a grid, camera angle and panel size of its own, edited
 in its card. A separate framing follows the shared center until it is dragged,
 typed or moved to the view center; **Shared center** puts it back in step.
