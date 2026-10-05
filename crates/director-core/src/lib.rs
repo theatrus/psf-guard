@@ -81,6 +81,10 @@ pub struct State {
     pub configuration_id: String,
     pub now_ms: u64,
     pub conditions_valid_until_ms: u64,
+    /// Complete setup, exposure and overhead by this observing-night boundary.
+    /// Independent of the shorter-lived freshness deadline for dispatch checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_deadline_ms: Option<u64>,
     pub safety: Safety,
     pub at_boundary: bool,
     pub operator_stop: bool,
@@ -185,7 +189,7 @@ fn validate(request: &Request) -> Result<Vec<Vec<Interval>>, Error> {
         {
             return Err(Error::InvalidGoal);
         }
-        safe_windows.push(observing_windows(
+        let mut windows = observing_windows(
             &goal.eligible_windows,
             Interval {
                 start_ms: a.valid_from_ms,
@@ -193,7 +197,14 @@ fn validate(request: &Request) -> Result<Vec<Vec<Interval>>, Error> {
             },
             request.state.meridian_exclusion,
             goal.transits.as_ref(),
-        )?);
+        )?;
+        if let Some(deadline) = request.state.completion_deadline_ms {
+            for window in &mut windows {
+                window.end_ms = window.end_ms.min(deadline);
+            }
+            windows.retain(|window| window.start_ms < window.end_ms);
+        }
+        safe_windows.push(windows);
     }
     Ok(safe_windows)
 }
@@ -239,6 +250,11 @@ pub fn evaluate(request: &Request) -> Result<Decision, Error> {
     if s.now_ms >= s.conditions_valid_until_ms {
         return Ok(Decision::CheckIn {
             reason: "conditions_stale".into(),
+        });
+    }
+    if s.completion_deadline_ms.is_some_and(|end| s.now_ms >= end) {
+        return Ok(Decision::Complete {
+            reason: "observing_night_ended".into(),
         });
     }
     if a.goals.iter().all(|g| g.accepted >= g.requested) {
@@ -293,6 +309,18 @@ pub fn evaluate(request: &Request) -> Result<Decision, Error> {
         return Ok(Decision::Wait {
             reason: "future_window".into(),
         });
+    }
+    if s.completion_deadline_ms.is_some() {
+        let mut without_night_end = request.clone();
+        without_night_end.state.completion_deadline_ms = None;
+        if matches!(
+            evaluate(&without_night_end)?,
+            Decision::Acquire { .. } | Decision::Wait { .. }
+        ) {
+            return Ok(Decision::Wait {
+                reason: "observing_night_window_too_short".into(),
+            });
+        }
     }
     Ok(Decision::CheckIn {
         reason: "no_authorized_feasible_work".into(),

@@ -165,6 +165,7 @@ async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment(
             configuration_id: assignment.configuration_id.clone(),
             now_ms: assignment.valid_from_ms,
             conditions_valid_until_ms: assignment.expires_at_ms,
+            completion_deadline_ms: None,
             safety: Safety::Unknown,
             at_boundary: true,
             operator_stop: false,

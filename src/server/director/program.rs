@@ -428,6 +428,7 @@ pub(super) fn assemble(
             configuration_id: configuration.id.clone(),
             now_ms: now,
             conditions_valid_until_ms: span.end_ms,
+            completion_deadline_ms: None,
             safety: Safety::Unknown,
             at_boundary: true,
             operator_stop: false,

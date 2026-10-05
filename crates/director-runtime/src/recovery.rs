@@ -388,5 +388,10 @@ pub async fn gate(
         // The existing planner enforces this bound across the complete operation,
         // not only its start. Never let recovery expand the caller's validity.
         state.conditions_valid_until_ms = state.conditions_valid_until_ms.min(deadline);
+        state.completion_deadline_ms = Some(
+            state
+                .completion_deadline_ms
+                .map_or(deadline, |end| end.min(deadline)),
+        );
     }))
 }

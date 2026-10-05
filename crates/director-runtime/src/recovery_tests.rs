@@ -612,6 +612,40 @@ async fn acquisition_needs_fresh_motion_evidence_and_cannot_outlive_the_night() 
             .conditions_valid_until_ms,
         100000
     );
+    assert_eq!(
+        valid
+            .acquisition_state_mut()
+            .unwrap()
+            .completion_deadline_ms,
+        Some(100000)
+    );
+    let mut earlier = operation(State {
+        completion_deadline_ms: Some(50000),
+        ..original.clone()
+    });
+    assert_eq!(
+        recovery::gate(&mut storage, &mut earlier, "rig-1")
+            .await
+            .unwrap(),
+        Ok(())
+    );
+    assert_eq!(
+        earlier
+            .acquisition_state_mut()
+            .unwrap()
+            .completion_deadline_ms,
+        Some(50000)
+    );
+    let mut request = storage_tests::fixture();
+    request.assignment.goals.truncate(1);
+    request.state = valid.acquisition_state_mut().unwrap().clone();
+    request.assignment.goals[0].exposure_ms = 90001;
+    request.assignment.goals[0].overhead_ms = 0;
+    request.assignment.goals[0].eligible_windows[0].end_ms = 200000;
+    assert!(!matches!(
+        psf_guard_director_core::evaluate(&request).unwrap(),
+        psf_guard_director_core::Decision::Acquire { .. }
+    ));
     for (state, code) in [
         (
             State {

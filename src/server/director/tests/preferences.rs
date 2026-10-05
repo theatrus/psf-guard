@@ -123,6 +123,7 @@ fn ranked_projects_dominate_objective_scores_but_never_eligibility_or_safety() {
         configuration_id: assignment.configuration_id.clone(),
         now_ms: 1000,
         conditions_valid_until_ms: 100000,
+        completion_deadline_ms: None,
         safety: Safety::Safe,
         at_boundary: true,
         operator_stop: false,

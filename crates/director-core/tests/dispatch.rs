@@ -123,3 +123,51 @@ fn invalid_duration_and_windows_do_not_produce_a_bound() {
     request.assignment.goals[0].eligible_windows[0].start_ms = 200_000;
     assert!(evaluate_dispatch(&request).is_err());
 }
+
+#[test]
+fn observing_night_bounds_completion_not_only_dispatch() {
+    let mut request = request();
+    request.state.completion_deadline_ms = Some(55_000);
+    let checked = evaluate_dispatch(&request).unwrap();
+    assert_eq!(checked.latest_start_ms, Some(15_000));
+    request.state.now_ms = 15_000;
+    assert!(matches!(evaluate(&request), Ok(Decision::Acquire { .. })));
+    request.state.now_ms += 1;
+    assert!(
+        matches!(evaluate(&request), Ok(Decision::Wait { reason }) if reason == "observing_night_window_too_short")
+    );
+    assert_eq!(evaluate_dispatch(&request).unwrap().latest_start_ms, None);
+    request.state.now_ms = 55_000;
+    assert!(
+        matches!(evaluate(&request), Ok(Decision::Complete { reason }) if reason == "observing_night_ended")
+    );
+    request.state.safety = Safety::Unsafe;
+    assert!(matches!(evaluate(&request), Ok(Decision::Stop { .. })));
+}
+
+#[test]
+fn night_deadline_cannot_borrow_from_future_windows_or_refill_spent_attempts() {
+    let mut request = request();
+    request.state.completion_deadline_ms = Some(50_000);
+    request.assignment.goals[0].eligible_windows = vec![Interval {
+        start_ms: 100_000,
+        end_ms: 200_000,
+    }];
+    assert_eq!(evaluate_dispatch(&request).unwrap().latest_start_ms, None);
+    request.assignment.goals[0].attempts_remaining = 0;
+    assert!(
+        matches!(evaluate(&request), Ok(Decision::CheckIn { reason }) if reason == "no_authorized_feasible_work")
+    );
+    request.state.completion_deadline_ms = Some(0);
+    assert!(matches!(evaluate(&request), Ok(Decision::Complete { .. })));
+}
+
+#[test]
+fn absent_night_deadline_preserves_old_wire_state() {
+    let request = request();
+    assert!(request.state.completion_deadline_ms.is_none());
+    assert!(serde_json::to_value(&request.state)
+        .unwrap()
+        .get("completion_deadline_ms")
+        .is_none());
+}
