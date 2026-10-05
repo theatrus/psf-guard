@@ -69,17 +69,25 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     // database's project and its own editor.
     await andromeda.getByRole('button', { name: 'Open the Andromeda exposures plan' }).click();
     await expect(page.getByRole('heading', { name: 'Andromeda exposures' })).toBeVisible();
+    // One tab at a time below the summary; each rig's readiness is in the summary.
+    const tab = (name: string) => page.getByRole('tablist', { name: 'Plan sections' }).getByRole('tab', { name: new RegExp(`^${name}`) });
+    await expect(page.getByRole('region', { name: 'Plan summary' })).toContainText('C925 data');
+    await tab('Plan').click();
     const rigs = page.getByRole('region', { name: 'Rigs' });
     await expect(rigs.getByRole('group', { name: 'C925 data' })).toContainText('project');
     await expect(rigs.getByRole('group', { name: 'Redcat data' })).toContainText('project');
-    // The outer pill passes the database it opened from, so that editor is already open.
-    await expect(page.getByLabel('RA (decimal hours)')).toHaveValue('0.712313');
-    await expect(page.getByLabel('Ha desired count')).toHaveValue('40');
+    // Each database's Target Scheduler rows have a tab of their own; the
+    // database the outer pill came from is listed first.
+    await tab('Rig databases').click();
+    await expect(page.getByLabel('RA (decimal hours)').first()).toHaveValue('0.712313');
+    await expect(page.getByLabel('Ha desired count').first()).toHaveValue('40');
+    await tab('Plan').click();
     await expect(page.getByRole('region', { name: 'Acquisition plan' })).toBeVisible();
+    await tab('Activate').click();
     await expect(page.getByRole('region', { name: 'Activation' })).toBeVisible();
+    expect(new URL(page.url().split('#')[1], 'http://test').searchParams.get('planTab')).toBe('activate');
+    await tab('Priority').click();
     const preferences = page.getByRole('region', { name: 'Project priority' });
-    // Folded by default: it ranks every plan, not this one.
-    await preferences.locator('summary').click();
     await preferences.getByRole('button', { name: 'Move Andromeda older setup up' }).click();
     // Every edit on the page saves from one bar, which names what changed.
     await expect(page.getByRole('region', { name: 'Unsaved changes' })).toContainText('Unsaved changes in Project priority.');
@@ -88,7 +96,6 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     await expect(preferences.getByText('Project priority saved.')).toBeVisible();
     await expect(preferences.getByText('Following global order')).toBeVisible();
     await page.reload();
-    await preferences.locator('summary').click();
     await expect(preferences.getByRole('listitem').first()).toContainText('Andromeda older setup');
     await preferences.getByLabel('Priority scope').selectOption('rig');
     await expect(preferences.getByLabel('Use inherited order')).toBeChecked();
@@ -116,8 +123,9 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     const card = page.locator(`[data-project-key="${slugs[0]}:1"]`);
     await card.getByRole('button', { name: /^Open the .* plan$/ }).click();
     await expect(page.getByRole('heading', { name: 'Andromeda exposures' })).toBeVisible();
-    // The database the card came from is already open to its targets.
-    await expect(page.getByLabel('RA (decimal hours)')).toHaveValue('0.712313');
+    // The database the card came from leads the rig database tab.
+    await tab('Rig databases').click();
+    await expect(page.getByLabel('RA (decimal hours)').first()).toHaveValue('0.712313');
     // The workspace's address is the Target Scheduler GUID both rigs share.
     expect(new URL(page.url().split('#')[1], 'http://test').searchParams.get('plan')).toBe(shared.toLowerCase());
     await page.getByRole('main').getByRole('link', { name: 'Library' }).click();

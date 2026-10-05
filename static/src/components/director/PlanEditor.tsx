@@ -173,7 +173,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
       <label className="plan-rig-head"><input type="checkbox" aria-label={`${rig.catalog_name} takes part`} checked={on} onChange={event => toggleRig(rig, event.target.checked)} disabled={plan.objectives.length === 0} />
         <strong>{rig.catalog_name}</strong>
         {extras.place && <span className="plan-rig-place">{extras.place}</span>}
-        <small>{rig.field_of_view ? `${rig.field_of_view.pixel_scale_arcsec.toFixed(2)}″/px${rig.field_of_view.focal_ratio ? `, f/${rig.field_of_view.focal_ratio.toFixed(1)}` : ''}` : 'no optics in its rig profile'}{loadingTemplates ? ', loading templates' : `, ${templates.length} template${templates.length === 1 ? '' : 's'}`}</small>
+        <small>{rig.field_of_view ? `${rig.field_of_view.pixel_scale_arcsec.toFixed(2)}″/px${rig.field_of_view.focal_ratio ? `, f/${rig.field_of_view.focal_ratio.toFixed(1)}` : ''}, ` : ''}{loadingTemplates ? 'loading templates' : `${templates.length} template${templates.length === 1 ? '' : 's'}`}</small>
         {total && <span className="plan-rig-total">{total.frames} frames, {formatHours(total.hours)}</span>}
       </label>
       {on && panels.length > 1 && (() => {

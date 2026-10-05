@@ -127,3 +127,36 @@ select.library-pill-state option { color: var(--color-text-primary); background:
 .director-attach label { display: flex; flex-direction: column; gap: 4px; max-width: 520px; font-size: 13px; color: var(--color-text-secondary); }
 .director-attach [role="note"], .director-workspace [role="note"] .director-actions { margin-top: 6px; }
 .director-workspace [role="note"] .director-actions { display: inline-flex; margin-left: 8px; gap: 6px; }
+
+/* Workspace: the summary, save bar and tabs stay at the top while a tab
+   scrolls beneath them. */
+.workspace-top { position: sticky; top: 0; z-index: 20; display: grid; gap: 8px; padding: 8px 0 0; background: var(--color-bg-primary); }
+.workspace-top .draft-bar { position: static; margin: 0; }
+.workspace-summary { display: grid; gap: 4px; }
+.workspace-summary-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin: 0; min-width: 0; }
+.workspace-summary-line > * { min-width: 0; overflow-wrap: anywhere; }
+.workspace-summary-name { font-size: 20px; }
+.workspace-rig { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border: 1px solid var(--color-border-secondary); border-radius: 999px; font-size: 13px; }
+.workspace-rig small { color: var(--color-text-secondary); }
+.workspace-rig.is-missing { border-color: var(--color-warning-light); }
+.workspace-rig.is-missing svg { color: var(--color-warning-light); }
+.workspace-activation { font-size: 13px; color: var(--color-text-secondary); }
+.workspace-activation.is-behind { color: var(--color-warning-light); }
+.workspace-tabs { display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--color-border-secondary); scrollbar-width: thin; }
+.director-page .workspace-tabs button.workspace-tab { flex: none; min-height: 36px; border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--color-text-secondary); }
+.director-page .workspace-tabs button.workspace-tab.active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
+.workspace-tab-edited { margin-left: 4px; font-size: 10px; color: var(--color-warning-light); }
+.workspace-panel { padding-top: 12px; }
+.workspace-panel[hidden] { display: none; }
+.observing-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+
+/* Framing in the workspace: the sky fills the window below the summary and
+   tabs, and the controls scroll beside it instead of lengthening the page. */
+@media (min-width: 1001px) {
+  .workspace-panel .framing-stage-wrap { position: static; }
+  .workspace-panel .framing-stage { height: max(420px, calc(100vh - 420px)); }
+  .workspace-panel .framing-controls { max-height: max(520px, calc(100vh - 300px)); overflow-y: auto; padding-right: 4px; scrollbar-width: thin; }
+}
+
+/* On a phone the summary would cover half the screen; it scrolls away. */
+@media (max-width: 700px) { .workspace-top { position: static; } }

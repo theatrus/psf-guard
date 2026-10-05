@@ -540,9 +540,6 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
         </div>
       </div>
       <p className="framing-readout" data-testid="framing-readout">
-        <span>{state.targetName || 'Target'}</span>
-        <span>{formatRaHours(state.center.ra_degrees)}</span>
-        <span>{formatDec(state.center.dec_degrees)}</span>
         <span>angle {state.positionAngle.toFixed(1)}°</span>
         {state.panel && <span>panel {formatDegrees(state.panel.width_degrees)} × {formatDegrees(state.panel.height_degrees)}</span>}
         {geometry && geometry.panels.length > 1 && <span>{geometry.panels.length} panels, {formatDegrees(geometry.extent.width_degrees)} × {formatDegrees(geometry.extent.height_degrees)}</span>}
