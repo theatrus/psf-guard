@@ -41,8 +41,8 @@ A plan carries Target Scheduler's per-project scheduling limits: minimum time,
 minimum and maximum altitude, custom horizon and its offset, meridian window,
 filter switch frequency, dither interval and smart exposure order. Set the defaults once on
 a plan's **Priority and defaults** tab, for every plan, a site or a rig (pick
-the scope at the top); set one plan's own on its **Plan** tab under
-**Scheduling limits**, where a table shows what each rig gets and where each
+the scope at the top); set one plan's own on its **Rigs** tab under
+**Scheduling limits for every rig**, where a table shows what each rig gets and where each
 value comes from. An empty field inherits and says from where. Both save from
 the page's save bar. Over the API they are the `scheduling` key of
 `PUT /preferences/{scope}/{id}` for the **global**, **site**, **rig** or
@@ -208,13 +208,25 @@ status. **Setup** expands the database's planning setup in place: enable
 planning, the rig profile, and the project links. **Library** opens its
 catalog.
 
-The **workspace** for one plan shows **Framing**, then **Plan**: the
-objectives, and one block per rig with its database's project, its templates,
-exposures and frames for each objective, what the last activation preview or
-apply does there, and **Edit in Target Scheduler** for the familiar targets
-and exposures editor. Rigs with a project in the plan, or ticked, come first;
-the rest fold under **Other rigs**. **Activation** below holds the preview and
-apply buttons. A plan with no linked database yet starts its framing
+The **workspace** for one plan has a summary at the top and four tabs.
+**Framing** places the target. **Exposures** holds the objectives and, for
+each rig shooting the plan, its template, exposure and frames per objective.
+**Rigs** lists each rig with its database's project and whether activation
+has reached it. **Add a rig** offers every rig with a new project, which
+activation creates in its database, and every project another plan holds in
+a database this plan has none in. **Drop from plan** takes a rig's exposures
+out; **Detach** gives a database's project a plan of its own. Once a rig's
+database has the project, its Target Scheduler settings and targets open
+there; before that the rig says activation creates them. The plan's
+scheduling limits follow the rigs. **Priority and defaults** holds the
+project priority and the scheduling defaults.
+
+Activation is no tab. Once every edit is saved, a bar at the top asks for an
+activation while the rig databases lack the saved plan or framing, and
+**Activate…** opens the preview and apply over the page. The summary's
+activation line opens the same dialog at any time, to push the last
+activation again. Older links naming the Plan, Rig databases or Activate tabs
+open Exposures or Rigs. A plan with no linked database yet starts its framing
 by looking a name up in the CDS catalogs or by typing a center; activation
 then creates and links the Target Scheduler project in each rig database.
 Its **Library** link goes back with the scope it came from. A project
@@ -708,11 +720,11 @@ the process that can read that folder.
 
 ## Acquisition plan
 
-Below Framing, **Plan** says what the project wants and which rig shoots it.
+The **Exposures** tab says what the project wants and how each rig shoots it.
 An objective is one bandpass and purpose (faint detail or unsaturated stars)
 with a goal in accepted hours or accepted frames per rig. Project precedence is
-set in **Project priority**, not as a score on each objective. Tick a
-rig to have it take part: for every objective the editor picks the rig's first
+set in **Project priority**, not as a score on each objective. Add a rig
+on the **Rigs** tab to have it take part: for every objective the editor picks the rig's first
 exposure template whose filter resolves to that bandpass, and starts the
 exposure length from the template's default, or from the rig's optics and sky
 when the template has none. Hours become frames per rig through that exposure,

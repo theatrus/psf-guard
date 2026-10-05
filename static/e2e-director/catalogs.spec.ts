@@ -72,26 +72,30 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     // One tab at a time below the summary; each rig's readiness is in the summary.
     const tab = (name: string) => page.getByRole('tablist', { name: 'Plan sections' }).getByRole('tab', { name: new RegExp(`^${name}`) });
     await expect(page.getByRole('region', { name: 'Plan summary' })).toContainText('C925 data');
-    await tab('Plan').click();
+    // The Rigs tab lists each rig with its database's project, the
+    // database the outer pill came from first, and that project's own
+    // Target Scheduler settings and targets.
+    await tab('Rigs').click();
     const rigs = page.getByRole('region', { name: 'Rigs' });
     await expect(rigs.getByRole('group', { name: 'C925 data' })).toContainText('project');
     await expect(rigs.getByRole('group', { name: 'Redcat data' })).toContainText('project');
-    // Each database's Target Scheduler rows have a tab of their own; the
-    // database the outer pill came from is listed first.
-    await tab('Rig databases').click();
     await expect(page.getByLabel('RA (decimal hours)').first()).toHaveValue('0.712313');
     await expect(page.getByLabel('Ha desired count').first()).toHaveValue('40');
-    await tab('Plan').click();
+    await tab('Exposures').click();
     await expect(page.getByRole('region', { name: 'Acquisition plan' })).toBeVisible();
-    // The plan's own scheduling limit, saved from the bar and shown per rig.
+    // The plan's own scheduling limit, on the Rigs tab, saved from the bar and shown per rig.
+    await tab('Rigs').click();
     const limits = page.getByRole('region', { name: 'Scheduling limits' });
     await limits.getByRole('spinbutton', { name: 'Minimum altitude' }).fill('30');
-    await expect(tab('Plan')).toContainText('●');
+    await expect(tab('Rigs')).toContainText('●');
     await page.getByRole('region', { name: 'Unsaved changes' }).getByRole('button', { name: 'Save changes' }).click();
     await expect(limits.getByRole('row', { name: /^Minimum altitude/ })).toContainText('30°from this plan');
-    await tab('Activate').click();
-    await expect(page.getByRole('region', { name: 'Activation' })).toBeVisible();
-    expect(new URL(page.url().split('#')[1], 'http://test').searchParams.get('planTab')).toBe('activate');
+    // Activation is no tab: the summary line opens it over the page.
+    await expect(page.getByRole('tab', { name: /^Activate/ })).toHaveCount(0);
+    await page.getByTestId('summary-activation').click();
+    const activation = page.getByRole('dialog', { name: 'Activate on the rigs' });
+    await expect(activation.getByRole('region', { name: 'Activation' })).toBeVisible();
+    await activation.getByRole('button', { name: /close/i }).click();
     await tab('Priority and defaults').click();
     const preferences = page.getByRole('region', { name: 'Project priority' });
     await preferences.getByRole('button', { name: 'Move Andromeda older setup up' }).click();
@@ -129,8 +133,8 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     const card = page.locator(`[data-project-key="${slugs[0]}:1"]`);
     await card.getByRole('button', { name: /^Open the .* plan$/ }).click();
     await expect(page.getByRole('heading', { name: 'Andromeda exposures' })).toBeVisible();
-    // The database the card came from leads the rig database tab.
-    await tab('Rig databases').click();
+    // The database the card came from leads the Rigs tab.
+    await tab('Rigs').click();
     await expect(page.getByLabel('RA (decimal hours)').first()).toHaveValue('0.712313');
     // The workspace's address is the Target Scheduler GUID both rigs share.
     expect(new URL(page.url().split('#')[1], 'http://test').searchParams.get('plan')).toBe(shared.toLowerCase());

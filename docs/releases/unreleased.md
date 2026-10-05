@@ -704,11 +704,16 @@
   plan's own. Activation writes them into each rig's Target Scheduler project,
   so they hold without Director, and leaves values nobody planned as they are.
   Set the defaults on a plan's Priority and defaults tab and a plan's own
-  under Scheduling limits on its Plan tab, which shows what each rig gets.
-- Work on a plan one tab at a time: Framing, Plan, Activate, Rig databases
-  and Priority and defaults, below a summary of the target, goals, each rig's setup and
+  under Scheduling limits on its Rigs tab, which shows what each rig gets.
+- Work on a plan one tab at a time: Framing, Exposures, Rigs, and Priority
+  and defaults, below a summary of the target, goals, each rig's setup and
   the activation. The page no longer scrolls through every section, the
   tab is kept in the address, and unsaved edits survive switching tabs.
+  The Rigs tab adds a rig with a new project, which activation creates, or
+  with a project its database already has, and holds each rig's Target
+  Scheduler settings once its database has the project. Activation is an
+  action at the top of the page: once everything is saved, a bar asks for an
+  activation while the rigs lack the saved plan, and opens the preview.
 - Stop the planning save bar from reporting unsaved changes nobody made: a
   framing taken from the catalog, a survey the server stands in for, or a
   panel rig picked for an empty framing is saved quietly with the next save.

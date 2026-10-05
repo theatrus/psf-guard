@@ -1,0 +1,9 @@
+.plan-rig-list .plan-rig-head {
+  display: flex;
+  align-items: baseline;
+  margin: 0 0 8px;
+}
+
+.plan-rig-list .director-attach {
+  margin-top: 12px;
+}

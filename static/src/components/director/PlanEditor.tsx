@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useId, useMemo, useState } from 'react';
+import { type MutableRefObject, type ReactNode, useEffect, useId, useMemo, useState } from 'react';
 import { useDraftSection } from './pageDraftsState';
 import { describePlanChanges } from './draftChanges';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -20,14 +20,24 @@ const retryWhenBusy = (count: number, error: unknown) => httpStatus(error) === 5
  *  its plan, what activation does there and its Target Scheduler rows. */
 export interface RigExtras { place?: ReactNode; below?: ReactNode }
 
+/** What the Rigs tab asks of the plan: which rigs shoot it, and a way to
+ *  add or drop one, filling in a template for each objective as a tick does. */
+export interface PlanRigControls {
+  setRig: (rigId: string, on: boolean) => void;
+}
+
 /** Objectives per bandpass and depth, and each rig's template and exposure
  *  for them, one block per rig. Rigs with a project in this plan or ticked
- *  come first; the rest fold away. */
-export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, footer }: {
+ *  come first; the rest fold away. With `controls`, rigs join and leave
+ *  from elsewhere on the page, and only the rigs in the plan are shown. */
+export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, footer, controls, onRigsChange }: {
   projectId: string;
   linkedRigIds?: string[];
   rigExtras?: (rig: DirectorRigProfileSummary) => RigExtras;
   footer?: ReactNode;
+  controls?: MutableRefObject<PlanRigControls | null>;
+  /** The rigs shooting the plan and its objective count, saved or not. */
+  onRigsChange?: (state: { rigIds: string[]; objectives: number }) => void;
 }) {
   const formId = useId();
   const { canWrite } = useAccess();
@@ -78,7 +88,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
   // activation reads the saved plan, so nothing here may look applied
   // before it is saved.
   const managed = useDraftSection('plan', {
-    label: 'Plan',
+    label: 'Exposures',
     order: 2,
     unsaved: canWrite && unsaved,
     changes: describePlanChanges(baseline, plan, id => rigList.find(rig => rig.rig.id === id)?.catalog_name ?? 'a rig'),
@@ -129,6 +139,14 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
     });
     return { ...current, contributions: [...current.contributions, ...added] };
   });
+  const objectiveCount = plan?.objectives.length ?? 0;
+  useEffect(() => { onRigsChange?.({ rigIds: joined, objectives: objectiveCount }); }, [joined, objectiveCount, onRigsChange]);
+  // Refreshed after every render, so the Rigs tab always adds with the
+  // templates and objectives as they stand.
+  useEffect(() => {
+    if (!controls) return;
+    controls.current = { setRig: (rigId, on) => { const rig = rigList.find(entry => entry.rig.id === rigId); if (rig) toggleRig(rig, on); } };
+  });
   const setRigPanels = (rig: DirectorRigProfileSummary, chosen: string[]) => update(current => ({
     ...current,
     // Every panel chosen is the same as no list at all.
@@ -172,7 +190,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
     const extras = rigExtras?.(rig) ?? {};
     return <div key={rig.rig.id} className="plan-rig" role="group" aria-label={rig.catalog_name}>
       <fieldset className="plan-rig-plan" disabled={!canWrite || stale}>
-      <label className="plan-rig-head"><input type="checkbox" aria-label={`${rig.catalog_name} takes part`} checked={on} onChange={event => toggleRig(rig, event.target.checked)} disabled={plan.objectives.length === 0} />
+      <label className="plan-rig-head">{!controls && <input type="checkbox" aria-label={`${rig.catalog_name} takes part`} checked={on} onChange={event => toggleRig(rig, event.target.checked)} disabled={plan.objectives.length === 0} />}
         <strong>{rig.catalog_name}</strong>
         {extras.place && <span className="plan-rig-place">{extras.place}</span>}
         <small>{rig.field_of_view ? `${rig.field_of_view.pixel_scale_arcsec.toFixed(2)}″/px${rig.field_of_view.focal_ratio ? `, f/${rig.field_of_view.focal_ratio.toFixed(1)}` : ''}, ` : ''}{loadingTemplates ? 'loading templates' : `${templates.length} template${templates.length === 1 ? '' : 's'}`}</small>
@@ -223,8 +241,10 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
       {extras.below}
     </div>;
   };
-  const inPlan = rigList.filter(rig => participating(rig) || linkedRigIds.includes(rig.rig.id));
-  const others = rigList.filter(rig => !inPlan.includes(rig));
+  // Rigs join from the Rigs tab when it is there; this lists only those
+  // shooting the plan.
+  const inPlan = rigList.filter(rig => participating(rig) || (!controls && linkedRigIds.includes(rig.rig.id)));
+  const others = controls ? [] : rigList.filter(rig => !inPlan.includes(rig));
   return <section className="plan-editor" aria-label="Acquisition plan">
     <form id={formId} onSubmit={event => { event.preventDefault(); if (!canWrite || save.isPending || stale) return; setNotice(''); const trouble = planProblem(plan); setProblem(trouble ?? ''); if (!trouble) save.mutate(); }}>
       <fieldset disabled={!canWrite || stale}>
@@ -253,9 +273,10 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
         {canWrite && <button type="button" onClick={addObjective}><Plus size={16} />Add objective</button>}
       </fieldset>
     </form>
-    <section className="plan-rigs" aria-label="Rigs">
-      <h4 className="plan-rigs-heading">Rigs</h4>
-      <p className="director-muted">Tick a rig to shoot the objectives with a template from its database or the shared library.</p>
+    <section className="plan-rigs" aria-label={controls ? 'Exposures per rig' : 'Rigs'}>
+      <h4 className="plan-rigs-heading">{controls ? 'Each rig' : 'Rigs'}</h4>
+      <p className="director-muted">{controls ? 'Each rig shoots the objectives with a template from its database or the shared library. Add or drop rigs on the Rigs tab.' : 'Tick a rig to shoot the objectives with a template from its database or the shared library.'}</p>
+      {controls && !rigs.isPending && inPlan.length === 0 && <p className="director-muted">No rig shoots this plan yet.</p>}
       {rigs.isError && <p className="director-error" role="alert">Rigs could not be loaded: {message(rigs.error)} <button type="button" onClick={() => void rigs.refetch()}>Retry</button></p>}
       {!rigs.isError && rigList.length === 0 && <p className="director-muted">{rigs.isPending ? 'Loading rigs...' : 'No rig has planning enabled yet.'}</p>}
       {inPlan.map(rigBlock)}

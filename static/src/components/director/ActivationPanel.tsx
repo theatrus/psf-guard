@@ -136,7 +136,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   const pending = preview.isPending || apply.isPending || push.isPending;
   const error = preview.error ?? apply.error ?? push.error;
   return <section className="activation" aria-label="Activation">
-    <p className="director-muted">Writes this plan into each rig's Target Scheduler database, taking over rows already there for the same work. Each rig above shows what changes.</p>
+    <p className="director-muted">Writes this plan into each rig's Target Scheduler database, taking over rows already there for the same work. The preview shows what changes in each.</p>
     {last.data && <p className="director-muted">Last activated revision {last.data.revision} on {new Date(last.data.applied_at_ms).toLocaleString()} across {last.data.rigs.length} rig{last.data.rigs.length === 1 ? '' : 's'}.</p>}
     {last.data && behind.length > 0 && <p className="activation-behind" role="note">The rig databases do not have the saved {behind.join(' and ')} yet. Preview and apply to send {behind.length === 1 ? 'it' : 'them'}.</p>}
     {last.data && behind.length === 0 && !unsavedPlan && planRevision !== undefined && <p className="director-muted">The rig databases have the saved plan and framing.</p>}
