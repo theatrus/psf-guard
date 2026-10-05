@@ -67,7 +67,7 @@ test('plans without a database survive reload, conflicts, and narrow viewports i
 
 test('a disabled Director has no navigation entry or editable records', async ({ page }) => {
   await page.route('**/api/director/v1/status', route => route.fulfill({ json: {
-    success: true, data: { protocol_version: 1, enabled: false, instance_id: null, acquisition_available: false, database_management: true },
+    success: true, data: { protocol_version: 1, enabled: false, instance_id: null, database_management: true },
     error: null,
   } }));
   // An old Planning link forwards to the Library; a plan address says plans are off.

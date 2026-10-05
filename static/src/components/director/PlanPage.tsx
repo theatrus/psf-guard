@@ -41,7 +41,6 @@ export default function PlanPage() {
       {status.isError && <div role="alert"><p>{message(status.error)}</p><button type="button" onClick={() => void status.refetch()}>Retry</button></div>}
       {status.data && !available && <p>Plans are unavailable on this server.</p>}
       {available && status.data && <>
-        {!status.data.acquisition_available && <p className="director-muted">Acquisition is not yet available.</p>}
         {!status.data.database_management && <p className="director-muted" role="note">Read only: plans can be drafted here, but this server does not write to rig databases.</p>}
         {!key
           ? <Navigate to={back ? `/?${back}` : '/'} replace />

@@ -184,9 +184,8 @@ async fn full_horizon_and_native_configuration_roundtrip_without_four_kib_trunca
         serde_json::to_value(setup).unwrap()
     );
     assert_eq!(
-        call(&reopened, "GET", "/status", Value::Null, None).await.1["data"]
-            ["acquisition_available"],
-        false
+        call(&reopened, "GET", "/status", Value::Null, None).await.1["data"]["enabled"],
+        true
     );
 }
 

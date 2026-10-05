@@ -433,7 +433,7 @@ delivery requirement.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
-| GET | `/status` | Reports `protocol_version`, `enabled`, `instance_id`, and `acquisition_available: false`. |
+| GET | `/status` | Reports `protocol_version`, `enabled`, `instance_id`, and `database_management`. |
 | GET | `/catalogs/{slug}/discovery` | Read project/profile evidence from one already registered catalog. |
 | GET | `/catalogs/{slug}/mappings` | Optional `after` source-project UUID and `limit` 1-256; returns `catalog_identity`, optional bound `rig`, `items` and `next_after`. |
 | GET | `/projects` | Optional `after` UUID cursor and `limit` from 1 to 256 (default 64). |

@@ -4,7 +4,6 @@ export interface DirectorStatus {
   protocol_version: number;
   enabled: boolean;
   instance_id: string | null;
-  acquisition_available: boolean;
   /** Whether this server may write into rig databases; without it Planning is read-only over the catalogs. */
   database_management: boolean;
 }

@@ -600,7 +600,6 @@ struct Status {
     protocol_version: u32,
     enabled: bool,
     instance_id: Option<Uuid>,
-    acquisition_available: bool,
     /// Whether this server may write into rig databases: activate plans,
     /// adopt catalogs in place, and edit Target Scheduler rows. Without it,
     /// Planning is read-only over the catalogs.
@@ -613,7 +612,6 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<ApiResponse<Status>>
         protocol_version: 1,
         enabled: service.is_some(),
         instance_id: service.map(|s| s.instance_id),
-        acquisition_available: false,
         database_management: state.database_management_allowed(),
     }))
 }
