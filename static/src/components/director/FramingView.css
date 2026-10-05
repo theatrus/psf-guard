@@ -156,8 +156,11 @@
 .director-page button.framing-rig-switch[aria-checked="true"] { background: #5ab4ff; }
 .director-page button.framing-rig-switch[aria-checked="true"] > span { left: 18px; background: #fff; }
 .director-page button.framing-rig-switch:disabled { cursor: not-allowed; opacity: 0.6; }
-.director-page .framing-rig-actions button.framing-frame-pick { min-height: 22px; padding: 1px 10px; border-radius: 999px; font-size: 12px; }
-.director-page .framing-rig-actions button.framing-frame-pick.is-active { border-color: #5ab4ff; background: rgba(80, 180, 255, 0.25); color: var(--color-text-primary); opacity: 1; cursor: default; }
+.framing-rig-pick { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.director-page button.framing-rig-pick { flex: 1; min-height: 0; justify-content: flex-start; padding: 2px 6px; margin: -2px 0; border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.director-page button.framing-rig-pick:hover:not(:disabled) { background: rgba(80, 180, 255, 0.12); }
+.director-page button.framing-rig-pick:hover:not(:disabled) .framing-rig-swatch { border-color: #5ab4ff; background: rgba(80, 180, 255, 0.35); }
+.director-page button.framing-rig-pick:disabled { cursor: default; opacity: 1; }
 /* The rig that sizes the shared panels reads as the selected one. */
 .framing-rig-card.is-framing { border-color: #5ab4ff; background: rgba(80, 180, 255, 0.08); box-shadow: inset 3px 0 0 #5ab4ff; }
 .framing-panel-source { margin: 0 0 6px; font-size: 13px; color: var(--color-text-secondary); }

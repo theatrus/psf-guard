@@ -550,7 +550,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     const grid = (m: DirectorRigFraming['mosaic']) => m.rows * m.columns > 1 ? `${m.rows} × ${m.columns}, ${m.overlap_percent}%` : '1 panel';
     const role = own
       ? `Separate framing · ${grid(own.mosaic)} · ${round(own.position_angle_degrees ?? state.positionAngle, 1)}°${own.center ? ' · moved center' : ''}`
-      : sizes ? `Framing · ${grid(state.mosaic)}`
+      : sizes ? `Frames the plan · ${grid(state.mosaic)}`
       : field ? `Shared framing · ${grid(state.mosaic)}` : 'No optics';
     const swatch = own ? `is-own-${ownIndex % 4}` : sizes ? 'is-shared' : shown ? 'is-compared' : 'is-none';
     const shooting = shootingRigIds?.includes(id) ?? false;
@@ -563,15 +563,23 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         {onToggleRig && <button type="button" role="switch" className="framing-rig-switch" aria-checked={shooting}
           aria-label={`${entry.catalog_name} on`} title={blocked ? joinBlocked : shooting ? 'Shoots this plan' : 'Off: not in this plan'}
           disabled={!canWrite || blocked} onClick={() => onToggleRig(id, !shooting)}><span aria-hidden="true" /></button>}
-        <span className={`framing-rig-swatch ${swatch}`} aria-hidden="true" />
-        <strong>{entry.catalog_name}</strong>
-        {field && <small>{formatDegrees(field.width_degrees)} × {formatDegrees(field.height_degrees)}, {field.pixel_scale_arcsec.toFixed(2)}″/px</small>}
+        {(() => {
+          // Swatch, name and field are one click target that frames the
+          // plan with this rig; the framing rig's card is highlighted.
+          const inner = <>
+            <span className={`framing-rig-swatch ${swatch}`} aria-hidden="true" />
+            <strong>{entry.catalog_name}</strong>
+            {field && <small>{formatDegrees(field.width_degrees)} × {formatDegrees(field.height_degrees)}, {field.pixel_scale_arcsec.toFixed(2)}″/px</small>}
+          </>;
+          return canFrame
+            ? <button type="button" className="framing-rig-pick" aria-pressed={sizes}
+                aria-label={sizes ? `${entry.catalog_name} frames the plan` : `Frame with ${entry.catalog_name}`}
+                title={sizes ? 'Frames the plan' : 'Frame with this rig'} disabled={!canWrite || sizes} onClick={() => chooseRig(id)}>{inner}</button>
+            : <span className="framing-rig-pick is-static">{inner}</span>;
+        })()}
       </div>
       <p className="framing-rig-role">{shownRole}</p>
       {canWrite && <div className="framing-rig-actions">
-        {canFrame && <button type="button" role="radio" className={`framing-frame-pick${sizes ? ' is-active' : ''}`} aria-checked={sizes}
-          aria-label={sizes ? `${entry.catalog_name} frames the plan` : `Frame with ${entry.catalog_name}`}
-          title={sizes ? 'Its field sets the shared framing' : 'Use its field for the shared framing'} disabled={sizes} onClick={() => chooseRig(id)}>{sizes ? 'Framing' : 'Frame'}</button>}
         {!own && field && <label className="framing-check" title="Draw its field on the sky"><input type="checkbox" aria-label={`${entry.catalog_name} outline`} checked={shown} onChange={event => update(current => ({ shownRigIds: event.target.checked ? [...current.shownRigIds, id] : current.shownRigIds.filter(other => other !== id) }))} />Outline</label>}
         {!own && <button type="button" className="link-button" onClick={() => frameRig(id)}>Frame separately</button>}
         {own && <button type="button" className="link-button" aria-expanded={editingRig === id} onClick={() => setEditingRig(editingRig === id ? null : id)}>{editingRig === id ? 'Done' : 'Edit'}</button>}
