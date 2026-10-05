@@ -623,10 +623,10 @@ split. They narrow the sections above for this stage; they do not replace them.
 
 PSF Guard owns these tables inside each rig database. Target Scheduler ignores
 them, and they never carry credentials or authority. Sync does not copy them
-today. The proposal in [Target Scheduler rows as Director's
-output](#target-scheduler-rows-as-directors-output-proposal) moves what they
-hold into the meta store, so that Sync keeps carrying Target Scheduler's
-tables only.
+today. The proposal in [Rig databases carry their Director
+plans](#rig-databases-carry-their-director-plans-proposal) makes PSF Guard
+Sync carry them between servers, while the N.I.N.A. Sync plugin keeps
+carrying Target Scheduler's tables only.
 
 | Table | Key | Holds |
 | --- | --- | --- |
@@ -1289,89 +1289,92 @@ Adoption is opt-in. Existing catalogs and Sync endpoints continue to work
 without a meta database. Define backup, restore, and schema migration behavior
 before production coordination data is stored.
 
-### Target Scheduler rows as Director's output (proposal)
+### Rig databases carry their Director plans (proposal)
 
 Proposed 2026-10-05; not built. For review before any code changes.
 
 **Why.** A plan that started in Target Scheduler and still matches its rows
 reads "Not activated yet". The project is running in Target Scheduler, but
-Director has not taken it over, so the plugin cannot pull it and the page
-keeps asking for an activation that would change nothing. Behind that sit two
-copies of the truth. Director's plan lives in the meta store. What Target
-Scheduler runs lives in each rig database's `project`, `target` and
-`exposureplan` rows. The plugin's program reads those rows, and Director's
-bookkeeping is split between the meta store and side tables in the rig
-database.
+Director has not recorded it, so the plugin cannot pull it and the page keeps
+asking for an activation that would change nothing. Separately, a rig's
+Director plans should travel with its database: moved to another PSF Guard
+with PSF Guard Sync, the rig should arrive with its plans, not only with
+Target Scheduler rows.
 
-**Constraints.**
+**Two kinds of Sync.**
 
-- Drop-in compatibility stays. A rig without the Director plugin runs the plan
-  from Target Scheduler rows that PSF Guard writes. A remote rig gets them
-  through the Sync peer.
-- The PSF Guard Sync plugin keeps every operation it has: pull (projects,
-  targets, exposure plans, captures and grades), copy back (the planning
-  push), grade push, and reconcile, which runs grade sync both ways and
-  recounts accepted frames afterwards. Each of them needs PSF Guard's per-rig
-  catalog to stay a full, mergeable Target Scheduler database.
-- Sync carries Target Scheduler's own tables only (`PLANNING_GUID_TABLES`
-  and captures). Nothing Director-specific crosses with a pull, push or
-  reconcile.
+- *PSF Guard to PSF Guard* moves a rig database between servers. It should
+  carry Director's side tables with the Target Scheduler rows, so the plans
+  are portable.
+- *The N.I.N.A. Sync plugin* moves Target Scheduler's tables between N.I.N.A.
+  and PSF Guard. It keeps every operation it has (pull of projects, targets,
+  exposure plans, captures and grades; copy back, the planning push; grade
+  push; reconcile, which runs grade sync both ways and recounts accepted
+  frames) and carries Target Scheduler's tables only. N.I.N.A. never sees the
+  side tables.
 
 **Proposal.**
 
-1. *The meta store is the source of truth for intent.* The plan, framing and
-   activation decide what each rig shoots. The plugin's program is built from
-   them, with coordinates, panels, exposures and required frames taken from
-   the activation and plan. It reads the rig database only for progress.
-2. *Target Scheduler rows are Director's output and Sync's payload.*
-   Activation writes them, Sync carries them, and N.I.N.A. runs them where the
-   Director plugin is absent. They are never the only record of a Director
-   decision.
-3. *Bookkeeping lives in the meta store only.* Which Target Scheduler project,
-   target and exposure plan serve which global project, panel and objective
-   moves from the `psf_guard_director_*` side tables into the activation
-   record, which already names the target and exposure plan GUIDs. New
-   activations stop writing the side tables. On upgrade, existing side-table
-   rows are read once into the meta store and left in place, unread; nothing
-   is deleted from a database N.I.N.A. shares.
-4. *One activation path.* Activation compares the plan with the rig
-   database's rows. It writes the rows that differ, and the project state if
-   it is still a draft, then records the activation. When nothing differs, it
-   records the activation without writing to the rig database. That case can
-   run without a click, because it writes only Director's store. The plan then
+1. *The rig database is the portable record of its plans.* It holds the
+   Target Scheduler rows, which give drop-in compatibility for rigs without
+   the Director plugin, and the `psf_guard_director_*` side tables, which say
+   which rows serve which global project, panel and objective. The meta store
+   coordinates across rigs and keeps the activation record. Both are written
+   in the same activation.
+2. *Side tables complete enough to rebuild a plan.* Today they hold the global
+   project, coordinator, panel IDs, objective, bandpass, purpose and required
+   frames. Add what a receiving server cannot get from the Target Scheduler
+   rows: each objective's goal (hours or frames and its value) and the
+   framing's grid (rows, columns, overlap, and whether a rig is framed
+   separately). Coordinates, rotation, templates and scheduling limits already
+   live in the Target Scheduler rows.
+3. *PSF Guard Sync learns the side tables.* A new peer capability,
+   `director_tables_v1` (like `frame_derivatives_v1`), lets two servers
+   exchange them in pulls and planning pushes. A peer without it gets
+   Target Scheduler rows only, as today. The N.I.N.A. Sync plugin path never
+   includes them.
+4. *Arriving plans.* A rig database that arrives with side tables written by
+   another coordinator becomes draft plans here, rebuilt from the side tables
+   and rows, and marked with the coordinator they came from. One coordinating
+   instance per project stays the rule. Taking coordination over is an
+   explicit action, not a side effect of a pull.
+5. *One activation path.* Activation compares the plan with the rig
+   database's rows and side tables. It writes what differs, and the project
+   state if it is still a draft, then records the activation in the meta
+   store. When the Target Scheduler rows already match, only the side tables
+   are written. On a server allowed to manage databases this can run without
+   a click, since it changes no row Target Scheduler reads. The plan then
    reads "Matches Target Scheduler" and active, and the plugin can pull it.
-5. *Changes from the Target Scheduler side become plan changes.* Captures
+6. *Changes from the Target Scheduler side become plan changes.* Captures
    already reach progress through the rows' acquired and accepted counts. An
-   edit to a desired count, exposure, enabled flag or target arrives through a
-   Sync pull, the Target Scheduler editor or N.I.N.A. itself. Director
-   compares the rows with what it last activated and updates the plan draft
-   from them, saying "Updated from Target Scheduler", so the next activation
-   does not overwrite them. When the same field changed on both sides since
-   the last activation, Target Scheduler's value is kept and the conflict is
-   shown; neither side is overwritten silently.
+   edit to a desired count, exposure, enabled flag or target arrives through
+   the N.I.N.A. Sync plugin, the Target Scheduler editor or N.I.N.A. itself.
+   Director compares the rows with what the side tables say it last wrote,
+   and updates the plan draft from them, saying "Updated from Target
+   Scheduler", so the next activation does not overwrite them. When the same
+   field changed on both sides since the last activation, Target Scheduler's
+   value is kept and the conflict is shown.
 
-**What stays the same.** Library, grading and calibration still read the
-per-rig catalog. Captures still attach to its `project` and `target` rows.
-Remote rigs still receive rows through the Sync planning push. The [native
-catalog decision](#native-catalogs-and-target-scheduler-exchange) is
-unchanged; this keeps the Target Scheduler rows at the exchange boundary that
-decision describes.
+**What stays the same.** Library, grading and calibration read the per-rig
+catalog, and captures attach to its `project` and `target` rows. Remote rigs
+still receive rows through the planning push. The [native catalog
+decision](#native-catalogs-and-target-scheduler-exchange) is unchanged.
 
 **Open questions.**
 
-- Should a Director-plugin rig with no Target Scheduler at all still get
-  Target Scheduler rows written? Its captures need `project` and `target`
-  rows to attach to in the Library, so today the answer is yes.
 - Which fields count for "matches"? Proposed: target name, coordinates,
   rotation, panel grid, each exposure plan's template, exposure, desired count
   and enabled flag, the project's scheduling limits, and the project state.
-  Sort order and fields Director does not plan are ignored.
 - How is an edit from the Target Scheduler side shown before it changes the
   plan: applied, then announced in the save bar, or held for review?
+- When a rig database arrives from another coordinator, should its plans
+  wait as drafts until someone takes coordination over, or stay read-only
+  with progress shown?
 
-**Delivery.** Two PRs. The first moves the bookkeeping into the meta store,
-builds the program from it and adds the single activation path. The second
-reads changes made on the Target Scheduler side back into the plan.
+**Delivery.** Three PRs. First: the single activation path, which records
+matching plans, and the extended side tables. Second: `director_tables_v1`
+in PSF Guard Sync, and rebuilding arriving plans. Third: reading changes made
+on the Target Scheduler side back into the plan.
 
 ### Native catalogs and Target Scheduler exchange
 
