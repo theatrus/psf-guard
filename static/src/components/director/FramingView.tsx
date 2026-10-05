@@ -126,10 +126,16 @@ export interface FramingViewProps {
   seed: FramingSeed | null;
   /** Rigs already holding this project; the first with optics frames by default. */
   preferredRigIds?: string[];
+  /** On a page that keeps the plan: the rigs shooting it, and how to add or
+   *  drop one. A rig's row then toggles it. */
+  shootingRigIds?: string[];
+  onToggleRig?: (rigId: string, on: boolean) => void;
+  /** Why a rig cannot join yet, such as a plan with no objectives. */
+  joinBlocked?: string;
 }
 
 /** Frame one project on the sky: target, angle, mosaic and rig footprints over a survey. */
-export default function FramingView({ projectId, seed, preferredRigIds = [] }: FramingViewProps) {
+export default function FramingView({ projectId, seed, preferredRigIds = [], shootingRigIds, onToggleRig, joinBlocked }: FramingViewProps) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const draftKey = ['directorFraming', projectId];
@@ -494,8 +500,9 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   const number = (value: string, fallback: number) => { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : fallback; };
 
   // The rigs that shoot this plan come first; the rest fold away.
-  const planRigs = rigList.filter(entry => preferredRigIds.includes(entry.rig.id));
-  const otherRigs = rigList.filter(entry => !preferredRigIds.includes(entry.rig.id));
+  const inPlan = (id: string) => preferredRigIds.includes(id) || (shootingRigIds ?? []).includes(id);
+  const planRigs = rigList.filter(entry => inPlan(entry.rig.id));
+  const otherRigs = rigList.filter(entry => !inPlan(entry.rig.id));
   if (draft.isPending) return <p role="status">Loading framing...</p>;
   if (draft.isError) return <p className="director-error" role="alert">{message(draft.error)}</p>;
   if (!state) return <StartFraming canWrite={canWrite} onStart={setStarted} />;
@@ -544,20 +551,29 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
       : sizes ? `Sets panel size · ${grid(state.mosaic)}`
       : field ? `Shared framing · ${grid(state.mosaic)}` : 'No optics';
     const swatch = own ? `is-own-${ownIndex % 4}` : sizes ? 'is-shared' : shown ? 'is-compared' : 'is-none';
-    return <li key={id} className={`framing-rig-card${editingRig === id ? ' is-editing' : ''}${sizes && !own ? ' is-panel-rig' : ''}`} role="group" aria-label={entry.catalog_name}>
-      <div className="framing-rig-head">
-        {/* The swatch picks the rig that sizes the shared panels: filled
-            when it does, an empty outline to click when it could. */}
-        {!own && field
-          ? <button type="button" className={`framing-rig-swatch is-pick ${swatch}`} aria-pressed={sizes}
-              aria-label={sizes ? `${entry.catalog_name} sets the panel size` : `Use ${entry.catalog_name} for the panel size`}
-              title={sizes ? 'Sets the panel size' : 'Use for panel size'} disabled={!canWrite || sizes} onClick={() => chooseRig(id)} />
-          : <span className={`framing-rig-swatch ${swatch}`} aria-hidden="true" />}
-        <strong>{entry.catalog_name}</strong>
-        {field && <small>{formatDegrees(field.width_degrees)} × {formatDegrees(field.height_degrees)}, {field.pixel_scale_arcsec.toFixed(2)}″/px</small>}
-      </div>
+    const shooting = shootingRigIds?.includes(id) ?? false;
+    const inner = <>
+      <span className={`framing-rig-swatch ${swatch}`} aria-hidden="true" />
+      <strong>{entry.catalog_name}</strong>
+      {field && <small>{formatDegrees(field.width_degrees)} × {formatDegrees(field.height_degrees)}, {field.pixel_scale_arcsec.toFixed(2)}″/px</small>}
+    </>;
+    const blocked = !shooting && !!joinBlocked;
+    return <li key={id} className={`framing-rig-card${editingRig === id ? ' is-editing' : ''}${shooting ? ' is-shooting' : ''}`} role="group" aria-label={entry.catalog_name}>
+      {/* On a page that keeps the plan, the heading (swatch, name and
+          field) adds the rig to the plan or drops it. */}
+      {onToggleRig
+        ? <button type="button" className="framing-rig-head is-toggle" aria-pressed={shooting}
+            aria-label={shooting ? `${entry.catalog_name} shoots this plan` : `Add ${entry.catalog_name} to this plan`}
+            title={blocked ? joinBlocked : shooting ? 'Shoots this plan; click to drop it' : 'Add to this plan'}
+            disabled={!canWrite || blocked} onClick={() => onToggleRig(id, !shooting)}>
+            <span className="framing-rig-check" aria-hidden="true">{shooting ? '✓' : ''}</span>{inner}
+          </button>
+        : <div className="framing-rig-head">{inner}</div>}
       <p className="framing-rig-role">{role}</p>
       {canWrite && <div className="framing-rig-actions">
+        {!own && field && <button type="button" className={`framing-size-pill${sizes ? ' is-active' : ''}`} aria-pressed={sizes}
+          aria-label={sizes ? `${entry.catalog_name} sets the panel size` : `Use ${entry.catalog_name} for the panel size`}
+          title={sizes ? 'Its field sets the shared panel size' : 'Use its field for the shared panel size'} disabled={sizes} onClick={() => chooseRig(id)}>{sizes ? 'Sets size' : 'Use size'}</button>}
         {!own && field && <label className="framing-check" title="Draw its field on the sky"><input type="checkbox" aria-label={`${entry.catalog_name} outline`} checked={shown} onChange={event => update(current => ({ shownRigIds: event.target.checked ? [...current.shownRigIds, id] : current.shownRigIds.filter(other => other !== id) }))} />Outline</label>}
         {!own && <button type="button" className="link-button" onClick={() => frameRig(id)}>Frame separately</button>}
         {own && <button type="button" className="link-button" aria-expanded={editingRig === id} onClick={() => setEditingRig(editingRig === id ? null : id)}>{editingRig === id ? 'Done' : 'Edit'}</button>}
@@ -675,7 +691,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
         {rigs.isError && <p className="director-error" role="alert">Rigs could not be loaded: {message(rigs.error)} <button type="button" onClick={() => void rigs.refetch()}>Retry</button></p>}
         {!rigs.isError && rigList.length === 0 && <p className="director-muted">{rigs.isPending ? 'Loading rigs...' : 'No rigs yet'}</p>}
         {planRigs.length > 0 && <ul className="framing-rig-list">{planRigs.map(rigCard)}</ul>}
-        {otherRigs.length > 0 && <details className="framing-other-rigs" open={planRigs.length === 0}>
+        {otherRigs.length > 0 && <details className="framing-other-rigs" open>
           <summary>Other rigs ({otherRigs.length})</summary>
           <ul className="framing-rig-list">{otherRigs.map(rigCard)}</ul>
         </details>}

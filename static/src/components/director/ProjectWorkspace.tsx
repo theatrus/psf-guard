@@ -115,7 +115,9 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
       </div>
     </div>
     <div {...panel('framing')}>
-      {first && scheduler.isPending ? <p role="status">Loading targets...</p> : <FramingView projectId={projectId} seed={seed} preferredRigIds={summaryRigs.map(rig => rig.id)} />}
+      {first && scheduler.isPending ? <p role="status">Loading targets...</p> : <FramingView projectId={projectId} seed={seed} preferredRigIds={summaryRigs.map(rig => rig.id)}
+        shootingRigIds={planRigs.rigIds} onToggleRig={(id, on) => planControls.current?.setRig(id, on)}
+        joinBlocked={canWrite && planRigs.objectives === 0 ? 'Add an objective on Exposures first' : undefined} />}
     </div>
     <div {...panel('exposures')}>
       <PlanEditor projectId={projectId} linkedRigIds={row.links.map(link => link.rig.id)} controls={planControls} onRigsChange={reportRigs} />
