@@ -341,6 +341,28 @@ export const apiClient = {
     return data.data;
   },
 
+  getDirectorSiteProfile: async (site: string): Promise<import('./directorTypes').DirectorSiteProfileView> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<import('./directorTypes').DirectorSiteProfileView>>(`/director/v1/sites/${encodeURIComponent(site)}/profile`);
+    if (!data.data) throw new Error(data.error || 'Failed to load the site');
+    return data.data;
+  },
+
+  saveDirectorSiteProfile: async (site: string, edit: import('./directorTypes').DirectorSiteProfileEdit): Promise<import('./directorTypes').DirectorSiteProfileView> => {
+    const api = await getApi();
+    const { data } = await api.put<ApiResponse<import('./directorTypes').DirectorSiteProfileView>>(`/director/v1/sites/${encodeURIComponent(site)}/profile`, edit);
+    if (!data.data) throw new Error(data.error || 'Failed to save the site');
+    return data.data;
+  },
+
+  /** Read N.I.N.A. `.hrz` text into a horizon; nothing is stored. */
+  parseDirectorHorizon: async (text: string): Promise<import('./directorTypes').DirectorHorizon> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<import('./directorTypes').DirectorHorizon>>('/director/v1/horizons/parse', { text });
+    if (!data.data) throw new Error(data.error || 'Failed to read the horizon file');
+    return data.data;
+  },
+
   getDirectorSurveys: async (): Promise<DirectorSurvey[]> => {
     const api = await getApi();
     const { data } = await api.get<ApiResponse<DirectorSurvey[]>>('/director/v1/sky/surveys');

@@ -7,6 +7,7 @@ import { useAllDatabases } from '../../hooks/useDatabases';
 import { openSettings } from '../../utils/settingsIntent';
 import { formatDegrees } from './framingModel';
 import RigProfileCard from './RigProfileCard';
+import DirectorSites from './DirectorSites';
 import { retryWhenBusy } from './retry';
 
 function describeStatus(payload: Record<string, unknown>, at: number): string {
@@ -23,7 +24,7 @@ export default function DirectorRigs() {
   const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 30_000 });
   // Only needed to name a peer; most servers have none.
   const peers = useQuery({ queryKey: ['peers'], queryFn: apiClient.getPeers, retry: false, refetchOnWindowFocus: false, enabled: profiles.data?.some(entry => entry.profile?.peer_id) ?? false });
-  return <section aria-label="Rig databases" className="director-records">
+  return <><section aria-label="Rig databases" className="director-records">
     <div className="director-toolbar"><h2>Rigs</h2></div>
     <p className="director-muted">Each registered database is one rig, and its projects are plans. Setup holds the rig's optics, site and limits; the Director plugin reports the rest.</p>
     {databases.isPending && <p role="status">Loading rig databases...</p>}
@@ -48,5 +49,6 @@ export default function DirectorRigs() {
         {openSetup === db.id && <RigProfileCard key={db.id} slug={db.id} />}
       </li>;
     })}</ul>
-  </section>;
+  </section>
+  <DirectorSites /></>;
 }
