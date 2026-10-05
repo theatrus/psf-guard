@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { Check, Eye, Send } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import type { DirectorActivationAction, DirectorActivationChange, DirectorActivationPush, DirectorActivationPushReport, DirectorActivationReport } from '../../api/directorTypes';
-import { retryWhenBusy } from './retry';
 import { useDrafts } from './pageDraftsState';
+import { useActivationState } from './activationState';
 import './ActivationPanel.css';
 
 const message = (error: unknown) => isAxiosError(error) ? error.response?.data?.error || error.message
@@ -109,7 +109,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   const status = useDirectorStatus();
   const manageable = status.data?.database_management ?? true;
   const client = useQueryClient();
-  const last = useQuery({ queryKey: ['directorActivation', projectId], queryFn: () => apiClient.getDirectorActivation(projectId), retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false });
+  const { last, planRevision, behind } = useActivationState(projectId);
   const [report, setReport] = useState<DirectorActivationReport | null>(null);
   const busy = useRef(false);
   // Activation writes the saved plan, so edits still in the editor are saved
@@ -134,15 +134,6 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   const run = (action: () => void) => { if (busy.current) return; busy.current = true; try { action(); } finally { busy.current = false; } };
   useEffect(() => { onReport?.(report); }, [report, onReport]);
   const pending = preview.isPending || apply.isPending || push.isPending;
-  // What the rig databases hold against what is saved here.
-  const savedPlan = useQuery({ queryKey: ['directorPlan', projectId], queryFn: () => apiClient.getDirectorPlan(projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
-  const savedFraming = useQuery({ queryKey: ['directorFraming', projectId], queryFn: () => apiClient.getDirectorFramingDraft(projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
-  const planRevision = savedPlan.data?.plan?.revision;
-  const framingRevision = savedFraming.data?.draft?.revision;
-  const behind = last.data ? [
-    planRevision !== undefined && planRevision > last.data.plan_revision && 'plan',
-    framingRevision !== undefined && framingRevision > last.data.framing_revision && 'framing',
-  ].filter((part): part is string => !!part) : [];
   const error = preview.error ?? apply.error ?? push.error;
   return <section className="activation" aria-label="Activation">
     <p className="director-muted">Writes this plan into each rig's Target Scheduler database, taking over rows already there for the same work. Each rig above shows what changes.</p>

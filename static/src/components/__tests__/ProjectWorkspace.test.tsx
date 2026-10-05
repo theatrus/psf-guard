@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
@@ -13,9 +13,17 @@ vi.mock('../director/FramingView', () => ({
   default: ({ projectId, seed }: { projectId: string; seed: { name: string; center: { ra_degrees: number } } | null }) => <output>{`Framing ${projectId}:${seed ? `${seed.name}@${seed.center.ra_degrees}` : 'no seed'}`}</output>,
 }));
 // The editor draws one block per rig; the stub draws what the workspace
-// gives each linked rig, and the list's footer.
-vi.mock('../director/PlanEditor', () => ({
-  default: ({ projectId, linkedRigIds = [], rigExtras, footer }: {
+// gives each linked rig, and the list's footer, and holds one draft field so
+// the save bar and the tabs have an edit to track.
+vi.mock('../director/PlanEditor', async () => {
+  const { useState } = await vi.importActual<typeof import('react')>('react');
+  const { useDraftSection } = await vi.importActual<typeof import('../director/pageDraftsState')>('../director/pageDraftsState');
+  function Goal() {
+    const [goal, setGoal] = useState('40');
+    useDraftSection('plan', { label: 'Plan', order: 2, unsaved: goal !== '40', save: async () => true, discard: () => setGoal('40') });
+    return <input aria-label="Stub goal" value={goal} onChange={event => setGoal(event.target.value)} />;
+  }
+  return { default: ({ projectId, linkedRigIds = [], rigExtras, footer }: {
     projectId: string;
     linkedRigIds?: string[];
     rigExtras?: (rig: { rig: { id: string; name: string; revision: number }; catalog_slug: string; catalog_name: string }) => { place?: React.ReactNode; below?: React.ReactNode };
@@ -26,16 +34,32 @@ vi.mock('../director/PlanEditor', () => ({
       const extras = rigExtras?.({ rig: { id, name: id, revision: 1 }, catalog_slug: id, catalog_name: id }) ?? {};
       return <div key={id}>{extras.place}{extras.below}</div>;
     })}
+    <Goal />
     {footer}
-  </div>,
-}));
+  </div> };
+});
 vi.mock('../director/ActivationPanel', () => ({ default: ({ projectId }: { projectId: string }) => <output>{`Activation ${projectId}`}</output> }));
 vi.mock('../director/ObservingPreferences', () => ({ default: () => <output>Observing preferences</output> }));
 const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: null });
+function Where() { return <output data-testid="where">{useLocation().search}</output>; }
+/** The saved framing, plan and last activation the summary reads. */
+function summaryHandlers(saved: { framing?: boolean; planRevision?: number; activated?: { plan_revision: number } } = {}) {
+  return [
+    http.get('/api/director/v1/projects/project/framing', () => ok({ project: { id: 'project', name: 'Andromeda', revision: 1 }, draft: saved.framing ? {
+      project_id: 'project', revision: 2, target_name: 'M31', center: { ra_degrees: 10.68, dec_degrees: 41.27 }, position_angle_degrees: 0, mosaic: { rows: 1, columns: 1, overlap_percent: 20 },
+      panel_rig_id: null, panel: null, shown_rig_ids: [], survey_id: 'dss2', view_fov_degrees: 4, updated_at_ms: 1, rig_framings: [] } : null })),
+    http.get('/api/director/v1/projects/project/plan', () => ok({ project: { id: 'project', name: 'Andromeda', revision: 1 }, plan: saved.planRevision === undefined ? null : {
+      project_id: 'project', revision: saved.planRevision, updated_at_ms: 1, contributions: [],
+      objectives: [{ id: 'o1', bandpass_id: 'h_alpha', purpose: 'faint_detail', goal: { kind: 'frames', value: 40 }, priority: 1 }] } })),
+    http.get('/api/director/v1/projects/project/activation', () => ok({ activation: saved.activated ? { project_id: 'project', revision: 3, framing_revision: 2, plan_revision: saved.activated.plan_revision,
+      coordinator_instance_id: 'c', applied_at_ms: 1, rigs: [] } : null })),
+  ];
+}
 const rig = { id: 'rig', name: 'C925', revision: 1 };
 
-function mount(links: Array<{ catalog_slug: string; catalog_name: string; source_row_id: number | null; source_name: string | null }>, route = '/plan?db=catalog&plan=project') {
+function mount(links: Array<{ catalog_slug: string; catalog_name: string; source_row_id: number | null; source_name: string | null }>, route = '/plan?db=catalog&plan=project', saved: Parameters<typeof summaryHandlers>[0] = { framing: true }) {
   server.use(
+    ...summaryHandlers(saved),
     // Every database is a rig of its own.
     http.get('/api/director/v1/rigs/profiles', () => ok(links.map(link => ({ rig: { ...rig, id: `rig-${link.catalog_slug}` }, catalog_slug: link.catalog_slug, catalog_name: link.catalog_name })))),
     http.get('/api/director/v1/plans', () => ok({ warnings: [], rows: [{ project: { id: 'project', name: 'Andromeda', revision: 1 }, framing: null, plan: null, activation: null,
@@ -45,30 +69,63 @@ function mount(links: Array<{ catalog_slug: string; catalog_name: string; source
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[route]}>
     <ProjectWorkspace instanceId="instance" projectId="project" />
+    <Where />
   </MemoryRouter></QueryClientProvider>);
 }
 
 describe('project workspace', () => {
   const links = [{ catalog_slug: 'catalog', catalog_name: 'C925 data', source_row_id: 7, source_name: 'Andromeda subs' }, { catalog_slug: 'redcat', catalog_name: 'Redcat data', source_row_id: null, source_name: null }];
-  it('seeds framing from the first linked database and opens the editor of the database it came from', async () => {
+  it('seeds framing from the first linked database and keeps each database editor in its own tab', async () => {
     mount(links);
     expect(await screen.findByRole('heading', { name: 'Andromeda' })).toBeInTheDocument();
     expect(await screen.findByText('Framing project:M31@7.5')).toBeInTheDocument();
     expect(screen.getByText('Plan project')).toBeInTheDocument();
     expect(screen.getByText('Activation project')).toBeInTheDocument();
-    expect(screen.getByText('Project row missing in this database')).toBeInTheDocument();
-    // The Library's Planning button names its database in `db`; that editor is open on arrival.
+    expect(screen.getAllByText('Project row missing in this database').length).toBeGreaterThan(0);
+    // The editors load once their tab is opened, the arrival database first.
+    expect(screen.queryByText('Source editor catalog:7')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Rig databases' }));
     expect(screen.getByText('Source editor catalog:7')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Edit in Target Scheduler/ }));
+    expect(screen.getByText(/opened from here/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Target Scheduler rows/ }));
     expect(screen.queryByText('Source editor catalog:7')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Library' })).toHaveAttribute('href', '/?db=catalog');
   });
-  it('keeps every database editor closed when it did not arrive from one', async () => {
-    mount(links, '/plan?db=elsewhere&plan=project');
-    expect(await screen.findByRole('heading', { name: 'Andromeda' })).toBeInTheDocument();
-    expect(screen.queryByText('Source editor catalog:7')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Edit in Target Scheduler/ }));
-    expect(screen.getByText('Source editor catalog:7')).toBeInTheDocument();
+  it('keeps the tab in the address and opens the one a link names', async () => {
+    mount(links, '/plan?plan=project&planTab=priority');
+    expect(await screen.findByRole('tab', { name: 'Priority' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('Observing preferences').closest('[role="tabpanel"]')).not.toHaveAttribute('hidden');
+    expect(screen.getByText('Plan project').closest('[role="tabpanel"]')).toHaveAttribute('hidden');
+    fireEvent.click(screen.getByRole('tab', { name: 'Plan' }));
+    expect(screen.getByRole('tab', { name: 'Plan' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('where')).toHaveTextContent('planTab=plan');
+    expect(screen.getByTestId('where')).toHaveTextContent('plan=project');
+    // Arrow keys move along the tabs.
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Plan' }), { key: 'ArrowRight' });
+    expect(screen.getByRole('tab', { name: 'Activate' })).toHaveAttribute('aria-selected', 'true');
+  });
+  it('keeps an unsaved edit across tabs and marks the tab that holds it', async () => {
+    mount(links, '/plan?plan=project&planTab=plan');
+    const goal = await screen.findByLabelText('Stub goal');
+    fireEvent.change(goal, { target: { value: '120' } });
+    expect(screen.getByRole('tab', { name: /Plan/ })).toContainElement(screen.getByLabelText('edited'));
+    expect(screen.getByRole('region', { name: 'Unsaved changes' })).toHaveTextContent('Unsaved changes in Plan.');
+    fireEvent.click(screen.getByRole('tab', { name: 'Framing' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Plan/ }));
+    expect(screen.getByLabelText('Stub goal')).toHaveValue('120');
+  });
+  it('sums the plan up once: target, goals, each rig and whether it is ready, and the activation', async () => {
+    mount(links, '/plan?plan=project', { framing: true, planRevision: 5, activated: { plan_revision: 4 } });
+    expect(await screen.findByTestId('summary-target')).toHaveTextContent('M31');
+    expect(await screen.findByTestId('summary-goals')).toHaveTextContent('H-alpha · 40 frames per rig');
+    const summary = screen.getByRole('region', { name: 'Plan summary' });
+    expect(await within(summary).findByText('C925 data')).toBeInTheDocument();
+    expect(within(summary).getAllByText(/no rig profile/).length).toBe(2);
+    expect(await screen.findByTestId('summary-activation')).toHaveTextContent('saved plan not sent yet');
+  });
+  it('opens on framing when no framing is saved yet', async () => {
+    mount(links, '/plan?plan=project', { framing: false });
+    expect(await screen.findByRole('tab', { name: 'Framing' })).toHaveAttribute('aria-selected', 'true');
   });
   it('frames an unlinked project without a seed', async () => {
     mount([]);
@@ -83,6 +140,7 @@ describe('attaching and detaching database projects', () => {
   function mountTwo() {
     const posts: Array<{ url: string; body: unknown }> = [];
     server.use(
+      ...summaryHandlers({ framing: true }),
       http.get('/api/director/v1/rigs/profiles', () => ok([
         { rig: rigA, catalog_slug: 'catalog', catalog_name: 'C925 data' },
         { rig: { id: 'rig-c', name: 'Third', revision: 1 }, catalog_slug: 'third', catalog_name: 'Third data' },
@@ -120,6 +178,7 @@ describe('attaching and detaching database projects', () => {
 
   it('detaches one database into a plan of its own, naming it after the project', async () => {
     const posts = mountTwo();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Rig databases' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Detach Third data' }));
     expect(screen.getByRole('note')).toHaveTextContent('Heart in Third data becomes a plan of its own');
     fireEvent.click(screen.getByRole('button', { name: 'Detach' }));

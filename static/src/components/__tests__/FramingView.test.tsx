@@ -173,7 +173,7 @@ describe('Framing view', () => {
     const { saves } = fixture(); mount(true, true, [rigB.rig.id, rigA.rig.id]);
     // rigB has no optics, so rigA frames by default; no click needed.
     await waitFor(() => expect(screen.getByLabelText('Panel rig')).toHaveValue(rigA.rig.id));
-    expect(screen.getByTestId('framing-readout')).toHaveTextContent('M31');
+    expect(screen.getByLabelText('Target name')).toHaveValue('M31');
     expect(screen.getByTestId('framing-readout')).toHaveTextContent('angle 35.0°');
     const stage = screen.getByTestId('framing-stage');
     stage.setPointerCapture = vi.fn();
