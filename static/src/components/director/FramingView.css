@@ -155,3 +155,6 @@
 .director-page button.framing-rig-swatch.is-pick.is-compared:not([aria-pressed="true"]) { border-style: dashed; border-color: #ffc56b; }
 /* The rig that sizes the shared panels reads as the selected one. */
 .framing-rig-card.is-panel-rig { border-color: #5ab4ff; background: rgba(80, 180, 255, 0.08); box-shadow: inset 3px 0 0 #5ab4ff; }
+.framing-panel-source { margin: 0 0 6px; font-size: 13px; color: var(--color-text-secondary); }
+.framing-panel-source strong { color: var(--color-text-primary); }
+.director-page .framing-panel-source button { min-height: 24px; margin-left: 6px; padding: 1px 8px; font-size: 12px; }

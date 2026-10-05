@@ -109,9 +109,8 @@ describe('Framing view', () => {
     const { saves, cutouts } = fixture(); mount();
     expect(await screen.findByLabelText('Target name')).toHaveValue('M31');
     expect(screen.getByLabelText('Position angle degrees')).toHaveValue(35);
-    // The first rig with optics frames on its own once rigs load; choosing it
-    // by hand before or after that draws the same one rectangle, at once.
-    fireEvent.change(screen.getByLabelText('Panel rig'), { target: { value: rigA.rig.id } });
+    // The first rig with optics sizes the panels once rigs load, and says so.
+    await waitFor(() => expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from RedCat 61 · 5.38° × 3.60°'));
     expect(screen.getByTestId('framing-extent')).toHaveTextContent('1 panel · 5.38° × 3.60°');
     expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1);
     // The rectangle is the rig's field, turned 35°: its corners are not axis-aligned.
@@ -194,7 +193,7 @@ describe('Framing view', () => {
   it('frames with the first rig that holds the project, moves the target by dragging the rectangle, and turns it by its handle', async () => {
     const { saves } = fixture(); mount(true, true, [rigB.rig.id, rigA.rig.id]);
     // rigB has no optics, so rigA frames by default; no click needed.
-    await waitFor(() => expect(screen.getByLabelText('Panel rig')).toHaveValue(rigA.rig.id));
+    await waitFor(() => expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from RedCat 61'));
     expect(screen.getByLabelText('Target name')).toHaveValue('M31');
     expect(screen.getByLabelText('Position angle degrees')).toHaveValue(35);
     const stage = screen.getByTestId('framing-stage');
@@ -303,7 +302,7 @@ describe('Framing view', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Look up name' }));
     expect(await screen.findByLabelText('Target name')).toHaveValue('IC 1805');
     expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(38.2);
-    fireEvent.change(screen.getByLabelText('Panel rig'), { target: { value: rigA.rig.id } });
+    await waitFor(() => expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from RedCat 61'));
     await waitFor(() => expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(38.2));
     expect(screen.getByLabelText('Declination degrees')).toHaveValue(61.45);
   });
@@ -663,13 +662,22 @@ describe('Framing view', () => {
     // A rig without optics has nothing to pick.
     expect(screen.queryByRole('button', { name: /C925 data/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Use Askar 107 for the panel size' }));
-    expect(screen.getByLabelText('Panel rig')).toHaveValue(rigC.rig.id);
+    expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from Askar 107');
+    expect(screen.queryByLabelText('Panel rig')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Askar 107 sets the panel size' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: 'Use RedCat 61 for the panel size' })).toHaveAttribute('aria-pressed', 'false');
     // The whole card of the panel rig reads as selected.
     expect(screen.getByRole('group', { name: 'Askar 107' })).toHaveClass('is-panel-rig');
     expect(screen.getByRole('group', { name: 'RedCat 61' })).not.toHaveClass('is-panel-rig');
     expect(screen.getByTestId('framing-extent')).toHaveTextContent('1 panel · 1.20° × 48.0′');
+    // Typing a size keeps the rig's numbers to start from, and drops the pick.
+    expect(screen.queryByLabelText('Panel width degrees')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Type a size' }));
+    expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Typed size · or pick a rig by its swatch');
+    expect(screen.getByLabelText('Panel width degrees')).toHaveValue(1.2);
+    expect(screen.getByRole('button', { name: 'Use Askar 107 for the panel size' })).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.change(screen.getByLabelText('Panel width degrees'), { target: { value: '2' } });
+    expect(screen.getByTestId('framing-extent')).toHaveTextContent('1 panel · 2.00° × 48.0′');
   });
 
   it('does not call the same rigs in another order an edit', async () => {
