@@ -2004,6 +2004,14 @@ end returns to NINA's following steps without moving a mount under a closed roof
 The separate recovery event journal is still local; capture/preparation batch
 replay and live phase reporting do not imply recovery-event ingestion by PSF Guard.
 
+Runtime 0.12.1 adds the idle-admission half of the resume gate: a configured,
+exclusively leased execution directory with no execution database can resume a
+stable weather hold before a workload is issued. Disabled storage, unreadable
+paths and unopened historical databases are not idle evidence. Once a ledger
+is opened, the existing unresolved-capture and active-preparation checks apply.
+This issues no hardware permit: preparation and capture still require a fresh
+coordinator allocation, open ledger and current shared-core dispatch checks.
+
 Add an explicit `hold_and_resume` policy alongside `stop_for_night`, inherited
 from rig defaults with a Session override. A closed roof is never permission to
 park: independent motion clearance still governs every mount action. Retain
