@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { Check, Crosshair, Globe, Grid3x3, LocateFixed, Orbit, RefreshCw, RotateCw, Sparkles, SquareDashedMousePointer, Sun, Telescope, Undo2 } from 'lucide-react';
 import NumberInput from '../NumberInput';
+import { useDraftSection } from './pageDraftsState';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorCutoutRequest, DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigFraming, DirectorRigProfileSummary, DirectorSkyMarks, DirectorSkyPosition } from '../../api/directorTypes';
@@ -335,6 +336,26 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
   });
   const httpError = isAxiosError(save.error) ? save.error : save.error instanceof Error && isAxiosError(save.error.cause) ? save.error.cause : null;
   const stale = httpError?.response?.status === 409;
+  // On the project page the save bar saves the framing with the plan. A
+  // framing never saved counts as unsaved: activation needs it stored.
+  const managed = useDraftSection('framing', {
+    label: 'Framing',
+    order: 1,
+    unsaved: canWrite && !!state && !!draft.data && (savedState ? differsFromSaved : true),
+    save: async () => {
+      if (!state || !draft.data || stale) return false;
+      setNotice('');
+      setProblem('');
+      try { await save.mutateAsync(); } catch { return false; }
+      return true;
+    },
+    discard: () => {
+      setState(savedState);
+      setUndo(null);
+      setNotice('');
+      save.reset();
+    },
+  });
 
   // Drag pans the view; the wheel zooms about the center. Every drag works
   // on the sky: the grabbed point is deprojected from the stage, so a pan
@@ -648,7 +669,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [] }: F
       {stale && <p className="director-error" role="alert">This framing changed since you loaded it. Reload to see the saved draft before editing again.</p>}
       {(problem || (save.isError && !stale)) && <p className="director-error" role="alert">{problem || message(save.error)}</p>}
       <div className="director-actions">
-        {canWrite && <button type="submit" disabled={save.isPending || stale}><Check size={16} />{save.isPending ? 'Saving...' : 'Save framing'}</button>}
+        {canWrite && !managed && <button type="submit" disabled={save.isPending || stale}><Check size={16} />{save.isPending ? 'Saving...' : 'Save framing'}</button>}
         <button type="button" aria-label="Reload framing" title="Reload framing" onClick={() => { setNotice(''); setProblem(''); save.reset(); void draft.refetch(); }}><RefreshCw size={16} /></button>
         {!canWrite && <span className="director-muted">Read only</span>}
       </div>

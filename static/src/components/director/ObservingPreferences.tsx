@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, RefreshCw, Save } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
+import { EditedMark } from './pageDrafts';
+import { useDraftSection, useDrafts } from './pageDraftsState';
 import type { ObservingSettings, PreferenceScope } from '../../api/directorPreferences';
 import './ObservingPreferences.css';
 
@@ -17,6 +19,10 @@ function ordered(projects: Project[], ids: string[]) {
 export default function ObservingPreferences({ projectId, rigs, projects }: { projectId: string; rigs: Project[]; projects: Project[] }) {
   const [rigPick, setRigPick] = useState('');
   const [scope, setScope] = useState<PreferenceScope>('global');
+  // Switching scope or rig shows another order and would drop an edit to
+  // this one, so both wait until it is saved or discarded.
+  const [editing, setEditing] = useState(false);
+  const drafts = useDrafts();
   const available = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles });
   const choices = [...rigs, ...(available.data ?? []).filter(r => !rigs.some(existing => existing.id === r.rig.id)).map(r => ({ id: r.rig.id, name: r.catalog_name }))];
   const rig = choices.some(r => r.id === rigPick) ? rigPick : choices[0]?.id ?? '';
@@ -30,23 +36,24 @@ export default function ObservingPreferences({ projectId, rigs, projects }: { pr
   const place = ordered(projects, globalOrder).findIndex(project => project.id === projectId);
   return <section className="observing-preferences" aria-label="Project priority">
     <details className="observing-fold">
-    <summary><h3>Project priority</h3>{effective.data && place >= 0 && <span className="director-muted"> · this plan is {place + 1} of {projects.length} in the global order</span>}</summary>
+    <summary><h3>Project priority{drafts && <EditedMark drafts={drafts} id="priority" />}</h3>{effective.data && place >= 0 && <span className="director-muted"> · this plan is {place + 1} of {projects.length} in the global order</span>}</summary>
     <div className="observing-context">
-      <label>Scope<select aria-label="Priority scope" value={scope} onChange={e => setScope(e.target.value as PreferenceScope)}><option value="global">Global order</option><option value="site" disabled={!site}>Site override</option><option value="rig" disabled={!rig}>Rig override</option></select></label>
-      <label>Rig<select aria-label="Priority rig" value={rig} onChange={e => setRigPick(e.target.value)}>{choices.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select></label>
+      <label>Scope<select aria-label="Priority scope" value={scope} disabled={editing} title={editing ? 'Save or discard the priority change first' : undefined} onChange={e => setScope(e.target.value as PreferenceScope)}><option value="global">Global order</option><option value="site" disabled={!site}>Site override</option><option value="rig" disabled={!rig}>Rig override</option></select></label>
+      <label>Rig<select aria-label="Priority rig" value={rig} disabled={editing} title={editing ? 'Save or discard the priority change first' : undefined} onChange={e => setRigPick(e.target.value)}>{choices.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select></label>
       {effective.data && <span className="observing-mode">{effective.data.order_source ? `Following ${effective.data.order_source.scope} order` : 'Previous scheduling policy active'}</span>}
     </div>
     {(settings.error || effective.error || defaults.error || available.error) && <p role="alert">{errorText(settings.error ?? effective.error ?? defaults.error ?? available.error)}</p>}
     {id && settings.isPending && <p role="status">Loading priority...</p>}
-    {settings.data && defaults.data && (scope === 'global' || effective.data) && <PriorityEditor key={`${scope}:${id}`} initial={settings.data} globalOrder={globalOrder} projects={projects} currentProject={projectId} sites={defaults.data.sites} />}
+    {settings.data && defaults.data && (scope === 'global' || effective.data) && <PriorityEditor key={`${scope}:${id}`} initial={settings.data} globalOrder={globalOrder} projects={projects} currentProject={projectId} sites={defaults.data.sites} onEditing={setEditing} />}
     </details>
   </section>;
 }
 
-function PriorityEditor({ initial, globalOrder, projects, currentProject, sites }: { initial: ObservingSettings; globalOrder: string[]; projects: Project[]; currentProject: string; sites: Project[] }) {
+function PriorityEditor({ initial, globalOrder, projects, currentProject, sites, onEditing }: { initial: ObservingSettings; globalOrder: string[]; projects: Project[]; currentProject: string; sites: Project[]; onEditing?: (editing: boolean) => void }) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const [draft, setDraft] = useState(initial);
+  const [stored, setStored] = useState(initial);
   const [saved, setSaved] = useState(false);
   const inherit = initial.scope !== 'global' && draft.project_order == null;
   const site = useQuery({ queryKey: ['observingSettings', 'site', draft.site_id], queryFn: () => apiClient.getObservingSettings('site', draft.site_id!), enabled: initial.scope === 'rig' && !!draft.site_id, refetchOnWindowFocus: false });
@@ -54,12 +61,27 @@ function PriorityEditor({ initial, globalOrder, projects, currentProject, sites 
   const parentPending = needsSite && (site.isPending || !!site.error);
   const inherited = initial.scope === 'rig' && draft.site_id ? site.data?.project_order ?? globalOrder : globalOrder;
   const list = ordered(projects, draft.project_order ?? inherited);
-  const reload = useMutation({ mutationFn: () => apiClient.getObservingSettings(initial.scope, initial.scope_id), retry: false, onSuccess: fresh => { setDraft(fresh); setSaved(false); save.reset(); } });
+  const reload = useMutation({ mutationFn: () => apiClient.getObservingSettings(initial.scope, initial.scope_id), retry: false, onSuccess: fresh => { setDraft(fresh); setStored(fresh); setSaved(false); save.reset(); } });
   const save = useMutation({ mutationFn: () => apiClient.saveObservingSettings({ ...draft, project_order: inherit ? null : list.map(p => p.id) }), retry: false, onSuccess: result => {
-    setSaved(true); setDraft(result);
+    setSaved(true); setDraft(result); setStored(result);
     client.setQueryData(['observingSettings', result.scope, result.scope_id], result);
     void client.invalidateQueries({ queryKey: ['observingEffective'] });
   } });
+  const unsaved = canWrite && JSON.stringify(draft) !== JSON.stringify(stored);
+  useEffect(() => { onEditing?.(unsaved); }, [unsaved, onEditing]);
+  useEffect(() => () => onEditing?.(false), [onEditing]);
+  const savable = !parentPending && list.length > 0 && list.length <= 256;
+  const managed = useDraftSection('priority', {
+    label: 'Project priority',
+    order: 3,
+    unsaved,
+    save: async () => {
+      if (!savable) return false;
+      try { await save.mutateAsync(); } catch { return false; }
+      return true;
+    },
+    discard: () => { setDraft(stored); setSaved(false); save.reset(); },
+  });
   const change = (patch: Partial<ObservingSettings>) => { setSaved(false); setDraft(current => ({ ...current, ...patch })); };
   const move = (index: number, delta: number) => {
     const ids = list.map(p => p.id);
@@ -79,7 +101,7 @@ function PriorityEditor({ initial, globalOrder, projects, currentProject, sites 
         </li>)}
       </ol>
       {list.length === 0 && <p>No projects.</p>}
-      <button type="submit" disabled={list.length === 0 || list.length > 256 || parentPending}><Save size={16} />{save.isPending ? 'Saving...' : 'Save priority'}</button>
+      {!managed && <button type="submit" disabled={list.length === 0 || list.length > 256 || parentPending}><Save size={16} />{save.isPending ? 'Saving...' : 'Save priority'}</button>}
       {needsSite && site.isPending && <p role="status">Loading site priority...</p>}
       {needsSite && site.error && <p role="alert">{errorText(site.error)} <button type="button" onClick={() => void site.refetch()}><RefreshCw size={16} />Retry</button></p>}
       {list.length > 256 && <p role="alert">A priority order supports up to 256 projects.</p>}

@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import { AccessContext, useAccess } from '../../auth/access';
 import ActivationPanel from '../director/ActivationPanel';
+import { DraftProvider } from '../director/pageDrafts';
+import { useDraftSection, usePageDrafts } from '../director/pageDraftsState';
 import type { DirectorActivationReport } from '../../api/directorTypes';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
@@ -43,13 +45,23 @@ function fixture(conflict = false, activated = false) {
   );
   return { applies, previewCount: () => previews, pushCount: () => pushes };
 }
+/** A page with one draft section, as the project workspace has. */
+function Page({ unsaved, save }: { unsaved: boolean; save: () => Promise<boolean> }) {
+  const drafts = usePageDrafts();
+  return <DraftProvider drafts={drafts}><Section unsaved={unsaved} save={save} /><ActivationPanel projectId="project" /></DraftProvider>;
+}
+function Section({ unsaved, save }: { unsaved: boolean; save: () => Promise<boolean> }) {
+  useDraftSection('plan', { label: 'Plan', order: 2, unsaved, save, discard: () => {} });
+  return null;
+}
 function mount(canWrite = true, plan: { unsavedPlan?: boolean; savePlan?: () => Promise<boolean> } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   function Wrapper({ children }: { children: ReactNode }) {
     const access = useAccess();
     return <QueryClientProvider client={client}><AccessContext.Provider value={{ ...access, canWrite }}>{children}</AccessContext.Provider></QueryClientProvider>;
   }
-  return render(<ActivationPanel projectId="project" {...plan} />, { wrapper: Wrapper });
+  const node = plan.savePlan ? <Page unsaved={!!plan.unsavedPlan} save={plan.savePlan} /> : <ActivationPanel projectId="project" />;
+  return render(node, { wrapper: Wrapper });
 }
 
 describe('Activation panel', () => {
@@ -123,21 +135,21 @@ describe('Activation panel', () => {
     const order: string[] = [];
     const savePlan = vi.fn(async () => { order.push(`save at ${previewCount()} previews`); return true; });
     const view = mount(true, { unsavedPlan: true, savePlan });
-    expect(await screen.findByRole('note')).toHaveTextContent('unsaved changes');
-    fireEvent.click(screen.getByRole('button', { name: 'Save plan and preview' }));
+    expect(await screen.findByRole('note')).toHaveTextContent('Unsaved changes in Plan');
+    fireEvent.click(screen.getByRole('button', { name: 'Save and preview activation' }));
     await waitFor(() => expect(previewCount()).toBe(1));
     expect(order).toEqual(['save at 0 previews']);
 
     // An edit after the preview: the preview is of the plan before it.
     expect(screen.queryByRole('button', { name: /Apply to rig databases/ })).not.toBeInTheDocument();
-    view.rerender(<ActivationPanel projectId="project" unsavedPlan={false} savePlan={savePlan} />);
+    view.rerender(<Page unsaved={false} save={savePlan} />);
     expect(await screen.findByRole('button', { name: /Apply to rig databases/ })).toBeInTheDocument();
   });
 
   it('does not preview a plan that could not be saved', async () => {
     const { previewCount } = fixture();
     mount(true, { unsavedPlan: true, savePlan: async () => false });
-    fireEvent.click(await screen.findByRole('button', { name: 'Save plan and preview' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save and preview activation' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('could not be saved');
     expect(previewCount()).toBe(0);
   });

@@ -1,11 +1,13 @@
 import { type MutableRefObject, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
 import { AccessContext, useAccess } from '../../auth/access';
 import PlanEditor from '../director/PlanEditor';
+import { DraftProvider } from '../director/pageDrafts';
+import { usePageDrafts } from '../director/pageDraftsState';
 import type { DirectorPlanDraft } from '../../api/directorTypes';
 import { convertGoal, framesFor, rigTotals } from '../director/planModel';
 
@@ -43,13 +45,20 @@ function fixture(existing: DirectorPlanDraft | null = null, mosaic: { rows: numb
   );
   return { saves };
 }
-function mount(canWrite = true, extra: { saveRef?: MutableRefObject<(() => Promise<boolean>) | null>; onUnsavedChange?: (unsaved: boolean) => void } = {}) {
+type Drafts = ReturnType<typeof usePageDrafts>;
+/** The editor on a page that keeps drafts, as the project workspace does. */
+function OnPage({ out }: { out: MutableRefObject<Drafts | null> }) {
+  const drafts = usePageDrafts();
+  out.current = drafts;
+  return <DraftProvider drafts={drafts}><PlanEditor projectId="project" /></DraftProvider>;
+}
+function mount(canWrite = true, extra: { drafts?: MutableRefObject<Drafts | null> } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   function Wrapper({ children }: { children: ReactNode }) {
     const access = useAccess();
     return <QueryClientProvider client={client}><AccessContext.Provider value={{ ...access, canWrite }}>{children}</AccessContext.Provider></QueryClientProvider>;
   }
-  return render(<PlanEditor projectId="project" {...extra} />, { wrapper: Wrapper });
+  return render(extra.drafts ? <OnPage out={extra.drafts} /> : <PlanEditor projectId="project" />, { wrapper: Wrapper });
 }
 
 describe('Plan editor', () => {
@@ -211,33 +220,38 @@ describe('Plan editor', () => {
     expect(framesFor({ kind: 'hours', value: 1 }, 7)).toBe(515);
     expect(rigTotals(stored)[0]).toEqual({ rigId: redcat.rig.id, frames: 40, hours: 1 });
   });
-  it('says when it holds unsaved edits, and saves them for activation', async () => {
-    // A raised goal left unsaved was what activation lost: it reads the
-    // saved plan. The editor now says it has edits and saves them on request.
+  it('hands its edits to the page save bar and leaves out its own Save button', async () => {
+    // Activation reads the saved plan: a raised goal left unsaved was what
+    // it lost. On the project page the plan saves through the page's bar.
     const objective = { id: 'o1', bandpass_id: 'luminance', purpose: 'unsaturated_stars', goal: { kind: 'frames' as const, value: 40 }, priority: 2 };
     const stored: DirectorPlanDraft = { project_id: 'project', revision: 4, objectives: [objective], updated_at_ms: 1, contributions: [
       { id: 'c1', objective_id: 'o1', rig_id: redcat.rig.id, template: { template_guid: null, template_id: 3, name: 'Lum', filter_name: 'L', gain: 100, offset: 30, bin: 1, readout_mode: null }, exposure_seconds: 90, panel_ids: [], enabled: true },
     ] };
     const { saves } = fixture(stored);
-    const saveRef: MutableRefObject<(() => Promise<boolean>) | null> = { current: null };
-    const unsaved: boolean[] = [];
-    mount(true, { saveRef, onUnsavedChange: value => unsaved.push(value) });
+    const drafts: MutableRefObject<Drafts | null> = { current: null };
+    mount(true, { drafts });
     const goal = await screen.findByLabelText('Objective goal');
     expect(goal).toHaveValue(40);
-    await waitFor(() => expect(saveRef.current).not.toBeNull());
-    expect(await saveRef.current!()).toBe(true);
-    expect(saves).toHaveLength(0);
+    expect(screen.queryByRole('button', { name: 'Save plan' })).not.toBeInTheDocument();
+    await waitFor(() => expect(drafts.current?.sections.map(section => section.id)).toEqual(['plan']));
+    expect(drafts.current!.unsaved).toHaveLength(0);
 
     // Typed over: emptied, then a new number, not a 0 in the way.
     fireEvent.change(goal, { target: { value: '' } });
     expect(goal).toHaveValue(null);
     fireEvent.change(goal, { target: { value: '120' } });
     expect(goal).toHaveValue(120);
-    await waitFor(() => expect(unsaved.at(-1)).toBe(true));
+    await waitFor(() => expect(drafts.current!.unsaved.map(section => section.label)).toEqual(['Plan']));
 
-    expect(await saveRef.current!()).toBe(true);
+    expect(await drafts.current!.saveAll()).toBeNull();
     expect(saves).toHaveLength(1);
     expect(saves[0].objectives[0].goal).toEqual({ kind: 'frames', value: 120 });
-    await waitFor(() => expect(unsaved.at(-1)).toBe(false));
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(0));
+
+    // Discard puts the saved plan back.
+    fireEvent.change(goal, { target: { value: '7' } });
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(1));
+    act(() => drafts.current!.discardAll());
+    await waitFor(() => expect(goal).toHaveValue(120));
   });
 });
