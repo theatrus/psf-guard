@@ -1997,6 +1997,12 @@ same night and allocation budget with fresh preparation/selection, not replayed
 hardware commands. Automatic reconciliation of uncertain capture/save outcomes,
 restart re-admission, rig-inherited policy and cloud classification remain
 separate work. Native simulator evidence belongs in the plugin validation guide.
+The first adapter increment covers launched allocations at settled boundaries.
+Startup and between-allocation admission still require Safe/Open conditions;
+they do not yet persist a resumable idle hold. A settled hold that reaches night
+end returns to NINA's following steps without moving a mount under a closed roof.
+The separate recovery event journal is still local; capture/preparation batch
+replay and live phase reporting do not imply recovery-event ingestion by PSF Guard.
 
 Add an explicit `hold_and_resume` policy alongside `stop_for_night`, inherited
 from rig defaults with a Session override. A closed roof is never permission to
