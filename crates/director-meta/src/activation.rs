@@ -34,6 +34,17 @@ pub struct ActivatedRig {
     pub plans: Vec<ActivatedPlan>,
 }
 
+/// A rig turned off in the plan whose Target Scheduler project activation
+/// set Inactive. Turning the rig on again sets the project Active; one the
+/// operator made Inactive is not listed and stays as they left it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct InactiveRig {
+    pub rig_id: Uuid,
+    pub catalog_id: Uuid,
+    pub project_guid: Uuid,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Activation {
@@ -46,13 +57,20 @@ pub struct Activation {
     pub coordinator_instance_id: Uuid,
     pub applied_at_ms: u64,
     pub rigs: Vec<ActivatedRig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inactive_rigs: Vec<InactiveRig>,
 }
 
 fn validate_activation(activation: &Activation) -> Result<(), Error> {
     valid_id(activation.project_id)?;
     valid_id(activation.coordinator_instance_id)?;
-    if activation.rigs.len() > 64 {
+    if activation.rigs.len() > 64 || activation.inactive_rigs.len() > 64 {
         return Err(Error::InvalidInput);
+    }
+    for rig in &activation.inactive_rigs {
+        valid_id(rig.rig_id)?;
+        valid_id(rig.catalog_id)?;
+        valid_id(rig.project_guid)?;
     }
     for rig in &activation.rigs {
         valid_id(rig.rig_id)?;

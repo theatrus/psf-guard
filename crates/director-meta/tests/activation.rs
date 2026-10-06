@@ -1,5 +1,5 @@
 use psf_guard_director_meta::{
-    activation::{ActivatedPlan, ActivatedRig, ActivatedTarget, Activation},
+    activation::{ActivatedPlan, ActivatedRig, ActivatedTarget, Activation, InactiveRig},
     Error, MetaStore, Uuid,
 };
 use tempfile::TempDir;
@@ -36,6 +36,11 @@ fn activations_advance_a_revision_and_read_back_after_reopen() {
                 required_frames: 72,
             }],
         }],
+        inactive_rigs: vec![InactiveRig {
+            rig_id: Uuid::new_v4(),
+            catalog_id: Uuid::new_v4(),
+            project_guid: Uuid::new_v4(),
+        }],
     };
     assert!(matches!(
         store.record_activation(&Activation {
@@ -57,4 +62,18 @@ fn activations_advance_a_revision_and_read_back_after_reopen() {
     drop(store);
     let store = MetaStore::open(&path).unwrap();
     assert_eq!(store.activation(project.id).unwrap(), Some(second));
+    // A record written before rigs could be turned off reads with none.
+    let mut old = serde_json::to_value(&record).unwrap();
+    old.as_object_mut().unwrap().remove("inactive_rigs");
+    let old: Activation = serde_json::from_value(old).unwrap();
+    assert!(old.inactive_rigs.is_empty());
+    // And an empty list is left out, so older builds still read new records.
+    let none = Activation {
+        inactive_rigs: vec![],
+        ..record
+    };
+    assert!(serde_json::to_value(&none)
+        .unwrap()
+        .get("inactive_rigs")
+        .is_none());
 }
