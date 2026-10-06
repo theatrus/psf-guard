@@ -1061,22 +1061,30 @@ legend and the nights table folded under **Legend and the next nights**.
 The server spreads the rigs and their nights over its thread pool and
 prepares each instant's Earth-side astrometry once for the Sun, the Moon
 and the target, so a week for two rigs answers in well under a tenth of a
-second. A verdict line says whether the target is visible tonight and for
-how long: dark hours (Sun below −12°), hours the target sits above the rig's
-minimum altitude and its custom horizon when it has one, the peak altitude,
-the Moon's phase, separation and hours up. Below it an altitude chart draws
+second. Tonight is the night under way: it runs from local noon to the next,
+so in the afternoon it is the coming night and after midnight the one that
+began the evening before. A verdict line says whether the target is visible
+tonight and for how long: dark hours (Sun below −12°), hours the target sits
+inside the limits Target Scheduler applies there, the peak altitude, the
+Moon's phase, separation and hours up. Those limits are the higher of the
+rig's and the plan's minimum altitude, the lower maximum, the rig's custom
+horizon raised by the plan's offset once the plan's
+[scheduling limits](#scheduling-limits) turn **Custom horizon** on, the
+plan's meridian window, and the rig's meridian pause. A rig framed
+separately is timed at its own center. Below it an altitude chart draws
 the night from an hour before dusk to an hour after dawn: the target's track,
 the horizon curve at the target's azimuth (or the flat minimum), the Moon's
 track dashed, a marker at the target's meridian transit with the rig's
 meridian pause drawn as a broken red stretch and left out of the visible
 hours, and shaded bands for darkness and astronomical night. A table
-gives the same numbers for the coming week, and a rig in the plan gets an
-estimate of the nights it needs at this week's rate. Pick another rig from the
-list to compare sites.
+gives the same numbers for the coming week, and a rig in the plan gets the
+hours it still owes, its goal less the frames Target Scheduler already
+accepted there, and the nights that takes at this week's rate. Pick another
+rig from the list to compare sites.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
-| POST | `/projects/{id}/feasibility` | Optional `nights` (1 to 14, default 7), `center` (defaults to the saved framing's center) and `start_ms`. For every rig with a site: `nights` summaries, tonight's `curve` (five-minute samples of Sun, Moon and target altitude with the horizon at each azimuth), `hours_needed` from the plan and `nights_to_complete`; rigs without a site are named in `warnings`. `422` until there is a center to time. |
+| POST | `/projects/{id}/feasibility` | Optional `nights` (1 to 14, default 7), `center` (defaults to the saved framing's center; a rig framed on its own center is timed there) and `start_ms` (default now; the first night is the one under way then). For every rig with a site: the `center` it was timed at, the applied `limits`, `nights` summaries, tonight's `curve` (five-minute samples of Sun, Moon and target altitude with the horizon at each azimuth), `hours_needed` (the plan's goal less accepted frames) and `nights_to_complete`; rigs without a site are named in `warnings`. `400` for a `start_ms` outside 1970-01-02 to 2099-01-01; `422` until there is a center to time. |
 
 Times come from the shared core's planning-grade Sun and Moon positions and
 the same horizon and limit rules the rig's geometry applies; they are
