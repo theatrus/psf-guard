@@ -1364,8 +1364,10 @@ async fn turning_a_contribution_off_turns_its_rows_off() {
     );
 }
 
-/// A rig whose every contribution is off is visited too, so the On switch
-/// reaches Target Scheduler; a rig never given rows is not listed.
+/// A rig whose every contribution is off has its Target Scheduler project
+/// set Inactive, so the On switch reaches Target Scheduler; its rows stay as
+/// they are. Turning it on again sets the project Active, but a project the
+/// operator made Inactive stays theirs. A rig never given rows is not listed.
 #[tokio::test]
 async fn turning_a_rig_off_turns_its_rows_off() {
     let a = activated().await;
@@ -1445,31 +1447,97 @@ async fn turning_a_rig_off_turns_its_rows_off() {
         .iter()
         .find(|r| r["rig"]["id"] == other_rig.to_string())
         .unwrap_or_else(|| panic!("{data}"));
-    let off_actions: Vec<&str> = off["changes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|c| c["action"].as_str().unwrap())
-        .collect();
-    assert_eq!(off_actions, ["disable", "disable"], "{off}");
+    let changes_of = |rig: &Value| -> Vec<String> {
+        rig["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                format!(
+                    "{} {}",
+                    c["kind"].as_str().unwrap(),
+                    c["action"].as_str().unwrap()
+                )
+            })
+            .collect()
+    };
+    assert_eq!(changes_of(off), ["project disable"], "{off}");
     assert_eq!(off["applied"], true, "{off}");
+    assert_eq!(
+        count(&other_db, "SELECT count(*) FROM project WHERE state=2"),
+        1
+    );
     assert_eq!(
         count(
             &other_db,
-            "SELECT count(*) FROM exposureplan WHERE enabled=0"
+            "SELECT count(*) FROM exposureplan WHERE enabled=1"
         ),
-        2
+        2,
+        "its rows stay as they are"
     );
     assert_eq!(
-        count(&a.db, "SELECT count(*) FROM exposureplan WHERE enabled=1"),
-        2
+        count(&a.db, "SELECT count(*) FROM project WHERE state=1"),
+        1
     );
-    // The rig that is off is no longer in the activation record.
-    let store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
-    let record = store.activation(a.project).unwrap().unwrap();
+    {
+        let store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let record = store.activation(a.project).unwrap().unwrap();
+        assert_eq!(
+            record.rigs.iter().map(|r| r.rig_id).collect::<Vec<_>>(),
+            [a.rig]
+        );
+        assert_eq!(
+            record
+                .inactive_rigs
+                .iter()
+                .map(|r| r.rig_id)
+                .collect::<Vec<_>>(),
+            [other_rig]
+        );
+    }
+    // Still off: nothing more to do, and the record still knows.
+    let data = activate("still off").await;
+    assert_eq!(data["rigs"].as_array().unwrap().len(), 1, "{data}");
+    {
+        let store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        assert_eq!(
+            store
+                .activation(a.project)
+                .unwrap()
+                .unwrap()
+                .inactive_rigs
+                .len(),
+            1
+        );
+    }
+    // On again: Active again.
+    set_rigs(&[a.rig, other_rig], &[]);
+    let data = activate("on again").await;
+    let back = data["rigs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["rig"]["id"] == other_rig.to_string())
+        .unwrap();
+    assert!(
+        changes_of(back).contains(&"project update".to_string()),
+        "{back}"
+    );
     assert_eq!(
-        record.rigs.iter().map(|r| r.rig_id).collect::<Vec<_>>(),
-        [a.rig]
+        count(&other_db, "SELECT count(*) FROM project WHERE state=1"),
+        1
+    );
+    // Made Inactive by hand in Target Scheduler, then the rig turned off and
+    // on again: the operator's Inactive stands.
+    other_db.execute("UPDATE project SET state=2", []).unwrap();
+    set_rigs(&[a.rig], &[other_rig]);
+    let data = activate("off over a hand-made inactive").await;
+    assert_eq!(data["rigs"].as_array().unwrap().len(), 1, "{data}");
+    set_rigs(&[a.rig, other_rig], &[]);
+    activate("on over a hand-made inactive").await;
+    assert_eq!(
+        count(&other_db, "SELECT count(*) FROM project WHERE state=2"),
+        1
     );
 }
 

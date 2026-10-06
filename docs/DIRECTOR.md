@@ -863,11 +863,16 @@ activation made for a contribution the plan no longer has (a rig unticked and
 ticked again, or a bandpass changed). A template activation creates is listed
 under `template`.
 
-A rig turned off in the plan, or one of its objectives turned off, has its
-exposure plans from earlier activations turned off (`enabled = 0`), so
-Target Scheduler stops taking them; their frames and grades stay. A rig that
-is off is visited only for this, is listed only when it has rows to turn off,
-and leaves the activation record. Turning it on again turns them back on.
+A rig turned off in the plan has its Target Scheduler project set Inactive
+(`disable`), so the scheduler stops taking it; its targets, exposure plans,
+frames and grades stay as they are. Turning the rig on again sets the project
+Active. A project already Inactive or Closed in Target Scheduler is left as
+the operator set it, and stays that way when the rig comes back on. A rig
+that is off is listed only when its project changes, and leaves the
+activation record's rigs; the record keeps the projects it set Inactive
+(`inactive_rigs`). An objective turned off on a rig that stays on turns off
+that objective's exposure plans (`enabled = 0`) instead; turning it on again
+turns them back on.
 
 A second activation updates the same rows in place: coordinates, angle,
 exposure and desired counts change, names the operator edited stay, and

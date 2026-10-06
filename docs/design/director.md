@@ -1390,8 +1390,9 @@ the plan are left alone; they are listed under the rig as "not in this plan".
 A project inactive or closed in Target Scheduler matches, and reads "Inactive
 in Target Scheduler".
 
-Three activation fixes came first, and are built: a rig or objective turned
-off turns its earlier rows off instead of leaving them `enabled=1`; an
+Three activation fixes came first, and are built: a rig turned off sets its
+Target Scheduler project Inactive, and an objective turned off on a rig that
+stays on turns its rows off, instead of leaving them `enabled=1`; an
 existing row that already holds the plan's values reads "unchanged" instead
 of "taken over"; and a row activation would take over without a GUID
 refuses the rig until Fill in GUIDs repairs it, instead of a GUID minted in

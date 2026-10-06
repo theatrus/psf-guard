@@ -338,9 +338,11 @@
 
 ## Changed
 
-- Turning a rig off in a plan, or one of its objectives, and activating
-  again turns its exposure plans off in Target Scheduler, so it stops taking
-  them. Frames and grades stay. Before, those rows stayed on.
+- Turning a rig off in a plan and activating again sets its Target
+  Scheduler project Inactive, and turning it on again sets it Active. A
+  project you made Inactive yourself stays Inactive. Turning off one
+  objective on a rig that stays on turns off that objective's exposure plans.
+  Before, all of these kept running.
 - Activation lists a Target Scheduler row that already holds the plan's
   values as **Unchanged** rather than **Taken over**.
 - Activation no longer makes up GUIDs for rows it takes over. A rig with such

@@ -16,7 +16,7 @@ use psf_guard_director_core::{
     framing::{FramingRequest, Panel},
 };
 use psf_guard_director_meta::{
-    activation::{ActivatedPlan, ActivatedRig, ActivatedTarget, Activation},
+    activation::{ActivatedPlan, ActivatedRig, ActivatedTarget, Activation, InactiveRig},
     catalog::ProjectMapping,
     framing::FramingDraft,
     plan::{Contribution, Goal, Objective, PlanDraft},
@@ -302,8 +302,12 @@ async fn execute(
         for contribution in plan.contributions.iter().filter(|c| c.enabled) {
             by_rig.entry(contribution.rig_id).or_default().push(contribution);
         }
-        // Contributions turned off: the rows they were given are turned off
-        // too, on a rig that is still on and on one that is now off.
+        // The last activation: which rigs had rows, and which projects it
+        // set Inactive when their rig was turned off.
+        let previous = store.activation(id)?;
+        // Contributions turned off on a rig that stays on: their rows are
+        // turned off. A rig with all of them off has its project set
+        // Inactive instead.
         let mut off_by_rig: BTreeMap<Uuid, Vec<&Contribution>> = BTreeMap::new();
         for contribution in plan.contributions.iter().filter(|c| !c.enabled) {
             off_by_rig.entry(contribution.rig_id).or_default().push(contribution);
@@ -472,6 +476,7 @@ async fn execute(
                         position_angle_degrees: layout.position_angle_degrees,
                         contributions,
                         turned_off,
+                        reactivate: previous.as_ref().is_some_and(|p| p.inactive_rigs.iter().any(|r| r.rig_id == *rig_id)),
                         rig_id: *rig_id,
                         catalog: catalog.identity,
                         existing_link,
@@ -523,13 +528,27 @@ async fn execute(
             });
             pending.push((*rig_id, connection, Some(outcome.record), outcome.created_project));
         }
-        // A rig with every contribution off: Target Scheduler stops taking
-        // the rows it was given. One that was never given any is not listed.
-        for (rig_id, turned_off) in off_by_rig.iter().filter(|(rig, _)| !by_rig.contains_key(rig)) {
-            let Some(catalog) = rig_catalogs.get(rig_id) else {
+        // A rig with every contribution off: its Target Scheduler project
+        // goes Inactive, so the scheduler stops taking it; its rows, frames
+        // and grades stay. A rig never given a project is not listed.
+        let mut inactive: Vec<InactiveRig> = Vec::new();
+        for rig_id in off_by_rig.keys().filter(|rig| !by_rig.contains_key(rig)) {
+            let was = previous.as_ref().and_then(|p| {
+                p.rigs
+                    .iter()
+                    .find(|r| r.rig_id == *rig_id)
+                    .map(|r| InactiveRig { rig_id: r.rig_id, catalog_id: r.catalog_id, project_guid: r.project_guid })
+                    .or_else(|| p.inactive_rigs.iter().find(|r| r.rig_id == *rig_id).cloned())
+            });
+            let Some(was) = was else {
                 continue;
             };
-            let Some(rig) = store.rig(*rig_id)? else {
+            let already = previous.as_ref().is_some_and(|p| p.inactive_rigs.iter().any(|r| r.rig_id == *rig_id));
+            let (Some(catalog), Some(rig)) = (rig_catalogs.get(rig_id), store.rig(*rig_id)?) else {
+                // Its database is gone from this server; keep what we know.
+                if already {
+                    inactive.push(was);
+                }
                 continue;
             };
             let profile = store.rig_profile(*rig_id)?;
@@ -542,11 +561,24 @@ async fn execute(
             .map_err(StoreError::from)?;
             connection.busy_timeout(Duration::from_secs(2))?;
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let project_guid = was.project_guid.to_string();
             let mut changes = Vec::new();
-            match turn_off(&tx, turned_off, &mut changes) {
-                Ok(()) => {}
-                Err(RigError::Skip(_)) => {}
-                Err(RigError::Failed(error)) => return Err(error.into()),
+            if let Some((row_id, name)) = project_row(&tx, &project_guid)? {
+                    let state: i64 = tx.query_row("SELECT IFNULL(state, 0) FROM project WHERE Id=?1", [row_id], |row| row.get(0))?;
+                    // Draft or Active goes Inactive. One already Inactive
+                    // or Closed by hand is the operator's and stays theirs.
+                    if state == 0 || state == 1 {
+                        tx.execute("UPDATE project SET state=2 WHERE Id=?1", [row_id])?;
+                        changes.push(Change {
+                            kind: "project",
+                            action: "disable",
+                            name,
+                            detail: "Inactive in Target Scheduler while this rig is off in the plan".into(),
+                        });
+                        inactive.push(was);
+                    } else if already && state == 2 {
+                        inactive.push(was);
+                    }
             }
             if changes.is_empty() {
                 tx.rollback()?;
@@ -636,6 +668,7 @@ async fn execute(
                 coordinator_instance_id: service.instance_id,
                 applied_at_ms: now,
                 rigs,
+                inactive_rigs: inactive,
             })?;
             activation_revision = Some(recorded.revision);
             for link in links {
@@ -839,6 +872,9 @@ struct Inputs<'a> {
     contributions: &'a [&'a Contribution],
     /// This rig's contributions that are off; the rows they own are turned off.
     turned_off: &'a [&'a Contribution],
+    /// The last activation set this rig's project Inactive when the rig was
+    /// turned off; now that it is on, the project goes Active again.
+    reactivate: bool,
     rig_id: Uuid,
     catalog: CatalogIdentity,
     existing_link: Option<Uuid>,
@@ -926,15 +962,25 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
     let project_guid = match owned {
         Some(guid) => {
             if project_row(tx, &guid)?.is_some() {
+                let state: i64 = tx.query_row(
+                    "SELECT IFNULL(state, 0) FROM project WHERE guid=?1",
+                    [&guid],
+                    |row| row.get(0),
+                )?;
+                let back_on = inputs.reactivate && state == 2;
                 tx.execute(
-                    "UPDATE project SET isMosaic=?2, state=CASE WHEN state=0 THEN 1 ELSE state END WHERE guid=?1",
-                    params![guid, i32::from(mosaic)],
+                    "UPDATE project SET isMosaic=?2, state=CASE WHEN state=0 OR (?3 AND state=2) THEN 1 ELSE state END WHERE guid=?1",
+                    params![guid, i32::from(mosaic), back_on],
                 )?;
                 changes.push(Change {
                     kind: "project",
-                    action: "unchanged",
+                    action: if back_on { "update" } else { "unchanged" },
                     name: project_name.clone(),
-                    detail: "Director's project from the last activation".into(),
+                    detail: if back_on {
+                        "Active again in Target Scheduler: this rig is on in the plan".into()
+                    } else {
+                        "Director's project from the last activation".into()
+                    },
                 });
                 guid
             } else {
