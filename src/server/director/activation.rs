@@ -458,17 +458,37 @@ async fn execute(
                 continue;
             };
             let rig_panels = if layout.own {
-                FramingRequest {
+                // A separate framing sized from the rig's own field is only
+                // laid out here; one the core refuses (too wide a mosaic)
+                // is this rig's warning, not a refused request.
+                match (FramingRequest {
                     center: layout.center,
                     position_angle_degrees: layout.position_angle_degrees,
                     panel: layout.panel,
                     mosaic: layout.mosaic,
                     overlays: vec![],
                     view: None,
-                }
+                })
                 .preview()
-                .map_err(|_| Error::Invalid)?
-                .panels
+                {
+                    Ok(preview) => preview.panels,
+                    Err(error) => {
+                        reports.push(RigReport {
+                            rig,
+                            catalog_slug: Some(catalog.context.id.clone()),
+                            catalog_name: catalog.context.name.clone(),
+                            profile_id: None,
+                            changes: vec![],
+                            warnings: vec![format!(
+                                "Its separate framing cannot be laid out ({error:?}); make its grid smaller or its panels narrower in Framing."
+                            )],
+                            applied: false,
+                            push: None,
+                        });
+                        carried.extend(previous_rig(*rig_id));
+                        continue;
+                    }
+                }
             } else {
                 panels.clone()
             };
@@ -688,21 +708,34 @@ async fn execute(
         if pending.iter().all(|(_, _, record, _)| record.is_none()) {
             warnings.push("No rig database can take this plan yet.".into());
         }
+        // The digest covers what Apply will write, not the frame counts the
+        // preview quotes (a frame saved between the two would refuse Apply
+        // for nothing), and each rig's profile revision, since its field
+        // sizes panels below what the text shows.
+        let mut profile_revisions = Vec::new();
+        for r in &reports {
+            profile_revisions.push(store.rig_profile(r.rig.id)?.map(|p| p.revision));
+        }
         let bytes = serde_json::to_vec(&(
-            "activation-v1",
+            "activation-v2",
             id,
             framing.revision,
             plan.revision,
             reports
                 .iter()
-                .map(|r| {
+                .zip(&profile_revisions)
+                .map(|(r, profile_revision)| {
                     (
                         r.rig.id,
                         &r.catalog_slug,
                         &r.profile_id,
-                        &r.changes,
+                        r.changes
+                            .iter()
+                            .map(|c| (c.kind, c.action, &c.name, without_frame_counts(&c.detail)))
+                            .collect::<Vec<_>>(),
                         &r.warnings,
                         r.push.as_ref().map(|p| &p.peer_id),
+                        profile_revision,
                     )
                 })
                 .collect::<Vec<_>>(),
@@ -1081,7 +1114,7 @@ enum RigError {
 // the other rigs go ahead.
 impl From<rusqlite::Error> for RigError {
     fn from(error: rusqlite::Error) -> Self {
-        Self::Skip(format!("Its database refused the write: {error}."))
+        Self::Skip(format!("Its database could not be read or written: {error}."))
     }
 }
 impl From<Error> for RigError {
@@ -1151,18 +1184,38 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                     |row| row.get(0),
                 )?;
                 let back_on = inputs.reactivate && state == 2;
-                tx.execute(
-                    "UPDATE project SET isMosaic=?2, state=CASE WHEN state=0 OR (?3 AND state=2) THEN 1 ELSE state END WHERE guid=?1",
-                    params![guid, i32::from(mosaic), back_on],
+                let was_mosaic: i64 = tx.query_row(
+                    "SELECT IFNULL(isMosaic, 0) FROM project WHERE guid=?1",
+                    [&guid],
+                    |row| row.get(0),
                 )?;
+                // One rule on both paths: a Draft goes Active, an Inactive
+                // one only when Director set it so; the mosaic flag follows
+                // the panels. Any change is reported as one.
+                let mut notes = Vec::new();
+                if state == 0 {
+                    notes.push("Draft → Active");
+                }
+                if back_on {
+                    notes.push("Active again: this rig is on in the plan");
+                }
+                if (was_mosaic != 0) != mosaic {
+                    notes.push(if mosaic { "now a mosaic" } else { "no longer a mosaic" });
+                }
+                if !notes.is_empty() {
+                    tx.execute(
+                        "UPDATE project SET isMosaic=?2, state=CASE WHEN state=0 OR (?3 AND state=2) THEN 1 ELSE state END WHERE guid=?1",
+                        params![guid, i32::from(mosaic), back_on],
+                    )?;
+                }
                 changes.push(Change {
                     kind: "project",
-                    action: if back_on { "update" } else { "unchanged" },
+                    action: if notes.is_empty() { "unchanged" } else { "update" },
                     name: project_name.clone(),
-                    detail: if back_on {
-                        "Active again in Target Scheduler: this rig is on in the plan".into()
-                    } else {
+                    detail: if notes.is_empty() {
                         "Director's project from the last activation".into()
+                    } else {
+                        notes.join("; ")
                     },
                 });
                 guid
@@ -1203,14 +1256,14 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                     }
                 }
                 tx.execute(
-                    "UPDATE project SET isMosaic=CASE WHEN ?2=1 THEN 1 ELSE isMosaic END WHERE guid=?1",
+                    "UPDATE project SET isMosaic=CASE WHEN ?2=1 THEN 1 ELSE isMosaic END, state=CASE WHEN state=0 THEN 1 ELSE state END WHERE guid=?1",
                     params![guid, i32::from(mosaic)],
                 )?;
                 changes.push(Change {
                     kind: "project",
                     action: "update",
                     name: project_row(tx, &guid)?.map(|(_, name)| name).unwrap_or_default(),
-                    detail: "the existing project already linked to this plan; Director now owns its planning rows".into(),
+                    detail: "the existing project already linked to this plan; Director now owns its planning rows, and a Draft goes Active".into(),
                 });
                 guid
             }
@@ -1249,6 +1302,17 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
         ],
     )?;
     let (project_row_id, _) = project_row(tx, &project_guid)?.ok_or(Error::Internal)?;
+    // Rows added to an existing project go under that project's N.I.N.A.
+    // profile, not the file's most common one.
+    let profile_id: String = tx
+        .query_row(
+            "SELECT IFNULL(profileId, '') FROM project WHERE Id=?1",
+            [project_row_id],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .filter(|profile| !profile.is_empty())
+        .unwrap_or(profile_id);
 
     // Targets: one per panel this rig owns, matched by panel id. A
     // contribution with no panel list covers every panel.
@@ -1298,31 +1362,63 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
         let mut shown = name.clone();
         let target_guid = match owned {
             Some(guid) => {
-                let existing: Option<(f64, f64, f64, String)> = tx
+                let existing: Option<(Option<f64>, Option<f64>, Option<f64>, String, i64, i64)> = tx
                     .query_row(
-                        "SELECT ra, dec, rotation, name FROM target WHERE guid=?1",
+                        "SELECT t.ra, t.dec, t.rotation, IFNULL(t.name, ''), IFNULL(t.epochcode, 2),
+                                (SELECT IFNULL(SUM(acquired), 0) FROM exposureplan WHERE targetid = t.Id)
+                         FROM target t WHERE t.guid=?1",
                         [&guid],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
                     )
                     .optional()?;
                 match existing {
-                    Some((ra0, dec0, rot0, name0)) => {
+                    Some((ra0, dec0, rot0, name0, epoch0, frames)) => {
+                        let (ra0, dec0, rot0) = (ra0.unwrap_or(f64::NAN), dec0.unwrap_or(f64::NAN), rot0.unwrap_or(f64::NAN));
                         let same = (ra0 - ra_hours).abs() < 1e-7
                             && (dec0 - dec).abs() < 1e-6
-                            && (rot0 - rotation).abs() < 1e-3;
-                        if !same {
+                            && (rot0 - rotation).abs() < 1e-3
+                            && epoch0 == 2;
+                        // A panel whose place moved by more than a quarter of
+                        // its size (a grid grown or shrunk, a new center)
+                        // is other sky. Moving a target that has frames
+                        // would credit them to the new place, so the new
+                        // place gets a new target and the old one keeps its
+                        // frames; its plans are turned off below.
+                        let moved = separation_degrees(ra0 * 15.0, dec0, ra_hours * 15.0, dec);
+                        let far = !moved.is_finite() || moved > 0.25 * panel_side_degrees(panel);
+                        if !same && far && frames > 0 {
+                            let fresh = new_guid();
+                            insert_target(tx, &fresh, &name, ra_hours, dec, rotation, project_row_id)?;
                             tx.execute(
-                                "UPDATE target SET ra=?2, dec=?3, rotation=?4, projectid=?5 WHERE guid=?1",
-                                params![guid, ra_hours, dec, rotation, project_row_id],
+                                "UPDATE psf_guard_director_target SET panel_id = panel_id || '~' || ?2 WHERE target_guid=?1",
+                                params![guid, inputs.framing.revision as i64],
                             )?;
+                            changes.push(Change {
+                                kind: "target",
+                                action: "create",
+                                name: name.clone(),
+                                detail: format!(
+                                    "{detail}; the panel moved {} from its old target, which keeps its {frames} frames and stops being taken",
+                                    format_distance(moved)
+                                ),
+                            });
+                            fresh
+                        } else {
+                            if !same {
+                                tx.execute(
+                                    "UPDATE target SET ra=?2, dec=?3, rotation=?4, epochcode=2, projectid=?5 WHERE guid=?1",
+                                    params![guid, ra_hours, dec, rotation, project_row_id],
+                                )?;
+                            }
+                            changes.push(Change {
+                                kind: "target",
+                                action: if same { "unchanged" } else { "update" },
+                                name: name0.clone(),
+                                detail,
+                            });
+                            shown = name0;
+                            guid
                         }
-                        changes.push(Change {
-                            kind: "target",
-                            action: if same { "unchanged" } else { "update" },
-                            name: name0.clone(),
-                            detail,
-                        });
-                        shown = name0;
                     }
                     None => {
                         insert_target(tx, &guid, &name, ra_hours, dec, rotation, project_row_id)?;
@@ -1332,32 +1428,46 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                             name: name.clone(),
                             detail,
                         });
+                        guid
                     }
                 }
-                guid
             }
             // Nothing owned yet: a target already in this project (imported
             // from Target Scheduler, or made by hand) is taken over rather
             // than doubled.
             None => match adoptable_target(tx, project_row_id, &name, ra_hours, dec, !mosaic)? {
                 Some(found) => {
-                    let same = (found.ra_hours - ra_hours).abs() < 1e-7
+                    // Director writes J2000 coordinates and plans the target,
+                    // so a JNOW or switched-off target is put right too; the
+                    // program only serves J2000 targets that are on.
+                    let placed = (found.ra_hours - ra_hours).abs() < 1e-7
                         && (found.dec - dec).abs() < 1e-6
                         && (found.rotation - rotation).abs() < 1e-3;
+                    let same = placed && found.epochcode == 2 && found.active;
                     if !same {
                         tx.execute(
-                            "UPDATE target SET ra=?2, dec=?3, rotation=?4 WHERE guid=?1",
+                            "UPDATE target SET ra=?2, dec=?3, rotation=?4, epochcode=2, active=1 WHERE guid=?1",
                             params![found.guid, ra_hours, dec, rotation],
                         )?;
                     }
+                    let mut notes = Vec::new();
+                    if found.epochcode != 2 {
+                        notes.push("now J2000");
+                    }
+                    if !found.active {
+                        notes.push("turned on");
+                    }
+                    let notes = if notes.is_empty() { String::new() } else { format!("; {}", notes.join(", ")) };
                     changes.push(Change {
                         kind: "target",
                         action: if same { "unchanged" } else { "adopt" },
                         name: found.name.clone(),
                         detail: if same {
                             format!("already in Target Scheduler at {detail}")
+                        } else if placed {
+                            format!("takes over the existing target at {detail}{notes}")
                         } else {
-                            format!("takes over the existing target, moving it to {detail}")
+                            format!("takes over the existing target, moving it to {detail}{notes}")
                         },
                     });
                     shown = found.name;
@@ -1609,8 +1719,8 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
             plans.push(ActivatedPlan {
                 contribution_id: contribution.id,
                 objective_id: objective.id,
-                target_guid: Uuid::parse_str(target_guid).map_err(|_| Error::Internal)?,
-                exposureplan_guid: Uuid::parse_str(&plan_guid).map_err(|_| Error::Internal)?,
+                target_guid: Uuid::parse_str(target_guid).map_err(|_| bad_guid(target_guid))?,
+                exposureplan_guid: Uuid::parse_str(&plan_guid).map_err(|_| bad_guid(&plan_guid))?,
                 required_frames: frames,
                 intent: Some(psf_guard_director_meta::activation::PlanIntent {
                     bandpass_id: objective.bandpass_id.clone(),
@@ -1739,17 +1849,17 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
         record: ActivatedRig {
             rig_id: inputs.rig_id,
             catalog_id: inputs.catalog.id,
-            project_guid: Uuid::parse_str(&project_guid).map_err(|_| Error::Internal)?,
+            project_guid: Uuid::parse_str(&project_guid).map_err(|_| bad_guid(&project_guid))?,
             profile_id,
             targets: targets
                 .into_iter()
                 .map(|(panel_id, guid, _)| {
                     Ok(ActivatedTarget {
                         panel_id,
-                        target_guid: Uuid::parse_str(&guid).map_err(|_| Error::Internal)?,
+                        target_guid: Uuid::parse_str(&guid).map_err(|_| bad_guid(&guid))?,
                     })
                 })
-                .collect::<Result<Vec<_>, Error>>()?,
+                .collect::<Result<Vec<_>, RigError>>()?,
             plans,
         },
         created_project,
@@ -1993,6 +2103,8 @@ struct Adoptable {
     ra_hours: f64,
     dec: f64,
     rotation: f64,
+    epochcode: i64,
+    active: bool,
 }
 
 /// The existing target a panel should take over, if any: the one with the
@@ -2009,12 +2121,13 @@ fn adoptable_target(
     single_panel: bool,
 ) -> Result<Option<Adoptable>, RigError> {
     let mut statement = tx.prepare(
-        "SELECT Id, guid, name, ra, dec, rotation FROM target
+        "SELECT Id, guid, name, ra, dec, rotation, IFNULL(epochcode, 2), COALESCE(active, 1) FROM target
          WHERE projectid=?1
            AND (guid IS NULL OR guid NOT IN (SELECT target_guid FROM psf_guard_director_target))
          ORDER BY Id",
     )?;
-    let rows: Vec<(i64, Option<String>, String, f64, f64, f64)> = statement
+    type Row = (i64, Option<String>, String, f64, f64, f64, i64, bool);
+    let rows: Vec<Row> = statement
         .query_map([project_row_id], |row| {
             Ok((
                 row.get(0)?,
@@ -2022,7 +2135,10 @@ fn adoptable_target(
                 row.get::<_, Option<String>>(2)?.unwrap_or_default(),
                 row.get::<_, Option<f64>>(3)?.unwrap_or(f64::NAN),
                 row.get::<_, Option<f64>>(4)?.unwrap_or(f64::NAN),
-                row.get::<_, Option<f64>>(5)?.unwrap_or(0.0),
+                // A missing angle is written, never taken as 0.
+                row.get::<_, Option<f64>>(5)?.unwrap_or(f64::NAN),
+                row.get(6)?,
+                row.get::<_, i64>(7)? != 0,
             ))
         })?
         .collect::<Result<_, _>>()?;
@@ -2037,7 +2153,7 @@ fn adoptable_target(
     let Some(index) = by_name.or(by_place).or(only) else {
         return Ok(None);
     };
-    let (row_id, guid, found_name, found_ra, found_dec, found_rotation) = rows[index].clone();
+    let (row_id, guid, found_name, found_ra, found_dec, found_rotation, epochcode, active) = rows[index].clone();
     let guid = match guid {
         Some(guid) if !guid.is_empty() => guid,
         _ => return Err(missing_guid(&format!("Target #{row_id} {found_name}"))),
@@ -2048,7 +2164,33 @@ fn adoptable_target(
         ra_hours: found_ra,
         dec: found_dec,
         rotation: found_rotation,
+        epochcode,
+        active,
     }))
+}
+
+/// A change's detail without the "(N of M frames taken)" it quotes.
+fn without_frame_counts(detail: &str) -> String {
+    let mut out = String::with_capacity(detail.len());
+    let mut rest = detail;
+    while let Some(start) = rest.find('(') {
+        let Some(end) = rest[start..].find(')') else { break };
+        let inner = &rest[start..start + end + 1];
+        out.push_str(&rest[..start]);
+        if !inner.ends_with("frames taken)") {
+            out.push_str(inner);
+        }
+        rest = &rest[start + end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A row Director would take over carries a GUID that is not a GUID.
+fn bad_guid(value: &str) -> RigError {
+    RigError::Skip(format!(
+        "A row in its database has the GUID \"{value}\", which is not a GUID; correct it in Target Scheduler."
+    ))
 }
 
 /// A row Director would take over has no GUID. Minting one here would give a
@@ -2250,42 +2392,61 @@ fn resolve_template(
     let moon_matches = |id| -> Result<bool, RigError> {
         Ok(match &choice.moon {
             None => true,
-            Some(wanted) => super::plan::read_moon_policy(tx, id)? == *wanted,
+            Some(wanted) => {
+                super::plan::read_moon_policy(tx, id).map_err(|error| {
+                    RigError::Skip(format!(
+                        "Template #{id}'s Moon avoidance settings cannot be read ({error}); correct them in Target Scheduler."
+                    ))
+                })? == *wanted
+            }
         })
     };
     let mut guid_used = false;
-    if let Some(id) = choice.template_id {
-        let found: Option<String> = tx
-            .query_row(
-                "SELECT filtername FROM exposuretemplate WHERE Id=?1",
-                [id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if found.is_some_and(|filter| {
-            filter
-                .trim()
-                .eq_ignore_ascii_case(choice.filter_name.trim())
-        }) && moon_matches(id)?
-        {
-            return chosen(id);
-        }
-    }
     if let Some(guid) = choice.template_guid {
-        let found: Option<(i64, String)> = tx
+        // A template belongs to one N.I.N.A. profile; the project's own.
+        let found: Option<(i64, String, String)> = tx
             .query_row(
-                "SELECT Id, filtername FROM exposuretemplate WHERE guid=?1",
+                "SELECT Id, IFNULL(filtername, ''), IFNULL(profileId, '') FROM exposuretemplate WHERE guid=?1",
                 [guid.to_string()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
         guid_used = found.is_some();
-        if let Some((id, filter)) = found
+        if let Some((id, filter, profile)) = found
             && filter.eq_ignore_ascii_case(&choice.filter_name)
+            && profile == profile_id
             && moon_matches(id)?
         {
             return chosen(id);
         }
+    }
+    // A Target Scheduler table has no AUTOINCREMENT, so a deleted template's
+    // id can come back on another one. The id is trusted only when the row
+    // still has the chosen settings.
+    let settings_match = |id: i64| -> Result<bool, RigError> {
+        let row: Option<(String, i64, i64, i64, i64, String)> = tx
+            .query_row(
+                "SELECT IFNULL(filtername, ''), IFNULL(gain, -1), IFNULL(offset, -1),
+                        CASE WHEN IFNULL(bin, 1) < 1 THEN 1 ELSE bin END, IFNULL(readoutmode, -1), IFNULL(profileId, '')
+                 FROM exposuretemplate WHERE Id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+            )
+            .optional()?;
+        Ok(row.is_some_and(|(filter, gain, offset, bin, readout, profile)| {
+            filter.trim().eq_ignore_ascii_case(choice.filter_name.trim())
+                && gain == i64::from(choice.gain.unwrap_or(-1))
+                && offset == i64::from(choice.offset.unwrap_or(-1))
+                && bin == i64::from(choice.bin.unwrap_or(1).max(1))
+                && readout == i64::from(choice.readout_mode.unwrap_or(-1))
+                && profile == profile_id
+        }))
+    };
+    if let Some(id) = choice.template_id
+        && settings_match(id)?
+        && moon_matches(id)?
+    {
+        return chosen(id);
     }
     let gain = choice.gain.unwrap_or(-1);
     let offset = choice.offset.unwrap_or(-1);
@@ -2352,6 +2513,32 @@ fn resolve_template(
         },
         created: true,
     })
+}
+
+/// The angle between two sky positions, in degrees.
+fn separation_degrees(ra1: f64, dec1: f64, ra2: f64, dec2: f64) -> f64 {
+    let (ra1, dec1, ra2, dec2) = (ra1.to_radians(), dec1.to_radians(), ra2.to_radians(), dec2.to_radians());
+    let a = ((dec2 - dec1) / 2.0).sin().powi(2) + dec1.cos() * dec2.cos() * ((ra2 - ra1) / 2.0).sin().powi(2);
+    (2.0 * a.sqrt().min(1.0).asin()).to_degrees()
+}
+
+/// A panel's shorter side, in degrees, from its corners.
+fn panel_side_degrees(panel: &Panel) -> f64 {
+    let c = &panel.footprint.corners;
+    let side = |a: &psf_guard_director_core::visibility::IcrsPosition, b: &psf_guard_director_core::visibility::IcrsPosition| {
+        separation_degrees(a.ra_degrees, a.dec_degrees, b.ra_degrees, b.dec_degrees)
+    };
+    side(&c[0], &c[1]).min(side(&c[1], &c[2]))
+}
+
+fn format_distance(degrees: f64) -> String {
+    if !degrees.is_finite() {
+        "an unknown distance".into()
+    } else if degrees >= 1.0 {
+        format!("{degrees:.2}°")
+    } else {
+        format!("{:.1}′", degrees * 60.0)
+    }
 }
 
 fn format_ra(hours: f64) -> String {

@@ -963,6 +963,19 @@ A second activation updates the same rows in place: coordinates, angle,
 exposure and desired counts change, names the operator edited stay, and
 `acquired`, `accepted`, captured frames and grades are never touched. Panels
 removed from the framing leave their targets behind rather than deleting data.
+Panel ids are places in the grid, so growing the grid or turning a mosaic can
+move a panel to other sky. A panel that moves by more than a quarter of its
+size and already has frames gets a new target at its new place; the old
+target keeps its frames and its plans are turned off. One without frames
+moves in place. Taking over a target writes J2000 coordinates and switches
+it on, since the program serves only those; a linked project still in Draft
+goes Active on its first activation, and every project change is listed.
+Rows added to an existing project go under that project's N.I.N.A. profile,
+and a template is bound by its GUID first; its id is trusted only when the
+row still has the chosen settings, since Target Scheduler can reuse ids.
+The preview digest leaves out the frame counts the preview quotes, so a
+frame saved between Preview and Apply does not refuse the Apply; it covers
+each rig's profile revision, since a rig's field sizes the panels.
 PSF Guard remembers which rows it owns in three tables it adds to the rig
 database, `psf_guard_director_project`, `psf_guard_director_target` and
 `psf_guard_director_plan`, keyed by the rows' GUIDs; Target Scheduler and Sync

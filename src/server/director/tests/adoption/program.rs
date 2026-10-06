@@ -386,7 +386,8 @@ async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment(
         .iter()
         .all(|goal| goal.priority > 0));
 
-    // An unactivated draft edit must not change priorities in an active program.
+    // An unactivated draft edit must not change priorities in an active
+    // program: the rig keeps serving the activation as reviewed.
     {
         let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut plan = store.plan_draft(a.project).unwrap().unwrap();
@@ -394,6 +395,11 @@ async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment(
         store.save_plan_draft(&plan, plan.revision).unwrap();
     }
     let (status, _, body) = raw_get(&a.f.app, &path, None).await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(body["error"].as_str().unwrap().contains("activate"));
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let after: psf_guard_director_core::program::Program =
+        serde_json::from_value(body["data"]["program"].clone()).unwrap();
+    let priorities = |program: &psf_guard_director_core::program::Program| {
+        program.assignment.goals.iter().map(|g| (g.id.clone(), g.priority)).collect::<Vec<_>>()
+    };
+    assert_eq!(priorities(&after), priorities(&ranked_program));
 }

@@ -630,6 +630,13 @@
   window and horizon offset. A rig whose database could not be read says so
   on the Rigs tab instead of calling its project missing, and the Exposures
   tab names the templates the server left out and why.
+- Growing a mosaic grid or turning a mosaic no longer moves targets that
+  already have frames to other sky: a moved panel with frames gets a new
+  target, and the old one keeps its frames. Taking over a target sets it to
+  J2000 and switches it on, a Draft project goes Active on its first
+  activation, new rows use the project's own N.I.N.A. profile, and a
+  template whose id was reused is no longer bound by mistake. A frame saved
+  between Preview and Apply no longer refuses the Apply.
 - Editing a plan no longer takes it out of every Director rig's program
   until the next activation; rigs keep the last activated plan. Finished
   goals are left out of a rig's program, and a rig with more than 256 goals
