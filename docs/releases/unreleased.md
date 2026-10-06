@@ -571,6 +571,9 @@
 
 ## Fixed
 
+- Color stacks on the Stacks page flow several to a row again when a target
+  has stacks of more than one exposure length. Each custom combination now
+  sits below the target's cards instead of between them.
 - A Target Scheduler project with several separate targets is no longer
   planned as one: Director drafts its first target from that target's own
   exposure plans, instead of raising it to the largest desired count of any
