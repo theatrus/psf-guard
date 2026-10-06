@@ -733,7 +733,7 @@ pub fn fold_filter(name: &str) -> Result<String, Error> {
 fn required<'a>(map: &'a Map<String, Value>, key: &str) -> Result<&'a Value, Error> {
     map.get(key).ok_or(Error::InvalidValue)
 }
-fn validate_id(value: &str) -> Result<(), Error> {
+pub(crate) fn validate_id(value: &str) -> Result<(), Error> {
     if value.len() != 12
         || !value
             .bytes()
