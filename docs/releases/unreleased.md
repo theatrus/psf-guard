@@ -1,5 +1,9 @@
 # Unreleased
 
+- Check Director cloud probes against durable recovery state and the original
+  rig/target/recipe geometry without consuming science attempts. Sparse initial
+  reference groups remain unknown-quality evidence rather than corrupt input.
+
 - Allow Director's shared runtime to resume bounded startup weather holds before
   any workload is admitted, while refusing missing storage or unopened historical
   execution ledgers as proof that equipment work has settled.

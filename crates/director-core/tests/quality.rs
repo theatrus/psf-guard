@@ -267,3 +267,14 @@ fn nonfinite_and_invalid_data_fail_closed() {
     p.good_star_ratio = p.poor_star_ratio;
     assert_eq!(classify(&p, &r, &f, 2000), Err(Error::InvalidPolicy));
 }
+
+#[test]
+fn a_sparse_initial_group_is_insufficient_evidence_not_corrupt_input() {
+    let (policy, _, _) = fixture();
+    let mut frames = initial_group();
+    frames.last_mut().unwrap().observed_at_ms += 7_200_001;
+    assert_eq!(
+        build_initial_reference(&policy, "sparse", &frames),
+        Err(Error::UnstableBaseline)
+    );
+}

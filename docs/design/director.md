@@ -2257,6 +2257,20 @@ deadlines. It neither changes nor borrows science attempt counts. This is a
 feasibility check, not a reservation: native probe dispatch still needs a
 separately persisted one-shot permit and capture provenance.
 
+Runtime 0.14.0 / IPC 14 exposes `check_quality_probe` against the open geometry
+ledger. The runtime injects its durable recovery snapshot; the caller cannot
+submit one. Only the matching quality-recovery attempt is eligible, and any
+unresolved science capture or active preparation blocks the check. It never
+creates a science reservation. Native dispatch must still consume the newly
+issued recovery attempt once and journal probe measurements separately from
+saved science frames.
+
+Cloud monitoring/recovery stays off by default. Equipment failure shutdown is
+independent: failed slews and uncertain operations stop, and optional focus/guide
+retries have a per-night failure cap as well as attempt/time caps. Exhaustion
+uses the configured abort policy, defaulting to park when enclosure clearance
+allows it. These failures can accompany clouds but are not proof of cloud cover.
+
 `recovery::readmission` reviews the original night without mutating it. Changed
 scope, clock reversal, ended/expired nights, terminal stops, surviving in-flight
 recovery, unresolved execution/hooks and non-quiescent equipment block restart.
@@ -2264,12 +2278,20 @@ Operator intent and fresh Safe/Open evidence are required. The most permissive
 result is `request_fresh_authority`, never "resume now". Readback must not reset
 budgets, extend the night, reuse an allocation launch or redispatch a probe.
 
-These contracts are implemented and tested in the shared core/runtime. Native
-initial-group collection/persistence, separately journaled probe capture and
-explicit coordinator restart admission remain implementation gates. The current
-plugin must not expose automatic quality recovery or process-restart acquisition
-until those paths pass the actual NINA/ASCOM/isolated-server tests. Automatically
-collected references must retain their unknown-quality warning.
+The plugin collects native NINA statistics and persists the first stable
+five-frame group from the initial sixteen frames per exact context and night.
+Its opt-in modes are monitor, stop for night, or bounded hold/probe. Probe frames
+use inherited NINA triggers but bypass science-save events and the science
+after-exposure slot. They consume recovery attempts, not science attempts.
+NINA 3.3.0.1065 with ASCOM simulators and a private PSF Guard server verified
+36 science saves plus two separately journaled probes, then resumed acquisition
+and parking. Controlled metrics were injected after real captures; this proves
+execution/accounting, not real-sky cloud accuracy. Automatically collected
+references retain their unknown-quality warning.
+
+Explicit coordinator process-restart admission remains a separate gate. Read-only
+review cannot itself restart acquisition, reuse an allocation, forgive uncertain
+captures/hooks or clear a terminal failure stop.
 
 Reuse PSF Guard's [screening evidence](../SCREENING.md) and
 [statistical grading](../STATISTICAL_GRADING.md) concepts: transparency, spatial

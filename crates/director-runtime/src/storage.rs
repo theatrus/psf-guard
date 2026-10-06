@@ -26,6 +26,15 @@ pub const MAX_PREPARATION_EVENT_PAGE: usize = 32;
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    CheckQualityProbe {
+        goal_id: String,
+        attempt_id: String,
+        recipe: Box<psf_guard_director_core::program::Recipe>,
+        constraints: Box<Constraints>,
+        state: State,
+        #[serde(skip)]
+        recovery: Option<Box<psf_guard_director_core::recovery::Snapshot>>,
+    },
     CheckGeometryPendingDispatch {
         command: Box<Command>,
         configuration: Box<Configuration>,
@@ -251,7 +260,8 @@ impl Operation {
             | Self::ActivePreparation {}
             | Self::ClosePreparation { .. }
             | Self::PreparationEvents { .. }
-            | Self::UnresolvedAttempt {} => None,
+            | Self::UnresolvedAttempt {}
+            | Self::CheckQualityProbe { .. } => None,
         }
     }
 }
@@ -537,6 +547,29 @@ impl Storage {
         }
         let ledger = self.ledger.as_mut().ok_or(StorageError::NotOpen)?;
         Ok(match operation {
+            Operation::CheckQualityProbe {
+                goal_id,
+                attempt_id,
+                recipe,
+                constraints,
+                state,
+                recovery,
+            } => {
+                let recovery = recovery.ok_or(StorageError::InvalidInput)?;
+                let check = ledger.check_quality_probe(
+                    &goal_id,
+                    &attempt_id,
+                    &recipe,
+                    &constraints,
+                    &state,
+                    &recovery,
+                )?;
+                StorageReply::DispatchChecked {
+                    decision: check.decision,
+                    evaluated_at_ms: check.evaluated_at_ms,
+                    latest_start_ms: check.latest_start_ms,
+                }
+            }
             Operation::CheckGeometryPendingDispatch {
                 command,
                 configuration,
