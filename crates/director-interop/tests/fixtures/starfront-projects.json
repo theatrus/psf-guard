@@ -1,0 +1,193 @@
+{
+  "projects": [
+    {
+      "id": "000000000003",
+      "name": "M51 in LRGB",
+      "coordinator": "coordinator",
+      "ownerId": "",
+      "region": {
+        "ra": 202.4696,
+        "dec": 47.1952,
+        "width": 0.25,
+        "height": 0.2,
+        "rotation": 0.0
+      },
+      "kind": "single",
+      "requirements": {
+        "minFocalLength": null,
+        "maxFocalLength": 400.0,
+        "minScale": null,
+        "maxScale": null,
+        "acceptColour": true,
+        "colourMaxMoon": null,
+        "maxHfr": 3.0,
+        "maxGuideRms": null,
+        "minExposure": null,
+        "maxExposure": null,
+        "filters": {
+          "L": null,
+          "R": null,
+          "G": null,
+          "B": null
+        },
+        "maxMoonIllumination": null,
+        "minMoonSeparation": null,
+        "minAltitude": null,
+        "requireCalibrated": false,
+        "minFramesPerVisit": 10
+      },
+      "goals": {
+        "L": 20.0,
+        "R": 5.0,
+        "G": 5.0,
+        "B": 5.0
+      },
+      "notes": "",
+      "compatibility": {
+        "ok": false,
+        "certain": false,
+        "checks": [
+          {
+            "check": "focal length",
+            "ok": false,
+            "detail": "530 mm is longer than the 400 mm the project wants"
+          },
+          {
+            "check": "scale",
+            "ok": true,
+            "detail": "1.46\"/px"
+          },
+          {
+            "check": "filters",
+            "ok": false,
+            "detail": "can shoot L — but no R; no G; no B"
+          },
+          {
+            "check": "stars",
+            "ok": true,
+            "detail": "usually 2.40\", project wants 3\" or better"
+          }
+        ],
+        "summary": "cannot contribute: 530 mm is longer than the 400 mm the project wants; can shoot L — but no R; no G; no B"
+      },
+      "joined": false,
+      "collected": {},
+      "progress": {
+        "L": {
+          "goalHours": 20.0,
+          "atGoal": 0.0,
+          "average": 0.0,
+          "thinnest": 0.0
+        },
+        "R": {
+          "goalHours": 5.0,
+          "atGoal": 0.0,
+          "average": 0.0,
+          "thinnest": 0.0
+        },
+        "G": {
+          "goalHours": 5.0,
+          "atGoal": 0.0,
+          "average": 0.0,
+          "thinnest": 0.0
+        },
+        "B": {
+          "goalHours": 5.0,
+          "atGoal": 0.0,
+          "average": 0.0,
+          "thinnest": 0.0
+        }
+      },
+      "participants": 0,
+      "participantsOnline": 0,
+      "participantNames": []
+    },
+    {
+      "id": "000000000002",
+      "name": "M31 halo in narrowband",
+      "coordinator": "coordinator",
+      "ownerId": "",
+      "region": {
+        "ra": 10.6847,
+        "dec": 41.269,
+        "width": 7.0,
+        "height": 4.5,
+        "rotation": 35.0
+      },
+      "kind": "mosaic",
+      "requirements": {
+        "minFocalLength": null,
+        "maxFocalLength": null,
+        "minScale": null,
+        "maxScale": null,
+        "acceptColour": true,
+        "colourMaxMoon": null,
+        "maxHfr": 3.5,
+        "maxGuideRms": null,
+        "minExposure": 120.0,
+        "maxExposure": 600.0,
+        "filters": {
+          "H": 7.0,
+          "O": 7.0
+        },
+        "maxMoonIllumination": null,
+        "minMoonSeparation": 30.0,
+        "minAltitude": 30.0,
+        "requireCalibrated": false,
+        "minFramesPerVisit": 10
+      },
+      "goals": {
+        "H": 10.0,
+        "O": 10.0
+      },
+      "notes": "Faint H-alpha and OIII around M31. Calibrated subs only.",
+      "compatibility": {
+        "ok": true,
+        "certain": true,
+        "checks": [
+          {
+            "check": "scale",
+            "ok": true,
+            "detail": "1.46\"/px"
+          },
+          {
+            "check": "filters",
+            "ok": true,
+            "detail": "can shoot H, O"
+          },
+          {
+            "check": "exposures",
+            "ok": true,
+            "detail": "the default exposures suit the project"
+          },
+          {
+            "check": "stars",
+            "ok": true,
+            "detail": "usually 2.40\", project wants 3.5\" or better"
+          }
+        ],
+        "summary": "can contribute"
+      },
+      "joined": false,
+      "collected": {},
+      "progress": {
+        "H": {
+          "goalHours": 10.0,
+          "atGoal": 0.0,
+          "average": 0.0,
+          "thinnest": 0.0
+        },
+        "O": {
+          "goalHours": 10.0,
+          "atGoal": 0.0,
+          "average": 0.0,
+          "thinnest": 0.0
+        }
+      },
+      "participants": 0,
+      "participantsOnline": 0,
+      "participantNames": []
+    }
+  ],
+  "protocol": 1
+}
