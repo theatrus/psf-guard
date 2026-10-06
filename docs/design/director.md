@@ -2130,12 +2130,20 @@ Operator intent and fresh Safe/Open evidence are required. The most permissive
 result is `request_fresh_authority`, never "resume now". Readback must not reset
 budgets, extend the night, reuse an allocation launch or redispatch a probe.
 
-These contracts are implemented and tested in the shared core/runtime. Native
-initial-group collection/persistence, separately journaled probe capture and
-explicit coordinator restart admission remain implementation gates. The current
-plugin must not expose automatic quality recovery or process-restart acquisition
-until those paths pass the actual NINA/ASCOM/isolated-server tests. Automatically
-collected references must retain their unknown-quality warning.
+The plugin collects native NINA statistics and persists the first stable
+five-frame group from the initial sixteen frames per exact context and night.
+Its opt-in modes are monitor, stop for night, or bounded hold/probe. Probe frames
+use inherited NINA triggers but bypass science-save events and the science
+after-exposure slot. They consume recovery attempts, not science attempts.
+NINA 3.3.0.1065 with ASCOM simulators and a private PSF Guard server verified
+36 science saves plus two separately journaled probes, then resumed acquisition
+and parking. Controlled metrics were injected after real captures; this proves
+execution/accounting, not real-sky cloud accuracy. Automatically collected
+references retain their unknown-quality warning.
+
+Explicit coordinator process-restart admission remains a separate gate. Read-only
+review cannot itself restart acquisition, reuse an allocation, forgive uncertain
+captures/hooks or clear a terminal failure stop.
 
 Reuse PSF Guard's [screening evidence](../SCREENING.md) and
 [statistical grading](../STATISTICAL_GRADING.md) concepts: transparency, spatial
