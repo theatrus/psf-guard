@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiClient } from '../../api/client';
 import type { DirectorCutoutRequest } from '../../api/directorTypes';
 
@@ -44,6 +44,9 @@ export function useSurveyCutout(request: DirectorCutoutRequest | null, delayMs =
   const debouncedKey = useDebounced(key, delayMs);
   const debounced = useMemo<DirectorCutoutRequest | null>(() => debouncedKey ? JSON.parse(debouncedKey) as DirectorCutoutRequest : null, [debouncedKey]);
   const [tiles, setTiles] = useState<LoadedCutout[]>([]);
+  // The prefetch reads what is held without rerunning each time a tile lands.
+  const held = useRef(tiles);
+  held.current = tiles;
   const image = tiles.length ? tiles[tiles.length - 1] : null;
   const [status, setStatus] = useState<SurveyCutout['status']>('idle');
   const [error, setError] = useState('');
@@ -53,11 +56,13 @@ export function useSurveyCutout(request: DirectorCutoutRequest | null, delayMs =
     let cancelled = false;
     let attempts = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // A request the view has moved on from is dropped, not left to finish.
+    const abort = new AbortController();
     setStatus('loading'); setError('');
     const poll = async () => {
       if (cancelled) return;
       try {
-        const result = await apiClient.fetchDirectorCutout(debounced);
+        const result = await apiClient.fetchDirectorCutout(debounced, abort.signal);
         if (cancelled) return;
         if (result.state === 'ready') {
           const url = URL.createObjectURL(result.blob);
@@ -78,17 +83,17 @@ export function useSurveyCutout(request: DirectorCutoutRequest | null, delayMs =
     };
     void poll();
     // A view that moved on, or a page that went away, must not keep asking.
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+    return () => { cancelled = true; abort.abort(); if (timer) clearTimeout(timer); };
   }, [debounced]);
   // Prefetches run one at a time after the main image, and only for images
   // not already held; a request that fails or is still rendering is left for
   // the next settled view to try again.
   const prefetchKey = JSON.stringify(prefetch);
-  const held = tiles.map(tile => tile.key).join('|');
   useEffect(() => {
     if (status !== 'ready' || prefetch.length === 0) return;
     let cancelled = false;
-    const wanted = prefetch.filter(item => !tiles.some(tile => tile.key === JSON.stringify(item)));
+    const abort = new AbortController();
+    const wanted = prefetch.filter(item => !held.current.some(tile => tile.key === JSON.stringify(item)));
     const wait = (ms: number) => new Promise<void>(resolve => { timer = setTimeout(resolve, ms); });
     let timer: ReturnType<typeof setTimeout> | null = null;
     const run = async () => {
@@ -96,7 +101,7 @@ export function useSurveyCutout(request: DirectorCutoutRequest | null, delayMs =
         // A wide view takes the server a moment to render; poll it like the main image, within reason.
         for (let attempt = 0; attempt < 40 && !cancelled; attempt += 1) {
           try {
-            const result = await apiClient.fetchDirectorCutout(item);
+            const result = await apiClient.fetchDirectorCutout(item, abort.signal);
             if (cancelled) return;
             if (result.state === 'generating') { await wait(IMAGE_POLL_STEPS_MS[Math.min(attempt, IMAGE_POLL_STEPS_MS.length - 1)]); continue; }
             if (result.state === 'ready') {
@@ -115,8 +120,8 @@ export function useSurveyCutout(request: DirectorCutoutRequest | null, delayMs =
       }
     };
     void run();
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [status, prefetchKey, held]); // eslint-disable-line react-hooks/exhaustive-deps
+    return () => { cancelled = true; abort.abort(); if (timer) clearTimeout(timer); };
+  }, [status, prefetchKey]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { setTiles(previous => { for (const tile of previous) URL.revokeObjectURL(tile.url); return []; }); }, []);
   return { image, tiles, status, error, stale: image !== null && image.key !== debouncedKey };
 }
