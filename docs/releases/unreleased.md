@@ -349,8 +349,15 @@
 ## Changed
 
 - On the planning page's Framing tab, each rig has an **On** switch, with the
-  rigs grouped On and Off, so several rigs can shoot one plan. Clicking an on
-  rig's heading frames the plan with it, and its card is highlighted.
+  rigs grouped On and Off, so several rigs can shoot one plan. Turning a rig on,
+  or clicking an on rig's heading, frames the plan with it, and its card is
+  highlighted.
+- The Framing tab hides the shared rectangle when every rig that is on has a
+  separate framing, since no rig shoots it. Rig outlines on the sky carry the
+  rig's name, and a rig's camera angle buttons wrap inside its card instead of
+  spilling out.
+- The planning page drops its "Planning" title; the header tab already says
+  where you are.
 - WBPP exports and runs build the same dark masters a stack would. When
   lights of one exposure were matched to different darks, each set of darks
   gets its own `DARKSET_<night>` folder and grouping keyword, so WBPP no

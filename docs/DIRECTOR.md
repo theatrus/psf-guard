@@ -719,14 +719,17 @@ first. Each card shows a swatch in the colour of the rig's outline on the
 sky, its field and pixel scale, and its part: **Sets panel size**, **Shared
 framing** or **Separate framing** with its grid and angle. On the planning
 page, each rig has an **On** switch: rigs that shoot the plan are listed under
-**On**, the rest under **Off**, and several can be on. Clicking an on rig's
-heading (swatch, name and field) frames the plan with it: its field sets the
-shared framing's panel size, and its card is highlighted. **Shared framing** names the rig its size
-comes from; **Type a size** sets one by hand instead, starting from that rig's. **Outline** draws its field on the sky, and
-**Frame separately** gives it a grid, camera angle and panel size of its own, edited
+**On**, the rest under **Off**, and several can be on. Turning a rig on
+frames the plan with it, and clicking an on rig's heading (swatch, name and
+field) does the same: its field sets the shared framing's panel size, and its
+card is highlighted. **Shared framing** names the rig its size
+comes from; **Type a size** sets one by hand instead, starting from that rig's. **Outline** draws its field on the sky, named
+in small text, and **Frame separately** gives it a grid, camera angle and panel size of its own, edited
 in its card. A separate framing follows the shared center until it is dragged,
 typed or moved to the view center; **Shared center** puts it back in step.
-**Use shared** drops it. **Move target to view center** and **Center view on target**
+**Use shared** drops it. When every rig that is on frames separately, no
+rig shoots the shared framing, so its rectangle is hidden and activation
+plans no target for it. **Move target to view center** and **Center view on target**
 keep the two apart on purpose: panning the sky never moves the plan. **Save
 framing** keeps a draft on the project; a draft saved elsewhere since you
 loaded is refused until you reload. Survey imagery is attributed below the
