@@ -198,6 +198,10 @@ fn scope_name(scope: Scope) -> &'static str {
     }
 }
 
+/// The largest stored settings record: room for a project order that ranks
+/// every plan, with its policy and limits beside it.
+pub const MAX_SETTINGS_BYTES: usize = 64 * 1024;
+
 fn check_scope(conn: &Connection, instance: Uuid, scope: Scope, id: Uuid) -> Result<(), Error> {
     valid_id(id)?;
     let exists = match scope {
@@ -226,7 +230,10 @@ fn validate(conn: &Connection, instance: Uuid, value: &Settings) -> Result<(), E
     }
     if let Some(order) = &value.project_order {
         let unique: std::collections::BTreeSet<_> = order.iter().collect();
-        if order.len() > 256 || unique.len() != order.len() || order.iter().any(Uuid::is_nil) {
+        if order.len() > crate::MAX_PLANS
+            || unique.len() != order.len()
+            || order.iter().any(Uuid::is_nil)
+        {
             return Err(Error::InvalidInput);
         }
     }
@@ -240,12 +247,21 @@ fn validate(conn: &Connection, instance: Uuid, value: &Settings) -> Result<(), E
 
 fn read(conn: &Connection, instance: Uuid, scope: Scope, id: Uuid) -> Result<Settings, Error> {
     check_scope(conn, instance, scope, id)?;
-    let payload: Option<String> = conn.query_row("SELECT substr(payload,1,16385) FROM observing_preferences WHERE scope=?1 AND scope_id=?2",
-        params![scope_name(scope), id.to_string()], |r| r.get(0)).optional()?;
+    let payload: Option<String> = conn
+        .query_row(
+            "SELECT substr(payload,1,?3) FROM observing_preferences WHERE scope=?1 AND scope_id=?2",
+            params![
+                scope_name(scope),
+                id.to_string(),
+                (MAX_SETTINGS_BYTES + 1) as i64
+            ],
+            |r| r.get(0),
+        )
+        .optional()?;
     let Some(payload) = payload else {
         return Ok(Settings::empty(scope, id));
     };
-    if payload.len() > 16384 {
+    if payload.len() > MAX_SETTINGS_BYTES {
         return Err(Error::CorruptDatabase);
     }
     let value: Settings = serde_json::from_str(&payload).map_err(|_| Error::CorruptDatabase)?;
@@ -386,8 +402,13 @@ impl MetaStore {
         }
         let mut saved = input.clone();
         saved.revision += 1;
+        let payload = serde_json::to_string(&saved).map_err(|_| Error::InvalidInput)?;
+        // Never store what the next read would refuse as corrupt.
+        if payload.len() > MAX_SETTINGS_BYTES {
+            return Err(Error::InvalidInput);
+        }
         tx.execute("INSERT INTO observing_preferences VALUES(?1,?2,?3) ON CONFLICT(scope,scope_id) DO UPDATE SET payload=excluded.payload",
-            params![scope_name(saved.scope),saved.scope_id.to_string(),serde_json::to_string(&saved).map_err(|_| Error::InvalidInput)?])?;
+            params![scope_name(saved.scope),saved.scope_id.to_string(),payload])?;
         validate_hierarchy(&tx, self.instance_id)?;
         tx.commit()?;
         Ok(saved)

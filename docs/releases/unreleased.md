@@ -1,5 +1,14 @@
 # Unreleased
 
+- Open Director's plan list without holding up N.I.N.A. or other Director
+  work. The list reads rig databases without locking them and shows a busy
+  one as it last read it. One damaged record, or one Target Scheduler template
+  whose Moon settings Director cannot use, no longer fails the whole list or
+  the rig's templates; the warnings name it.
+
+- Rank up to 1024 projects in Director's project order, as many as the plan
+  list shows, instead of 256.
+
 - Check Director cloud probes against durable recovery state and the original
   rig/target/recipe geometry without consuming science attempts. Sparse initial
   reference groups remain unknown-quality evidence rather than corrupt input.

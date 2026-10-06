@@ -26,6 +26,10 @@ mod storage;
 pub mod templates;
 pub mod workload;
 
+/// The most plans the plan list shows and a project order can rank. Every
+/// Target Scheduler project becomes a plan, so both follow the same bound.
+pub const MAX_PLANS: usize = 1024;
+
 #[derive(Debug)]
 pub enum Error {
     Sqlite(rusqlite::Error),

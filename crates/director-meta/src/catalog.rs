@@ -20,6 +20,17 @@ pub struct MappingPage {
     pub next_after: Option<Uuid>,
 }
 
+/// A source project seen for the first time, to be planned under the plan
+/// that already holds its GUID, or else under a new plan.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceProject {
+    pub source_project_guid: Uuid,
+    pub source_profile_id: String,
+    /// The new plan's id and name, used only when no plan holds the GUID.
+    pub proposed_project_id: Uuid,
+    pub name: String,
+}
+
 impl MetaStore {
     pub fn catalog_identity(&self, id: Uuid) -> Result<Option<CatalogIdentity>, Error> {
         read_catalog(&self.connection, id)
@@ -47,6 +58,66 @@ impl MetaStore {
         Self::link_catalog_projects_on(&tx, mappings)?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// Plan and link a bound catalog's new source projects in one transaction,
+    /// so a failed link leaves no plan behind for the next listing to repeat.
+    /// A GUID linked here already keeps its plan; one linked in another
+    /// catalog joins that plan, as Sync copies do; any other gets the proposed
+    /// plan. Answers each project's plan, in input order.
+    pub fn adopt_source_projects(
+        &mut self,
+        catalog: Uuid,
+        rig: Uuid,
+        projects: &[SourceProject],
+    ) -> Result<Vec<Uuid>, Error> {
+        valid_id(catalog)?;
+        valid_id(rig)?;
+        if !(1..=256).contains(&projects.len()) {
+            return Err(Error::InvalidInput);
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut mappings = Vec::with_capacity(projects.len());
+        for project in projects {
+            valid_id(project.proposed_project_id)?;
+            let guid = project.source_project_guid.to_string();
+            // This catalog's link first, then the lowest catalog's, as
+            // `project_for_source_guid` answers.
+            let linked: Option<String> = tx
+                .query_row(
+                    "SELECT project_id FROM project_catalog WHERE source_project_guid=?2
+                     ORDER BY catalog_id!=?1, catalog_id LIMIT 1",
+                    params![catalog.to_string(), guid],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let project_id = match linked {
+                Some(id) => parse_id(&id)?,
+                None => {
+                    valid_name(&project.name)?;
+                    if read_named(&tx, Kind::Project, project.proposed_project_id)?.is_some() {
+                        return Err(Error::Conflict);
+                    }
+                    tx.execute(
+                        "INSERT INTO global_project(id,name,revision) VALUES(?1,?2,1)",
+                        params![project.proposed_project_id.to_string(), project.name],
+                    )?;
+                    project.proposed_project_id
+                }
+            };
+            mappings.push(ProjectMapping {
+                catalog_id: catalog,
+                source_project_guid: project.source_project_guid,
+                source_profile_id: project.source_profile_id.clone(),
+                project_id,
+                rig_id: rig,
+            });
+        }
+        Self::link_catalog_projects_on(&tx, &mappings)?;
+        tx.commit()?;
+        Ok(mappings.into_iter().map(|m| m.project_id).collect())
     }
 
     /// Exercise exactly the adoption transaction, then roll it back. This uses a
