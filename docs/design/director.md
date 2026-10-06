@@ -2947,8 +2947,11 @@ local workload source, and import into PSF Guard's existing project workspace
 and rig databases. Both use the shared Rust planner, durable local execution
 ledger and the same NINA Session/actions/hooks. Neither connector is implemented.
 The shared Rust read-only adapter now decodes health, profiles, projects and
-nightly visits with provenance and review reasons. It adds no IPC command or
-acquisition authority; see the focused record for limits and remaining work.
+nightly visits with provenance and review reasons. Reviewed inactive imports,
+immutable source history, finalized contribution contracts, a durable report
+outbox and fresh-only presence projection are also implemented. These add no
+authenticated host connector, IPC command or acquisition authority; see the
+focused record for limits and remaining work.
 
 The public protocol supplies hello, browse/join, a nightly panel list and reports.
 It grants no hardware authority; the nightly list is held rather than constantly
@@ -4381,7 +4384,8 @@ fixtures but are not required network dependencies of CI or acquisition.
 
 ### Phase 6: remote instances and collaboration (deferred)
 
-The shared read-only decoder is implemented; host integration remains deferred.
+The shared reader, reviewed inactive import storage, contribution outbox and
+fresh-only presence projection are implemented; host integration remains deferred.
 The [interoperability backlog](collaboration.md#delivery-and-validation)
 defines reviewed increments for host connectors, PSF Guard import,
 plugin-only admission and durable reports. No connector, public collaboration

@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 22;
+const SCHEMA_VERSION: i32 = 23;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -49,6 +49,7 @@ impl MetaStore {
         super::preferences::create_table(&tx)?;
         super::site_profile::create_table(&tx)?;
         super::operation_inbox::create_tables(&tx)?;
+        super::collaboration::create_tables(&tx)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         conn.close().map_err(|(_, error)| Error::Sqlite(error))?;
@@ -126,6 +127,9 @@ impl MetaStore {
             }
             if version < 22 {
                 super::operation_inbox::create_tables(&tx)?;
+            }
+            if version < 23 {
+                super::collaboration::create_tables(&tx)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
@@ -318,6 +322,9 @@ fn validate(conn: &Connection) -> Result<Uuid, Error> {
         ] {
             conn.prepare(sql).map_err(|_| Error::CorruptDatabase)?;
         }
+    }
+    if version >= 23 {
+        super::collaboration::validate_tables(conn)?;
     }
     let id: String = conn.query_row(
         "SELECT instance_id FROM meta WHERE singleton=1",

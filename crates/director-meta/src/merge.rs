@@ -38,6 +38,14 @@ impl MetaStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let target = read_named(&tx, Kind::Project, into)?.ok_or(Error::NotFound)?;
         let absorbed = read_named(&tx, Kind::Project, from)?.ok_or(Error::NotFound)?;
+        let imported: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM collaboration_project WHERE project_id IN (?1,?2))",
+            params![into.to_string(), from.to_string()],
+            |row| row.get(0),
+        )?;
+        if imported {
+            return Err(Error::Conflict);
+        }
         let clash: i64 = tx.query_row(
             "SELECT count(*) FROM project_catalog a JOIN project_catalog b ON a.catalog_id=b.catalog_id
              WHERE a.project_id=?1 AND b.project_id=?2",
@@ -102,6 +110,14 @@ impl MetaStore {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let imported: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM collaboration_project WHERE project_id=?1)",
+            [from.to_string()],
+            |row| row.get(0),
+        )?;
+        if imported {
+            return Err(Error::Conflict);
+        }
         let linked: Option<String> = tx
             .query_row(
                 "SELECT project_id FROM project_catalog WHERE catalog_id=?1 AND source_project_guid=?2",
