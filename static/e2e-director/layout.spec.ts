@@ -70,6 +70,8 @@ async function layoutProblems(page: Page, scope = '.director-page'): Promise<str
     for (const a of controls) {
       for (const b of controls) {
         if (a === b || a.el.contains(b.el) || b.el.contains(a.el)) continue;
+        // A control scrolled up to the sticky top's edge is going under it.
+        if (sticky && sticky.contains(a.el) !== sticky.contains(b.el)) continue;
         const gap = b.box.top - a.box.bottom;
         const shared = Math.min(a.box.right, b.box.right) - Math.max(a.box.left, b.box.left);
         if (gap > -1 && gap < 4 && shared > 1) problems.push(`too close: ${name(a.el)} above ${name(b.el)} (${Math.round(gap)}px)`);
@@ -90,6 +92,31 @@ async function layoutProblems(page: Page, scope = '.director-page'): Promise<str
     if (root.scrollWidth > root.clientWidth + 1) problems.push(`sideways scroll in ${scope}: ${root.scrollWidth} > ${root.clientWidth}`);
     return problems;
   }, scope);
+}
+
+/**
+ * Every stretch of the page and of the form's own scroller, a part of a
+ * window at a time, so a problem low on the sky or the form is checked as
+ * well as what shows first. A box that does not scroll at this size is
+ * left alone.
+ */
+async function problemsWhileScrolling(page: Page): Promise<string[]> {
+  const found: string[] = [];
+  for (const selector of ['.app-main', '.workspace-panel:not([hidden]) .framing-controls']) {
+    const scroller = page.locator(selector).first();
+    if (await scroller.count() === 0) continue;
+    const { height, client } = await scroller.evaluate(el => ({ height: el.scrollHeight, client: el.clientHeight }));
+    if (height <= client + 1) continue;
+    const step = Math.max(120, Math.round(client * 0.6));
+    for (let top = 0; ; top = Math.min(top + step, height - client)) {
+      await scroller.evaluate((el, at) => { el.scrollTop = at; }, top);
+      await page.waitForTimeout(60);
+      for (const problem of await layoutProblems(page)) found.push(`scrolled ${selector}: ${problem}`);
+      if (top >= height - client) break;
+    }
+    await scroller.evaluate(el => { el.scrollTop = 0; });
+  }
+  return found;
 }
 
 test('planning tabs lay out without overlaps or clipping', async ({ page, request }) => {
@@ -143,18 +170,15 @@ test('planning tabs lay out without overlaps or clipping', async ({ page, reques
     await expect(page.getByRole('group', { name: 'Askar data' }).getByRole('button', { name: 'Done' })).toBeVisible();
     await page.getByLabel('Askar data camera angle degrees').fill('30');
     const found: string[] = [];
-    const sizes = [[1440, 1000], [1280, 800], [1100, 900], [1024, 768], [900, 900], [375, 812]] as const;
+    const sizes = [[1440, 1000], [1280, 800], [1100, 900], [1024, 768], [900, 900], [390, 844], [375, 812]] as const;
     for (const tab of ['Framing', 'Exposures', 'Rigs', 'Priority and defaults']) {
       await page.getByRole('tab', { name: new RegExp(`^${tab}`) }).click();
       for (const [width, height] of sizes) {
         await page.setViewportSize({ width, height });
         await page.waitForTimeout(300);
         for (const problem of await layoutProblems(page)) found.push(`${tab} @${width}×${height}: ${problem}`);
-        if (tab === 'Framing') {
-          await page.getByLabel('Position angle degrees').scrollIntoViewIfNeeded();
-          for (const problem of await layoutProblems(page)) found.push(`${tab} (angle in view) @${width}×${height}: ${problem}`);
-          await page.locator('.app-main').evaluate(el => el.scrollTo(0, 0));
-        }
+        // The sky and its form run past the window at most sizes.
+        if (tab === 'Framing') for (const problem of await problemsWhileScrolling(page)) found.push(`${tab} @${width}×${height}: ${problem}`);
       }
       await page.setViewportSize({ width: 1440, height: 1000 });
     }

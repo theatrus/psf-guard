@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import type { DirectorFeasibility, DirectorRigFeasibility, DirectorSkyPosition } from '../../api/directorTypes';
 import { formatHours } from './visibilityFormat';
+import { roundRa } from './framingModel';
 import { retryWhenBusy } from './retry';
 import './VisibilityPanel.css';
 
@@ -102,7 +103,7 @@ export function AltitudeChart({ rig, compact = false }: { rig: DirectorRigFeasib
  *  estimate, with the nights table folded away, so it fits under the
  *  framing stage and stays on screen. */
 export default function VisibilityPanel({ projectId, center, enabled = true, compact = false }: { projectId: string; center: DirectorSkyPosition; enabled?: boolean; compact?: boolean }) {
-  const rounded = useMemo(() => ({ ra_degrees: Number(center.ra_degrees.toFixed(3)), dec_degrees: Number(center.dec_degrees.toFixed(3)) }), [center.ra_degrees, center.dec_degrees]);
+  const rounded = useMemo(() => ({ ra_degrees: roundRa(center.ra_degrees, 3), dec_degrees: Number(center.dec_degrees.toFixed(3)) }), [center.ra_degrees, center.dec_degrees]);
   const debounced = useDebounced(rounded, 350);
   const query = useQuery({
     queryKey: ['directorFeasibility', projectId, debounced],

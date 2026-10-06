@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { DirectorFramingPreview, DirectorFramingRequest } from '../../../api/directorTypes';
-import { DEFAULT_STAGE, angleAt, deprojectFrom, framingBackdrop, framingGeometry, framingGraticule, gridSteps, handleSky, compassDirections, deprojectOn, offsetFrom, preferredSurveyId, projectOn, stageDeproject, tileFor, tileSize, viewLeftTile, stageFor, stageProject, tileMatrix, toStage, trueWidth, viewAt } from '../framingModel';
+import { DEFAULT_STAGE, MAX_VIEW_FOV, angleAt, deprojectFrom, draftFromState, fitViewFov, framingBackdrop, framingGeometry, framingGraticule, framingProblems, gridSteps, handleSky, compassDirections, deprojectOn, normaliseAngle, offsetFrom, preferredSurveyId, projectOn, roundRa, rotationHandleSky, stageDeproject, stateFromDraft, stateFromSeed, tileFor, tileSize, viewLeftTile, stageFor, stageProject, tileMatrix, toStage, trueWidth, viewAt } from '../framingModel';
 
 /** Written by `crates/director-core/tests/framing_fixture.rs`; the core keeps
  *  reproducing it, so this test pins the browser port to the server. */
@@ -214,5 +214,79 @@ describe('viewport-driven tiles', () => {
     expect(viewLeftTile(tile, at, 4.5)).toBe(false);
     expect(viewLeftTile(tile, at, 4)).toBe(true);
     expect(viewLeftTile(tile, { ra_degrees: 11.5, dec_degrees: 20 }, 6)).toBe(true);
+  });
+});
+
+describe('what the server takes', () => {
+  it('keeps angles in [0, 360) and rounds off the drift of a quarter turn and back', () => {
+    // Plain arithmetic leaves 35.099999999999994, which the save bar would
+    // call a change and the store a new layout.
+    expect(35.1 + 90 - 90).not.toBe(35.1);
+    expect(normaliseAngle(normaliseAngle(35.1 + 90) - 90)).toBe(35.1);
+    // The handle reads tenths: 359.96 rounds up to 360, which the core refuses.
+    expect(normaliseAngle(Math.round(359.96 * 10) / 10)).toBe(0);
+    expect(normaliseAngle(-90)).toBe(270);
+    expect(normaliseAngle(720.5)).toBe(0.5);
+    expect(normaliseAngle(218.8412345)).toBe(218.8412345);
+    // toFixed would send RA 360.00000.
+    expect(roundRa(359.999996, 5)).toBe(0);
+    expect(roundRa(10.123456, 3)).toBe(10.123);
+  });
+
+  it('reads a saved angle through the same rounding', () => {
+    const seed = stateFromSeed({ name: 'M31', center: { ra_degrees: 10.68, dec_degrees: 41.27 }, position_angle_degrees: 0 }, 'dss2_color');
+    const draft = { ...draftFromState(seed, 'project', 1), position_angle_degrees: 35.10000000000002, view_fov_degrees: 180,
+      rig_framings: [{ rig_id: 'r', center: null, position_angle_degrees: 359.9999999999, mosaic: seed.mosaic, panel: null }] };
+    const state = stateFromDraft(draft);
+    expect(state.positionAngle).toBe(35.1);
+    expect(state.rigFramings[0].position_angle_degrees).toBe(0);
+    // The server keeps a view up to 180° wide; the stage shows up to 150°.
+    expect(state.viewFov).toBe(MAX_VIEW_FOV);
+    expect(draftFromState({ ...state, viewFov: 400 }, 'project', 1).view_fov_degrees).toBe(MAX_VIEW_FOV);
+  });
+
+  it('names what the core would refuse, by field', () => {
+    const rig = { rig: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'RedCat', revision: 1 }, catalog_slug: 'redcat', catalog_name: 'RedCat 61', profile: null,
+      field_of_view: { width_degrees: 5.38, height_degrees: 3.6, pixel_scale_arcsec: 3.1, focal_ratio: 4.9 }, default_exposure_seconds: { broadband: 120, narrowband: 300 } };
+    const base = { ...stateFromSeed({ name: 'M31', center: { ra_degrees: 10.68, dec_degrees: 41.27 }, position_angle_degrees: 0 }, 'dss2_color'), panelRigId: rig.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 } };
+    expect(framingProblems(base, [rig])).toEqual([]);
+    // Eight RedCat columns at 20% overlap span 35.5°: past the core's 30°.
+    const wide = { ...base, mosaic: { rows: 1, columns: 8, overlap_percent: 20 } };
+    expect(framingProblems(wide, [rig])).toEqual([{ field: 'mosaic', message: 'Mosaic 35.51° × 3.60°, over 30°' }]);
+    expect(framingProblems({ ...base, panel: { width_degrees: 0, height_degrees: 1 } }, [rig]).map(problem => problem.field)).toEqual(['panel']);
+    expect(framingProblems({ ...base, panel: { width_degrees: 31, height_degrees: 1 } }, [rig]).map(problem => problem.field)).toEqual(['panel']);
+    expect(framingProblems({ ...base, center: { ra_degrees: 360, dec_degrees: 0 } }, [rig]).map(problem => problem.field)).toEqual(['center']);
+    expect(framingProblems({ ...base, positionAngle: 360 }, [rig]).map(problem => problem.field)).toEqual(['angle']);
+    // A separate framing with no size of its own is sized from its rig's field.
+    const own = { ...base, rigFramings: [{ rig_id: rig.rig.id, center: null, position_angle_degrees: null, mosaic: { rows: 1, columns: 8, overlap_percent: 20 }, panel: null }] };
+    expect(framingProblems(own, [rig], () => 'RedCat 61')).toEqual([{ field: `rig:${rig.rig.id}:mosaic`, message: 'RedCat 61: mosaic 35.51° × 3.60°, over 30°' }]);
+  });
+});
+
+describe('fitting the view', () => {
+  const center = { ra_degrees: 120, dec_degrees: 20 };
+  const inside = (point: { ra_degrees: number; dec_degrees: number }, fov: number, rotation: number) => {
+    const [x, y] = toStage(projectOn(viewAt(center, center, rotation), point)!, fov);
+    return x >= 0 && x <= DEFAULT_STAGE.width && y >= 0 && y <= DEFAULT_STAGE.height;
+  };
+  it('takes a turned rectangle\'s corners as drawn, and its handle', () => {
+    // A long panel turned 45°: its unturned box would fit a narrower view
+    // than its corners need.
+    const turned = framingGeometry({ center, position_angle_degrees: 45, panel: { width_degrees: 4, height_degrees: 1 }, mosaic: { rows: 1, columns: 1, overlap_percent: 0 }, overlays: [], view: null });
+    const corners = turned.panels.flatMap(panel => panel.corners);
+    const fov = fitViewFov(corners, null, center, 0)!;
+    expect(fov).toBeGreaterThan(4 * 1.3);
+    expect(corners.every(corner => inside(corner, fov, 0))).toBe(true);
+    // With the sky turned by the camera, the same rectangle stands upright and fits a narrower view.
+    expect(fitViewFov(corners, null, center, 45)!).toBeLessThan(fov);
+    // A tall panel's handle stands past its top edge: the fit makes room for it.
+    const tall = framingGeometry({ center, position_angle_degrees: 0, panel: { width_degrees: 1, height_degrees: 3 }, mosaic: { rows: 1, columns: 1, overlap_percent: 0 }, overlays: [], view: null });
+    const tallCorners = tall.panels.flatMap(panel => panel.corners);
+    const state = { ...stateFromSeed({ name: 'x', center, position_angle_degrees: 0 }, 'dss2_color') };
+    const handle = (viewFov: number) => rotationHandleSky(state, tall.extent, viewFov);
+    const withHandle = fitViewFov(tallCorners, handle, center, 0)!;
+    expect(withHandle).toBeGreaterThan(fitViewFov(tallCorners, null, center, 0)!);
+    expect(inside(handle(withHandle), withHandle, 0)).toBe(true);
+    expect(fitViewFov([], null, center, 0)).toBeNull();
   });
 });

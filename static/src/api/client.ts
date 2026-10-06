@@ -372,12 +372,12 @@ export const apiClient = {
   },
 
   /** One survey image. 202 and 502 are answers, not errors: the view polls or explains. */
-  fetchDirectorCutout: async (request: DirectorCutoutRequest): Promise<DirectorCutoutResult> => {
+  fetchDirectorCutout: async (request: DirectorCutoutRequest, signal?: AbortSignal): Promise<DirectorCutoutResult> => {
     const api = await getApi();
     // Bytes, not a Blob: the browser and the test runner both hand those back
     // without touching a stream, and the JSON answers decode from the same buffer.
     const response = await api.get<ArrayBuffer>('/director/v1/sky/cutout', {
-      params: request, responseType: 'arraybuffer', validateStatus: status => status === 200 || status === 202 || status === 502,
+      params: request, responseType: 'arraybuffer', signal, validateStatus: status => status === 200 || status === 202 || status === 502,
     });
     const type = String(response.headers['content-type'] ?? 'image/jpeg');
     if (response.status === 200) return { state: 'ready', blob: new Blob([response.data], { type }) };
