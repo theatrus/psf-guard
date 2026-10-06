@@ -644,6 +644,9 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
             <line x1={0} y1={0} x2={east[0] * 28} y2={east[1] * 28} /><text x={east[0] * 36} y={east[1] * 36 + 5} textAnchor="middle">E</text>
           </g>; })()}
         </svg>
+        {/* The tools and the notes under them share one column, so a note
+            always sits below the tools however many rows they wrap to. */}
+        <div className="framing-stage-top">
         <div className="framing-stage-tools" onPointerDown={event => event.stopPropagation()}>
           <div className="framing-seg" role="group" aria-label="A drag moves">
             <button type="button" aria-pressed={dragMode === 'rectangle'} aria-label="Drag moves the rectangle" title="A drag moves the rectangle over a still sky. Drag its handle to turn the camera; drag the sky to look around." onClick={() => chooseDragMode('rectangle')}><SquareDashedMousePointer size={15} /><span>Rectangle</span></button>
@@ -664,6 +667,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
           {marks.data && showObjects && !marks.data.objects.available && <span role="note">Deep-sky marks need the Seiza object catalog on this server{marks.data.objects.note ? ` (${marks.data.objects.note})` : ''}.</span>}
           {marks.data && showBodies && !marks.data.minor_bodies.available && <span role="note">Comets and asteroids need the Seiza minor-body catalog on this server{marks.data.minor_bodies.note ? ` (${marks.data.minor_bodies.note})` : ''}.</span>}
           {marks.isError && marksWanted && <span role="alert">Marks could not be loaded: {message(marks.error)}</span>}
+        </div>
         </div>
         <div className="framing-stage-zoom" onPointerDown={event => event.stopPropagation()}>
           <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => zoomBy(1 / 1.5)}>+</button>

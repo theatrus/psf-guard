@@ -32,7 +32,8 @@
 .framing-target line { stroke: #ff6b6b; stroke-width: 2.5; vector-effect: non-scaling-stroke; }
 /* Tools over the sky: what a drag moves, then the layers, as one row of
    small buttons; the compass keeps the top-right corner. */
-.framing-stage-tools { position: absolute; left: 10px; top: 10px; right: 84px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.framing-stage-top { position: absolute; left: 10px; top: 10px; right: 84px; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; pointer-events: none; }
+.framing-stage-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; pointer-events: auto; }
 .framing-seg { display: inline-flex; background: rgba(0, 0, 0, 0.65); border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 6px; overflow: hidden; }
 .framing-seg button { min-height: 28px; height: 28px; padding: 0 9px; gap: 5px; font-size: 12px; color: #fff; background: transparent; border: 0; border-radius: 0; border-right: 1px solid rgba(255, 255, 255, 0.18); }
 .framing-seg button:last-child { border-right: 0; }
@@ -42,7 +43,7 @@
 .framing-seg-icons button { width: 30px; padding: 0; }
 .framing-seg-icons button[aria-pressed="false"] { color: rgba(255, 255, 255, 0.6); }
 @media (max-width: 600px) { .framing-seg button span { display: none; } }
-.framing-stage-status { position: absolute; left: 10px; top: 46px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; pointer-events: none; max-width: min(70%, 520px); }
+.framing-stage-status { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; pointer-events: none; max-width: min(100%, 520px); }
 .framing-stage-status span { background: rgba(0, 0, 0, 0.65); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
 .framing-stage-status [role="alert"] { background: rgba(160, 40, 40, 0.85); }
 .framing-stage-status [role="note"] { color: rgba(255, 255, 255, 0.8); }
@@ -70,6 +71,9 @@
 .framing-readout { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 6px 0 0; font-size: 13px; font-variant-numeric: tabular-nums; }
 .framing-readout span:first-child { font-weight: 600; }
 .framing-turns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+/* The view and target buttons under the target's fields: room above them,
+   so the angle buttons do not run into them. */
+.framing-controls fieldset > .director-actions { margin-top: 12px; gap: 8px; }
 /* A field whose controls need the grid's whole width. */
 .framing-grid > .framing-span { grid-column: 1 / -1; }
 .framing-turns button { padding: 4px 8px; min-height: 28px; }
