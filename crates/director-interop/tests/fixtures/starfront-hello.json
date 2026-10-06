@@ -1,0 +1,43 @@
+{
+  "protocol": 1,
+  "profile": {
+    "name": "Vega 530",
+    "focalLength": 530.0,
+    "pixelSize": 3.76,
+    "sensorWidth": 6248,
+    "sensorHeight": 4176,
+    "binning": 1,
+    "filters": {
+      "Ha": 7.0,
+      "OIII": 7.0,
+      "SII": 7.0,
+      "L": null
+    },
+    "colour": false,
+    "rotation": null,
+    "typicalHfr": 2.4,
+    "typicalGuideRms": 0.62,
+    "exposures": {
+      "Ha": 300.0,
+      "OIII": 300.0,
+      "SII": 300.0,
+      "L": 120.0
+    },
+    "hoursPerNight": 6.0,
+    "windowFrom": "21:30",
+    "windowTo": "04:30",
+    "scale": 1.463313962264151,
+    "field": [
+      2.53966267672956,
+      1.6974441962264148
+    ]
+  },
+  "presence": {
+    "ra": 0.7123,
+    "dec": 41.27,
+    "state": "imaging",
+    "target": "M31 halo in narrowband",
+    "project": "000000000002",
+    "telescope": "Vega 530 narrowband"
+  }
+}

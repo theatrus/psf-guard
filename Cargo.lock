@@ -4197,6 +4197,7 @@ dependencies = [
  "mime_guess",
  "nalgebra",
  "psf-guard-director-core",
+ "psf-guard-director-interop",
  "psf-guard-director-meta",
  "rand 0.10.3",
  "rayon",
@@ -4261,6 +4262,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "psf-guard-director-interop"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "psf-guard-director-core",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "url",
+]
+
+[[package]]
 name = "psf-guard-director-ledger"
 version = "0.1.0"
 dependencies = [
@@ -4291,6 +4305,7 @@ name = "psf-guard-director-runtime"
 version = "0.14.0"
 dependencies = [
  "psf-guard-director-core",
+ "psf-guard-director-interop",
  "psf-guard-director-ledger",
  "rusqlite",
  "serde",
