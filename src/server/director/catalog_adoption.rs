@@ -193,11 +193,13 @@ async fn execute(
             let evidence = catalog_discovery::read_evidence(&tx)?;
             let source_names = evidence.mapping_names(&plan.mappings)?;
             let saved_identity = catalog_identity::read(&tx)?;
-            let require_new = saved_identity.is_none();
-            let identity = saved_identity.unwrap_or(CatalogIdentity {
-                id: plan.catalog_id,
-                origin_instance_id: service.instance_id,
-            });
+            let (identity, require_new) = super::reviewed_identity(
+                store,
+                saved_identity,
+                service.instance_id,
+                &catalog.database_path,
+                plan.catalog_id,
+            )?;
             if identity.id != plan.catalog_id {
                 return Err(Error::Conflict.into());
             }

@@ -217,7 +217,9 @@ fn project_orders_validate_identity_duplicates_limits_and_scope() {
         vec![project, project],
         vec![Uuid::nil()],
         vec![Uuid::new_v4()],
-        (0..257).map(|_| Uuid::new_v4()).collect(),
+        (0..=psf_guard_director_meta::MAX_PLANS)
+            .map(|_| Uuid::new_v4())
+            .collect(),
     ] {
         let mut settings = Settings::empty(Scope::Global, store.instance_id());
         settings.project_order = Some(order);

@@ -142,6 +142,8 @@ pub struct Service {
     instance_id: Uuid,
     admission: Arc<Semaphore>,
     discovery_admission: Arc<Semaphore>,
+    /// What earlier plan listings read, for the next one.
+    plans_memo: Mutex<plans::Memo>,
 }
 
 impl Service {
@@ -161,6 +163,7 @@ impl Service {
             read_slots: Arc::new(Semaphore::new(reader_slots())),
             admission: Arc::new(Semaphore::new(1)),
             discovery_admission: Arc::new(Semaphore::new(1)),
+            plans_memo: Mutex::new(plans::Memo::default()),
         })))
     }
 
@@ -334,8 +337,6 @@ pub(super) struct IdentifiedCatalogs {
     by_id: BTreeMap<Uuid, (CatalogIdentity, Arc<DatabaseContext>)>,
     /// One line per file left out, for the operator.
     pub(super) duplicates: Vec<String>,
-    /// Slugs of the files left out.
-    pub(super) duplicate_slugs: Vec<String>,
 }
 
 impl IdentifiedCatalogs {
@@ -347,10 +348,6 @@ impl IdentifiedCatalogs {
         self.by_id
             .values()
             .map(|(identity, context)| (identity, context))
-    }
-
-    pub(super) fn is_duplicate(&self, slug: &str) -> bool {
-        self.duplicate_slugs.iter().any(|s| s == slug)
     }
 }
 
@@ -365,6 +362,34 @@ pub(super) fn derived_identity(instance: Uuid, path: &str) -> CatalogIdentity {
         id: Uuid::new_v5(&instance, canonical.as_bytes()),
         origin_instance_id: instance,
     }
+}
+
+/// The identity an explicit review plans a file under, and whether it must
+/// be a new catalog. A file with no identity row that the store already
+/// knows under its derived identity keeps that one, so a client's id cannot
+/// make it a second catalog and rig and leave the first one's profile and
+/// links behind. Any other file without a row takes the client's id, new.
+fn reviewed_identity(
+    store: &MetaStore,
+    saved: Option<CatalogIdentity>,
+    instance: Uuid,
+    path: &str,
+    requested: Uuid,
+) -> Result<(CatalogIdentity, bool), Error> {
+    if let Some(saved) = saved {
+        return Ok((saved, false));
+    }
+    let derived = derived_identity(instance, path);
+    if store.catalog_identity(derived.id)?.is_some() {
+        return Ok((derived, false));
+    }
+    Ok((
+        CatalogIdentity {
+            id: requested,
+            origin_instance_id: instance,
+        },
+        true,
+    ))
 }
 
 /// The identity a file carries, or the one it would be given.
@@ -384,17 +409,14 @@ pub(super) fn identified_catalogs(
     let mut found = IdentifiedCatalogs {
         by_id: BTreeMap::new(),
         duplicates: Vec::new(),
-        duplicate_slugs: Vec::new(),
     };
     for context in sorted {
         let identity = identity_of(instance, &context.database_path);
         match found.by_id.get(&identity.id) {
             Some((_, first)) => {
-                found.duplicates.push(format!(
-                    "{}: carries the same catalog identity as {}, so it is a copy of that file; it is left out of planning. Remove it from the registry, or drop its psf_guard_catalog_identity table to make it a database of its own.",
-                    context.name, first.name
-                ));
-                found.duplicate_slugs.push(context.id.clone());
+                found
+                    .duplicates
+                    .push(copy_warning(&context.name, &first.name));
             }
             None => {
                 found.by_id.insert(identity.id, (identity, context.clone()));
@@ -402,6 +424,14 @@ pub(super) fn identified_catalogs(
         }
     }
     found
+}
+
+/// What the operator reads about a registered file that carries another
+/// file's identity.
+pub(super) fn copy_warning(copy: &str, original: &str) -> String {
+    format!(
+        "{copy}: carries the same catalog identity as {original}, so it is a copy of that file; it is left out of planning. Remove it from the registry, or drop its psf_guard_catalog_identity table to make it a database of its own."
+    )
 }
 
 /// The identity a database file carries, or `None` for an unadopted or
@@ -591,6 +621,17 @@ async fn admit(semaphore: &Arc<Semaphore>) -> Result<tokio::sync::OwnedSemaphore
         .map_err(|_| Error::Internal)
 }
 
+/// Blocking file work off the async workers, with no store gate held: rig
+/// database reads, frame headers, the registry file.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, Error> {
+    tokio::task::spawn_blocking(work).await.map_err(|error| {
+        tracing::error!(%error, "Director file worker failed");
+        Error::Internal
+    })
+}
+
 /// Planning reads and the meta store are open to every server.
 fn enabled(state: &AppState) -> Result<Arc<Service>, Error> {
     state.director.clone().ok_or(Error::Disabled)
@@ -738,7 +779,9 @@ async fn detach_project(
     let catalog = state
         .get_database(&request.catalog_slug)
         .ok_or(Error::Missing)?;
-    let identity = identity_of(service.instance_id, &catalog.database_path);
+    let instance = service.instance_id;
+    let path = catalog.database_path.clone();
+    let identity = blocking(move || identity_of(instance, &path)).await?;
     let name = request.name.trim().to_owned();
     if name.is_empty() || name.len() > 256 {
         return Err(Error::Invalid);
