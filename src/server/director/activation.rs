@@ -280,6 +280,11 @@ async fn execute(
         let _catalog_permit = catalog_permit;
         let applying = expected.is_some();
         let project = store.project(id)?.ok_or(Error::Missing)?;
+        if store.collaboration_requires_admission(id)? {
+            return Err(ActivationError::NotReady(
+                "This collaboration import is an inactive draft. Remote constraints, exact panels and a local nightly budget must be admitted before acquisition.",
+            ));
+        }
         let framing = store
             .framing_draft(id)?
             .ok_or(ActivationError::NotReady("Save a framing first."))?;

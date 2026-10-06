@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
 mod adoption;
+mod collaboration;
 mod configuration;
 mod equipment_report;
 mod pairing;

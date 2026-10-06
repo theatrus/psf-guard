@@ -10,6 +10,7 @@ pub mod allocation;
 pub mod catalog;
 pub mod catalog_rig;
 pub mod client;
+pub mod collaboration;
 pub mod configuration;
 pub mod equipment_report;
 pub mod framing;
