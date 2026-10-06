@@ -22,6 +22,20 @@ pub struct Request {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    BuildQualityReference {
+        policy: psf_guard_director_core::quality::Policy,
+        id: String,
+        frames: Vec<psf_guard_director_core::quality::Frame>,
+    },
+    ClassifyQuality {
+        policy: psf_guard_director_core::quality::Policy,
+        reference: Box<psf_guard_director_core::quality::Reference>,
+        frame: Box<psf_guard_director_core::quality::Frame>,
+        now_ms: u64,
+    },
+    ReviewRestart {
+        input: core::readmission::Review,
+    },
     Open {
         identity: core::Identity,
         policy: core::Policy,
@@ -54,6 +68,16 @@ pub enum Issued {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Reply {
+    QualityReferenceBuilt {
+        reference: Box<psf_guard_director_core::quality::Reference>,
+    },
+    QualityClassified {
+        assessment: psf_guard_director_core::quality::Assessment,
+    },
+    RestartReviewed {
+        advice: core::readmission::Advice,
+        record: Box<ledger::Record>,
+    },
     Opened {
         created: bool,
         record: Box<ledger::Record>,
@@ -99,6 +123,8 @@ pub enum Error {
     ClockReversed,
     NotAdmitted,
     AcquisitionBlocked,
+    InsufficientSamples,
+    UnstableBaseline,
 }
 
 impl From<ledger::Error> for Error {
@@ -196,6 +222,19 @@ impl Storage {
         }
         // Reject cross-rig input before creating or touching a recovery database.
         match &request.operation {
+            Operation::BuildQualityReference { frames, .. }
+                if frames.iter().any(|f| f.context.rig_id != rig_id) =>
+            {
+                return Err(Error::WrongScope)
+            }
+            Operation::ClassifyQuality {
+                reference, frame, ..
+            } if reference.frame.context.rig_id != rig_id || frame.context.rig_id != rig_id => {
+                return Err(Error::WrongScope)
+            }
+            Operation::ReviewRestart { input } if input.rig_id != rig_id => {
+                return Err(Error::WrongScope)
+            }
             Operation::Open { identity, .. } if identity.rig_id != rig_id => {
                 return Err(Error::WrongScope)
             }
@@ -216,8 +255,50 @@ impl Storage {
             }
             _ => {}
         }
+        if let Operation::BuildQualityReference { policy, id, frames } = &request.operation {
+            return Ok(Reply::QualityReferenceBuilt {
+                reference: Box::new(
+                    psf_guard_director_core::quality::build_initial_reference(policy, id, frames)
+                        .map_err(|error| match error {
+                        psf_guard_director_core::quality::Error::InsufficientSamples => {
+                            Error::InsufficientSamples
+                        }
+                        psf_guard_director_core::quality::Error::UnstableBaseline => {
+                            Error::UnstableBaseline
+                        }
+                        _ => Error::InvalidInput,
+                    })?,
+                ),
+            });
+        }
+        if let Operation::ClassifyQuality {
+            policy,
+            reference,
+            frame,
+            now_ms,
+        } = &request.operation
+        {
+            return Ok(Reply::QualityClassified {
+                assessment: psf_guard_director_core::quality::classify(
+                    policy, reference, frame, *now_ms,
+                )
+                .map_err(|_| Error::InvalidInput)?,
+            });
+        }
         let store = self.store(rig_id)?;
         Ok(match request.operation {
+            Operation::ClassifyQuality { .. } | Operation::BuildQualityReference { .. } => {
+                unreachable!("handled above without opening storage")
+            }
+            Operation::ReviewRestart { input } => {
+                let record = store.current()?.ok_or(Error::NotAdmitted)?;
+                let advice = core::readmission::review(&record.snapshot, &input)
+                    .map_err(|_| Error::InvalidInput)?;
+                Reply::RestartReviewed {
+                    advice,
+                    record: Box::new(record),
+                }
+            }
             Operation::Open {
                 identity,
                 policy,

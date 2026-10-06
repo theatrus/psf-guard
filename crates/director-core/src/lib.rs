@@ -17,6 +17,7 @@ pub mod preparation;
 pub mod priority;
 pub mod program;
 pub mod project;
+pub mod quality;
 pub mod recovery;
 pub mod visibility;
 pub mod windows;

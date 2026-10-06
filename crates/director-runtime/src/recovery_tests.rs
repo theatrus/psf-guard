@@ -106,6 +106,170 @@ async fn start(
 }
 
 #[tokio::test]
+async fn quality_classification_is_scoped_read_only_and_not_a_dispatch_permit() {
+    use psf_guard_director_core::quality as q;
+    let dir = TempDir::new().unwrap();
+    let (mut client, task) = start(&dir).await;
+    let reference_frame = q::Frame {
+        capture_id: "reference-frame".into(),
+        observed_at_ms: 1000,
+        context: q::Context {
+            rig_id: "rig-1".into(),
+            configuration_id: "config-1".into(),
+            target_id: "target".into(),
+            recipe_fingerprint: "recipe".into(),
+            analysis_fingerprint: "nina-fast".into(),
+            width: 100,
+            height: 100,
+        },
+        metrics: q::Metrics {
+            stars: Some(100),
+            hfr_pixels: Some(2.0),
+            background_adu: Some(1000.0),
+            eccentricity: Some(0.4),
+        },
+    };
+    let reference = q::Reference {
+        id: "reference".into(),
+        approved: true,
+        initial_group: vec![],
+        frame: reference_frame.clone(),
+    };
+    let mut frame = q::Frame {
+        capture_id: "new-frame".into(),
+        observed_at_ms: 2000,
+        ..reference_frame
+    };
+    frame.metrics.stars = Some(30);
+    frame.metrics.background_adu = Some(2000.0);
+    let reply = exchange(
+        &mut client,
+        1,
+        Operation::ClassifyQuality {
+            policy: q::Policy::default(),
+            reference: Box::new(reference.clone()),
+            frame: Box::new(frame.clone()),
+            now_ms: 2000,
+        },
+    )
+    .await;
+    assert!(matches!(
+        reply,
+        recovery::Reply::QualityClassified {
+            assessment: q::Assessment {
+                verdict: core::Verdict::CorroboratedPoor,
+                ..
+            }
+        }
+    ));
+    assert!(!dir.path().join("recovery.sqlite").exists());
+    let group: Vec<_> = (0..5)
+        .map(|i| q::Frame {
+            capture_id: format!("initial-{i}"),
+            observed_at_ms: 1000 + i * 100,
+            ..reference.frame.clone()
+        })
+        .collect();
+    let built = exchange(
+        &mut client,
+        2,
+        Operation::BuildQualityReference {
+            policy: q::Policy::default(),
+            id: "initial-reference".into(),
+            frames: group.clone(),
+        },
+    )
+    .await;
+    let recovery::Reply::QualityReferenceBuilt { reference: initial } = built else {
+        panic!("expected initial reference")
+    };
+    assert!(!initial.approved);
+    assert_eq!(initial.initial_group, group);
+    let result = exchange(
+        &mut client,
+        3,
+        Operation::ClassifyQuality {
+            policy: q::Policy::default(),
+            reference: initial,
+            frame: Box::new(frame.clone()),
+            now_ms: 2000,
+        },
+    )
+    .await;
+    assert!(matches!(
+        result,
+        recovery::Reply::QualityClassified {
+            assessment: q::Assessment {
+                verdict: core::Verdict::CorroboratedPoor,
+                reference_quality_unknown: true,
+                ..
+            }
+        }
+    ));
+    assert!(!dir.path().join("recovery.sqlite").exists());
+    frame.context.rig_id = "another-rig".into();
+    let reply = exchange(
+        &mut client,
+        4,
+        Operation::ClassifyQuality {
+            policy: q::Policy::default(),
+            reference: Box::new(reference),
+            frame: Box::new(frame),
+            now_ms: 2000,
+        },
+    )
+    .await;
+    assert!(matches!(
+        reply,
+        recovery::Reply::Error {
+            code: recovery::Error::WrongScope
+        }
+    ));
+    assert!(!dir.path().join("recovery.sqlite").exists());
+    drop(client);
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn restart_review_cannot_mutate_the_journal_or_clear_a_stop() {
+    use core::readmission as r;
+    let dir = TempDir::new().unwrap();
+    let (mut client, task) = start(&dir).await;
+    exchange(&mut client, 1, open()).await;
+    let input = r::Review {
+        rig_id: "rig-1".into(),
+        configuration_id: "config-1".into(),
+        night_id: "night-1".into(),
+        now_ms: 10001,
+        operator_requested: true,
+        boundary: r::Boundary::Settled,
+        camera_idle: true,
+        mount_stopped: true,
+        guider_stopped: true,
+        safety: Safety::Safe,
+        motion: core::Motion::Permitted,
+    };
+    let reply = exchange(
+        &mut client,
+        2,
+        Operation::ReviewRestart {
+            input: input.clone(),
+        },
+    )
+    .await;
+    assert!(
+        matches!(reply, recovery::Reply::RestartReviewed { advice: r::Advice::RequestFreshAuthority, record } if record.revision == 0)
+    );
+    exchange(&mut client, 3, apply(0, 10001, core::Event::StopNight {})).await;
+    let reply = exchange(&mut client, 4, Operation::ReviewRestart { input }).await;
+    assert!(
+        matches!(reply, recovery::Reply::RestartReviewed { advice: r::Advice::TerminalStop, record } if record.revision == 1)
+    );
+    drop(client);
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn weather_resume_ipc_cannot_bypass_missing_execution_evidence() {
     let dir = TempDir::new().unwrap();
     let (mut client, task) = start(&dir).await;
