@@ -1831,6 +1831,7 @@ async fn a_rig_skipped_for_one_activation_keeps_its_record() {
 /// A rig database that refuses the write skips that rig with a reason; the
 /// other rigs are applied and recorded, and the refused rig keeps what the
 /// last activation knew of it.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_rig_database_that_refuses_the_write_skips_only_that_rig() {
     use std::os::unix::fs::PermissionsExt;
