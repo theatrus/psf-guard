@@ -125,9 +125,10 @@ export interface FramingViewProps {
   /** Rigs already holding this project; the first with optics frames by default. */
   preferredRigIds?: string[];
   /** On a page that keeps the plan: the rigs shooting it, and how to add or
-   *  drop one. A rig's row then toggles it. */
+   *  drop one. A rig's row then toggles it. `false` says the rig did not
+   *  join, such as when no exposure template matches it. */
   shootingRigIds?: string[];
-  onToggleRig?: (rigId: string, on: boolean) => void;
+  onToggleRig?: (rigId: string, on: boolean) => boolean | void;
   /** Why a rig cannot join yet, such as a plan with no objectives. */
   joinBlocked?: string;
 }
@@ -677,10 +678,10 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         {onToggleRig && <button type="button" role="switch" className="framing-rig-switch" aria-checked={shooting}
           aria-label={`${entry.catalog_name} on`} title={blocked ? joinBlocked : shooting ? 'Shoots this plan' : 'Off: not in this plan'}
           disabled={!canWrite || blocked} onClick={() => {
-            onToggleRig(id, !shooting);
+            const joined = onToggleRig(id, !shooting) !== false;
             // A rig turned on frames the plan at once, as though its heading
-            // were clicked too.
-            if (!shooting && field && !own) chooseRig(id);
+            // were clicked too; one that could not join frames nothing.
+            if (!shooting && joined && field && !own) chooseRig(id);
           }}><span aria-hidden="true" /></button>}
         {(() => {
           // Swatch, name and field are one click target that frames the

@@ -692,7 +692,7 @@ describe('Framing view', () => {
     const toggled: Array<[string, boolean]> = [];
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     const view = (shooting: string[]) => <QueryClientProvider client={client}><FramingView projectId="project" seed={seed} preferredRigIds={[rigA.rig.id]}
-      shootingRigIds={shooting} onToggleRig={(id, on) => toggled.push([id, on])} /></QueryClientProvider>;
+      shootingRigIds={shooting} onToggleRig={(id, on) => { toggled.push([id, on]); }} /></QueryClientProvider>;
     const { rerender } = render(view([rigA.rig.id]));
     const redcat = await screen.findByRole('switch', { name: 'RedCat 61 on' });
     expect(redcat).toHaveAttribute('aria-checked', 'true');
@@ -721,6 +721,22 @@ describe('Framing view', () => {
     expect(screen.getByRole('group', { name: 'Askar 107' })).toHaveClass('is-framing');
     fireEvent.click(screen.getByRole('switch', { name: 'Askar 107 on' }));
     expect(toggled.at(-1)).toEqual([rigC.rig.id, false]);
+  });
+
+  it('frames with a rig turned on only when it joins the plan', async () => {
+    const rigC = { ...rigA, rig: { ...rigA.rig, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Askar' }, catalog_slug: 'askar', catalog_name: 'Askar 107' };
+    fixture();
+    server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB, rigC]))));
+    const toggled: Array<[string, boolean]> = [];
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    // No exposure template matches Askar, so the page says it did not join.
+    render(<QueryClientProvider client={client}><FramingView projectId="project" seed={seed} preferredRigIds={[rigA.rig.id]}
+      shootingRigIds={[rigA.rig.id]} onToggleRig={(id, on) => { toggled.push([id, on]); return false; }} /></QueryClientProvider>);
+    await waitFor(() => expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from RedCat 61'));
+    fireEvent.click(screen.getByRole('switch', { name: 'Askar 107 on' }));
+    expect(toggled).toEqual([[rigC.rig.id, true]]);
+    expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from RedCat 61');
+    expect(screen.getByRole('button', { name: 'RedCat 61 frames the plan' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('hides the shared framing when every rig that is on frames separately', async () => {
