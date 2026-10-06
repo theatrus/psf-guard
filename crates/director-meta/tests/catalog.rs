@@ -567,3 +567,72 @@ fn orphaned_links_fail_reads_and_cannot_be_published_as_a_backup() {
     assert!(matches!(store.backup(&backup), Err(Error::CorruptDatabase)));
     assert!(!backup.exists());
 }
+
+#[test]
+fn source_projects_get_their_plans_and_links_together_or_not_at_all() {
+    use psf_guard_director_meta::catalog::SourceProject;
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let catalog = CatalogIdentity {
+        id: Uuid::new_v4(),
+        origin_instance_id: store.instance_id(),
+    };
+    let rig = store
+        .bind_catalog_rig_after(catalog, "C925", true, || Ok(()))
+        .unwrap()
+        .rig
+        .id;
+    // Another catalog already plans one of the GUIDs, as a Sync copy does.
+    let shared = fixture(&mut store);
+    store.link_catalog_project(&shared).unwrap();
+    let source = |guid: Uuid, profile: &str, name: &str| SourceProject {
+        source_project_guid: guid,
+        source_profile_id: profile.into(),
+        proposed_project_id: Uuid::new_v4(),
+        name: name.into(),
+    };
+    let new = source(Uuid::new_v4(), "profile-a", "Pelican");
+    let joined = source(shared.source_project_guid, "profile-a", "Andromeda");
+    let plans = store
+        .adopt_source_projects(catalog.id, rig, &[new.clone(), joined.clone()])
+        .unwrap();
+    assert_eq!(plans, vec![new.proposed_project_id, shared.project_id]);
+    assert_eq!(
+        store
+            .project(new.proposed_project_id)
+            .unwrap()
+            .unwrap()
+            .name,
+        "Pelican"
+    );
+    assert!(store.project(joined.proposed_project_id).unwrap().is_none());
+    assert_eq!(
+        store
+            .linked_project(catalog.id, joined.source_project_guid)
+            .unwrap(),
+        Some(shared.project_id)
+    );
+    // Taken in again, a linked project keeps its plan.
+    let again = source(new.source_project_guid, "profile-a", "Pelican");
+    assert_eq!(
+        store
+            .adopt_source_projects(catalog.id, rig, &[again])
+            .unwrap(),
+        vec![new.proposed_project_id]
+    );
+    // One link that fails leaves no plan behind for the next listing to repeat.
+    let count = |store: &MetaStore| store.projects(None, 256).unwrap().items.len();
+    let before = count(&store);
+    let fresh = source(Uuid::new_v4(), "profile-a", "Veil");
+    let changed = source(new.source_project_guid, "profile-b", "Pelican");
+    assert!(matches!(
+        store.adopt_source_projects(catalog.id, rig, &[fresh.clone(), changed]),
+        Err(Error::Conflict)
+    ));
+    assert!(store.project(fresh.proposed_project_id).unwrap().is_none());
+    assert_eq!(count(&store), before);
+    assert!(matches!(
+        store.adopt_source_projects(catalog.id, rig, &[]),
+        Err(Error::InvalidInput)
+    ));
+}

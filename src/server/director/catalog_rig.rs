@@ -2,7 +2,7 @@
 use super::catalog_adoption::AdoptionError;
 use super::*;
 use crate::catalog_identity;
-use psf_guard_director_meta::{catalog_rig::CatalogRig, CatalogIdentity};
+use psf_guard_director_meta::catalog_rig::CatalogRig;
 use rusqlite::{OpenFlags, TransactionBehavior};
 use std::time::Duration;
 
@@ -96,11 +96,13 @@ async fn execute(
                 .map_err(StoreError::from)
                 .map_err(Error::from)?;
             let saved = catalog_identity::read(&tx)?;
-            let require_new = saved.is_none();
-            let identity = saved.unwrap_or(CatalogIdentity {
-                id: plan.catalog_id,
-                origin_instance_id: service.instance_id,
-            });
+            let (identity, require_new) = super::reviewed_identity(
+                store,
+                saved,
+                service.instance_id,
+                &catalog.database_path,
+                plan.catalog_id,
+            )?;
             if identity.id != plan.catalog_id {
                 return Err(Error::Conflict.into());
             }

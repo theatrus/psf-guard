@@ -54,7 +54,9 @@ async fn global_project_order_accepts_a_full_list_and_rejects_stale_replacements
     let (_dir, state, app, instance, _catalog, rig) = fixture().await;
     let order: Vec<Uuid> = {
         let mut store = state.director.as_ref().unwrap().writer.lock().unwrap();
-        (0..256)
+        // Every Target Scheduler project is a plan, so an order ranks as
+        // many as the plan list shows.
+        (0..psf_guard_director_meta::MAX_PLANS)
             .map(|i| {
                 store
                     .create_project(Uuid::new_v4(), &format!("Project {i}"))
@@ -67,7 +69,7 @@ async fn global_project_order_accepts_a_full_list_and_rejects_stale_replacements
     let (_, value) = call(&app, "GET", &path, Value::Null, None).await;
     let mut settings = value["data"].clone();
     settings["project_order"] = json!(order);
-    assert!(serde_json::to_vec(&settings).unwrap().len() > 4096);
+    assert!(serde_json::to_vec(&settings).unwrap().len() > 16384);
     let (status, saved) = call(&app, "PUT", &path, settings.clone(), None).await;
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(

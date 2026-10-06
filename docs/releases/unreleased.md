@@ -8,6 +8,14 @@
   and a rig that is off hands the panel size to one that is on. Separate
   framings of rigs that are off are drawn dim, and those of rigs gone from
   the list can be removed. On a phone the survey chips fold behind one.
+- Open Director's plan list without holding up N.I.N.A. or other Director
+  work. The list reads rig databases without locking them and shows a busy
+  one as it last read it. One damaged record, or one Target Scheduler template
+  whose Moon settings Director cannot use, no longer fails the whole list or
+  the rig's templates; the warnings name it.
+
+- Rank up to 1024 projects in Director's project order, as many as the plan
+  list shows, instead of 256.
 - Show tonight in Director's Visibility panel from noon until the next noon;
   from local noon on it showed tomorrow night. Each rig is now timed with the
   plan's scheduling limits (altitude, custom horizon and offset, meridian
