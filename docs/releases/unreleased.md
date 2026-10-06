@@ -1,5 +1,13 @@
 # Unreleased
 
+- In Director's framing view, turn the camera by its handle with the sky
+  turned without it spinning, save views wider than 40°, and keep the view
+  and any edit typed while a save is out. A value the server would refuse
+  is marked at its field before a save, a quarter turn and back is no
+  change, a trackpad zooms as far as a wheel does for the same distance,
+  and a rig that is off hands the panel size to one that is on. Separate
+  framings of rigs that are off are drawn dim, and those of rigs gone from
+  the list can be removed. On a phone the survey chips fold behind one.
 - Open Director's plan list without holding up N.I.N.A. or other Director
   work. The list reads rig databases without locking them and shows a busy
   one as it last read it. One damaged record, or one Target Scheduler template

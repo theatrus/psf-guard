@@ -134,19 +134,25 @@ export interface SkyCanvasProps {
   stage: Stage;
   /** Called once when the browser has no WebGL, so the caller can fall back. */
   onUnsupported?: () => void;
+  /** Called with true when the GPU takes the canvas's context away, and
+   *  with false once it is back, so the caller can draw something else meanwhile. */
+  onLost?: (lost: boolean) => void;
   className?: string;
 }
 
 /** The survey picture under the framing stage, re-projected on the GPU for
  *  every frame from the tiles fetched so far. */
-export default function SkyCanvas({ tiles, view, viewFov, stage, onUnsupported, className }: SkyCanvasProps) {
+export default function SkyCanvas({ tiles, view, viewFov, stage, onUnsupported, onLost, className }: SkyCanvasProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const program = useRef<Program | null | undefined>(undefined);
   const textures = useRef(new Map<string, { texture: WebGLTexture; width: number; height: number }>());
   const loading = useRef(new Map<string, Promise<void>>());
+  // Counts contexts: an image that decodes after its context went away
+  // must not be uploaded into the next one.
+  const generation = useRef(0);
   const frame = useRef(0);
-  const latest = useRef({ tiles, view, viewFov, stage });
-  latest.current = { tiles, view, viewFov, stage };
+  const latest = useRef({ tiles, view, viewFov, stage, onUnsupported, onLost });
+  latest.current = { tiles, view, viewFov, stage, onUnsupported, onLost };
 
   const draw = () => {
     const element = canvas.current;
@@ -190,21 +196,13 @@ export default function SkyCanvas({ tiles, view, viewFov, stage, onUnsupported, 
   };
   const schedule = () => { cancelAnimationFrame(frame.current); frame.current = requestAnimationFrame(draw); };
 
-  useEffect(() => {
-    const element = canvas.current;
-    if (!element || program.current !== undefined) return;
-    program.current = setUp(element);
-    if (!program.current) { onUnsupported?.(); return; }
-    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(schedule) : null;
-    observer?.observe(element);
-    return () => { observer?.disconnect(); cancelAnimationFrame(frame.current); };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
   // Upload each new tile once its image has decoded; drop textures of tiles that left.
-  useEffect(() => {
+  const upload = () => {
     const p = program.current;
     if (!p) return;
     const { gl } = p;
+    const { tiles } = latest.current;
+    const started = generation.current;
     const keep = new Set(tiles.map(tile => tile.key));
     for (const [key, entry] of textures.current) {
       if (!keep.has(key)) { gl.deleteTexture(entry.texture); textures.current.delete(key); }
@@ -215,7 +213,7 @@ export default function SkyCanvas({ tiles, view, viewFov, stage, onUnsupported, 
       image.decoding = 'async';
       image.src = tile.url;
       const task = image.decode().then(() => {
-        if (!latest.current.tiles.some(t => t.key === tile.key)) return;
+        if (generation.current !== started || program.current !== p || !latest.current.tiles.some(t => t.key === tile.key)) return;
         const texture = gl.createTexture();
         if (!texture) return;
         gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -226,11 +224,65 @@ export default function SkyCanvas({ tiles, view, viewFov, stage, onUnsupported, 
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, image);
         textures.current.set(tile.key, { texture, width: image.naturalWidth, height: image.naturalHeight });
         schedule();
-      }).catch(() => undefined).finally(() => { loading.current.delete(tile.key); });
+      }).catch(() => undefined).finally(() => { if (generation.current === started) loading.current.delete(tile.key); });
       loading.current.set(tile.key, task);
     }
     schedule();
-  }, [tiles]); // eslint-disable-line react-hooks/exhaustive-deps
+  };
+  /** Let go of every texture and the program, in a context that still holds them. */
+  const release = () => {
+    const p = program.current;
+    if (p && !p.gl.isContextLost()) {
+      for (const entry of textures.current.values()) p.gl.deleteTexture(entry.texture);
+      p.gl.deleteProgram(p.program);
+    }
+    textures.current.clear();
+    loading.current.clear();
+    generation.current += 1;
+  };
+
+  useEffect(() => {
+    const element = canvas.current;
+    if (!element || program.current !== undefined) return;
+    program.current = setUp(element);
+    if (!program.current) { latest.current.onUnsupported?.(); return; }
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(schedule) : null;
+    observer?.observe(element);
+    // A context the GPU takes away takes its textures with it. Asking for it
+    // back (preventDefault) lets the browser restore it; the program is then
+    // built again and the tiles uploaded anew.
+    const lost = (event: Event) => {
+      event.preventDefault();
+      cancelAnimationFrame(frame.current);
+      release();
+      program.current = null;
+      latest.current.onLost?.(true);
+    };
+    const restored = () => {
+      program.current = setUp(element);
+      if (!program.current) { latest.current.onUnsupported?.(); return; }
+      upload();
+      latest.current.onLost?.(false);
+    };
+    element.addEventListener('webglcontextlost', lost);
+    element.addEventListener('webglcontextrestored', restored);
+    return () => {
+      observer?.disconnect();
+      cancelAnimationFrame(frame.current);
+      element.removeEventListener('webglcontextlost', lost);
+      element.removeEventListener('webglcontextrestored', restored);
+      const gl = program.current?.gl;
+      release();
+      program.current = undefined;
+      // A browser keeps only a few contexts, so a canvas that leaves the
+      // page gives its own back at once. React may put the same canvas
+      // straight back (development mounts twice), so only a canvas still
+      // gone a moment later lets go of it.
+      if (gl) setTimeout(() => { if (!element.isConnected) gl.getExtension('WEBGL_lose_context')?.loseContext(); }, 0);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { upload(); }, [tiles]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { schedule(); }, [view, viewFov, stage]); // eslint-disable-line react-hooks/exhaustive-deps
 

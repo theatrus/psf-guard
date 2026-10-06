@@ -159,14 +159,18 @@ button.workspace-pill { cursor: pointer; }
 .workspace-panel[hidden] { display: none; }
 .observing-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
 
-/* Framing in the workspace: the sky fills the room the window leaves below
-   the sticky top, and the controls scroll beside it in all of that room,
-   staying put while the page scrolls down to the visibility chart. The
-   workspace measures the room into --workspace-room and the top's height
-   into --workspace-top. */
+/* Framing in the workspace: the sky and its readout fill the room the
+   window leaves below the sticky top, and the controls scroll beside it in
+   all of that room, staying put while the page scrolls down to the
+   visibility chart. The workspace measures the room into --workspace-room
+   and the top's height into --workspace-top; both columns give back the
+   24px of the panel's and the framing's top margins. The sky takes what
+   its readout leaves, however that line wraps. */
 @media (min-width: 1001px) {
   .workspace-panel .framing-stage-wrap { position: static; }
-  .workspace-panel .framing-stage { height: max(420px, calc(var(--workspace-room, calc(100vh - 300px)) - 120px)); }
+  .workspace-panel .framing-sky-box { display: flex; flex-direction: column; height: max(420px, calc(var(--workspace-room, calc(100vh - 300px)) - 24px)); }
+  .workspace-panel .framing-sky-box > .framing-stage { flex: 1 1 auto; height: auto; min-height: 0; }
+  .workspace-panel .framing-sky-box > .framing-readout { flex: none; }
   .workspace-panel .framing-controls { position: sticky; top: calc(var(--workspace-top, 0px) + 12px); max-height: max(420px, calc(var(--workspace-room, calc(100vh - 300px)) - 24px)); overflow-y: auto; padding-right: 4px; scrollbar-width: thin; box-sizing: border-box; }
 }
 

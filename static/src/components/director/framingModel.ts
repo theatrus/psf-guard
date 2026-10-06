@@ -41,11 +41,79 @@ export interface FramingState {
 }
 
 export function stateFromDraft(draft: DirectorFramingDraft): FramingState {
+  // Angles are read through the same rounding every edit uses, so one saved
+  // with float drift before is not an edit when a turn comes back to it.
   return {
-    targetName: draft.target_name, center: draft.center, positionAngle: draft.position_angle_degrees,
+    targetName: draft.target_name, center: draft.center, positionAngle: normaliseAngle(draft.position_angle_degrees),
     mosaic: draft.mosaic, panelRigId: draft.panel_rig_id, panel: draft.panel, shownRigIds: draft.shown_rig_ids,
-    surveyId: draft.survey_id, viewCenter: draft.center, viewFov: draft.view_fov_degrees, rigFramings: draft.rig_framings ?? [],
+    surveyId: draft.survey_id, viewCenter: draft.center, viewFov: clampFov(draft.view_fov_degrees),
+    rigFramings: (draft.rig_framings ?? []).map(own => own.position_angle_degrees === null ? own : { ...own, position_angle_degrees: normaliseAngle(own.position_angle_degrees) }),
   };
+}
+
+/** An angle, or a right ascension, in [0, 360): wrapped, with the last
+ *  digits of float drift rounded off so a quarter turn and back is the
+ *  same number, and a value that rounds up to 360 read as 0. The core
+ *  refuses 360 itself. Nine places keep every digit anyone types. */
+export function normaliseAngle(degrees: number): number {
+  if (!Number.isFinite(degrees)) return 0;
+  const rounded = Math.round((((degrees % 360) + 360) % 360) * 1e9) / 1e9;
+  return rounded >= 360 ? 0 : rounded;
+}
+
+/** A right ascension rounded for a request: `toFixed` turns 359.999996
+ *  into 360, which the sky and feasibility endpoints refuse. */
+export function roundRa(raDegrees: number, places: number): number {
+  const rounded = Number(normaliseAngle(raDegrees).toFixed(places));
+  return rounded >= 360 ? 0 : rounded;
+}
+
+/** The core's limits on a framing (`crates/director-core/src/framing.rs`):
+ *  a panel side and a whole mosaic are at most 30° across, a panel side
+ *  at least 0.01°. */
+export const MAX_EXTENT_DEGREES = 30;
+export const MIN_PANEL_DEGREES = 0.01;
+
+/** The mosaic's extent along the camera axes, as the core computes it. */
+export function mosaicExtent(panel: DirectorPanelSize, mosaic: DirectorMosaic): DirectorPanelSize {
+  const [stepX, stepY] = mosaicStep(panel, mosaic);
+  return { width_degrees: panel.width_degrees + stepX * (mosaic.columns - 1), height_degrees: panel.height_degrees + stepY * (mosaic.rows - 1) };
+}
+
+/** Something the server would refuse to save, named by the field it is in. */
+export interface FramingProblem {
+  /** `center`, `angle`, `panel` or `mosaic` for the shared framing; the
+   *  same after `rig:<id>:` for a rig framed on its own. */
+  field: string;
+  message: string;
+}
+
+function layoutProblems(prefix: string, who: string, center: DirectorSkyPosition, angle: number, panel: DirectorPanelSize | null, mosaic: DirectorMosaic): FramingProblem[] {
+  const problems: FramingProblem[] = [];
+  const say = (field: string, message: string) => problems.push({ field: `${prefix}${field}`, message: who ? `${who}${message}` : message[0].toUpperCase() + message.slice(1) });
+  const within = (value: number, low: number, high: number) => Number.isFinite(value) && value >= low && value <= high;
+  if (!within(center.ra_degrees, 0, 360) || center.ra_degrees >= 360 || !within(center.dec_degrees, -90, 90)) say('center', 'RA 0 to 360°, Dec −90 to 90°');
+  if (!within(angle, 0, 360) || angle >= 360) say('angle', 'camera angle 0 to 360°');
+  if (![mosaic.rows, mosaic.columns].every(n => Number.isInteger(n) && n >= 1 && n <= 16) || !within(mosaic.overlap_percent, 0, 90)) say('mosaic', '1 to 16 rows and columns, overlap up to 90%');
+  if (panel) {
+    if (![panel.width_degrees, panel.height_degrees].every(side => within(side, MIN_PANEL_DEGREES, MAX_EXTENT_DEGREES))) say('panel', `panel sides ${MIN_PANEL_DEGREES}° to ${MAX_EXTENT_DEGREES}°`);
+    else {
+      const extent = mosaicExtent(panel, mosaic);
+      if (extent.width_degrees > MAX_EXTENT_DEGREES || extent.height_degrees > MAX_EXTENT_DEGREES) say('mosaic', `mosaic ${formatDegrees(extent.width_degrees)} × ${formatDegrees(extent.height_degrees)}, over ${MAX_EXTENT_DEGREES}°`);
+    }
+  }
+  return problems;
+}
+
+/** What the server would refuse in this framing, checked here first so the
+ *  field can say so before a save, not after a bare 400. A separate framing
+ *  is sized from its rig's field when no size is typed, as activation sizes it. */
+export function framingProblems(state: FramingState, rigs: DirectorRigProfileSummary[], rigName: (id: string) => string = () => 'A rig'): FramingProblem[] {
+  const problems = layoutProblems('', '', state.center, state.positionAngle, state.panel, state.mosaic);
+  for (const own of state.rigFramings) {
+    problems.push(...layoutProblems(`rig:${own.rig_id}:`, `${rigName(own.rig_id)}: `, own.center ?? state.center, own.position_angle_degrees ?? state.positionAngle, own.panel ?? panelForRig(rigs, own.rig_id), own.mosaic));
+  }
+  return problems;
 }
 
 export function stateFromSeed(seed: FramingSeed, defaultSurvey: string): FramingState {
@@ -61,7 +129,9 @@ export function draftFromState(state: FramingState, projectId: string, revision:
     project_id: projectId, revision, target_name: state.targetName.trim(), center: state.center,
     position_angle_degrees: state.positionAngle, mosaic: state.mosaic, panel_rig_id: state.panelRigId,
     panel: state.panel, shown_rig_ids: state.shownRigIds, survey_id: state.surveyId,
-    view_fov_degrees: state.viewFov, updated_at_ms: 0, rig_framings: state.rigFramings,
+    // The view's width is the view's own: it is kept with the draft but
+    // never part of the layout, and always within what the stage shows.
+    view_fov_degrees: clampFov(state.viewFov), updated_at_ms: 0, rig_framings: state.rigFramings,
   };
 }
 
@@ -478,6 +548,35 @@ export function handleOffset(positionAngle: number, halfHeightDegrees: number, m
  *  plane away from its center. */
 export function handleSky(center: DirectorSkyPosition, positionAngle: number, halfHeightDegrees: number, marginDegrees: number): DirectorSkyPosition {
   return deprojectFrom(center, handleOffset(positionAngle, halfHeightDegrees, marginDegrees));
+}
+
+/** The framing's rotation handle on the sky: past the top edge of the whole
+ *  mosaic, along the camera's up direction, a few per cent of the view out. */
+export function rotationHandleSky(state: FramingState, extent: DirectorPanelSize, viewFov = state.viewFov): DirectorSkyPosition {
+  return handleSky(state.center, state.positionAngle, extent.height_degrees / 2, Math.max(0.02, viewFov * 0.03));
+}
+
+/** How much wider than its footprint a fitted view is. */
+export const FIT_MARGIN = 1.3;
+
+/** The view width that shows every one of `points`, and the rotation handle
+ *  when there is one, on a stage centered at `center` and turned by
+ *  `rotation`, with room around them. Each point is taken as drawn, so a
+ *  turned rectangle's corners count and not its unturned box. The handle
+ *  stands further out as the view widens, so the width is stepped up
+ *  from the corners' until it holds the handle too. `null` with no points. */
+export function fitViewFov(points: DirectorSkyPosition[], handle: ((viewFov: number) => DirectorSkyPosition) | null, center: DirectorSkyPosition, rotation: number, stage: Stage = DEFAULT_STAGE): number | null {
+  const view = viewAt(center, center, rotation);
+  // A point x degrees from the center sits x / fov of the stage's width out,
+  // and must stay inside half the stage's width and half its height.
+  const needed = (positions: DirectorSkyPosition[]) => positions.reduce((widest, position) => {
+    const at = projectOn(view, position);
+    return at ? Math.max(widest, 2 * FIT_MARGIN * Math.abs(at[0]), (2 * FIT_MARGIN * Math.abs(at[1]) * stage.width) / stage.height) : widest;
+  }, 0);
+  let fov = needed(points);
+  if (!(fov > 0)) return null;
+  if (handle) for (let step = 0; step < 4; step += 1) fov = Math.max(fov, needed([handle(fov)]));
+  return clampFov(fov);
 }
 
 /** The camera angle that points a footprint's up direction from its center
