@@ -10,6 +10,7 @@ description = "Local sidecar protocol and planning host for PSF Guard Director"
 [dependencies]
 psf-guard-director-core = { path = "../director-core" }
 psf-guard-director-ledger = { path = "../director-ledger" }
+psf-guard-director-interop = { path = "../director-interop" }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }

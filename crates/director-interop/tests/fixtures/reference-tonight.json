@@ -1,0 +1,264 @@
+{
+  "task": {
+    "id": "a41d9aed7ed4",
+    "project": "a418a2d6046a",
+    "projectName": "M31 halo in narrowband",
+    "agent": "8e6710917f15",
+    "region": {
+      "ra": 10.6847,
+      "dec": 41.269,
+      "width": 5,
+      "height": 3,
+      "rotation": 0
+    },
+    "filters": [
+      {
+        "filter": "H",
+        "exposure": 300,
+        "hours": 10
+      },
+      {
+        "filter": "O",
+        "exposure": 300,
+        "hours": 10
+      }
+    ],
+    "state": "accepted",
+    "version": 3,
+    "issued": 1791171000,
+    "note": "joined by Interop fixture",
+    "seconds": 72000,
+    "cells": [
+      {
+        "ra": 9.06407384841786,
+        "dec": 40.617722098113205,
+        "width": 2.53966267672956,
+        "height": 1.697444196226415,
+        "rotation": 0,
+        "row": 0,
+        "column": 0
+      },
+      {
+        "ra": 10.6847,
+        "dec": 40.617722098113205,
+        "width": 2.53966267672956,
+        "height": 1.697444196226415,
+        "rotation": 0,
+        "row": 0,
+        "column": 1
+      },
+      {
+        "ra": 12.30532615158214,
+        "dec": 40.617722098113205,
+        "width": 2.53966267672956,
+        "height": 1.697444196226415,
+        "rotation": 0,
+        "row": 0,
+        "column": 2
+      },
+      {
+        "ra": 9.031414477177801,
+        "dec": 41.92027790188679,
+        "width": 2.53966267672956,
+        "height": 1.697444196226415,
+        "rotation": 0,
+        "row": 1,
+        "column": 0
+      },
+      {
+        "ra": 10.6847,
+        "dec": 41.92027790188679,
+        "width": 2.53966267672956,
+        "height": 1.697444196226415,
+        "rotation": 0,
+        "row": 1,
+        "column": 1
+      },
+      {
+        "ra": 12.337985522822198,
+        "dec": 41.92027790188679,
+        "width": 2.53966267672956,
+        "height": 1.697444196226415,
+        "rotation": 0,
+        "row": 1,
+        "column": 2
+      }
+    ],
+    "share": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "kind": "mosaic",
+    "visit": {
+      "seconds": 3300,
+      "frames": {
+        "O": 11
+      },
+      "filter": "O",
+      "moon": 0
+    },
+    "assignedNight": "2026-10-05",
+    "assignedAt": 1791171000,
+    "dealtHours": 6,
+    "tiledRotation": null
+  },
+  "tasks": [
+    {
+      "id": "a41d9aed7ed4",
+      "project": "a418a2d6046a",
+      "projectName": "M31 halo in narrowband",
+      "agent": "8e6710917f15",
+      "region": {
+        "ra": 10.6847,
+        "dec": 41.269,
+        "width": 5,
+        "height": 3,
+        "rotation": 0
+      },
+      "filters": [
+        {
+          "filter": "H",
+          "exposure": 300,
+          "hours": 10
+        },
+        {
+          "filter": "O",
+          "exposure": 300,
+          "hours": 10
+        }
+      ],
+      "state": "accepted",
+      "version": 3,
+      "issued": 1791171000,
+      "note": "joined by Interop fixture",
+      "seconds": 72000,
+      "cells": [
+        {
+          "ra": 9.06407384841786,
+          "dec": 40.617722098113205,
+          "width": 2.53966267672956,
+          "height": 1.697444196226415,
+          "rotation": 0,
+          "row": 0,
+          "column": 0
+        },
+        {
+          "ra": 10.6847,
+          "dec": 40.617722098113205,
+          "width": 2.53966267672956,
+          "height": 1.697444196226415,
+          "rotation": 0,
+          "row": 0,
+          "column": 1
+        },
+        {
+          "ra": 12.30532615158214,
+          "dec": 40.617722098113205,
+          "width": 2.53966267672956,
+          "height": 1.697444196226415,
+          "rotation": 0,
+          "row": 0,
+          "column": 2
+        },
+        {
+          "ra": 9.031414477177801,
+          "dec": 41.92027790188679,
+          "width": 2.53966267672956,
+          "height": 1.697444196226415,
+          "rotation": 0,
+          "row": 1,
+          "column": 0
+        },
+        {
+          "ra": 10.6847,
+          "dec": 41.92027790188679,
+          "width": 2.53966267672956,
+          "height": 1.697444196226415,
+          "rotation": 0,
+          "row": 1,
+          "column": 1
+        },
+        {
+          "ra": 12.337985522822198,
+          "dec": 41.92027790188679,
+          "width": 2.53966267672956,
+          "height": 1.697444196226415,
+          "rotation": 0,
+          "row": 1,
+          "column": 2
+        }
+      ],
+      "share": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "kind": "mosaic",
+      "visit": {
+        "seconds": 3300,
+        "frames": {
+          "O": 11
+        },
+        "filter": "O",
+        "moon": 0
+      },
+      "assignedNight": "2026-10-05",
+      "assignedAt": 1791171000,
+      "dealtHours": 6,
+      "tiledRotation": null
+    }
+  ],
+  "requirementsByProject": {
+    "a418a2d6046a": {
+      "minFocalLength": null,
+      "maxFocalLength": null,
+      "minScale": null,
+      "maxScale": null,
+      "acceptColour": true,
+      "colourMaxMoon": null,
+      "maxHfr": 3.5,
+      "maxGuideRms": null,
+      "minExposure": 120,
+      "maxExposure": 600,
+      "filters": {
+        "H": 7,
+        "O": 7
+      },
+      "maxMoonIllumination": null,
+      "minMoonSeparation": 30,
+      "minAltitude": 30,
+      "requireCalibrated": false,
+      "minFramesPerVisit": 10
+    }
+  },
+  "version": 3,
+  "protocol": 1,
+  "requirements": {
+    "minFocalLength": null,
+    "maxFocalLength": null,
+    "minScale": null,
+    "maxScale": null,
+    "acceptColour": true,
+    "colourMaxMoon": null,
+    "maxHfr": 3.5,
+    "maxGuideRms": null,
+    "minExposure": 120,
+    "maxExposure": 600,
+    "filters": {
+      "H": 7,
+      "O": 7
+    },
+    "maxMoonIllumination": null,
+    "minMoonSeparation": 30,
+    "minAltitude": 30,
+    "requireCalibrated": false,
+    "minFramesPerVisit": 10
+  }
+}

@@ -2946,6 +2946,9 @@ AstroCollab 0.2.0-draft.1 (wire protocol 1) to two proposed clients: a plugin-on
 local workload source, and import into PSF Guard's existing project workspace
 and rig databases. Both use the shared Rust planner, durable local execution
 ledger and the same NINA Session/actions/hooks. Neither connector is implemented.
+The shared Rust read-only adapter now decodes health, profiles, projects and
+nightly visits with provenance and review reasons. It adds no IPC command or
+acquisition authority; see the focused record for limits and remaining work.
 
 The public protocol supplies hello, browse/join, a nightly panel list and reports.
 It grants no hardware authority; the nightly list is held rather than constantly
@@ -4378,8 +4381,9 @@ fixtures but are not required network dependencies of CI or acquisition.
 
 ### Phase 6: remote instances and collaboration (deferred)
 
-Design and protocol mapping only. The [interoperability backlog](collaboration.md#delivery-and-validation)
-defines reviewed increments for a shared read-only adapter, PSF Guard import,
+The shared read-only decoder is implemented; host integration remains deferred.
+The [interoperability backlog](collaboration.md#delivery-and-validation)
+defines reviewed increments for host connectors, PSF Guard import,
 plugin-only admission and durable reports. No connector, public collaboration
 route or permission is delivered yet. File transfer awaits a defined extension.
 Deferral does not block single-coordinator planning and acquisition across
