@@ -324,7 +324,9 @@ async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment(
     }
     let (status, _, body) = raw_get(&a.f.app, &path, None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let goals = body["data"]["program"]["assignment"]["goals"].as_array().unwrap();
+    let goals = body["data"]["program"]["assignment"]["goals"]
+        .as_array()
+        .unwrap();
     assert_eq!(goals.len(), 2, "{body}");
     assert_eq!(body["data"]["omitted"], json!([]), "{body}");
     assert_eq!(body["data"]["links"][0]["bandpass_id"], "h_alpha");
@@ -332,10 +334,33 @@ async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment(
     a.db.execute("UPDATE exposureplan SET accepted=desired WHERE Id=(SELECT min(Id) FROM exposureplan WHERE desired=72)", []).unwrap();
     let (status, _, body) = raw_get(&a.f.app, &path, None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["data"]["program"]["assignment"]["goals"].as_array().unwrap().len(), 1, "{body}");
-    assert_eq!(body["data"]["program"]["bindings"].as_array().unwrap().len(), 1, "{body}");
-    assert!(body["data"]["omitted"].to_string().contains("1 finished goal left out"), "{body}");
-    a.db.execute("UPDATE exposureplan SET accepted=10 WHERE accepted=desired AND desired=72", []).unwrap();
+    assert_eq!(
+        body["data"]["program"]["assignment"]["goals"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "{body}"
+    );
+    assert_eq!(
+        body["data"]["program"]["bindings"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "{body}"
+    );
+    assert!(
+        body["data"]["omitted"]
+            .to_string()
+            .contains("1 finished goal left out"),
+        "{body}"
+    );
+    a.db.execute(
+        "UPDATE exposureplan SET accepted=10 WHERE accepted=desired AND desired=72",
+        [],
+    )
+    .unwrap();
 
     // The tuple is checked before anything is read.
     let wrong_instance = format!(
@@ -399,7 +424,12 @@ async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment(
     let after: psf_guard_director_core::program::Program =
         serde_json::from_value(body["data"]["program"].clone()).unwrap();
     let priorities = |program: &psf_guard_director_core::program::Program| {
-        program.assignment.goals.iter().map(|g| (g.id.clone(), g.priority)).collect::<Vec<_>>()
+        program
+            .assignment
+            .goals
+            .iter()
+            .map(|g| (g.id.clone(), g.priority))
+            .collect::<Vec<_>>()
     };
     assert_eq!(priorities(&after), priorities(&ranked_program));
 }

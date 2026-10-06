@@ -1114,7 +1114,9 @@ enum RigError {
 // the other rigs go ahead.
 impl From<rusqlite::Error> for RigError {
     fn from(error: rusqlite::Error) -> Self {
-        Self::Skip(format!("Its database could not be read or written: {error}."))
+        Self::Skip(format!(
+            "Its database could not be read or written: {error}."
+        ))
     }
 }
 impl From<Error> for RigError {
@@ -1200,7 +1202,11 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                     notes.push("Active again: this rig is on in the plan");
                 }
                 if (was_mosaic != 0) != mosaic {
-                    notes.push(if mosaic { "now a mosaic" } else { "no longer a mosaic" });
+                    notes.push(if mosaic {
+                        "now a mosaic"
+                    } else {
+                        "no longer a mosaic"
+                    });
                 }
                 if !notes.is_empty() {
                     tx.execute(
@@ -1210,7 +1216,11 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                 }
                 changes.push(Change {
                     kind: "project",
-                    action: if notes.is_empty() { "unchanged" } else { "update" },
+                    action: if notes.is_empty() {
+                        "unchanged"
+                    } else {
+                        "update"
+                    },
                     name: project_name.clone(),
                     detail: if notes.is_empty() {
                         "Director's project from the last activation".into()
@@ -1362,7 +1372,9 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
         let mut shown = name.clone();
         let target_guid = match owned {
             Some(guid) => {
-                let existing: Option<(Option<f64>, Option<f64>, Option<f64>, String, i64, i64)> = tx
+                // RA, Dec, angle (any may be NULL), name, epoch code, frames taken.
+                type Placed = (Option<f64>, Option<f64>, Option<f64>, String, i64, i64);
+                let existing: Option<Placed> = tx
                     .query_row(
                         "SELECT t.ra, t.dec, t.rotation, IFNULL(t.name, ''), IFNULL(t.epochcode, 2),
                                 (SELECT IFNULL(SUM(acquired), 0) FROM exposureplan WHERE targetid = t.Id)
@@ -1373,7 +1385,11 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                     .optional()?;
                 match existing {
                     Some((ra0, dec0, rot0, name0, epoch0, frames)) => {
-                        let (ra0, dec0, rot0) = (ra0.unwrap_or(f64::NAN), dec0.unwrap_or(f64::NAN), rot0.unwrap_or(f64::NAN));
+                        let (ra0, dec0, rot0) = (
+                            ra0.unwrap_or(f64::NAN),
+                            dec0.unwrap_or(f64::NAN),
+                            rot0.unwrap_or(f64::NAN),
+                        );
                         let same = (ra0 - ra_hours).abs() < 1e-7
                             && (dec0 - dec).abs() < 1e-6
                             && (rot0 - rotation).abs() < 1e-3
@@ -1388,7 +1404,15 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                         let far = !moved.is_finite() || moved > 0.25 * panel_side_degrees(panel);
                         if !same && far && frames > 0 {
                             let fresh = new_guid();
-                            insert_target(tx, &fresh, &name, ra_hours, dec, rotation, project_row_id)?;
+                            insert_target(
+                                tx,
+                                &fresh,
+                                &name,
+                                ra_hours,
+                                dec,
+                                rotation,
+                                project_row_id,
+                            )?;
                             tx.execute(
                                 "UPDATE psf_guard_director_target SET panel_id = panel_id || '~' || ?2 WHERE target_guid=?1",
                                 params![guid, inputs.framing.revision as i64],
@@ -1457,7 +1481,11 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                     if !found.active {
                         notes.push("turned on");
                     }
-                    let notes = if notes.is_empty() { String::new() } else { format!("; {}", notes.join(", ")) };
+                    let notes = if notes.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; {}", notes.join(", "))
+                    };
                     changes.push(Change {
                         kind: "target",
                         action: if same { "unchanged" } else { "adopt" },
@@ -2153,7 +2181,8 @@ fn adoptable_target(
     let Some(index) = by_name.or(by_place).or(only) else {
         return Ok(None);
     };
-    let (row_id, guid, found_name, found_ra, found_dec, found_rotation, epochcode, active) = rows[index].clone();
+    let (row_id, guid, found_name, found_ra, found_dec, found_rotation, epochcode, active) =
+        rows[index].clone();
     let guid = match guid {
         Some(guid) if !guid.is_empty() => guid,
         _ => return Err(missing_guid(&format!("Target #{row_id} {found_name}"))),
@@ -2174,7 +2203,9 @@ fn without_frame_counts(detail: &str) -> String {
     let mut out = String::with_capacity(detail.len());
     let mut rest = detail;
     while let Some(start) = rest.find('(') {
-        let Some(end) = rest[start..].find(')') else { break };
+        let Some(end) = rest[start..].find(')') else {
+            break;
+        };
         let inner = &rest[start..start + end + 1];
         out.push_str(&rest[..start]);
         if !inner.ends_with("frames taken)") {
@@ -2433,14 +2464,18 @@ fn resolve_template(
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
             )
             .optional()?;
-        Ok(row.is_some_and(|(filter, gain, offset, bin, readout, profile)| {
-            filter.trim().eq_ignore_ascii_case(choice.filter_name.trim())
-                && gain == i64::from(choice.gain.unwrap_or(-1))
-                && offset == i64::from(choice.offset.unwrap_or(-1))
-                && bin == i64::from(choice.bin.unwrap_or(1).max(1))
-                && readout == i64::from(choice.readout_mode.unwrap_or(-1))
-                && profile == profile_id
-        }))
+        Ok(
+            row.is_some_and(|(filter, gain, offset, bin, readout, profile)| {
+                filter
+                    .trim()
+                    .eq_ignore_ascii_case(choice.filter_name.trim())
+                    && gain == i64::from(choice.gain.unwrap_or(-1))
+                    && offset == i64::from(choice.offset.unwrap_or(-1))
+                    && bin == i64::from(choice.bin.unwrap_or(1).max(1))
+                    && readout == i64::from(choice.readout_mode.unwrap_or(-1))
+                    && profile == profile_id
+            }),
+        )
     };
     if let Some(id) = choice.template_id
         && settings_match(id)?
@@ -2517,15 +2552,22 @@ fn resolve_template(
 
 /// The angle between two sky positions, in degrees.
 fn separation_degrees(ra1: f64, dec1: f64, ra2: f64, dec2: f64) -> f64 {
-    let (ra1, dec1, ra2, dec2) = (ra1.to_radians(), dec1.to_radians(), ra2.to_radians(), dec2.to_radians());
-    let a = ((dec2 - dec1) / 2.0).sin().powi(2) + dec1.cos() * dec2.cos() * ((ra2 - ra1) / 2.0).sin().powi(2);
+    let (ra1, dec1, ra2, dec2) = (
+        ra1.to_radians(),
+        dec1.to_radians(),
+        ra2.to_radians(),
+        dec2.to_radians(),
+    );
+    let a = ((dec2 - dec1) / 2.0).sin().powi(2)
+        + dec1.cos() * dec2.cos() * ((ra2 - ra1) / 2.0).sin().powi(2);
     (2.0 * a.sqrt().min(1.0).asin()).to_degrees()
 }
 
 /// A panel's shorter side, in degrees, from its corners.
 fn panel_side_degrees(panel: &Panel) -> f64 {
     let c = &panel.footprint.corners;
-    let side = |a: &psf_guard_director_core::visibility::IcrsPosition, b: &psf_guard_director_core::visibility::IcrsPosition| {
+    let side = |a: &psf_guard_director_core::visibility::IcrsPosition,
+                b: &psf_guard_director_core::visibility::IcrsPosition| {
         separation_degrees(a.ra_degrees, a.dec_degrees, b.ra_degrees, b.dec_degrees)
     };
     side(&c[0], &c[1]).min(side(&c[1], &c[2]))

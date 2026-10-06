@@ -506,8 +506,10 @@ const MAX_PROGRAM_GOALS: usize = 256;
 
 /// Drop targets and recipes no goal is bound to.
 fn prune_unbound(built: &mut Built) {
-    let targets: std::collections::BTreeSet<String> = built.bindings.iter().map(|b| b.target_id.clone()).collect();
-    let recipes: std::collections::BTreeSet<String> = built.bindings.iter().map(|b| b.recipe_id.clone()).collect();
+    let targets: std::collections::BTreeSet<String> =
+        built.bindings.iter().map(|b| b.target_id.clone()).collect();
+    let recipes: std::collections::BTreeSet<String> =
+        built.bindings.iter().map(|b| b.recipe_id.clone()).collect();
     built.targets.retain(|t| targets.contains(&t.id));
     built.recipes.retain(|r| recipes.contains(&r.id));
 }
@@ -766,8 +768,14 @@ fn build(
                 source_project_guid: entry.project_guid,
                 target_guid: activated.target_guid,
                 exposureplan_guid: activated.exposureplan_guid,
-                bandpass_id: intent.as_ref().map(|i| i.bandpass_id.clone()).unwrap_or_default(),
-                purpose: intent.as_ref().map(|i| i.purpose.clone()).unwrap_or_default(),
+                bandpass_id: intent
+                    .as_ref()
+                    .map(|i| i.bandpass_id.clone())
+                    .unwrap_or_default(),
+                purpose: intent
+                    .as_ref()
+                    .map(|i| i.purpose.clone())
+                    .unwrap_or_default(),
             });
         }
         if done > 0 {
@@ -785,11 +793,23 @@ fn build(
     // refused.
     if built.goals.len() > MAX_PROGRAM_GOALS {
         let mut order: Vec<usize> = (0..built.goals.len()).collect();
-        order.sort_by(|&a, &b| built.goals[b].priority.cmp(&built.goals[a].priority).then(a.cmp(&b)));
-        let kept: std::collections::BTreeSet<usize> = order.into_iter().take(MAX_PROGRAM_GOALS).collect();
+        order.sort_by(|&a, &b| {
+            built.goals[b]
+                .priority
+                .cmp(&built.goals[a].priority)
+                .then(a.cmp(&b))
+        });
+        let kept: std::collections::BTreeSet<usize> =
+            order.into_iter().take(MAX_PROGRAM_GOALS).collect();
         let dropped = built.goals.len() - kept.len();
         let keep = |index: &usize| kept.contains(index);
-        let goals: Vec<_> = built.goals.drain(..).enumerate().filter(|(i, _)| keep(i)).map(|(_, g)| g).collect();
+        let goals: Vec<_> = built
+            .goals
+            .drain(..)
+            .enumerate()
+            .filter(|(i, _)| keep(i))
+            .map(|(_, g)| g)
+            .collect();
         let ids: std::collections::BTreeSet<String> = goals.iter().map(|g| g.id.clone()).collect();
         built.goals = goals;
         built.bindings.retain(|b| ids.contains(&b.goal_id));

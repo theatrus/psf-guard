@@ -1927,15 +1927,44 @@ async fn a_grid_change_gives_a_moved_panel_with_frames_a_new_target() {
     a.db.execute("UPDATE exposureplan SET acquired=5 WHERE targetid=(SELECT Id FROM target WHERE name='IC 1805 r1c1')", []).unwrap();
     edit_framing(&a.f, a.project, |framing| framing.mosaic.rows = 3);
     let data = activate_now(&a.f, a.project, "3 rows").await;
-    let details: Vec<String> = data["rigs"][0]["changes"].as_array().unwrap().iter()
+    let details: Vec<String> = data["rigs"][0]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
         .filter(|c| c["kind"] == "target")
-        .map(|c| format!("{} {}: {}", c["action"].as_str().unwrap(), c["name"].as_str().unwrap(), c["detail"].as_str().unwrap()))
+        .map(|c| {
+            format!(
+                "{} {}: {}",
+                c["action"].as_str().unwrap(),
+                c["name"].as_str().unwrap(),
+                c["detail"].as_str().unwrap()
+            )
+        })
         .collect();
-    assert!(details.iter().any(|d| d.starts_with("create IC 1805 r1c1") && d.contains("keeps its 5 frames")), "{details:?}");
-    assert!(details.iter().any(|d| d.starts_with("update IC 1805 r2c1")), "{details:?}");
-    assert_eq!(count("SELECT count(*) FROM target"), 4, "old r1c1, new r1c1, r2c1 moved, new r3c1");
-    assert_eq!(count("SELECT count(*) FROM exposureplan WHERE acquired=5 AND enabled=0"), 1, "the old place keeps its frames, off");
-    assert_eq!(count("SELECT count(*) FROM exposureplan WHERE enabled=1"), 3);
+    assert!(
+        details
+            .iter()
+            .any(|d| d.starts_with("create IC 1805 r1c1") && d.contains("keeps its 5 frames")),
+        "{details:?}"
+    );
+    assert!(
+        details.iter().any(|d| d.starts_with("update IC 1805 r2c1")),
+        "{details:?}"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM target"),
+        4,
+        "old r1c1, new r1c1, r2c1 moved, new r3c1"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE acquired=5 AND enabled=0"),
+        1,
+        "the old place keeps its frames, off"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE enabled=1"),
+        3
+    );
 }
 
 /// Taking over a target puts it right for Director: J2000 coordinates and
@@ -1973,11 +2002,30 @@ async fn taking_over_a_jnow_target_in_a_draft_project_puts_both_right() {
             .unwrap();
     }
     let data = activate_now(&a.f, a.project, "take over").await;
-    let target = data["rigs"][0]["changes"].as_array().unwrap().iter().find(|c| c["kind"] == "target").unwrap().clone();
+    let target = data["rigs"][0]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["kind"] == "target")
+        .unwrap()
+        .clone();
     assert_eq!(target["action"], "adopt", "{target}");
-    assert!(target["detail"].as_str().unwrap().contains("now J2000, turned on"), "{target}");
-    assert_eq!(count("SELECT count(*) FROM target WHERE Id=1 AND epochcode=2 AND active=1"), 1);
-    assert_eq!(count("SELECT count(*) FROM project WHERE Id=1 AND state=1"), 1, "Draft went Active");
+    assert!(
+        target["detail"]
+            .as_str()
+            .unwrap()
+            .contains("now J2000, turned on"),
+        "{target}"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM target WHERE Id=1 AND epochcode=2 AND active=1"),
+        1
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM project WHERE Id=1 AND state=1"),
+        1,
+        "Draft went Active"
+    );
 }
 
 /// A template id that came back on another template (Target Scheduler's
@@ -1988,10 +2036,20 @@ async fn a_reused_template_id_with_other_settings_is_not_bound() {
     let a = activated().await;
     // Template 1 is now something else under the same id: another GUID and
     // gain.
-    a.db.execute("UPDATE exposuretemplate SET guid=?1, gain=200 WHERE Id=1", [Uuid::new_v4().to_string()]).unwrap();
+    a.db.execute(
+        "UPDATE exposuretemplate SET guid=?1, gain=200 WHERE Id=1",
+        [Uuid::new_v4().to_string()],
+    )
+    .unwrap();
     let data = activate_now(&a.f, a.project, "reused id").await;
     assert_eq!(actions(&data, "template"), ["create"], "{data}");
-    let bound: i64 = a.db.query_row("SELECT DISTINCT exposureTemplateId FROM exposureplan", [], |r| r.get(0)).unwrap();
+    let bound: i64 =
+        a.db.query_row(
+            "SELECT DISTINCT exposureTemplateId FROM exposureplan",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_ne!(bound, 1);
 }
 
@@ -2008,11 +2066,28 @@ async fn a_frame_saved_between_preview_and_apply_does_not_refuse_it() {
         [Uuid::new_v4().to_string()],
     )
     .unwrap();
-    let (status, preview) = call(&a.f.app, "POST", &format!("/projects/{}/activation/preview", a.project), json!({}), None).await;
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{preview}");
-    assert!(preview.to_string().contains("(0 of 10 frames taken)"), "{preview}");
-    a.db.execute("UPDATE exposureplan SET acquired=1 WHERE exposure=600", []).unwrap();
-    let (status, applied) = call(&a.f.app, "POST", &format!("/projects/{}/activation/apply", a.project),
-        json!({"preview_digest": preview["data"]["preview_digest"]}), None).await;
+    assert!(
+        preview.to_string().contains("(0 of 10 frames taken)"),
+        "{preview}"
+    );
+    a.db.execute("UPDATE exposureplan SET acquired=1 WHERE exposure=600", [])
+        .unwrap();
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/apply", a.project),
+        json!({"preview_digest": preview["data"]["preview_digest"]}),
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{applied}");
 }
