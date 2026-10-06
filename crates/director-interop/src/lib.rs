@@ -2,6 +2,7 @@
 //! Hosts own HTTP, credentials, persistence, reviewed admission and execution.
 
 pub mod astrocollab;
+pub mod collaboration;
 mod json;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,6 +18,9 @@ pub enum Error {
     InvalidRegion,
     AmbiguousFilter,
     AmbiguousTask,
+    NeedsReview,
+    InvalidEvidence,
+    InvalidReply,
 }
 
 impl std::fmt::Display for Error {
