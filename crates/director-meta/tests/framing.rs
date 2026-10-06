@@ -100,12 +100,14 @@ fn bad_geometry_and_survey_ids_are_refused() {
             Err(Error::InvalidInput)
         ));
     }
-    let mut bad = draft(project.id);
-    bad.view_fov_degrees = 0.0;
-    assert!(matches!(
-        store.save_framing_draft(&bad, 0),
-        Err(Error::InvalidInput)
-    ));
+    for width in [0.0, 180.5, f64::NAN] {
+        let mut bad = draft(project.id);
+        bad.view_fov_degrees = width;
+        assert!(matches!(
+            store.save_framing_draft(&bad, 0),
+            Err(Error::InvalidInput)
+        ));
+    }
     let mut no_panel = draft(project.id);
     no_panel.panel = None;
     assert_eq!(store.save_framing_draft(&no_panel, 0).unwrap().revision, 1);
@@ -238,23 +240,36 @@ fn only_a_layout_change_moves_the_layout_revision() {
     view.view_fov_degrees = 3.0;
     let viewed = store.save_framing_draft(&view, 1).unwrap();
     assert_eq!((viewed.revision, viewed.layout_revision), (2, 1));
+    // Zoomed out for the constellations around the target, as wide as the
+    // stage goes: still the view's own.
+    let mut wide = viewed.clone();
+    wide.view_fov_degrees = 150.0;
+    let viewed = store.save_framing_draft(&wide, 2).unwrap();
+    assert_eq!((viewed.revision, viewed.layout_revision), (3, 1));
+    // A quarter turn and back leaves float drift in the angle and the
+    // center, not a new layout.
+    let mut drift = viewed.clone();
+    drift.position_angle_degrees = 35.000_000_000_000_01;
+    drift.center.ra_degrees += 1e-12;
+    let viewed = store.save_framing_draft(&drift, 3).unwrap();
+    assert_eq!((viewed.revision, viewed.layout_revision), (4, 1));
     // Turning the camera changes what activation writes.
     let mut turned = viewed.clone();
     turned.position_angle_degrees = 90.0;
-    let turned = store.save_framing_draft(&turned, 2).unwrap();
-    assert_eq!((turned.revision, turned.layout_revision), (3, 3));
+    let turned = store.save_framing_draft(&turned, 4).unwrap();
+    assert_eq!((turned.revision, turned.layout_revision), (5, 5));
     // A client never sets it: what it sends is ignored.
     let mut sent = turned.clone();
     sent.layout_revision = 0;
     sent.survey_id = "dss2_color".into();
-    let resaved = store.save_framing_draft(&sent, 3).unwrap();
-    assert_eq!((resaved.revision, resaved.layout_revision), (4, 3));
+    let resaved = store.save_framing_draft(&sent, 5).unwrap();
+    assert_eq!((resaved.revision, resaved.layout_revision), (6, 5));
     assert_eq!(
         store
             .framing_draft(project.id)
             .unwrap()
             .unwrap()
             .layout_revision,
-        3
+        5
     );
 }

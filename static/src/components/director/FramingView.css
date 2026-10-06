@@ -3,7 +3,9 @@
    the form scrolls, so the horizon chart is always on screen. */
 .framing { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 20px; align-items: start; margin-top: 12px; }
 @media (max-width: 1000px) { .framing { grid-template-columns: minmax(0, 1fr); } }
-.framing-stage-wrap { min-width: 0; }
+.framing-stage-wrap, .framing-sky-box { min-width: 0; }
+/* A framing that could not be reloaded stays up under this line. */
+.framing-banner { grid-column: 1 / -1; margin: 0; }
 @media (min-width: 1001px) and (min-height: 700px) { .framing-stage-wrap { position: sticky; top: 0; } }
 /* The stage takes the column's width and what the window leaves after the
    readout and the visibility strip; the drawing measures the element and
@@ -27,6 +29,8 @@
 .framing-rig-2 polygon { stroke: #ff8ad4; fill: rgba(255, 138, 212, 0.08); } .framing-rig-2 text { fill: #ffd6ef; }
 .framing-rig-3 polygon { stroke: #c9a7ff; fill: rgba(201, 167, 255, 0.08); } .framing-rig-3 text { fill: #ebe0ff; }
 .framing-rig-panels.is-editing polygon { stroke-dasharray: none; stroke-width: 2.5; }
+/* A rig that is off, or no longer listed, shoots nothing: its grid is dim. */
+.framing-rig-panels.is-off { opacity: 0.35; }
 .framing-own { border-left: 3px solid var(--color-border-tertiary); padding-left: 10px; margin: 6px 0; }
 .framing-own .framing-check { display: inline-flex; margin-left: 8px; padding: 0; }
 .framing-target line { stroke: #ff6b6b; stroke-width: 2.5; vector-effect: non-scaling-stroke; }
@@ -46,7 +50,9 @@
 .framing-stage-status { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; pointer-events: none; max-width: min(100%, 520px); }
 .framing-stage-status span { background: rgba(0, 0, 0, 0.65); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
 .framing-stage-status [role="alert"] { background: rgba(160, 40, 40, 0.85); }
-.framing-stage-status [role="note"] { color: rgba(255, 255, 255, 0.8); }
+/* A note is a few words; its title gives the reason, so it takes the pointer
+   for the tooltip. A drag that starts on it still reaches the stage. */
+.framing-stage-status [role="note"] { color: rgba(255, 255, 255, 0.8); pointer-events: auto; cursor: help; }
 .framing-stage-scale { position: absolute; right: 10px; bottom: 8px; background: rgba(0, 0, 0, 0.65); color: #fff; padding: 3px 8px; border-radius: 4px; font-size: 12px; pointer-events: none; }
 .framing-attribution { margin: 4px 0 0; font-size: 11px; line-height: 1.35; }
 .framing-controls fieldset { border: 1px solid var(--color-border-secondary); border-radius: 6px; padding: 6px 12px 10px; margin: 0 0 10px; min-width: 0; }
@@ -81,7 +87,19 @@
 .framing-stacks { margin: 8px 0 0; font-size: 13px; }
 .framing-stacks ul { margin: 4px 0 0; padding-left: 18px; color: var(--color-text-secondary); }
 .framing-stacks li { margin: 2px 0; }
-.framing-stage-surveys { position: absolute; left: 10px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 4px; max-width: 70%; }
+.framing-stage-surveys { position: absolute; left: 10px; bottom: 8px; display: flex; flex-direction: column-reverse; align-items: flex-start; gap: 4px; max-width: 70%; }
+.framing-stage-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+/* A narrow stage keeps one chip, which opens the rest in a column above it,
+   clear of the scale in the other corner. */
+.framing-stage-surveys.is-narrow { right: 60px; max-width: none; max-height: calc(100% - 70px); pointer-events: none; }
+.framing-stage-surveys.is-narrow > * { pointer-events: auto; }
+.framing-stage-surveys.is-narrow .framing-stage-chips { flex-direction: column; flex-wrap: nowrap; align-items: flex-start; max-width: 100%; min-height: 0; overflow-y: auto; }
+.framing-stage-surveys.is-narrow .framing-stage-chips button { white-space: nowrap; }
+.framing-stage-surveys .framing-layers-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; }
+/* The layers chip shares the bottom edge with the scale: it leaves the
+   scale's width clear and shortens its name to fit. */
+.framing-stage-surveys.is-narrow .framing-layers-chip { max-width: calc(100% - 115px); }
+.framing-layers-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .framing-stage-surveys button { min-height: 26px; padding: 2px 9px; font-size: 12px; border-radius: 12px; background: rgba(0, 0, 0, 0.65); color: #fff; border: 1px solid rgba(255, 255, 255, 0.25); }
 .framing-stage-surveys button[aria-pressed="true"] { background: rgba(90, 180, 255, 0.85); color: #06121f; border-color: #5ab4ff; }
 .framing-stage-surveys button:hover:not(:disabled) { background: rgba(40, 40, 40, 0.85); }
@@ -174,3 +192,9 @@
 .director-page .framing-panel-source button { min-height: 24px; margin-left: 6px; padding: 1px 8px; font-size: 12px; }
 
 .framing-overlay-label { fill: #ffe3b3; font-size: 13px; paint-order: stroke; stroke: rgba(0, 0, 0, 0.7); stroke-width: 3px; }
+
+/* What the server would refuse, said at the field. */
+.framing-problem { margin: 4px 0 0; font-size: 13px; color: var(--color-error-light); }
+.framing-controls input[aria-invalid="true"] { border-color: var(--color-error-light); }
+.framing-orphans { display: grid; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--color-text-secondary); }
+.framing-orphans li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
