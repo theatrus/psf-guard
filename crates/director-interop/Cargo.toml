@@ -1,0 +1,17 @@
+[package]
+name = "psf-guard-director-interop"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "Apache-2.0"
+publish = false
+description = "Read-only AstroCollab demand normalization shared by Director hosts"
+
+[dependencies]
+psf-guard-director-core = { path = "../director-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+regex = "1"
+sha2 = "0.11"
+url = "2"
