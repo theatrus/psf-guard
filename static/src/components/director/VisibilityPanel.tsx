@@ -126,7 +126,7 @@ export default function VisibilityPanel({ projectId, center, enabled = true, com
   const rigSelect = data && data.rigs.length > 1 && <select aria-label="Visibility rig" value={rig?.rig.id ?? ''} onChange={event => setChosen(event.target.value)}>
     {data.rigs.map(r => <option key={r.rig.id} value={r.rig.id}>{r.catalog_name}{r.in_plan ? '' : ' (not in plan)'}</option>)}
   </select>;
-  const estimate = rig && rig.hours_needed !== null && <p className="director-muted" data-testid="visibility-estimate">{rig.hours_needed > 0 ? `This rig owes the plan ${formatHours(rig.hours_needed)}${rig.nights_to_complete !== null ? `; at this week's rate that is about ${rig.nights_to_complete} night${rig.nights_to_complete === 1 ? '' : 's'}.` : ', but the target is not up this week.'}` : 'This rig has nothing to shoot in the plan yet.'}</p>;
+  const estimate = rig && rig.hours_needed !== null && <p className="director-muted" data-testid="visibility-estimate">{rig.hours_needed > 0 ? `This rig owes the plan ${formatHours(rig.hours_needed)}${rig.nights_to_complete !== null ? `; at this week's rate that is about ${rig.nights_to_complete} night${rig.nights_to_complete === 1 ? '' : 's'}.` : ', but the target is not up this week.'}` : 'This rig has nothing left to shoot for the plan.'}</p>;
   const notes = <>
     {query.isPending && <p role="status">Timing the target...</p>}
     {query.isError && <p className="director-error" role="alert">{message(query.error)}</p>}

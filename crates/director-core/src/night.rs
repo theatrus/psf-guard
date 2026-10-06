@@ -15,6 +15,15 @@ pub const MAX_NIGHTS: u32 = 31;
 pub const MAX_TARGETS: usize = 16;
 pub const MIN_STEP_MS: u64 = 60_000;
 const DAY_MS: u64 = 86_400_000;
+/// The span `start_ms` may fall in: a day after the Unix epoch, so the noon
+/// before it is never earlier, to 2099-01-01, so the last night still ends
+/// inside the years the astrometry covers.
+pub const EARLIEST_START_MS: u64 = DAY_MS;
+pub const LATEST_START_MS: u64 = 4_070_908_800_000;
+/// Longest meridian window, either side: half a day covers the whole sky.
+const MAX_MERIDIAN_WINDOW_MS: u64 = DAY_MS / 2;
+/// How far the hour angle turns in an hour of clock time, in degrees.
+const SIDEREAL_DEGREES_PER_HOUR: f64 = 15.041_068_64;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -30,7 +39,10 @@ pub struct NightRequest {
     pub horizon: Horizon,
     pub limits: AltitudeLimits,
     pub targets: Vec<NightTarget>,
-    /// The first night is the one whose local noon comes at or after this.
+    /// The first night is the one under way at this instant: it runs from
+    /// the local mean noon at or before it to the next, so in the afternoon
+    /// it is the coming night and after midnight the one that began the
+    /// evening before.
     pub start_ms: u64,
     pub nights: u32,
     pub step_ms: u64,
@@ -39,6 +51,10 @@ pub struct NightRequest {
     /// The rig's pause around the meridian; zero and zero means none.
     #[serde(default = "no_exclusion")]
     pub meridian_exclusion: MeridianExclusion,
+    /// The project's meridian window, Target Scheduler's `meridianwindow`:
+    /// image only this long either side of the upper transit. Zero is off.
+    #[serde(default)]
+    pub meridian_window_ms: u64,
 }
 
 fn no_exclusion() -> MeridianExclusion {
@@ -53,7 +69,7 @@ fn no_exclusion() -> MeridianExclusion {
 pub struct TargetNight {
     pub id: String,
     /// Dark hours with the target above the horizon curve, inside limits and
-    /// outside the rig's meridian pause.
+    /// the meridian window, and outside the rig's meridian pause.
     pub hours_up: f64,
     /// The same, while the Moon is below the horizon.
     pub hours_up_moon_down: f64,
@@ -86,10 +102,12 @@ pub struct Night {
 pub struct TargetSample {
     pub altitude_degrees: f64,
     pub azimuth_degrees: f64,
-    /// The custom horizon at this azimuth, when the rig has one.
+    /// The custom horizon at this azimuth plus the project's horizon
+    /// offset, when the rig has one.
     #[serde(deserialize_with = "Option::deserialize")]
     pub horizon_altitude_degrees: Option<f64>,
-    /// Inside the rig's limits and above its horizon at this instant.
+    /// Inside the limits, above the horizon and inside the meridian window
+    /// at this instant.
     pub allowed: bool,
     /// Inside the rig's meridian pause at this instant.
     pub meridian_blocked: bool,
@@ -137,18 +155,14 @@ fn planning_orientation(start_ms: u64, end_ms: u64) -> EarthOrientation {
     }
 }
 
-/// The UTC instant of the first local mean noon at or after `start_ms`.
-fn first_local_noon(start_ms: u64, longitude_degrees: f64) -> u64 {
+/// The UTC instant of the last local mean noon at or before `start_ms`,
+/// which opens the night under way then. None outside the Unix era.
+fn night_noon(start_ms: u64, longitude_degrees: f64) -> Option<u64> {
     let offset_ms = (longitude_degrees / 15.0 * 3_600_000.0).round() as i64;
-    let day_start = (start_ms / DAY_MS) * DAY_MS;
-    let mut noon = day_start as i64 + (DAY_MS / 2) as i64 - offset_ms;
-    while noon < start_ms as i64 {
-        noon += DAY_MS as i64;
-    }
-    while noon - DAY_MS as i64 >= start_ms as i64 {
-        noon -= DAY_MS as i64;
-    }
-    noon as u64
+    let day = DAY_MS as i64;
+    let local = i64::try_from(start_ms).ok()?.checked_add(offset_ms)?;
+    let local_noon = (local - day / 2).div_euclid(day) * day + day / 2;
+    u64::try_from(local_noon - offset_ms).ok()
 }
 
 fn local_date(noon_ms: u64, longitude_degrees: f64) -> String {
@@ -165,6 +179,8 @@ fn validate(request: &NightRequest) -> Result<(), NightError> {
     request.limits.validate()?;
     if request.nights == 0
         || request.nights > MAX_NIGHTS
+        || !(EARLIEST_START_MS..=LATEST_START_MS).contains(&request.start_ms)
+        || request.meridian_window_ms > MAX_MERIDIAN_WINDOW_MS
         || request.step_ms < MIN_STEP_MS
         || request.step_ms > DAY_MS / 24
         || request.targets.len() > MAX_TARGETS
@@ -208,7 +224,8 @@ fn one_night(
     index: u32,
     keep_samples: bool,
 ) -> Result<NightCurve, NightError> {
-    let first_noon = first_local_noon(request.start_ms, request.site.longitude_degrees);
+    let first_noon = night_noon(request.start_ms, request.site.longitude_degrees)
+        .ok_or(NightError::InvalidRequest)?;
     let end = first_noon + u64::from(request.nights) * DAY_MS;
     let orientation = planning_orientation(first_noon, end);
     let step_hours = request.step_ms as f64 / 3_600_000.0;
@@ -239,9 +256,16 @@ fn one_night(
     let paused =
         request.meridian_exclusion.before_ms > 0 || request.meridian_exclusion.after_ms > 0;
     let span = Interval {
-        start_ms: noon + request.meridian_exclusion.before_ms + 1_000,
-        end_ms: next_noon.saturating_sub(request.meridian_exclusion.after_ms + 1_000),
+        start_ms: noon
+            .saturating_add(request.meridian_exclusion.before_ms)
+            .saturating_add(1_000),
+        end_ms: next_noon
+            .saturating_sub(request.meridian_exclusion.after_ms)
+            .saturating_sub(1_000),
     };
+    // The window as an hour angle either side of the meridian; zero is off.
+    let window_degrees = (request.meridian_window_ms > 0)
+        .then(|| request.meridian_window_ms as f64 / 3_600_000.0 * SIDEREAL_DEGREES_PER_HOUR);
     let allowed_by_meridian: Vec<Option<Vec<Interval>>> = request
         .targets
         .iter()
@@ -316,11 +340,13 @@ fn one_night(
                 request.limits,
                 observed.azimuth_degrees,
                 observed.altitude_degrees,
-            )?;
+            )? && window_degrees
+                .is_none_or(|limit| observed.hour_angle_degrees.abs() <= limit);
             let meridian_blocked = allowed_by_meridian[index].as_ref().is_some_and(|windows| {
-                t >= span.start_ms
-                    && t < span.end_ms
-                    && !windows.iter().any(|w| t >= w.start_ms && t < w.end_ms)
+                span.start_ms >= span.end_ms
+                    || (t >= span.start_ms
+                        && t < span.end_ms
+                        && !windows.iter().any(|w| t >= w.start_ms && t < w.end_ms))
             });
             if dark {
                 entry.max_altitude_degrees =
@@ -341,7 +367,10 @@ fn one_night(
                 target_samples.push(TargetSample {
                     altitude_degrees: observed.altitude_degrees,
                     azimuth_degrees: observed.azimuth_degrees,
-                    horizon_altitude_degrees: request.horizon.altitude(observed.azimuth_degrees)?,
+                    horizon_altitude_degrees: request
+                        .horizon
+                        .altitude(observed.azimuth_degrees)?
+                        .map(|curve| curve + request.limits.horizon_offset_degrees),
                     allowed,
                     meridian_blocked,
                 });
@@ -408,7 +437,7 @@ mod tests {
                     },
                 },
             ],
-            // 2026-09-25 00:00 UTC
+            // 2026-09-25 00:00 UTC, 17:00 the day before in Los Angeles.
             start_ms: 1_790_294_400_000,
             nights: 2,
             step_ms: 300_000,
@@ -417,7 +446,71 @@ mod tests {
                 before_ms: 0,
                 after_ms: 0,
             },
+            meridian_window_ms: 0,
         }
+    }
+
+    #[test]
+    fn tonight_is_the_night_under_way_or_starting_this_evening() {
+        let mut asked = request();
+        asked.nights = 1;
+        asked.targets.clear();
+        // Los Angeles on 2026-10-05 at 16:00 and 22:00 PDT, and at 01:00 the
+        // next morning, is still the night of the 5th.
+        for start_ms in [1_791_241_200_000, 1_791_262_800_000, 1_791_273_600_000] {
+            asked.start_ms = start_ms;
+            let night = &night_preview(&asked).unwrap()[0];
+            assert_eq!(night.date, "2026-10-05", "{start_ms}");
+            assert!(night.noon_ms <= start_ms && start_ms < night.noon_ms + DAY_MS);
+            assert!(night.dusk_ms.is_some_and(|dusk| dusk > night.noon_ms));
+        }
+        // From local mean noon, 12:53 PDT, the next night is tonight.
+        asked.start_ms = 1_791_316_800_000; // 13:00 PDT on the 6th
+        assert_eq!(night_preview(&asked).unwrap()[0].date, "2026-10-06");
+    }
+
+    #[test]
+    fn a_meridian_window_keeps_only_the_hours_around_transit() {
+        let open = night_preview(&request()).unwrap();
+        let mut windowed = request();
+        windowed.meridian_window_ms = 3_600_000;
+        let nights = night_preview(&windowed).unwrap();
+        let heart = &nights[0].targets[0];
+        assert!(open[0].targets[0].hours_up > 7.0);
+        assert!(heart.hours_up > 1.8 && heart.hours_up <= 2.1, "{heart:?}");
+        assert_eq!(heart.hours_lost_to_meridian, 0.0);
+        let curve = night_curve(&windowed, 0).unwrap();
+        let transit = heart.transit_ms.unwrap();
+        for sample in &curve.samples {
+            if sample.t_ms.abs_diff(transit) > 3_700_000 {
+                assert!(!sample.targets[0].allowed, "{}", sample.t_ms);
+            }
+        }
+        let mut wide = request();
+        wide.meridian_window_ms = DAY_MS;
+        assert_eq!(night_preview(&wide), Err(NightError::InvalidRequest));
+    }
+
+    #[test]
+    fn a_start_outside_the_supported_years_is_refused_without_overflow() {
+        for start_ms in [0, LATEST_START_MS + 1, u64::MAX] {
+            let mut far = request();
+            far.start_ms = start_ms;
+            assert_eq!(night_preview(&far), Err(NightError::InvalidRequest));
+        }
+        let mut last = request();
+        last.start_ms = LATEST_START_MS;
+        last.nights = MAX_NIGHTS;
+        assert_eq!(night_preview(&last).unwrap().len(), MAX_NIGHTS as usize);
+        // A pause longer than the day blocks the target rather than overflowing.
+        let mut paused = request();
+        paused.meridian_exclusion = MeridianExclusion {
+            before_ms: u64::MAX,
+            after_ms: u64::MAX,
+        };
+        let nights = night_preview(&paused).unwrap();
+        assert_eq!(nights[0].targets[0].hours_up, 0.0);
+        assert!(nights[0].targets[0].hours_lost_to_meridian > 7.0);
     }
 
     #[test]
@@ -457,7 +550,8 @@ mod tests {
         let nights = night_preview(&request()).unwrap();
         assert_eq!(nights.len(), 2);
         let first = &nights[0];
-        assert_eq!(first.date, "2026-09-25");
+        // The night that starts that evening, local time.
+        assert_eq!(first.date, "2026-09-24");
         assert!(
             first.dark_hours > 9.0 && first.dark_hours < 11.0,
             "{first:?}"
@@ -489,7 +583,7 @@ mod tests {
         // A far-southern target never clears 25 degrees from there.
         assert_eq!(first.targets[1].hours_up, 0.0);
         assert!(first.targets[1].max_altitude_degrees < 0.0);
-        assert_eq!(nights[1].date, "2026-09-26");
+        assert_eq!(nights[1].date, "2026-09-25");
     }
 
     #[test]
@@ -513,12 +607,22 @@ mod tests {
         };
         let curve = night_curve(&walled, 0).unwrap();
         assert_eq!(curve.samples.len(), 288);
-        assert_eq!(curve.night.date, "2026-09-25");
+        assert_eq!(curve.night.date, "2026-09-24");
         assert!(curve.samples.iter().any(|s| s.sun_altitude_degrees > 0.0));
         assert!(curve.samples.iter().any(|s| s.sun_altitude_degrees < -18.0));
         let heart: Vec<&TargetSample> = curve.samples.iter().map(|s| &s.targets[0]).collect();
         assert!(heart.iter().all(|t| t.horizon_altitude_degrees.is_some()));
         assert!(heart.iter().any(|t| t.allowed) && heart.iter().any(|t| !t.allowed));
+        // A project's horizon offset lifts the drawn curve and the limit.
+        let mut raised = walled.clone();
+        raised.limits.horizon_offset_degrees = 30.0;
+        let lifted = night_curve(&raised, 0).unwrap();
+        for (low, high) in curve.samples.iter().zip(&lifted.samples) {
+            let low = low.targets[0].horizon_altitude_degrees.unwrap();
+            let high = high.targets[0].horizon_altitude_degrees.unwrap();
+            assert!((high - low - 30.0).abs() < 1e-9);
+        }
+        assert!(lifted.night.targets[0].hours_up < curve.night.targets[0].hours_up);
         // The summary of the curve is the summary of the preview.
         let preview = night_preview(&walled).unwrap();
         assert_eq!(curve.night, preview[0]);
