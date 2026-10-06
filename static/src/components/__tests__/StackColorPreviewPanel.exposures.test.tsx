@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
-import type { StackColorInputSources, StackColorJob, StackColorProcessing, StackColorRole, StackColorSource } from '../../api/types';
+import type { StackColorInputSources, StackColorJob, StackColorProcessing, StackColorRole, StackColorSource, StackNarrowbandPalette } from '../../api/types';
 import StackColorPreviewPanel from '../StackColorPreviewPanel';
 import { colorSourceKey } from '../stackColorSources';
 
@@ -57,7 +57,7 @@ interface BuildRequest {
 
 function mount(options: {
   sources?: StackColorSource[]; jobs?: StackColorJob[]; legacy?: boolean;
-  omitTarget?: boolean;
+  omitTarget?: boolean; narrowbandPalettes?: StackNarrowbandPalette[];
   outdated?: ReadonlySet<string>; response?: (sources: StackColorSource[]) => Partial<StackColorJob>;
 } = {}) {
   const catalog = { sources: options.sources ?? candidates, jobs: options.jobs ?? [], legacy: options.legacy ?? false };
@@ -70,7 +70,7 @@ function mount(options: {
       ...(catalog.legacy ? {} : { source_candidates: catalog.sources }),
       ambiguous_roles: roles.filter((role) => catalog.sources.filter((source) => source.role === role).length > 1),
       unmapped_filters: [], rgb_available: roles.every((role) => catalog.sources.some((source) => source.role === role)),
-      lrgb_available: false, narrowband_palettes: [],
+      lrgb_available: false, narrowband_palettes: options.narrowbandPalettes ?? [],
     }], jobs: catalog.jobs })),
     http.post('/api/db/test/projects/1/stack-previews/color', async ({ request }) => {
       const body = await request.json() as BuildRequest;
@@ -117,6 +117,20 @@ describe('automatic color exposure cards', () => {
     expect(within(cardFor(short)).queryByRole('combobox', { name: /source stack/ })).not.toBeInTheDocument();
     expect(within(cardFor(long)).queryByRole('combobox', { name: /source stack/ })).not.toBeInTheDocument();
     expect(screen.getByText('Custom combination').closest('details')).not.toHaveAttribute('open');
+  });
+
+  it('flows every card of a target before its custom combinations, which take whole rows', async () => {
+    const narrowband: StackColorSource[] = (['ha', 'oiii'] as const).flatMap((role, index) => [30, 300].map((seconds) => ({
+      ...candidates[0], role, filter_name: role, label: `${role} (${seconds} s)`, job_id: `${role}-${seconds}`, group_index: 3 + index,
+      exposure_group: { key: `${role}-${seconds}`, label: `${seconds} s`, min_seconds: seconds, max_seconds: seconds },
+    })));
+    mount({ sources: [...candidates, ...narrowband], narrowbandPalettes: ['hoo'] });
+    await screen.findByRole('button', { name: 'Build RGB 30 s color preview' });
+    await waitFor(() => expect(screen.getAllByText('Custom combination')).toHaveLength(2));
+    const items = [...document.querySelector('.stack-color-grid')!.children].map((child) => child.tagName);
+    expect(items.filter((tag) => tag === 'ARTICLE').length).toBeGreaterThanOrEqual(3);
+    // Interleaved, each whole-row fold would leave its card alone on a row.
+    expect(items.lastIndexOf('ARTICLE')).toBeLessThan(items.indexOf('DETAILS'));
   });
 
   it.each([30, 300])('submits exact source references from the %i s card', async (seconds) => {

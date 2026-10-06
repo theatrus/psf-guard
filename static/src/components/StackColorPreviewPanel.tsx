@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { isValidElement, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { formatIntegration, totalIntegration } from '../utils/integrationTime';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
@@ -830,7 +830,10 @@ export default function StackColorPreviewPanel({
           if (palette) cards.push(renderCard(target, 'narrowband',
             target.narrowband_palettes.includes(palette), undefined, palette, paletteChoices,
             paletteKey, exposureMode));
-          return cards;
+          // A custom combination takes a whole row; set after the target's
+          // cards, so the cards still flow several to a row.
+          const custom = (node: ReactNode) => isValidElement(node) && String(node.key).endsWith(':custom');
+          return [...cards.filter((node) => !custom(node)), ...cards.filter(custom)];
         })}
       </div>
       {inspector && (
