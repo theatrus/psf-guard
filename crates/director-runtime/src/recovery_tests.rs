@@ -132,6 +132,7 @@ async fn quality_classification_is_scoped_read_only_and_not_a_dispatch_permit() 
     let reference = q::Reference {
         id: "reference".into(),
         approved: true,
+        initial_group: vec![],
         frame: reference_frame.clone(),
     };
     let mut frame = q::Frame {
@@ -162,10 +163,54 @@ async fn quality_classification_is_scoped_read_only_and_not_a_dispatch_permit() 
         }
     ));
     assert!(!dir.path().join("recovery.sqlite").exists());
+    let group: Vec<_> = (0..5)
+        .map(|i| q::Frame {
+            capture_id: format!("initial-{i}"),
+            observed_at_ms: 1000 + i * 100,
+            ..reference.frame.clone()
+        })
+        .collect();
+    let built = exchange(
+        &mut client,
+        2,
+        Operation::BuildQualityReference {
+            policy: q::Policy::default(),
+            id: "initial-reference".into(),
+            frames: group.clone(),
+        },
+    )
+    .await;
+    let recovery::Reply::QualityReferenceBuilt { reference: initial } = built else {
+        panic!("expected initial reference")
+    };
+    assert!(!initial.approved);
+    assert_eq!(initial.initial_group, group);
+    let result = exchange(
+        &mut client,
+        3,
+        Operation::ClassifyQuality {
+            policy: q::Policy::default(),
+            reference: initial,
+            frame: Box::new(frame.clone()),
+            now_ms: 2000,
+        },
+    )
+    .await;
+    assert!(matches!(
+        result,
+        recovery::Reply::QualityClassified {
+            assessment: q::Assessment {
+                verdict: core::Verdict::CorroboratedPoor,
+                reference_quality_unknown: true,
+                ..
+            }
+        }
+    ));
+    assert!(!dir.path().join("recovery.sqlite").exists());
     frame.context.rig_id = "another-rig".into();
     let reply = exchange(
         &mut client,
-        2,
+        4,
         Operation::ClassifyQuality {
             policy: q::Policy::default(),
             reference: Box::new(reference),

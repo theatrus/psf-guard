@@ -23,6 +23,7 @@ fn fixture() -> (Policy, Reference, Frame) {
     let reference = Reference {
         id: "approved-reference".into(),
         approved: true,
+        initial_group: vec![],
         frame: frame.clone(),
     };
     let frame = Frame {
@@ -31,6 +32,86 @@ fn fixture() -> (Policy, Reference, Frame) {
         ..frame
     };
     (Policy::default(), reference, frame)
+}
+
+fn initial_group() -> Vec<Frame> {
+    let (_, reference, _) = fixture();
+    (0..5)
+        .map(|n| Frame {
+            capture_id: format!("initial-{n}"),
+            observed_at_ms: 1000 + n * 100,
+            ..reference.frame.clone()
+        })
+        .collect()
+}
+
+#[test]
+fn stable_initial_group_is_frozen_but_always_warns_that_quality_is_unknown() {
+    let (p, _, mut frame) = fixture();
+    let group = initial_group();
+    let baseline = build_initial_reference(&p, "baseline", &group).unwrap();
+    assert!(!baseline.approved);
+    assert_eq!(baseline.initial_group, group);
+    let assessed = classify(&p, &baseline, &frame, 2000).unwrap();
+    assert_eq!(assessed.verdict, Verdict::ConfirmedGood);
+    assert!(assessed.reference_quality_unknown);
+    let original = baseline.clone();
+    frame.metrics.stars = Some(20);
+    frame.metrics.background_adu = Some(2000.0);
+    assert_eq!(
+        classify(&p, &baseline, &frame, 2000).unwrap().verdict,
+        Verdict::CorroboratedPoor
+    );
+    assert_eq!(baseline, original);
+    let first = &group[0];
+    assert_eq!(
+        classify(&p, &baseline, first, 2000).unwrap().reason,
+        Reason::SameCapture
+    );
+}
+
+#[test]
+fn initial_group_rejects_incomplete_incompatible_unstable_and_replayed_evidence() {
+    let p = Policy::default();
+    assert_eq!(
+        build_initial_reference(&p, "baseline", &initial_group()[..4]),
+        Err(Error::InsufficientSamples)
+    );
+    for fault in 0..7 {
+        let mut group = initial_group();
+        match fault {
+            0 => group[2].metrics.stars = Some(40),
+            1 => group[2].metrics.background_adu = Some(2000.0),
+            2 => group[2].metrics.hfr_pixels = Some(3.0),
+            3 => group[2].metrics.eccentricity = None,
+            4 => group[2].context.recipe_fingerprint = "other".into(),
+            5 => group[2].capture_id = group[1].capture_id.clone(),
+            _ => group[2].observed_at_ms = group[1].observed_at_ms,
+        }
+        assert!(
+            build_initial_reference(&p, "baseline", &group).is_err(),
+            "fault {fault}"
+        );
+    }
+}
+
+#[test]
+fn stable_cloudy_start_is_not_claimed_to_be_known_good() {
+    let p = Policy::default();
+    let mut group = initial_group();
+    for f in &mut group {
+        f.metrics.stars = Some(25);
+        f.metrics.background_adu = Some(5000.0);
+    }
+    let baseline = build_initial_reference(&p, "cloudy-start", &group).unwrap();
+    let next = Frame {
+        capture_id: "next".into(),
+        observed_at_ms: 2000,
+        ..group.last().unwrap().clone()
+    };
+    let result = classify(&p, &baseline, &next, 2000).unwrap();
+    assert_eq!(result.reason, Reason::ConsistentWithReference);
+    assert!(result.reference_quality_unknown);
 }
 
 #[test]

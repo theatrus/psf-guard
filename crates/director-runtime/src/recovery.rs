@@ -22,6 +22,11 @@ pub struct Request {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    BuildQualityReference {
+        policy: psf_guard_director_core::quality::Policy,
+        id: String,
+        frames: Vec<psf_guard_director_core::quality::Frame>,
+    },
     ClassifyQuality {
         policy: psf_guard_director_core::quality::Policy,
         reference: Box<psf_guard_director_core::quality::Reference>,
@@ -63,6 +68,9 @@ pub enum Issued {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Reply {
+    QualityReferenceBuilt {
+        reference: Box<psf_guard_director_core::quality::Reference>,
+    },
     QualityClassified {
         assessment: psf_guard_director_core::quality::Assessment,
     },
@@ -115,6 +123,8 @@ pub enum Error {
     ClockReversed,
     NotAdmitted,
     AcquisitionBlocked,
+    InsufficientSamples,
+    UnstableBaseline,
 }
 
 impl From<ledger::Error> for Error {
@@ -212,6 +222,11 @@ impl Storage {
         }
         // Reject cross-rig input before creating or touching a recovery database.
         match &request.operation {
+            Operation::BuildQualityReference { frames, .. }
+                if frames.iter().any(|f| f.context.rig_id != rig_id) =>
+            {
+                return Err(Error::WrongScope)
+            }
             Operation::ClassifyQuality {
                 reference, frame, ..
             } if reference.frame.context.rig_id != rig_id || frame.context.rig_id != rig_id => {
@@ -240,6 +255,22 @@ impl Storage {
             }
             _ => {}
         }
+        if let Operation::BuildQualityReference { policy, id, frames } = &request.operation {
+            return Ok(Reply::QualityReferenceBuilt {
+                reference: Box::new(
+                    psf_guard_director_core::quality::build_initial_reference(policy, id, frames)
+                        .map_err(|error| match error {
+                        psf_guard_director_core::quality::Error::InsufficientSamples => {
+                            Error::InsufficientSamples
+                        }
+                        psf_guard_director_core::quality::Error::UnstableBaseline => {
+                            Error::UnstableBaseline
+                        }
+                        _ => Error::InvalidInput,
+                    })?,
+                ),
+            });
+        }
         if let Operation::ClassifyQuality {
             policy,
             reference,
@@ -256,7 +287,7 @@ impl Storage {
         }
         let store = self.store(rig_id)?;
         Ok(match request.operation {
-            Operation::ClassifyQuality { .. } => {
+            Operation::ClassifyQuality { .. } | Operation::BuildQualityReference { .. } => {
                 unreachable!("handled above without opening storage")
             }
             Operation::ReviewRestart { input } => {

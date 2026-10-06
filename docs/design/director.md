@@ -2075,16 +2075,27 @@ exposure/binning, capture ID, observation time, source and algorithm revision.
 
 ##### Shared quality and restart review contracts
 
-Runtime 0.13.0 / IPC 13 adds read-only `classify_quality` and `review_restart`
+Runtime 0.13.0 / IPC 13 adds read-only `build_quality_reference`,
+`classify_quality` and `review_restart`
 recovery operations. They return evidence/advice, never a dispatch permit, and
 do not advance the recovery journal or change science progress. Classification
 does not create a recovery database. The managed host must retain the same
 version/hash pin and strict response validation as other runtime operations.
 
-`director_core::quality` compares a frame with a frozen, explicitly approved
-reference. Exact scope includes rig, configuration, target, a fingerprint of
+`director_core::quality` compares a frame with a frozen reference. By default,
+build that reference from a stable initial group of 5-16 compatible frames.
+The group must span at most two hours, have enough stars and usable shape
+measurements, and remain within bounded star-count, HFR and background spreads.
+Retain the original group and use its median metrics, not a rolling baseline.
+The host must persist the first successful reference and never replace it
+automatically during the night. Show **Reference quality unknown** while using
+this provisional reference: stable initial frames can still be cloudy. A
+relative good verdict must not clear that warning or imply clear sky. Explicitly
+approved individual references are also supported by the core contract.
+
+Exact scope includes rig, configuration, target, a fingerprint of
 the complete recipe, detector/settings/units, and bitmap dimensions. No rolling
-reference is learned. Missing, stale, incompatible or unapproved evidence is
+reference is learned. Missing, stale, incompatible or unstable initial evidence is
 Unknown. Star loss must be corroborated by a physical-ADU background rise with
 stable HFR and usable eccentricity. Poor focus/tracking remains Unknown rather
 than being labeled cloud. Recovery requires the stricter good-star/background
@@ -2106,16 +2117,16 @@ result is `request_fresh_authority`, never "resume now". Readback must not reset
 budgets, extend the night, reuse an allocation launch or redispatch a probe.
 
 These contracts are implemented and tested in the shared core/runtime. Native
-reference approval/evidence collection, separately journaled probe capture and
+initial-group collection/persistence, separately journaled probe capture and
 explicit coordinator restart admission remain implementation gates. The current
 plugin must not expose automatic quality recovery or process-restart acquisition
-until those paths pass the actual NINA/ASCOM/isolated-server tests. Reference
-approval must not imply that an automatically collected initial frame is good.
+until those paths pass the actual NINA/ASCOM/isolated-server tests. Automatically
+collected references must retain their unknown-quality warning.
 
 Reuse PSF Guard's [screening evidence](../SCREENING.md) and
 [statistical grading](../STATISTICAL_GRADING.md) concepts: transparency, spatial
 obstruction, star counts and tracking/focus evidence. Compare compatible frames
-and retain a known-good reference. A target/filter/exposure change must not
+and retain the frozen reference with its quality provenance. A target/filter/exposure change must not
 look like a sudden cloud; a long bad run must not become recovery merely
 because a rolling baseline adapted. Missing metrics are unknown, not bad or
 good. A single low star count, no-solve or final rejection is insufficient to

@@ -1,5 +1,5 @@
 //! Conservative local screening, not image grading or proof of cloud cover.
-//! A caller supplies a frozen, explicitly approved reference in physical ADU.
+//! A frozen reference is approved or built from a stable initial cohort in ADU.
 //! The classifier never learns from a deteriorating stream or issues hardware work.
 
 use crate::{recovery::Verdict, valid_id};
@@ -45,6 +45,10 @@ pub struct Reference {
     pub id: String,
     pub approved: bool,
     pub frame: Frame,
+    /// Empty for an operator-approved individual frame. A provisional baseline
+    /// retains its original cohort so its stability can be verified on readback.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub initial_group: Vec<Frame>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -101,12 +105,15 @@ pub struct Assessment {
     pub star_ratio: Option<f64>,
     pub background_ratio: Option<f64>,
     pub hfr_ratio: Option<f64>,
+    pub reference_quality_unknown: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     InvalidPolicy,
     InvalidFrame,
+    InsufficientSamples,
+    UnstableBaseline,
 }
 
 impl Policy {
@@ -187,14 +194,27 @@ pub fn classify(
         star_ratio: None,
         background_ratio: None,
         hfr_ratio: None,
+        reference_quality_unknown: !reference.approved,
     };
-    if !reference.approved {
+    let mut baseline = reference.frame.clone();
+    if !reference.initial_group.is_empty() {
+        let built = build_initial_reference(policy, &reference.id, &reference.initial_group)?;
+        if built.frame != reference.frame {
+            return Err(Error::InvalidFrame);
+        }
+        baseline.metrics = group_metrics(&reference.initial_group);
+    } else if !reference.approved {
         return Ok(unknown(Reason::ReferenceUnapproved));
     }
     if reference.frame.context != frame.context {
         return Ok(unknown(Reason::IncompatibleContext));
     }
-    if reference.frame.capture_id == frame.capture_id {
+    if reference.frame.capture_id == frame.capture_id
+        || reference
+            .initial_group
+            .iter()
+            .any(|f| f.capture_id == frame.capture_id)
+    {
         return Ok(unknown(Reason::SameCapture));
     }
     if frame.observed_at_ms > now_ms
@@ -206,7 +226,7 @@ pub fn classify(
     if now_ms - reference.frame.observed_at_ms > policy.reference_max_age_ms {
         return Ok(unknown(Reason::ReferenceExpired));
     }
-    let (r, m) = (&reference.frame.metrics, &frame.metrics);
+    let (r, m) = (&baseline.metrics, &frame.metrics);
     let (Some(rs), Some(rh), Some(rb), Some(re), Some(s), Some(h), Some(b), Some(e)) = (
         r.stars,
         r.hfr_pixels,
@@ -241,5 +261,116 @@ pub fn classify(
         star_ratio: Some(stars),
         background_ratio: Some(background),
         hfr_ratio: Some(hfr),
+        reference_quality_unknown: !reference.approved,
     })
+}
+
+/// Freeze the first stable cohort. The host must persist this result and never
+/// replace it automatically as conditions deteriorate. Stability is not quality.
+pub fn build_initial_reference(
+    policy: &Policy,
+    id: &str,
+    frames: &[Frame],
+) -> Result<Reference, Error> {
+    policy.validate()?;
+    if !valid_id(id) || frames.len() > 16 {
+        return Err(Error::InvalidFrame);
+    }
+    if frames.len() < 5 {
+        return Err(Error::InsufficientSamples);
+    }
+    let first = &frames[0];
+    let mut ids = std::collections::BTreeSet::new();
+    for (i, frame) in frames.iter().enumerate() {
+        frame.validate()?;
+        if !ids.insert(&frame.capture_id)
+            || frame.context != first.context
+            || i > 0 && frame.observed_at_ms <= frames[i - 1].observed_at_ms
+            || frame.observed_at_ms - first.observed_at_ms > 7_200_000
+        {
+            return Err(Error::InvalidFrame);
+        }
+        let m = &frame.metrics;
+        if m.stars.is_none_or(|n| n < policy.minimum_reference_stars)
+            || m.hfr_pixels.is_none()
+            || m.background_adu.is_none()
+            || m.eccentricity
+                .is_none_or(|e| e > policy.maximum_eccentricity)
+        {
+            return Err(Error::UnstableBaseline);
+        }
+    }
+    let spread = |values: Vec<f64>, limit: f64| {
+        let min = values.iter().copied().fold(f64::INFINITY, f64::min);
+        let max = values.iter().copied().fold(0.0, f64::max);
+        max / min <= limit
+    };
+    if !spread(
+        frames
+            .iter()
+            .map(|f| f64::from(f.metrics.stars.unwrap()))
+            .collect(),
+        1.25,
+    ) || !spread(
+        frames
+            .iter()
+            .map(|f| f.metrics.hfr_pixels.unwrap())
+            .collect(),
+        1.15,
+    ) || !spread(
+        frames
+            .iter()
+            .map(|f| f.metrics.background_adu.unwrap())
+            .collect(),
+        1.2,
+    ) {
+        return Err(Error::UnstableBaseline);
+    }
+    Ok(Reference {
+        id: id.into(),
+        approved: false,
+        frame: frames.last().unwrap().clone(),
+        initial_group: frames.to_vec(),
+    })
+}
+
+fn group_metrics(frames: &[Frame]) -> Metrics {
+    fn median(mut values: Vec<f64>) -> f64 {
+        values.sort_by(f64::total_cmp);
+        let n = values.len();
+        if n.is_multiple_of(2) {
+            values[n / 2 - 1] / 2.0 + values[n / 2] / 2.0
+        } else {
+            values[n / 2]
+        }
+    }
+    Metrics {
+        stars: Some(
+            median(
+                frames
+                    .iter()
+                    .map(|f| f64::from(f.metrics.stars.unwrap()))
+                    .collect(),
+            )
+            .round() as u32,
+        ),
+        hfr_pixels: Some(median(
+            frames
+                .iter()
+                .map(|f| f.metrics.hfr_pixels.unwrap())
+                .collect(),
+        )),
+        background_adu: Some(median(
+            frames
+                .iter()
+                .map(|f| f.metrics.background_adu.unwrap())
+                .collect(),
+        )),
+        eccentricity: Some(median(
+            frames
+                .iter()
+                .map(|f| f.metrics.eccentricity.unwrap())
+                .collect(),
+        )),
+    }
 }
