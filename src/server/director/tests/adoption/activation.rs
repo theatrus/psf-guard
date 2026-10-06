@@ -543,12 +543,12 @@ async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doublin
     .unwrap();
     // Target 1: Ha 300 s on the plan's own template, a third done, and Ha
     // 600 s, which is other work. Target 2: Ha on the copy, at the
-    // template's default exposure, with no GUID yet.
+    // template's default exposure.
     a.db.execute_batch(
         "INSERT INTO exposureplan (Id, profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, enabled, guid)
          VALUES (11, 'profile-a', 300, 40, 12, 12, 1, 1, 1, 'aaaaaaaa-0000-4000-8000-000000000011'),
                 (12, 'profile-a', 600, 10, 0, 0, 1, 1, 1, 'aaaaaaaa-0000-4000-8000-000000000012'),
-                (13, 'profile-a', -1, 30, 5, 5, 2, 2, 0, NULL);",
+                (13, 'profile-a', -1, 30, 5, 5, 2, 2, 0, 'aaaaaaaa-0000-4000-8000-000000000013');",
     )
     .unwrap();
     let catalog = crate::catalog_identity::read(&a.db).unwrap().unwrap().id;
@@ -772,8 +772,8 @@ async fn activation_takes_over_the_linked_projects_existing_targets_instead_of_d
     assert_eq!(places.len(), 2);
     a.db.execute(
         "INSERT INTO target (name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
-         VALUES ('IC 1805 r1c1', 1, 0.0, 0.0, 2, 0.0, 100, 1, NULL)",
-        [],
+         VALUES ('IC 1805 r1c1', 1, 0.0, 0.0, 2, 0.0, 100, 1, ?1)",
+        [Uuid::new_v4().to_string()],
     )
     .unwrap();
     a.db.execute(
@@ -820,9 +820,9 @@ async fn activation_takes_over_the_linked_projects_existing_targets_instead_of_d
     assert_eq!(status, StatusCode::OK, "{preview}");
     let data = &preview["data"];
     assert_eq!(actions(data, "project"), ["update"]);
-    // Both are taken over: the named target moves to its panel, the one
-    // already in place stays where it is, and the preview says which.
-    assert_eq!(actions(data, "target"), ["adopt", "adopt"], "{data}");
+    // Both are taken over: the named target moves to its panel, and the one
+    // already in place needs no write, so it reads unchanged.
+    assert_eq!(actions(data, "target"), ["adopt", "unchanged"], "{data}");
     let details: Vec<&str> = data["rigs"][0]["changes"]
         .as_array()
         .unwrap()
@@ -832,7 +832,7 @@ async fn activation_takes_over_the_linked_projects_existing_targets_instead_of_d
         .collect();
     assert!(details[0].contains("moving it to"), "{details:?}");
     assert!(
-        details[1].starts_with("takes over the existing target at"),
+        details[1].starts_with("already in Target Scheduler at"),
         "{details:?}"
     );
     let digest = data["preview_digest"].as_str().unwrap().to_owned();
@@ -859,7 +859,7 @@ async fn activation_takes_over_the_linked_projects_existing_targets_instead_of_d
         count("SELECT count(*) FROM target WHERE name='Lower half' AND rotation=15.0"),
         1
     );
-    assert_eq!(count("SELECT count(*) FROM target WHERE name='IC 1805 r1c1' AND projectid=1 AND rotation=15.0 AND ra>2.0 AND guid IS NOT NULL"), 1, "named target moved and given a GUID");
+    assert_eq!(count("SELECT count(*) FROM target WHERE name='IC 1805 r1c1' AND projectid=1 AND rotation=15.0 AND ra>2.0"), 1, "named target moved");
     assert_eq!(
         count("SELECT count(*) FROM target WHERE projectid=2 AND ra=0.0"),
         1,
@@ -1216,4 +1216,306 @@ async fn activation_writes_the_plans_scheduling_limits_and_keeps_hand_edits_nobo
 
     // Nothing differs: no scheduling change at all.
     assert!(limits(&apply().await).is_none());
+}
+
+/// Ownership is by GUID, and a GUID minted here would exist only in this
+/// copy of the rows. A row Director would take over without one refuses the
+/// rig, writes nothing, and points at Fill in GUIDs; it is never doubled.
+#[tokio::test]
+async fn a_row_without_a_guid_refuses_the_rig_instead_of_minting_one() {
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    let source = Uuid::new_v4();
+    a.db.execute(
+        "INSERT INTO project (Id, profileId, name, description, state, priority, isMosaic, flatsHandling, guid)
+         VALUES (1, 'profile-a', 'Heart by hand', '', 1, 1, 1, 0, ?1)",
+        [source.to_string()],
+    )
+    .unwrap();
+    a.db.execute(
+        "INSERT INTO target (Id, name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+         VALUES (1, 'IC 1805 r1c1', 1, 0.0, 0.0, 2, 0.0, 100, 1, NULL)",
+        [],
+    )
+    .unwrap();
+    let catalog = crate::catalog_identity::read(&a.db).unwrap().unwrap().id;
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        store
+            .link_catalog_project(&psf_guard_director_meta::catalog::ProjectMapping {
+                catalog_id: catalog,
+                source_project_guid: source,
+                source_profile_id: "profile-a".into(),
+                project_id: a.project,
+                rig_id: a.rig,
+            })
+            .unwrap();
+    }
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let rig = &preview["data"]["rigs"][0];
+    assert_eq!(rig["changes"].as_array().unwrap().len(), 0, "{rig}");
+    assert!(
+        rig["warnings"].as_array().unwrap().iter().any(|w| w
+            .as_str()
+            .unwrap()
+            .starts_with("Target #1 IC 1805 r1c1 has no GUID yet. Fill in GUIDs")),
+        "{rig}"
+    );
+    assert_eq!(count("SELECT count(*) FROM target"), 1, "no twin target");
+    assert_eq!(
+        count("SELECT count(*) FROM target WHERE guid IS NULL"),
+        1,
+        "no GUID minted"
+    );
+}
+
+/// A contribution turned off turns its rows off in Target Scheduler, so the
+/// scheduler stops taking them; its frames stay. A row already holding the
+/// plan's values reads unchanged.
+#[tokio::test]
+async fn turning_a_contribution_off_turns_its_rows_off() {
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    // A second objective on the same rig, so the rig stays on.
+    let oiii = Uuid::new_v4();
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut draft = store.plan_draft(a.project).unwrap().unwrap();
+        let revision = draft.revision;
+        let mut objective = draft.objectives[0].clone();
+        objective.id = oiii;
+        objective.bandpass_id = "oiii".into();
+        draft.objectives.push(objective);
+        let mut contribution = draft.contributions[0].clone();
+        contribution.id = Uuid::new_v4();
+        contribution.objective_id = oiii;
+        contribution.exposure_seconds = 600.0;
+        draft.contributions.push(contribution);
+        store.save_plan_draft(&draft, revision).unwrap();
+    }
+    let activate = |label: &'static str| {
+        let app = a.f.app.clone();
+        let project = a.project;
+        async move {
+            let (status, preview) = call(
+                &app,
+                "POST",
+                &format!("/projects/{project}/activation/preview"),
+                json!({}),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{label}: {preview}");
+            let (status, applied) = call(
+                &app,
+                "POST",
+                &format!("/projects/{project}/activation/apply"),
+                json!({"preview_digest": preview["data"]["preview_digest"]}),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{label}: {applied}");
+            applied["data"].clone()
+        }
+    };
+    activate("first").await;
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE enabled=1"),
+        4
+    );
+    // Done in Target Scheduler for a while: frames taken on the 600 s rows.
+    a.db.execute("UPDATE exposureplan SET acquired=3 WHERE exposure=600", [])
+        .unwrap();
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut draft = store.plan_draft(a.project).unwrap().unwrap();
+        let revision = draft.revision;
+        draft.contributions[1].enabled = false;
+        store.save_plan_draft(&draft, revision).unwrap();
+    }
+    let data = activate("off").await;
+    assert_eq!(
+        actions(&data, "plan"),
+        ["unchanged", "unchanged", "disable", "disable"],
+        "{data}"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE exposure=600 AND enabled=0 AND acquired=3"),
+        2
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE exposure=300 AND enabled=1"),
+        2
+    );
+    // Once off, nothing more to say about them.
+    let again = activate("again").await;
+    assert_eq!(
+        actions(&again, "plan"),
+        ["unchanged", "unchanged"],
+        "{again}"
+    );
+}
+
+/// A rig whose every contribution is off is visited too, so the On switch
+/// reaches Target Scheduler; a rig never given rows is not listed.
+#[tokio::test]
+async fn turning_a_rig_off_turns_its_rows_off() {
+    let a = activated().await;
+    let count = |db: &rusqlite::Connection, sql: &str| {
+        db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap()
+    };
+    let (other_rig, other_db) = add_rig(&a.f, "rig-b").await;
+    let set_rigs = |on: &[Uuid], off: &[Uuid]| {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut draft = store.plan_draft(a.project).unwrap().unwrap();
+        let revision = draft.revision;
+        let template = draft.contributions[0].clone();
+        draft.contributions = on
+            .iter()
+            .map(|rig| (rig, true))
+            .chain(off.iter().map(|rig| (rig, false)))
+            .map(|(rig, enabled)| {
+                let existing = draft
+                    .contributions
+                    .iter()
+                    .find(|c| c.rig_id == *rig)
+                    .cloned();
+                let mut contribution = existing.unwrap_or_else(|| Contribution {
+                    id: Uuid::new_v4(),
+                    rig_id: *rig,
+                    ..template.clone()
+                });
+                contribution.enabled = enabled;
+                contribution
+            })
+            .collect();
+        store.save_plan_draft(&draft, revision).unwrap();
+    };
+    let activate = |label: &'static str| {
+        let app = a.f.app.clone();
+        let project = a.project;
+        async move {
+            let (status, preview) = call(
+                &app,
+                "POST",
+                &format!("/projects/{project}/activation/preview"),
+                json!({}),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{label}: {preview}");
+            let (status, applied) = call(
+                &app,
+                "POST",
+                &format!("/projects/{project}/activation/apply"),
+                json!({"preview_digest": preview["data"]["preview_digest"]}),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{label}: {applied}");
+            applied["data"].clone()
+        }
+    };
+    // The second rig is off and was never given rows: it is not listed.
+    set_rigs(&[a.rig], &[other_rig]);
+    let data = activate("one on").await;
+    assert_eq!(data["rigs"].as_array().unwrap().len(), 1, "{data}");
+    set_rigs(&[a.rig, other_rig], &[]);
+    activate("both on").await;
+    assert_eq!(
+        count(
+            &other_db,
+            "SELECT count(*) FROM exposureplan WHERE enabled=1"
+        ),
+        2
+    );
+    set_rigs(&[a.rig], &[other_rig]);
+    let data = activate("second off").await;
+    let off = data["rigs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["rig"]["id"] == other_rig.to_string())
+        .unwrap_or_else(|| panic!("{data}"));
+    let off_actions: Vec<&str> = off["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["action"].as_str().unwrap())
+        .collect();
+    assert_eq!(off_actions, ["disable", "disable"], "{off}");
+    assert_eq!(off["applied"], true, "{off}");
+    assert_eq!(
+        count(
+            &other_db,
+            "SELECT count(*) FROM exposureplan WHERE enabled=0"
+        ),
+        2
+    );
+    assert_eq!(
+        count(&a.db, "SELECT count(*) FROM exposureplan WHERE enabled=1"),
+        2
+    );
+    // The rig that is off is no longer in the activation record.
+    let store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+    let record = store.activation(a.project).unwrap().unwrap();
+    assert_eq!(
+        record.rigs.iter().map(|r| r.rig_id).collect::<Vec<_>>(),
+        [a.rig]
+    );
+}
+
+/// Register another rig database and adopt it as its own rig.
+async fn add_rig(f: &Fixture, slug: &str) -> (Uuid, rusqlite::Connection) {
+    let path = f._dir.path().join(format!("{slug}.sqlite"));
+    let db = crate::ts_schema::create_fresh_db(&path).unwrap();
+    db.execute(
+        "INSERT INTO exposuretemplate (profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel, moonavoidanceenabled,
+            moonavoidanceseparation, moonavoidancewidth, maximumhumidity, defaultexposure, moonrelaxscale, moonrelaxmaxaltitude,
+            moonrelaxminaltitude, moondownenabled, ditherevery, minutesOffset, guid)
+         VALUES ('profile-b', 'Ha 300', 'Ha', 100, 30, 1, -1, 0, 0, 60, 7, 0, 300, 0, 5, -15, 0, -1, 0, ?1)",
+        [Uuid::new_v4().to_string()],
+    )
+    .unwrap();
+    let context = crate::server::database_context::DatabaseContext::new(
+        slug.into(),
+        format!("{slug} rig"),
+        path.to_string_lossy().into(),
+        vec![f._dir.path().to_string_lossy().into()],
+        None,
+        None,
+        None,
+        f._dir.path().join(format!("cache-{slug}")),
+    )
+    .unwrap();
+    f.state
+        .databases
+        .write()
+        .unwrap()
+        .insert(slug.into(), Arc::new(context));
+    let catalog = Uuid::new_v4();
+    let (status, reviewed) = call(
+        &f.app,
+        "POST",
+        &format!("/catalogs/{slug}/rig/preview"),
+        json!({"catalog_id": catalog}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reviewed}");
+    let (status, applied) = call(&f.app, "POST", &format!("/catalogs/{slug}/rig/apply"),
+        json!({"plan": {"catalog_id": catalog}, "preview_digest": reviewed["data"]["preview_digest"]}), None).await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    (
+        Uuid::parse_str(applied["data"]["binding"]["rig"]["id"].as_str().unwrap()).unwrap(),
+        db,
+    )
 }

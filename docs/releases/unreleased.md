@@ -338,6 +338,13 @@
 
 ## Changed
 
+- Turning a rig off in a plan, or one of its objectives, and activating
+  again turns its exposure plans off in Target Scheduler, so it stops taking
+  them. Frames and grades stay. Before, those rows stayed on.
+- Activation lists a Target Scheduler row that already holds the plan's
+  values as **Unchanged** rather than **Taken over**.
+- Activation no longer makes up GUIDs for rows it takes over. A rig with such
+  a row is skipped and points at **Fill in GUIDs**.
 - On the planning page's Framing tab, each rig has an **On** switch, with the
   rigs grouped On and Off, so several rigs can shoot one plan. Clicking an on
   rig's heading frames the plan with it, and its card is highlighted.

@@ -1390,10 +1390,12 @@ the plan are left alone; they are listed under the rig as "not in this plan".
 A project inactive or closed in Target Scheduler matches, and reads "Inactive
 in Target Scheduler".
 
-Three activation fixes come first: write the plan's enabled flag instead of
-always `enabled=1`; report "unchanged" instead of "taken over" when an existing
-row already holds the plan's values; and leave rows without a GUID unmatched
-until `fill-guids` repairs them.
+Three activation fixes came first, and are built: a rig or objective turned
+off turns its earlier rows off instead of leaving them `enabled=1`; an
+existing row that already holds the plan's values reads "unchanged" instead
+of "taken over"; and a row activation would take over without a GUID
+refuses the rig until Fill in GUIDs repairs it, instead of a GUID minted in
+one copy.
 
 **Director names targets.** Names help, so they are planned: activation sets
 each target's name to the plan's, on existing rows as well as new ones, and

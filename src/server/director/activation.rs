@@ -302,6 +302,12 @@ async fn execute(
         for contribution in plan.contributions.iter().filter(|c| c.enabled) {
             by_rig.entry(contribution.rig_id).or_default().push(contribution);
         }
+        // Contributions turned off: the rows they were given are turned off
+        // too, on a rig that is still on and on one that is now off.
+        let mut off_by_rig: BTreeMap<Uuid, Vec<&Contribution>> = BTreeMap::new();
+        for contribution in plan.contributions.iter().filter(|c| !c.enabled) {
+            off_by_rig.entry(contribution.rig_id).or_default().push(contribution);
+        }
         if by_rig.is_empty() {
             return Err(ActivationError::NotReady(
                 "Tick at least one rig in the plan first.",
@@ -346,7 +352,7 @@ async fn execute(
         let mut rig_catalogs: BTreeMap<Uuid, RigCatalog> = BTreeMap::new();
         for (identity, context) in found.iter() {
             if let Some(binding) = store.catalog_rig(identity.id)?
-                && by_rig.contains_key(&binding.rig.id)
+                && (by_rig.contains_key(&binding.rig.id) || off_by_rig.contains_key(&binding.rig.id))
             {
                 rig_catalogs.insert(
                     binding.rig.id,
@@ -359,8 +365,10 @@ async fn execute(
         }
         let now = now_ms();
         let mut reports = Vec::new();
-        let mut pending: Vec<(Uuid, Connection, ActivatedRig, bool)> = Vec::new();
+        let mut pending: Vec<(Uuid, Connection, Option<ActivatedRig>, bool)> = Vec::new();
+        let no_contributions: Vec<&Contribution> = Vec::new();
         for (rig_id, contributions) in &by_rig {
+            let turned_off = off_by_rig.get(rig_id).unwrap_or(&no_contributions);
             let rig = store.rig(*rig_id)?.ok_or(Error::Missing)?;
             let Some(catalog) = rig_catalogs.get(rig_id) else {
                 reports.push(RigReport {
@@ -427,18 +435,7 @@ async fn execute(
             }
             // A rig on another PSF Guard: its rows land here first, then go
             // to the peer by Sync once Apply has committed them.
-            let push = match profile.as_ref().and_then(|p| p.peer_id.as_deref()) {
-                None => None,
-                Some(peer_id) => match known_peers.iter().find(|peer| peer.id == peer_id) {
-                    Some(peer) => Some(Push::planned(peer)),
-                    None => {
-                        warnings.push(format!(
-                            "Its peer '{peer_id}' is no longer registered; the plan stays on this server until Setup names another."
-                        ));
-                        None
-                    }
-                },
-            };
+            let push = planned_push(profile.as_ref(), &known_peers, &mut warnings);
             // A preview performs the same writes and rolls them back, so the
             // connection is read-write either way; nothing lands without Apply.
             let mut connection = super::super::database_context::open_scheduler_connection_with_flags(
@@ -474,6 +471,7 @@ async fn execute(
                         panels: &rig_panels,
                         position_angle_degrees: layout.position_angle_degrees,
                         contributions,
+                        turned_off,
                         rig_id: *rig_id,
                         catalog: catalog.identity,
                         existing_link,
@@ -523,10 +521,56 @@ async fn execute(
                 applied: false,
                 push,
             });
-            pending.push((*rig_id, connection, outcome.record, outcome.created_project));
+            pending.push((*rig_id, connection, Some(outcome.record), outcome.created_project));
+        }
+        // A rig with every contribution off: Target Scheduler stops taking
+        // the rows it was given. One that was never given any is not listed.
+        for (rig_id, turned_off) in off_by_rig.iter().filter(|(rig, _)| !by_rig.contains_key(rig)) {
+            let Some(catalog) = rig_catalogs.get(rig_id) else {
+                continue;
+            };
+            let Some(rig) = store.rig(*rig_id)? else {
+                continue;
+            };
+            let profile = store.rig_profile(*rig_id)?;
+            let mut warnings = Vec::new();
+            let push = planned_push(profile.as_ref(), &known_peers, &mut warnings);
+            let mut connection = super::super::database_context::open_scheduler_connection_with_flags(
+                FilePath::new(&catalog.context.database_path),
+                OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
+            .map_err(StoreError::from)?;
+            connection.busy_timeout(Duration::from_secs(2))?;
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let mut changes = Vec::new();
+            match turn_off(&tx, turned_off, &mut changes) {
+                Ok(()) => {}
+                Err(RigError::Skip(_)) => {}
+                Err(RigError::Failed(error)) => return Err(error.into()),
+            }
+            if changes.is_empty() {
+                tx.rollback()?;
+                continue;
+            }
+            if applying {
+                tx.commit_pending()?;
+            } else {
+                tx.rollback()?;
+            }
+            reports.push(RigReport {
+                rig,
+                catalog_slug: Some(catalog.context.id.clone()),
+                catalog_name: catalog.context.name.clone(),
+                profile_id: None,
+                changes,
+                warnings,
+                applied: false,
+                push,
+            });
+            pending.push((*rig_id, connection, None, false));
         }
         let mut warnings = coverage_warnings;
-        if pending.is_empty() {
+        if pending.iter().all(|(_, _, record, _)| record.is_none()) {
             warnings.push("No rig database can take this plan yet.".into());
         }
         let bytes = serde_json::to_vec(&(
@@ -570,6 +614,9 @@ async fn execute(
                 if let Some(report) = reports.iter_mut().find(|r| r.rig.id == rig_id) {
                     report.applied = true;
                 }
+                let Some(record) = record else {
+                    continue;
+                };
                 if created_project {
                     links.push(ProjectMapping {
                         catalog_id: record.catalog_id,
@@ -635,6 +682,25 @@ async fn execute(
         }
     }
     Ok(Json(ApiResponse::success(report)))
+}
+
+/// The Sync peer a remote rig's rows go to after Apply, if its profile
+/// names one that is still registered.
+fn planned_push(
+    profile: Option<&psf_guard_director_meta::profile::RigProfile>,
+    known_peers: &[PeerEntry],
+    warnings: &mut Vec<String>,
+) -> Option<Push> {
+    let peer_id = profile.and_then(|p| p.peer_id.as_deref())?;
+    match known_peers.iter().find(|peer| peer.id == peer_id) {
+        Some(peer) => Some(Push::planned(peer)),
+        None => {
+            warnings.push(format!(
+                "Its peer '{peer_id}' is no longer registered; the plan stays on this server until Setup names another."
+            ));
+            None
+        }
+    }
 }
 
 /// Send a rig database's planning rows to the peer that holds the rig's real
@@ -771,6 +837,8 @@ struct Inputs<'a> {
     panels: &'a [Panel],
     position_angle_degrees: f64,
     contributions: &'a [&'a Contribution],
+    /// This rig's contributions that are off; the rows they own are turned off.
+    turned_off: &'a [&'a Contribution],
     rig_id: Uuid,
     catalog: CatalogIdentity,
     existing_link: Option<Uuid>,
@@ -1055,10 +1123,10 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                     }
                     changes.push(Change {
                         kind: "target",
-                        action: "adopt",
+                        action: if same { "unchanged" } else { "adopt" },
                         name: found.name.clone(),
                         detail: if same {
-                            format!("takes over the existing target at {detail}")
+                            format!("already in Target Scheduler at {detail}")
                         } else {
                             format!("takes over the existing target, moving it to {detail}")
                         },
@@ -1221,25 +1289,37 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                         if !found.enabled {
                             notes.push("turned on".to_string());
                         }
-                        tx.execute(
-                            "UPDATE exposureplan SET exposure=?2, desired=?3, exposureTemplateId=?4, enabled=1 WHERE Id=?1",
-                            params![found.row_id, contribution.exposure_seconds, i64::from(frames), template_id],
-                        )?;
+                        // A row left at the template's default exposure is
+                        // given the length explicitly; that is a write too.
+                        let same = notes.is_empty() && found.explicit_exposure;
+                        if !same {
+                            tx.execute(
+                                "UPDATE exposureplan SET exposure=?2, desired=?3, exposureTemplateId=?4, enabled=1 WHERE Id=?1",
+                                params![found.row_id, contribution.exposure_seconds, i64::from(frames), template_id],
+                            )?;
+                        }
                         changes.push(Change {
                             kind: "plan",
-                            action: "adopt",
+                            action: if same { "unchanged" } else { "adopt" },
                             name: name.clone(),
-                            detail: format!(
-                                "takes over plan #{} ({} of {} frames taken){}",
-                                found.row_id,
-                                found.acquired,
-                                found.desired,
-                                if notes.is_empty() {
-                                    String::new()
-                                } else {
-                                    format!("; {}", notes.join(", "))
-                                }
-                            ),
+                            detail: if same {
+                                format!(
+                                    "already in Target Scheduler as plan #{} ({} of {} frames taken)",
+                                    found.row_id, found.acquired, found.desired
+                                )
+                            } else {
+                                format!(
+                                    "takes over plan #{} ({} of {} frames taken){}",
+                                    found.row_id,
+                                    found.acquired,
+                                    found.desired,
+                                    if notes.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!("; {}", notes.join(", "))
+                                    }
+                                )
+                            },
                         });
                         found.guid
                     }
@@ -1291,6 +1371,7 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
             });
         }
     }
+    turn_off(tx, inputs.turned_off, &mut changes)?;
     // Every other plan on these targets stays as it is in Target Scheduler:
     // ones this rig received for contributions the plan no longer has, and
     // the rig's own that no contribution took. Say so, so the preview
@@ -1398,6 +1479,67 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
         },
         created_project,
     })
+}
+
+/// Turn off the exposure plans that contributions now off were given, so
+/// Target Scheduler stops taking them. Their frames and grades stay.
+fn turn_off(
+    tx: &Connection,
+    contributions: &[&Contribution],
+    changes: &mut Vec<Change>,
+) -> Result<(), RigError> {
+    if contributions.is_empty() {
+        return Ok(());
+    }
+    let has_table: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='psf_guard_director_plan')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_table || !has_column(tx, "exposureplan", "enabled")? {
+        return Ok(());
+    }
+    let mut statement = tx.prepare(
+        "SELECT e.Id, e.exposure, IFNULL(e.acquired, 0), IFNULL(e.desired, 0), t.name, tg.name
+         FROM psf_guard_director_plan d
+         JOIN exposureplan e ON e.guid = d.exposureplan_guid
+         LEFT JOIN target tg ON tg.Id = e.targetid
+         LEFT JOIN exposuretemplate t ON t.Id = e.exposureTemplateId
+         WHERE d.contribution_id = ?1 AND COALESCE(e.enabled, 1) = 1
+         ORDER BY e.Id",
+    )?;
+    type Row = (i64, Option<f64>, i64, i64, Option<String>, Option<String>);
+    for contribution in contributions {
+        let rows: Vec<Row> = statement
+            .query_map([contribution.id.to_string()], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            })?
+            .collect::<Result<_, _>>()?;
+        for (row_id, exposure, acquired, desired, template_name, target_name) in rows {
+            tx.execute("UPDATE exposureplan SET enabled=0 WHERE Id=?1", [row_id])?;
+            changes.push(Change {
+                kind: "plan",
+                action: "disable",
+                name: format!(
+                    "{} · {} · {} s",
+                    target_name.unwrap_or_default(),
+                    template_name.unwrap_or_default(),
+                    exposure.unwrap_or(contribution.exposure_seconds)
+                ),
+                detail: format!(
+                    "plan #{row_id} ({acquired} of {desired} frames taken) is off for this rig; Target Scheduler stops taking it"
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn required_frames(objective: &Objective, contribution: &Contribution) -> Option<u32> {
@@ -1642,8 +1784,8 @@ struct Adoptable {
 /// The existing target a panel should take over, if any: the one with the
 /// panel's name, else the one at the panel's place (within a quarter of an
 /// arcminute, an import's round trip), else, for a single-panel framing,
-/// the project's only unowned target. A row without a GUID is given one,
-/// since ownership is by GUID.
+/// the project's only unowned target. Ownership is by GUID, so a match
+/// without one refuses the rig.
 fn adoptable_target(
     tx: &Connection,
     project_row_id: i64,
@@ -1651,7 +1793,7 @@ fn adoptable_target(
     ra_hours: f64,
     dec: f64,
     single_panel: bool,
-) -> rusqlite::Result<Option<Adoptable>> {
+) -> Result<Option<Adoptable>, RigError> {
     let mut statement = tx.prepare(
         "SELECT Id, guid, name, ra, dec, rotation FROM target
          WHERE projectid=?1
@@ -1684,14 +1826,7 @@ fn adoptable_target(
     let (row_id, guid, found_name, found_ra, found_dec, found_rotation) = rows[index].clone();
     let guid = match guid {
         Some(guid) if !guid.is_empty() => guid,
-        _ => {
-            let minted = new_guid();
-            tx.execute(
-                "UPDATE target SET guid=?2 WHERE Id=?1",
-                params![row_id, minted],
-            )?;
-            minted
-        }
+        _ => return Err(missing_guid(&format!("Target #{row_id} {found_name}"))),
     };
     Ok(Some(Adoptable {
         guid,
@@ -1702,6 +1837,15 @@ fn adoptable_target(
     }))
 }
 
+/// A row Director would take over has no GUID. Minting one here would give a
+/// sync copy GUIDs the rig's own database lacks, so the rig waits for Fill in
+/// GUIDs instead, which also keeps Director from making a twin of the row.
+fn missing_guid(what: &str) -> RigError {
+    RigError::Skip(format!(
+        "{what} has no GUID yet. Fill in GUIDs for this database under Settings, Databases, then activate again."
+    ))
+}
+
 /// An exposure plan already on a target that a contribution takes over.
 struct AdoptablePlan {
     row_id: i64,
@@ -1710,6 +1854,8 @@ struct AdoptablePlan {
     acquired: i64,
     template_id: i64,
     enabled: bool,
+    /// The row names its exposure, not the template's default.
+    explicit_exposure: bool,
 }
 
 /// The target's own exposure plan for the work a contribution asks for, if
@@ -1718,15 +1864,15 @@ struct AdoptablePlan {
 /// the same exposure length either way. Another length is other work (Ha at
 /// 600 s does not replace Ha at 300 s), so it is never taken over. A plan
 /// left at Target Scheduler's "template default" exposure counts at the
-/// template's default. A row without a GUID is given one, since ownership is
-/// by GUID.
+/// template's default. Ownership is by GUID, so a match without one refuses
+/// the rig.
 fn adoptable_plan(
     tx: &Connection,
     target_row: i64,
     template_id: i64,
     exposure_seconds: f64,
     claimed: &std::collections::BTreeSet<i64>,
-) -> rusqlite::Result<Option<AdoptablePlan>> {
+) -> Result<Option<AdoptablePlan>, RigError> {
     type Settings = (String, i64, i64, i64, i64);
     let settings_of = |id: i64| -> rusqlite::Result<Option<Settings>> {
         tx.query_row(
@@ -1805,14 +1951,7 @@ fn adoptable_plan(
     };
     let guid = match &row.1 {
         Some(guid) if !guid.is_empty() => guid.clone(),
-        _ => {
-            let minted = new_guid();
-            tx.execute(
-                "UPDATE exposureplan SET guid=?2 WHERE Id=?1",
-                params![row.0, minted],
-            )?;
-            minted
-        }
+        _ => return Err(missing_guid(&format!("Exposure plan #{}", row.0))),
     };
     Ok(Some(AdoptablePlan {
         row_id: row.0,
@@ -1821,6 +1960,7 @@ fn adoptable_plan(
         acquired: row.4,
         template_id: row.5,
         enabled: row.6 != 0,
+        explicit_exposure: row.2.is_some_and(|exposure| exposure > 0.0),
     }))
 }
 
