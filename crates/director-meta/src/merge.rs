@@ -239,6 +239,11 @@ fn retire(tx: &Connection, project: Uuid) -> Result<(), Error> {
         return Err(Error::Conflict);
     }
     tx.execute("DELETE FROM activation WHERE project_id=?1", [&id])?;
+    // An intent's setup references go first: they point at the intent.
+    tx.execute(
+        "DELETE FROM project_intent_setup WHERE intent_id IN (SELECT id FROM project_intent WHERE project_id=?1)",
+        [&id],
+    )?;
     tx.execute("DELETE FROM project_intent WHERE project_id=?1", [&id])?;
     tx.execute("DELETE FROM framing_draft WHERE project_id=?1", [&id])?;
     tx.execute("DELETE FROM plan_draft WHERE project_id=?1", [&id])?;
