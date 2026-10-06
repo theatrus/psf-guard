@@ -3,7 +3,7 @@
 //! What N.I.N.A. already knows about a project is its plan; the operator
 //! should open the workspace to find it there, not retype it.
 
-use super::plan::read_templates;
+use super::plan::Templates;
 use super::*;
 use psf_guard_director_core::{
     framing::{Mosaic, PanelSize, TangentPlane},
@@ -35,7 +35,7 @@ struct SourceTarget {
     rotation_degrees: f64,
 }
 
-fn has_column(connection: &Connection, table: &str, column: &str) -> bool {
+pub(super) fn has_column(connection: &Connection, table: &str, column: &str) -> bool {
     connection
         .prepare(&format!("SELECT {column} FROM {table} LIMIT 0"))
         .is_ok()
@@ -330,44 +330,66 @@ fn shared_name(targets: &[SourceTarget], project_name: &str) -> String {
         .to_owned()
 }
 
-/// Import once: a framing draft from the targets and a plan draft from the
-/// exposure plans, each only when the project has none yet.
-pub(super) fn import_from_catalog(
-    store: &mut MetaStore,
+/// A Target Scheduler project's targets and exposure plans read as drafts,
+/// before the store sees them. Reading needs no store gate.
+#[derive(Default)]
+pub(super) struct Drafts {
+    pub framing: Option<FramingDraft>,
+    pub plan: Option<PlanDraft>,
+    /// As in [`Imported`].
+    pub separate_targets: usize,
+    /// Exposure plans left out, and why.
+    pub warnings: Vec<String>,
+}
+
+/// Which drafts a project has none of yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Missing {
+    pub framing: bool,
+    pub plan: bool,
+}
+
+/// Read the drafts a project would take in: a framing draft from the
+/// targets and a plan draft from the exposure plans, each only when missing.
+/// `panel` is the rig's field, when its optics are known; `templates` are
+/// the database's, read once for all its projects. Without them no plan
+/// draft is read.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn read_drafts(
     connection: &Connection,
+    templates: Option<&Templates>,
     rig: Uuid,
     project_id: Uuid,
     project_row: i64,
     project_name: &str,
-    now_ms: u64,
-) -> Result<Imported, StoreError> {
-    let mut imported = Imported::default();
-    let need_framing = store.framing_draft(project_id)?.is_none();
-    let need_plan = store.plan_draft(project_id)?.is_none();
-    if !need_framing && !need_plan {
-        return Ok(imported);
+    panel: Option<PanelSize>,
+    missing: Missing,
+) -> Result<Drafts, StoreError> {
+    let mut drafts = Drafts::default();
+    let missing = Missing {
+        plan: missing.plan && templates.is_some(),
+        ..missing
+    };
+    if !missing.framing && !missing.plan {
+        return Ok(drafts);
     }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
     let mut targets = source_targets(connection, project_row)?;
     if targets.is_empty() {
-        return Ok(imported);
+        return Ok(drafts);
     }
-    let panel = store
-        .rig_profile(rig)?
-        .and_then(|profile| profile.optics)
-        .and_then(|optics| optics.value.field_of_view().ok())
-        .map(|fov| PanelSize {
-            width_degrees: fov.width_degrees,
-            height_degrees: fov.height_degrees,
-        });
     // Separate targets that are not one mosaic: Director plans one framing
     // per project, so the draft is the first target alone. Merging the
     // others' exposure plans into it would raise its desired counts.
     let one_framing = forms_one_framing(&targets, panel);
     if !one_framing {
-        imported.separate_targets = targets.len();
+        drafts.separate_targets = targets.len();
         targets.truncate(1);
     }
-    if need_framing {
+    if missing.framing {
         let (center, mosaic) = infer_layout(&targets, panel);
         let extent = panel.map(|p| {
             let keep = 1.0 - f64::from(mosaic.overlap_percent) / 100.0;
@@ -379,7 +401,7 @@ pub(super) fn import_from_catalog(
         let view_fov = extent
             .map(|(w, h)| (w.max(h * 4.0 / 3.0) * 1.6).clamp(0.5, 40.0))
             .unwrap_or(4.0);
-        let draft = FramingDraft {
+        drafts.framing = Some(FramingDraft {
             project_id,
             revision: 0,
             target_name: shared_name(&targets, project_name),
@@ -394,13 +416,10 @@ pub(super) fn import_from_catalog(
             updated_at_ms: now_ms,
             rig_framings: vec![],
             layout_revision: 0,
-        };
-        store.save_framing_draft(&draft, 0)?;
-        imported.framing = true;
+        });
     }
-    if need_plan {
+    if let Some(templates) = templates.filter(|_| missing.plan) {
         let priority = source_priority(connection, project_row)?;
-        let templates = read_templates(connection).map_err(|_| StoreError::InvalidInput)?;
         let enabled = if has_column(connection, "exposureplan", "enabled") {
             "COALESCE(e.enabled, 1) = 1"
         } else {
@@ -430,12 +449,23 @@ pub(super) fn import_from_catalog(
         // One objective per bandpass; the frames a panel wants is the most
         // any of its plans asks for, since Director counts per panel.
         let mut by_bandpass: BTreeMap<String, (usize, f64, u32)> = BTreeMap::new();
+        let mut left_out = std::collections::BTreeSet::new();
         for (template_id, exposure, desired) in rows {
-            let Some(index) = template_id.and_then(|id| templates.iter().position(|t| t.id == id))
+            let Some(index) =
+                template_id.and_then(|id| templates.usable.iter().position(|t| t.id == id))
             else {
+                if let Some(unusable) =
+                    template_id.and_then(|id| templates.unusable.iter().find(|t| t.id == id))
+                    && left_out.insert(unusable.id)
+                {
+                    drafts.warnings.push(format!(
+                        "{project_name}: its exposure plans with template {} were left out of its plan; that template's Moon avoidance settings are outside what Director plans with.",
+                        unusable.name
+                    ));
+                }
                 continue;
             };
-            let template = &templates[index];
+            let template = &templates.usable[index];
             let exposure = exposure
                 .filter(|e| e.is_finite() && *e > 0.0)
                 .unwrap_or(template.default_exposure)
@@ -452,7 +482,7 @@ pub(super) fn import_from_catalog(
             if desired == 0 {
                 continue;
             }
-            let template = &templates[index];
+            let template = &templates.usable[index];
             let objective = Objective {
                 id: Uuid::new_v4(),
                 bandpass_id,
@@ -483,18 +513,44 @@ pub(super) fn import_from_catalog(
             objectives.push(objective);
         }
         if !objectives.is_empty() {
-            store.save_plan_draft(
-                &PlanDraft {
-                    project_id,
-                    revision: 0,
-                    objectives,
-                    contributions,
-                    updated_at_ms: now_ms,
-                },
-                0,
-            )?;
-            imported.plan = true;
+            drafts.plan = Some(PlanDraft {
+                project_id,
+                revision: 0,
+                objectives,
+                contributions,
+                updated_at_ms: now_ms,
+            });
         }
+    }
+    Ok(drafts)
+}
+
+/// Import once: save each draft under `project_id` only while the project
+/// has none, so a draft the operator saved meanwhile is never replaced.
+pub(super) fn save_drafts(
+    store: &mut MetaStore,
+    project_id: Uuid,
+    drafts: Drafts,
+) -> Result<Imported, StoreError> {
+    let mut imported = Imported::default();
+    if let Some(mut framing) = drafts.framing {
+        framing.project_id = project_id;
+        match store.save_framing_draft(&framing, 0) {
+            Ok(_) => imported.framing = true,
+            Err(StoreError::Conflict) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    if let Some(mut plan) = drafts.plan {
+        plan.project_id = project_id;
+        match store.save_plan_draft(&plan, 0) {
+            Ok(_) => imported.plan = true,
+            Err(StoreError::Conflict) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    if imported.framing || imported.plan {
+        imported.separate_targets = drafts.separate_targets;
     }
     Ok(imported)
 }

@@ -30,6 +30,30 @@ pub(super) struct TemplateList {
     catalog_name: String,
     rig: Option<NamedIdentity>,
     templates: Vec<Template>,
+    /// Templates left out because Director cannot plan with them, named.
+    warnings: Vec<String>,
+}
+
+/// A rig database's templates, and the ones left out of them.
+pub(super) struct Templates {
+    pub(super) usable: Vec<Template>,
+    pub(super) unusable: Vec<Unusable>,
+}
+
+/// A template whose Moon avoidance is on with settings Director's planner
+/// refuses, such as a relax range that ends below where it starts.
+pub(super) struct Unusable {
+    pub(super) id: i64,
+    pub(super) name: String,
+}
+
+impl Unusable {
+    pub(super) fn warning(&self) -> String {
+        format!(
+            "Template {}: its Moon avoidance settings are outside what Director plans with, so it is left out. Fix them in Target Scheduler.",
+            self.name
+        )
+    }
 }
 
 /// Every exposure template in the rig database, across profiles, with the
@@ -62,14 +86,17 @@ pub(super) async fn templates(
                 catalog_slug: catalog.id.clone(),
                 catalog_name: catalog.name.clone(),
                 rig,
-                templates,
+                templates: templates.usable,
+                warnings: templates.unusable.iter().map(Unusable::warning).collect(),
             })
         })
         .await?;
     Ok(Json(ApiResponse::success(list)))
 }
 
-pub(super) fn read_templates(connection: &Connection) -> Result<Vec<Template>, Error> {
+/// Every template with a filter. One whose Moon avoidance cannot be planned
+/// is set apart by name rather than failing the rig's whole list.
+pub(super) fn read_templates(connection: &Connection) -> Result<Templates, Error> {
     let has = |column: &str| {
         connection
             .prepare("PRAGMA table_info(exposuretemplate)")
@@ -82,7 +109,10 @@ pub(super) fn read_templates(connection: &Connection) -> Result<Vec<Template>, E
             .unwrap_or(false)
     };
     if !has("filtername") {
-        return Ok(vec![]);
+        return Ok(Templates {
+            usable: vec![],
+            unusable: vec![],
+        });
     }
     let guid = if has("guid") { "guid" } else { "NULL" };
     let readout = if has("readoutmode") {
@@ -117,7 +147,10 @@ pub(super) fn read_templates(connection: &Connection) -> Result<Vec<Template>, E
             ))
         })
         .map_err(StoreError::from)?;
-    let mut templates = Vec::new();
+    let mut templates = Templates {
+        usable: Vec::new(),
+        unusable: Vec::new(),
+    };
     for row in rows {
         let (id, guid, profile_id, name, filter_name, gain, offset, bin, readout_mode, exposure) =
             row.map_err(StoreError::from)?;
@@ -125,11 +158,20 @@ pub(super) fn read_templates(connection: &Connection) -> Result<Vec<Template>, E
         if filter_name.trim().is_empty() {
             continue;
         }
-        templates.push(Template {
+        let name = name.unwrap_or_else(|| filter_name.clone());
+        let moon = match read_moon_policy(connection, id) {
+            Ok(moon) => moon,
+            Err(error) if is_unusable_moon(&error) => {
+                templates.unusable.push(Unusable { id, name });
+                continue;
+            }
+            Err(error) => return Err(StoreError::from(error).into()),
+        };
+        templates.usable.push(Template {
             id,
             guid: guid.and_then(|value| Uuid::parse_str(&value).ok()),
             profile_id: profile_id.unwrap_or_default(),
-            name: name.unwrap_or_else(|| filter_name.clone()),
+            name,
             bandpass: bandpass_for_filter(&filter_name),
             filter_name,
             gain: gain.filter(|value| *value >= 0),
@@ -137,10 +179,18 @@ pub(super) fn read_templates(connection: &Connection) -> Result<Vec<Template>, E
             bin: bin.filter(|value| *value > 0),
             readout_mode: readout_mode.filter(|value| *value >= 0),
             default_exposure: exposure.filter(|value| *value > 0.0).unwrap_or(60.0),
-            moon: read_moon_policy(connection, id).map_err(StoreError::from)?,
+            moon,
         });
     }
     Ok(templates)
+}
+
+const UNUSABLE_MOON: &str = "Invalid exposure template Moon avoidance settings";
+
+/// Whether `read_moon_policy` failed on the template's settings rather than
+/// on the database.
+pub(super) fn is_unusable_moon(error: &rusqlite::Error) -> bool {
+    matches!(error, rusqlite::Error::FromSqlConversionFailure(_, _, inner) if inner.to_string() == UNUSABLE_MOON)
 }
 
 pub(super) fn read_moon_policy(
@@ -170,7 +220,7 @@ pub(super) fn read_moon_policy(
             default.to_owned()
         }
     });
-    let policy = connection.query_row(
+    let mut policy = connection.query_row(
         &format!(
             "SELECT {} FROM exposuretemplate WHERE Id=?1",
             values.join(",")
@@ -188,13 +238,22 @@ pub(super) fn read_moon_policy(
             })
         },
     )?;
+    // Target Scheduler ignores the other Moon fields while avoidance is off,
+    // and so does Director's planner; values outside its ranges then stand
+    // for nothing and read as the defaults.
+    if !policy.enabled && policy.validate().is_err() {
+        policy = psf_guard_director_core::moon::MoonPolicy {
+            moon_down: policy.moon_down,
+            ..Default::default()
+        };
+    }
     policy.validate().map_err(|_| {
         rusqlite::Error::FromSqlConversionFailure(
             0,
             rusqlite::types::Type::Real,
             Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "Invalid exposure template Moon avoidance settings",
+                UNUSABLE_MOON,
             )),
         )
     })?;

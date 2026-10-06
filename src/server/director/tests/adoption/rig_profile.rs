@@ -264,3 +264,28 @@ async fn an_unbound_database_has_no_profile() {
         StatusCode::NOT_FOUND
     );
 }
+
+/// The profile form is a read: it answers beside a write in progress, and
+/// its header search holds no store gate.
+#[tokio::test]
+async fn the_rig_profile_reads_while_a_write_holds_the_store() {
+    let (f, rig) = bound_fixture().await;
+    let service = f.state.director.clone().unwrap();
+    let (started, start) = tokio::sync::oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel::<()>();
+    let write = tokio::spawn(service.clone().run(move |store| {
+        started.send(()).unwrap();
+        wait.recv().unwrap();
+        store.create_project(Uuid::new_v4(), "M33")
+    }));
+    start.await.unwrap();
+    let (status, profile) = call(&f.app, "GET", PROFILE, Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{profile}");
+    assert_eq!(profile["data"]["rig"]["id"], rig.to_string());
+    assert_eq!(
+        profile["data"]["defaults"]["optics"]["source"]["file_name"],
+        "newest.fits"
+    );
+    release.send(()).unwrap();
+    write.await.unwrap().unwrap();
+}
