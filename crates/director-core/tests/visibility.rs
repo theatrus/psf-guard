@@ -261,10 +261,12 @@ fn invalid_coordinates_and_unbounded_time_never_reach_dependency_panics() {
         observe(position, site, unbounded, u64::MAX - 1),
         Err(VisibilityError::UnsupportedTime)
     );
-    // The translation suppresses SOFA's dubious-year warning. The wrapper
-    // supplies an explicit cutoff rather than trusting stale leap-second data.
+    // Past SOFA's five-year leap-second horizon the wrapper assumes no new
+    // leap seconds; the cutoff is epv00's range, ending with 2099.
+    assert!(observe(position, site, unbounded, 1_874_966_400_000).is_ok()); // 2029-06-01
+    assert!(observe(position, site, unbounded, 4_102_444_799_000).is_ok()); // 2099-12-31
     assert_eq!(
-        observe(position, site, unbounded, 1_861_920_000_000),
+        observe(position, site, unbounded, 4_102_444_800_000), // 2100-01-01
         Err(VisibilityError::UnsupportedTime)
     );
 }

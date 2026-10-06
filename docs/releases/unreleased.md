@@ -1,5 +1,11 @@
 # Unreleased
 
+- Show tonight in Director's Visibility panel from noon until the next noon;
+  from local noon on it showed tomorrow night. Each rig is now timed with the
+  plan's scheduling limits (altitude, custom horizon and offset, meridian
+  window) at its own center when framed separately, and the hours it owes
+  leave out frames already accepted.
+
 - Check Director cloud probes against durable recovery state and the original
   rig/target/recipe geometry without consuming science attempts. Sparse initial
   reference groups remain unknown-quality evidence rather than corrupt input.
