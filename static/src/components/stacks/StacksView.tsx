@@ -12,6 +12,8 @@ import WbppRunDialog from '../WbppRunDialog';
 import { describeWbppRunForProject, useWbppRun } from '../../hooks/useWbppRun';
 import { DEFAULT_WBPP_OPTIONS } from '../../api/types';
 import WbppStacks from './WbppStacks';
+import MosaicStacks from './MosaicStacks';
+import { useProjectMosaic } from '../../hooks/useProjectMosaic';
 import './stacks.css';
 
 /** What Images hands over when a person stacks a selection. */
@@ -30,7 +32,8 @@ const CARD_SIZE_STEP = 50;
  * unless Images handed over a selection.
  */
 export default function StacksView() {
-  const { dbId, projectId, targetId } = useDbProjectTarget();
+  const { dbId, projectId, targetId, mosaic: mosaicScope } = useDbProjectTarget();
+  const { data: mosaic } = useProjectMosaic(mosaicScope ? dbId : null, mosaicScope ? projectId : null);
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -151,6 +154,7 @@ export default function StacksView() {
           </button>
         </p>
       )}
+      {mosaic && <MosaicStacks mosaic={mosaic} />}
       <StackPreviewPanel
         dbId={dbId}
         projectId={projectId}

@@ -9,8 +9,7 @@
 .director-project-context { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; }
 .director-project-context dt { color: var(--color-text-secondary); }
 .director-project-context dd { margin: 0; overflow-wrap: anywhere; }
-.director-heading, .director-toolbar, .director-actions, .director-edit-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.director-heading h1 { font-size: 24px; margin: 0; }
+.director-toolbar, .director-actions, .director-edit-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .director-preview { color: var(--color-warning-light); font-size: 13px; }
 .director-muted { color: var(--color-text-secondary); }
 .director-page button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 7px 10px; border: 1px solid var(--color-border-tertiary); border-radius: 4px; color: var(--color-text-primary); background: var(--color-bg-tertiary); cursor: pointer; }
