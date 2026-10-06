@@ -9,6 +9,8 @@ use tokio::time::timeout;
 
 pub mod recovery;
 pub mod storage;
+// Shared read-only mapping; no IPC command or acquisition authority is added.
+pub use psf_guard_director_interop as interop;
 pub const PROTOCOL_VERSION: u32 = 14;
 pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_FRAME_BYTES: usize = psf_guard_director_core::MAX_REQUEST_BYTES + 4096;
