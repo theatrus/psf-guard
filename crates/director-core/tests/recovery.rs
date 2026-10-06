@@ -1,5 +1,102 @@
 use psf_guard_director_core::{recovery::*, Safety};
 
+#[test]
+fn restart_review_requires_operator_settled_boundary_and_fresh_authority() {
+    use readmission::*;
+    let state = initial();
+    let original = state.clone();
+    let mut input = Review {
+        rig_id: "rig".into(),
+        configuration_id: "config".into(),
+        night_id: "night".into(),
+        now_ms: 1001,
+        operator_requested: false,
+        boundary: Boundary::Settled,
+        camera_idle: true,
+        mount_stopped: true,
+        guider_stopped: true,
+        safety: Safety::Safe,
+        motion: Motion::Permitted,
+    };
+    assert_eq!(
+        review(&state, &input).unwrap(),
+        Advice::OperatorReviewRequired
+    );
+    input.operator_requested = true;
+    assert_eq!(
+        review(&state, &input).unwrap(),
+        Advice::RequestFreshAuthority
+    );
+    for boundary in [Boundary::Unknown, Boundary::Unresolved] {
+        input.boundary = boundary;
+        assert_eq!(review(&state, &input).unwrap(), Advice::UnsettledExecution);
+    }
+    input.boundary = Boundary::Settled;
+    input.camera_idle = false;
+    assert_eq!(
+        review(&state, &input).unwrap(),
+        Advice::EquipmentNotQuiescent
+    );
+    input.camera_idle = true;
+    input.motion = Motion::Unknown;
+    assert_eq!(review(&state, &input).unwrap(), Advice::WaitForSafety);
+    input.motion = Motion::Permitted;
+    input.night_id = "new-night".into();
+    assert_eq!(review(&state, &input).unwrap(), Advice::WrongScope);
+    input.night_id = "night".into();
+    input.now_ms = 999;
+    assert_eq!(review(&state, &input).unwrap(), Advice::ClockReversed);
+    input.now_ms = 10000;
+    assert_eq!(review(&state, &input).unwrap(), Advice::NightEnded);
+    assert_eq!(state, original);
+}
+
+#[test]
+fn restart_cannot_clear_a_stop_probe_or_expired_hold() {
+    use readmission::*;
+    let input = Review {
+        rig_id: "rig".into(),
+        configuration_id: "config".into(),
+        night_id: "night".into(),
+        now_ms: 1500,
+        operator_requested: true,
+        boundary: Boundary::Settled,
+        camera_idle: true,
+        mount_stopped: true,
+        guider_stopped: true,
+        safety: Safety::Safe,
+        motion: Motion::Permitted,
+    };
+    let stopped = step(&initial(), 1100, Event::StopNight {});
+    assert_eq!(review(&stopped, &input).unwrap(), Advice::TerminalStop);
+    let held = step(
+        &step(
+            &initial(),
+            1001,
+            Event::Quality {
+                sample: sample(1001, Verdict::CorroboratedPoor),
+            },
+        ),
+        1002,
+        Event::Quality {
+            sample: sample(1002, Verdict::CorroboratedPoor),
+        },
+    );
+    let pending = step(
+        &held,
+        1102,
+        Event::BeginRecovery {
+            attempt_id: "probe".into(),
+        },
+    );
+    assert_eq!(review(&pending, &input).unwrap(), Advice::UncertainRecovery);
+    let expired = Review {
+        now_ms: 2002,
+        ..input
+    };
+    assert_eq!(review(&held, &expired).unwrap(), Advice::HoldExpired);
+}
+
 fn identity() -> Identity {
     Identity {
         rig_id: "rig".into(),

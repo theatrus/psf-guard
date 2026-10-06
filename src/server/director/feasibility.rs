@@ -220,7 +220,7 @@ pub(super) async fn evaluate(
                 let mut total = 0.0;
                 for c in &contributions {
                     let objective = p.objectives.iter().find(|o| o.id == c.objective_id)?;
-                    let frames = match objective.goal {
+                    let frames = match c.goal_for(objective) {
                         Goal::Hours { value } => (value * 3600.0 / c.exposure_seconds).ceil(),
                         Goal::Frames { value } => f64::from(value),
                     };

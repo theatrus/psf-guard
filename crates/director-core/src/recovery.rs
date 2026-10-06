@@ -5,6 +5,7 @@
 
 use crate::Safety;
 use serde::{Deserialize, Serialize};
+pub mod readmission;
 
 pub const VERSION: u32 = 1;
 const DAY_MS: u64 = 86_400_000;

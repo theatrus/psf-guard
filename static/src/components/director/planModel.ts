@@ -78,6 +78,22 @@ export function newContribution(objective: DirectorObjective, rig: DirectorRigPr
   return { id: newId(), objective_id: objective.id, rig_id: rig.rig.id, template: choiceFrom(template), exposure_seconds: exposure, panel_ids: [], enabled: true };
 }
 
+/** The goal a rig works to: its own when set, else the objective's. */
+export function goalFor(contribution: DirectorContribution, objective: DirectorObjective): DirectorGoal {
+  return contribution.goal ?? objective.goal;
+}
+
+/** Hours that reach an hours goal's depth on a rig at this focal ratio,
+ *  read as hours at f/5 (signal per pixel goes as 1 / f-ratio²), to the
+ *  half hour. Null when there is nothing to adjust: a frames goal, an
+ *  unknown ratio, or a rig within a quarter of f/5's speed. */
+export function speedAdjustedHours(goal: DirectorGoal, focalRatio: number | null | undefined): number | null {
+  if (goal.kind !== 'hours' || !(focalRatio && focalRatio > 0) || !(goal.value > 0)) return null;
+  const factor = (focalRatio / 5) ** 2;
+  if (factor > 0.8 && factor < 1.25) return null;
+  return Math.max(0.5, Math.round(goal.value * factor * 2) / 2);
+}
+
 /** Accepted frames one rig owes an objective at its exposure length. */
 export function framesFor(goal: DirectorGoal, exposureSeconds: number): number | null {
   if (!(exposureSeconds > 0)) return null;
@@ -126,7 +142,7 @@ export function rigTotals(plan: DirectorPlanDraft, panels: string[] = [], byRigP
     const objective = plan.objectives.find(o => o.id === contribution.objective_id);
     if (!objective) continue;
     const own = byRigPanels[contribution.rig_id] ?? panels;
-    const frames = (framesFor(objective.goal, contribution.exposure_seconds) ?? 0) * (own.length > 1 ? panelFactor(contribution, own) : 1);
+    const frames = (framesFor(goalFor(contribution, objective), contribution.exposure_seconds) ?? 0) * (own.length > 1 ? panelFactor(contribution, own) : 1);
     const total = byRig.get(contribution.rig_id) ?? { rigId: contribution.rig_id, frames: 0, hours: 0 };
     total.frames += frames;
     total.hours += hoursFor(frames, contribution.exposure_seconds);

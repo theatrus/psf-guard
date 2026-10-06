@@ -14,6 +14,8 @@ use serde_json::json;
 mod dispatch;
 #[path = "geometry/priority.rs"]
 mod priority_preview;
+#[path = "geometry/quality_probe.rs"]
+mod quality_probe;
 #[path = "geometry/recovery.rs"]
 mod recovery;
 

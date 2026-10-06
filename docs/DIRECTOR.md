@@ -803,7 +803,12 @@ exposure template whose filter resolves to that bandpass, and starts the
 exposure length from the template's default, or from the rig's optics and sky
 when the template has none. Hours become frames per rig through that exposure,
 so a fast rig under bright skies shoots more short frames than a slow one under
-dark skies for the same goal. Switching a goal between hours and frames keeps
+dark skies for the same goal. Each rig can set its own goal for an objective in place of the
+plan's, for a slower or faster rig. For an hours goal, a rig more than a
+quarter away from f/5 is offered a suggestion that reaches f/5's depth, read as
+signal per pixel going as one over the f-ratio squared: about 24 h at f/10 for a
+6 h goal. A suggestion applies only when clicked, and **×** returns the rig to
+the plan's goal. Activation and feasibility use each rig's own goal. Switching a goal between hours and frames keeps
 the goal: the number is converted through the exposure of the first rig
 shooting the objective, or the first rig's default for that band. A rig binds each objective to a template in its own database, or to one
 from the shared **Exposure templates** library (below), which activation

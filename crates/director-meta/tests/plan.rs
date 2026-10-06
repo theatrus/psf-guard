@@ -34,6 +34,7 @@ fn plan(project: Uuid, rig: Uuid) -> PlanDraft {
             exposure_seconds: 300.0,
             panel_ids: vec![],
             enabled: true,
+            goal: None,
         }],
         updated_at_ms: 1_000,
     }
@@ -113,4 +114,40 @@ fn dangling_and_malformed_plans_are_refused() {
     let mut empty = PlanDraft::empty(project.id, 0);
     empty.objectives.clear();
     assert_eq!(store.save_plan_draft(&empty, 0).unwrap().revision, 1);
+}
+
+#[test]
+fn a_rig_can_carry_its_own_goal_for_an_objective() {
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let project = store.create_project(Uuid::new_v4(), "Heart").unwrap();
+    let rig = store.create_rig(Uuid::new_v4(), "C925").unwrap();
+    let mut draft = plan(project.id, rig.id);
+    // The objective asks 6 h; this slow rig is set to 24 h of its own.
+    draft.contributions[0].goal = Some(Goal::Hours { value: 24.0 });
+    let saved = store.save_plan_draft(&draft, 0).unwrap();
+    let contribution = &saved.contributions[0];
+    assert_eq!(contribution.goal, Some(Goal::Hours { value: 24.0 }));
+    assert_eq!(
+        contribution.goal_for(&saved.objectives[0]),
+        Goal::Hours { value: 24.0 }
+    );
+    // Without one, the objective's goal applies.
+    let mut plain = saved.clone();
+    plain.contributions[0].goal = None;
+    let plain = store.save_plan_draft(&plain, 1).unwrap();
+    assert_eq!(
+        plain.contributions[0].goal_for(&plain.objectives[0]),
+        Goal::Hours { value: 6.0 }
+    );
+    // A rig's goal follows the objective's limits.
+    let mut bad = plain.clone();
+    bad.contributions[0].goal = Some(Goal::Frames { value: 0 });
+    assert!(matches!(
+        store.save_plan_draft(&bad, 2),
+        Err(Error::InvalidInput)
+    ));
+    // A draft saved before rig goals existed reads with none.
+    let json = serde_json::to_string(&plain).unwrap();
+    assert!(!json.contains("\"goal\":null"), "{json}");
 }
