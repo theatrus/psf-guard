@@ -348,6 +348,10 @@
 
 ## Changed
 
+- The planning page's save bar and plan summary are one line each, and the
+  tabs are shorter, so the Framing sky gets the height back. The Framing
+  sidebar fills the window below them and stays in place while the page
+  scrolls.
 - On the planning page's Framing tab, each rig has an **On** switch, with the
   rigs grouped On and Off, so several rigs can shoot one plan. Turning a rig on,
   or clicking an on rig's heading, frames the plan with it, and its card is
