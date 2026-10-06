@@ -800,3 +800,466 @@ async fn attaching_a_plan_moves_its_links_and_detaching_hands_them_back() {
         StatusCode::NOT_FOUND
     );
 }
+
+/// The listing's row for a plan, by name.
+fn plan_named(listed: &Value, name: &str) -> Value {
+    listed["data"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["project"]["name"] == name)
+        .unwrap_or_else(|| panic!("no {name} in {listed}"))
+        .clone()
+}
+
+fn warns(listed: &Value, text: &str) -> bool {
+    listed["data"]["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|w| w.as_str().unwrap().contains(text))
+}
+
+/// A rig database N.I.N.A. is writing is read beside its writer, and the
+/// listing leaves no lock behind. One locked outright shows what the last
+/// listing read; with no earlier read its links stay, their state unknown
+/// rather than gone.
+#[tokio::test]
+async fn the_plan_list_reads_rig_databases_beside_their_writers() {
+    let f = Fixture::new();
+    let path = register(
+        &f,
+        "nina",
+        "NINA rig",
+        &[(1, "Pelican", Some(Uuid::new_v4()))],
+    );
+    let nina = rusqlite::Connection::open(&path).unwrap();
+    nina.execute(
+        "INSERT INTO target (name, active, ra, dec, epochcode, rotation, roi, projectid, guid) VALUES ('IC 5070', 1, 20.85, 44.35, 2, 0.0, 100, 1, 'target-pelican')",
+        [],
+    )
+    .unwrap();
+    let (status, first) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(
+        plan_named(&first, "Pelican")["links"][0]["source_row_id"],
+        1
+    );
+
+    // N.I.N.A. mid-write holds the database's write lock.
+    nina.busy_timeout(std::time::Duration::ZERO).unwrap();
+    nina.execute_batch("BEGIN IMMEDIATE; UPDATE project SET description='writing' WHERE Id=1;")
+        .unwrap();
+    let (status, beside) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{beside}");
+    assert!(!warns(&beside, "NINA rig"), "{beside}");
+    assert_eq!(
+        plan_named(&beside, "Pelican")["links"][0]["source_state"],
+        1
+    );
+    // Its commit needs every reader gone, and none is left.
+    nina.execute_batch("COMMIT").unwrap();
+
+    nina.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    let started = std::time::Instant::now();
+    let (status, locked) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{locked}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(
+        warns(
+            &locked,
+            "NINA rig: is busy, so the list shows what it held at the last listing"
+        ),
+        "{locked}"
+    );
+    let link = &plan_named(&locked, "Pelican")["links"][0];
+    assert_eq!(link["source_row_id"], 1, "{link}");
+    assert_eq!(link["source_unread"], false);
+    assert_eq!(link["targets"][0]["name"], "IC 5070");
+
+    // A server that has not read it yet keeps the link and says so.
+    f.state
+        .director
+        .as_ref()
+        .unwrap()
+        .plans_memo
+        .lock()
+        .unwrap()
+        .reads
+        .clear();
+    let (status, unread) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{unread}");
+    assert!(
+        warns(
+            &unread,
+            "NINA rig: is busy, so its plans show no rows or progress until it can be read"
+        ),
+        "{unread}"
+    );
+    let link = &plan_named(&unread, "Pelican")["links"][0];
+    assert_eq!(link["catalog_slug"], "nina", "{link}");
+    assert_eq!(link["source_unread"], true);
+    assert_eq!(link["source_row_id"], Value::Null);
+
+    nina.execute_batch("ROLLBACK").unwrap();
+    let (_, free) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(
+        plan_named(&free, "Pelican")["links"][0]["source_unread"],
+        false
+    );
+}
+
+/// A new database N.I.N.A. is writing becomes a rig and its projects plans
+/// at once. Its identity row waits for a listing that finds the file free,
+/// and the rig stays the same.
+#[tokio::test]
+async fn a_busy_new_database_is_planned_at_once_and_gets_its_identity_row_later() {
+    let f = Fixture::new();
+    let path = register(&f, "veil", "Veil rig", &[(1, "Veil", Some(Uuid::new_v4()))]);
+    let nina = rusqlite::Connection::open(&path).unwrap();
+    nina.execute_batch("BEGIN IMMEDIATE; UPDATE project SET description='writing' WHERE Id=1;")
+        .unwrap();
+    let has_identity = || {
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'psf_guard_catalog_identity'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            == 1
+    };
+    let (status, busy) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{busy}");
+    assert!(
+        warns(
+            &busy,
+            "Veil rig: busy, so its identity is written on a later listing"
+        ),
+        "{busy}"
+    );
+    let rig = plan_named(&busy, "Veil")["links"][0]["rig"]["id"].clone();
+    assert!(rig.is_string(), "{busy}");
+    assert!(!has_identity());
+
+    nina.execute_batch("COMMIT").unwrap();
+    let (status, free) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{free}");
+    assert!(!warns(&free, "Veil rig"), "{free}");
+    assert!(has_identity());
+    assert_eq!(plan_named(&free, "Veil")["links"][0]["rig"]["id"], rig);
+}
+
+/// While a listing searches frame headers, which can scan every image
+/// folder, it holds no store gate and no rig database lock: framing edits,
+/// rig check-ins and N.I.N.A.'s own writes go on beside it.
+#[tokio::test]
+async fn writes_and_check_ins_go_on_while_a_listing_reads_frame_headers() {
+    let f = Fixture::new();
+    let path = register(
+        &f,
+        "nina",
+        "NINA rig",
+        &[(1, "Pelican", Some(Uuid::new_v4()))],
+    );
+    let (status, first) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let rig = Uuid::parse_str(
+        plan_named(&first, "Pelican")["links"][0]["rig"]["id"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    // A new frame sends the rig's headers to be searched again, and a new
+    // project is there to take in.
+    let nina = rusqlite::Connection::open(&path).unwrap();
+    nina.busy_timeout(std::time::Duration::ZERO).unwrap();
+    nina.execute_batch(
+        "INSERT INTO acquiredimage (projectId, targetId, acquireddate, filtername, gradingStatus, metadata)
+         VALUES (1, 0, 0, 'Ha', 0, '{\"FileName\":\"frame.fits\"}')",
+    )
+    .unwrap();
+    nina.execute(
+        "INSERT INTO project (Id, profileId, name, description, state, priority, isMosaic, flatsHandling, guid) VALUES (2, 'profile-x', 'Veil', '', 1, 1, 0, 0, ?1)",
+        [Uuid::new_v4().to_string()],
+    )
+    .unwrap();
+
+    let service = f.state.director.clone().unwrap();
+    let (held_tx, held) = tokio::sync::oneshot::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    service.plans_memo.lock().unwrap().hold = Some((held_tx, release_rx));
+    let listing = tokio::spawn({
+        let app = f.app.clone();
+        async move { call(&app, "GET", "/plans", Value::Null, None).await }
+    });
+    held.await.unwrap();
+
+    let project = Uuid::new_v4();
+    let (status, created) = call(
+        &f.app,
+        "POST",
+        "/projects",
+        json!({"id": project, "name": "Crescent"}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let draft = json!({
+        "project_id": project, "revision": 0, "target_name": "NGC 6888",
+        "center": {"ra_degrees": 303.0, "dec_degrees": 38.35},
+        "position_angle_degrees": 0.0,
+        "mosaic": {"rows": 1, "columns": 1, "overlap_percent": 20},
+        "panel_rig_id": null, "panel": null,
+        "shown_rig_ids": [], "survey_id": "dss2_color", "view_fov_degrees": 4.0,
+        "updated_at_ms": 0,
+    });
+    let (status, framed) = call(
+        &f.app,
+        "PUT",
+        &format!("/projects/{project}/framing"),
+        draft,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{framed}");
+    let status_report = json!({
+        "coordinator_instance_id": service.instance_id, "catalog_id": rig,
+        "session_id": "night-1", "reported_at_ms": 1, "status": {"phase": "exposing"},
+    });
+    let (status, reported) = call(
+        &f.app,
+        "POST",
+        &format!("/rigs/{rig}/status"),
+        status_report,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reported}");
+    nina.execute(
+        "UPDATE project SET description='still writing' WHERE Id=1",
+        [],
+    )
+    .unwrap();
+    let (status, profile) = call(
+        &f.app,
+        "GET",
+        "/catalogs/nina/rig/profile",
+        Value::Null,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{profile}");
+    assert!(!listing.is_finished());
+
+    release.send(()).unwrap();
+    let (status, listed) = listing.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(
+        plan_named(&listed, "Veil")["links"][0]["catalog_slug"],
+        "nina"
+    );
+    assert_eq!(plan_named(&listed, "Crescent")["framing"]["revision"], 1);
+}
+
+/// One unreadable record, or one database that lost its project table,
+/// costs only its own part of the list.
+#[tokio::test]
+async fn an_unreadable_record_or_database_costs_only_its_own_part_of_the_list() {
+    let f = Fixture::new();
+    let path = register(
+        &f,
+        "nina",
+        "NINA rig",
+        &[
+            (1, "Pelican", Some(Uuid::new_v4())),
+            (2, "Veil", Some(Uuid::new_v4())),
+        ],
+    );
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "INSERT INTO target (name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+             VALUES ('IC 5070', 1, 20.85, 44.35, 2, 0.0, 100, 1, 'target-pelican'),
+                    ('NGC 6960', 1, 20.76, 30.71, 2, 0.0, 100, 2, 'target-veil')",
+        )
+        .unwrap();
+    let gone = register(
+        &f,
+        "gone",
+        "Gone rig",
+        &[(1, "Crescent", Some(Uuid::new_v4()))],
+    );
+    let (status, first) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let pelican = plan_named(&first, "Pelican")["project"]["id"].clone();
+    assert_eq!(plan_named(&first, "Pelican")["framing"]["source"], "draft");
+
+    rusqlite::Connection::open(f._dir.path().join("meta.sqlite"))
+        .unwrap()
+        .execute(
+            "UPDATE framing_draft SET payload='{}' WHERE project_id=?1",
+            [pelican.as_str().unwrap()],
+        )
+        .unwrap();
+    rusqlite::Connection::open(&gone)
+        .unwrap()
+        .execute_batch("DROP TABLE project")
+        .unwrap();
+    let (status, listed) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert!(
+        warns(
+            &listed,
+            "Pelican: its framing draft could not be read, so the list leaves it out"
+        ),
+        "{listed}"
+    );
+    assert_eq!(plan_named(&listed, "Pelican")["framing"], Value::Null);
+    assert_eq!(
+        plan_named(&listed, "Pelican")["links"][0]["source_row_id"],
+        1
+    );
+    assert_eq!(
+        plan_named(&listed, "Veil")["framing"]["target_name"],
+        "NGC 6960"
+    );
+    assert!(
+        warns(&listed, "Gone rig: has no Target Scheduler project table"),
+        "{listed}"
+    );
+    let link = &plan_named(&listed, "Crescent")["links"][0];
+    assert_eq!(link["catalog_slug"], "gone", "{link}");
+    assert_eq!(link["source_unread"], true);
+}
+
+/// The list names what it leaves out and the real reason, rather than
+/// stopping short or blaming a missing table.
+#[tokio::test]
+async fn the_plan_list_names_what_it_leaves_out_and_why() {
+    let f = Fixture::new();
+    let path = register(&f, "big", "Big rig", &[]);
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch("BEGIN").unwrap();
+    for id in 1..=4097 {
+        db.execute(
+            "INSERT INTO project (Id, profileId, name, description, state, priority, isMosaic, flatsHandling, guid) VALUES (?1, 'profile-x', 'Project', '', 1, 1, 0, 0, ?2)",
+            rusqlite::params![id, Uuid::new_v4().to_string()],
+        )
+        .unwrap();
+    }
+    db.execute_batch("COMMIT").unwrap();
+    {
+        let mut store = f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        for i in 0..psf_guard_director_meta::MAX_PLANS {
+            store
+                .create_project(Uuid::new_v4(), &format!("Plan {i}"))
+                .unwrap();
+        }
+    }
+    // A thousand plans is more than `call` reads back.
+    let response = f
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/director/v1/plans")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let listed: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert!(
+        warns(&listed, "Big rig: holds more than 4096 projects"),
+        "{}",
+        listed["data"]["warnings"]
+    );
+    assert!(
+        !warns(&listed, "has no Target Scheduler project table"),
+        "{}",
+        listed["data"]["warnings"]
+    );
+    assert!(
+        warns(&listed, "Only the first 1024 plans are listed."),
+        "{}",
+        listed["data"]["warnings"]
+    );
+    assert_eq!(
+        listed["data"]["rows"].as_array().unwrap().len(),
+        psf_guard_director_meta::MAX_PLANS
+    );
+}
+
+/// A file planned under its derived identity keeps it: an explicit review
+/// cannot give it a second catalog and rig and leave the first behind.
+#[tokio::test]
+async fn an_explicit_review_cannot_replace_the_identity_a_file_is_planned_under() {
+    let f = Fixture::new();
+    let guid = Uuid::new_v4();
+    let path = register(&f, "shed", "Shed data", &[(1, "Pelican", Some(guid))]);
+    f.state.set_allow_database_management(false);
+    let (status, listed) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let pelican = plan_named(&listed, "Pelican");
+    let rig = pelican["links"][0]["rig"]["id"].clone();
+    f.state.set_allow_database_management(true);
+
+    let other = Uuid::new_v4();
+    let (status, refused) = call(
+        &f.app,
+        "POST",
+        "/catalogs/shed/rig/preview",
+        json!({"catalog_id": other}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    let mapping = json!({"catalog_id": other, "mappings": [{
+        "catalog_id": other, "source_project_guid": guid, "source_profile_id": "profile-x",
+        "project_id": pelican["project"]["id"], "rig_id": rig,
+    }]});
+    let (status, refused) = call(
+        &f.app,
+        "POST",
+        "/catalogs/shed/adoption/preview",
+        mapping,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+
+    // Reviewing its own identity applies the binding it already has.
+    let (status, reviewed) = call(
+        &f.app,
+        "POST",
+        "/catalogs/shed/rig/preview",
+        json!({"catalog_id": rig}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reviewed}");
+    let (status, applied) = call(
+        &f.app,
+        "POST",
+        "/catalogs/shed/rig/apply",
+        json!({"plan": {"catalog_id": rig}, "preview_digest": reviewed["data"]["preview_digest"]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(applied["data"]["binding"]["rig"]["id"], rig);
+    let written = crate::catalog_identity::read(&rusqlite::Connection::open(&path).unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(json!(written.id), rig);
+    let (_, again) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(plan_named(&again, "Pelican")["links"][0]["rig"]["id"], rig);
+}

@@ -48,21 +48,21 @@ pub(super) struct Evidence {
 }
 
 impl Evidence {
-    /// Source rows that carry a usable GUID: `(guid, row id, name)`.
-    pub(super) fn identified_rows(&self) -> impl Iterator<Item = (Uuid, i64, Option<&str>)> {
+    /// Source rows that carry a usable GUID and profile: `(guid, row id,
+    /// name, profile)`. A row with an issue is not identified.
+    pub(super) fn identified_projects(
+        &self,
+    ) -> impl Iterator<Item = (Uuid, i64, Option<&str>, &str)> {
         self.projects.iter().filter_map(|project| {
-            project
-                .source_project_guid
-                .filter(|_| project.issues.is_empty())
-                .map(|guid| (guid, project.source_row_id, project.name.as_deref()))
+            let guid = project.source_project_guid?;
+            let profile = project.source_profile_id.as_deref()?;
+            project.issues.is_empty().then_some((
+                guid,
+                project.source_row_id,
+                project.name.as_deref(),
+                profile,
+            ))
         })
-    }
-
-    pub(super) fn profile_of(&self, guid: Uuid) -> Option<String> {
-        self.projects
-            .iter()
-            .find(|project| project.source_project_guid == Some(guid) && project.issues.is_empty())
-            .and_then(|project| project.source_profile_id.clone())
     }
 
     pub(super) fn mapping_names(

@@ -9,7 +9,7 @@ use psf_guard_director_core::{
     visibility::{Horizon, Site},
 };
 use psf_guard_director_meta::profile::{Limits, Reported, RigProfile, SkyQuality, Source};
-use rusqlite::{Connection, OpenFlags, TransactionBehavior};
+use rusqlite::{Connection, OpenFlags};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const HEADER_CANDIDATES: usize = 12;
@@ -97,15 +97,21 @@ pub(super) async fn get(
 ) -> Result<Json<ApiResponse<ProfileView>>, Error> {
     let service = enabled(&state)?;
     let catalog = state.get_database(&slug).ok_or(Error::Missing)?;
-    run_bound(service, catalog, move |store, catalog, connection, rig| {
-        let profile = store
-            .rig_profile(rig.id)?
-            .unwrap_or_else(|| RigProfile::empty(rig.id, now_ms()));
-        let defaults = header_defaults(catalog, connection);
-        Ok(view(rig, profile, defaults))
-    })
-    .await
-    .map(|value| Json(ApiResponse::success(value)))
+    let (identity, connection) = file_identity(&service, catalog.clone()).await?;
+    let (rig, profile) = service
+        .clone()
+        .with_reader(move |store| {
+            let binding = store.catalog_rig(identity.id)?.ok_or(Error::Missing)?;
+            let profile = store
+                .rig_profile(binding.rig.id)?
+                .unwrap_or_else(|| RigProfile::empty(binding.rig.id, now_ms()));
+            Ok::<_, Error>((binding.rig, profile))
+        })
+        .await?;
+    // The first header search of a database scans its image folders; no
+    // store gate is held while it runs.
+    let defaults = blocking(move || header_defaults(&catalog, &connection)).await?;
+    Ok(Json(ApiResponse::success(view(rig, profile, defaults))))
 }
 
 pub(super) async fn put(
@@ -117,12 +123,18 @@ pub(super) async fn put(
     let catalog = state.get_database(&slug).ok_or(Error::Missing)?;
     // Only a peer this server knows can be named; the select in the browser
     // offers exactly those, so anything else is a stale or forged request.
-    if let Some(peer) = &edit.peer_id
-        && !crate::server::peers::registered_peers(&state)
-            .iter()
-            .any(|entry| &entry.id == peer)
-    {
-        return Err(Error::Invalid);
+    // The peers live in the registry file, read off the async workers.
+    if let Some(peer) = edit.peer_id.clone() {
+        let state = state.clone();
+        let known = blocking(move || {
+            crate::server::peers::registered_peers(&state)
+                .iter()
+                .any(|entry| entry.id == peer)
+        })
+        .await?;
+        if !known {
+            return Err(Error::Invalid);
+        }
     }
     for source in [
         edit.optics.as_ref().map(|part| &part.source),
@@ -138,30 +150,36 @@ pub(super) async fn put(
             return Err(Error::Invalid);
         }
     }
-    run_bound(service, catalog, move |store, _, _, rig| {
-        let now = now_ms();
-        let stored = store.rig_profile(rig.id)?;
-        let mut next = stored
-            .clone()
-            .unwrap_or_else(|| RigProfile::empty(rig.id, now));
-        let previous = stored.as_ref();
-        next.optics = stamp(edit.optics, previous.and_then(|p| p.optics.as_ref()), now);
-        next.site = stamp(edit.site, previous.and_then(|p| p.site.as_ref()), now);
-        next.horizon = stamp(edit.horizon, previous.and_then(|p| p.horizon.as_ref()), now);
-        next.sky_quality = stamp(
-            edit.sky_quality,
-            previous.and_then(|p| p.sky_quality.as_ref()),
-            now,
-        );
-        next.limits = stamp(Some(edit.limits), previous.map(|p| &p.limits), now)
-            .expect("limits are always present");
-        next.peer_id = edit.peer_id;
-        next.updated_at_ms = now;
-        let saved = store.save_rig_profile(&next, edit.expected_revision)?;
-        Ok(view(rig, saved, Defaults::default()))
-    })
-    .await
-    .map(|value| Json(ApiResponse::success(value)))
+    let (identity, _) = file_identity(&service, catalog).await?;
+    service
+        .run(move |store| {
+            let rig = store
+                .catalog_rig(identity.id)?
+                .ok_or(StoreError::NotFound)?
+                .rig;
+            let now = now_ms();
+            let stored = store.rig_profile(rig.id)?;
+            let mut next = stored
+                .clone()
+                .unwrap_or_else(|| RigProfile::empty(rig.id, now));
+            let previous = stored.as_ref();
+            next.optics = stamp(edit.optics, previous.and_then(|p| p.optics.as_ref()), now);
+            next.site = stamp(edit.site, previous.and_then(|p| p.site.as_ref()), now);
+            next.horizon = stamp(edit.horizon, previous.and_then(|p| p.horizon.as_ref()), now);
+            next.sky_quality = stamp(
+                edit.sky_quality,
+                previous.and_then(|p| p.sky_quality.as_ref()),
+                now,
+            );
+            next.limits = stamp(Some(edit.limits), previous.map(|p| &p.limits), now)
+                .expect("limits are always present");
+            next.peer_id = edit.peer_id;
+            next.updated_at_ms = now;
+            let saved = store.save_rig_profile(&next, edit.expected_revision)?;
+            Ok(view(rig, saved, Defaults::default()))
+        })
+        .await
+        .map(|value| Json(ApiResponse::success(value)))
 }
 
 /// Keep the old timestamp when nothing about the part changed, so a resave of
@@ -239,46 +257,34 @@ fn from_plugin<T>(value: T, reported_at_ms: u64) -> Reported<T> {
     }
 }
 
-/// Resolve the database's bound rig under both admission permits, then run
-/// the operation with the meta store, the catalog and its read-only connection.
-async fn run_bound<T: Send + 'static>(
-    service: Arc<Service>,
+/// The identity the database file carries, or the one it would be given,
+/// read with no store gate held, and the read-only connection it was read on.
+async fn file_identity(
+    service: &Service,
     catalog: Arc<DatabaseContext>,
-    operation: impl FnOnce(&mut MetaStore, &DatabaseContext, &Connection, NamedIdentity) -> Result<T, Error>
-        + Send
-        + 'static,
-) -> Result<T, Error> {
-    service
-        .clone()
-        .with_writer(move |store| {
-            let mut connection =
-                super::super::database_context::open_scheduler_connection_with_flags(
-                    FilePath::new(&catalog.database_path),
-                    OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-                )
-                .map_err(StoreError::from)
-                .map_err(Error::from)?;
-            connection
-                .busy_timeout(Duration::from_secs(2))
-                .map_err(StoreError::from)
-                .map_err(Error::from)?;
-            let tx = connection
-                .transaction_with_behavior(TransactionBehavior::Deferred)
-                .map_err(StoreError::from)
-                .map_err(Error::from)?;
-            let identity = crate::catalog_identity::read(&tx)?.unwrap_or_else(|| {
-                super::derived_identity(service.instance_id, &catalog.database_path)
-            });
-            let binding = store.catalog_rig(identity.id)?.ok_or(Error::Missing)?;
-            operation(store, &catalog, &tx, binding.rig)
-        })
-        .await
+) -> Result<(CatalogIdentity, Connection), Error> {
+    let instance = service.instance_id;
+    blocking(move || {
+        let connection = super::super::database_context::open_scheduler_connection_with_flags(
+            FilePath::new(&catalog.database_path),
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(StoreError::from)?;
+        connection
+            .busy_timeout(Duration::from_secs(2))
+            .map_err(StoreError::from)?;
+        let identity = crate::catalog_identity::read(&connection)?
+            .unwrap_or_else(|| super::derived_identity(instance, &catalog.database_path));
+        Ok((identity, connection))
+    })
+    .await?
 }
 
 /// Optics and site from the newest frames whose files can be found. One
 /// header read per candidate, first usable file wins.
 pub(super) fn header_defaults(catalog: &DatabaseContext, connection: &Connection) -> Defaults {
-    let Some(names) = recent_file_names(connection) else {
+    // No frames, no reason to scan the image folders.
+    let Some(names) = recent_file_names(connection).filter(|names| !names.is_empty()) else {
         return Defaults::default();
     };
     let Ok(tree) = catalog.get_directory_tree() else {

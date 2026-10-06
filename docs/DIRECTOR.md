@@ -22,7 +22,8 @@ The highest eligible project runs first. Completed work, blocked filters,
 unsafe conditions, horizon and meridian limits still prevent acquisition.
 Objective priorities choose work within the selected project; they cannot move
 a lower-ranked project ahead. New projects follow the saved list in name/ID
-order until you rank them. The list supports up to 256 projects.
+order until you rank them. The list supports up to 1024 projects, as many as
+the plan list shows.
 
 Saving replaces the old score policy for newly issued programs, not active
 allocations. Without a saved order, existing scheduling behavior is preserved.
@@ -84,7 +85,11 @@ full Moon, linear altitude relaxation of separation and width, and the
 configured upper relaxation altitude as the Moon-down boundary (not necessarily
 zero degrees). Missing legacy columns use TS defaults: off, 60 degrees, 7 days,
 zero relaxation, -15/5 degree bounds and Moon-down off. Invalid saved rules are
-reported instead of silently ignored.
+reported instead of silently ignored. A Target Scheduler template with avoidance
+on and rules outside these ranges is left out of the rig's template list and of
+imported plans, with a warning that names it; the rig's other templates work as
+before. With avoidance off, Target Scheduler ignores the other Moon fields, and
+so does Director: values outside the ranges then read as the defaults.
 
 Execution intersects the allocated windows, horizon/meridian limits and lunar
 windows for the entire preparation/exposure interval. Minute cells use shared
@@ -292,8 +297,15 @@ line. Close N.I.N.A. on that rig first, and fill the rig's own database
 rather than a sync copy of it, so the GUIDs start where the rows do. A file
 the server cannot write is reported with no button, and nothing is copied
 or changed. The next listing takes the projects in as plans. A file
-that cannot be written, or has no project table, is reported in the
-Library's plans section and left out.
+with no project table, or with more than 4096 projects, is reported in the
+Library's plans section and left out. A file that is busy or cannot be
+opened is shown as the last listing read it, with a warning; one no listing
+has read since the server started keeps its plans' links, marked
+`source_unread`, with no rows or progress. A file whose identity table
+cannot be written yet is planned under the identity it will get, and a
+later listing writes it. A record that cannot be read, such as a damaged
+framing draft, empties only its own part of its plan's row, and the
+warnings name it.
 
 The identity table, `psf_guard_catalog_identity`, and the Director side
 tables are plain SQL, so N.I.N.A., Target Scheduler and any SQLite tool open
@@ -842,7 +854,7 @@ as framing. Feasibility by night and activation into rig databases follow.
 | GET | `/templates` | The exposure template library: Director's own templates, each with `id`, `revision`, `name`, `filter_name`, `gain`, `offset`, `bin`, `readout_mode`, `default_exposure_seconds` and the `bandpass` its filter resolves to. |
 | PUT | `/templates/{id}` | Save a library template; the body is the whole template and its `revision` is the one read, 0 for a new one. `409` on a stale revision. Open to every server, like plan drafts. |
 | DELETE | `/templates/{id}?revision=` | Remove a library template at the revision read. Plans that chose it keep their copy of its settings. |
-| GET | `/catalogs/{slug}/templates` | Every Target Scheduler exposure template in the database, across profiles, with the `bandpass` its filter name resolves to (`id`, `name`, `kind`). Read only. |
+| GET | `/catalogs/{slug}/templates` | Every Target Scheduler exposure template in the database, across profiles, with the `bandpass` its filter name resolves to (`id`, `name`, `kind`). Read only. `warnings` names each template left out because its Moon avoidance is on with rules Director cannot plan with. |
 | GET | `/projects/{id}/plan` | The project and its plan draft, or `plan: null`. |
 | PUT | `/projects/{id}/plan` | The whole draft with `revision` set to the one read. `409` when it moved; `404` for an unknown project or rig. |
 
@@ -1263,9 +1275,15 @@ framing, rig profiles, feasibility, mosaic, marks) are served from the pool at
 once, beside any write and beside one another; they never queue behind a
 write or answer busy for one. Writes take the single writer in turn; one that
 has waited twenty seconds for it answers `503` with `Retry-After: 1`, which the
-browser retries. Work that scans or writes the rig databases (adoption on the
-plans listing, rig binding, activation) has a gate of its own so it does not
-hold the store. A canceled HTTP request may still commit its already admitted
+browser retries. The plan list reads each rig database on a read-only
+connection with no gate held and builds the list on a pooled reader. It takes
+the writer only to record something new (a rig, plan, link, first drafts or
+header optics), and opens a rig database for writing only to add its missing
+identity table, committed at once, so N.I.N.A. never waits behind it. A rig's
+header search, which can scan every image folder, runs outside every gate and
+runs again only once more frames arrive. Work that binds or writes the rig
+databases (new rigs on the plan list, rig binding, adoption, activation) has a
+gate of its own so it does not hold the store. A canceled HTTP request may still commit its already admitted
 transaction. Use the same create identity on retry, or GET after an ambiguous
 rename result. Errors do not return filesystem paths or raw SQLite diagnostics;
 detailed failures are logged locally.

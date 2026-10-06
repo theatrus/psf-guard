@@ -114,3 +114,83 @@ async fn templates_list_every_profile_with_a_bandpass_and_plans_use_compare_and_
         StatusCode::NOT_FOUND
     );
 }
+
+/// A template whose Moon rules Director cannot plan with is set apart by
+/// name; it fails neither the rig's template list nor the plans of the rig's
+/// other projects. With avoidance off its other Moon values mean nothing,
+/// as in Target Scheduler, and the template is used.
+#[tokio::test]
+async fn a_template_with_unusable_moon_rules_is_named_and_left_out_alone() {
+    let f = Fixture::new();
+    let path = f._dir.path().join("moon.sqlite");
+    let db = crate::ts_schema::create_fresh_db(&path).unwrap();
+    db.execute_batch(
+        "INSERT INTO project (Id, profileId, name, description, state, priority, isMosaic, flatsHandling, guid)
+         VALUES (1, 'profile-x', 'Pelican', '', 1, 1, 0, 0, '0b0b0b0b-1111-4111-8111-111111111111');
+         INSERT INTO exposuretemplate (Id, profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel, moonavoidanceenabled,
+            moonavoidanceseparation, moonavoidancewidth, maximumhumidity, defaultexposure, moonrelaxscale, moonrelaxmaxaltitude,
+            moonrelaxminaltitude, moondownenabled, ditherevery, minutesOffset, guid)
+         VALUES (1, 'profile-x', 'Ha 300', 'Ha', 100, 30, 1, -1, 0, 1, 60, 7, 0, 300, 0, 5, -15, 0, -1, 0, 'tmpl-ha'),
+                (2, 'profile-x', 'OIII off', 'OIII', 100, 30, 1, -1, 0, 0, 60, 30, 0, 180, 0, -15, 5, 1, -1, 0, 'tmpl-o3'),
+                (3, 'profile-x', 'SII wide', 'SII', 100, 30, 1, -1, 0, 1, 60, 30, 0, 180, 0, 5, -15, 0, -1, 0, 'tmpl-s2');
+         INSERT INTO target (Id, name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+         VALUES (1, 'IC 5070', 1, 20.85, 44.35, 2, 0.0, 100, 1, 'tgt-1');
+         INSERT INTO exposureplan (profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, enabled, guid)
+         VALUES ('profile-x', 300, 30, 0, 0, 1, 1, 1, 'ep-1'), ('profile-x', 180, 20, 0, 0, 1, 2, 1, 'ep-2'),
+                ('profile-x', 180, 10, 0, 0, 1, 3, 1, 'ep-3');",
+    )
+    .unwrap();
+    let context = crate::server::database_context::DatabaseContext::new(
+        "moon".into(),
+        "Moon rig".into(),
+        path.to_string_lossy().into(),
+        vec![f._dir.path().to_string_lossy().into()],
+        None,
+        None,
+        None,
+        f._dir.path().join("cache"),
+    )
+    .unwrap();
+    f.state
+        .databases
+        .write()
+        .unwrap()
+        .insert("moon".into(), Arc::new(context));
+
+    let (status, listed) = call(&f.app, "GET", "/catalogs/moon/templates", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let names: Vec<&str> = listed["data"]["templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Ha 300", "OIII off"], "{listed}");
+    let off = &listed["data"]["templates"][1]["moon"];
+    assert_eq!(off["enabled"], false, "{off}");
+    assert_eq!(off["moon_down"], true);
+    assert_eq!(off["width_days"], 7.0);
+    assert_eq!(
+        listed["data"]["warnings"],
+        json!(["Template SII wide: its Moon avoidance settings are outside what Director plans with, so it is left out. Fix them in Target Scheduler."])
+    );
+
+    // The project still gets its plan, from the templates Director can use.
+    let (status, plans) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{plans}");
+    assert!(
+        plans["data"]["warnings"].as_array().unwrap().iter().any(|w| w
+            .as_str()
+            .unwrap()
+            .contains("Moon rig: Pelican: its exposure plans with template SII wide were left out of its plan")),
+        "{plans}"
+    );
+    let row = plans["data"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["project"]["name"] == "Pelican")
+        .unwrap()
+        .clone();
+    assert_eq!(row["plan"]["objectives"], 2, "{row}");
+}

@@ -9,7 +9,9 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .route("/preferences", get(defaults))
         .route("/preferences/{scope}/{id}", get(read).put(save))
         .route("/rigs/{rig}/preferences", get(effective))
-        .layer(axum::extract::DefaultBodyLimit::max(16384))
+        .layer(axum::extract::DefaultBodyLimit::max(
+            psf_guard_director_meta::preferences::MAX_SETTINGS_BYTES,
+        ))
 }
 
 #[derive(Serialize)]
