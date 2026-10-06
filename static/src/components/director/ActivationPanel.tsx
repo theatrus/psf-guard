@@ -20,6 +20,7 @@ const ACTIONS: Array<{ action: DirectorActivationAction; count: string; label: s
   { action: 'create', count: 'new', label: 'New' },
   { action: 'adopt', count: 'taken over', label: 'Taken over' },
   { action: 'update', count: 'updated', label: 'Updated' },
+  { action: 'disable', count: 'turned off', label: 'Turned off' },
   { action: 'keep', count: 'left as is', label: 'Left as is' },
   { action: 'unchanged', count: 'unchanged', label: 'Unchanged' },
 ];

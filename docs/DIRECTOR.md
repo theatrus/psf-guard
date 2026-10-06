@@ -883,7 +883,8 @@ rig's database, the same rows Target Scheduler and the Director plugin read:
   by hand) is taken over rather than doubled: the one with the panel's name,
   else the one at the panel's place, else, for a single-panel framing, the
   project's only target not yet owned by a panel. The preview lists these as
-  `adopt` and says whether they move;
+  `adopt` with where they move, or `unchanged` when one already sits at the
+  panel;
 - one exposure plan per rig objective and panel, bound to the chosen template
   (or one matching its settings, created if needed; a library template is created under the library's own GUID, so every rig database carries the same one), with `desired` set to the
   frames that objective needs at that rig's exposure length. A plan the
@@ -894,15 +895,40 @@ rig's database, the same rows Target Scheduler and the Director plugin read:
   counts at that default). Another exposure length is other work and gets a
   plan of its own. A taken-over plan keeps its `acquired` and `accepted`
   counts; its `desired`, template and enabled flag follow the plan, and the
-  preview lists it as `adopt` with its row number and what changes.
+  preview lists it as `adopt` with its row number and what changes, or as
+  `unchanged` when it already holds the plan's values.
+
+Rows are owned by GUID. A target or exposure plan activation would take over
+but that has no GUID yet refuses the rig, which says which row and points at
+**Fill in GUIDs**: a GUID made at activation would exist only in that copy of
+the database, and skipping the row would make a twin of it.
 
 The preview accounts for every exposure plan on the targets: plans it adds
-(`create`), takes over (`adopt`), changes (`update`) or leaves alone
-(`unchanged`), and with `keep` the rest, which stay as they are in Target
-Scheduler: the rig's own plans no objective asks for, and plans an earlier
-activation made for a contribution the plan no longer has (a rig unticked and
-ticked again, or a bandpass changed). A template activation creates is listed
-under `template`.
+(`create`), takes over (`adopt`), changes (`update`), turns off (`disable`)
+or leaves alone (`unchanged`), and with `keep` the rig's own plans no
+objective asks for, which stay as they are in Target Scheduler. A template
+activation creates is listed under `template`.
+
+A plan an earlier activation made that nothing plans now is turned off
+(`disable`, `enabled = 0`), so Target Scheduler stops taking it: its
+objective turned off or removed, its band changed, its panel gone from the
+framing or from the contribution's panels. Its frames and grades stay, and
+its target stays. Work that comes back (a rig dropped and added again, an
+objective made anew) takes those plans back, counts and all, instead of
+adding twins.
+
+A rig turned off in the plan, or no longer in it after an activation gave
+it rows, has its Target Scheduler project set Inactive (`disable`), so the
+scheduler stops taking it; its targets, exposure plans, frames and grades
+stay as they are. Turning the rig on again sets the project Active. A project
+already Inactive or Closed in Target Scheduler is left as the operator set
+it, and stays that way when the rig comes back on. A rig that is off is
+listed only when its project changes, and leaves the activation record's
+rigs; the record keeps the projects it set Inactive (`inactive_rigs`), and
+**Push again** sends those to their peers too. A rig an activation cannot
+reach (its database not registered, no panel size, a refused row) keeps its
+last record, so its rows stay accounted for and a later activation can still
+turn it off.
 
 A second activation updates the same rows in place: coordinates, angle,
 exposure and desired counts change, names the operator edited stay, and
