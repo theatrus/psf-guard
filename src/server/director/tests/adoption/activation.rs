@@ -650,8 +650,8 @@ async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doublin
         ["unchanged", "unchanged", "keep"]
     );
 
-    // A contribution made anew (a rig unticked and ticked again) gets new
-    // plans; the old ones stay in Target Scheduler, and the preview says so.
+    // A contribution made anew (a rig dropped and added back) takes its old
+    // plans back, frames and all, instead of doubling them.
     {
         let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut draft = store.plan_draft(a.project).unwrap().unwrap();
@@ -662,7 +662,7 @@ async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doublin
     let data = preview("remade").await;
     assert_eq!(
         actions(&data, "plan"),
-        ["create", "create", "keep", "keep", "keep"],
+        ["unchanged", "unchanged", "keep"],
         "{data}"
     );
 }
@@ -1586,4 +1586,244 @@ async fn add_rig(f: &Fixture, slug: &str) -> (Uuid, rusqlite::Connection) {
         Uuid::parse_str(applied["data"]["binding"]["rig"]["id"].as_str().unwrap()).unwrap(),
         db,
     )
+}
+
+/// Activate the plan as it stands: preview, then apply with the digest.
+async fn activate_now(f: &Fixture, project: Uuid, label: &str) -> Value {
+    let (status, preview) = call(
+        &f.app,
+        "POST",
+        &format!("/projects/{project}/activation/preview"),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{label}: {preview}");
+    let (status, applied) = call(
+        &f.app,
+        "POST",
+        &format!("/projects/{project}/activation/apply"),
+        json!({"preview_digest": preview["data"]["preview_digest"]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{label}: {applied}");
+    applied["data"].clone()
+}
+
+fn edit_plan(f: &Fixture, project: Uuid, edit: impl FnOnce(&mut PlanDraft)) {
+    let mut store = f.state.director.as_ref().unwrap().writer.lock().unwrap();
+    let mut draft = store.plan_draft(project).unwrap().unwrap();
+    let revision = draft.revision;
+    edit(&mut draft);
+    store.save_plan_draft(&draft, revision).unwrap();
+}
+
+fn rig_changes(data: &Value, rig: Uuid) -> Vec<String> {
+    data["rigs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["rig"]["id"] == rig.to_string())
+        .map(|r| {
+            r["changes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|c| {
+                    format!(
+                        "{} {}",
+                        c["kind"].as_str().unwrap(),
+                        c["action"].as_str().unwrap()
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The planning page's switch may drop a rig's contributions outright. A rig
+/// the last activation gave rows and the plan no longer holds is off all the
+/// same: its project goes Inactive. Added back, it takes its old plans back
+/// rather than doubling them, and its project goes Active again.
+#[tokio::test]
+async fn a_rig_dropped_from_the_plan_goes_inactive_and_comes_back_without_twins() {
+    let a = activated().await;
+    let count = |db: &rusqlite::Connection, sql: &str| {
+        db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap()
+    };
+    let (other_rig, other_db) = add_rig(&a.f, "rig-b").await;
+    edit_plan(&a.f, a.project, |draft| {
+        let mut second = draft.contributions[0].clone();
+        second.id = Uuid::new_v4();
+        second.rig_id = other_rig;
+        draft.contributions.push(second);
+    });
+    activate_now(&a.f, a.project, "both").await;
+    assert_eq!(
+        count(
+            &other_db,
+            "SELECT count(*) FROM exposureplan WHERE enabled=1"
+        ),
+        2
+    );
+    other_db
+        .execute("UPDATE exposureplan SET acquired=5, accepted=4", [])
+        .unwrap();
+    // Dropped the way the switch drops it.
+    edit_plan(&a.f, a.project, |draft| {
+        draft.contributions.retain(|c| c.rig_id != other_rig)
+    });
+    let data = activate_now(&a.f, a.project, "dropped").await;
+    assert_eq!(rig_changes(&data, other_rig), ["project disable"], "{data}");
+    assert_eq!(
+        count(&other_db, "SELECT count(*) FROM project WHERE state=2"),
+        1
+    );
+    // Added back as a new contribution.
+    edit_plan(&a.f, a.project, |draft| {
+        let mut back = draft.contributions[0].clone();
+        back.id = Uuid::new_v4();
+        back.rig_id = other_rig;
+        draft.contributions.push(back);
+    });
+    let data = activate_now(&a.f, a.project, "back").await;
+    let back = rig_changes(&data, other_rig);
+    assert!(back.contains(&"project update".to_string()), "{back:?}");
+    assert!(
+        !back.iter().any(|c| c == "plan create"),
+        "no twins: {back:?}"
+    );
+    assert_eq!(
+        count(&other_db, "SELECT count(*) FROM project WHERE state=1"),
+        1
+    );
+    assert_eq!(
+        count(&other_db, "SELECT count(*) FROM exposureplan"),
+        2,
+        "no twins"
+    );
+    assert_eq!(
+        count(
+            &other_db,
+            "SELECT count(*) FROM exposureplan WHERE enabled=1 AND acquired=5 AND accepted=4"
+        ),
+        2,
+        "frames kept"
+    );
+}
+
+/// Work the plan no longer asks for is turned off and listed: an objective
+/// removed, and a panel gone from the framing.
+#[tokio::test]
+async fn work_the_plan_no_longer_asks_for_is_turned_off() {
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    let oiii = Uuid::new_v4();
+    edit_plan(&a.f, a.project, |draft| {
+        let mut objective = draft.objectives[0].clone();
+        objective.id = oiii;
+        objective.bandpass_id = "oiii".into();
+        draft.objectives.push(objective);
+        let mut contribution = draft.contributions[0].clone();
+        contribution.id = Uuid::new_v4();
+        contribution.objective_id = oiii;
+        contribution.exposure_seconds = 600.0;
+        draft.contributions.push(contribution);
+    });
+    activate_now(&a.f, a.project, "first").await;
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE enabled=1"),
+        4
+    );
+    // The OIII objective removed, with its contribution.
+    edit_plan(&a.f, a.project, |draft| {
+        draft.objectives.retain(|o| o.id != oiii);
+        draft.contributions.retain(|c| c.objective_id != oiii);
+    });
+    let data = activate_now(&a.f, a.project, "objective removed").await;
+    assert_eq!(
+        actions(&data, "plan"),
+        ["unchanged", "unchanged", "disable", "disable"],
+        "{data}"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE exposure=600 AND enabled=0"),
+        2
+    );
+    // One panel instead of two: r2c1's plan goes off; its target stays.
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut framing = store.framing_draft(a.project).unwrap().unwrap();
+        let revision = framing.revision;
+        framing.mosaic.rows = 1;
+        store.save_framing_draft(&framing, revision).unwrap();
+    }
+    let data = activate_now(&a.f, a.project, "panel removed").await;
+    assert_eq!(
+        actions(&data, "plan")
+            .iter()
+            .filter(|a| *a == "disable")
+            .count(),
+        1,
+        "{data}"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE enabled=1"),
+        1
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM target"),
+        2,
+        "targets are never deleted"
+    );
+}
+
+/// A rig this activation cannot reach keeps its last record, so its rows
+/// stay accounted for and turning it off later still reaches it.
+#[tokio::test]
+async fn a_rig_skipped_for_one_activation_keeps_its_record() {
+    let a = activated().await;
+    let count = |db: &rusqlite::Connection, sql: &str| {
+        db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap()
+    };
+    let (other_rig, other_db) = add_rig(&a.f, "rig-b").await;
+    edit_plan(&a.f, a.project, |draft| {
+        let mut second = draft.contributions[0].clone();
+        second.id = Uuid::new_v4();
+        second.rig_id = other_rig;
+        draft.contributions.push(second);
+    });
+    activate_now(&a.f, a.project, "both").await;
+    // Its database is away for one activation.
+    let away =
+        a.f.state
+            .databases
+            .write()
+            .unwrap()
+            .remove("rig-b")
+            .unwrap();
+    activate_now(&a.f, a.project, "away").await;
+    {
+        let store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let record = store.activation(a.project).unwrap().unwrap();
+        assert!(
+            record.rigs.iter().any(|r| r.rig_id == other_rig),
+            "kept in the record"
+        );
+    }
+    a.f.state
+        .databases
+        .write()
+        .unwrap()
+        .insert("rig-b".into(), away);
+    // Turned off once it is back: its project goes Inactive.
+    edit_plan(&a.f, a.project, |draft| {
+        draft.contributions.retain(|c| c.rig_id != other_rig)
+    });
+    activate_now(&a.f, a.project, "off").await;
+    assert_eq!(
+        count(&other_db, "SELECT count(*) FROM project WHERE state=2"),
+        1
+    );
 }

@@ -892,22 +892,30 @@ the database, and skipping the row would make a twin of it.
 
 The preview accounts for every exposure plan on the targets: plans it adds
 (`create`), takes over (`adopt`), changes (`update`), turns off (`disable`)
-or leaves alone (`unchanged`), and with `keep` the rest, which stay as they are in Target
-Scheduler: the rig's own plans no objective asks for, and plans an earlier
-activation made for a contribution the plan no longer has (a rig unticked and
-ticked again, or a bandpass changed). A template activation creates is listed
-under `template`.
+or leaves alone (`unchanged`), and with `keep` the rig's own plans no
+objective asks for, which stay as they are in Target Scheduler. A template
+activation creates is listed under `template`.
 
-A rig turned off in the plan has its Target Scheduler project set Inactive
-(`disable`), so the scheduler stops taking it; its targets, exposure plans,
-frames and grades stay as they are. Turning the rig on again sets the project
-Active. A project already Inactive or Closed in Target Scheduler is left as
-the operator set it, and stays that way when the rig comes back on. A rig
-that is off is listed only when its project changes, and leaves the
-activation record's rigs; the record keeps the projects it set Inactive
-(`inactive_rigs`). An objective turned off on a rig that stays on turns off
-that objective's exposure plans (`enabled = 0`) instead; turning it on again
-turns them back on.
+A plan an earlier activation made that nothing plans now is turned off
+(`disable`, `enabled = 0`), so Target Scheduler stops taking it: its
+objective turned off or removed, its band changed, its panel gone from the
+framing or from the contribution's panels. Its frames and grades stay, and
+its target stays. Work that comes back (a rig dropped and added again, an
+objective made anew) takes those plans back, counts and all, instead of
+adding twins.
+
+A rig turned off in the plan, or no longer in it after an activation gave
+it rows, has its Target Scheduler project set Inactive (`disable`), so the
+scheduler stops taking it; its targets, exposure plans, frames and grades
+stay as they are. Turning the rig on again sets the project Active. A project
+already Inactive or Closed in Target Scheduler is left as the operator set
+it, and stays that way when the rig comes back on. A rig that is off is
+listed only when its project changes, and leaves the activation record's
+rigs; the record keeps the projects it set Inactive (`inactive_rigs`), and
+**Push again** sends those to their peers too. A rig an activation cannot
+reach (its database not registered, no panel size, a refused row) keeps its
+last record, so its rows stay accounted for and a later activation can still
+turn it off.
 
 A second activation updates the same rows in place: coordinates, angle,
 exposure and desired counts change, names the operator edited stay, and
