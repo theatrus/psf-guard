@@ -587,6 +587,9 @@
   applied and recorded. A rig database now gets a minute for its write lock
   instead of two seconds, and check-ins and saves no longer wait behind an
   activation.
+- On the Framing tab, the camera angle buttons no longer run into the
+  buttons below them, and on a phone the sky's notes sit below its toolbar
+  instead of over it.
 - Color stacks on the Stacks page flow several to a row again when a target
   has stacks of more than one exposure length. Each custom combination now
   sits below the target's cards instead of between them.
