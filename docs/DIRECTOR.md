@@ -639,7 +639,8 @@ compass shows where north has gone. The buttons after it switch the layers:
 the equatorial grid, the constellations, deep-sky marks, comets and
 asteroids, and the Sun, Moon and planets. Every choice is remembered in the
 browser. Scroll or use the corner buttons to zoom, from three arcminutes
-across out to a hemisphere.
+across out to a hemisphere; the zoom follows how far the wheel or trackpad
+moves, so a swipe zooms as much as the same distance of wheel notches.
 
 The survey picture follows at every zoom, out to a hemisphere: the server
 renders it at the width asked for, and the offline maps composite every tile
@@ -657,7 +658,8 @@ holds the minor-body catalog, comets and asteroids are placed for the moment
 the view is looked at (comets with their tail direction, asteroids with
 their motion); and the Sun, Moon and planets come from a built-in ephemeris
 good to a few arcminutes. Each layer has a button at the top of the stage,
-and says on the stage when its catalog is not on this server. Deep-sky
+and says on the stage in a few words when its catalog is not on this
+server; the note's tooltip gives the reason. Deep-sky
 marks start on; comets, asteroids and the solar system wait for their
 button, since a zoomed-in field otherwise fills with faint asteroids.
 **Catalogs marked** under **View** picks the catalog families that get
@@ -706,7 +708,9 @@ fixture shared between the core's tests and the browser's keeps the two in
 step. Chips on the sky switch the layer:
 the DSS2 colour plates N.I.N.A. starts from, and the narrowband surveys
 (Finkbeiner H-alpha and the Northern Sky Narrowband Survey's H-alpha, O III,
-SHO and colour layers); the **Survey** list under View holds every layer. The rectangle is the field of the **panel rig**: the first rig
+SHO and colour layers); the **Survey** list under View holds every layer.
+On a narrow stage, such as a phone's, the chips fold behind one chip that
+names the layer on screen, so they keep clear of the sky and the scale. The rectangle is the field of the **panel rig**: the first rig
 holding the project that knows its optics is chosen for you (rigs take their
 optics from their own frames when they are adopted), and you can pick another
 or type a panel size. Drag the rectangle to move the target, drag its handle
@@ -723,16 +727,29 @@ page, each rig has an **On** switch: rigs that shoot the plan are listed under
 frames the plan with it, and clicking an on rig's heading (swatch, name and
 field) does the same: its field sets the shared framing's panel size, and its
 card is highlighted. **Shared framing** names the rig its size
-comes from; **Type a size** sets one by hand instead, starting from that rig's. **Outline** draws its field on the sky, named
+comes from and the size the rectangle uses; **Type a size** sets one by
+hand instead, starting from that rig's, and **Use current field** appears
+when the rig's field has changed since it was picked. When the rig that
+sets the size is turned off, here or elsewhere, the first rig that is on,
+knows its optics and shoots the shared framing takes over; with none, the
+size stays and the line says its rig is off. **Outline** draws its field on the sky, named
 in small text, and **Frame separately** gives it a grid, camera angle and panel size of its own, edited
 in its card. A separate framing follows the shared center until it is dragged,
 typed or moved to the view center; **Shared center** puts it back in step.
-**Use shared** drops it. When every rig that is on frames separately, no
+**Use shared** drops it. The separate framing of a rig that is off, or no
+longer listed, is drawn dim and stays where it is; one whose rig is gone has
+no card, so it is listed under **Rigs** with **Remove**. When every rig that is on frames separately, no
 rig shoots the shared framing, so its rectangle is hidden and activation
 plans no target for it. **Move target to view center** and **Center view on target**
 keep the two apart on purpose: panning the sky never moves the plan. **Save
 framing** keeps a draft on the project; a draft saved elsewhere since you
-loaded is refused until you reload. Survey imagery is attributed below the
+loaded is refused until you reload. A value the server would refuse (a
+panel side outside 0.01° to 30°, a mosaic wider than 30°) is marked at its
+field with the reason, and the save waits until it is fixed. Saving leaves
+the view where it is, and an edit typed while the save was out stays an
+unsaved edit. A reload that fails keeps the framing on screen under a line
+that offers to try again. Angles are kept in 0° to 360°, rounded to a
+billionth of a degree, so a quarter turn and back is no change. Survey imagery is attributed below the
 view and is a composition aid, not pointing evidence.
 
 ### Finished stacks on the sky
@@ -1083,7 +1100,7 @@ core computes every footprint, so the browser only draws.
 | --- | --- | --- |
 | POST | `/framing/preview` | Stateless. `center`, `position_angle_degrees`, `panel` (`width_degrees`, `height_degrees`), `mosaic` (`rows`, `columns`, `overlap_percent`), optional `overlays` (other fields to place on the center) and `view` (`center`, `rotation_degrees`). Returns each panel's sky corners and, with a view, its corners as offsets from the view center with the view's up as `+eta`. `400` for a grid above 16 by 16, more than 256 panels, an extent past 30 degrees, or a view that cannot see the center. |
 | GET | `/projects/{id}/framing` | The project and its draft, or `draft: null`. |
-| PUT | `/projects/{id}/framing` | The whole draft with `revision` set to the one read (0 when none existed). `409` when it moved; `400` when `project_id` disagrees with the URL; `404` for an unknown project or `panel_rig_id`. |
+| PUT | `/projects/{id}/framing` | The whole draft with `revision` set to the one read (0 when none existed). `409` when it moved; `400` when `project_id` disagrees with the URL, the geometry fails the core's checks, or `view_fov_degrees` is outside 0.02 to 180; `404` for an unknown project or `panel_rig_id`. `layout_revision` moves only when what activation writes changes; centers and angles within 1e-7° of the saved ones count as unchanged. |
 | GET | `/rigs/profiles` | Every registered database bound to a rig: `rig`, `catalog_slug`, `catalog_name`, the rig `profile` (or `null`) and its `field_of_view`. Unbound or unreadable databases are left out. |
 
 Offsets are gnomonic (tangent-plane) degrees with east positive, exact for any

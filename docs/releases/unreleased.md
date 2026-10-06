@@ -1,5 +1,14 @@
 # Unreleased
 
+- In Director's framing view, turn the camera by its handle with the sky
+  turned without it spinning, save views wider than 40°, and keep the view
+  and any edit typed while a save is out. A value the server would refuse
+  is marked at its field before a save, a quarter turn and back is no
+  change, a trackpad zooms as far as a wheel does for the same distance,
+  and a rig that is off hands the panel size to one that is on. Separate
+  framings of rigs that are off are drawn dim, and those of rigs gone from
+  the list can be removed. On a phone the survey chips fold behind one.
+
 - Check Director cloud probes against durable recovery state and the original
   rig/target/recipe geometry without consuming science attempts. Sparse initial
   reference groups remain unknown-quality evidence rather than corrupt input.

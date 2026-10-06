@@ -565,7 +565,9 @@ describe('Framing view', () => {
     fireEvent.click(screen.getByLabelText('Sun, Moon and planets'));
     fireEvent.click(screen.getByLabelText('Comets and asteroids'));
     expect(screen.getByTestId('framing-mark-solar')).toHaveTextContent('Jupiter');
-    expect(screen.getByRole('note')).toHaveTextContent('Comets and asteroids need the Seiza minor-body catalog on this server (minor-body catalog is not configured).');
+    // The note on the sky is a few words; the reason is in its title.
+    expect(screen.getByRole('note')).toHaveTextContent('No comet catalog');
+    expect(screen.getByRole('note')).toHaveAttribute('title', 'Comets and asteroids need the Seiza minor-body catalog on this server (minor-body catalog is not configured).');
     expect(window.localStorage.getItem('psf-guard.framing.marks.bodies')).toBe('true');
     // The big galaxy is drawn at its catalog size and angle: 35° east of
     // north leans its major axis up and to the left on a north-up stage
@@ -637,14 +639,14 @@ describe('Framing view', () => {
 
   it('shows coordinates and angles to the places that matter, and saves them whole', async () => {
     const stored: DirectorFramingDraft = { project_id: 'project', revision: 2, target_name: 'Medusa Nebula', center: { ra_degrees: 112.26128933333334, dec_degrees: 13.246830369444444 }, position_angle_degrees: 218.8412345,
-      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: null, panel: { width_degrees: 0.5727744486363814, height_degrees: 0.3828274803946109 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 0.9164391178182103, updated_at_ms: 1 };
+      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: null, panel: { width_degrees: 0.5727744486363814, height_degrees: 0.3828274803946109 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 1.6164391178182103, updated_at_ms: 1 };
     const { saves } = fixture(stored);
     mount();
     expect(await screen.findByLabelText('Right ascension degrees')).toHaveValue(112.26129);
     expect(screen.getByLabelText('Declination degrees')).toHaveValue(13.24683);
     expect(screen.getByLabelText('Position angle degrees')).toHaveValue(218.84);
     expect(screen.getByLabelText('Panel width degrees')).toHaveValue(0.573);
-    expect(screen.getByLabelText('View width degrees')).toHaveValue(0.92);
+    expect(screen.getByLabelText('View width degrees')).toHaveValue(1.62);
     fireEvent.change(screen.getByLabelText('Target name'), { target: { value: 'Medusa' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
     await waitFor(() => expect(saves).toHaveLength(1));
@@ -763,6 +765,291 @@ describe('Framing view', () => {
     expect(saves).toHaveLength(1);
     expect(saves[0].panel_rig_id).toBe(rigA.rig.id);
     await waitFor(() => expect(drafts.current!.sections[0].pending).toBe(false));
+  });
+
+  /** The stage as the drag tests lay it out: 1024 × 768 at the window's corner. */
+  const laidOutStage = () => {
+    const stage = screen.getByTestId('framing-stage');
+    stage.setPointerCapture = vi.fn();
+    stage.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1024, height: 768, right: 1024, bottom: 768, x: 0, y: 0, toJSON: () => ({}) });
+    Object.defineProperty(stage, 'clientWidth', { value: 1024, configurable: true });
+    return stage;
+  };
+  const valueOf = (label: string) => Number((screen.getByLabelText(label) as HTMLInputElement).value);
+  const rigC = { ...rigA, rig: { ...rigA.rig, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Askar' }, catalog_slug: 'askar', catalog_name: 'Askar 107',
+    field_of_view: { width_degrees: 1.2, height_degrees: 0.8, pixel_scale_arcsec: 1.9, focal_ratio: 7 } };
+  const heart: DirectorFramingDraft = { project_id: 'project', revision: 3, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.5 }, position_angle_degrees: 0,
+    mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 6, updated_at_ms: 1 };
+  /** The view on the planning page, with the rigs that shoot the plan. */
+  function mountWithRigs(shooting: string[]) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const view = (on: string[]) => <QueryClientProvider client={client}><FramingView projectId="project" seed={seed} shootingRigIds={on} onToggleRig={() => {}} /></QueryClientProvider>;
+    const { rerender, unmount } = render(view(shooting));
+    return { rerender: (on: string[]) => rerender(view(on)), unmount };
+  }
+
+  it('turns the camera by its handle over a turned sky without spinning it', async () => {
+    fixture(); mount(true, true, [rigA.rig.id]);
+    await waitFor(() => expect(screen.getByTestId('framing-rotate-handle')).toBeInTheDocument());
+    const stage = laidOutStage();
+    fireEvent.click(screen.getByLabelText('Turn the sky with the camera'));
+    const circle = document.querySelector('.framing-rotate circle')!;
+    const [hx, hy] = [Number(circle.getAttribute('cx')), Number(circle.getAttribute('cy'))];
+    // Ten small moves. Each is read against the view the drag began in; read
+    // through a view the sky turns by the angle being changed, they spun the
+    // camera from 35° to 331.8°.
+    fireEvent.pointerDown(stage, pointer(hx, hy));
+    for (let step = 1; step <= 10; step += 1) fireEvent.pointerMove(stage, { pointerId: 1, clientX: hx + 3 * step, clientY: hy });
+    fireEvent.pointerUp(stage, { pointerId: 1 });
+    const expected = angleAt(seed.center, skyAtStage(viewAt(seed.center, seed.center, 35), valueOf('View width degrees'), hx + 30, hy));
+    expect(valueOf('Position angle degrees')).toBeCloseTo(expected, 0);
+    expect(Math.abs(valueOf('Position angle degrees') - 35)).toBeLessThan(20);
+    // Fit takes the turned rectangle and its handle: the handle stays on the stage.
+    fireEvent.click(screen.getByRole('button', { name: 'Fit the footprint' }));
+    const fitted = document.querySelector('.framing-rotate circle')!;
+    expect(Number(fitted.getAttribute('cx'))).toBeGreaterThan(0); expect(Number(fitted.getAttribute('cx'))).toBeLessThan(1024);
+    expect(Number(fitted.getAttribute('cy'))).toBeGreaterThan(0); expect(Number(fitted.getAttribute('cy'))).toBeLessThan(768);
+  });
+
+  it('keeps a panned view and an edit typed while a save is out', async () => {
+    const { saves } = fixture(heart);
+    let answer!: () => void;
+    const answered = new Promise<void>(resolve => { answer = resolve; });
+    server.use(http.put('/api/director/v1/projects/project/framing', async ({ request }) => {
+      const body = await request.json() as DirectorFramingDraft;
+      saves.push(body);
+      await answered;
+      return HttpResponse.json(ok({ project: { id: 'project', name: 'Andromeda', revision: 1 }, draft: { ...body, revision: body.revision + 1, updated_at_ms: 5 } }));
+    }));
+    const drafts = mountOnPage();
+    expect(await screen.findByLabelText('Target name')).toHaveValue('Heart');
+    await waitFor(() => expect(drafts.current?.sections.map(section => section.id)).toEqual(['framing']));
+    // Look away from the target, and turn the camera: an edit to save.
+    const stage = laidOutStage();
+    fireEvent.pointerDown(stage, pointer(100, 700));
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 300, clientY: 600 });
+    fireEvent.pointerUp(stage, { pointerId: 1 });
+    const panned = screen.getByTestId('framing-view-center').textContent!;
+    expect(panned).not.toContain('02h 32m 48.0s');
+    fireEvent.change(screen.getByLabelText('Position angle degrees'), { target: { value: '10' } });
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(1));
+    const saving = drafts.current!.saveAll();
+    await waitFor(() => expect(saves).toHaveLength(1));
+    fireEvent.change(screen.getByLabelText('Target name'), { target: { value: 'Heart and Soul' } });
+    answer();
+    expect(await saving).toBeNull();
+    expect(saves[0].position_angle_degrees).toBe(10);
+    // The view stays where it was looked at, and the name typed meanwhile is still an edit.
+    await waitFor(() => expect(drafts.current!.unsaved[0]?.changes).toEqual(['target name “Heart” → “Heart and Soul”']));
+    expect(screen.getByTestId('framing-view-center')).toHaveTextContent(panned);
+    expect(screen.getByLabelText('Target name')).toHaveValue('Heart and Soul');
+    expect(screen.getByLabelText('Position angle degrees')).toHaveValue(10);
+  });
+
+  it('hands the panel size to a rig that is on once its rig goes off, and says when none can take it', async () => {
+    fixture({ ...heart, panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 } });
+    server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB, rigC]))));
+    const source = () => screen.getByTestId('framing-panel-source');
+    const view = mountWithRigs([rigA.rig.id, rigC.rig.id]);
+    await waitFor(() => expect(source()).toHaveTextContent('Size from RedCat 61 · 5.38° × 3.60°'));
+    // Turned off, here or on another tab: the rig that is on takes over.
+    view.rerender([rigC.rig.id]);
+    await waitFor(() => expect(source()).toHaveTextContent('Size from Askar 107 · 1.20° × 48.0′'));
+    expect(screen.getByTestId('framing-extent')).toHaveTextContent('1 panel · 1.20° × 48.0′');
+    // C925 knows no optics, so with only it on nothing can take over.
+    view.rerender([rigB.rig.id]);
+    expect(source()).toHaveTextContent('Size from Askar 107 (off) · 1.20° × 48.0′');
+    view.unmount();
+    // A saved panel rig that is off when the view opens gives way at once.
+    mountWithRigs([rigC.rig.id]);
+    await waitFor(() => expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from Askar 107 · 1.20° × 48.0′'));
+  });
+
+  it('says at the field what the server would refuse, and holds the save until it is fixed', async () => {
+    const { saves } = fixture(); mount(true, true, [rigA.rig.id]);
+    await waitFor(() => expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from RedCat 61'));
+    // Eight RedCat columns at 20% overlap span 35.5°; the core takes 30°.
+    fireEvent.change(screen.getByLabelText('Mosaic columns'), { target: { value: '8' } });
+    expect(screen.getByTestId('framing-problem')).toHaveTextContent('Mosaic 35.51° × 3.60°, over 30°');
+    expect(screen.getByLabelText('Mosaic columns')).toHaveAttribute('aria-invalid', 'true');
+    const button = () => screen.getByRole('button', { name: 'Save framing' });
+    expect(button()).toBeDisabled();
+    expect(button()).toHaveAttribute('title', 'Mosaic 35.51° × 3.60°, over 30°');
+    fireEvent.change(screen.getByLabelText('Mosaic columns'), { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Type a size' }));
+    fireEvent.change(screen.getByLabelText('Panel width degrees'), { target: { value: '40' } });
+    expect(screen.getByTestId('framing-problem')).toHaveTextContent('Panel sides 0.01° to 30°');
+    expect(screen.getByLabelText('Panel width degrees')).toHaveAttribute('aria-invalid', 'true');
+    expect(button()).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Panel width degrees'), { target: { value: '5' } });
+    // A right ascension of 360 is 0, and a declination past the pole is the pole.
+    fireEvent.change(screen.getByLabelText('Right ascension degrees'), { target: { value: '360' } });
+    fireEvent.change(screen.getByLabelText('Declination degrees'), { target: { value: '95' } });
+    expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(0);
+    expect(screen.getByLabelText('Declination degrees')).toHaveValue(90);
+    expect(screen.queryByTestId('framing-problem')).not.toBeInTheDocument();
+    fireEvent.click(button());
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0]).toMatchObject({ center: { ra_degrees: 0, dec_degrees: 90 }, mosaic: { columns: 2 }, panel: { width_degrees: 5 } });
+  });
+
+  it('gives the page\'s save bar the reason a framing cannot be saved', async () => {
+    const { saves } = fixture(heart);
+    const drafts = mountOnPage();
+    await screen.findByLabelText('Target name');
+    await waitFor(() => expect(drafts.current?.sections.map(section => section.id)).toEqual(['framing']));
+    fireEvent.change(screen.getByLabelText('Panel width degrees'), { target: { value: '0' } });
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(1));
+    expect(await drafts.current!.saveAll()).toEqual({ label: 'Framing', reason: 'Panel sides 0.01° to 30°' });
+    expect(saves).toHaveLength(0);
+  });
+
+  it('calls a quarter turn and back no change', async () => {
+    fixture({ ...heart, position_angle_degrees: 35.1 });
+    const drafts = mountOnPage();
+    await screen.findByLabelText('Target name');
+    await waitFor(() => expect(drafts.current?.sections.map(section => section.id)).toEqual(['framing']));
+    fireEvent.click(screen.getByRole('button', { name: 'Turn 90 degrees clockwise' }));
+    expect(screen.getByLabelText('Position angle degrees')).toHaveValue(125.1);
+    await waitFor(() => expect(drafts.current!.unsaved[0]?.changes).toEqual(['camera angle 35.1° → 125.1°']));
+    fireEvent.click(screen.getByRole('button', { name: 'Turn 90 degrees counter-clockwise' }));
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(0));
+    expect(screen.getByLabelText('Position angle degrees')).toHaveValue(35.1);
+  });
+
+  it('keeps the framing on screen when a reload fails, and offers to try again', async () => {
+    fixture(heart); mount();
+    expect(await screen.findByLabelText('Target name')).toHaveValue('Heart');
+    fireEvent.change(screen.getByLabelText('Target name'), { target: { value: 'Heart edited' } });
+    server.use(http.get('/api/director/v1/projects/project/framing', () => HttpResponse.json({ success: false, data: null, error: 'The store is down' }, { status: 500 })));
+    fireEvent.click(screen.getByRole('button', { name: 'Reload framing' }));
+    const banner = await screen.findByText(/The framing could not be reloaded/);
+    expect(screen.getByLabelText('Target name')).toHaveValue('Heart edited');
+    expect(screen.getByTestId('framing-stage')).toBeInTheDocument();
+    server.use(http.get('/api/director/v1/projects/project/framing', () => HttpResponse.json(ok({ project: { id: 'project', name: 'Andromeda', revision: 1 }, draft: heart }))));
+    fireEvent.click(within(banner).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByText(/The framing could not be reloaded/)).not.toBeInTheDocument());
+    // Nothing was saved elsewhere, so the edit stays.
+    expect(screen.getByLabelText('Target name')).toHaveValue('Heart edited');
+  });
+
+  it('gives a hidden shared framing no handle to turn', async () => {
+    fixture();
+    mountWithRigs([rigB.rig.id]);
+    await waitFor(() => expect(screen.getByTestId('framing-rotate-handle')).toBeInTheDocument());
+    const circle = document.querySelector('.framing-rotate circle')!;
+    const [hx, hy] = [Number(circle.getAttribute('cx')), Number(circle.getAttribute('cy'))];
+    fireEvent.click(within(screen.getByRole('group', { name: 'C925 data' })).getByRole('button', { name: 'Frame separately' }));
+    expect(screen.queryByTestId('framing-rotate-handle')).not.toBeInTheDocument();
+    const stage = laidOutStage();
+    fireEvent.pointerDown(stage, pointer(hx, hy));
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: hx + 200, clientY: hy + 100 });
+    fireEvent.pointerUp(stage, { pointerId: 1 });
+    expect(screen.getByLabelText('Position angle degrees')).toHaveValue(35);
+  });
+
+  it('zooms by how far the wheel turned, so a trackpad swipe is no leap', async () => {
+    fixture(heart); mount();
+    await screen.findByLabelText('Target name');
+    const stage = screen.getByTestId('framing-stage');
+    expect(valueOf('View width degrees')).toBe(6);
+    // Fifty small trackpad steps of 4 pixels are two mouse notches: 1.2 × 1.2.
+    for (let step = 0; step < 50; step += 1) fireEvent.wheel(stage, { deltaY: 4, deltaMode: 0 });
+    expect(valueOf('View width degrees')).toBeCloseTo(6 * 1.44, 1);
+    // Lines count 16 pixels; a page-long spin zooms at most 2 times per event.
+    fireEvent.wheel(stage, { deltaY: -3, deltaMode: 1 });
+    expect(valueOf('View width degrees')).toBeCloseTo(6 * 1.44 / Math.pow(1.2, 0.48), 1);
+    const before = valueOf('View width degrees');
+    fireEvent.wheel(stage, { deltaY: 10_000, deltaMode: 0 });
+    expect(valueOf('View width degrees')).toBeCloseTo(before * 2, 1);
+  });
+
+  it('undoes a found target and nothing after it, and carries a moved separate framing along', async () => {
+    fixture(); mount(true, true, [rigA.rig.id]);
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
+    fireEvent.click(within(screen.getByRole('group', { name: 'C925 data' })).getByRole('button', { name: 'Frame separately' }));
+    fireEvent.change(screen.getByLabelText('C925 data right ascension degrees'), { target: { value: '11.6847' } });
+    fireEvent.change(screen.getByLabelText('Find a target'), { target: { value: 'NGC 7000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }));
+    expect(await screen.findByText('Moved the target to NGC 7000.')).toBeInTheDocument();
+    // The separate framing keeps its place beside the target, not at M31.
+    expect(valueOf('C925 data right ascension degrees')).toBeGreaterThan(314.75);
+    expect(valueOf('C925 data right ascension degrees')).toBeLessThan(317);
+    // An edit after the pick survives its Undo.
+    fireEvent.change(screen.getByLabelText('Position angle degrees'), { target: { value: '80' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(screen.getByLabelText('Target name')).toHaveValue('M31');
+    expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(seed.center.ra_degrees);
+    expect(screen.getByTestId('framing-view-center')).toHaveTextContent('00h 42m 44.3s');
+    expect(screen.getByLabelText('Position angle degrees')).toHaveValue(80);
+    expect(valueOf('C925 data right ascension degrees')).toBeCloseTo(11.6847, 4);
+  });
+
+  it('shows the size the rectangle uses, and offers the rig\'s field once it has moved', async () => {
+    fixture({ ...heart, panel_rig_id: rigA.rig.id, panel: { width_degrees: 5, height_degrees: 3.5 } }); mount();
+    const source = () => screen.getByTestId('framing-panel-source');
+    await waitFor(() => expect(source()).toHaveTextContent('Size from RedCat 61 · 5.00° × 3.50°'));
+    expect(screen.getByTestId('framing-extent')).toHaveTextContent('1 panel · 5.00° × 3.50°');
+    fireEvent.click(screen.getByRole('button', { name: 'Use current field' }));
+    expect(source()).toHaveTextContent('Size from RedCat 61 · 5.38° × 3.60°');
+    expect(screen.queryByRole('button', { name: 'Use current field' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the size a rig gave after it lost its optics', async () => {
+    fixture({ ...heart, panel_rig_id: rigA.rig.id, panel: { width_degrees: 5, height_degrees: 3.5 } });
+    server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([{ ...rigA, field_of_view: null }, rigB]))));
+    mount();
+    await waitFor(() => expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from RedCat 61 · 5.00° × 3.50° · no optics now'));
+    expect(screen.getByTestId('framing-extent')).toHaveTextContent('1 panel · 5.00° × 3.50°');
+  });
+
+  it('dims the separate framing of a rig that is off and leaves it in place, and lists one whose rig is gone', async () => {
+    const gone = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    fixture({ ...heart, center: seed.center, view_fov_degrees: 20, panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 }, rig_framings: [
+      { rig_id: rigB.rig.id, center: { ra_degrees: seed.center.ra_degrees, dec_degrees: seed.center.dec_degrees + 4 }, position_angle_degrees: 0, mosaic: { rows: 1, columns: 1, overlap_percent: 0 }, panel: { width_degrees: 1, height_degrees: 1 } },
+      { rig_id: gone, center: null, position_angle_degrees: null, mosaic: { rows: 1, columns: 2, overlap_percent: 0 }, panel: { width_degrees: 1, height_degrees: 1 } },
+    ] });
+    mountWithRigs([rigA.rig.id]);
+    await waitFor(() => expect(screen.getAllByTestId('framing-rig-panels')).toHaveLength(2));
+    for (const group of screen.getAllByTestId('framing-rig-panels')) expect(group).toHaveClass('is-off');
+    // Off, it stays where it is: a drag on it looks around instead.
+    fireEvent.click(within(screen.getByRole('group', { name: 'C925 data' })).getByRole('button', { name: 'Edit' }));
+    const at = valueOf('C925 data declination degrees');
+    const stage = laidOutStage();
+    const polygon = document.querySelector(`[data-rig="${rigB.rig.id}"] polygon`)!;
+    const points = polygon.getAttribute('points')!.split(' ').map(pair => pair.split(',').map(Number));
+    const [x, y] = [points.reduce((sum, [px]) => sum + px, 0) / 4, points.reduce((sum, [, py]) => sum + py, 0) / 4];
+    fireEvent.pointerDown(stage, pointer(x, y));
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: x + 100, clientY: y + 50 });
+    fireEvent.pointerUp(stage, { pointerId: 1 });
+    expect(valueOf('C925 data declination degrees')).toBe(at);
+    expect(screen.getByTestId('framing-view-center')).not.toHaveTextContent('00h 42m 44.3s');
+    // A rig gone from the list has no card; its framing is listed so it can go.
+    const orphans = screen.getByRole('list', { name: 'Framings of rigs not listed' });
+    expect(orphans).toHaveTextContent('Rig not listed · separate framing, 1 × 2');
+    fireEvent.click(within(orphans).getByRole('button', { name: 'Remove' }));
+    expect(screen.queryByRole('list', { name: 'Framings of rigs not listed' })).not.toBeInTheDocument();
+    expect(screen.getAllByTestId('framing-rig-panels')).toHaveLength(1);
+  });
+
+  it('folds the survey chips behind one on a narrow stage', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    const measured = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const [width, height] = this.dataset.testid === 'framing-stage' ? [358, 300] : [0, 0];
+      return { left: 0, top: 0, width, height, right: width, bottom: height, x: 0, y: 0, toJSON: () => ({}) };
+    });
+    try {
+      fixture(heart); mount();
+      const layers = await screen.findByRole('button', { name: 'Survey layers' });
+      expect(layers).toHaveAttribute('aria-expanded', 'false');
+      expect(layers).toHaveTextContent('DSS2');
+      expect(screen.queryByRole('group', { name: 'Survey layers' })).not.toBeInTheDocument();
+      fireEvent.click(layers);
+      const chips = screen.getByRole('group', { name: 'Survey layers' });
+      fireEvent.click(within(chips).getByRole('button', { name: 'Hα Finkbeiner' }));
+      expect(screen.queryByRole('group', { name: 'Survey layers' })).not.toBeInTheDocument();
+      expect(screen.getByLabelText('Survey')).toHaveValue('finkbeiner_halpha');
+    } finally { measured.mockRestore(); }
   });
 
   it('projects sky positions onto the view plane the way the server does', () => {
