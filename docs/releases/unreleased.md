@@ -571,6 +571,9 @@
 
 ## Fixed
 
+- On the Framing tab, the camera angle buttons no longer run into the
+  buttons below them, and on a phone the sky's notes sit below its toolbar
+  instead of over it.
 - A Target Scheduler project with several separate targets is no longer
   planned as one: Director drafts its first target from that target's own
   exposure plans, instead of raising it to the largest desired count of any
