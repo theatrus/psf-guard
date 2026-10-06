@@ -2289,9 +2289,32 @@ and parking. Controlled metrics were injected after real captures; this proves
 execution/accounting, not real-sky cloud accuracy. Automatically collected
 references retain their unknown-quality warning.
 
-Explicit coordinator process-restart admission remains a separate gate. Read-only
-review cannot itself restart acquisition, reuse an allocation, forgive uncertain
-captures/hooks or clear a terminal failure stop.
+The plugin now has opt-in **Record settled night boundaries**, requiring automatic
+workloads, and a separate one-use **Resume recorded night on next Run** request.
+The latter is not serialized or cloned. Only a previously recorded unused night
+or a fully settled, checked-in and server-released allocation boundary is eligible.
+The bound rig, pairing, server, equipment configuration and session options must
+match. Original night identity, deadline and spent budgets remain unchanged.
+Fresh Safe/Open evidence, the configured weather stability interval, an idle
+camera, a parked non-tracking mount and a confirmed stopped guider are required.
+Core review still supplies advice only: the new owner requests a fresh workload
+and fresh server start authority before acquisition.
+
+This first restart mode refuses session-level and inherited triggers/conditions
+whose cross-allocation lifecycle is not journaled. Named instruction hook slots
+remain supported; ordinary sessions keep existing trigger compatibility. An
+active/corrupt/missing checkpoint, uncertain capture or hook, ongoing recovery,
+or terminal stop blocks admission. Cancelling a session records a terminal stop
+through bounded cleanup before closing the sidecar. It is not a resumable pause.
+Generic process-crash reconciliation and arbitrary trigger lifecycle recovery
+remain open; read-only review cannot forgive them or replay consumed authority.
+Native NINA 3.3.0.1065, ASCOM OmniSim and the private server verified a recorded
+unused night admitted by a new sidecar/public owner, three science captures
+across two targets, fresh workload release/check-in, cancellation with a durable
+parked stop, and refusal of a second explicit restart. This fixture does not kill
+and relaunch NINA. See the plugin's
+[acceptance record](https://github.com/theatrus/psf-guard-director-nina-plugin/blob/main/docs/nina-smoke-test.md#explicit-settled-night-admission)
+and [PR #58](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/58).
 
 Reuse PSF Guard's [screening evidence](../SCREENING.md) and
 [statistical grading](../STATISTICAL_GRADING.md) concepts: transparency, spatial
