@@ -293,15 +293,20 @@ fn check_orientation(orientation: EarthOrientation, unix_ms: u64) -> Result<(), 
     Ok(())
 }
 
-/// UTC as SOFA's two-part Julian date, within the leap-second model's reach.
+/// UTC as SOFA's two-part Julian date, through 2099.
 fn utc_two_part(unix_ms: u64) -> Result<(f64, f64), VisibilityError> {
     let millis = i64::try_from(unix_ms).map_err(|_| VisibilityError::UnsupportedTime)?;
     let time =
         chrono::DateTime::from_timestamp_millis(millis).ok_or(VisibilityError::UnsupportedTime)?;
-    // Match the SOFA 2023 model's five-year future horizon. This also stays
-    // inside epv00's 1900-2100 range, whose dependency wrapper unwraps errors.
-    // Updating the leap-second model requires an explicit reviewed change.
-    if !(1970..=2028).contains(&time.year()) {
+    // The leap-second table ends with the one at the start of 2017, and
+    // SOFA keeps TAI-UTC at 37 s after it. A leap second the table misses
+    // moves TT by one second: the Sun, the Moon and precession shift by
+    // under an arcsecond, and Earth rotation not at all, since UT1 comes
+    // from the caller's UT1-UTC. So later years assume no new leap seconds
+    // rather than fail; the CGPM plans to stop adding them by 2035. The end
+    // stays inside epv00's 1900-2100 range, whose dependency wrapper unwraps
+    // errors.
+    if !(1970..=2099).contains(&time.year()) {
         return Err(VisibilityError::UnsupportedTime);
     }
     sofars::ts::dtf2d(
