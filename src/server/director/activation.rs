@@ -1612,6 +1612,11 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                 target_guid: Uuid::parse_str(target_guid).map_err(|_| Error::Internal)?,
                 exposureplan_guid: Uuid::parse_str(&plan_guid).map_err(|_| Error::Internal)?,
                 required_frames: frames,
+                intent: Some(psf_guard_director_meta::activation::PlanIntent {
+                    bandpass_id: objective.bandpass_id.clone(),
+                    purpose: objective.purpose.clone(),
+                    priority: objective.priority,
+                }),
             });
         }
     }

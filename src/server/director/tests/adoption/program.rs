@@ -313,6 +313,30 @@ async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment(
         "{goals:?}"
     );
 
+    // A plan edited after activation leaves the program as activated: the
+    // rig keeps working the reviewed plan until the next activation.
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut draft = store.plan_draft(a.project).unwrap().unwrap();
+        let revision = draft.revision;
+        draft.objectives[0].priority = 7;
+        store.save_plan_draft(&draft, revision).unwrap();
+    }
+    let (status, _, body) = raw_get(&a.f.app, &path, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let goals = body["data"]["program"]["assignment"]["goals"].as_array().unwrap();
+    assert_eq!(goals.len(), 2, "{body}");
+    assert_eq!(body["data"]["omitted"], json!([]), "{body}");
+    assert_eq!(body["data"]["links"][0]["bandpass_id"], "h_alpha");
+    // A finished goal is left out, and said so.
+    a.db.execute("UPDATE exposureplan SET accepted=desired WHERE Id=(SELECT min(Id) FROM exposureplan WHERE desired=72)", []).unwrap();
+    let (status, _, body) = raw_get(&a.f.app, &path, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["program"]["assignment"]["goals"].as_array().unwrap().len(), 1, "{body}");
+    assert_eq!(body["data"]["program"]["bindings"].as_array().unwrap().len(), 1, "{body}");
+    assert!(body["data"]["omitted"].to_string().contains("1 finished goal left out"), "{body}");
+    a.db.execute("UPDATE exposureplan SET accepted=10 WHERE accepted=desired AND desired=72", []).unwrap();
+
     // The tuple is checked before anything is read.
     let wrong_instance = format!(
         "/rigs/{}/program?coordinator_instance_id={}&catalog_id={catalog}",

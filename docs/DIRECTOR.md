@@ -1030,7 +1030,7 @@ holds when the network is away.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
-| GET | `/rigs/{rig}/program?coordinator_instance_id=&catalog_id=` | The rig's current program. Send `If-None-Match` with the last `ETag` to get `304` when nothing changed. `403` when the coordinator, catalog and rig do not match this server's binding; `422` until the rig has reported its equipment or an activated plan gives it work; `404` when the catalog is not registered here. |
+| GET | `/rigs/{rig}/program?coordinator_instance_id=&catalog_id=` | The rig's current program, built from the last activation: editing the plan does not change it until the next activation. Finished goals are left out and named in `omitted`; past 256 goals the highest-priority ones are kept and the rest named. Send `If-None-Match` with the last `ETag` to get `304` when nothing changed. `403` when the coordinator, catalog and rig do not match this server's binding; `422` until the rig has reported its equipment or an activated plan gives it work; `404` when the catalog is not registered here. |
 
 The envelope carries the shared core's `Program` (schema 1): an `Assignment`
 valid for 24 hours from the pull with one goal per activated exposure plan,

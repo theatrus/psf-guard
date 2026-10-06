@@ -630,6 +630,10 @@
   window and horizon offset. A rig whose database could not be read says so
   on the Rigs tab instead of calling its project missing, and the Exposures
   tab names the templates the server left out and why.
+- Editing a plan no longer takes it out of every Director rig's program
+  until the next activation; rigs keep the last activated plan. Finished
+  goals are left out of a rig's program, and a rig with more than 256 goals
+  keeps the most important ones instead of losing its whole program.
 - Activation no longer fails as a whole when one rig database is busy,
   read-only or refuses a write: that rig says why and the others are
   applied and recorded. A rig database now gets a minute for its write lock
