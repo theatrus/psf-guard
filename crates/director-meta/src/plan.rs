@@ -60,6 +60,33 @@ pub struct Contribution {
     /// Panel IDs from the framing draft; empty means every panel.
     pub panel_ids: Vec<String>,
     pub enabled: bool,
+    /// This rig's own goal for the objective, in place of the objective's,
+    /// for a slower or faster rig. Absent means the objective's goal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<Goal>,
+}
+
+impl Contribution {
+    /// The goal this rig works to: its own when set, else the objective's.
+    pub fn goal_for(&self, objective: &Objective) -> Goal {
+        self.goal.unwrap_or(objective.goal)
+    }
+}
+
+fn valid_goal(goal: Goal) -> Result<(), Error> {
+    match goal {
+        Goal::Hours { value } => {
+            if !value.is_finite() || value <= 0.0 || value > 10_000.0 {
+                return Err(Error::InvalidInput);
+            }
+        }
+        Goal::Frames { value } => {
+            if value == 0 || value > 1_000_000 {
+                return Err(Error::InvalidInput);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -118,18 +145,7 @@ pub(crate) fn validate_plan(plan: &PlanDraft) -> Result<(), Error> {
         {
             return Err(Error::InvalidInput);
         }
-        match objective.goal {
-            Goal::Hours { value } => {
-                if !value.is_finite() || value <= 0.0 || value > 10_000.0 {
-                    return Err(Error::InvalidInput);
-                }
-            }
-            Goal::Frames { value } => {
-                if value == 0 || value > 1_000_000 {
-                    return Err(Error::InvalidInput);
-                }
-            }
-        }
+        valid_goal(objective.goal)?;
     }
     let mut contribution_ids = std::collections::BTreeSet::new();
     for contribution in &plan.contributions {
@@ -147,6 +163,9 @@ pub(crate) fn validate_plan(plan: &PlanDraft) -> Result<(), Error> {
                 .any(|id| !text_ok(id, 32) || id.is_empty())
         {
             return Err(Error::InvalidInput);
+        }
+        if let Some(goal) = contribution.goal {
+            valid_goal(goal)?;
         }
         let template = &contribution.template;
         if let Some(guid) = template.template_guid {

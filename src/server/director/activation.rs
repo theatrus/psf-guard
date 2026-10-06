@@ -1401,7 +1401,7 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
 }
 
 fn required_frames(objective: &Objective, contribution: &Contribution) -> Option<u32> {
-    match objective.goal {
+    match contribution.goal_for(objective) {
         Goal::Hours { value } => frames_for_hours(value, contribution.exposure_seconds),
         Goal::Frames { value } => Some(value),
     }
@@ -2004,4 +2004,48 @@ fn format_dec(dec: f64) -> String {
     let d = abs.floor();
     let m = ((abs - d) * 60.0).floor();
     format!("{sign}{d:02.0}° {m:02.0}′")
+}
+
+#[cfg(test)]
+mod goal_tests {
+    use super::*;
+    use psf_guard_director_meta::plan::TemplateChoice;
+
+    #[test]
+    fn a_rigs_own_goal_sets_the_frames_it_is_asked_for() {
+        let objective = Objective {
+            id: Uuid::new_v4(),
+            bandpass_id: "h_alpha".into(),
+            purpose: "faint_detail".into(),
+            goal: Goal::Hours { value: 6.0 },
+            priority: 1,
+        };
+        let mut contribution = Contribution {
+            id: Uuid::new_v4(),
+            objective_id: objective.id,
+            rig_id: Uuid::new_v4(),
+            template: TemplateChoice {
+                template_guid: None,
+                template_id: Some(1),
+                name: "Ha 300".into(),
+                filter_name: "Ha".into(),
+                gain: None,
+                offset: None,
+                bin: None,
+                readout_mode: None,
+                moon: None,
+            },
+            exposure_seconds: 300.0,
+            panel_ids: vec![],
+            enabled: true,
+            goal: None,
+        };
+        // 6 h at 300 s.
+        assert_eq!(required_frames(&objective, &contribution), Some(72));
+        // A slow rig set to 24 h of its own.
+        contribution.goal = Some(Goal::Hours { value: 24.0 });
+        assert_eq!(required_frames(&objective, &contribution), Some(288));
+        contribution.goal = Some(Goal::Frames { value: 50 });
+        assert_eq!(required_frames(&objective, &contribution), Some(50));
+    }
 }

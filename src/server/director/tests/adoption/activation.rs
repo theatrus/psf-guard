@@ -130,6 +130,7 @@ pub(super) async fn activated() -> Activated {
                         exposure_seconds: 300.0,
                         panel_ids: vec![],
                         enabled: true,
+                        goal: None,
                     }],
                     updated_at_ms: 1,
                 },

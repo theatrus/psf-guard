@@ -80,6 +80,9 @@
 
 ## Added
 
+- A rig in a plan can carry its own goal for an objective in place of the
+  plan's. For an hours goal, a rig well away from f/5 is offered a goal that
+  reaches the same depth at its focal ratio, such as 24 h at f/10 for 6 h.
 - The desktop app writes a daily log file and keeps a week of them, on
   Windows, macOS and Linux. **Settings › Open logs** opens the folder. The log
   names each frame a stack leaves out or rejects, and why.
