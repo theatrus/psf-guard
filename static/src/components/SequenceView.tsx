@@ -17,6 +17,8 @@ import { useSpatialScan } from '../hooks/useSpatialScan';
 import ScoringPenaltyControl from './ScoringPenaltyControl';
 import { useGrading } from '../hooks/useGrading';
 import { useDbProjectTarget, useGridState } from '../hooks/useUrlState';
+import { useProjectMosaic } from '../hooks/useProjectMosaic';
+import MosaicSequence from './MosaicSequence';
 import UndoRedoToolbar from './UndoRedoToolbar';
 import ImageCard from './ImageCard';
 import Dialog from './Dialog';
@@ -78,7 +80,8 @@ function qualityColor(score: number): string {
 }
 
 export default function SequenceView() {
-  const { dbId, projectId, targetId, setTargetId } = useDbProjectTarget();
+  const { dbId, projectId, targetId, mosaic: mosaicScope, setTargetId } = useDbProjectTarget();
+  const { data: mosaic } = useProjectMosaic(mosaicScope ? dbId : null, mosaicScope ? projectId : null);
   const {
     imageSize,
     currentImageId: urlCurrentImageId,
@@ -132,7 +135,8 @@ export default function SequenceView() {
   const entrySelectionRef = useRef<Set<number> | null>(new Set(selectedImages));
   const inferredSelectionRef = useRef<Set<number> | null>(null);
   useEffect(() => {
-    if (!projectId || targetId) return;
+    // A mosaic's scope keeps every panel; it never narrows to one.
+    if (!projectId || targetId || mosaicScope) return;
     const currentTargetId = urlCurrentImageId === null
       ? null
       : imageMap.get(urlCurrentImageId)?.target_id ?? null;
@@ -153,6 +157,7 @@ export default function SequenceView() {
     }
   }, [
     imageMap,
+    mosaicScope,
     projectId,
     setTargetId,
     targetId,
@@ -654,6 +659,10 @@ export default function SequenceView() {
         Select a project to analyze image sequences
       </div>
     );
+  }
+
+  if (!targetId && mosaic && dbId) {
+    return <MosaicSequence dbId={dbId} mosaic={mosaic} images={images} />;
   }
 
   if (!targetId) {

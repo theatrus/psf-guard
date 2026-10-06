@@ -187,6 +187,9 @@ export const handlers = [
   http.get('/api/db/:dbId/projects/:projectId/targets', () =>
     HttpResponse.json(emptyList)
   ),
+  http.get('/api/db/:dbId/projects/:projectId/mosaic', () =>
+    HttpResponse.json({ success: true, data: { mosaic: null }, error: null, status: 'ready' })
+  ),
   http.get('/api/db/:dbId/images', () => HttpResponse.json(emptyList)),
   http.get('/api/db/:dbId/images/:imageId', () =>
     HttpResponse.json({

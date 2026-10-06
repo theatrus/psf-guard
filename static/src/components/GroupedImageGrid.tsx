@@ -4,7 +4,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { FolderInput } from 'lucide-react';
 import { apiClient } from '../api/client';
-import type { Image } from '../api/types';
+import type { Image, ProjectMosaic } from '../api/types';
 import { GradingStatus } from '../api/types';
 import { useGrading } from '../hooks/useGrading';
 import { useSpatialScan } from '../hooks/useSpatialScan';
@@ -31,7 +31,9 @@ import {
 } from '../types/grouping';
 import {
   groupImagesBySession,
+  groupImagesByPanel,
   imageGroupKey,
+  type ImageGroup,
   NO_EXPANDED_GROUPS,
   resolveExpandedGroups,
   splitImageGroupsByExposure,
@@ -43,10 +45,90 @@ import {
 } from '../utils/gridNavigation';
 import { thumbnailGridColumns } from '../utils/thumbnailSizing';
 import { useScopedQuality } from '../hooks/useSequenceAnalysis';
+import { mosaicLabel, useProjectMosaic } from '../hooks/useProjectMosaic';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import SecondaryScoreToggle from './SecondaryScoreToggle';
 import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog';
 import { matchesStatusFilter, statusFilterLabel } from '../utils/statusFilter';
+
+/** The grid's groups for one set of images in a grouping mode. */
+function groupImages(filteredImages: Image[], groupingMode: GroupingMode): ImageGroup[] {
+  if (groupingMode === 'session') {
+    return splitImageGroupsByExposure(groupImagesBySession(filteredImages));
+  }
+
+  const groups = new Map<string, Image[]>();
+
+  filteredImages.forEach(image => {
+    let groupKey: string;
+
+    // Helper functions for building group keys
+    const getProjectPart = () => image.project_display_name || 'Unknown Project';
+    const getFilterPart = () => image.filter_name || 'No Filter';
+    const getDatePart = () => {
+      if (image.acquired_date) {
+        const date = new Date(image.acquired_date * 1000);
+        return date.toISOString().split('T')[0];
+      }
+      return 'Unknown Date';
+    };
+
+    // Build group key based on mode
+    switch (groupingMode) {
+      case 'filter':
+        groupKey = getFilterPart();
+        break;
+      case 'date':
+        groupKey = getDatePart();
+        break;
+      case 'both':
+        groupKey = `${getFilterPart()} - ${getDatePart()}`;
+        break;
+      case 'project':
+        groupKey = getProjectPart();
+        break;
+      case 'project+filter':
+        groupKey = `${getProjectPart()} - ${getFilterPart()}`;
+        break;
+      case 'project+date':
+        groupKey = `${getProjectPart()} - ${getDatePart()}`;
+        break;
+      case 'project+date+filter':
+        groupKey = `${getProjectPart()} - ${getDatePart()} - ${getFilterPart()}`;
+        break;
+      default:
+        groupKey = getFilterPart();
+    }
+
+    if (!groups.has(groupKey)) {
+      groups.set(groupKey, []);
+    }
+    groups.get(groupKey)!.push(image);
+  });
+
+  // Convert to array and sort
+  const sorted = Array.from(groups.entries())
+    .map(([groupName, images]) => ({
+      filterName: groupName, // Keep property name for compatibility
+      images: images.sort((a, b) => {
+        // Within each group, sort by acquired date (oldest first - chronological order)
+        const dateA = a.acquired_date || 0;
+        const dateB = b.acquired_date || 0;
+        return dateA - dateB; // Oldest first
+      })
+    }));
+
+  // Sort groups based on mode
+  if (groupingMode === 'date' || groupingMode.includes('date')) {
+    // Sort by group name descending for date-based grouping (newest first)
+    sorted.sort((a, b) => b.filterName.localeCompare(a.filterName));
+  } else {
+    // Sort alphabetically for other modes
+    sorted.sort((a, b) => a.filterName.localeCompare(b.filterName));
+  }
+
+  return splitImageGroupsByExposure(sorted);
+}
 
 interface GroupedImageGridProps {
   useLazyImages?: boolean;
@@ -57,7 +139,10 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   // Get state from URL hooks
   const location = useLocation();
   const navigate = useNavigate();
-  const { dbId, projectId, targetId } = useDbProjectTarget();
+  const { dbId, projectId, targetId, mosaic: mosaicScope } = useDbProjectTarget();
+  const { data: projectMosaic } = useProjectMosaic(mosaicScope ? dbId : null, mosaicScope ? projectId : null);
+  // In a mosaic's scope the grid shows each panel's frames under its panel.
+  const mosaic: ProjectMosaic | null = mosaicScope ? projectMosaic ?? null : null;
   const {
     groupingMode,
     imageSize,
@@ -248,84 +333,13 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const isMultiProjectMode = projectId === null;
 
   
-  // Group images based on selected mode
-  const imageGroups = useMemo(() => {
-    if (groupingMode === 'session') {
-      return splitImageGroupsByExposure(groupImagesBySession(filteredImages));
-    }
-
-    const groups = new Map<string, Image[]>();
-    
-    filteredImages.forEach(image => {
-      let groupKey: string;
-      
-      // Helper functions for building group keys
-      const getProjectPart = () => image.project_display_name || 'Unknown Project';
-      const getFilterPart = () => image.filter_name || 'No Filter';
-      const getDatePart = () => {
-        if (image.acquired_date) {
-          const date = new Date(image.acquired_date * 1000);
-          return date.toISOString().split('T')[0];
-        }
-        return 'Unknown Date';
-      };
-      
-      // Build group key based on mode
-      switch (groupingMode) {
-        case 'filter':
-          groupKey = getFilterPart();
-          break;
-        case 'date':
-          groupKey = getDatePart();
-          break;
-        case 'both':
-          groupKey = `${getFilterPart()} - ${getDatePart()}`;
-          break;
-        case 'project':
-          groupKey = getProjectPart();
-          break;
-        case 'project+filter':
-          groupKey = `${getProjectPart()} - ${getFilterPart()}`;
-          break;
-        case 'project+date':
-          groupKey = `${getProjectPart()} - ${getDatePart()}`;
-          break;
-        case 'project+date+filter':
-          groupKey = `${getProjectPart()} - ${getDatePart()} - ${getFilterPart()}`;
-          break;
-        default:
-          groupKey = getFilterPart();
-      }
-      
-      if (!groups.has(groupKey)) {
-        groups.set(groupKey, []);
-      }
-      groups.get(groupKey)!.push(image);
-    });
-
-    // Convert to array and sort
-    const sorted = Array.from(groups.entries())
-      .map(([groupName, images]) => ({ 
-        filterName: groupName, // Keep property name for compatibility
-        images: images.sort((a, b) => {
-          // Within each group, sort by acquired date (oldest first - chronological order)
-          const dateA = a.acquired_date || 0;
-          const dateB = b.acquired_date || 0;
-          return dateA - dateB; // Oldest first
-        })
-      }));
-    
-    // Sort groups based on mode
-    if (groupingMode === 'date' || groupingMode.includes('date')) {
-      // Sort by group name descending for date-based grouping (newest first)
-      sorted.sort((a, b) => b.filterName.localeCompare(a.filterName));
-    } else {
-      // Sort alphabetically for other modes
-      sorted.sort((a, b) => a.filterName.localeCompare(b.filterName));
-    }
-    
-    return splitImageGroupsByExposure(sorted);
-  }, [filteredImages, groupingMode]);
+  // Group images based on selected mode, under their panels in a mosaic.
+  const imageGroups = useMemo(
+    () => mosaic
+      ? groupImagesByPanel(filteredImages, mosaic, images => groupImages(images, groupingMode))
+      : groupImages(filteredImages, groupingMode),
+    [filteredImages, groupingMode, mosaic],
+  );
 
   const visibleExpandedGroups = useMemo(
     () => resolveExpandedGroups(imageGroups, groupingMode, expandedGroups),
@@ -962,6 +976,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
             <div className="stats-section">
               <div className="grid-summary">
                 <div className="grid-stats">
+                  {mosaic && <>{mosaicLabel(mosaic)} • </>}
                   {filteredImages.length} of {allImages.length} images • {imageGroups.length} groups
                   {filters.status !== 'all' && ` • ${statusFilterLabel(filters.status)}`}
                   {filters.filterName !== 'all' && ` • ${filters.filterName}`}
@@ -1066,6 +1081,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
 
             return (
               <div key={groupKey} className="filter-group" data-group-key={groupKey}>
+                {group.panelHeading && <h2 className="mosaic-panel-heading">{group.panelHeading}</h2>}
                 <div 
                   className="filter-header"
                   data-scroll-anchor={`group:${groupKey}`}

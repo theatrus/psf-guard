@@ -1,14 +1,16 @@
 import { useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useMergedProjects, useMergedTargets } from '../../hooks/useDatabases';
-import { isMergedPath, useDbProjectTarget, withoutPlanningParams } from '../../hooks/useUrlState';
+import { isMergedPath, MOSAIC_PARAM, useDbProjectTarget, withoutPlanningParams } from '../../hooks/useUrlState';
+import { mosaicLabel, useProjectMosaics } from '../../hooks/useProjectMosaic';
 import { useCurrentPlan } from './useCurrentPlan';
 import { fittedWidth, sharedStart, shortLabel } from './targetLabels';
 import './header.css';
 
 interface Member { db_id: string; db_name: string; id: number }
 
-const valueOf = (db: string, project: number, target: number | null) => `${db}:${project}:${target ?? ''}`;
+const MOSAIC = 'mosaic';
+const valueOf = (db: string, project: number, target: number | 'mosaic' | null) => `${db}:${project}:${target ?? ''}`;
 
 /** The second half of the scope: which rig's project Images and Sequence
  *  show, and which of its targets. A plan shot by several rigs lists each
@@ -18,7 +20,7 @@ export default function RigTargetSelect() {
   const location = useLocation();
   const { pathname } = location;
   const navigate = useNavigate();
-  const { dbId, projectId, targetId, setDbProjectTarget } = useDbProjectTarget();
+  const { dbId, projectId, targetId, mosaic: mosaicScope, setDbProjectTarget, setMosaic } = useDbProjectTarget();
   const { current: planInScope } = useCurrentPlan();
   const { data: projects } = useMergedProjects();
   const { data: targets } = useMergedTargets();
@@ -42,6 +44,10 @@ export default function RigTargetSelect() {
     return new Set(kin.map(project => project.db_id)).size >= 2 ? kin : [current];
   }, [pathname, planInScope, projects, dbId, projectId]);
 
+  // A project whose targets are one mosaic also offers them all at once.
+  const mosaics = useProjectMosaics(members);
+  const mosaicOf = (member: Member) => mosaics[members.indexOf(member)] ?? null;
+
   const targetsOf = (member: Member) =>
     targets.filter(target => target.db_id === member.db_id && target.project_id === member.id)
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -63,19 +69,22 @@ export default function RigTargetSelect() {
   const inScope = members.some(member => member.db_id === dbId && member.id === projectId);
   // A target the URL still names from another project reads as all targets.
   const knownTarget = inScope && targetId !== null && targets.some(target => target.db_id === dbId && target.project_id === projectId && target.id === targetId) ? targetId : null;
-  const value = inScope && dbId !== null && projectId !== null ? valueOf(dbId, projectId, knownTarget) : '';
+  const inMosaic = inScope && mosaicScope && members.some(member => member.db_id === dbId && member.id === projectId && mosaicOf(member));
+  const value = inScope && dbId !== null && projectId !== null ? valueOf(dbId, projectId, inMosaic ? MOSAIC : knownTarget) : '';
   // On the Library or the Sky the scope is only parked; choosing a rig there
   // opens Images for it, as the project picker does. Elsewhere it moves the
   // scope in place.
-  const choose = (db: string, project: number, target: number | null) => {
+  const choose = (db: string, project: number, target: number | 'mosaic' | null) => {
     if (isMergedPath(pathname) && pathname !== '/plan') {
       const next = withoutPlanningParams(location.search);
       next.set('db', db); next.set('project', String(project));
-      if (target === null) next.delete('target'); else next.set('target', String(target));
+      if (typeof target === 'number') next.set('target', String(target)); else next.delete('target');
+      if (target === MOSAIC) next.set(MOSAIC_PARAM, '1'); else next.delete(MOSAIC_PARAM);
       navigate(`/grid?${next}`);
       return;
     }
-    setDbProjectTarget(db, project, target);
+    if (target === MOSAIC) setMosaic(db, project);
+    else setDbProjectTarget(db, project, target);
   };
   // Each option's full and shown text; mosaic panels drop the start they share.
   const labels = new Map<string, { full: string; shown: string }>();
@@ -86,12 +95,18 @@ export default function RigTargetSelect() {
     groupLabel.set(`${member.db_id}:${member.id}`, prefix ? `${member.db_name} · ${prefix}` : member.db_name);
     const all = single ? 'All targets' : `${member.db_name} · all targets`;
     labels.set(valueOf(member.db_id, member.id, null), { full: prefix ? `${all} (${prefix})` : all, shown: all });
+    const mosaic = mosaicOf(member);
+    if (mosaic) {
+      const label = mosaicLabel(mosaic, prefix);
+      labels.set(valueOf(member.db_id, member.id, MOSAIC), { full: label, shown: single ? label : `${member.db_name} · ${label}` });
+    }
     for (const target of own) {
       labels.set(valueOf(member.db_id, member.id, target.id), { full: target.name, shown: shortLabel(target.name, prefix) });
     }
   }
   const options = (member: Member) => [
     valueOf(member.db_id, member.id, null),
+    ...(mosaicOf(member) ? [valueOf(member.db_id, member.id, MOSAIC)] : []),
     ...targetsOf(member).map(target => valueOf(member.db_id, member.id, target.id)),
   ].map(key => {
     const label = labels.get(key)!;
@@ -105,7 +120,7 @@ export default function RigTargetSelect() {
     title={selected?.full} style={{ width: fittedWidth(shownText) }}
     onChange={event => {
       const [db, project, target] = event.target.value.split(':');
-      if (db && project) choose(db, Number(project), target ? Number(target) : null);
+      if (db && project) choose(db, Number(project), target === MOSAIC ? MOSAIC : target ? Number(target) : null);
     }}>
     {!inScope && <option value="" disabled>Choose a rig</option>}
     {single ? options(members[0]) : members.map(member => <optgroup key={`${member.db_id}:${member.id}`} label={groupLabel.get(`${member.db_id}:${member.id}`)}>{options(member)}</optgroup>)}

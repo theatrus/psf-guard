@@ -237,6 +237,12 @@ fn ensure_director_tables(tx: &Connection) -> Result<(), RigError> {
     Ok(())
 }
 
+/// The rig side tables, for tests outside Director that read them.
+#[cfg(test)]
+pub(crate) fn create_director_tables(conn: &Connection) {
+    assert!(ensure_director_tables(conn).is_ok());
+}
+
 /// A participating rig's registered database, found by catalog identity.
 struct RigCatalog {
     identity: CatalogIdentity,

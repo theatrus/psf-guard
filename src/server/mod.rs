@@ -18,6 +18,7 @@ pub mod handlers;
 pub mod import_job;
 pub mod master_cleanup;
 pub mod mcp;
+pub mod mosaic_scope;
 pub mod organization;
 pub mod pairing;
 pub mod peers;
@@ -528,6 +529,10 @@ async fn run_server_internal(
         .route(
             "/projects/{project_id}/targets",
             get(handlers::list_targets),
+        )
+        .route(
+            "/projects/{project_id}/mosaic",
+            get(mosaic_scope::get_project_mosaic),
         )
         .route(
             "/projects/{project_id}/stack-previews",

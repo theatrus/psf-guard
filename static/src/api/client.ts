@@ -6,6 +6,7 @@ import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, 
   DirectorSkyMarks,
   DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate, DirectorAttached} from './directorTypes';
 import type { GuidFillReport, GuidReport,
+  ProjectMosaic,
   ProjectProcessingSettings,
   StackColorInputSources,
   FlatHistoryState,
@@ -1680,6 +1681,15 @@ export const apiClient = {
       dbPath(dbId, `/projects/${projectId}/targets`)
     );
     return data.data || [];
+  },
+
+  /** The project's mosaic panels, or `null` when it is not a mosaic. */
+  getProjectMosaic: async (dbId: string, projectId: number): Promise<ProjectMosaic | null> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<{ mosaic: ProjectMosaic | null }>>(
+      dbPath(dbId, `/projects/${projectId}/mosaic`)
+    );
+    return data.data?.mosaic ?? null;
   },
 
   getTargetNavigation: async (dbId: string): Promise<TargetNavigation[]> => {
