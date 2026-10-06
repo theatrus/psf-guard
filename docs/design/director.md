@@ -2941,29 +2941,32 @@ not proof that acquisition failed or that an image passes quality requirements.
 
 ## Federation and collaboration
 
-Future design note only, outside the active implementation scope. A later
-revision may support collaborative projects with other people and independent
-PSF Guard instances. Do not implement invitations, participant coordination or
-cross-instance exchange as part of the framing wizard or current multi-rig work;
-that needs a separate implementation request. The following are future constraints.
+The [AstroCollab and Starfront interoperability record](collaboration.md) maps
+AstroCollab 0.2.0-draft.1 (wire protocol 1) to two proposed clients: a plugin-only
+local workload source, and import into PSF Guard's existing project workspace
+and rig databases. Both use the shared Rust planner, durable local execution
+ledger and the same NINA Session/actions/hooks. Neither connector is implemented.
+
+The public protocol supplies hello, browse/join, a nightly panel list and reports.
+It grants no hardware authority; the nightly list is held rather than constantly
+replanned. File upload routes and amendments to previously credited reports are
+not defined. Do not implement speculative draft-0.1 upload or capacity routes.
+The focused record tracks the current mapping, source versions, authority and
+evidence gaps, and incremental acceptance gates.
 
 Extend the same project/workload/contribution model used for one owner's rigs,
-not a second collaborative scheduler. Retain coordinator and participant
-identity, immutable grant identity, stable capture identity and assessment
-provenance across the boundary. A participant can offer permitted capacity or
-request work; accepting a shared project does not grant remote control over its
-equipment. Shared-core capability matching and priorities must still respect
-the participant's commissioned local policy. Collaboration APIs and permissions
-remain deferred; do not add cross-instance execution in this increment.
+not a second collaborative scheduler. Keep remote demand/provenance separate
+from bounded local acquisition authority. PSF Guard mode uses the existing meta
+store and rig databases; plugin-only mode uses the sidecar's local store and a
+reviewed local issuer without requiring a PSF Guard instance. Both preserve
+capture identity, assessment provenance and commissioned local policy.
 
-Each participating instance may have its own meta database, but each shared
-project initially has one authoritative coordinator. A remote participant keeps
-control of its equipment and only accepts assignments within local policy.
-
-Use explicit invitations and scoped permissions for project metadata, contribution
-submission, grading, original-image access, and acquisition authority. Sharing
-a project must not share stored credentials or expose unrelated catalogs.
-Retain contributor attribution, assessment provenance, and audit history.
+Each remote project has one server owning its requirements and credit. Local
+participants still own their equipment, priorities and safety decisions. Explicit
+join/adoption and scoped telescope tokens permit fetching and reporting work,
+not administering projects or granting local catalog access. Shared projects
+must not expose unrelated catalogs or credentials. Invitation, coordinator
+administration and original-image delivery are not assumed client APIs.
 
 Treat remote plans as untrusted input. Validate capabilities and allowed
 templates locally; do not accept arbitrary executable code or unrestricted file
@@ -4375,11 +4378,12 @@ fixtures but are not required network dependencies of CI or acquisition.
 
 ### Phase 6: remote instances and collaboration (deferred)
 
-Future revision only. Keep the collaboration constraints above as design notes;
-do not implement coordinator/participant APIs, invitations, cross-instance
-contribution exchange or collaborative permissions in the current work. Define
-its acceptance gate when that work is explicitly requested. Deferral does not
-block single-coordinator planning and acquisition across multiple rigs/sites.
+Design and protocol mapping only. The [interoperability backlog](collaboration.md#delivery-and-validation)
+defines reviewed increments for a shared read-only adapter, PSF Guard import,
+plugin-only admission and durable reports. No connector, public collaboration
+route or permission is delivered yet. File transfer awaits a defined extension.
+Deferral does not block single-coordinator planning and acquisition across
+multiple rigs/sites; the existing local authority and safety contracts remain.
 
 ### Later: moving targets (design note)
 
