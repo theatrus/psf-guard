@@ -582,6 +582,11 @@
 
 ## Fixed
 
+- Activation no longer fails as a whole when one rig database is busy,
+  read-only or refuses a write: that rig says why and the others are
+  applied and recorded. A rig database now gets a minute for its write lock
+  instead of two seconds, and check-ins and saves no longer wait behind an
+  activation.
 - Color stacks on the Stacks page flow several to a row again when a target
   has stacks of more than one exposure length. Each custom combination now
   sits below the target's cards instead of between them.
