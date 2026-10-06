@@ -69,7 +69,9 @@
 .framing-compass text { fill: #d8ecff; font-size: 16px; font-weight: 600; paint-order: stroke; stroke: rgba(0, 0, 0, 0.7); stroke-width: 3px; }
 .framing-readout { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 6px 0 0; font-size: 13px; font-variant-numeric: tabular-nums; }
 .framing-readout span:first-child { font-weight: 600; }
-.framing-turns { display: flex; gap: 6px; margin-top: 4px; }
+.framing-turns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+/* A field whose controls need the grid's whole width. */
+.framing-grid > .framing-span { grid-column: 1 / -1; }
 .framing-turns button { padding: 4px 8px; min-height: 28px; }
 .framing-stack { opacity: 0.92; }
 .framing-stacks { margin: 8px 0 0; font-size: 13px; }
@@ -166,3 +168,5 @@
 .framing-panel-source { margin: 0 0 6px; font-size: 13px; color: var(--color-text-secondary); }
 .framing-panel-source strong { color: var(--color-text-primary); }
 .director-page .framing-panel-source button { min-height: 24px; margin-left: 6px; padding: 1px 8px; font-size: 12px; }
+
+.framing-overlay-label { fill: #ffe3b3; font-size: 13px; paint-order: stroke; stroke: rgba(0, 0, 0, 0.7); stroke-width: 3px; }

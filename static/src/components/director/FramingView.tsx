@@ -403,6 +403,9 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     return [(event.clientX - rect.left) * k, (event.clientY - rect.top) * k];
   };
   const geometryRef = useRef<DirectorFramingPreview | undefined>(undefined);
+  // Whether a rig shoots the shared framing; when none does, it is not drawn
+  // and cannot be dragged.
+  const sharedInUseRef = useRef(true);
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!state || !stageView || event.button !== 0) return;
     const point = stagePoint(event);
@@ -422,7 +425,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
       const handleAt = projectOn(stageView, rotationHandle(geometry, state));
       const handle = handleAt ? toStage(handleAt, state.viewFov, stageSize) : null;
       if (handle && Math.hypot(handle[0] - point[0], handle[1] - point[1]) <= 18) kind = 'rotate';
-      else if (kind === 'look' && !event.shiftKey && dragMode === 'rectangle' && geometry.panels.some(panel => { const corners = stageCorners(panel.corners, stageView); return corners && insidePolygon(point, corners, state.viewFov, stageSize); })) kind = 'target';
+      else if (kind === 'look' && !event.shiftKey && dragMode === 'rectangle' && sharedInUseRef.current && geometry.panels.some(panel => { const corners = stageCorners(panel.corners, stageView); return corners && insidePolygon(point, corners, state.viewFov, stageSize); })) kind = 'target';
     }
     // Where the pointer took hold, relative to the target, so the target
     // follows the hand instead of jumping to it.
@@ -593,11 +596,15 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
       {editingRig === id && ownEditor}
     </li>;
   };
+  // The shared framing is drawn only while some rig shoots it: when every
+  // rig that is on has a separate framing, no shared target is planned.
+  const sharedInUse = !onToggleRig || rigList.some(entry => (shootingRigIds ?? []).includes(entry.rig.id) && !state.rigFramings.some(own => own.rig_id === entry.rig.id));
+  sharedInUseRef.current = sharedInUse;
   const view = stageView ?? viewAt(state.center, state.viewCenter);
   const onStage = (position: { ra_degrees: number; dec_degrees: number }) => { const offset = projectOn(view, position); return offset ? toStage(offset, state.viewFov, stageSize) : null; };
-  const handle = geometry && geometry.panels.length > 0 ? onStage(rotationHandle(geometry, state)) : null;
+  const handle = sharedInUse && geometry && geometry.panels.length > 0 ? onStage(rotationHandle(geometry, state)) : null;
   const centerOnStage = geometry ? onStage(state.center) : null;
-  const panelPolygons = (geometry?.panels ?? []).map(panel => ({ panel, corners: stageCorners(panel.corners, view) }));
+  const panelPolygons = sharedInUse ? (geometry?.panels ?? []).map(panel => ({ panel, corners: stageCorners(panel.corners, view) })) : [];
   return <section className="framing" aria-label="Framing">
     <div className="framing-stage-wrap">
       <div ref={stage} className={`framing-stage${cutout.stale ? ' is-stale' : ''}`} role="img" aria-label="Sky view" data-testid="framing-stage"
@@ -616,7 +623,10 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
           {backdrop && backdrop.names.length > 0 && <g className="framing-names" data-testid="framing-names">{backdrop.names.map(name => <text key={name.text} x={name.x} y={name.y}>{name.text}</text>)}</g>}
           {marks.data && marksWanted && <SkyMarks marks={marks.data} view={view} viewFov={state.viewFov} stage={stageSize} objects={showObjects} bodies={showBodies} solar={showSolar} />}
           {placedStacks.map(({ panel, preview, matrix }) => <image key={`${panel.rig.id}-${panel.panel_id}`} className="framing-stack" data-testid="framing-stack" href={preview.url} x={0} y={0} width={preview.width} height={preview.height} preserveAspectRatio="none" transform={matrix} />)}
-          {geometry?.overlays.map(overlay => { const corners = stageCorners(overlay.corners, view); return corners && <polygon key={overlay.id} className="framing-overlay" points={polygonPoints(corners, state.viewFov, stageSize)} />; })}
+          {geometry?.overlays.map(overlay => { const corners = stageCorners(overlay.corners, view); return corners && <g key={overlay.id} className="framing-overlay-group">
+            <polygon className="framing-overlay" points={polygonPoints(corners, state.viewFov, stageSize)} />
+            <text className="framing-overlay-label" x={toStage(corners[0], state.viewFov, stageSize)[0] + 6} y={toStage(corners[0], state.viewFov, stageSize)[1] + 14}>{rigName(overlay.id)}</text>
+          </g>; })}
           {ownRigs.map(({ rigId, geometry: own }, index) => <g key={rigId} className={`framing-rig-panels framing-rig-${index % 4}${rigId === editingRig ? ' is-editing' : ''}`} data-testid="framing-rig-panels" data-rig={rigId}>
             {own.panels.map(panel => { const corners = stageCorners(panel.corners, view); return corners && <g key={panel.id}>
               <polygon points={polygonPoints(corners, state.viewFov, stageSize)} />
@@ -686,7 +696,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         <div className="framing-grid">
           <label>RA<span className="framing-input"><NumberInput aria-label="Right ascension degrees" step="any" min={0} max={359.99999} value={round(state.center.ra_degrees, 5)} onChange={event => update(current => ({ center: { ...current.center, ra_degrees: number(event.target.value, current.center.ra_degrees) } }))} /><small>°</small></span><small>{formatRaHours(state.center.ra_degrees)}</small></label>
           <label>Dec<span className="framing-input"><NumberInput aria-label="Declination degrees" step="any" min={-90} max={90} value={round(state.center.dec_degrees, 5)} onChange={event => update(current => ({ center: { ...current.center, dec_degrees: number(event.target.value, current.center.dec_degrees) } }))} /><small>°</small></span><small>{formatDec(state.center.dec_degrees)}</small></label>
-          <label>Camera angle<span className="framing-input"><NumberInput aria-label="Position angle degrees" step="any" min={0} max={359.99} value={round(state.positionAngle, 2)} onChange={event => update({ positionAngle: ((number(event.target.value, state.positionAngle) % 360) + 360) % 360 })} /><small>° E of N</small></span>
+          <label className="framing-span">Camera angle<span className="framing-input"><NumberInput aria-label="Position angle degrees" step="any" min={0} max={359.99} value={round(state.positionAngle, 2)} onChange={event => update({ positionAngle: ((number(event.target.value, state.positionAngle) % 360) + 360) % 360 })} /><small>° E of N</small></span>
             <span className="framing-turns"><button type="button" aria-label="Turn 90 degrees counter-clockwise" onClick={() => turn(-90)}>−90°</button><button type="button" aria-label="Turn 90 degrees clockwise" onClick={() => turn(90)}>+90°</button>
               {panelRig?.profile?.optics && panelRig.profile.optics.value.rotation.mode !== 'rotator' && <button type="button" onClick={() => update({ positionAngle: (panelRig.profile!.optics!.value.rotation as { angle_degrees: number }).angle_degrees })}>Rig's camera angle</button>}</span></label>
         </div>

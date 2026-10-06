@@ -135,6 +135,8 @@ describe('Framing view', () => {
     expect(document.querySelectorAll('.framing-panel text')).toHaveLength(2);
     fireEvent.click(screen.getByRole('checkbox', { name: /RedCat 61/ }));
     expect(document.querySelectorAll('.framing-overlay')).toHaveLength(1);
+    // The outline names its rig, as the panels do.
+    expect(document.querySelector('.framing-overlay-label')).toHaveTextContent('RedCat 61');
     // A rig without optics has no outline to show, and says why.
     expect(screen.queryByRole('checkbox', { name: /C925 data/ })).not.toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'C925 data' })).toHaveTextContent('No optics');
@@ -717,6 +719,18 @@ describe('Framing view', () => {
     expect(screen.getByRole('group', { name: 'Askar 107' })).toHaveClass('is-framing');
     fireEvent.click(screen.getByRole('switch', { name: 'Askar 107 on' }));
     expect(toggled.at(-1)).toEqual([rigC.rig.id, false]);
+  });
+
+  it('hides the shared framing when every rig that is on frames separately', async () => {
+    fixture();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    render(<QueryClientProvider client={client}><FramingView projectId="project" seed={seed} preferredRigIds={[rigB.rig.id]}
+      shootingRigIds={[rigB.rig.id]} onToggleRig={() => {}} /></QueryClientProvider>);
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
+    fireEvent.click(within(screen.getByRole('group', { name: 'C925 data' })).getByRole('button', { name: 'Frame separately' }));
+    // Only C925's own panels are left: no rig shoots the shared rectangle.
+    expect(screen.getByTestId('framing-rig-panels').querySelectorAll('polygon')).toHaveLength(1);
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(0);
   });
 
   it('does not call the same rigs in another order an edit', async () => {
