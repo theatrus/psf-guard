@@ -68,7 +68,8 @@ function SaveBarView({ drafts, canWrite, blocker }: { drafts: Drafts; canWrite: 
       {drafts.unsaved.filter(section => (section.changes ?? []).length > 0).map(section => {
         const changes = section.changes ?? [];
         const shown = changes.slice(0, MAX_CHANGES_SHOWN);
-        return <li key={section.id}><strong>{section.label}:</strong> {shown.join('; ')}{changes.length > shown.length ? `; and ${changes.length - shown.length} more` : ''}</li>;
+        const text = `${shown.join('; ')}${changes.length > shown.length ? `; and ${changes.length - shown.length} more` : ''}`;
+        return <li key={section.id} title={`${section.label}: ${changes.join('; ')}`}><strong>{section.label}:</strong> {text}</li>;
       })}
     </ul>}
     {dirty && <div className="draft-bar-actions">

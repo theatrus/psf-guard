@@ -14,6 +14,8 @@ use tokio::io::duplex;
 
 #[path = "geometry_tests/dispatch.rs"]
 mod dispatch;
+#[path = "geometry_tests/quality_probe.rs"]
+mod quality_probe;
 
 #[derive(Deserialize)]
 struct Fixture {

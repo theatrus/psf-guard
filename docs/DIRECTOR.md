@@ -719,14 +719,17 @@ first. Each card shows a swatch in the colour of the rig's outline on the
 sky, its field and pixel scale, and its part: **Sets panel size**, **Shared
 framing** or **Separate framing** with its grid and angle. On the planning
 page, each rig has an **On** switch: rigs that shoot the plan are listed under
-**On**, the rest under **Off**, and several can be on. Clicking an on rig's
-heading (swatch, name and field) frames the plan with it: its field sets the
-shared framing's panel size, and its card is highlighted. **Shared framing** names the rig its size
-comes from; **Type a size** sets one by hand instead, starting from that rig's. **Outline** draws its field on the sky, and
-**Frame separately** gives it a grid, camera angle and panel size of its own, edited
+**On**, the rest under **Off**, and several can be on. Turning a rig on
+frames the plan with it, and clicking an on rig's heading (swatch, name and
+field) does the same: its field sets the shared framing's panel size, and its
+card is highlighted. **Shared framing** names the rig its size
+comes from; **Type a size** sets one by hand instead, starting from that rig's. **Outline** draws its field on the sky, named
+in small text, and **Frame separately** gives it a grid, camera angle and panel size of its own, edited
 in its card. A separate framing follows the shared center until it is dragged,
 typed or moved to the view center; **Shared center** puts it back in step.
-**Use shared** drops it. **Move target to view center** and **Center view on target**
+**Use shared** drops it. When every rig that is on frames separately, no
+rig shoots the shared framing, so its rectangle is hidden and activation
+plans no target for it. **Move target to view center** and **Center view on target**
 keep the two apart on purpose: panning the sky never moves the plan. **Save
 framing** keeps a draft on the project; a draft saved elsewhere since you
 loaded is refused until you reload. Survey imagery is attributed below the
@@ -751,6 +754,38 @@ stacks stay where their solves put them and the rectangles show the new plan.
 | Method | Route | Body or query |
 | --- | --- | --- |
 | GET | `/projects/{id}/mosaic` | Per activated panel: `panel_id`, `rig`, `catalog_slug`, `target_id`, `progress` (`desired`, `acquired`, `accepted` over its exposure plans), `status` (`ready`, `unsolved`, `no_stack`, `missing_target`, `missing_catalog`) and the stack `preview` with its `wcs` when solved. `activation_revision` is `null` before the first activation; `framing_stale` flags a framing saved since. |
+
+### A mosaic as one view
+
+Target Scheduler keeps a mosaic as one target per panel. When a project's
+targets are one mosaic, the header's rig and target switcher offers it as
+one more choice, such as **M31 mosaic (4 panels)**, beside **All targets**
+and the single panels. The choice sets `mosaic=1` next to `db` and
+`project`, so a reload or a shared link opens the same view.
+
+- **Images** groups the frames under their panels, row by row from the top.
+  Each panel's first group carries its heading (`r1c2 · M31 Panel 2`), and
+  the grouping mode still splits frames within each panel. Arrow keys,
+  Space and Shift selection run across panels as across any groups.
+- **Sequence** lists every panel's frames in capture order, each card named
+  by its panel, with a filter choice and a button that opens each panel's
+  own sequence. Quality scores stay per panel.
+- **Stacks** shows each panel's latest stack in the mosaic's grid, and a sky
+  overview that places every solved stack by its plate solve with the
+  framing view's projection. Nothing is stitched.
+
+Grading, calibration and stacking stay per panel.
+
+The panels come from Director's record when it activated the project: the
+rig database's `psf_guard_director_target` rows name each target's panel
+(`r{row}c{column}`). Without that record the targets' coordinates and
+rotation must form a full grid, read the same way a framing draft is
+imported from Target Scheduler. Target names are never read for this, and
+a project whose targets form no grid has no mosaic choice.
+
+| Method | Route | Body or query |
+| --- | --- | --- |
+| GET | `/api/db/{db}/projects/{id}/mosaic` | `mosaic`: `null` when the project is not a mosaic, else its `name`, `source` (`director` or `inferred`), `rows`, `columns` and `panels` row by row, each with `target_id`, `target_name`, `panel_id`, `row`, `column` and the latest stack `preview` with its `wcs` when solved. |
 
 The imagery comes from the same HiPS surveys N.I.N.A.'s framing assistant
 downloads, including the narrowband layers, fetched by the PSF Guard server

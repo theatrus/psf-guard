@@ -81,16 +81,25 @@ export function useUrlParams() {
  * a list — it sets all three params atomically so the URL is never partially
  * populated.
  */
+/** The URL key that scopes a view to a project's whole mosaic. */
+export const MOSAIC_PARAM = 'mosaic';
+
 export function useDbProjectTarget() {
   const { getParam, getNumberParam, updateParams } = useUrlParams();
 
   const dbId = useMemo(() => getParam('db'), [getParam]);
   const projectId = useMemo(() => getNumberParam('project'), [getNumberParam]);
   const targetId = useMemo(() => getNumberParam('target'), [getNumberParam]);
+  // `mosaic=1` scopes to every panel of the project's mosaic at once. It
+  // only means something with a project and no target.
+  const mosaic = useMemo(
+    () => getParam(MOSAIC_PARAM) === '1' && projectId !== null && targetId === null,
+    [getParam, projectId, targetId]
+  );
 
   const setDbProjectTarget = useCallback(
     (db: string | null, project: number | null, target: number | null) => {
-      updateParams({ db, project, target });
+      updateParams({ db, project, target, [MOSAIC_PARAM]: null });
     },
     [updateParams]
   );
@@ -98,14 +107,22 @@ export function useDbProjectTarget() {
   const setProjectId = useCallback(
     (id: number | null) => {
       // Reset target when project changes; dbId stays.
-      updateParams({ project: id, target: null });
+      updateParams({ project: id, target: null, [MOSAIC_PARAM]: null });
     },
     [updateParams]
   );
 
   const setTargetId = useCallback(
     (id: number | null) => {
-      updateParams({ target: id });
+      updateParams({ target: id, [MOSAIC_PARAM]: null });
+    },
+    [updateParams]
+  );
+
+  /** Scope to the project's whole mosaic. */
+  const setMosaic = useCallback(
+    (db: string, project: number) => {
+      updateParams({ db, project, target: null, [MOSAIC_PARAM]: '1' });
     },
     [updateParams]
   );
@@ -114,9 +131,11 @@ export function useDbProjectTarget() {
     dbId,
     projectId,
     targetId,
+    mosaic,
     setDbProjectTarget,
     setProjectId,
     setTargetId,
+    setMosaic,
   };
 }
 

@@ -5979,6 +5979,17 @@
   overflow: hidden;
 }
 
+/* In a mosaic's scope each panel's first group carries the panel's name. */
+.mosaic-panel-heading {
+  margin: 0;
+  padding: 0.6rem 1.5rem;
+  background: var(--color-bg-elevated);
+  border-left: 4px solid var(--color-primary);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
 .filter-header {
   background: var(--color-bg-secondary);
   padding: 1rem 1.5rem;
@@ -7616,4 +7627,50 @@
 
 .image-preview .copy-mark-own {
   background: rgba(120, 80, 0, 0.75);
+}
+
+/* A mosaic's sequence: every panel's frames in capture order. */
+.mosaic-sequence-note {
+  color: var(--color-text-muted);
+  margin: 0.5rem 0;
+}
+
+.mosaic-sequence-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+}
+
+.mosaic-sequence-panels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.mosaic-sequence-frames {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+
+.mosaic-sequence-frame {
+  position: relative;
+}
+
+.mosaic-sequence-panel {
+  position: absolute;
+  top: 0.4rem;
+  left: 0.4rem;
+  z-index: 2;
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+  background: var(--color-primary);
+  color: var(--color-bg);
+  font-size: 0.8rem;
+  font-weight: 600;
+  pointer-events: none;
 }

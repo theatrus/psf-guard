@@ -450,6 +450,37 @@ pub async fn gate(
     operation: &mut storage::Operation,
     rig_id: &str,
 ) -> Result<Result<(), Error>, ProtocolError> {
+    if let storage::Operation::CheckQualityProbe {
+        recovery: bound,
+        state,
+        ..
+    } = operation
+    {
+        if state.rig_id != rig_id {
+            return Ok(Err(Error::WrongScope));
+        }
+        let reply = execute(
+            storage,
+            Request {
+                recovery_version: CONTRACT_VERSION,
+                operation: Operation::Current {},
+            },
+            rig_id,
+        )
+        .await?;
+        let Reply::Current {
+            record: Some(record),
+        } = reply
+        else {
+            return Ok(Err(Error::NotAdmitted));
+        };
+        if !matches!(&record.snapshot.phase, core::Phase::Recovering { hold, .. } if matches!(hold.cause, core::Cause::Quality { .. }))
+        {
+            return Ok(Err(Error::AcquisitionBlocked));
+        }
+        *bound = Some(Box::new(record.snapshot));
+        return Ok(Ok(()));
+    }
     let Some(state) = operation.acquisition_state_mut() else {
         return Ok(Ok(()));
     };

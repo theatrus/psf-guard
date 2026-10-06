@@ -1,6 +1,6 @@
 /* The app's main column scrolls; this page must not scroll on its own, or
    the framing view's sticky sky column would have nothing to stick to. */
-.director-page { padding: 24px; }
+.director-page { padding: 12px 24px 24px; }
 .director-page > * { max-width: 1400px; margin-left: auto; margin-right: auto; }
 /* A Planning panel shown inside Settings or the Live drawer. */
 .director-page.director-embedded { padding: 0; }
@@ -9,8 +9,7 @@
 .director-project-context { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; }
 .director-project-context dt { color: var(--color-text-secondary); }
 .director-project-context dd { margin: 0; overflow-wrap: anywhere; }
-.director-heading, .director-toolbar, .director-actions, .director-edit-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.director-heading h1 { font-size: 24px; margin: 0; }
+.director-toolbar, .director-actions, .director-edit-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .director-preview { color: var(--color-warning-light); font-size: 13px; }
 .director-muted { color: var(--color-text-secondary); }
 .director-page button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 7px 10px; border: 1px solid var(--color-border-tertiary); border-radius: 4px; color: var(--color-text-primary); background: var(--color-bg-tertiary); cursor: pointer; }
@@ -129,13 +128,15 @@ select.library-pill-state option { color: var(--color-text-primary); background:
 .director-workspace [role="note"] .director-actions { display: inline-flex; margin-left: 8px; gap: 6px; }
 
 /* Workspace: the summary, save bar and tabs stay at the top while a tab
-   scrolls beneath them. */
-.workspace-top { position: sticky; top: 0; z-index: 20; display: grid; gap: 8px; padding: 8px 0 0; background: var(--color-bg-primary); }
+   scrolls beneath them. Each is one line where the width allows, so the
+   tab below keeps the height. */
+.workspace-top { position: sticky; top: 0; z-index: 20; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 6px 0 0; background: var(--color-bg-primary); }
 .workspace-top .draft-bar { position: static; margin: 0; }
-.workspace-summary { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--color-border-tertiary); border-radius: 22px; background: var(--color-bg-elevated); }
-.workspace-summary-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; }
-.workspace-summary-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; min-width: 0; }
-.workspace-summary-name { flex: 1 1 12rem; min-width: 0; margin: 0; font-size: 18px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--color-border-tertiary); border-radius: 18px; background: var(--color-bg-elevated); }
+.workspace-summary-head, .workspace-summary-line { display: contents; }
+.workspace-summary-name { flex: 0 1 auto; min-width: 0; margin: 0 4px; font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Where the plan stands closes the line. */
+.workspace-summary .workspace-activation { order: 1; margin-left: auto; }
 .workspace-pills { display: contents; }
 /* The Library's pill: one shape and size for every fact the summary shows. */
 .workspace-pill { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 10px; border: 0; border-radius: 999px; font: inherit; font-size: 12px; line-height: 1.2; background: var(--color-bg-tertiary); color: var(--color-text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
@@ -147,23 +148,26 @@ a.workspace-pill { text-decoration: none; }
 a.workspace-pill:hover, button.workspace-pill:hover { color: var(--color-text-primary); }
 button.workspace-pill { cursor: pointer; }
 .director-page .workspace-summary button.workspace-pill { min-height: 24px; padding: 2px 10px; border: 0; border-radius: 999px; }
-.workspace-tabs { display: flex; gap: 6px; margin-top: 8px; overflow-x: auto; border-bottom: 1px solid var(--color-border-secondary); scrollbar-width: thin; }
-.director-page .workspace-tabs button.workspace-tab { flex: none; min-height: 44px; padding: 10px 20px; border: none; border-bottom: 3px solid transparent; border-radius: 6px 6px 0 0; background: none; color: var(--color-text-secondary); font-size: 15px; font-weight: 500; }
+.workspace-tabs { display: flex; gap: 6px; margin-top: 0; overflow-x: auto; border-bottom: 1px solid var(--color-border-secondary); scrollbar-width: thin; }
+.director-page .workspace-tabs button.workspace-tab { flex: none; min-height: 36px; padding: 6px 16px; border: none; border-bottom: 3px solid transparent; border-radius: 6px 6px 0 0; background: none; color: var(--color-text-secondary); font-size: 15px; font-weight: 500; }
 .director-page .workspace-tabs button.workspace-tab:hover { color: var(--color-text-primary); background: var(--color-bg-secondary); }
 .director-page .workspace-tabs button.workspace-tab:focus { outline: none; }
 .director-page .workspace-tabs button.workspace-tab:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
 .director-page .workspace-tabs button.workspace-tab.active { color: var(--color-primary); border-bottom-color: var(--color-primary); background: var(--color-bg-secondary); }
 .workspace-tab-edited { margin-left: 6px; font-size: 10px; color: var(--color-warning-light); }
-.workspace-panel { padding-top: 20px; }
+.workspace-panel { padding-top: 12px; }
 .workspace-panel[hidden] { display: none; }
 .observing-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
 
-/* Framing in the workspace: the sky fills the window below the summary and
-   tabs, and the controls scroll beside it instead of lengthening the page. */
+/* Framing in the workspace: the sky fills the room the window leaves below
+   the sticky top, and the controls scroll beside it in all of that room,
+   staying put while the page scrolls down to the visibility chart. The
+   workspace measures the room into --workspace-room and the top's height
+   into --workspace-top. */
 @media (min-width: 1001px) {
   .workspace-panel .framing-stage-wrap { position: static; }
-  .workspace-panel .framing-stage { height: max(420px, calc(100vh - 420px)); }
-  .workspace-panel .framing-controls { max-height: max(520px, calc(100vh - 300px)); overflow-y: auto; padding-right: 4px; scrollbar-width: thin; }
+  .workspace-panel .framing-stage { height: max(420px, calc(var(--workspace-room, calc(100vh - 300px)) - 120px)); }
+  .workspace-panel .framing-controls { position: sticky; top: calc(var(--workspace-top, 0px) + 12px); max-height: max(420px, calc(var(--workspace-room, calc(100vh - 300px)) - 24px)); overflow-y: auto; padding-right: 4px; scrollbar-width: thin; box-sizing: border-box; }
 }
 
 /* On a phone the summary would cover half the screen; it scrolls away. */

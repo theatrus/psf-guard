@@ -112,3 +112,92 @@
     padding: 0.5rem;
   }
 }
+
+/* A mosaic's panels, as its grid and on the sky. */
+.mosaic-stacks {
+  margin-bottom: 1.5rem;
+}
+
+.mosaic-stacks h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.15rem;
+}
+
+.mosaic-stacks-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+
+.mosaic-stacks-grid {
+  display: grid;
+  gap: 0.5rem;
+  align-content: start;
+  max-width: 760px;
+}
+
+.mosaic-stacks-cell {
+  margin: 0;
+  min-width: 0;
+}
+
+.mosaic-stacks-cell img,
+.mosaic-stacks-empty {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: contain;
+  background: var(--color-bg-secondary);
+  border-radius: 6px;
+}
+
+.mosaic-stacks-empty {
+  display: grid;
+  place-items: center;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.mosaic-stacks-cell figcaption {
+  margin-top: 0.25rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mosaic-stacks-sky {
+  margin: 0;
+}
+
+.mosaic-stacks-sky svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+
+.mosaic-stacks-sky-bg {
+  fill: #05070d;
+}
+
+.mosaic-stacks-sky-panel polygon {
+  fill: none;
+  stroke: var(--color-primary);
+  stroke-width: 2;
+}
+
+.mosaic-stacks-sky-panel text {
+  fill: #fff;
+  font-size: 22px;
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: #000;
+  stroke-width: 4px;
+}
+
+.mosaic-stacks-sky figcaption {
+  margin-top: 0.25rem;
+  font-size: 0.85rem;
+}

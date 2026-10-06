@@ -1,4 +1,4 @@
-import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useMemo, useRef, useState } from 'react';
+import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { apiClient } from '../../api/client';
@@ -67,6 +67,7 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
   const drafts = usePageDrafts();
   // The Rigs tab adds and drops rigs through the plan editor, which keeps
   // the plan; it reports back which rigs shoot it.
+  const measureTop = useWorkspaceRoom();
   const planControls = useRef<PlanRigControls | null>(null);
   const [planRigs, setPlanRigs] = useState<{ rigIds: string[]; objectives: number }>({ rigIds: [], objectives: 0 });
   const reportRigs = useCallback((next: { rigIds: string[]; objectives: number }) => setPlanRigs(next), []);
@@ -103,7 +104,7 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
   ]).values()];
   const panel = (id: TabId) => ({ role: 'tabpanel' as const, id: `workspace-panel-${id}`, 'aria-labelledby': `workspace-tab-${id}`, hidden: tab !== id, className: 'workspace-panel' });
   return <DraftProvider drafts={drafts}><section aria-label="Project planning" className="director-workspace">
-    <div className="workspace-top">
+    <div className="workspace-top" ref={measureTop}>
       <SaveBar drafts={drafts} canWrite={canWrite} />
       <ActivationBar projectId={projectId} drafts={drafts} canWrite={canWrite} open={activating} onOpen={() => setActivating(true)} onClose={() => setActivating(false)} />
       <WorkspaceSummary projectId={projectId} projectName={row.project.name} back={back.toString()} rigs={summaryRigs} onActivation={() => setActivating(true)} hideActivation={activationDue} />
@@ -131,4 +132,31 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
       <ObservingPreferences projectId={projectId} folded={false} rigs={row.links.map(link => ({ id: link.rig.id, name: link.catalog_name }))} projects={(plans.data?.rows ?? []).map(entry => entry.project)} />
     </div>
   </section></DraftProvider>;
+}
+
+/**
+ * Measure the sticky top and the room the scrolling column leaves below it,
+ * into --workspace-top and --workspace-room on the workspace, so the framing
+ * sky and its controls fill the window however tall the bars are.
+ */
+function useWorkspaceRoom() {
+  const [top, setTop] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    const workspace = top?.parentElement;
+    if (!top || !workspace) return;
+    const scroller = top.closest<HTMLElement>('.app-main');
+    const measure = () => {
+      const view = scroller?.clientHeight || window.innerHeight;
+      const height = top.offsetHeight;
+      workspace.style.setProperty('--workspace-top', `${height}px`);
+      workspace.style.setProperty('--workspace-room', `${Math.max(0, view - height)}px`);
+    };
+    measure();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    observer?.observe(top);
+    if (scroller) observer?.observe(scroller);
+    window.addEventListener('resize', measure);
+    return () => { observer?.disconnect(); window.removeEventListener('resize', measure); };
+  }, [top]);
+  return setTop;
 }

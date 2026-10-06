@@ -1,5 +1,9 @@
 # Unreleased
 
+- Check Director cloud probes against durable recovery state and the original
+  rig/target/recipe geometry without consuming science attempts. Sparse initial
+  reference groups remain unknown-quality evidence rather than corrupt input.
+
 - Allow Director's shared runtime to resume bounded startup weather holds before
   any workload is admitted, while refusing missing storage or unopened historical
   execution ledgers as proof that equipment work has settled.
@@ -79,6 +83,12 @@
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
 ## Added
+
+- Review a mosaic's panels together. The header's target switcher offers
+  "M31 mosaic (4 panels)" when a project's targets are one mosaic: Images
+  groups frames under each panel in grid order, Sequence shows every panel's
+  frames in capture order, and Stacks lays each panel's stack out as the
+  grid and on the sky. Grading and stacking stay per panel.
 
 - A rig in a plan can carry its own goal for an objective in place of the
   plan's. For an hours goal, a rig well away from f/5 is offered a goal that
@@ -347,9 +357,20 @@
   values as **Unchanged** rather than **Taken over**.
 - Activation no longer makes up GUIDs for rows it takes over. A rig with such
   a row is skipped and points at **Fill in GUIDs**.
+- The planning page's save bar and plan summary are one line each, and the
+  tabs are shorter, so the Framing sky gets the height back. The Framing
+  sidebar fills the window below them and stays in place while the page
+  scrolls.
 - On the planning page's Framing tab, each rig has an **On** switch, with the
-  rigs grouped On and Off, so several rigs can shoot one plan. Clicking an on
-  rig's heading frames the plan with it, and its card is highlighted.
+  rigs grouped On and Off, so several rigs can shoot one plan. Turning a rig on,
+  or clicking an on rig's heading, frames the plan with it, and its card is
+  highlighted.
+- The Framing tab hides the shared rectangle when every rig that is on has a
+  separate framing, since no rig shoots it. Rig outlines on the sky carry the
+  rig's name, and a rig's camera angle buttons wrap inside its card instead of
+  spilling out.
+- The planning page drops its "Planning" title; the header tab already says
+  where you are.
 - WBPP exports and runs build the same dark masters a stack would. When
   lights of one exposure were matched to different darks, each set of darks
   gets its own `DARKSET_<night>` folder and grouping keyword, so WBPP no
