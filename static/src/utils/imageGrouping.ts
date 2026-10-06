@@ -1,4 +1,4 @@
-import type { Image } from '../api/types';
+import type { Image, ProjectMosaic } from '../api/types';
 import type { GroupingMode } from '../types/grouping';
 
 export interface ImageGroup {
@@ -7,6 +7,9 @@ export interface ImageGroup {
   baseKey?: string;
   filterName: string;
   images: Image[];
+  /** In a mosaic's scope, the heading the first group of each panel
+   *  carries: "r1c2 · M31 Panel 2". */
+  panelHeading?: string;
 }
 
 /** Use the project's server-assigned partition, never a filtered subset's durations. */
@@ -151,4 +154,33 @@ function sessionLabel(first: Image, last: Image): string {
     && start.getDate() === end.getDate();
   const endLabel = sameDay ? time(end) : `${formatDate(end)}, ${time(end)}`;
   return `${target} · ${filter} · ${formatDate(start)}, ${time(start)}–${endLabel}`;
+}
+
+/** A mosaic's images under its panels, row by row from the top: each
+ *  panel's frames grouped by `groupWithin`, its first group carrying the
+ *  panel's heading. Frames of targets outside the mosaic come last. */
+export function groupImagesByPanel(
+  images: Image[],
+  mosaic: ProjectMosaic,
+  groupWithin: (images: Image[]) => ImageGroup[],
+): ImageGroup[] {
+  const byTarget = new Map<number, Image[]>();
+  for (const image of images) {
+    const list = byTarget.get(image.target_id);
+    if (list) list.push(image);
+    else byTarget.set(image.target_id, [image]);
+  }
+  const sections: { id: string; heading: string; images: Image[] }[] = mosaic.panels.map(panel => ({
+    id: panel.panel_id,
+    heading: panel.target_name ? `${panel.panel_id} · ${panel.target_name}` : panel.panel_id,
+    images: byTarget.get(panel.target_id) ?? [],
+  }));
+  const panelTargets = new Set(mosaic.panels.map(panel => panel.target_id));
+  const others = images.filter(image => !panelTargets.has(image.target_id));
+  if (others.length > 0) sections.push({ id: 'other', heading: 'Other targets', images: others });
+  return sections.flatMap(section => groupWithin(section.images).map((group, index) => ({
+    ...group,
+    key: JSON.stringify(['panel', section.id, imageGroupKey(group)]),
+    ...(index === 0 ? { panelHeading: section.heading } : {}),
+  })));
 }

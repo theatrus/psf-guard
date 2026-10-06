@@ -286,9 +286,11 @@ pub fn build_initial_reference(
         if !ids.insert(&frame.capture_id)
             || frame.context != first.context
             || i > 0 && frame.observed_at_ms <= frames[i - 1].observed_at_ms
-            || frame.observed_at_ms - first.observed_at_ms > 7_200_000
         {
             return Err(Error::InvalidFrame);
+        }
+        if frame.observed_at_ms - first.observed_at_ms > 7_200_000 {
+            return Err(Error::UnstableBaseline);
         }
         let m = &frame.metrics;
         if m.stars.is_none_or(|n| n < policy.minimum_reference_stars)

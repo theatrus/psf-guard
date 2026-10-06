@@ -30,6 +30,9 @@ mod equipment_report;
 mod feasibility;
 mod framing;
 mod import_drafts;
+#[cfg(test)]
+pub(crate) use activation::create_director_tables as create_rig_tables_for_tests;
+pub(crate) use import_drafts::inferred_mosaic;
 mod mosaic;
 pub(super) mod pairing;
 mod plan;

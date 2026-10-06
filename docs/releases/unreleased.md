@@ -1,5 +1,9 @@
 # Unreleased
 
+- Check Director cloud probes against durable recovery state and the original
+  rig/target/recipe geometry without consuming science attempts. Sparse initial
+  reference groups remain unknown-quality evidence rather than corrupt input.
+
 - Allow Director's shared runtime to resume bounded startup weather holds before
   any workload is admitted, while refusing missing storage or unopened historical
   execution ledgers as proof that equipment work has settled.
@@ -79,6 +83,12 @@
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
 ## Added
+
+- Review a mosaic's panels together. The header's target switcher offers
+  "M31 mosaic (4 panels)" when a project's targets are one mosaic: Images
+  groups frames under each panel in grid order, Sequence shows every panel's
+  frames in capture order, and Stacks lays each panel's stack out as the
+  grid and on the sky. Grading and stacking stay per panel.
 
 - A rig in a plan can carry its own goal for an objective in place of the
   plan's. For an hours goal, a rig well away from f/5 is offered a goal that

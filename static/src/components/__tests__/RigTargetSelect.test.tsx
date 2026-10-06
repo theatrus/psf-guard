@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
@@ -55,6 +55,25 @@ describe('rig and target switcher', () => {
     expect(fixed).toHaveClass('rig-target-fixed');
     expect(fixed).toHaveTextContent('Rig · target');
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+  });
+
+  it("offers a mosaic's panels as one choice, kept in the URL so a link reopens it", async () => {
+    const panel = (targetId: number, column: number) => ({ target_id: targetId, target_name: `Veil ${column}`, panel_id: `r1c${column}`, row: 1, column });
+    server.use(http.get('/api/db/c925/projects/3/mosaic', () => ok({ mosaic: { project_id: 3, name: 'Veil', source: 'inferred', rows: 1, columns: 2, panels: [panel(30, 1), panel(31, 2)] } })));
+    const first = mount('/grid?db=c925&project=3');
+    const select = await screen.findByRole('combobox', { name: 'Rig and target' });
+    await within(select).findByRole('option', { name: 'Veil mosaic (2 panels)' });
+    expect(within(select).getAllByRole('option').map(option => option.textContent)).toEqual(['All targets', 'Veil mosaic (2 panels)', 'Veil east', 'Veil west']);
+    fireEvent.change(select, { target: { value: 'c925:3:mosaic' } });
+    expect(screen.getByTestId('location')).toHaveTextContent('/grid?db=c925&project=3&mosaic=1');
+    // Choosing one panel leaves the mosaic.
+    fireEvent.change(select, { target: { value: 'c925:3:31' } });
+    expect(screen.getByTestId('location')).toHaveTextContent('/grid?db=c925&project=3&target=31');
+    first.unmount();
+    // A shared link opens on the mosaic.
+    mount('/sequence?db=c925&project=3&mosaic=1');
+    const shared = await screen.findByRole('combobox', { name: 'Rig and target' });
+    await waitFor(() => expect(shared).toHaveValue('c925:3:mosaic'));
   });
 
   it('says so when no project is in scope', async () => {
