@@ -562,7 +562,12 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
       <div className="framing-rig-head">
         {onToggleRig && <button type="button" role="switch" className="framing-rig-switch" aria-checked={shooting}
           aria-label={`${entry.catalog_name} on`} title={blocked ? joinBlocked : shooting ? 'Shoots this plan' : 'Off: not in this plan'}
-          disabled={!canWrite || blocked} onClick={() => onToggleRig(id, !shooting)}><span aria-hidden="true" /></button>}
+          disabled={!canWrite || blocked} onClick={() => {
+            onToggleRig(id, !shooting);
+            // A rig turned on frames the plan at once, as though its heading
+            // were clicked too.
+            if (!shooting && field && !own) chooseRig(id);
+          }}><span aria-hidden="true" /></button>}
         {(() => {
           // Swatch, name and field are one click target that frames the
           // plan with this rig; the framing rig's card is highlighted.

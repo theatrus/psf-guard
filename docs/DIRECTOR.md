@@ -719,9 +719,10 @@ first. Each card shows a swatch in the colour of the rig's outline on the
 sky, its field and pixel scale, and its part: **Sets panel size**, **Shared
 framing** or **Separate framing** with its grid and angle. On the planning
 page, each rig has an **On** switch: rigs that shoot the plan are listed under
-**On**, the rest under **Off**, and several can be on. Clicking an on rig's
-heading (swatch, name and field) frames the plan with it: its field sets the
-shared framing's panel size, and its card is highlighted. **Shared framing** names the rig its size
+**On**, the rest under **Off**, and several can be on. Turning a rig on
+frames the plan with it, and clicking an on rig's heading (swatch, name and
+field) does the same: its field sets the shared framing's panel size, and its
+card is highlighted. **Shared framing** names the rig its size
 comes from; **Type a size** sets one by hand instead, starting from that rig's. **Outline** draws its field on the sky, and
 **Frame separately** gives it a grid, camera angle and panel size of its own, edited
 in its card. A separate framing follows the shared center until it is dragged,

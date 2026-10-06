@@ -699,17 +699,21 @@ describe('Framing view', () => {
     // A rig that is off cannot frame the plan.
     expect(screen.queryByRole('button', { name: 'Frame with Askar 107' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('switch', { name: 'Askar 107 on' }));
+    // Turning a rig on frames the plan with it at once.
+    expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from Askar 107');
     fireEvent.click(screen.getByRole('switch', { name: 'C925 data on' }));
+    // C925 has no optics, so it joins without taking the framing over.
+    expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from Askar 107');
     expect(toggled).toEqual([[rigC.rig.id, true], [rigB.rig.id, true]]);
     rerender(view([rigA.rig.id, rigC.rig.id, rigB.rig.id]));
     expect(screen.getByRole('switch', { name: 'Askar 107 on' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.queryByRole('heading', { name: 'Off' })).not.toBeInTheDocument();
-    // One rig frames the plan; any other that is on can take over.
-    await waitFor(() => expect(screen.getByRole('button', { name: 'RedCat 61 frames the plan' })).toHaveAttribute('aria-pressed', 'true'));
-    // The heading, name included, is the click target.
-    expect(within(screen.getByRole('button', { name: 'Frame with Askar 107' })).getByText('Askar 107')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Frame with Askar 107' }));
+    // One rig frames the plan; any other that is on can take over by its heading.
     expect(screen.getByRole('button', { name: 'Askar 107 frames the plan' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(screen.getByRole('button', { name: 'Frame with RedCat 61' })).getByText('RedCat 61')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Frame with RedCat 61' }));
+    expect(screen.getByRole('button', { name: 'RedCat 61 frames the plan' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Frame with Askar 107' }));
     expect(screen.getByRole('group', { name: 'Askar 107' })).toHaveClass('is-framing');
     fireEvent.click(screen.getByRole('switch', { name: 'Askar 107 on' }));
     expect(toggled.at(-1)).toEqual([rigC.rig.id, false]);
