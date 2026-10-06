@@ -1984,7 +1984,8 @@ and a durable `weather_holding` phase. It records separate weather interruption
 and elapsed-hold budgets. Safe/Open ticks only build a stability interval; they
 never authorize acquisition by themselves. Bad readings and monitoring gaps
 reset stability. `resume_weather` is explicit, and the runtime refuses it unless
-the open capture ledger has no unresolved capture or active preparation. The
+the open capture ledger has no unresolved capture or active preparation, or
+runtime 0.12.1 proves unused idle storage as described below. The
 host must additionally confirm equipment quiescence and sequence-hook outcomes.
 Terminal stops cannot be cleared. Legacy stored policy/snapshots without the new
 optional fields retain stop-for-night behavior and their existing encoding.
@@ -1994,13 +1995,25 @@ gate; old tokens remain canceled. It keeps monitoring current evidence while
 dispatch is latched off. Interrupted user instructions and uncertain native
 outcomes are not safe resume boundaries. Resuming a settled boundary uses the
 same night and allocation budget with fresh preparation/selection, not replayed
-hardware commands. Automatic reconciliation of uncertain capture/save outcomes,
-restart re-admission, rig-inherited policy and cloud classification remain
-separate work. Native simulator evidence belongs in the plugin validation guide.
-The first adapter increment covers launched allocations at settled boundaries.
-Startup and between-allocation admission still require Safe/Open conditions;
-they do not yet persist a resumable idle hold. A settled hold that reaches night
+hardware commands. Plugin PR #55 extends this to interrupted live captures: a
+completed invocation that never queued a save can spend its attempt as failed
+after confirming the same camera is connected and quiescent. This is not proof
+the sensor never exposed. Every readmission requires the bound camera driver to
+report Idle; NINA's cleared exposure flag or an unknown driver state is not enough.
+Queued saves require an exact NINA image ID and Director
+capture ID receipt within the save timeout. Saved frames remain pending assessment;
+the saved-exposure hook runs after safe readmission. File absence is not evidence
+of failure, and no attempt is refunded or replayed. Interrupted custom hooks,
+native triggers, uncertain preparation and crash-recovered attempts stay blocked.
+
+Startup and between-allocation admission now use the same durable observing-night
+hold policy before requesting work, without fabricating an allocation or capture
+ledger. Native motion/guiding stop; independent enclosure clearance governs
+parking. Workload requests are canceled on a weather interruption. A hold reaching night
 end returns to NINA's following steps without moving a mount under a closed roof.
+Restart re-admission, rig-inherited policy and cloud classification/probes remain
+separate work. Native simulator evidence belongs in the plugin's
+[validation guide](https://github.com/theatrus/psf-guard-director-nina-plugin/blob/main/docs/nina-smoke-test.md).
 The separate recovery event journal is still local; capture/preparation batch
 replay and live phase reporting do not imply recovery-event ingestion by PSF Guard.
 
@@ -2012,8 +2025,8 @@ is opened, the existing unresolved-capture and active-preparation checks apply.
 This issues no hardware permit: preparation and capture still require a fresh
 coordinator allocation, open ledger and current shared-core dispatch checks.
 
-Add an explicit `hold_and_resume` policy alongside `stop_for_night`, inherited
-from rig defaults with a Session override. A closed roof is never permission to
+The Session exposes `hold_and_resume` alongside `stop_for_night`; inheritance
+from rig defaults remains planned. A closed roof is never permission to
 park: independent motion clearance still governs every mount action. Retain
 the observing-night identity, spent retry/hold budgets, and immutable interrupted
 capture/preparation IDs across the hold, server outage, and process restart.
