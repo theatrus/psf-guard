@@ -187,6 +187,19 @@ pub(crate) fn validate_plan(plan: &PlanDraft) -> Result<(), Error> {
     Ok(())
 }
 
+/// A rig shoots each objective once: a second contribution for the same
+/// pair would have activation count the work twice. Only saves are held to
+/// this, so a plan stored before the check still loads.
+fn one_part_per_rig_and_objective(plan: &PlanDraft) -> Result<(), Error> {
+    let mut parts = std::collections::BTreeSet::new();
+    for contribution in &plan.contributions {
+        if !parts.insert((contribution.rig_id, contribution.objective_id)) {
+            return Err(Error::InvalidInput);
+        }
+    }
+    Ok(())
+}
+
 impl MetaStore {
     pub fn plan_draft(&self, project: Uuid) -> Result<Option<PlanDraft>, Error> {
         read_plan(&self.connection, project)
@@ -199,6 +212,7 @@ impl MetaStore {
         expected_revision: u64,
     ) -> Result<PlanDraft, Error> {
         validate_plan(plan)?;
+        one_part_per_rig_and_objective(plan)?;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;

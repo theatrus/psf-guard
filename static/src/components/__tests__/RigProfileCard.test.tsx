@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
@@ -178,5 +178,41 @@ describe('Rig profile card', () => {
     await waitFor(() => expect(settingsSaves).toHaveLength(1));
     expect(settingsSaves[0]).toMatchObject({ scope: 'rig', site_id: backyard.id, revision: 0 });
     await waitFor(() => expect(screen.getByTestId('rig-site-origin')).toHaveTextContent('the location from Backyard'));
+  });
+
+  it('keeps the saved profile when the site step fails, so a second Save does not conflict with it', async () => {
+    const { saves } = fixture();
+    const backyard = { id: '33333333-3333-4333-8333-333333333333', name: 'Backyard', revision: 1 };
+    const rigSettings = { scope: 'rig', scope_id: rig.id, revision: 0, overrides: { weights: {} }, enabled: null, site_id: null as string | null };
+    let settingsCalls = 0;
+    server.use(
+      http.get('/api/director/v1/preferences', () => HttpResponse.json(ok({ global_id: 'g', presets: {}, sites: [backyard] }))),
+      http.get(`/api/director/v1/preferences/rig/${rig.id}`, () => HttpResponse.json(ok(rigSettings))),
+      http.put(`/api/director/v1/preferences/rig/${rig.id}`, async ({ request }) => {
+        settingsCalls += 1;
+        if (settingsCalls === 1) return HttpResponse.json({ success: false, data: null, error: 'metadata is busy' }, { status: 500 });
+        const body = await request.json() as typeof rigSettings;
+        return HttpResponse.json(ok({ ...body, revision: body.revision + 1 }));
+      }),
+    );
+    mount();
+    fireEvent.change(await screen.findByLabelText('Planning site'), { target: { value: backyard.id } });
+    fireEvent.change(screen.getByLabelText('Bortle class'), { target: { value: '5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Profile saved, planning site not: metadata is busy');
+    fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
+    expect(await screen.findByText('Saved rig profile revision 2.')).toBeInTheDocument();
+    // The second Save names the revision the first one wrote.
+    expect(saves.map(save => save.expected_revision)).toEqual([0, 1]);
+    expect(settingsCalls).toBe(2);
+  });
+
+  it('offers a Reload after a lost race', async () => {
+    fixture(true); mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Save rig profile' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('This rig changed since you loaded it');
+    fireEvent.click(within(alert).getByRole('button', { name: 'Reload' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save rig profile' })).toBeEnabled());
   });
 });

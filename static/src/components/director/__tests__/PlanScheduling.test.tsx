@@ -81,10 +81,36 @@ describe('plan scheduling limits', () => {
     expect(saves[0].scheduling).toEqual({ minimum_altitude_degrees: 35 });
     await waitFor(() => expect(within(screen.getByRole('table')).getByRole('row', { name: /^Minimum altitude/ })).toHaveTextContent('35°from this plan'));
     expect(screen.getByText('set here')).toBeInTheDocument();
+    // Its own save is no news from elsewhere.
+    expect(screen.queryByText(/changed elsewhere/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Inherit minimum altitude' }));
     expect(await drafts.current!.saveAll()).toBeNull();
     expect(saves[1].scheduling).toEqual({});
+  });
+
+  it('keeps edits through a conflict, loads the newer limits under them, and reloads on request', async () => {
+    const { saves } = fixture();
+    const drafts = mount();
+    const altitude = await screen.findByRole('spinbutton', { name: 'Minimum altitude' });
+    fireEvent.change(altitude, { target: { value: '35' } });
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(1));
+    // Someone else saved other limits first.
+    const theirs = { scope: 'project', scope_id: project, revision: 1, overrides: { weights: {}, importance: null, minimum_dwell_ms: null, switch_margin: null }, enabled: null, site_id: null, project_order: null, scheduling: { minimum_time_minutes: 45 } };
+    server.use(
+      http.put(`/api/director/v1/preferences/project/${project}`, () => HttpResponse.json({ success: false, data: null, error: 'Conflict' }, { status: 409 })),
+      http.get(`/api/director/v1/preferences/project/${project}`, () => ok(theirs)),
+    );
+    expect(await drafts.current!.saveAll()).toMatchObject({ label: 'Scheduling limits' });
+    expect(await screen.findByText(/These limits changed elsewhere/)).toBeInTheDocument();
+    expect(screen.getByRole('spinbutton', { name: 'Minimum altitude' })).toHaveValue(35);
+    // A second save would undo theirs unseen; it waits for a reload.
+    expect(await drafts.current!.saveAll()).toEqual({ label: 'Scheduling limits', reason: 'the limits changed elsewhere; reload them first' });
+    expect(saves).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Reload' }));
+    await waitFor(() => expect(screen.getByRole('spinbutton', { name: 'Minimum time' })).toHaveValue(45));
+    expect(screen.getByRole('spinbutton', { name: 'Minimum altitude' })).toHaveValue(null);
+    expect(screen.queryByText(/These limits changed elsewhere/)).not.toBeInTheDocument();
   });
 
   it('is read only without write access', async () => {

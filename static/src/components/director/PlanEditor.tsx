@@ -1,4 +1,4 @@
-import { type MutableRefObject, type ReactNode, useEffect, useId, useMemo, useState } from 'react';
+import { type MutableRefObject, type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useDraftSection } from './pageDraftsState';
 import { describePlanChanges } from './draftChanges';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -8,7 +8,7 @@ import NumberInput from '../NumberInput';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorContribution, DirectorGoal, DirectorObjective, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplate } from '../../api/directorTypes';
-import { PURPOSES, bandpassKind, bandpassOptions, convertGoal, coverageGaps, goalFor, speedAdjustedHours, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, libraryChoice, libraryFor, newContribution, newLibraryContribution, newObjective, panelIds, panelsByRig, planProblem, rigPanels, rigTotals, templateValue, templatesFor } from './planModel';
+import { PURPOSES, bandpassKind, bandpassOptions, convertGoal, coverageGaps, goalFor, speedAdjustedHours, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, libraryChoice, libraryFor, newContribution, newLibraryContribution, newObjective, onePartEach, panelIds, panelsByRig, planProblem, rigPanels, rigTotals, samePlan, shootingRigs, templateValue, templatesFor } from './planModel';
 import './PlanEditor.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Plan request failed';
@@ -20,11 +20,22 @@ const retryWhenBusy = (count: number, error: unknown) => httpStatus(error) === 5
  *  its plan, what activation does there and its Target Scheduler rows. */
 export interface RigExtras { place?: ReactNode; below?: ReactNode }
 
+/** What became of a request to add or drop a rig: whether it now shoots
+ *  the plan (or stopped), and in a few words what was left out or why
+ *  nothing changed. */
+export interface RigChange { done: boolean; note: string | null }
+
 /** What the Rigs tab asks of the plan: which rigs shoot it, and a way to
  *  add or drop one, filling in a template for each objective as a tick does. */
 export interface PlanRigControls {
-  setRig: (rigId: string, on: boolean) => void;
+  setRig: (rigId: string, on: boolean) => RigChange;
 }
+
+/** What the plan editor tells the page: the rigs shooting the plan and its
+ *  objective count, saved or not, and whether rigs can join yet. */
+export interface PlanRigState { rigIds: string[]; objectives: number; ready: boolean }
+
+const orList = (words: string[]) => words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} or ${words[words.length - 1]}`;
 
 /** Objectives per bandpass and depth, and each rig's template and exposure
  *  for them, one block per rig. Rigs with a project in this plan or ticked
@@ -36,8 +47,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
   rigExtras?: (rig: DirectorRigProfileSummary) => RigExtras;
   footer?: ReactNode;
   controls?: MutableRefObject<PlanRigControls | null>;
-  /** The rigs shooting the plan and its objective count, saved or not. */
-  onRigsChange?: (state: { rigIds: string[]; objectives: number }) => void;
+  onRigsChange?: (state: PlanRigState) => void;
 }) {
   const formId = useId();
   const { canWrite } = useAccess();
@@ -61,29 +71,54 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
   const panelsFor = useMemo(() => panelsByRig(framing.data?.draft, rigList.map(rig => rig.rig.id)), [framing.data, rigList]);
   const ownFramed = useMemo(() => (framing.data?.draft?.rig_framings ?? []).map(own => own.rig_id), [framing.data]);
   const [plan, setPlan] = useState<DirectorPlanDraft | null>(null);
-  // Which rigs the operator has ticked. A rig can take part with no matching
-  // template yet, so this is not the same as "has a contribution".
-  const [joined, setJoined] = useState<string[]>([]);
+  // The saved copy the draft started from: what it is compared with, and
+  // whose revision a save names.
+  const [base, setBase] = useState<DirectorPlanDraft | null>(null);
+  // Rigs shown with the plan: those shooting it when it loaded and those
+  // added since. A rig whose objectives are all switched off stays in view
+  // until it is dropped, so unticking one does not take its block away.
+  const [kept, setKept] = useState<string[]>([]);
+  // A copy saved elsewhere arrived over unsaved edits.
+  const [conflict, setConflict] = useState(false);
   const [notice, setNotice] = useState('');
   const [problem, setProblem] = useState('');
+  const take = useCallback((saved: DirectorPlanDraft) => {
+    const next = onePartEach(saved);
+    setPlan(next); setBase(next); setKept(shootingRigs(next)); setConflict(false);
+  }, []);
+  const latest = useRef({ plan, base });
+  latest.current = { plan, base };
   useEffect(() => {
     if (!loaded.data) return;
     const next = loaded.data.plan ?? emptyPlan(projectId);
-    setPlan(next);
-    // Keep rigs the operator ticked even when a save left them without a contribution.
-    setJoined(ids => [...new Set([...ids, ...next.contributions.map(c => c.rig_id)])]);
-  }, [loaded.data, projectId]);
+    const { plan: draft, base: was } = latest.current;
+    // The server's copy replaces the draft only while nothing is unsaved.
+    // Over unsaved edits a newer copy (another browser's save, a plan an
+    // attach brought in) is a conflict to settle, never a silent reset.
+    if (!draft || !was || samePlan(draft, was)) take(next);
+    else if (next.revision !== was.revision) setConflict(true);
+  }, [loaded.data, projectId, take]);
   const save = useMutation({
     retry: false,
-    mutationFn: () => {
-      if (!plan || !loaded.data) throw new Error('Nothing to save');
-      return apiClient.saveDirectorPlan({ ...plan, revision: loaded.data.plan?.revision ?? 0 });
+    mutationFn: (sent: DirectorPlanDraft) => apiClient.saveDirectorPlan({ ...sent, revision: latest.current.base?.revision ?? 0 }),
+    onSuccess: (saved, sent) => {
+      const next = saved.plan ?? emptyPlan(projectId);
+      setNotice(`Saved plan revision ${next.revision}.`);
+      // Edits made while the save ran stay unsaved on top of the new copy.
+      setBase(next);
+      setPlan(current => !current || samePlan(current, sent) ? next : current);
+      client.setQueryData<DirectorPlanView>(planKey, saved);
     },
-    onSuccess: saved => { setNotice(`Saved plan revision ${saved.plan?.revision ?? 0}.`); client.setQueryData<DirectorPlanView>(planKey, saved); },
+    onError: error => { if (httpStatus(error) === 409) { setConflict(true); void loaded.refetch(); } },
   });
-  const stale = httpStatus(save.error) === 409;
-  const baseline = loaded.data ? loaded.data.plan ?? emptyPlan(projectId) : null;
-  const unsaved = !!plan && !!baseline && JSON.stringify(plan) !== JSON.stringify(baseline);
+  const stale = conflict || httpStatus(save.error) === 409;
+  const unsaved = !!plan && !!base && !samePlan(plan, base);
+  // Drop the draft for the newest saved copy, asking first when that loses edits.
+  const reload = () => {
+    if (canWrite && unsaved && !window.confirm('Drop the unsaved exposure changes and load the saved plan?')) return;
+    setNotice(''); setProblem(''); save.reset();
+    void loaded.refetch().then(result => { if (result.data) take(result.data.plan ?? emptyPlan(projectId)); });
+  };
   // On the project page the save bar saves the plan with the framing;
   // activation reads the saved plan, so nothing here may look applied
   // before it is saved.
@@ -91,7 +126,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
     label: 'Exposures',
     order: 2,
     unsaved: canWrite && unsaved,
-    changes: describePlanChanges(baseline, plan, id => rigList.find(rig => rig.rig.id === id)?.catalog_name ?? 'a rig'),
+    changes: describePlanChanges(base, plan, id => rigList.find(rig => rig.rig.id === id)?.catalog_name ?? 'a rig'),
     save: async () => {
       if (!unsaved) return true;
       if (stale) return 'the plan changed elsewhere; reload it first';
@@ -100,10 +135,11 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
       setProblem(trouble ?? '');
       if (trouble) return trouble;
       setNotice('');
-      try { await save.mutateAsync(); } catch (error) { return message(error); }
+      try { await save.mutateAsync(plan); } catch (error) { return httpStatus(error) === 409 ? 'the plan changed elsewhere; reload it first' : message(error); }
       return true;
     },
-    discard: () => { if (baseline) setPlan(baseline); setProblem(''); save.reset(); },
+    // The newest saved copy, which also settles a conflict.
+    discard: () => { const saved = loaded.data ? loaded.data.plan ?? emptyPlan(projectId) : base; if (saved) take(saved); setProblem(''); save.reset(); },
   });
   // Director's own templates: a rig whose database has none for a band shoots with one of these.
   const libraryQuery = useQuery({ queryKey: ['directorTemplateLibrary'], queryFn: apiClient.getDirectorTemplateLibrary, retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false });
@@ -126,27 +162,57 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
     return { ...current, objectives, contributions };
   });
   const removeObjective = (id: string) => update(current => ({ ...current, objectives: current.objectives.filter(o => o.id !== id), contributions: current.contributions.filter(c => c.objective_id !== id) }));
-  const participating = (rig: DirectorRigProfileSummary) => joined.includes(rig.rig.id);
-  const toggleRig = (rig: DirectorRigProfileSummary, on: boolean) => update(current => {
-    setJoined(ids => on ? [...new Set([...ids, rig.rig.id])] : ids.filter(id => id !== rig.rig.id));
-    if (!on) return { ...current, contributions: current.contributions.filter(c => c.rig_id !== rig.rig.id) };
-    const added = current.objectives.flatMap(objective => {
-      const matching = templatesFor(objective.bandpass_id, templatesByRig[rig.rig.id] ?? []);
-      const template = matching[0];
+  // A rig shoots the plan when one of its contributions is on.
+  const shootingKey = shootingRigs(plan).join(',');
+  const shooting = useMemo(() => shootingKey ? shootingKey.split(',') : [], [shootingKey]);
+  const participating = (rig: DirectorRigProfileSummary) => kept.includes(rig.rig.id) || shooting.includes(rig.rig.id);
+  const bandName = (id: string) => options.find(o => o.id === id)?.name ?? id;
+  const toggleRig = (rig: DirectorRigProfileSummary, on: boolean): RigChange => {
+    if (!plan) return { done: false, note: 'plan still loading' };
+    const id = rig.rig.id;
+    if (!on) {
+      // Switched off, not deleted: activation sets the rig's Target
+      // Scheduler project inactive from them, and turning it on again
+      // brings the same templates and exposures back.
+      update(current => ({ ...current, contributions: current.contributions.map(c => c.rig_id === id ? { ...c, enabled: false } : c) }));
+      setKept(ids => ids.filter(other => other !== id));
+      return { done: true, note: null };
+    }
+    if (plan.objectives.length === 0) return { done: false, note: 'add an objective first' };
+    if (templateQueries[rigList.indexOf(rig)]?.isPending || libraryQuery.isPending) return { done: false, note: 'templates still loading' };
+    // Contributions the rig already has come back on; only the objectives
+    // it lacks get one, so a rig never shoots an objective twice.
+    const owned = new Set(plan.contributions.filter(c => c.rig_id === id).map(c => c.objective_id));
+    const lacking: string[] = [];
+    const added = plan.objectives.filter(objective => !owned.has(objective.id)).flatMap(objective => {
+      const template = templatesFor(objective.bandpass_id, templatesByRig[id] ?? [])[0];
       if (template) return [newContribution(objective, rig, template, defaultExposure(rig, bandpassKind(objective.bandpass_id, templatesByRig, library), template))];
       // Nothing in the rig's database for this band: the library stands in.
       const shared = libraryFor(objective.bandpass_id, library)[0];
-      return shared ? [newLibraryContribution(objective, rig, shared)] : [];
+      if (shared) return [newLibraryContribution(objective, rig, shared)];
+      lacking.push(bandName(objective.bandpass_id));
+      return [];
     });
-    return { ...current, contributions: [...current.contributions, ...added] };
-  });
+    const gap = lacking.length > 0 ? `no ${orList(lacking)} template` : null;
+    if (owned.size === 0 && added.length === 0) return { done: false, note: gap };
+    update(current => {
+      const has = new Set(current.contributions.filter(c => c.rig_id === id).map(c => c.objective_id));
+      return { ...current, contributions: [...current.contributions.map(c => c.rig_id === id ? { ...c, enabled: true } : c), ...added.filter(c => !has.has(c.objective_id))] };
+    });
+    setKept(ids => [...new Set([...ids, id])]);
+    return { done: true, note: gap };
+  };
   const objectiveCount = plan?.objectives.length ?? 0;
-  useEffect(() => { onRigsChange?.({ rigIds: joined, objectives: objectiveCount }); }, [joined, objectiveCount, onRigsChange]);
+  const ready = !!plan && rigs.isSuccess;
+  useEffect(() => { onRigsChange?.({ rigIds: shooting, objectives: objectiveCount, ready }); }, [shooting, objectiveCount, ready, onRigsChange]);
   // Refreshed after every render, so the Rigs tab always adds with the
   // templates and objectives as they stand.
   useEffect(() => {
     if (!controls) return;
-    controls.current = { setRig: (rigId, on) => { const rig = rigList.find(entry => entry.rig.id === rigId); if (rig) toggleRig(rig, on); } };
+    controls.current = { setRig: (rigId, on) => {
+      const rig = rigList.find(entry => entry.rig.id === rigId);
+      return rig ? toggleRig(rig, on) : { done: false, note: rigs.isPending ? 'rigs still loading' : 'not a planning rig' };
+    } };
   });
   const setRigPanels = (rig: DirectorRigProfileSummary, chosen: string[]) => update(current => ({
     ...current,
@@ -191,11 +257,12 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
     const extras = rigExtras?.(rig) ?? {};
     return <div key={rig.rig.id} className="plan-rig" role="group" aria-label={rig.catalog_name}>
       <fieldset className="plan-rig-plan" disabled={!canWrite || stale}>
-      <label className="plan-rig-head">{!controls && <input type="checkbox" aria-label={`${rig.catalog_name} takes part`} checked={on} onChange={event => toggleRig(rig, event.target.checked)} disabled={plan.objectives.length === 0} />}
+      <label className="plan-rig-head">{!controls && <input type="checkbox" aria-label={`${rig.catalog_name} takes part`} checked={on} onChange={event => { const change = toggleRig(rig, event.target.checked); setNotice(change.note ? `${rig.catalog_name}: ${change.note}` : ''); }} disabled={plan.objectives.length === 0} />}
         <strong>{rig.catalog_name}</strong>
         {extras.place && <span className="plan-rig-place">{extras.place}</span>}
         <small>{rig.field_of_view ? `${rig.field_of_view.pixel_scale_arcsec.toFixed(2)}″/px${rig.field_of_view.focal_ratio ? `, f/${rig.field_of_view.focal_ratio.toFixed(1)}` : ''}, ` : ''}{loadingTemplates ? 'loading templates' : `${templates.length} template${templates.length === 1 ? '' : 's'}`}</small>
         {total && <span className="plan-rig-total">{total.frames} frames, {formatHours(total.hours)}</span>}
+        {on && !shooting.includes(rig.rig.id) && <span className="director-muted">not shooting</span>}
       </label>
       {on && panels.length > 1 && (() => {
         const owned = rigPanels(plan, rig.rig.id, panels);
@@ -262,7 +329,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
   const inPlan = rigList.filter(rig => participating(rig) || (!controls && linkedRigIds.includes(rig.rig.id)));
   const others = controls ? [] : rigList.filter(rig => !inPlan.includes(rig));
   return <section className="plan-editor" aria-label="Acquisition plan">
-    <form id={formId} onSubmit={event => { event.preventDefault(); if (!canWrite || save.isPending || stale) return; setNotice(''); const trouble = planProblem(plan); setProblem(trouble ?? ''); if (!trouble) save.mutate(); }}>
+    <form id={formId} onSubmit={event => { event.preventDefault(); if (!canWrite || save.isPending || stale) return; setNotice(''); const trouble = planProblem(plan); setProblem(trouble ?? ''); if (!trouble) save.mutate(plan); }}>
       <fieldset disabled={!canWrite || stale}>
         <legend>Objectives</legend>
         <p className="director-muted">Hours or frames per filter</p>
@@ -308,11 +375,11 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
           : <ul className="plan-gaps" data-testid="plan-coverage">{gaps.map(gap => <li key={gap.objective.id} className="director-error">{options.find(o => o.id === gap.objective.bandpass_id)?.name ?? gap.objective.bandpass_id}: no rig on {gap.panels.length === sharedPanels.length ? 'any panel' : `panel${gap.panels.length === 1 ? '' : 's'} ${gap.panels.join(', ')}`}.</li>)}</ul>}
       </fieldset>}
       {notice && <p role="status">{notice}</p>}
-      {stale && <p className="director-error" role="alert">This plan changed since you loaded it. Reload to see the saved plan before editing again.</p>}
+      {stale && <p className="director-error" role="alert">This plan changed since you loaded it. <button type="button" onClick={reload}>Reload</button></p>}
       {(problem || (save.isError && !stale)) && <p className="director-error" role="alert">{problem || message(save.error)}</p>}
       <div className="director-actions">
         {canWrite && !managed && <button type="submit" form={formId} disabled={save.isPending || stale}><Check size={16} />{save.isPending ? 'Saving...' : 'Save plan'}</button>}
-        <button type="button" aria-label="Reload plan" title="Reload plan" onClick={() => { setNotice(''); setProblem(''); save.reset(); void loaded.refetch(); }}><RefreshCw size={16} /></button>
+        <button type="button" aria-label="Reload plan" title="Reload plan" onClick={reload}><RefreshCw size={16} /></button>
         {!canWrite && <span className="director-muted">Read only</span>}
       </div>
   </section>;

@@ -2,7 +2,7 @@ import { type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import { AccessContext, useAccess } from '../../auth/access';
 import TemplateLibrary from '../director/TemplateLibrary';
@@ -95,10 +95,24 @@ describe('Template library', () => {
     fireEvent.click(within(copyList).getByRole('button', { name: /Ha 300/ }));
     await waitFor(() => expect(saves).toHaveLength(3));
     expect(saves[2]).toMatchObject({ revision: 0, name: 'Ha 300', filter_name: 'Ha', gain: 100, default_exposure_seconds: 300 });
-    // Removing sends the revision the row was read at.
+    // Removing asks first, then sends the revision the row was read at.
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Lum 90' }));
+    expect(confirm).toHaveBeenCalledWith('Remove Lum 90 from the library? Plans keep their copy.');
+    expect(deletes).toEqual([]);
     fireEvent.click(screen.getByRole('button', { name: 'Remove Lum 90' }));
     await waitFor(() => expect(deletes).toEqual(['11111111-1111-4111-8111-111111111111?3']));
     expect(await screen.findByText('Removed Lum 90.')).toBeInTheDocument();
+    confirm.mockRestore();
+  });
+
+  it('lets the exposure be cleared and typed over', async () => {
+    fixture(); mount();
+    const exposure = await screen.findByLabelText('Template exposure seconds');
+    fireEvent.change(exposure, { target: { value: '' } });
+    expect(exposure).toHaveValue(null);
+    fireEvent.change(exposure, { target: { value: '45' } });
+    expect(exposure).toHaveValue(45);
   });
 
   it('is read only without write access', async () => {

@@ -109,7 +109,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   const status = useDirectorStatus();
   const manageable = status.data?.database_management ?? true;
   const client = useQueryClient();
-  const { last, planRevision, behind } = useActivationState(projectId);
+  const { last, planRevision, behind, behindText } = useActivationState(projectId);
   const [report, setReport] = useState<DirectorActivationReport | null>(null);
   const busy = useRef(false);
   // Activation writes the saved plan, so edits still in the editor are saved
@@ -133,17 +133,22 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   const push = useMutation({ retry: false, mutationFn: () => apiClient.pushDirectorActivation(projectId), onSuccess: setPushed });
   const run = (action: () => void) => { if (busy.current) return; busy.current = true; try { action(); } finally { busy.current = false; } };
   useEffect(() => { onReport?.(report); }, [report, onReport]);
+  // Apply takes its own button away; the result takes focus in its place.
+  const outcome = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (report?.applied && (!document.activeElement || document.activeElement === document.body)) outcome.current?.focus();
+  }, [report]);
   const pending = preview.isPending || apply.isPending || push.isPending;
   const error = preview.error ?? apply.error ?? push.error;
   return <section className="activation" aria-label="Activation">
     {last.data && <p className="director-muted">Last activated {new Date(last.data.applied_at_ms).toLocaleString()} · {last.data.rigs.length} rig{last.data.rigs.length === 1 ? '' : 's'}</p>}
-    {last.data && behind.length > 0 && <p className="activation-behind" role="note">Saved {behind.join(' and ')} not on the rigs yet</p>}
+    {last.data && behind.length > 0 && <p className="activation-behind" role="note">{behindText}</p>}
     {last.data && behind.length === 0 && !unsavedPlan && planRevision !== undefined && <p className="director-muted">Rigs are up to date</p>}
     {!last.data && last.isSuccess && <p className="director-muted">Not activated yet</p>}
     {error && !(apply.isError && httpStatus(apply.error) === 409) && <p className="director-error" role="alert">{message(error)}</p>}
     {apply.isError && httpStatus(apply.error) === 409 && <p className="director-error" role="alert">Changed since the preview. Preview again.</p>}
     {report && <div className="activation-report">
-      <p><strong>{report.applied ? 'Applied' : 'Preview'}</strong>: framing revision {report.framing_revision}, plan revision {report.plan_revision}, {report.panels} panel{report.panels === 1 ? '' : 's'}.{report.activation_revision !== null && ` Activation revision ${report.activation_revision}.`}</p>
+      <p tabIndex={-1} ref={outcome}><strong>{report.applied ? 'Applied' : 'Preview'}</strong>: framing revision {report.framing_revision}, plan revision {report.plan_revision}, {report.panels} panel{report.panels === 1 ? '' : 's'}.{report.activation_revision !== null && ` Activation revision ${report.activation_revision}.`}</p>
       {report.warnings.map(warning => <p key={warning} className="director-error" role="alert">{warning}</p>)}
       {report.rigs.filter(rig => !shownElsewhere?.has(rig.rig.id)).map(rig => <div key={rig.rig.id}>
         <h4 className="activation-rig-name">{rig.catalog_name}</h4>

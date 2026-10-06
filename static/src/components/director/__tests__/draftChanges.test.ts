@@ -44,8 +44,17 @@ describe('what the save bar says changed', () => {
     const changes = describePlanChanges(before, after, rigName);
     expect(changes).toContain('H-alpha goal 40 frames per rig → 120 frames per rig');
     expect(changes).toContain('RedCat H-alpha exposure 300 s → 600 s');
-    expect(changes).toContain('C925 H-alpha added');
+    // A rig new to the plan is one change, not one per objective.
+    expect(changes).toContain('C925 added');
+    expect(changes).not.toContain('C925 H-alpha added');
     expect(changes.some(change => change.endsWith('added, 6 h'))).toBe(true);
-    expect(describePlanChanges(after, before, rigName)).toContain('C925 H-alpha removed');
+    expect(describePlanChanges(after, before, rigName)).toContain('C925 dropped');
+    // Dropped keeps its parts switched off; one objective off is still named.
+    const off = { ...before, contributions: [{ ...before.contributions[0], enabled: false }] };
+    expect(describePlanChanges(before, off, rigName)).toEqual(['RedCat dropped']);
+    expect(describePlanChanges(off, before, rigName)).toEqual(['RedCat added']);
+    const two = { ...before, contributions: [...before.contributions, { ...before.contributions[0], id: 'c3', objective_id: 'o2' }], objectives: after.objectives };
+    const oneOff = { ...two, contributions: [two.contributions[0], { ...two.contributions[1], enabled: false }] };
+    expect(describePlanChanges(two, oneOff, rigName)).toEqual(['RedCat O III off']);
   });
 });

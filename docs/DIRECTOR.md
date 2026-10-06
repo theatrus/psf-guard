@@ -180,7 +180,9 @@ also holds, since a detached project keeps its GUID. Any rig's GUID still
 finds its plan, and `plan=<database>:<row>` finds the plan of a project row
 or says why the row has none yet (a project without a GUID cannot be
 planned). Whatever the address, the page rewrites it to the plan's own key,
-so history and bookmarks stay right. A workspace open when a detach makes
+so history and bookmarks stay right. The workspace stays open through that
+rewrite, unsaved edits and all, while opening another plan with edits
+unsaved asks first, as leaving the page does. A workspace open when a detach makes
 its GUID ambiguous stays on its plan; a fresh visit to such a GUID lists
 the plans that hold it. An address that names nothing says so and links
 back to the Library. Opening a plan from a Library row carries that row's
@@ -215,18 +217,29 @@ each rig shooting the plan, its template, exposure and frames per objective.
 **Rigs** lists each rig with its database's project and whether activation
 has reached it. **Add a rig** offers every rig with a new project, which
 activation creates in its database, and every project another plan holds in
-a database this plan has none in. **Drop from plan** takes a rig's exposures
-out; **Detach** gives a database's project a plan of its own. Once a rig's
+a database this plan has none in. A rig joins with a template for each
+objective, from its database or the library; one with no template for any
+objective's band says so and stays out. **Drop from plan** switches a rig's
+exposures off: activation then sets its Target Scheduler project inactive,
+and adding the rig back turns the same exposures on again. **Detach** gives
+a database's project a plan of its own. Once a rig's
 database has the project, its Target Scheduler settings and targets open
 there; before that the rig says activation creates them. The plan's
 scheduling limits follow the rigs. **Priority and defaults** holds the
 project priority and the scheduling defaults.
 
+Edits wait for the save bar. A copy saved elsewhere, or a plan an attach
+brings in, never replaces unsaved edits: the tab says the plan changed and
+offers **Reload**, and the save bar will not save over it.
+
 Activation is no tab. Once every edit is saved, a bar at the top asks for an
-activation while the rig databases lack the saved plan or framing, and
-**Activate…** opens the preview and apply over the page. The summary's
-activation line opens the same dialog at any time, to push the last
-activation again. Older links naming the Plan, Rig databases or Activate tabs
+activation while the rig databases lack the saved plan or framing, or a rig
+that shoots the plan has none of it (the last activation skipped it, or it
+joined since), and **Activate…** opens the preview and apply over the page.
+The summary's activation line, **On the rigs** when nothing is missing,
+opens the same dialog at any time, to push the last activation again. On a
+server that does not write rig databases the summary says **Drafts only**
+and no bar asks. Older links naming the Plan, Rig databases or Activate tabs
 open Exposures or Rigs. A plan with no linked database yet starts its framing
 by looking a name up in the CDS catalogs or by typing a center; activation
 then creates and links the Target Scheduler project in each rig database.

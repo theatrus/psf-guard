@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { Check, ChevronDown, ChevronRight, Plus } from 'lucide-react';
@@ -75,6 +75,9 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
   const [problem, setProblem] = useState('');
   const [notice, setNotice] = useState('');
   useEffect(() => { if (loaded.data) setForm(formFrom(loaded.data)); }, [loaded.data]);
+  // A rename the last Save got through before its profile step failed: the
+  // next Save starts from it rather than renaming again and conflicting.
+  const renamed = useRef<DirectorIdentity | null>(null);
   const save = useMutation({
     retry: false,
     mutationFn: async ({ view, next }: { view: DirectorSiteProfileView; next: SiteForm }) => {
@@ -82,8 +85,12 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
       const located = lat !== null && lon !== null;
       const manual = { kind: 'manual' as const };
       const stored = view.profile;
-      let identity = view.site;
-      if (next.name.trim() !== identity.name) identity = await apiClient.renameDirectorIdentity('sites', identity.id, { expected_revision: identity.revision, name: next.name.trim() });
+      let identity = renamed.current ?? view.site;
+      if (next.name.trim() !== identity.name) {
+        identity = await apiClient.renameDirectorIdentity('sites', identity.id, { expected_revision: identity.revision, name: next.name.trim() });
+        renamed.current = identity;
+        void client.invalidateQueries({ queryKey: ['directorSites'] });
+      }
       const saved = await apiClient.saveDirectorSiteProfile(site.id, {
         expected_revision: stored.revision,
         location: located ? { value: { latitude_degrees: lat, longitude_degrees: lon, elevation_meters: elev ?? 0 }, source: manual } : null,
@@ -92,6 +99,7 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
       return { ...saved, site: identity };
     },
     onSuccess: saved => {
+      renamed.current = null;
       setNotice(`Saved ${saved.site.name}.`);
       client.setQueryData(queryKey, saved);
       void client.invalidateQueries({ queryKey: ['directorSites'] });
@@ -99,7 +107,10 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
       void client.invalidateQueries({ queryKey: ['directorRigProfiles'] });
     },
   });
-  const stale = isAxiosError(save.error) && save.error.response?.status === 409;
+  // The client wraps a reply that carries an error message; the status is on its cause.
+  const httpError = isAxiosError(save.error) ? save.error : save.error instanceof Error && isAxiosError(save.error.cause) ? save.error.cause : null;
+  const stale = httpError?.response?.status === 409;
+  const reload = () => { renamed.current = null; setNotice(''); setProblem(''); save.reset(); void loaded.refetch(); };
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!loaded.data || !form || !canWrite || save.isPending) return;
@@ -122,7 +133,7 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
     {loaded.isPending && <p role="status">Loading site...</p>}
     {loaded.isError && <p className="director-error" role="alert">{message(loaded.error)}</p>}
     {notice && <p role="status">{notice}</p>}
-    {stale && <p className="director-error" role="alert">This site changed since you loaded it. Reload the page before editing again.</p>}
+    {stale && <p className="director-error" role="alert">This site changed since you loaded it. <button type="button" onClick={reload}>Reload</button></p>}
     {data && form && <form onSubmit={submit} className="rig-profile-form">
       <fieldset disabled={disabled}>
         <legend>Location</legend>

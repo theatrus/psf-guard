@@ -50,26 +50,32 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       const edit = editFromForm(form, view.profile);
       if (typeof edit === 'string') throw new Error(edit);
       const saved = await apiClient.saveDirectorRigProfile(slug, edit);
+      // Cached at once, so a failed site step below leaves the next Save
+      // naming this revision rather than conflicting with itself. Keep the
+      // header defaults from the last load; a save does not reread frames.
+      client.setQueryData<DirectorRigProfileView>(queryKey, current => current ? { ...saved, defaults: current.defaults } : saved);
       // The planning site lives with the rig's observing settings.
       if (rigSettings.data && siteId !== rigSettings.data.site_id) {
-        const settings = await apiClient.saveObservingSettings({ ...rigSettings.data, site_id: siteId });
-        client.setQueryData(['observingSettings', 'rig', settings.scope_id], settings);
-        void client.invalidateQueries({ queryKey: ['observingEffective'] });
+        try {
+          const settings = await apiClient.saveObservingSettings({ ...rigSettings.data, site_id: siteId });
+          client.setQueryData(['observingSettings', 'rig', settings.scope_id], settings);
+          void client.invalidateQueries({ queryKey: ['observingEffective'] });
+        } catch (error) {
+          throw new Error(`Profile saved, planning site not: ${message(error)}`, { cause: error });
+        }
       }
       return saved;
     },
-    onSuccess: saved => {
-      void client.invalidateQueries({ queryKey: ['directorRigProfiles'] });
-      setNotice(`Saved rig profile revision ${saved.profile.revision}.`);
-      // Keep the header defaults from the last load; a save does not reread frames.
-      client.setQueryData<DirectorRigProfileView>(queryKey, current => current ? { ...saved, defaults: current.defaults } : saved);
-    },
+    onSuccess: saved => setNotice(`Saved rig profile revision ${saved.profile.revision}.`),
+    // Either step may have changed what planning reads for the rig.
+    onSettled: () => void client.invalidateQueries({ queryKey: ['directorRigProfiles'] }),
   });
   // Derived from the error itself, so the conflict notice and the generic one
   // can never both render for the same failed save.
   const httpError = isAxiosError(save.error) ? save.error
     : save.error instanceof Error && isAxiosError(save.error.cause) ? save.error.cause : null;
   const stale = httpError?.response?.status === 409;
+  const reload = () => { setNotice(''); setProblem(''); save.reset(); void loaded.refetch(); if (rigId) void rigSettings.refetch(); };
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!loaded.data || !form || !canWrite || save.isPending) return;
@@ -85,13 +91,13 @@ export default function RigProfileCard({ slug }: { slug: string }) {
   const preview = optics ? fieldOfView(optics) : null;
   return <section className="rig-profile" aria-label="Rig profile">
     <div className="director-toolbar"><h3>Rig profile</h3>
-      <button type="button" aria-label="Reload rig profile" title="Reload rig profile" disabled={loaded.isFetching || save.isPending} onClick={() => { setNotice(''); setProblem(''); save.reset(); void loaded.refetch(); }}><RefreshCw size={16} /></button>
+      <button type="button" aria-label="Reload rig profile" title="Reload rig profile" disabled={loaded.isFetching || save.isPending} onClick={reload}><RefreshCw size={16} /></button>
     </div>
     <p className="director-muted">What this rig sees and where it stands. The N.I.N.A. plugin fills these in when it reports; until then, take them from frame headers or type them.</p>
     {loaded.isPending && <p role="status">Loading rig profile...</p>}
     {loaded.isError && <p className="director-error" role="alert">{message(loaded.error)}</p>}
     {notice && <p role="status">{notice}</p>}
-    {stale && <p className="director-error" role="alert">This rig changed since you loaded it. Reload to see the saved values before editing again.</p>}
+    {stale && <p className="director-error" role="alert">This rig changed since you loaded it. <button type="button" onClick={reload}>Reload</button></p>}
     {data && form && <form onSubmit={submit} className="rig-profile-form">
       <fieldset disabled={disabled}>
         <legend>Optics</legend>

@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import type { Location } from 'react-router-dom';
 
 /** The edits a page holds until its save bar saves them: which sections have
  *  them, and how to save or drop each. The bar itself is in `pageDrafts`. */
@@ -35,12 +36,33 @@ export interface Drafts {
   unsaved: Registered[];
   register: (id: string, section: DraftSection | null) => void;
   /** Save every section with edits, in order, stopping at the first that
-   *  cannot be saved. Resolves that section and why, or null. */
+   *  cannot be saved. Resolves that section and why, or null. A call while
+   *  a save runs gets that save's result rather than a second one. */
   saveAll: () => Promise<SaveFailure | null>;
   discardAll: () => void;
 }
 
 export const DraftContext = createContext<Drafts | null>(null);
+
+/** Navigation state for an address rewrite that shows the same page, such
+ *  as a plan's key becoming its canonical one: the leave guard lets it pass
+ *  with edits unsaved. It names the address it rewrites, so a later step
+ *  back or forward onto that history entry from another plan still asks. */
+export function samePageAs(search: string): { samePageAs: string } {
+  return { samePageAs: search };
+}
+
+/** Whether a navigation leaves the page: another path, or another value
+ *  of a search parameter that names what the page edits. A rewrite of this
+ *  very address marked with [`samePageAs`] stays. */
+export function leavesPage(current: Location, next: Location, pageKeys: readonly string[] = []): boolean {
+  if (current.pathname !== next.pathname) return true;
+  const state: unknown = next.state;
+  if (typeof state === 'object' && state !== null && (state as { samePageAs?: unknown }).samePageAs === current.search) return false;
+  const before = new URLSearchParams(current.search);
+  const after = new URLSearchParams(next.search);
+  return pageKeys.some(key => before.get(key) !== after.get(key));
+}
 
 /** The page's draft registry. Sections register through
  *  [`useDraftSection`]; the page renders [`SaveBar`] once. */
@@ -64,14 +86,23 @@ export function usePageDrafts(): Drafts {
   }, []);
   const ordered = useMemo(() => Object.values(sections).sort((left, right) => left.order - right.order), [sections]);
   const unsaved = useMemo(() => ordered.filter(section => section.unsaved), [ordered]);
-  const saveAll = useCallback(async () => {
-    const pending = Object.values(live.current).filter(section => section.unsaved || section.pending).sort((left, right) => left.order - right.order);
-    for (const section of pending) {
-      let saved: boolean | string = false;
-      try { saved = await section.save(); } catch (error) { saved = error instanceof Error ? error.message : false; }
-      if (saved !== true) return { label: section.label, reason: typeof saved === 'string' ? saved : null };
-    }
-    return null;
+  // The save running now. A second Save (the bar's, then activation's
+  // "Save and preview") would send each section again with the revision
+  // the first is replacing, and lose to it with a conflict.
+  const running = useRef<Promise<SaveFailure | null> | null>(null);
+  const saveAll = useCallback(() => {
+    if (running.current) return running.current;
+    const run = (async () => {
+      const pending = Object.values(live.current).filter(section => section.unsaved || section.pending).sort((left, right) => left.order - right.order);
+      for (const section of pending) {
+        let saved: boolean | string = false;
+        try { saved = await section.save(); } catch (error) { saved = error instanceof Error ? error.message : false; }
+        if (saved !== true) return { label: section.label, reason: typeof saved === 'string' ? saved : null };
+      }
+      return null;
+    })().finally(() => { running.current = null; });
+    running.current = run;
+    return run;
   }, []);
   const discardAll = useCallback(() => { Object.values(live.current).forEach(section => { if (section.unsaved) section.discard(); }); }, []);
   return { sections: ordered, unsaved, register, saveAll, discardAll };

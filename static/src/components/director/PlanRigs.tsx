@@ -6,7 +6,7 @@ import { useAccess } from '../../auth/access';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import { ProjectPlanEditor } from '../ProjectSchedulerDialog';
 import type { DirectorPlanLink, DirectorPlanRow } from '../../api/directorTypes';
-import type { PlanRigControls } from './PlanEditor';
+import type { PlanRigControls, RigChange } from './PlanEditor';
 import { useActivationState } from './activationState';
 import { retryWhenBusy } from './retry';
 import './PlanRigs.css';
@@ -17,7 +17,7 @@ const message = (error: unknown) => error instanceof Error ? error.message : 'Di
  *  a rig with a new project or one its database already has, drop or
  *  detach one, and once a rig's database has the project, its Target
  *  Scheduler settings. */
-export default function PlanRigs({ row, rows, joined, objectives, controls, cameFrom, load }: {
+export default function PlanRigs({ row, rows, joined, objectives, ready, controls, cameFrom, load }: {
   row: DirectorPlanRow;
   /** Every plan, for projects other plans hold that could join this one. */
   rows: DirectorPlanRow[];
@@ -25,6 +25,8 @@ export default function PlanRigs({ row, rows, joined, objectives, controls, came
   joined: string[];
   /** How many objectives the plan has, saved or not: a rig joins by shooting them. */
   objectives: number;
+  /** The plan and the rig list have loaded, so a rig can join. */
+  ready: boolean;
   controls: MutableRefObject<PlanRigControls | null>;
   /** The database the Library's link came from; it is listed first. */
   cameFrom: string | null;
@@ -77,15 +79,22 @@ export default function PlanRigs({ row, rows, joined, objectives, controls, came
     onSuccess: plan => { setDetachPick(null); setProblem(''); setNotice(`Detached: ${plan.name} is a separate plan.`); void client.invalidateQueries({ queryKey: ['directorPlans'] }); },
     onError: error => setProblem(message(error)),
   });
+  // Add or drop a rig through the plan editor, and say what came of it:
+  // a rig with no template for any objective does not join.
+  const setRig = (id: string, on: boolean) => {
+    setProblem(''); setNotice('');
+    const change: RigChange = controls.current?.setRig(id, on) ?? { done: false, note: 'plan still loading' };
+    const name = profiles.data?.find(rig => rig.rig.id === id)?.catalog_name ?? 'The rig';
+    if (!change.done) setProblem(`${name}: ${change.note ?? 'not added'}`);
+    else if (on) setNotice(`${name} added${change.note ? `; ${change.note}` : ''}`);
+  };
   const addRig = (value: string) => {
     setProblem('');
     if (!value.startsWith('new:')) { setPick(value); setNotice(''); return; }
-    const id = value.slice(4);
-    controls.current?.setRig(id, true);
     setPick('');
-    const name = profiles.data?.find(rig => rig.rig.id === id)?.catalog_name ?? 'The rig';
-    setNotice(`${name} joins the plan with a template for each objective; check them on Exposures. Activation creates the project in its database.`);
+    setRig(value.slice(4), true);
   };
+  const waitTitle = !ready ? 'Plan still loading' : objectives === 0 ? 'Add an objective on Exposures first' : undefined;
 
   // One entry per rig: a database project linked to the plan, or a rig
   // shooting it that has no project yet. The Library's database leads.
@@ -107,11 +116,11 @@ export default function PlanRigs({ row, rows, joined, objectives, controls, came
       const place = link ? link.source_name ? `project “${link.source_name}”` : 'project row missing in this database' : 'new project on activation';
       return <div className="director-rig-database plan-rig" role="group" aria-label={name} key={key}>
         <p className="plan-rig-head"><strong>{name}</strong><span className="plan-rig-place">{place}</span>
-          <span className="director-muted">{activated.has(rigId) ? 'active' : 'not activated'}{shooting ? '' : ' · not shooting'}</span>
+          <span className="director-muted">{activated.has(rigId) ? 'activated' : 'not activated'}{shooting ? '' : ' · not shooting'}</span>
           {link && cameFrom === link.catalog_slug && <span className="director-muted"> · opened from here</span>}</p>
         <div className="director-actions">
-          {canWrite && !shooting && <button type="button" disabled={objectives === 0} title={objectives === 0 ? 'Add an objective on Exposures first' : undefined} onClick={() => controls.current?.setRig(rigId, true)}><Plus size={16} />Shoot this plan</button>}
-          {canWrite && shooting && <button type="button" aria-label={`Drop ${name} from the plan`} title={link ? 'Stop shooting this plan here; the project stays in its database' : 'Leave this rig out of the plan'} onClick={() => controls.current?.setRig(rigId, false)}><Minus size={16} />Drop from plan</button>}
+          {canWrite && !shooting && <button type="button" disabled={!!waitTitle} title={waitTitle} onClick={() => setRig(rigId, true)}><Plus size={16} />Shoot this plan</button>}
+          {canWrite && shooting && <button type="button" aria-label={`Drop ${name} from the plan`} title={link ? 'Stop shooting this plan here; the project stays in its database' : 'Leave this rig out of the plan'} onClick={() => setRig(rigId, false)}><Minus size={16} />Drop from plan</button>}
           {canWrite && link && row.links.length > 1 && <button type="button" aria-label={`Detach ${name}`} title="Make it a separate plan" onClick={() => { setDetachPick(detachPick === key ? null : key); setProblem(''); }}><Unlink size={16} />Detach</button>}
           {link && link.source_row_id !== null && <button type="button" aria-expanded={open} onClick={toggle}>{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}Target Scheduler settings</button>}
         </div>
@@ -127,13 +136,13 @@ export default function PlanRigs({ row, rows, joined, objectives, controls, came
         <select aria-label="Add a rig" value={pick} onChange={event => addRig(event.target.value)}>
           <option value="">Choose a rig…</option>
           {fresh.length > 0 && <optgroup label="New project">
-            {fresh.map(rig => <option key={rig.rig.id} value={`new:${rig.rig.id}`} disabled={objectives === 0}>{rig.catalog_name}</option>)}
+            {fresh.map(rig => <option key={rig.rig.id} value={`new:${rig.rig.id}`} disabled={!!waitTitle}>{rig.catalog_name}</option>)}
           </optgroup>}
           {candidates.length > 0 && <optgroup label="Existing project">
             {candidates.map(entry => <option key={entry.key} value={entry.key}>{entry.link.catalog_name}: {entry.link.source_name ?? entry.link.source_project_guid}{entry.plan.project.name !== (entry.link.source_name ?? '') ? ` (plan “${entry.plan.project.name}”)` : ''}</option>)}
           </optgroup>}
         </select></label>
-      {objectives === 0 && fresh.length > 0 && <p className="director-muted">Add an objective first</p>}
+      {waitTitle && fresh.length > 0 && <p className="director-muted">{ready ? 'Add an objective first' : 'Plan still loading'}</p>}
       {chosen && <p className="director-muted" role="note">
         {chosen.plan.links.length > 1 ? `Merge “${chosen.plan.project.name}” and its ${chosen.plan.links.length} databases into this plan?` : `Merge “${chosen.plan.project.name}” into this plan?`}
         <span className="director-actions"><button type="button" disabled={attach.isPending} onClick={() => attach.mutate(chosen.plan.project.id)}><Link2 size={16} />{attach.isPending ? 'Attaching…' : 'Attach'}</button><button type="button" onClick={() => setPick('')}>Cancel</button></span>

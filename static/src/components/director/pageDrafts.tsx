@@ -1,7 +1,7 @@
-import { useContext, useEffect, useState, type ReactNode } from 'react';
+import { useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { UNSAFE_DataRouterContext, useBlocker, type Blocker } from 'react-router-dom';
 import { Check, Undo2 } from 'lucide-react';
-import { DraftContext, describeFailure, type Drafts, type SaveFailure } from './pageDraftsState';
+import { DraftContext, describeFailure, leavesPage, type Drafts, type SaveFailure } from './pageDraftsState';
 import './pageDrafts.css';
 
 export function DraftProvider({ drafts, children }: { drafts: Drafts; children: ReactNode }) {
@@ -15,23 +15,27 @@ const listed = (labels: string[]) => labels.length <= 1 ? labels.join('') : `${l
 
 /** The one place a page's edits are saved or dropped. It stays on screen
  *  while anything is unsaved, and asks before the page is left with edits
- *  in it, by a link in the app or by closing or reloading the tab. */
-export function SaveBar({ drafts, canWrite }: { drafts: Drafts; canWrite: boolean }) {
+ *  in it, by a link in the app or by closing or reloading the tab.
+ *  `pageKeys` names the search parameters that say what the page edits,
+ *  so going from one plan to another asks too. */
+export function SaveBar({ drafts, canWrite, pageKeys = [] }: { drafts: Drafts; canWrite: boolean; pageKeys?: readonly string[] }) {
   // Leaving by a link can only be held under a data router, which the app
   // uses; a component rendered on its own still warns before the tab closes.
   return useContext(UNSAFE_DataRouterContext)
-    ? <GuardedSaveBar drafts={drafts} canWrite={canWrite} />
+    ? <GuardedSaveBar drafts={drafts} canWrite={canWrite} pageKeys={pageKeys} />
     : <SaveBarView drafts={drafts} canWrite={canWrite} blocker={null} />;
 }
 
-function GuardedSaveBar({ drafts, canWrite }: { drafts: Drafts; canWrite: boolean }) {
+function GuardedSaveBar({ drafts, canWrite, pageKeys }: { drafts: Drafts; canWrite: boolean; pageKeys: readonly string[] }) {
   const dirty = canWrite && drafts.unsaved.length > 0;
-  const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && currentLocation.pathname !== nextLocation.pathname);
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && leavesPage(currentLocation, nextLocation, pageKeys));
   return <SaveBarView drafts={drafts} canWrite={canWrite} blocker={blocker} />;
 }
 
 function SaveBarView({ drafts, canWrite, blocker }: { drafts: Drafts; canWrite: boolean; blocker: Blocker | null }) {
-  const [state, setState] = useState<{ kind: 'idle' | 'saving' | 'saved' } | { kind: 'failed'; failure: SaveFailure }>({ kind: 'idle' });
+  // `held`: the saved status kept on screen past its time because it has focus.
+  const [state, setState] = useState<{ kind: 'idle' | 'saving' } | { kind: 'saved'; held?: boolean } | { kind: 'failed'; failure: SaveFailure }>({ kind: 'idle' });
+  const savedStatus = useRef<HTMLParagraphElement>(null);
   const labels = drafts.unsaved.map(section => section.label);
   const dirty = canWrite && labels.length > 0;
   useEffect(() => {
@@ -41,8 +45,15 @@ function SaveBarView({ drafts, canWrite, blocker }: { drafts: Drafts; canWrite: 
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
   useEffect(() => {
+    // The Save button that had focus goes once the sections report nothing
+    // unsaved; the status takes focus, so the keyboard stays in the bar and
+    // a screen reader reads the outcome.
+    if (state.kind !== 'saved' || dirty) return;
+    if (!document.activeElement || document.activeElement === document.body) savedStatus.current?.focus();
+  }, [state.kind, dirty]);
+  useEffect(() => {
     if (state.kind !== 'saved') return;
-    const timer = window.setTimeout(() => setState({ kind: 'idle' }), 4000);
+    const timer = window.setTimeout(() => setState(document.activeElement === savedStatus.current ? { kind: 'saved', held: true } : { kind: 'idle' }), 4000);
     return () => window.clearTimeout(timer);
   }, [state.kind]);
   const save = async () => {
@@ -63,7 +74,7 @@ function SaveBarView({ drafts, canWrite, blocker }: { drafts: Drafts; canWrite: 
       ? <p className="draft-bar-message" role="alert">Leave with unsaved changes in {listed(labels)}?</p>
       : dirty
         ? <p className="draft-bar-message">{state.kind === 'failed' ? describeFailure(state.failure) : `Unsaved changes in ${listed(labels)}.`}</p>
-        : <p className="draft-bar-message" role="status"><Check size={16} />All changes saved.</p>}
+        : <p className="draft-bar-message" role="status" tabIndex={-1} ref={savedStatus} onBlur={() => { if (state.kind === 'saved' && state.held) setState({ kind: 'idle' }); }}><Check size={16} />All changes saved.</p>}
     {dirty && drafts.unsaved.some(section => (section.changes ?? []).length > 0) && <ul className="draft-bar-changes" aria-label="What changed">
       {drafts.unsaved.filter(section => (section.changes ?? []).length > 0).map(section => {
         const changes = section.changes ?? [];
