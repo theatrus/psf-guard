@@ -43,16 +43,57 @@ pub struct FramingDraft {
     pub layout_revision: u64,
 }
 
+/// How far apart two angles or coordinates may be, in degrees, and still
+/// lay out the same targets: far below a pixel, and far above the float
+/// drift a browser's arithmetic adds to a turn and its undoing.
+const LAYOUT_TOLERANCE_DEGREES: f64 = 1e-7;
+
+/// Two angles, or two right ascensions, the same within the tolerance,
+/// counting 359.99999999 and 0 as neighbours.
+fn same_angle(a: f64, b: f64) -> bool {
+    let apart = (a - b).rem_euclid(360.0);
+    apart.min(360.0 - apart) <= LAYOUT_TOLERANCE_DEGREES
+}
+
+fn same_position(a: &IcrsPosition, b: &IcrsPosition) -> bool {
+    same_angle(a.ra_degrees, b.ra_degrees)
+        && (a.dec_degrees - b.dec_degrees).abs() <= LAYOUT_TOLERANCE_DEGREES
+}
+
+fn same_rig_framing(a: &RigFraming, b: &RigFraming) -> bool {
+    a.rig_id == b.rig_id
+        && match (&a.center, &b.center) {
+            (Some(a), Some(b)) => same_position(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+        && match (a.position_angle_degrees, b.position_angle_degrees) {
+            (Some(a), Some(b)) => same_angle(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+        && a.mosaic == b.mosaic
+        && a.panel == b.panel
+}
+
 impl FramingDraft {
-    /// Whether two drafts lay out the same targets for activation.
+    /// Whether two drafts lay out the same targets for activation. Centers
+    /// and angles compare within a small tolerance, so a quarter turn and
+    /// back, which leaves a few units in the last place, asks for no
+    /// activation.
     pub fn same_layout(&self, other: &Self) -> bool {
         self.target_name == other.target_name
-            && self.center == other.center
-            && self.position_angle_degrees == other.position_angle_degrees
+            && same_position(&self.center, &other.center)
+            && same_angle(self.position_angle_degrees, other.position_angle_degrees)
             && self.mosaic == other.mosaic
             && self.panel_rig_id == other.panel_rig_id
             && self.panel == other.panel
-            && self.rig_framings == other.rig_framings
+            && self.rig_framings.len() == other.rig_framings.len()
+            && self
+                .rig_framings
+                .iter()
+                .zip(&other.rig_framings)
+                .all(|(a, b)| same_rig_framing(a, b))
     }
 }
 
@@ -118,6 +159,10 @@ impl FramingDraft {
 const MAX_TIME_MS: u64 = 4_102_444_800_000; // 2100-01-01
 
 const MAX_SURVEY_ID_LEN: usize = 256;
+/// The view's width is the view's own setting, not part of the layout: as
+/// wide as the sky and feasibility endpoints draw, which covers zooming out
+/// to see the constellations around a target.
+const VIEW_FOV_DEGREES: std::ops::RangeInclusive<f64> = 0.02..=180.0;
 
 pub(crate) fn validate_draft(draft: &FramingDraft) -> Result<(), Error> {
     valid_id(draft.project_id)?;
@@ -131,7 +176,7 @@ pub(crate) fn validate_draft(draft: &FramingDraft) -> Result<(), Error> {
         || draft.survey_id.trim() != draft.survey_id
         || draft.survey_id.chars().any(char::is_control)
         || !draft.view_fov_degrees.is_finite()
-        || !(0.02..=40.0).contains(&draft.view_fov_degrees)
+        || !VIEW_FOV_DEGREES.contains(&draft.view_fov_degrees)
         || draft.shown_rig_ids.len() > 64
         || draft.updated_at_ms > MAX_TIME_MS
     {
