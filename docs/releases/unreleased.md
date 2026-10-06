@@ -630,6 +630,10 @@
   window and horizon offset. A rig whose database could not be read says so
   on the Rigs tab instead of calling its project missing, and the Exposures
   tab names the templates the server left out and why.
+- Detaching a database's project from a plan that has work for that rig now
+  says what goes and asks first. Afterwards the old plan no longer writes to
+  the detached project or sets it Inactive, and an attached plan takes over
+  the absorbed project's rows on its next activation.
 - Growing a mosaic grid or turning a mosaic no longer moves targets that
   already have frames to other sky: a moved panel with frames gets a new
   target, and the old one keeps its frames. Taking over a target sets it to

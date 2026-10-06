@@ -257,7 +257,25 @@ describe('attaching and detaching database projects', () => {
     expect(screen.getByRole('note')).toHaveTextContent('Make Heart in Third data a separate plan?');
     fireEvent.click(screen.getByRole('button', { name: 'Detach' }));
     expect(await screen.findByText('Detached: Heart is a separate plan.')).toBeInTheDocument();
-    expect(posts).toEqual([{ url: 'detach', body: { catalog_slug: 'third', source_project_guid: 'guid-c', name: 'Heart' } }]);
+    expect(posts).toEqual([{ url: 'detach', body: { catalog_slug: 'third', source_project_guid: 'guid-c', name: 'Heart', drop_rig_work: false } }]);
+  });
+
+  it('says what a detach would take out of the plan, and detaches only once that is confirmed', async () => {
+    const posts = mountTwo();
+    server.use(http.post('/api/director/v1/projects/project/detach', async ({ request }) => {
+      const body = await request.json() as { drop_rig_work: boolean };
+      posts.push({ url: 'detach', body });
+      return body.drop_rig_work
+        ? ok({ id: 'fresh', name: 'Heart', revision: 1 })
+        : HttpResponse.json({ success: false, data: null, error: 'This plan has 2 exposure goals for Third data; detaching takes them out of this plan.' }, { status: 409 });
+    }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Rigs' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Detach Third data' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Detach' }));
+    expect(await screen.findByRole('note')).toHaveTextContent('This plan has 2 exposure goals for Third data; detaching takes them out of this plan. Detach Heart anyway?');
+    fireEvent.click(screen.getByRole('button', { name: 'Detach anyway' }));
+    expect(await screen.findByText('Detached: Heart is a separate plan.')).toBeInTheDocument();
+    expect(posts.map(post => (post.body as { drop_rig_work: boolean }).drop_rig_work)).toEqual([false, true]);
   });
 
   it('adds a rig with a new project, which activation creates, and drops it again', async () => {

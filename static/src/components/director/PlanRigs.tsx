@@ -1,3 +1,4 @@
+import { isAxiosError } from 'axios';
 import { type MutableRefObject, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, Link2, Minus, Plus, Unlink } from 'lucide-react';
@@ -43,6 +44,9 @@ export default function PlanRigs({ row, rows, joined, objectives, ready, control
   const client = useQueryClient();
   const [pick, setPick] = useState('');
   const [detachPick, setDetachPick] = useState<string | null>(null);
+  // What a detach would take out of this plan, as the server put it; shown
+  // before the person confirms.
+  const [detachLoses, setDetachLoses] = useState<string | null>(null);
   // Each project's settings are long; the database the Library's link came
   // from opens, or the only one, and the rest wait for a click.
   const [opened, setOpened] = useState<Set<string>>(() => {
@@ -75,9 +79,19 @@ export default function PlanRigs({ row, rows, joined, objectives, ready, control
   });
   const detach = useMutation({
     retry: false,
-    mutationFn: (link: DirectorPlanLink) => apiClient.detachDirectorProject(projectId, link.catalog_slug, link.source_project_guid, link.source_name ?? row.project.name),
-    onSuccess: plan => { setDetachPick(null); setProblem(''); setNotice(`Detached: ${plan.name} is a separate plan.`); void client.invalidateQueries({ queryKey: ['directorPlans'] }); },
-    onError: error => setProblem(message(error)),
+    mutationFn: ({ link, drop }: { link: DirectorPlanLink; drop: boolean }) => apiClient.detachDirectorProject(projectId, link.catalog_slug, link.source_project_guid, link.source_name ?? row.project.name, drop),
+    onSuccess: plan => {
+      setDetachPick(null); setDetachLoses(null); setProblem('');
+      setNotice(`Detached: ${plan.name} is a separate plan.`);
+      void client.invalidateQueries({ queryKey: ['directorPlans'] });
+      void client.invalidateQueries({ queryKey: ['directorPlan', projectId] });
+      void client.invalidateQueries({ queryKey: ['directorActivation', projectId] });
+    },
+    onError: (error, { drop }) => {
+      // The plan has work for that rig: say what goes, and ask again.
+      if (!drop && detachConflict(error)) setDetachLoses(message(error));
+      else setProblem(message(error));
+    },
   });
   // Add or drop a rig through the plan editor, and say what came of it:
   // a rig with no template for any objective does not join.
@@ -124,11 +138,13 @@ export default function PlanRigs({ row, rows, joined, objectives, ready, control
         <div className="director-actions">
           {canWrite && !shooting && <button type="button" disabled={!!waitTitle} title={waitTitle} onClick={() => setRig(rigId, true)}><Plus size={16} />Shoot this plan</button>}
           {canWrite && shooting && <button type="button" aria-label={`Drop ${name} from the plan`} title={link ? 'Stop shooting this plan here; the project stays in its database' : 'Leave this rig out of the plan'} onClick={() => setRig(rigId, false)}><Minus size={16} />Drop from plan</button>}
-          {canWrite && link && row.links.length > 1 && <button type="button" aria-label={`Detach ${name}`} title="Make it a separate plan" onClick={() => { setDetachPick(detachPick === key ? null : key); setProblem(''); }}><Unlink size={16} />Detach</button>}
+          {canWrite && link && row.links.length > 1 && <button type="button" aria-label={`Detach ${name}`} title="Make it a separate plan" onClick={() => { setDetachPick(detachPick === key ? null : key); setDetachLoses(null); setProblem(''); }}><Unlink size={16} />Detach</button>}
           {link && link.source_row_id !== null && <button type="button" aria-expanded={open} onClick={toggle}>{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}Target Scheduler settings</button>}
         </div>
-        {link && detachPick === key && <p className="director-muted" role="note">Make {link.source_name ?? 'this project'} in {link.catalog_name} a separate plan?
-          <span className="director-actions"><button type="button" disabled={detach.isPending} onClick={() => detach.mutate(link)}>{detach.isPending ? 'Detaching…' : 'Detach'}</button><button type="button" onClick={() => setDetachPick(null)}>Cancel</button></span></p>}
+        {link && detachPick === key && <p className="director-muted" role="note">{detachLoses
+          ? <>{detachLoses} Detach {link.source_name ?? 'this project'} anyway?</>
+          : <>Make {link.source_name ?? 'this project'} in {link.catalog_name} a separate plan?</>}
+          <span className="director-actions"><button type="button" disabled={detach.isPending} onClick={() => detach.mutate({ link, drop: detachLoses !== null })}>{detach.isPending ? 'Detaching…' : detachLoses ? 'Detach anyway' : 'Detach'}</button><button type="button" onClick={() => { setDetachPick(null); setDetachLoses(null); }}>Cancel</button></span></p>}
         {link && link.source_row_id !== null
           ? open && load && <ProjectPlanEditor dbId={link.catalog_slug} projectId={link.source_row_id} canEdit={canEditRows} withTemplates={false} />
           : <p className="director-muted">{link?.source_unread ? 'Database not read just now' : 'Created on activation'}</p>}
@@ -154,4 +170,10 @@ export default function PlanRigs({ row, rows, joined, objectives, ready, control
     {notice && <p role="status">{notice}</p>}
     {problem && <p className="director-error" role="alert">{problem}</p>}
   </section>;
+}
+
+/** A detach the server held back because the plan has work for that rig. */
+function detachConflict(error: unknown): boolean {
+  const status = (value: unknown) => isAxiosError(value) ? value.response?.status : undefined;
+  return status(error) === 409 || (error instanceof Error && status(error.cause) === 409);
 }
