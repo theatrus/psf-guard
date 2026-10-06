@@ -2109,6 +2109,20 @@ deadlines. It neither changes nor borrows science attempt counts. This is a
 feasibility check, not a reservation: native probe dispatch still needs a
 separately persisted one-shot permit and capture provenance.
 
+Runtime 0.14.0 / IPC 14 exposes `check_quality_probe` against the open geometry
+ledger. The runtime injects its durable recovery snapshot; the caller cannot
+submit one. Only the matching quality-recovery attempt is eligible, and any
+unresolved science capture or active preparation blocks the check. It never
+creates a science reservation. Native dispatch must still consume the newly
+issued recovery attempt once and journal probe measurements separately from
+saved science frames.
+
+Cloud monitoring/recovery stays off by default. Equipment failure shutdown is
+independent: failed slews and uncertain operations stop, and optional focus/guide
+retries have a per-night failure cap as well as attempt/time caps. Exhaustion
+uses the configured abort policy, defaulting to park when enclosure clearance
+allows it. These failures can accompany clouds but are not proof of cloud cover.
+
 `recovery::readmission` reviews the original night without mutating it. Changed
 scope, clock reversal, ended/expired nights, terminal stops, surviving in-flight
 recovery, unresolved execution/hooks and non-quiescent equipment block restart.
