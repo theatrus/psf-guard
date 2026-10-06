@@ -267,6 +267,71 @@ impl BoundGeometry {
         self.evaluate_with_active(request, current, None)
     }
 
+    /// Feasibility for one separately budgeted recovery exposure of the exact
+    /// bound recipe. This does not reserve science work or issue a probe permit.
+    pub fn check_quality_probe(
+        &self,
+        goal_id: &str,
+        current: &Constraints,
+        state: &State,
+        recovery: &crate::recovery::Snapshot,
+        attempt_id: &str,
+        reference_recipe: &crate::program::Recipe,
+    ) -> Result<crate::dispatch::DispatchCheck, Error> {
+        use crate::recovery::{Cause, Phase};
+        recovery.validate().map_err(|_| Error::InvalidCheckpoint)?;
+        let Phase::Recovering {
+            hold,
+            attempt_id: actual,
+            deadline_ms,
+            ..
+        } = &recovery.phase
+        else {
+            return Err(Error::InvalidCheckpoint);
+        };
+        let Cause::Quality { context } = &hold.cause else {
+            return Err(Error::InvalidCheckpoint);
+        };
+        let resolved = self.source.resolve(goal_id).map_err(Error::Program)?;
+        if resolved.recipe != reference_recipe
+            || actual != attempt_id
+            || state.now_ms < recovery.last_event_ms
+            || state.now_ms - recovery.last_event_ms > recovery.policy.evidence_max_age_ms
+            || recovery.identity.rig_id != state.rig_id
+            || recovery.identity.configuration_id != state.configuration_id
+            || context.target_id != resolved.target.id
+            || context.filter_id != resolved.recipe.filter_id
+            || context.exposure_ms != resolved.recipe.exposure_ms
+            || i16::try_from(context.bin_x).ok() != Some(resolved.recipe.binning.x)
+            || i16::try_from(context.bin_y).ok() != Some(resolved.recipe.binning.y)
+        {
+            return Err(Error::InvalidCheckpoint);
+        }
+        let mut request = Request {
+            contract_version: CONTRACT_VERSION,
+            assignment: self.source.snapshot().assignment.clone(),
+            state: state.clone(),
+        };
+        self.check_current(&request, current)?;
+        let mut goal = resolved.goal.clone();
+        goal.requested = 1;
+        goal.accepted = 0;
+        goal.pending = 0;
+        goal.attempts_remaining = 1;
+        goal.eligible_windows = self.windows[goal_id].clone();
+        request.assignment.goals = vec![goal];
+        request.state.completion_deadline_ms = Some(
+            request
+                .state
+                .completion_deadline_ms
+                .unwrap_or(u64::MAX)
+                .min(*deadline_ms)
+                .min(recovery.identity.ends_at_ms)
+                .min(recovery.policy.latest_resume_ms),
+        );
+        crate::dispatch::evaluate_dispatch(&request).map_err(Error::Planning)
+    }
+
     pub fn evaluate_with_active(
         &self,
         request: &Request,
