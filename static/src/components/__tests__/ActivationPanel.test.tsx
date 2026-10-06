@@ -91,16 +91,18 @@ describe('Activation panel', () => {
       { kind: 'plan', action: 'adopt', name: 'IC 1805 r1c1 · Ha 300 · 300 s', detail: 'takes over plan #11 (12 of 40 frames taken); desired 40 → 72' },
       { kind: 'plan', action: 'create', name: 'IC 1805 r1c1 · OIII 300 · 300 s', detail: '72 frames, template #4 OIII 300' },
       { kind: 'plan', action: 'keep', name: 'IC 1805 r1c1 · Ha 300 · 600 s', detail: 'plan #12 (0 of 10 frames taken) is not part of this plan; left as it is' },
+      { kind: 'plan', action: 'disable', name: 'IC 1805 r1c1 · SII 300 · 300 s', detail: 'plan #14 (3 of 72 frames taken) is off for this rig; Target Scheduler stops taking it' },
     ] }] };
     server.use(http.post('/api/director/v1/projects/project/activation/preview', () => HttpResponse.json(ok(takeover))));
     fireEvent.click(await screen.findByRole('button', { name: 'Preview' }));
     const rigSummary = await screen.findByLabelText('RedCat 61 activation');
     expect(rigSummary).toHaveTextContent('Targets: 1 taken over');
-    expect(rigSummary).toHaveTextContent('Exposure plans: 1 new, 1 taken over, 1 left as is');
+    expect(rigSummary).toHaveTextContent('Exposure plans: 1 new, 1 taken over, 1 turned off, 1 left as is');
     const changes = screen.getByText('What changes in RedCat 61').closest('details')!;
     expect(changes).toHaveAttribute('open');
     expect(changes).toHaveTextContent('Taken overIC 1805 r1c1 · Ha 300 · 300 s takes over plan #11 (12 of 40 frames taken); desired 40 → 72');
     expect(changes).toHaveTextContent('Left as isIC 1805 r1c1 · Ha 300 · 600 s plan #12');
+    expect(changes).toHaveTextContent('Turned offIC 1805 r1c1 · SII 300 · 300 s plan #14');
     expect(changes).toHaveTextContent('Exposure templates');
     expect(changes).toHaveTextContent('New#4 OIII 300');
   });
