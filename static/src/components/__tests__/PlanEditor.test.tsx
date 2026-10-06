@@ -153,6 +153,32 @@ describe('Plan editor', () => {
     await waitFor(() => expect(screen.queryByRole('group', { name: 'RedCat 61' })).not.toBeInTheDocument());
     expect(reported.at(-1)).toEqual({ rigIds: [], objectives: 1 });
   });
+  it('lets a slow rig carry its own goal, with an f-ratio suggestion, and saves it', async () => {
+    const slow = { ...redcat, rig: { ...redcat.rig, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'C925 slow' }, catalog_slug: 'redcat', catalog_name: 'C925 slow',
+      field_of_view: { width_degrees: 0.57, height_degrees: 0.38, pixel_scale_arcsec: 0.33, focal_ratio: 10 } };
+    const { saves } = fixture(null, null, []);
+    server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([slow]))));
+    mount();
+    await screen.findByText(/3 templates/);
+    fireEvent.click(screen.getByRole('button', { name: 'Add objective' }));
+    fireEvent.change(screen.getByLabelText('Objective bandpass'), { target: { value: 'h_alpha' } });
+    fireEvent.change(screen.getByLabelText('Objective goal'), { target: { value: '6' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /C925 slow/ }));
+    // The plan's 6 h, and an f/10 suggestion: four times f/5's time.
+    expect(screen.getByTestId('frames-redcat-h_alpha')).toHaveTextContent('72');
+    fireEvent.click(screen.getByRole('button', { name: 'f/10.0: 24 h' }));
+    expect(screen.getByLabelText('C925 slow goal for H-alpha')).toHaveValue(24);
+    expect(screen.getByTestId('frames-redcat-h_alpha')).toHaveTextContent('288');
+    expect(screen.getByText('288 frames, 24 h')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save plan' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].objectives[0].goal).toEqual({ kind: 'hours', value: 6 });
+    expect(saves[0].contributions[0].goal).toEqual({ kind: 'hours', value: 24 });
+    // Back to the plan's goal.
+    fireEvent.click(screen.getByRole('button', { name: "C925 slow uses the plan's goal for H-alpha" }));
+    expect(screen.getByTestId('frames-redcat-h_alpha')).toHaveTextContent('72');
+  });
+
   it('adds an objective in hours, binds a rig through its matching template, and saves frames per rig', async () => {
     const { saves } = fixture(null, null, []); mount();
     expect(await screen.findByText('No objectives yet')).toBeInTheDocument();

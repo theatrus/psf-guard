@@ -7,8 +7,8 @@ import { Check, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import NumberInput from '../NumberInput';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
-import type { DirectorContribution, DirectorObjective, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplate } from '../../api/directorTypes';
-import { PURPOSES, bandpassKind, bandpassOptions, convertGoal, coverageGaps, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, libraryChoice, libraryFor, newContribution, newLibraryContribution, newObjective, panelIds, panelsByRig, planProblem, rigPanels, rigTotals, templateValue, templatesFor } from './planModel';
+import type { DirectorContribution, DirectorGoal, DirectorObjective, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplate } from '../../api/directorTypes';
+import { PURPOSES, bandpassKind, bandpassOptions, convertGoal, coverageGaps, goalFor, speedAdjustedHours, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, libraryChoice, libraryFor, newContribution, newLibraryContribution, newObjective, panelIds, panelsByRig, planProblem, rigPanels, rigTotals, templateValue, templatesFor } from './planModel';
 import './PlanEditor.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Plan request failed';
@@ -206,12 +206,15 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
           {owned.length === 0 && <span className="director-error">No panel chosen; this rig shoots nothing.</span>}
         </div>;
       })()}
-      {on && <table className="plan-contributions"><thead><tr><th>Objective</th><th>Template</th><th>Exposure</th><th>Frames</th><th>On</th></tr></thead><tbody>
+      {on && <table className="plan-contributions"><thead><tr><th>Objective</th><th>Template</th><th>Exposure</th><th>Goal</th><th>Frames</th><th>On</th></tr></thead><tbody>
         {plan.objectives.map(objective => {
           const contribution = plan.contributions.find(c => c.rig_id === rig.rig.id && c.objective_id === objective.id) ?? null;
           const matching = templatesFor(objective.bandpass_id, templates);
           const label = options.find(o => o.id === objective.bandpass_id)?.name ?? objective.bandpass_id;
-          const frames = contribution ? framesFor(objective.goal, contribution.exposure_seconds) : null;
+          const goal = contribution ? goalFor(contribution, objective) : objective.goal;
+          const frames = contribution ? framesFor(goal, contribution.exposure_seconds) : null;
+          const suggested = contribution && !contribution.goal ? speedAdjustedHours(objective.goal, rig.field_of_view?.focal_ratio) : null;
+          const setGoal = (next: DirectorGoal | null) => setContribution(rig, objective, current => current ? { ...current, goal: next } : current);
           return <tr key={objective.id}>
             <td>{label}<br /><small className="director-muted">{PURPOSES.find(p => p.id === objective.purpose)?.name ?? objective.purpose}</small></td>
             <td>{(() => {
@@ -233,6 +236,18 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
               </select>;
             })()}</td>
             <td>{contribution && <span className="plan-goal"><NumberInput aria-label={`${rig.catalog_name} exposure for ${label}`} min={1} step="any" value={contribution.exposure_seconds} onChange={event => setContribution(rig, objective, current => current ? { ...current, exposure_seconds: number(event.target.value, current.exposure_seconds) } : current)} /><small>s</small></span>}</td>
+            <td className="plan-rig-goal">{contribution && (contribution.goal
+              ? <span className="plan-goal">
+                  <NumberInput aria-label={`${rig.catalog_name} goal for ${label}`} min={0} step="any" value={contribution.goal.value} onChange={event => setGoal({ ...contribution.goal!, value: number(event.target.value, contribution.goal!.value) } as DirectorGoal)} />
+                  <select aria-label={`${rig.catalog_name} goal unit for ${label}`} value={contribution.goal.kind} onChange={event => setGoal(convertGoal(contribution.goal!, event.target.value as 'hours' | 'frames', contribution.exposure_seconds))}>
+                    <option value="hours">h</option><option value="frames">frames</option>
+                  </select>
+                  <button type="button" className="link-button" aria-label={`${rig.catalog_name} uses the plan's goal for ${label}`} title="Use the plan's goal" onClick={() => setGoal(null)}>×</button>
+                </span>
+              : <span className="director-muted">{objective.goal.kind === 'hours' ? `${objective.goal.value} h` : `${objective.goal.value} frames`}
+                  {canWrite && <> <button type="button" className="link-button" onClick={() => setGoal(objective.goal)}>Set</button></>}
+                  {canWrite && suggested !== null && <> <button type="button" className="link-button" title={`At f/${rig.field_of_view!.focal_ratio!.toFixed(1)}, about ${suggested} h reaches f/5's depth`} onClick={() => setGoal({ kind: 'hours', value: suggested })}>f/{rig.field_of_view!.focal_ratio!.toFixed(1)}: {suggested} h</button></>}
+                </span>)}</td>
             <td>{contribution && frames !== null && <span data-testid={`frames-${rig.catalog_slug}-${objective.bandpass_id}`}>{frames}{panels.length > 1 && <small className="director-muted"> per panel</small>}<br /><small className="director-muted">{formatHours(hoursFor(frames, contribution.exposure_seconds))}{panels.length > 1 ? ' each' : ''}</small></span>}</td>
             <td>{contribution && <input type="checkbox" aria-label={`${rig.catalog_name} shoots ${label}`} checked={contribution.enabled} onChange={event => setContribution(rig, objective, current => current ? { ...current, enabled: event.target.checked } : current)} />}</td>
           </tr>;

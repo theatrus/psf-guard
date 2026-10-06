@@ -283,6 +283,8 @@ export interface DirectorContribution {
   exposure_seconds: number;
   panel_ids: string[];
   enabled: boolean;
+  /** This rig's own goal for the objective; absent means the objective's. */
+  goal?: DirectorGoal | null;
 }
 export interface DirectorPlanDraft {
   project_id: string;
