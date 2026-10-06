@@ -22,7 +22,7 @@ export const LIMITS: LimitSpec[] = [
   { key: 'maximum_altitude_degrees', label: 'Maximum altitude', kind: 'number', unit: '°', min: 0, max: 90, step: 0.1, zero: 'none', hint: 'Highest altitude to image at; 0 for no limit.' },
   { key: 'use_custom_horizon', label: 'Custom horizon', kind: 'flag', hint: "Follow the N.I.N.A. profile's custom horizon instead of a flat minimum altitude." },
   { key: 'horizon_offset_degrees', label: 'Horizon offset', kind: 'number', unit: '°', min: -90, max: 90, step: 0.1, hint: 'Degrees added to the custom horizon.' },
-  { key: 'meridian_window_minutes', label: 'Meridian window', kind: 'number', unit: 'min', min: 0, max: 719, step: 1, zero: 'off', hint: 'Minutes either side of the meridian to avoid; 0 turns it off.' },
+  { key: 'meridian_window_minutes', label: 'Meridian window', kind: 'number', unit: 'min', min: 0, max: 719, step: 1, zero: 'off', hint: 'Image only this many minutes either side of the meridian; 0 turns it off.' },
   { key: 'minimum_time_minutes', label: 'Minimum time', kind: 'number', unit: 'min', min: 0, max: 1440, step: 1, hint: 'Shortest stretch worth starting the project for.' },
   { key: 'dither_every', label: 'Dither every', kind: 'number', unit: 'frames', min: 0, max: 10000, step: 1, zero: 'per template', hint: "Exposures between dithers; 0 follows each exposure template's setting." },
   { key: 'filter_switch_frequency', label: 'Filter switch every', kind: 'number', unit: 'frames', min: 0, max: 10000, step: 1, zero: 'automatic', hint: 'Exposures before changing filter; 0 lets Target Scheduler decide.' },

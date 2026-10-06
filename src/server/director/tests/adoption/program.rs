@@ -313,6 +313,25 @@ async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment(
         "{goals:?}"
     );
 
+    // A row the program cannot read costs that goal only: an enabled Moon
+    // rule out of range on one template, or a NULL count.
+    a.db.execute("UPDATE exposureplan SET desired=NULL WHERE Id=(SELECT max(Id) FROM exposureplan WHERE desired=72)", []).unwrap();
+    let (status, _, body) = raw_get(&a.f.app, &path, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["data"]["program"]["assignment"]["goals"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "a NULL desired is nothing owed: {body}"
+    );
+    a.db.execute(
+        "UPDATE exposureplan SET desired=72 WHERE desired IS NULL",
+        [],
+    )
+    .unwrap();
+
     // A plan edited after activation leaves the program as activated: the
     // rig keeps working the reviewed plan until the next activation.
     {

@@ -18,11 +18,13 @@ pub struct SchedulingOverrides {
     pub minimum_altitude_degrees: Option<f64>,
     /// Highest altitude to image at, in degrees; 0 means no upper limit.
     pub maximum_altitude_degrees: Option<f64>,
-    /// Use the profile's custom horizon instead of a flat minimum altitude.
+    /// Use the profile's custom horizon as well; the higher of it and the
+    /// minimum altitude applies.
     pub use_custom_horizon: Option<bool>,
     /// Degrees added to the custom horizon.
     pub horizon_offset_degrees: Option<f64>,
-    /// Minutes either side of the meridian to avoid; 0 turns it off.
+    /// Image only within this many minutes either side of the meridian, as
+    /// Target Scheduler's meridian window does; 0 turns it off.
     pub meridian_window_minutes: Option<u32>,
     /// Exposures before switching filter; 0 lets Target Scheduler decide.
     pub filter_switch_frequency: Option<u32>,
