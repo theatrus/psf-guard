@@ -22,6 +22,15 @@ pub struct Request {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    ClassifyQuality {
+        policy: psf_guard_director_core::quality::Policy,
+        reference: Box<psf_guard_director_core::quality::Reference>,
+        frame: Box<psf_guard_director_core::quality::Frame>,
+        now_ms: u64,
+    },
+    ReviewRestart {
+        input: core::readmission::Review,
+    },
     Open {
         identity: core::Identity,
         policy: core::Policy,
@@ -54,6 +63,13 @@ pub enum Issued {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Reply {
+    QualityClassified {
+        assessment: psf_guard_director_core::quality::Assessment,
+    },
+    RestartReviewed {
+        advice: core::readmission::Advice,
+        record: Box<ledger::Record>,
+    },
     Opened {
         created: bool,
         record: Box<ledger::Record>,
@@ -196,6 +212,14 @@ impl Storage {
         }
         // Reject cross-rig input before creating or touching a recovery database.
         match &request.operation {
+            Operation::ClassifyQuality {
+                reference, frame, ..
+            } if reference.frame.context.rig_id != rig_id || frame.context.rig_id != rig_id => {
+                return Err(Error::WrongScope)
+            }
+            Operation::ReviewRestart { input } if input.rig_id != rig_id => {
+                return Err(Error::WrongScope)
+            }
             Operation::Open { identity, .. } if identity.rig_id != rig_id => {
                 return Err(Error::WrongScope)
             }
@@ -216,8 +240,34 @@ impl Storage {
             }
             _ => {}
         }
+        if let Operation::ClassifyQuality {
+            policy,
+            reference,
+            frame,
+            now_ms,
+        } = &request.operation
+        {
+            return Ok(Reply::QualityClassified {
+                assessment: psf_guard_director_core::quality::classify(
+                    policy, reference, frame, *now_ms,
+                )
+                .map_err(|_| Error::InvalidInput)?,
+            });
+        }
         let store = self.store(rig_id)?;
         Ok(match request.operation {
+            Operation::ClassifyQuality { .. } => {
+                unreachable!("handled above without opening storage")
+            }
+            Operation::ReviewRestart { input } => {
+                let record = store.current()?.ok_or(Error::NotAdmitted)?;
+                let advice = core::readmission::review(&record.snapshot, &input)
+                    .map_err(|_| Error::InvalidInput)?;
+                Reply::RestartReviewed {
+                    advice,
+                    record: Box::new(record),
+                }
+            }
             Operation::Open {
                 identity,
                 policy,
