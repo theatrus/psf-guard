@@ -199,6 +199,18 @@ impl MetaStore {
         if super::framing::read_draft(&tx, project)?.is_none() {
             let region = &plan.share().region;
             let mas = psf_guard_director_core::program::MAS_PER_DEGREE as f64;
+            let size = |region: &psf_guard_director_interop::astrocollab::Region| {
+                psf_guard_director_core::framing::PanelSize {
+                    width_degrees: f64::from(region.width_mas) / mas,
+                    height_degrees: f64::from(region.height_mas) / mas,
+                }
+            };
+            // A collaboration's whole sky region can exceed a camera panel.
+            // Keep import independent of the framing editor's panel bounds.
+            let panel = std::iter::once(region)
+                .chain(plan.share().cells.iter().map(|c| &c.region))
+                .map(size)
+                .find(|panel| panel.validate().is_ok());
             let framing = super::framing::FramingDraft {
                 project_id: project,
                 revision: 1,
@@ -210,10 +222,7 @@ impl MetaStore {
                 position_angle_degrees: f64::from(region.position_angle_mas) / mas,
                 mosaic: psf_guard_director_core::framing::Mosaic::SINGLE,
                 panel_rig_id: Some(rig),
-                panel: Some(psf_guard_director_core::framing::PanelSize {
-                    width_degrees: f64::from(region.width_mas) / mas,
-                    height_degrees: f64::from(region.height_mas) / mas,
-                }),
+                panel,
                 shown_rig_ids: vec![],
                 survey_id: "dss2_color".into(),
                 view_fov_degrees: (f64::from(region.width_mas.max(region.height_mas)) / mas * 1.2)

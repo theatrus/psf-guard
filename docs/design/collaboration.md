@@ -230,7 +230,7 @@ contribution is a delivered receipt, not a local grade change or endless retry.
 | Open projects and join | Browse, compatibility review, explicit participation | Join returns an accepted share; a manually offered share still needs acceptance. Joining does not start a sequence. |
 | Project region, kind and depth goals | Existing project/objective intent, with remote provenance | `single` centers one object; `mosaic` covers a region. Remote depth is hours at a sky position, not a local frame quota or proof of cross-rig equivalence. |
 | Task cells, ordered share, visit and version | Immutable demand translated to targets, recipes and frame goals | Keep server panel indices and geometry. Translate assigned visit frames, not season-long task hours. The assigned night is provenance, not an acquisition deadline. |
-| Requirements | Shared capability checks and stricter effective observing constraints | Remote constraints can narrow, never weaken, local horizon, Moon, safety, equipment, time or attempt limits. Preserve local project ranking and overrides. |
+| Requirements | Contribution criteria and shared Director capability checks | TS uses reviewed local scheduling and recipes; remote criteria still govern credit. Director admission can narrow, never weaken, local safety/equipment constraints. Preserve project ranking and overrides. |
 | Presence | Optional projection of Director live status | Opt-in position/name sharing; no commands and no replay of stale presence after reconnect. |
 | Night report and verdict | Durable contribution outbox and remote assessment history | Report actual attributable data; remote accepted/rejected/unverified is separate from local per-frame grades. |
 | Depth map | Advisory combined coverage in the existing project workspace | Never subtract another telescope's remote integration from local authorized attempts or overwrite local capture progress. |
@@ -403,7 +403,8 @@ Current gaps are explicit:
   allocation/start acknowledgement. Plugin-only needs a distinct local issuer,
   not a fabricated coordinator response or a bypass of admission checks.
 - Local issuance must bind the profile, equipment fingerprint, adopted source
-  revision, permitted sky region, recipes, attempt cap and night deadline. The
+  revision, permitted sky region, recipes and reviewed local execution bounds.
+  Do not infer an acquisition deadline from the remote assignment's night. The
   ledger, exclusive local owner and fresh dispatch checks apply to both issuers.
   PSF Guard's server-issued path retains its existing one-shot launch contract.
 - Shared report aggregation needs per-frame provenance, evidence completeness
@@ -430,7 +431,8 @@ every adopted goal and saved capture. Map external 12-hex IDs explicitly to
 local IDs; do not find projects by name or nearest coordinates. Task version
 is not a PSF Guard revision, and server receipt identity is not a capture GUID.
 
-Always send the rig's named observing night. Preserve it through delayed replay,
+Always send the rig's actual named observing night, not its assignment date.
+Preserve it through delayed replay,
 even after midnight or a site/time-zone change. AstroCollab timestamps and
 exposures use seconds, Director uses milliseconds, and core coordinates use
 integer milliarcseconds. Convert with finite/range/overflow checks. Regions and

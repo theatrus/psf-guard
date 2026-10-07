@@ -78,6 +78,31 @@ fn connection_and_import_cannot_bind_one_agent_to_different_rigs() {
 }
 
 #[test]
+fn broad_parent_regions_do_not_prevent_importing_supported_camera_cells() {
+    let (_, mut s, rig) = store();
+    let mut v = wire();
+    v.as_object_mut().unwrap().remove("task");
+    v["tasks"][0]["region"]["width"] = json!(40.0);
+    let p = prepared(&v);
+    apply(&mut s, &p, rig);
+    let framing = s.framing_draft(p.project_id()).unwrap().unwrap();
+    assert_eq!(
+        framing.panel.unwrap().width_degrees,
+        f64::from(p.share().cells[0].region.width_mas) / 3_600_000.0
+    );
+    assert_eq!(
+        s.collaboration_import(p.import_id())
+            .unwrap()
+            .unwrap()
+            .plan
+            .share()
+            .region
+            .width_mas,
+        p.share().region.width_mas
+    );
+}
+
+#[test]
 fn preview_is_read_only_and_apply_keeps_exact_panels_in_an_inactive_project_draft() {
     let (dir, mut s, rig) = store();
     let p = import();
