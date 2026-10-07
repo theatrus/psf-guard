@@ -3196,6 +3196,27 @@
   min-width: fit-content;
 }
 
+/* Status keeps any mix of grades: one box per grade, all ticked for All. */
+.status-filter > span {
+  color: var(--color-text-muted);
+  font-weight: 500;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.status-filter .status-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--color-text-secondary);
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.status-filter .status-choice input {
+  margin: 0;
+}
+
 .filter-input-group select,
 .filter-input-group input[type="date"],
 .filter-input-group input[type="text"] {
@@ -3346,7 +3367,9 @@
 }
 
 @media (max-width: 768px) {
-  .filter-primary-row .filter-input-group label {
+  /* The captions go on a phone; each status box keeps its own name. */
+  .filter-primary-row .filter-input-group label:not(.status-choice),
+  .filter-primary-row .status-filter > span {
     position: absolute;
     width: 1px;
     height: 1px;

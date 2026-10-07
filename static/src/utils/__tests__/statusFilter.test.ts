@@ -5,6 +5,8 @@ import {
   parseStatusFilter,
   STATUS_FILTER_OPTIONS,
   statusFilterLabel,
+  statusFilterOf,
+  statusWords,
 } from '../statusFilter';
 
 describe('status filter', () => {
@@ -40,10 +42,23 @@ describe('status filter', () => {
     expect(statusFilterLabel('1')).toBe('Accepted');
     expect(statusFilterLabel(null as unknown as string)).toBe('All');
     expect(STATUS_FILTER_OPTIONS.map((option) => option.value)).toEqual([
-      'all',
       'accepted',
       'rejected',
       'pending',
     ]);
+  });
+
+  it('keeps any mix of grades, in one order, and every grade is All', () => {
+    // Everything but rejected.
+    expect(parseStatusFilter('pending,accepted')).toBe('accepted,pending');
+    expect(matchesStatusFilter('accepted,pending', GradingStatus.Accepted)).toBe(true);
+    expect(matchesStatusFilter('accepted,pending', GradingStatus.Pending)).toBe(true);
+    expect(matchesStatusFilter('accepted,pending', GradingStatus.Rejected)).toBe(false);
+    expect(statusFilterLabel('accepted,pending')).toBe('Accepted and Pending');
+    expect(parseStatusFilter('accepted,rejected,pending')).toBe('all');
+    expect(parseStatusFilter('1,0')).toBe('accepted,pending');
+    expect(parseStatusFilter('rejected,bogus')).toBe('rejected');
+    expect(statusFilterOf([])).toBe('all');
+    expect(statusWords('all')).toEqual(['accepted', 'rejected', 'pending']);
   });
 });

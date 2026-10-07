@@ -2,7 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   parseStatusFilter,
   STATUS_FILTER_OPTIONS,
+  statusFilterOf,
+  statusWords,
   type StatusFilter,
+  type StatusWord,
 } from '../utils/statusFilter';
 import { ALL_FLAGS, flagFilterLabel, parseFlagFilter } from '../utils/flagFilter';
 
@@ -66,6 +69,15 @@ export default function FilterControls({
     const newFilters = { ...filters, status };
     onFilterChange(newFilters);
   };
+  // Every grade ticked is All; unticking the last one goes back to All too,
+  // rather than showing nothing.
+  const shownStatuses = statusWords(filters.status);
+  const toggleStatus = (word: StatusWord) => {
+    const next = shownStatuses.includes(word)
+      ? shownStatuses.filter((shown) => shown !== word)
+      : [...shownStatuses, word];
+    handleStatusChange(statusFilterOf(next));
+  };
 
   const handleFilterNameChange = (filterName: string) => {
     const newFilters = { ...filters, filterName };
@@ -124,19 +136,18 @@ export default function FilterControls({
   return (
     <div className="filter-controls compact">
       <div className="filter-row compact filter-primary-row">
-        <div className="filter-input-group">
-          <label htmlFor="image-status-filter">Status:</label>
-          <select
-            id="image-status-filter"
-            value={filters.status} 
-            onChange={(e) => handleStatusChange(parseStatusFilter(e.target.value))}
-          >
-            {STATUS_FILTER_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+        <div className="filter-input-group status-filter" role="group" aria-labelledby="image-status-filter">
+          <span id="image-status-filter">Status:</span>
+          {STATUS_FILTER_OPTIONS.map((option) => (
+            <label key={option.value} className="status-choice">
+              <input
+                type="checkbox"
+                checked={shownStatuses.includes(option.value)}
+                onChange={() => toggleStatus(option.value)}
+              />
+              {option.label}
+            </label>
+          ))}
         </div>
 
         <div className="filter-input-group">
