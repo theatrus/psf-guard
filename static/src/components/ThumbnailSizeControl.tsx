@@ -14,6 +14,8 @@ interface ThumbnailSizeControlProps {
   min?: number;
   max?: number;
   step?: number;
+  /** Said in place of the pixel width, such as "Fit". */
+  valueText?: string;
 }
 
 export default function ThumbnailSizeControl({
@@ -24,6 +26,7 @@ export default function ThumbnailSizeControl({
   min = THUMBNAIL_SIZE_MIN,
   max = THUMBNAIL_SIZE_MAX,
   step = THUMBNAIL_SIZE_STEP,
+  valueText,
 }: ThumbnailSizeControlProps) {
   return (
     <div className="size-control compact">
@@ -37,7 +40,7 @@ export default function ThumbnailSizeControl({
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
       />
-      <output htmlFor={id} className="size-value">{value}px</output>
+      <output htmlFor={id} className="size-value">{valueText ?? `${value}px`}</output>
     </div>
   );
 }

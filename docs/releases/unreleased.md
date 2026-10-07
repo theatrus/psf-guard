@@ -5,6 +5,8 @@
   target moved in N.I.N.A. shows up in the plan on the next listing. Your
   survey and view choices stay. Plans imported before this update follow
   too, unless someone already edited them.
+- Fill the row with stack cards by default: one to a row, or two on a wide
+  screen. A card size you choose stays in this browser; **Fit** goes back.
 - Stop asking to activate a plan whose rigs already hold it: one taken in
   from Target Scheduler, or rows that came by Sync. Planning checks each rig
   on a copy of its planning tables, so it never locks N.I.N.A.'s database,
