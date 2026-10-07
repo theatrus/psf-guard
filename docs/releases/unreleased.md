@@ -1,5 +1,10 @@
 # Unreleased
 
+- Scroll a large image grid smoothly again. Every card ran a hidden
+  spinner that never stopped, so the browser restyled thousands of cards on
+  each frame; Safari felt it most. Cards off screen now skip drawing until
+  they come near.
+
 - Keep unsaved edits in a plan's workspace when its address changes after a
   detach, an attach or its first activation, and when a newer copy of the
   plan or its limits arrives from elsewhere: the tab marks the change and

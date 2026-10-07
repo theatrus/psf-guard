@@ -50,3 +50,20 @@ test('a link saved with the old numeric status still filters', async ({ page }) 
   await expect(page.locator('.image-card')).toHaveCount(1, { timeout: 15_000 });
   await expect(page.getByLabel('Status:')).toHaveValue('accepted');
 });
+
+test('a settled grid runs no animations', async ({ page }) => {
+  // Every card once carried a hidden spinner that turned forever. With
+  // thousands of cards the browser restyled each one on every frame, and
+  // scrolling fell to ten frames a second.
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+  await expect(page.locator('.image-card')).toHaveCount(3, { timeout: 15_000 });
+  await expect(page.locator('.filter-images .loading-spinner')).toHaveCount(0, { timeout: 30_000 });
+  await expect
+    .poll(() => page.evaluate(() => document.getAnimations()
+      .filter((animation) => {
+        const target = (animation.effect as KeyframeEffect | null)?.target;
+        return target instanceof Element && target.closest('.filter-images') !== null;
+      })
+      .map((animation) => (animation as CSSAnimation).animationName ?? 'transition')))
+    .toEqual([]);
+});

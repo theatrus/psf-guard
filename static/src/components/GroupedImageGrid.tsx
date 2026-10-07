@@ -43,7 +43,7 @@ import {
   findGridNavigationIndex,
   type GridNavigationDirection,
 } from '../utils/gridNavigation';
-import { thumbnailGridColumns } from '../utils/thumbnailSizing';
+import { thumbnailCardHeightEstimate, thumbnailGridColumns } from '../utils/thumbnailSizing';
 import { useScopedQuality } from '../hooks/useSequenceAnalysis';
 import { mosaicLabel, useProjectMosaic } from '../hooks/useProjectMosaic';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
@@ -1107,6 +1107,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                     className="filter-images"
                     style={{
                       gridTemplateColumns: thumbnailGridColumns(imageSize),
+                      ['--card-height-estimate' as string]: `${thumbnailCardHeightEstimate(imageSize)}px`,
                     }}
                   >
                     {group.images.map((image) => {

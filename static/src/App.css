@@ -1217,33 +1217,6 @@
   min-height: 200px;
 }
 
-/* Skeleton loading animation for stable layout */
-.image-preview::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: linear-gradient(90deg, transparent, var(--color-overlay-white), transparent);
-  animation: skeleton-loading 1.5s ease-in-out infinite;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-}
-
-.image-preview.loading::before {
-  opacity: 1;
-}
-
-@keyframes skeleton-loading {
-  0% {
-    transform: translateX(-100%);
-  }
-  100% {
-    transform: translateX(100%);
-  }
-}
-
 .image-preview img {
   width: 100%;
   height: auto;
@@ -1253,27 +1226,6 @@
 }
 
 .image-preview img[src] {
-  opacity: 1;
-}
-
-.image-preview::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 30px;
-  height: 30px;
-  margin: -15px 0 0 -15px;
-  border: 3px solid var(--color-bg-tertiary);
-  border-top-color: var(--color-primary);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-  pointer-events: none;
-}
-
-.image-preview.loading::before {
   opacity: 1;
 }
 
@@ -1322,6 +1274,13 @@
    label, then the day and the seconds. */
 .image-card {
   container-type: inline-size;
+}
+
+/* A grid can hold thousands of cards. Off screen ones skip style, layout and
+   paint; each keeps its last height so the scrollbar holds still. */
+.filter-images .image-card {
+  content-visibility: auto;
+  contain-intrinsic-height: auto var(--card-height-estimate, 300px);
 }
 
 @container (max-width: 260px) {
