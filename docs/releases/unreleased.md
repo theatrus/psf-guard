@@ -387,6 +387,10 @@
 
 ## Changed
 
+- Image cards in the grid and the sequence take about a third of the room
+  for their text: filter, time, HFR and stars sit in one row, the grade is
+  a slim strip with the reject reason on the same line, and nothing wraps.
+  The target's name is left off when every card shows the same target.
 - Turning a rig off in a plan, or dropping it, and activating again sets its
   Target Scheduler project Inactive, and turning it on again sets it Active.
   A project you made Inactive yourself stays Inactive. Exposure plans the

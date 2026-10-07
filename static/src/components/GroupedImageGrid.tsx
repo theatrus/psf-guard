@@ -297,6 +297,11 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     label: 'Quality: unscored',
     title: 'No sequence score is available for these images. Open a target Sequence view to inspect the evidence or run Analyze Quality.',
   };
+  // One target on screen: the scope already names it, so the cards don't.
+  const severalTargets = useMemo(
+    () => new Set(filteredImages.map(image => image.target_id)).size > 1,
+    [filteredImages]
+  );
   const scoredImageCount = filteredImages.reduce(
     (count, image) => count + Number(quality.qualityByImage.has(image.id)),
     0,
@@ -1124,6 +1129,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                             qualityScoreScope={quality.scopeByImage.get(image.id)}
                             basisScores={quality.basisScoresByImage.get(image.id)}
                             qualityPresentation="compact"
+                            showTarget={severalTargets}
                             isSelected={
                               selectedImages.has(image.id) ||
                               image.id === activeImageId

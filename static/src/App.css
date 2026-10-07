@@ -1283,37 +1283,112 @@
 }
 
 .image-info {
-  padding: 1rem;
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.45rem 0.55rem 0.5rem;
+  font-size: 0.78rem;
+  line-height: 1.25;
+  min-width: 0;
 }
 
-.image-info h3 {
-  font-size: 1.1rem;
-  margin: 0 0 0.5rem 0;
+/* Every line is one line: what does not fit is cut short, with the whole
+   value in its title. */
+.image-info > * {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-info h3.image-target {
+  font-size: 0.85rem;
+  font-weight: 600;
   color: var(--color-primary);
+}
+
+/* The facts as a table row: filter, time, HFR, stars in columns of fixed
+   share, so they sit in the same place on every card of a grid. */
+.image-facts {
+  display: grid;
+  /* The numbers keep their width; only the date gives way. */
+  grid-template-columns: minmax(1.2em, auto) minmax(0, 1fr) minmax(2.6em, auto) minmax(2.6em, auto);
+  gap: 0.45rem;
+  align-items: baseline;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A narrow card keeps the values and drops their dressing: first the HFR
+   label, then the day and the seconds. */
+.image-card {
+  container-type: inline-size;
+}
+
+@container (max-width: 260px) {
+  .image-facts .fact-label {
+    display: none;
+  }
+}
+
+@container (max-width: 210px) {
+  .image-facts .date-day,
+  .image-facts .date-seconds {
+    display: none;
+  }
+}
+
+@container (max-width: 170px) {
+  .image-info {
+    font-size: 0.7rem;
+    padding-inline: 0.4rem;
+  }
+
+  .image-facts {
+    gap: 0.25rem;
+    grid-template-columns: minmax(1em, auto) minmax(0, 1fr) minmax(2.2em, auto) minmax(2.2em, auto);
+  }
+}
+
+.image-facts > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .image-filter {
   color: var(--color-text-muted);
-  font-size: 0.9rem;
-  margin: 0.25rem 0;
+  font-weight: 600;
 }
 
 .image-date {
   color: var(--color-text-hint);
-  font-size: 0.85rem;
-  margin: 0.25rem 0;
+}
+
+.image-facts .stat-hfr,
+.image-facts .stat-stars {
+  text-align: right;
 }
 
 .image-status {
   display: block;
-  padding: 0.25rem 0.75rem;
-  border-radius: 4px;
-  font-size: 0.85rem;
-  margin-top: 0.5rem;
-  font-weight: 500;
+  padding: 0.1rem 0.45rem;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Quality signals, side by side on one line. */
+.image-signals {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.image-signals:empty {
+  display: none;
 }
 
 .image-status.status-accepted {
@@ -1338,17 +1413,9 @@
 }
 
 .reject-reason-inline {
-  font-size: 0.85rem;
-  color: var(--color-error-light);
   font-style: italic;
   font-weight: normal;
-}
-
-.image-stats {
-  display: flex;
-  gap: 1rem;
-  margin: 0.5rem 0;
-  font-size: 0.85rem;
+  opacity: 0.9;
 }
 
 .stat-hfr {
