@@ -95,7 +95,14 @@ impl MetaStore {
     }
 
     /// Give one database's project a plan of its own again, named `name`,
-    /// and move its link there. The old plan keeps its drafts.
+    /// and move its link there. The old plan keeps its drafts, less the work
+    /// it planned for that database's rig: left in, its next activation
+    /// would make the rig a second project or fight the new plan for this
+    /// one. That work goes only with `drop_rig_work`; without it a plan
+    /// that has some is refused with [`Error::Conflict`], so the caller can
+    /// ask first. The old plan's activation record forgets the rig too, so
+    /// its next activation does not read the rig as turned off and set the
+    /// project it no longer holds Inactive.
     pub fn detach_project(
         &mut self,
         from: Uuid,
@@ -103,6 +110,7 @@ impl MetaStore {
         source_project_guid: Uuid,
         new_id: Uuid,
         name: &str,
+        drop_rig_work: bool,
     ) -> Result<NamedIdentity, Error> {
         valid_id(from)?;
         valid_id(catalog)?;
@@ -150,6 +158,36 @@ impl MetaStore {
                 source_project_guid.to_string()
             ],
         )?;
+        if let Some(rig) = super::catalog_rig::read_binding(&tx, catalog)? {
+            if let Some(mut plan) = super::plan::read_plan(&tx, from)?
+                && plan.contributions.iter().any(|c| c.rig_id == rig)
+            {
+                if !drop_rig_work {
+                    return Err(Error::Conflict);
+                }
+                plan.contributions.retain(|c| c.rig_id != rig);
+                plan.revision = plan.revision.checked_add(1).ok_or(Error::Conflict)?;
+                tx.execute(
+                    "UPDATE plan_draft SET revision=?2, payload=?3 WHERE project_id=?1",
+                    params![
+                        from.to_string(),
+                        i64::try_from(plan.revision).map_err(|_| Error::Conflict)?,
+                        super::configuration::encode(&plan)?
+                    ],
+                )?;
+            }
+            if let Some(mut activation) = super::activation::read_activation(&tx, from)? {
+                let before = (activation.rigs.len(), activation.inactive_rigs.len());
+                activation.rigs.retain(|r| r.rig_id != rig);
+                activation.inactive_rigs.retain(|r| r.rig_id != rig);
+                if before != (activation.rigs.len(), activation.inactive_rigs.len()) {
+                    tx.execute(
+                        "UPDATE activation SET payload=?2 WHERE project_id=?1",
+                        params![from.to_string(), super::configuration::encode(&activation)?],
+                    )?;
+                }
+            }
+        }
         tx.commit()?;
         Ok(fresh)
     }
@@ -201,6 +239,11 @@ fn retire(tx: &Connection, project: Uuid) -> Result<(), Error> {
         return Err(Error::Conflict);
     }
     tx.execute("DELETE FROM activation WHERE project_id=?1", [&id])?;
+    // An intent's setup references go first: they point at the intent.
+    tx.execute(
+        "DELETE FROM project_intent_setup WHERE intent_id IN (SELECT id FROM project_intent WHERE project_id=?1)",
+        [&id],
+    )?;
     tx.execute("DELETE FROM project_intent WHERE project_id=?1", [&id])?;
     tx.execute("DELETE FROM framing_draft WHERE project_id=?1", [&id])?;
     tx.execute("DELETE FROM plan_draft WHERE project_id=?1", [&id])?;

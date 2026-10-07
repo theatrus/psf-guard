@@ -458,10 +458,12 @@ export const apiClient = {
     return data.data;
   },
 
-  /** Give one database's project a plan of its own again. */
-  detachDirectorProject: async (projectId: string, catalogSlug: string, sourceProjectGuid: string, name: string): Promise<DirectorIdentity> => {
+  /** Give one database's project a plan of its own again. `dropRigWork`
+   *  confirms that the plan's work for that database's rig goes with it;
+   *  without it a plan that has some answers 409 saying what would go. */
+  detachDirectorProject: async (projectId: string, catalogSlug: string, sourceProjectGuid: string, name: string, dropRigWork = false): Promise<DirectorIdentity> => {
     const api = await getApi();
-    const { data } = await api.post<ApiResponse<DirectorIdentity>>(`/director/v1/projects/${encodeURIComponent(projectId)}/detach`, { catalog_slug: catalogSlug, source_project_guid: sourceProjectGuid, name });
+    const { data } = await api.post<ApiResponse<DirectorIdentity>>(`/director/v1/projects/${encodeURIComponent(projectId)}/detach`, { catalog_slug: catalogSlug, source_project_guid: sourceProjectGuid, name, drop_rig_work: dropRigWork });
     if (!data.data) throw new Error(data.error || 'Failed to detach the project');
     return data.data;
   },

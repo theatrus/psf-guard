@@ -767,6 +767,11 @@ struct DetachRequest {
     source_project_guid: Uuid,
     /// The name for the plan the project gets back; its own name, as a rule.
     name: String,
+    /// The plan's work for this database's rig goes with the project. Sent
+    /// once the person has seen what that is; without it a plan that has
+    /// such work answers 409 saying what would go.
+    #[serde(default)]
+    drop_rig_work: bool,
 }
 
 /// Give one database's project a plan of its own again.
@@ -774,7 +779,8 @@ async fn detach_project(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
     Json(request): Json<DetachRequest>,
-) -> Result<Json<ApiResponse<NamedIdentity>>, Error> {
+) -> Result<axum::response::Response, Error> {
+    use axum::response::IntoResponse;
     let service = enabled(&state)?;
     let catalog = state
         .get_database(&request.catalog_slug)
@@ -786,19 +792,45 @@ async fn detach_project(
     if name.is_empty() || name.len() > 256 {
         return Err(Error::Invalid);
     }
-    Ok(Json(ApiResponse::success(
-        service
-            .run(move |store| {
-                store.detach_project(
+    let drop = request.drop_rig_work;
+    let outcome = service
+        .run(move |store| {
+            // Ask first when the plan has work for this database's rig.
+            if !drop && let Some(binding) = store.catalog_rig(identity.id)? {
+                let parts = store.plan_draft(id)?.map_or(0, |plan| {
+                    plan.contributions
+                        .iter()
+                        .filter(|c| c.rig_id == binding.rig.id)
+                        .count()
+                });
+                if parts > 0 {
+                    return Ok(Err((binding.rig.name, parts)));
+                }
+            }
+            store
+                .detach_project(
                     id,
                     identity.id,
                     request.source_project_guid,
                     Uuid::new_v4(),
                     &name,
+                    drop,
                 )
-            })
-            .await?,
-    )))
+                .map(Ok)
+        })
+        .await?;
+    Ok(match outcome {
+        Ok(plan) => Json(ApiResponse::success(plan)).into_response(),
+        Err((rig, parts)) => (
+            StatusCode::CONFLICT,
+            Json(ApiResponse::<()>::error(format!(
+                "This plan has {parts} exposure goal{} for {rig}; detaching takes {} out of this plan.",
+                if parts == 1 { "" } else { "s" },
+                if parts == 1 { "it" } else { "them" }
+            ))),
+        )
+            .into_response(),
+    })
 }
 
 mod configuration_api;

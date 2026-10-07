@@ -537,19 +537,29 @@ async fn execute(
                         continue;
                     }
                 };
-                let existing_link = {
+                // The project this plan is linked to in this database, and
+                // those linked to other plans: a detach or an attach moves
+                // a link, and the rig database's own record of who owns a
+                // project follows the link, not the other way round.
+                let (existing_link, foreign) = {
                     // Every page: a rig with more linked projects than one
                     // page holds must still find this one, or it would make
                     // a second project.
                     let mut after = None;
+                    let mut mine = None;
+                    let mut foreign = std::collections::BTreeSet::new();
                     loop {
                         let page = store.catalog_project_mappings(catalog.identity.id, after, 256)?;
-                        if let Some(mapping) = page.items.iter().find(|m| m.project_id == id) {
-                            break Some(mapping.source_project_guid);
+                        for mapping in &page.items {
+                            if mapping.project_id == id {
+                                mine.get_or_insert(mapping.source_project_guid);
+                            } else {
+                                foreign.insert(mapping.source_project_guid.to_string());
+                            }
                         }
                         match page.next_after {
                             Some(next) => after = Some(next),
-                            None => break None,
+                            None => break (mine, foreign),
                         }
                     }
                 };
@@ -566,6 +576,7 @@ async fn execute(
                         rig_id: *rig_id,
                         catalog: catalog.identity,
                         existing_link,
+                        foreign: &foreign,
                         instance: service.instance_id,
                         now,
                         scheduling: &scheduling,
@@ -1091,6 +1102,9 @@ struct Inputs<'a> {
     rig_id: Uuid,
     catalog: CatalogIdentity,
     existing_link: Option<Uuid>,
+    /// Projects in this database linked to other plans; never this plan's,
+    /// whatever the rig database's side table still says.
+    foreign: &'a std::collections::BTreeSet<String>,
     instance: Uuid,
     now: u64,
     /// Target Scheduler scheduling limits for this rig and project.
@@ -1172,7 +1186,8 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
             [inputs.project.id.to_string()],
             |row| row.get(0),
         )
-        .optional()?;
+        .optional()?
+        .filter(|guid| !inputs.foreign.contains(guid));
     let mut created_project = false;
     // A row made here takes every resolved limit; an existing one only those
     // someone set, so a value edited by hand in Target Scheduler stays.
@@ -1302,7 +1317,7 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
     tx.execute(
         "INSERT INTO psf_guard_director_project(project_guid,global_project_id,coordinator_instance_id,activation_revision,applied_at_ms)
          VALUES(?1,?2,?3,?4,?5)
-         ON CONFLICT(project_guid) DO UPDATE SET activation_revision=excluded.activation_revision, applied_at_ms=excluded.applied_at_ms",
+         ON CONFLICT(project_guid) DO UPDATE SET global_project_id=excluded.global_project_id, coordinator_instance_id=excluded.coordinator_instance_id, activation_revision=excluded.activation_revision, applied_at_ms=excluded.applied_at_ms",
         params![
             project_guid,
             inputs.project.id.to_string(),
