@@ -1,6 +1,6 @@
 import { type MutableRefObject, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
@@ -635,6 +635,29 @@ describe('Framing view', () => {
     fireEvent.change(screen.getByLabelText('Position angle degrees'), { target: { value: '15' } });
     await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(1));
     expect(drafts.current!.unsaved[0].changes).toEqual(['camera angle 0° → 15°']);
+  });
+
+  it('keeps a survey picked by hand in this browser and never calls it an edit', async () => {
+    // The layer is how the sky is shown, not part of what is planned.
+    const stored: DirectorFramingDraft = { project_id: 'project', revision: 2, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.5 }, position_angle_degrees: 0,
+      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 6, updated_at_ms: 1 };
+    fixture(stored);
+    const drafts = mountOnPage();
+    await waitFor(() => expect(screen.getByLabelText('Survey')).toHaveValue('dss2_color'));
+    await waitFor(() => expect(drafts.current?.sections.map(section => section.id)).toEqual(['framing']));
+    fireEvent.change(screen.getByLabelText('Survey'), { target: { value: 'finkbeiner_halpha' } });
+    expect(screen.getByLabelText('Survey')).toHaveValue('finkbeiner_halpha');
+    expect(drafts.current!.unsaved).toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Back to saved framing' })).toBeDisabled();
+    expect(window.localStorage.getItem('psf-guard.framing.survey')).toBe('finkbeiner_halpha');
+
+    // Opened again, this plan or another shows the layer this browser picked.
+    cleanup();
+    fixture(stored);
+    const again = mountOnPage();
+    await waitFor(() => expect(screen.getByLabelText('Survey')).toHaveValue('finkbeiner_halpha'));
+    await waitFor(() => expect(again.current?.sections.map(section => section.id)).toEqual(['framing']));
+    expect(again.current!.unsaved).toHaveLength(0);
   });
 
   it('shows coordinates and angles to the places that matter, and saves them whole', async () => {

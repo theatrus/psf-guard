@@ -809,6 +809,8 @@ step. Chips on the sky switch the layer:
 the DSS2 colour plates N.I.N.A. starts from, and the narrowband surveys
 (Finkbeiner H-alpha and the Northern Sky Narrowband Survey's H-alpha, O III,
 SHO and colour layers); the **Survey** list under View holds every layer.
+The layer is how the sky is shown, not part of the framing: picking one is
+never an unsaved change, and this browser keeps it for every plan.
 On a narrow stage, such as a phone's, the chips fold behind one chip that
 names the layer on screen, so they keep clear of the sky and the scale. The rectangle is the field of the **panel rig**: the first rig
 holding the project that knows its optics is chosen for you (rigs take their
@@ -1272,7 +1274,7 @@ the DSS set for the DSS2 colour plates and the SHO set with stars for the
 online NSNS SHO layer (`stands_in_for` on the survey listing names the
 pair). A plan whose framing was saved on the online layer opens on the
 offline map; the online layer stays a click away on its chip, and a layer
-picked by hand is kept.
+picked by hand is kept in this browser and comes first.
 When the server first lists a set it decodes the smallest version of every
 tile into memory in the background, a few tens of megabytes, so the first
 wide view renders at once; and once a framing view has its own tile, the

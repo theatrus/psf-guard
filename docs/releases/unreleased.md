@@ -1,5 +1,8 @@
 # Unreleased
 
+- Pick a sky survey layer in Planning's framing without it counting as an
+  unsaved change: the layer is kept in your browser for every plan.
+
 - Keep a plan taken in from Target Scheduler in step with its project until
   you change it in Planning or activate it: a desired count raised or a
   target moved in N.I.N.A. shows up in the plan on the next listing. Your
