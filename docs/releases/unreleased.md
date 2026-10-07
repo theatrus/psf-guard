@@ -604,6 +604,11 @@
 
 ## Fixed
 
+- Activation no longer fails as a whole when one rig database is busy,
+  read-only or refuses a write: that rig says why and the others are
+  applied and recorded. A rig database now gets a minute for its write lock
+  instead of two seconds, and check-ins and saves no longer wait behind an
+  activation.
 - On the Framing tab, the camera angle buttons no longer run into the
   buttons below them, and on a phone the sky's notes sit below its toolbar
   instead of over it.

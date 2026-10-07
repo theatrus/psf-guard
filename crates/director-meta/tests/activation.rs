@@ -77,3 +77,39 @@ fn activations_advance_a_revision_and_read_back_after_reopen() {
         .get("inactive_rigs")
         .is_none());
 }
+
+#[test]
+fn validate_refuses_a_record_the_store_would_refuse() {
+    let rig = ActivatedRig {
+        rig_id: Uuid::new_v4(),
+        catalog_id: Uuid::new_v4(),
+        project_guid: Uuid::new_v4(),
+        profile_id: "profile".into(),
+        targets: vec![],
+        plans: (0..5000)
+            .map(|_| ActivatedPlan {
+                contribution_id: Uuid::new_v4(),
+                objective_id: Uuid::new_v4(),
+                target_guid: Uuid::new_v4(),
+                exposureplan_guid: Uuid::new_v4(),
+                required_frames: 1,
+            })
+            .collect(),
+    };
+    let record = Activation {
+        project_id: Uuid::new_v4(),
+        revision: 0,
+        framing_revision: 1,
+        plan_revision: 1,
+        coordinator_instance_id: Uuid::new_v4(),
+        applied_at_ms: 1,
+        rigs: vec![rig],
+        inactive_rigs: vec![],
+    };
+    assert!(record.validate().is_err());
+    let small = Activation {
+        rigs: vec![],
+        ..record
+    };
+    assert!(small.validate().is_ok());
+}
