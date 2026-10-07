@@ -13,6 +13,7 @@ pub mod client;
 pub mod collaboration;
 pub mod collaboration_connection;
 pub mod configuration;
+pub mod draft_import;
 pub mod equipment_report;
 pub mod framing;
 pub mod inbox;

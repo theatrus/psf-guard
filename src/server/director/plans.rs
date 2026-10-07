@@ -525,6 +525,9 @@ struct Import {
     row: i64,
     label: String,
     missing: Missing,
+    /// A plan an import made and nobody has edited since: read again, it
+    /// takes in what changed in Target Scheduler.
+    follow: Option<import_drafts::Follow>,
 }
 
 /// What a listing has to record, found on a pooled reader.
@@ -656,6 +659,7 @@ fn find_work(store: &MetaStore, sources: &[Source], management: bool) -> Work {
                     row: row.row,
                     label,
                     missing,
+                    follow: None,
                 });
             }
         }
@@ -666,7 +670,8 @@ fn find_work(store: &MetaStore, sources: &[Source], management: bool) -> Work {
             continue;
         }
         // What Target Scheduler already holds for a linked project is its
-        // plan: take it in as drafts the first time, once.
+        // plan: take it in as drafts the first time, and again after a
+        // change there until someone edits or activates the plan.
         let rows: HashMap<Uuid, &SourceRow> = contents.rows.iter().map(|r| (r.guid, r)).collect();
         let mut after = None;
         loop {
@@ -678,18 +683,35 @@ fn find_work(store: &MetaStore, sources: &[Source], management: bool) -> Work {
                 let Some(row) = rows.get(&mapping.source_project_guid) else {
                     continue;
                 };
-                if let Some(missing) = missing_drafts(store, mapping.project_id) {
-                    work.imports.push(Import {
-                        source: index,
-                        rig,
-                        guid: row.guid,
-                        project: mapping.project_id,
-                        new_plan: false,
-                        row: row.row,
-                        label: plan_name(row.name.as_deref()),
-                        missing,
-                    });
-                }
+                let (missing, follow) = match missing_drafts(store, mapping.project_id) {
+                    Some(missing) => (missing, None),
+                    None => match import_drafts::following(
+                        store,
+                        mapping.project_id,
+                        catalog,
+                        mapping.source_project_guid,
+                    ) {
+                        Some(follow) => (
+                            Missing {
+                                framing: true,
+                                plan: true,
+                            },
+                            Some(follow),
+                        ),
+                        None => continue,
+                    },
+                };
+                work.imports.push(Import {
+                    source: index,
+                    rig,
+                    guid: row.guid,
+                    project: mapping.project_id,
+                    new_plan: false,
+                    row: row.row,
+                    label: plan_name(row.name.as_deref()),
+                    missing,
+                    follow,
+                });
             }
             match page.next_after {
                 Some(next) => after = Some(next),
@@ -958,12 +980,15 @@ fn prepare(service: &Service, sources: &[Source], work: Work) -> Prepared {
                 import.missing,
             ) {
                 Ok(mut drafts) => {
-                    prepared.warnings.extend(
-                        drafts
-                            .warnings
-                            .drain(..)
-                            .map(|warning| format!("{}: {warning}", catalog.name)),
-                    );
+                    // A plan read again was warned about when it came in.
+                    let warnings = std::mem::take(&mut drafts.warnings);
+                    if import.follow.is_none() {
+                        prepared.warnings.extend(
+                            warnings
+                                .into_iter()
+                                .map(|warning| format!("{}: {warning}", catalog.name)),
+                        );
+                    }
                     if drafts.framing.is_some() || drafts.plan.is_some() {
                         prepared.drafts.push((import, drafts));
                     }
@@ -1029,8 +1054,17 @@ fn record(
             }
         }
     }
-    for (import, drafts) in prepared.drafts {
+    for (mut import, drafts) in prepared.drafts {
         let name = &sources[import.source].catalog.name;
+        if let Some(follow) = import.follow.take() {
+            if let Err(error) = import_drafts::refresh_drafts(store, follow, drafts) {
+                warnings.push(format!(
+                    "{name}: {} could not take in its Target Scheduler changes ({error})",
+                    import.label
+                ));
+            }
+            continue;
+        }
         let project = if import.new_plan {
             match resolved.get(&(import.source, import.guid)) {
                 Some(project) => *project,
@@ -1039,7 +1073,10 @@ fn record(
         } else {
             import.project
         };
-        match import_drafts::save_drafts(store, project, drafts) {
+        // A plan made whole from its project follows it from now on.
+        let source = (import.missing.framing && import.missing.plan)
+            .then_some((sources[import.source].identity.id, import.guid));
+        match import_drafts::save_drafts(store, project, drafts, source) {
             Ok(imported) if imported.separate_targets > 1 => warnings.push(format!(
                 "{name}: {} has {} separate targets; its plan frames the first. Target Scheduler keeps running the others.",
                 import.label, imported.separate_targets

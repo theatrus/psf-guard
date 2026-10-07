@@ -10,6 +10,7 @@ use psf_guard_director_core::{
     visibility::IcrsPosition,
 };
 use psf_guard_director_meta::{
+    draft_import::DraftImport,
     framing::FramingDraft,
     plan::{Contribution, Goal, Objective, PlanDraft, TemplateChoice},
 };
@@ -527,16 +528,23 @@ pub(super) fn read_drafts(
 
 /// Import once: save each draft under `project_id` only while the project
 /// has none, so a draft the operator saved meanwhile is never replaced.
+/// `source` names the project read; drafts the import made alone are
+/// recorded against it, so the plan follows it until someone edits it.
 pub(super) fn save_drafts(
     store: &mut MetaStore,
     project_id: Uuid,
     drafts: Drafts,
+    source: Option<(Uuid, Uuid)>,
 ) -> Result<Imported, StoreError> {
     let mut imported = Imported::default();
+    let mut revisions = (0, 0);
     if let Some(mut framing) = drafts.framing {
         framing.project_id = project_id;
         match store.save_framing_draft(&framing, 0) {
-            Ok(_) => imported.framing = true,
+            Ok(saved) => {
+                imported.framing = true;
+                revisions.0 = saved.layout_revision;
+            }
             Err(StoreError::Conflict) => {}
             Err(error) => return Err(error),
         }
@@ -544,15 +552,162 @@ pub(super) fn save_drafts(
     if let Some(mut plan) = drafts.plan {
         plan.project_id = project_id;
         match store.save_plan_draft(&plan, 0) {
-            Ok(_) => imported.plan = true,
+            Ok(saved) => {
+                imported.plan = true;
+                revisions.1 = saved.revision;
+            }
             Err(StoreError::Conflict) => {}
             Err(error) => return Err(error),
+        }
+    }
+    if let Some((catalog_id, source_project_guid)) = source
+        && (imported.framing || imported.plan)
+    {
+        // A draft saved here before the import is the operator's: then the
+        // plan does not follow.
+        let theirs = (!imported.framing && store.framing_draft(project_id)?.is_some())
+            || (!imported.plan && store.plan_draft(project_id)?.is_some());
+        if !theirs {
+            store.record_draft_import(&DraftImport {
+                project_id,
+                catalog_id,
+                source_project_guid,
+                framing_revision: revisions.0,
+                plan_revision: revisions.1,
+            })?;
         }
     }
     if imported.framing || imported.plan {
         imported.separate_targets = drafts.separate_targets;
     }
     Ok(imported)
+}
+
+/// A plan that follows its Target Scheduler project: the import's record
+/// and the drafts it saved, untouched since. A framing's revision counts by
+/// its layout: choosing another survey or view width is no edit.
+pub(super) struct Follow {
+    record: DraftImport,
+    framing: Option<FramingDraft>,
+    plan: Option<PlanDraft>,
+}
+
+/// Whether a linked plan follows this source project: imported from it,
+/// never activated, and its drafts still at the revisions the import saved.
+/// Once someone saves a draft here or activates the plan, it is theirs.
+pub(super) fn following(
+    store: &MetaStore,
+    project: Uuid,
+    catalog: Uuid,
+    source: Uuid,
+) -> Option<Follow> {
+    let record = store.draft_import(project).ok()??;
+    if record.catalog_id != catalog || record.source_project_guid != source {
+        return None;
+    }
+    if !matches!(store.activation(project), Ok(None)) {
+        return None;
+    }
+    let framing = store.framing_draft(project).ok()?;
+    let plan = store.plan_draft(project).ok()?;
+    (framing.as_ref().map_or(0, |f| f.layout_revision) == record.framing_revision
+        && plan.as_ref().map_or(0, |p| p.revision) == record.plan_revision)
+        .then_some(Follow {
+            record,
+            framing,
+            plan,
+        })
+}
+
+/// Give a plan read again the ids its last import had, band by band, so an
+/// unchanged plan reads the same and a changed one keeps its objectives.
+fn keep_ids(stored: Option<&PlanDraft>, plan: &mut PlanDraft) {
+    let Some(stored) = stored else {
+        return;
+    };
+    for objective in &mut plan.objectives {
+        let Some(old) = stored
+            .objectives
+            .iter()
+            .find(|o| o.bandpass_id == objective.bandpass_id)
+        else {
+            continue;
+        };
+        let read = objective.id;
+        objective.id = old.id;
+        for contribution in plan
+            .contributions
+            .iter_mut()
+            .filter(|c| c.objective_id == read)
+        {
+            contribution.objective_id = old.id;
+            if let Some(was) = stored
+                .contributions
+                .iter()
+                .find(|c| c.objective_id == old.id && c.rig_id == contribution.rig_id)
+            {
+                contribution.id = was.id;
+            }
+        }
+    }
+}
+
+/// Take a followed plan's project in again. Each draft saves under the
+/// revision the import left; one that reads the same is not saved again. A
+/// save made here meanwhile wins, and the plan stops following. Answers
+/// whether a draft changed.
+pub(super) fn refresh_drafts(
+    store: &mut MetaStore,
+    follow: Follow,
+    drafts: Drafts,
+) -> Result<bool, StoreError> {
+    let Follow {
+        mut record,
+        framing: stored_framing,
+        plan: stored_plan,
+    } = follow;
+    let project_id = record.project_id;
+    let mut changed = false;
+    if let Some(mut framing) = drafts.framing {
+        framing.project_id = project_id;
+        // How the person looks at it stays theirs.
+        if let Some(stored) = &stored_framing {
+            framing.survey_id = stored.survey_id.clone();
+            framing.view_fov_degrees = stored.view_fov_degrees;
+            framing.shown_rig_ids = stored.shown_rig_ids.clone();
+        }
+        let expected = stored_framing.as_ref().map_or(0, |stored| stored.revision);
+        match store.save_framing_draft(&framing, expected) {
+            Ok(saved) => {
+                changed |= saved.revision != expected;
+                record.framing_revision = saved.layout_revision;
+            }
+            Err(StoreError::Conflict) => {
+                store.forget_draft_import(project_id)?;
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    if let Some(mut plan) = drafts.plan {
+        plan.project_id = project_id;
+        keep_ids(stored_plan.as_ref(), &mut plan);
+        match store.save_plan_draft(&plan, record.plan_revision) {
+            Ok(saved) => {
+                changed |= saved.revision != record.plan_revision;
+                record.plan_revision = saved.revision;
+            }
+            Err(StoreError::Conflict) => {
+                store.forget_draft_import(project_id)?;
+                return Ok(changed);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    if changed {
+        store.record_draft_import(&record)?;
+    }
+    Ok(changed)
 }
 
 #[cfg(test)]

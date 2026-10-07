@@ -1,5 +1,6 @@
 use super::activation::activated;
 use super::*;
+use psf_guard_director_meta::plan::Goal;
 
 /// Register a schema-23 database with the given projects, returning its path.
 fn register(
@@ -499,7 +500,8 @@ async fn a_target_scheduler_project_is_imported_as_framing_and_plan_drafts_once(
     assert_eq!(ha_c["template"]["filter_name"], "Ha");
     assert_eq!(ha_c["exposure_seconds"], 300.0);
     assert_eq!(ha_c["enabled"], true);
-    // A second listing changes nothing: the drafts are the operator's now.
+    // Nobody has edited the plan here, so a change in Target Scheduler is
+    // taken in; the framing, the same there, is not saved again.
     db.execute("UPDATE project SET priority=0 WHERE Id=1", [])
         .unwrap();
     let (_, again) = call(&f.app, "GET", "/plans", Value::Null, None).await;
@@ -510,7 +512,7 @@ async fn a_target_scheduler_project_is_imported_as_framing_and_plan_drafts_once(
         .find(|r| r["project"]["name"] == "Heart Nebula")
         .unwrap();
     assert_eq!(row2["framing"]["revision"], 1);
-    assert_eq!(row2["plan"]["revision"], 1);
+    assert_eq!(row2["plan"]["revision"], 2);
     let (_, retained) = call(
         &f.app,
         "GET",
@@ -523,7 +525,7 @@ async fn a_target_scheduler_project_is_imported_as_framing_and_plan_drafts_once(
         .as_array()
         .unwrap()
         .iter()
-        .all(|o| o["priority"] == 2));
+        .all(|o| o["priority"] == 0));
 }
 
 /// Separate targets that are not one mosaic: the drafts frame the first
@@ -1262,4 +1264,113 @@ async fn an_explicit_review_cannot_replace_the_identity_a_file_is_planned_under(
     assert_eq!(json!(written.id), rig);
     let (_, again) = call(&f.app, "GET", "/plans", Value::Null, None).await;
     assert_eq!(plan_named(&again, "Pelican")["links"][0]["rig"]["id"], rig);
+}
+
+/// A plan taken in from Target Scheduler and not touched here follows the
+/// project: a desired count raised there is taken in on the next listing,
+/// under the same objectives. Once the plan is saved here it is the
+/// operator's, and Target Scheduler's later changes stay out of it.
+#[tokio::test]
+async fn an_imported_plan_follows_target_scheduler_until_it_is_saved_here() {
+    let f = Fixture::new();
+    let path = register(
+        &f,
+        "heart",
+        "Heart rig",
+        &[(1, "Heart Nebula", Some(Uuid::new_v4()))],
+    );
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch(
+        "INSERT INTO exposuretemplate (Id, profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel, moonavoidanceenabled,
+            moonavoidanceseparation, moonavoidancewidth, maximumhumidity, defaultexposure, moonrelaxscale, moonrelaxmaxaltitude,
+            moonrelaxminaltitude, moondownenabled, ditherevery, minutesOffset, guid)
+         VALUES (1, 'profile-x', 'Ha 300', 'Ha', 100, 30, 1, -1, 0, 0, 60, 7, 0, 300, 0, 5, -15, 0, -1, 0, 'tmpl-ha');
+         INSERT INTO target (Id, name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+         VALUES (1, 'Heart r1c1', 1, 2.5333, 0.0, 2, 0.0, 100, 1, 'tgt-1'),
+                (2, 'Heart r1c2', 1, 2.4267, 0.0, 2, 0.0, 100, 1, 'tgt-2');
+         INSERT INTO exposureplan (profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, enabled, guid)
+         VALUES ('profile-x', -1, 30, 4, 3, 1, 1, 1, 'ep-1'), ('profile-x', -1, 30, 0, 0, 2, 1, 1, 'ep-2');",
+    )
+    .unwrap();
+    let list = || {
+        let app = f.app.clone();
+        async move {
+            let (status, listed) = call(&app, "GET", "/plans", Value::Null, None).await;
+            assert_eq!(status, StatusCode::OK, "{listed}");
+            listed
+        }
+    };
+    let listed = list().await;
+    let project = Uuid::parse_str(
+        listed["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["project"]["name"] == "Heart Nebula")
+            .unwrap()["project"]["id"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    let saved = || {
+        let store = f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        (
+            store.framing_draft(project).unwrap().unwrap(),
+            store.plan_draft(project).unwrap().unwrap(),
+            store.draft_import(project).unwrap(),
+        )
+    };
+    let (framing, plan, import) = saved();
+    assert_eq!((framing.revision, plan.revision), (1, 1));
+    let import = import.expect("the import is recorded");
+    assert_eq!((import.framing_revision, import.plan_revision), (1, 1));
+    assert_eq!(plan.objectives[0].goal, Goal::Frames { value: 30 });
+
+    // Another survey is how the person looks at it, not an edit.
+    {
+        let mut store = f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut viewed = framing.clone();
+        viewed.survey_id = "nina:FramingAssistantCache".into();
+        let viewed = store.save_framing_draft(&viewed, 1).unwrap();
+        assert_eq!((viewed.revision, viewed.layout_revision), (2, 1));
+    }
+    // Raised in Target Scheduler: the plan takes it in, framing untouched.
+    db.execute("UPDATE exposureplan SET desired=45", [])
+        .unwrap();
+    list().await;
+    let (framing2, plan2, import2) = saved();
+    assert_eq!(framing2.revision, 2);
+    assert_eq!(framing2.survey_id, "nina:FramingAssistantCache");
+    assert_eq!(plan2.revision, 2);
+    assert_eq!(plan2.objectives[0].goal, Goal::Frames { value: 45 });
+    assert_eq!(
+        plan2.objectives[0].id, plan.objectives[0].id,
+        "same objective"
+    );
+    assert_eq!(plan2.contributions[0].id, plan.contributions[0].id);
+    assert_eq!(import2.unwrap().plan_revision, 2);
+    // Nothing changed there: nothing is saved again.
+    list().await;
+    assert_eq!(saved().1.revision, 2);
+    // A target moved there moves the framing, and the survey stays.
+    db.execute("UPDATE target SET dec=1.0", []).unwrap();
+    list().await;
+    let (moved, _, _) = saved();
+    assert_eq!((moved.revision, moved.layout_revision), (3, 3));
+    assert!((moved.center.dec_degrees - 1.0).abs() < 1e-3, "{moved:?}");
+    assert_eq!(moved.survey_id, "nina:FramingAssistantCache");
+
+    // Saved here: the plan is the operator's from now on.
+    {
+        let mut store = f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut edited = plan2.clone();
+        edited.objectives[0].goal = Goal::Frames { value: 60 };
+        store.save_plan_draft(&edited, 2).unwrap();
+    }
+    db.execute("UPDATE exposureplan SET desired=80", [])
+        .unwrap();
+    list().await;
+    let (_, plan3, _) = saved();
+    assert_eq!(plan3.revision, 3);
+    assert_eq!(plan3.objectives[0].goal, Goal::Frames { value: 60 });
 }
