@@ -163,7 +163,18 @@ pub(super) async fn preview(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<Report>>, ActivationError> {
-    execute(state, id, None).await
+    execute(state, id, None, false).await
+}
+
+/// What an activation would change, worked out on a copy of each rig
+/// database's planning tables. The page asks for an activation only while a
+/// rig lacks the saved plan: a plan taken in from Target Scheduler, or rows
+/// that came by Sync, already match. The copy never takes N.I.N.A.'s lock.
+pub(super) async fn check(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ApiResponse<Report>>, ActivationError> {
+    execute(state, id, None, true).await
 }
 
 pub(super) async fn apply(
@@ -179,7 +190,7 @@ pub(super) async fn apply(
     {
         return Err(Error::Invalid.into());
     }
-    execute(state, id, Some(request.preview_digest)).await
+    execute(state, id, Some(request.preview_digest), false).await
 }
 
 fn now_ms() -> u64 {
@@ -254,6 +265,7 @@ async fn execute(
     state: Arc<AppState>,
     id: Uuid,
     expected: Option<String>,
+    on_copy: bool,
 ) -> Result<Json<ApiResponse<Report>>, ActivationError> {
     // A preview only reads; applying writes every participating rig database.
     let service = if expected.is_some() {
@@ -500,7 +512,7 @@ async fn execute(
             let push = planned_push(profile.as_ref(), &known_peers, &mut warnings);
             // A preview performs the same writes and rolls them back, so the
             // connection is read-write either way; nothing lands without Apply.
-            let mut connection = match open_rig(&catalog.context.database_path) {
+            let mut connection = match open_rig_for(&catalog.context.database_path, on_copy) {
                 Ok(connection) => connection,
                 Err(reason) => {
                     warnings.push(reason);
@@ -657,7 +669,7 @@ async fn execute(
             let push = planned_push(profile.as_ref(), &known_peers, &mut warnings);
             // A database that cannot be opened or locked now keeps what the
             // last activation knew, so a later one can finish the job.
-            let mut connection = match open_rig(&catalog.context.database_path) {
+            let mut connection = match open_rig_for(&catalog.context.database_path, on_copy) {
                 Ok(connection) => connection,
                 Err(reason) => {
                     warnings.push(reason);
@@ -917,6 +929,85 @@ fn open_rig(path: &str) -> Result<Connection, String> {
     super::super::database_context::configure_scheduler_busy_timeout(&connection)
         .map_err(|error| format!("Its database could not be opened for writing: {error}."))?;
     Ok(connection)
+}
+
+/// A rig database for an activation, or for a check a copy of its planning
+/// tables.
+fn open_rig_for(path: &str, on_copy: bool) -> Result<Connection, String> {
+    if on_copy {
+        planning_copy(path)
+    } else {
+        open_rig(path)
+    }
+}
+
+/// Every table an activation reads or writes in a rig database.
+const PLANNING_TABLES: [&str; 9] = [
+    "project",
+    "target",
+    "exposuretemplate",
+    "exposureplan",
+    "ruleweight",
+    "profilepreference",
+    "psf_guard_director_project",
+    "psf_guard_director_target",
+    "psf_guard_director_plan",
+];
+
+/// A rig database's planning tables, schema and rows, copied into memory in
+/// one read: an activation run on the copy shows what it would change and
+/// never takes the file's write lock. These tables are small; frames and
+/// their metadata stay behind.
+fn planning_copy(path: &str) -> Result<Connection, String> {
+    let read_failed = |error: rusqlite::Error| format!("Its database could not be read: {error}.");
+    let source = super::super::database_context::open_scheduler_connection_with_flags(
+        FilePath::new(path),
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(read_failed)?;
+    let copy = Connection::open_in_memory().map_err(read_failed)?;
+    let read = source.unchecked_transaction().map_err(read_failed)?;
+    for table in PLANNING_TABLES {
+        let schema: Vec<(String, String)> = read
+            .prepare(
+                "SELECT tbl_name, sql FROM sqlite_master
+                 WHERE lower(tbl_name)=?1 AND type IN ('table', 'index') AND sql IS NOT NULL
+                 ORDER BY type='index'",
+            )
+            .and_then(|mut statement| {
+                statement
+                    .query_map([table], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .collect()
+            })
+            .map_err(read_failed)?;
+        let Some((name, _)) = schema.first() else {
+            continue;
+        };
+        for (_, sql) in &schema {
+            copy.execute_batch(sql).map_err(read_failed)?;
+        }
+        let mut rows = read
+            .prepare(&format!("SELECT * FROM \"{name}\""))
+            .map_err(read_failed)?;
+        let columns = rows.column_count();
+        let mut insert = copy
+            .prepare(&format!(
+                "INSERT INTO \"{name}\" VALUES ({})",
+                vec!["?"; columns].join(",")
+            ))
+            .map_err(read_failed)?;
+        let mut cursor = rows.query([]).map_err(read_failed)?;
+        while let Some(row) = cursor.next().map_err(read_failed)? {
+            let values = (0..columns)
+                .map(|i| row.get::<_, rusqlite::types::Value>(i))
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(read_failed)?;
+            insert
+                .execute(rusqlite::params_from_iter(values))
+                .map_err(read_failed)?;
+        }
+    }
+    Ok(copy)
 }
 
 /// Take the rig database's write lock for an activation.
@@ -1280,15 +1371,37 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                         )));
                     }
                 }
+                // Director takes over its planning rows either way; the row
+                // itself changes only for a Draft or a new mosaic, so one
+                // that already matches is reported unchanged.
+                let (state, was_mosaic): (i64, i64) = tx.query_row(
+                    "SELECT IFNULL(state, 0), IFNULL(isMosaic, 0) FROM project WHERE guid=?1",
+                    [&guid],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                let mut notes = Vec::new();
+                if state == 0 {
+                    notes.push("Draft → Active");
+                }
+                if mosaic && was_mosaic == 0 {
+                    notes.push("now a mosaic");
+                }
                 tx.execute(
                     "UPDATE project SET isMosaic=CASE WHEN ?2=1 THEN 1 ELSE isMosaic END, state=CASE WHEN state=0 THEN 1 ELSE state END WHERE guid=?1",
                     params![guid, i32::from(mosaic)],
                 )?;
                 changes.push(Change {
                     kind: "project",
-                    action: "update",
+                    action: if notes.is_empty() { "unchanged" } else { "update" },
                     name: project_row(tx, &guid)?.map(|(_, name)| name).unwrap_or_default(),
-                    detail: "the existing project already linked to this plan; Director now owns its planning rows, and a Draft goes Active".into(),
+                    detail: if notes.is_empty() {
+                        "already in Target Scheduler, linked to this plan; Director takes over its planning rows".into()
+                    } else {
+                        format!(
+                            "linked to this plan; Director takes over its planning rows; {}",
+                            notes.join("; ")
+                        )
+                    },
                 });
                 guid
             }
@@ -1613,17 +1726,23 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                 .optional()?;
             let plan_guid = match owned {
                 Some(guid) => {
-                    let existing: Option<(f64, i64, i64, i64)> = tx
+                    // The length the row runs at: its own, or its
+                    // template's default when it is left at -1.
+                    let existing: Option<(Option<f64>, i64, i64, i64)> = tx
                         .query_row(
-                            "SELECT exposure, desired, exposureTemplateId, COALESCE(enabled,1) FROM exposureplan WHERE guid=?1",
+                            "SELECT CASE WHEN e.exposure IS NULL OR e.exposure < 0 THEN t.defaultexposure ELSE e.exposure END,
+                                    e.desired, e.exposureTemplateId, COALESCE(e.enabled,1)
+                             FROM exposureplan e LEFT JOIN exposuretemplate t ON t.Id = e.exposureTemplateId
+                             WHERE e.guid=?1",
                             [&guid],
                             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                         )
                         .optional()?;
                     match existing {
                         Some((exposure0, desired0, template0, enabled0)) => {
-                            let same = (exposure0 - contribution.exposure_seconds).abs() < 1e-6
-                                && desired0 == i64::from(frames)
+                            let same = exposure0.is_some_and(|exposure| {
+                                (exposure - contribution.exposure_seconds).abs() < 1e-6
+                            }) && desired0 == i64::from(frames)
                                 && template0 == template_id
                                 && enabled0 == 1;
                             if !same {
@@ -1685,9 +1804,11 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                         if !found.enabled {
                             notes.push("turned on".to_string());
                         }
-                        // A row left at the template's default exposure is
-                        // given the length explicitly; that is a write too.
-                        let same = notes.is_empty() && found.explicit_exposure;
+                        // A row at its template's default length (-1) was
+                        // matched on that length, so it already runs at the
+                        // plan's and stays as Target Scheduler wrote it. One
+                        // asking for 0 s is given the length.
+                        let same = notes.is_empty() && !found.zero_length;
                         if !same {
                             tx.execute(
                                 "UPDATE exposureplan SET exposure=?2, desired=?3, exposureTemplateId=?4, enabled=1 WHERE Id=?1",
@@ -2256,8 +2377,8 @@ struct AdoptablePlan {
     acquired: i64,
     template_id: i64,
     enabled: bool,
-    /// The row names its exposure, not the template's default.
-    explicit_exposure: bool,
+    /// The row asks for a 0 s exposure; it was matched on its template's length.
+    zero_length: bool,
 }
 
 /// The target's own exposure plan for the work a contribution asks for, if
@@ -2370,7 +2491,7 @@ fn adoptable_plan(
         acquired: row.4,
         template_id: row.5,
         enabled: row.6 != 0,
-        explicit_exposure: row.2.is_some_and(|exposure| exposure > 0.0),
+        zero_length: row.2 == Some(0.0),
     }))
 }
 

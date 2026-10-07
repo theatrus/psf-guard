@@ -548,6 +548,15 @@ export const apiClient = {
     return data.data.activation;
   },
 
+  /** What an activation would change, worked out on a copy of each rig
+   *  database's planning tables: never written, never locked. */
+  checkDirectorActivation: async (projectId: string): Promise<DirectorActivationReport> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorActivationReport>>(`/director/v1/projects/${encodeURIComponent(projectId)}/activation/check`);
+    if (!data.data) throw new Error(data.error || 'Failed to check activation');
+    return data.data;
+  },
+
   previewDirectorActivation: async (projectId: string): Promise<DirectorActivationReport> => {
     const api = await getApi();
     const { data } = await api.post<ApiResponse<DirectorActivationReport>>(`/director/v1/projects/${encodeURIComponent(projectId)}/activation/preview`, {});
