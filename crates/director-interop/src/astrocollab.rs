@@ -250,7 +250,10 @@ pub fn decode_health(bytes: &[u8]) -> Result<Health, Error> {
     Ok(Health {
         protocol: WIRE_PROTOCOL,
         build: json::text(required(map, "version")?, 120)?,
-        server_time_ms: milliseconds(required(map, "time")?)?.ok_or(Error::InvalidValue)?,
+        // Protocol timestamps are real-valued seconds, not exact frame durations.
+        server_time_ms: json::ranged(required(map, "time")?, 0.0, 9_007_199_254_740.0)?
+            .map(|seconds| (seconds * 1000.0).floor() as u64)
+            .ok_or(Error::InvalidValue)?,
         features,
     })
 }
