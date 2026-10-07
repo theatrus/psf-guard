@@ -123,15 +123,20 @@ export default function ImageCard({
     if (!timestamp) return 'Unknown';
     return new Date(timestamp * 1000).toLocaleString();
   };
-  // Day, hour and minute, and seconds, as separate pieces so a narrow card
-  // can drop the day and the seconds; the full date is the cell's title.
+  // The date with its year, a shorter one, the year alone, the time and its
+  // seconds, as separate pieces so a narrower card shows fewer: last of all
+  // a frame from this year keeps its time and one from another year its
+  // year. The full date is the cell's title.
   const shortDate = (timestamp: number | null) => {
     if (!timestamp) return null;
     const date = new Date(timestamp * 1000);
     return {
-      day: date.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' }),
+      day: date.toLocaleDateString(undefined, { year: 'numeric', month: 'numeric', day: 'numeric' }),
+      dayShort: date.toLocaleDateString(undefined, { year: '2-digit', month: 'numeric', day: 'numeric' }),
+      year: String(date.getFullYear()),
       time: date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false }),
       seconds: `:${String(date.getSeconds()).padStart(2, '0')}`,
+      otherYear: date.getFullYear() !== new Date().getFullYear(),
     };
   };
   const when = shortDate(image.acquired_date);
@@ -230,8 +235,14 @@ export default function ImageCard({
             wraps and the values line up from card to card. */}
         <div className="image-facts">
           <span className="image-filter" title={`Filter: ${image.filter_name || 'none'}`}>{image.filter_name || 'No filter'}</span>
-          <span className="image-date" title={formatDate(image.acquired_date)}>
-            {when ? <><span className="date-day">{when.day} </span>{when.time}<span className="date-seconds">{when.seconds}</span></> : '—'}
+          <span className={`image-date${when?.otherYear ? ' is-other-year' : ''}`} title={formatDate(image.acquired_date)}>
+            {when ? <>
+              <span className="date-day">{when.day} </span>
+              <span className="date-day-short">{when.dayShort} </span>
+              <span className="date-year">{when.year}</span>
+              <span className="date-time">{when.time}</span>
+              <span className="date-seconds">{when.seconds}</span>
+            </> : '—'}
           </span>
           <span className="stat-hfr" title="Half-flux radius">{stats.hfr && <><span className="fact-label">HFR </span>{stats.hfr}</>}</span>
           <span className="stat-stars" title="Detected stars">{stats.starCount != null && `★${stats.starCount}`}</span>

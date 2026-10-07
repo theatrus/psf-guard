@@ -1220,10 +1220,38 @@
   }
 }
 
-@container (max-width: 210px) {
-  .image-facts .date-day,
+/* The date gives way in steps, measured on the date column: its seconds,
+   then two digits of its year, then all but what matters most, the time of
+   a frame from this year and the year of one from another. */
+.image-facts .date-day-short,
+.image-facts .date-year {
+  display: none;
+}
+
+@container (max-width: 285px) {
   .image-facts .date-seconds {
     display: none;
+  }
+}
+
+@container (max-width: 245px) {
+  .image-facts .date-day {
+    display: none;
+  }
+
+  .image-facts .date-day-short {
+    display: inline;
+  }
+}
+
+@container (max-width: 225px) {
+  .image-facts .date-day-short,
+  .image-facts .image-date.is-other-year .date-time {
+    display: none;
+  }
+
+  .image-facts .image-date.is-other-year .date-year {
+    display: inline;
   }
 }
 
@@ -3168,6 +3196,27 @@
   min-width: fit-content;
 }
 
+/* Status keeps any mix of grades: one box per grade, all ticked for All. */
+.status-filter > span {
+  color: var(--color-text-muted);
+  font-weight: 500;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.status-filter .status-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--color-text-secondary);
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.status-filter .status-choice input {
+  margin: 0;
+}
+
 .filter-input-group select,
 .filter-input-group input[type="date"],
 .filter-input-group input[type="text"] {
@@ -3318,7 +3367,9 @@
 }
 
 @media (max-width: 768px) {
-  .filter-primary-row .filter-input-group label {
+  /* The captions go on a phone; each status box keeps its own name. */
+  .filter-primary-row .filter-input-group label:not(.status-choice),
+  .filter-primary-row .status-filter > span {
     position: absolute;
     width: 1px;
     height: 1px;
