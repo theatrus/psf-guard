@@ -324,6 +324,15 @@ export interface DirectorActivationPushReport {
   rigs: Array<{ rig: DirectorIdentity; catalog_name: string; push: DirectorActivationPush }>;
   warnings: string[];
 }
+/** What taking a rig's Target Scheduler values into the plan did. */
+export interface DirectorTakenValues {
+  plan_revision: number;
+  framing_revision: number;
+  /** What came in, one line each. */
+  taken: string[];
+  /** What stayed as planned, and why. */
+  left: string[];
+}
 export interface DirectorActivationReport {
   project: DirectorIdentity;
   framing_revision: number;

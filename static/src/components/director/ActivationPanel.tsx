@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { Check, Eye, Send } from 'lucide-react';
+import { Check, Download, Eye, Send } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
-import type { DirectorActivationAction, DirectorActivationChange, DirectorActivationPush, DirectorActivationPushReport, DirectorActivationReport } from '../../api/directorTypes';
+import type { DirectorActivationAction, DirectorActivationChange, DirectorActivationPush, DirectorActivationPushReport, DirectorActivationReport, DirectorTakenValues } from '../../api/directorTypes';
 import { describeFailure, useDrafts } from './pageDraftsState';
 import { useActivationState } from './activationState';
 import './ActivationPanel.css';
@@ -45,9 +45,25 @@ function counts(changes: DirectorActivationChange[], kind: DirectorActivationCha
 
 type ReportRig = DirectorActivationReport['rigs'][number];
 
+/** Whether a preview would change rows Target Scheduler already holds for
+ *  this rig: its project is there, and some row is more than unchanged. */
+function differsFromTargetScheduler(rig: ReportRig): boolean {
+  return rig.changes.some(change => change.kind === 'project' && change.action !== 'create')
+    && rig.changes.some(change => change.action !== 'unchanged' && change.action !== 'keep');
+}
+
+/** Taking a rig's Target Scheduler values: the action, and what it did. */
+interface Take {
+  run: () => void;
+  pending: boolean;
+  result?: DirectorTakenValues;
+}
+
 /** What the last preview or apply did in one rig's database: a line of
- *  counts, its warnings, where its rows go, and every row it touches. */
-export function RigActivation({ rig, applied }: { rig: ReportRig; applied: boolean }) {
+ *  counts, its warnings, where its rows go, and every row it touches. Where
+ *  a preview would overwrite Target Scheduler's rows, the plan can take
+ *  them instead. */
+export function RigActivation({ rig, applied, take }: { rig: ReportRig; applied: boolean; take?: Take }) {
   const summary = KINDS
     .filter(({ kind }) => rig.changes.some(change => change.kind === kind))
     .map(({ kind, label }) => `${label}: ${counts(rig.changes, kind)}`);
@@ -59,6 +75,16 @@ export function RigActivation({ rig, applied }: { rig: ReportRig; applied: boole
     </p>
     {rig.warnings.map(warning => <p key={warning} className="director-muted" role="note">{warning}</p>)}
     <RigChanges rig={rig} />
+    {take && !applied && differsFromTargetScheduler(rig) && <div className="director-actions">
+      <button type="button" disabled={take.pending} title={`Write ${rig.catalog_name}'s Target Scheduler values into the plan instead`} onClick={take.run}>
+        <Download size={16} />{take.pending ? 'Taking…' : "Take Target Scheduler's values"}
+      </button>
+    </div>}
+    {take?.result && <div className="activation-taken" aria-label={`Taken from ${rig.catalog_name}`}>
+      {take.result.taken.length === 0 && <p className="director-muted">Nothing to take: the plan already has its values</p>}
+      {take.result.taken.length > 0 && <ul>{take.result.taken.map(line => <li key={line}>{line}</li>)}</ul>}
+      {take.result.left.map(line => <p key={line} className="director-muted" role="note">{line}</p>)}
+    </div>}
   </div>;
 }
 
@@ -112,7 +138,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   const status = useDirectorStatus();
   const manageable = status.data?.database_management ?? true;
   const client = useQueryClient();
-  const { last, planRevision, behind, behindText, matches } = useActivationState(projectId);
+  const { last, planRevision, framingRevision, behind, behindText, matches } = useActivationState(projectId);
   const [report, setReport] = useState<DirectorActivationReport | null>(null);
   const [visits, setVisits] = useState<CollaborationVisit[]>([]);
   const busy = useRef(false);
@@ -133,6 +159,19 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
     onSuccess: applied => { setReport(applied); for (const key of [['directorActivation', projectId], ['directorActivationCheck', projectId], ['collaborationActivation', projectId], ['db'], ['directorCatalog'], ['directorPlans']]) void client.invalidateQueries({ queryKey: key }); },
     onError: error => { if (httpStatus(error) === 409) setReport(null); },
   });
+  // The plan takes a rig's Target Scheduler values; then the preview runs
+  // again on what is saved now.
+  const [taken, setTaken] = useState<Record<string, DirectorTakenValues>>({});
+  const takeValues = useMutation({
+    retry: false,
+    mutationFn: (rigId: string) => apiClient.takeTargetSchedulerValues(projectId, rigId, planRevision ?? 0, framingRevision ?? 0),
+    onSuccess: async (result, rigId) => {
+      setTaken(current => ({ ...current, [rigId]: result }));
+      await Promise.all([['directorPlan', projectId], ['directorFraming', projectId], ['directorActivationCheck', projectId]]
+        .map(key => client.invalidateQueries({ queryKey: key })));
+      preview.mutate();
+    },
+  });
   const [pushed, setPushed] = useState<DirectorActivationPushReport | null>(null);
   const push = useMutation({ retry: false, mutationFn: () => apiClient.pushDirectorActivation(projectId), onSuccess: setPushed });
   const run = (action: () => void) => { if (busy.current) return; busy.current = true; try { action(); } finally { busy.current = false; } };
@@ -142,8 +181,9 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   useEffect(() => {
     if (report?.applied && (!document.activeElement || document.activeElement === document.body)) outcome.current?.focus();
   }, [report]);
-  const pending = preview.isPending || apply.isPending || push.isPending;
-  const error = preview.error ?? apply.error ?? push.error;
+  const pending = preview.isPending || apply.isPending || push.isPending || takeValues.isPending;
+  const tookStale = takeValues.isError && httpStatus(takeValues.error) === 409;
+  const error = preview.error ?? apply.error ?? push.error ?? (tookStale ? null : takeValues.error);
   return <section className="activation" aria-label="Activation">
     <CollaborationActivation projectId={projectId} value={visits} disabled={pending || !canWrite} onChange={next => { setVisits(next); setReport(null); }} />
     {last.data && <p className="director-muted">Last activated {new Date(last.data.applied_at_ms).toLocaleString()} · {last.data.rigs.length} rig{last.data.rigs.length === 1 ? '' : 's'}</p>}
@@ -151,13 +191,17 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
     {last.data && behind.length === 0 && !unsavedPlan && planRevision !== undefined && <p className="director-muted">Rigs are up to date</p>}
     {!last.data && last.isSuccess && <p className="director-muted">{matches ? 'The rigs already match the saved plan' : 'Not activated yet'}</p>}
     {error && !(apply.isError && httpStatus(apply.error) === 409) && <p className="director-error" role="alert">{message(error)}</p>}
-    {apply.isError && httpStatus(apply.error) === 409 && <p className="director-error" role="alert">Changed since the preview. Preview again.</p>}
+    {((apply.isError && httpStatus(apply.error) === 409) || tookStale) && <p className="director-error" role="alert">Changed since the preview. Preview again.</p>}
     {report && <div className="activation-report">
       <p tabIndex={-1} ref={outcome}><strong>{report.applied ? 'Applied' : 'Preview'}</strong>: framing revision {report.framing_revision}, plan revision {report.plan_revision}, {report.panels} panel{report.panels === 1 ? '' : 's'}.{report.activation_revision !== null && ` Activation revision ${report.activation_revision}.`}</p>
       {report.warnings.map(warning => <p key={warning} className="director-error" role="alert">{warning}</p>)}
       {report.rigs.filter(rig => !shownElsewhere?.has(rig.rig.id)).map(rig => <div key={rig.rig.id}>
         <h4 className="activation-rig-name">{rig.catalog_name}</h4>
-        <RigActivation rig={rig} applied={report.applied} />
+        <RigActivation rig={rig} applied={report.applied} take={canWrite ? {
+          run: () => run(() => takeValues.mutate(rig.rig.id)),
+          pending: takeValues.isPending && takeValues.variables === rig.rig.id,
+          result: taken[rig.rig.id],
+        } : undefined} />
       </div>)}
     </div>}
     {pushed && <div className="activation-report" aria-label="Push result">

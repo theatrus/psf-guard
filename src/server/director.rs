@@ -45,6 +45,7 @@ mod site_profile;
 mod sky_image;
 mod sky_objects;
 mod sky_search;
+mod take_values;
 mod templates;
 mod workload;
 
@@ -598,6 +599,10 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
                 .layer(DefaultBodyLimit::max(
                     psf_guard_director_core::MAX_REQUEST_BYTES,
                 )),
+        )
+        .route(
+            "/projects/{id}/plan/take-target-scheduler",
+            axum::routing::post(take_values::take),
         )
         .route("/sky/surveys", get(sky_image::surveys))
         .route("/sky/cutout", get(sky_image::cutout))

@@ -1,5 +1,9 @@
 # Unreleased
 
+- Keep what was changed in N.I.N.A. after an activation: the activation
+  preview offers **Take Target Scheduler's values** for a rig, which writes
+  that rig's frame counts, templates, exposure lengths and moved targets into
+  the plan instead of overwriting them, and says what it left as planned.
 - Pick a sky survey layer in Planning's framing without it counting as an
   unsaved change: the layer is kept in your browser for every plan.
 - Activate reviewed collaboration assignments into existing rig databases with

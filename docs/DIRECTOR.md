@@ -1058,6 +1058,35 @@ A second activation updates the same rows in place: coordinates, angle,
 exposure and desired counts change, names the operator edited stay, and
 `acquired`, `accepted`, captured frames and grades are never touched. Panels
 removed from the framing leave their targets behind rather than deleting data.
+
+When the rows were changed in N.I.N.A. after an activation and they are the
+ones to keep, a rig's block in the preview offers **Take Target Scheduler's
+values** instead of overwriting them. It reads that rig's linked project the
+way an import does and writes it into the saved plan:
+
+- each band's frames: the band's goal where only this rig shoots it, else
+  this rig's own goal. Goals compare by the frames they come to at the rig's
+  exposure length, so six hours of 300 s frames and 72 frames are the same;
+- the template and exposure length of each band, and which bands are on: a
+  band the project no longer shoots is turned off for the rig, unless some
+  exposure plan used a template Director cannot read, when none is;
+- the framing, when the project's targets moved by more than 1″ and no other
+  rig uses the same layout: the rig's own framing if it has one, else the
+  shared one. A single panel can sit anywhere; a grid moved by hand is
+  matched as near as a grid allows, and an activation then lines its targets
+  up.
+
+What the plan has no place for stays as Target Scheduler has it and is named:
+a Draft project (an activation makes it Active) and targets turned off (an
+activation turns them on). Both drafts save together under the revisions the
+preview saw; a save since refuses, and the preview runs again on what is now
+saved.
+
+Before asking for an activation the page runs the same activation on an
+in-memory copy of each rig's planning tables (`GET /activation/check`), so
+it never locks N.I.N.A.'s database. A rig whose rows would all read
+`unchanged` or `keep` already holds the plan, whatever the activation
+record says.
 Panel ids are places in the grid, so growing the grid or turning a mosaic can
 move a panel to other sky. A panel that moves by more than a quarter of its
 size and already has frames gets a new target at its new place; the old
@@ -1127,6 +1156,8 @@ pulls its program from this server, the coordinator, and reports here.
 | --- | --- | --- |
 | GET | `/projects/{id}/activation` | `{ activation }`: the last applied activation (revision, framing and plan revisions, and per rig the project, target and plan GUIDs) or `null`. |
 | POST | `/projects/{id}/activation/preview` | Empty body. Computes and rolls back; returns the per-rig report and `preview_digest`. `422` until the project has a framing with a panel size and a plan with a ticked rig. |
+| GET | `/projects/{id}/activation/check` | The preview's report, worked out on an in-memory copy of each rig database's planning tables; never writes and never takes a rig database's lock. |
+| POST | `/projects/{id}/plan/take-target-scheduler` | `{ rig_id, plan_revision, framing_revision }`. Writes that rig's linked Target Scheduler project into the saved plan and framing drafts and answers the new revisions with `taken` and `left` lines; `409` when either draft was saved since, `422` when the rig has no database here or no project linked to the plan. |
 | POST | `/projects/{id}/activation/apply` | `{ preview_digest }`. Commits each rig database in turn, records the activation, links new projects, then pushes each remote rig's planning rows to its peer; `409` when the digest no longer matches. Each rig row carries `push` (`peer_id`, `peer_name`, `applied`, `summary`, `error`) or `null`. |
 | POST | `/projects/{id}/activation/push` | Empty body. Sends the last activation's rows again to every remote rig's peer and returns one row per pushed rig; `422` before any activation. An unreachable peer is an `error` in its row, not a failed call. |
 

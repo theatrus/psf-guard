@@ -2027,6 +2027,221 @@ async fn matching_rows_without_directors_tables_read_unchanged() {
     assert_eq!(actions(&draft, "project"), ["update"], "{draft}");
 }
 
+/// Take a rig's Target Scheduler values under the revisions now saved.
+async fn take_values(f: &Fixture, project: Uuid, rig: Uuid) -> (StatusCode, Value) {
+    let (plan, framing) = {
+        let store = f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        (
+            store.plan_draft(project).unwrap().map_or(0, |p| p.revision),
+            store
+                .framing_draft(project)
+                .unwrap()
+                .map_or(0, |f| f.revision),
+        )
+    };
+    call(
+        &f.app,
+        "POST",
+        &format!("/projects/{project}/plan/take-target-scheduler"),
+        json!({"rig_id": rig, "plan_revision": plan, "framing_revision": framing}),
+        None,
+    )
+    .await
+}
+
+async fn check_now(f: &Fixture, project: Uuid) -> Value {
+    let (status, checked) = call(
+        &f.app,
+        "GET",
+        &format!("/projects/{project}/activation/check"),
+        Value::Null,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{checked}");
+    checked["data"].clone()
+}
+
+/// A desired count raised in N.I.N.A. after an activation can be taken into
+/// the plan instead of being overwritten: it becomes the band's goal, the
+/// layout stays where it is, and the check then finds nothing to change.
+#[tokio::test]
+async fn a_rigs_target_scheduler_values_can_be_taken_into_the_plan() {
+    let a = activated().await;
+    activate_now(&a.f, a.project, "first").await;
+    let framing_before = {
+        let store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        store.framing_draft(a.project).unwrap().unwrap()
+    };
+    a.db.execute("UPDATE exposureplan SET desired=90", [])
+        .unwrap();
+    let behind = check_now(&a.f, a.project).await;
+    assert!(
+        actions(&behind, "plan")
+            .iter()
+            .all(|action| action == "update"),
+        "{behind}"
+    );
+
+    // Revisions the person did not see are refused.
+    let (status, stale) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/plan/take-target-scheduler", a.project),
+        json!({"rig_id": a.rig, "plan_revision": 99, "framing_revision": framing_before.revision}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+
+    let (status, taken) = take_values(&a.f, a.project, a.rig).await;
+    assert_eq!(status, StatusCode::OK, "{taken}");
+    assert_eq!(taken["data"]["taken"], json!(["Ha: 90 frames"]), "{taken}");
+    assert_eq!(taken["data"]["framing_revision"], framing_before.revision);
+    let store_plan = {
+        let store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        store.plan_draft(a.project).unwrap().unwrap()
+    };
+    assert_eq!(store_plan.objectives[0].goal, Goal::Frames { value: 90 });
+    let after = check_now(&a.f, a.project).await;
+    assert_eq!(
+        actions(&after, "plan"),
+        ["unchanged", "unchanged"],
+        "{after}"
+    );
+}
+
+/// Where another rig shoots the same band, the frames become this rig's own
+/// goal; the band's goal and the other rig stay as planned.
+#[tokio::test]
+async fn a_shared_band_takes_the_rigs_frames_as_its_own_goal() {
+    let a = activated().await;
+    let (other_rig, _other_db) = add_rig(&a.f, "rig-b").await;
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut draft = store.plan_draft(a.project).unwrap().unwrap();
+        let revision = draft.revision;
+        let mine = draft.contributions[0].clone();
+        draft.contributions.push(Contribution {
+            id: Uuid::new_v4(),
+            rig_id: other_rig,
+            ..mine
+        });
+        store.save_plan_draft(&draft, revision).unwrap();
+    }
+    activate_now(&a.f, a.project, "both").await;
+    let goal_before = {
+        let store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        store.plan_draft(a.project).unwrap().unwrap().objectives[0].goal
+    };
+    a.db.execute("UPDATE exposureplan SET desired=90", [])
+        .unwrap();
+    let (status, taken) = take_values(&a.f, a.project, a.rig).await;
+    assert_eq!(status, StatusCode::OK, "{taken}");
+    assert_eq!(
+        taken["data"]["taken"],
+        json!(["Ha: 90 frames on this rig"]),
+        "{taken}"
+    );
+    let plan = {
+        let store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        store.plan_draft(a.project).unwrap().unwrap()
+    };
+    assert_eq!(plan.objectives[0].goal, goal_before);
+    let mine = plan
+        .contributions
+        .iter()
+        .find(|c| c.rig_id == a.rig)
+        .unwrap();
+    let theirs = plan
+        .contributions
+        .iter()
+        .find(|c| c.rig_id == other_rig)
+        .unwrap();
+    assert_eq!(mine.goal, Some(Goal::Frames { value: 90 }));
+    assert_eq!(theirs.goal, None);
+    let after = check_now(&a.f, a.project).await;
+    for rig in [a.rig, other_rig] {
+        let changes = rig_changes(&after, rig);
+        assert!(
+            changes
+                .iter()
+                .all(|c| c.ends_with("unchanged") || c.ends_with("keep")),
+            "{rig}: {changes:?}"
+        );
+    }
+}
+
+/// A target moved in Target Scheduler moves the plan's framing when only this
+/// rig uses it; the check then finds the target where the plan has it. A
+/// single panel can sit anywhere; a grid moved by hand is matched as near as
+/// a grid allows, and an activation lines its targets up.
+#[tokio::test]
+async fn a_target_moved_in_target_scheduler_moves_the_framing() {
+    let a = activated().await;
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut framing = store.framing_draft(a.project).unwrap().unwrap();
+        let revision = framing.revision;
+        framing.mosaic = Mosaic {
+            rows: 1,
+            columns: 1,
+            overlap_percent: 20,
+        };
+        store.save_framing_draft(&framing, revision).unwrap();
+    }
+    activate_now(&a.f, a.project, "first").await;
+    let before = {
+        let store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        store.framing_draft(a.project).unwrap().unwrap()
+    };
+    a.db.execute("UPDATE target SET dec=dec+0.5", []).unwrap();
+    let (status, taken) = take_values(&a.f, a.project, a.rig).await;
+    assert_eq!(status, StatusCode::OK, "{taken}");
+    assert_eq!(
+        taken["data"]["taken"],
+        json!(["Framing: where Target Scheduler has it"]),
+        "{taken}"
+    );
+    let after = {
+        let store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        store.framing_draft(a.project).unwrap().unwrap()
+    };
+    assert!(
+        (after.center.dec_degrees - before.center.dec_degrees - 0.5).abs() < 1e-6,
+        "{after:?}"
+    );
+    let checked = check_now(&a.f, a.project).await;
+    assert_eq!(actions(&checked, "target"), ["unchanged"], "{checked}");
+}
+
+/// A band turned off in Target Scheduler is turned off for that rig, and
+/// what the plan has no place for is named, not taken.
+#[tokio::test]
+async fn a_band_off_in_target_scheduler_is_turned_off_and_a_draft_is_named() {
+    let a = activated().await;
+    activate_now(&a.f, a.project, "first").await;
+    a.db.execute_batch("UPDATE exposureplan SET enabled=0; UPDATE project SET state=0;")
+        .unwrap();
+    let (status, taken) = take_values(&a.f, a.project, a.rig).await;
+    assert_eq!(status, StatusCode::OK, "{taken}");
+    assert_eq!(
+        taken["data"]["taken"],
+        json!(["Ha: off, as in Target Scheduler"]),
+        "{taken}"
+    );
+    assert_eq!(
+        taken["data"]["left"],
+        json!(["Project: a Draft in Target Scheduler; an activation makes it Active"]),
+        "{taken}"
+    );
+    let plan = {
+        let store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        store.plan_draft(a.project).unwrap().unwrap()
+    };
+    assert!(!plan.contributions[0].enabled);
+}
+
 async fn add_rig(f: &Fixture, slug: &str) -> (Uuid, rusqlite::Connection) {
     let path = f._dir.path().join(format!("{slug}.sqlite"));
     let db = crate::ts_schema::create_fresh_db(&path).unwrap();

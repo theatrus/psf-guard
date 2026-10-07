@@ -5,7 +5,7 @@ import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorFeasibility, DirectorMosaicPreview, DirectorResolvedName,
   DirectorSkyMarks,
-  DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate, DirectorAttached} from './directorTypes';
+  DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate, DirectorAttached, DirectorTakenValues } from './directorTypes';
 import type { GuidFillReport, GuidReport,
   ProjectMosaic,
   ProjectProcessingSettings,
@@ -560,6 +560,15 @@ export const apiClient = {
     const api = await getApi();
     const { data } = await api.get<ApiResponse<DirectorActivationReport>>(`/director/v1/projects/${encodeURIComponent(projectId)}/activation/check`);
     if (!data.data) throw new Error(data.error || 'Failed to check activation');
+    return data.data;
+  },
+
+  /** Take one rig's Target Scheduler values into the saved plan, under the
+   *  draft revisions last seen. */
+  takeTargetSchedulerValues: async (projectId: string, rigId: string, planRevision: number, framingRevision: number): Promise<DirectorTakenValues> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<DirectorTakenValues>>(`/director/v1/projects/${encodeURIComponent(projectId)}/plan/take-target-scheduler`, { rig_id: rigId, plan_revision: planRevision, framing_revision: framingRevision });
+    if (!data.data) throw new Error(data.error || "Failed to take Target Scheduler's values");
     return data.data;
   },
 
