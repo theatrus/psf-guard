@@ -74,6 +74,363 @@ async fn mock(app: Router) -> (String, tokio::task::JoinHandle<()>) {
 fn health(features: Value) -> Value {
     json!({"ok":true,"protocol":1,"version":"test","time":1791171023.0,"features":features})
 }
+async fn commissioned(state: &Arc<AppState>, rig: Uuid) {
+    use psf_guard_director_core::optics::{Optics, Rotation};
+    use psf_guard_director_meta::profile::{Reported, RigProfile, Source as ProfileSource};
+    state
+        .director
+        .clone()
+        .unwrap()
+        .run(move |s| {
+            let mut p = RigProfile::empty(rig, 1000);
+            p.optics = Some(Reported {
+                value: Optics {
+                    sensor_width_px: 6248,
+                    sensor_height_px: 4176,
+                    pixel_size_um: 3.76,
+                    focal_length_mm: 530.0,
+                    aperture_mm: None,
+                    rotation: Rotation::Rotator {},
+                },
+                source: ProfileSource::Manual {},
+                reported_at_ms: 1000,
+            });
+            s.save_rig_profile(&p, 0)?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+}
+fn setup_filters() -> Value {
+    json!({"operation":"configure","settings":{"binning":1,"colour":false,"hours_per_night":6.0,"share_status":false,"filters":{"Ha":{"exposure_seconds":300.0,"bandpass_nm":7.0},"OIII":{"exposure_seconds":300.0,"bandpass_nm":7.0}}}})
+}
+fn observing_night() -> Value {
+    json!({"night":"2026-10-05","moon":0.12,"moon_up":0.3})
+}
+#[tokio::test]
+#[ignore = "Requires ASTROCOLLAB_REFERENCE and ASTROCOLLAB_PYTHON pointing to the public reference checkout and its Python"]
+async fn reference_server_managed_pair_hello_join_and_reviewed_import() {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    struct Reference(std::process::Child);
+    impl Drop for Reference {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let root = std::env::var("ASTROCOLLAB_REFERENCE").expect("Set reference checkout path");
+    let python = std::env::var("ASTROCOLLAB_PYTHON").unwrap_or("python".into());
+    let mut process = Reference(
+        Command::new(python)
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/support/astrocollab_reference.py"
+            ))
+            .arg(root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let mut line = String::new();
+    BufReader::new(process.0.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let remote: Value = serde_json::from_str(&line).expect("Reference server did not start");
+    let (_dir, state, app, rig) = fixture().await;
+    commissioned(&state, rig).await;
+    let id = add(&app, rig, remote["url"].as_str().unwrap(), &[]).await;
+    let (status, paired) = call(
+        &app,
+        "POST",
+        &action(id, "pair"),
+        json!({"code":remote["code"]}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{paired}");
+    let route = format!("/collaboration/{id}/work");
+    assert_eq!(
+        call(&app, "POST", &route, setup_filters(), &[]).await.0,
+        StatusCode::OK
+    );
+    let (status, projects) = call(&app, "POST", &route, json!({"operation":"browse"}), &[]).await;
+    assert_eq!(status, StatusCode::OK, "{projects}");
+    let project = projects["data"]["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["compatible"] == true)
+        .expect("No compatible sample project")["project_id"]
+        .clone();
+    let (status, work) = call(
+        &app,
+        "POST",
+        &route,
+        json!({"operation":"join","project":project,"night":observing_night()}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{work}");
+    let share = work["data"]["shares"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["review_reasons"].as_array().unwrap().is_empty())
+        .expect("Reference share requires review");
+    let task = share["task_id"].clone();
+    let (status, preview) = call(
+        &app,
+        "POST",
+        &route,
+        json!({"operation":"preview","task":task,"night":observing_night()}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let (status,imported)=call(&app,"POST",&route,json!({"operation":"apply","task":task,"night":observing_night(),"review_digest":preview["data"]["preview"]["review_digest"]}),&[]).await;
+    assert_eq!(status, StatusCode::OK, "{imported}");
+    assert_eq!(imported["data"]["preview"]["acquisition_enabled"], false);
+}
+#[tokio::test]
+async fn malformed_report_reply_acknowledges_nothing_and_replay_uses_same_snapshot() {
+    use psf_guard_director_interop::collaboration::*;
+    let (_dir, state, app, rig) = fixture().await;
+    commissioned(&state, rig).await;
+    let count = Arc::new(AtomicUsize::new(0));
+    let seen = count.clone();
+    let sent = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let received = sent.clone();
+    let (endpoint,remote)=mock(Router::new()
+        .route("/api/v1/health",get(||async{Json(health(json!(["pairing"]))) }))
+        .route("/api/v1/pair",axum::routing::post(||async{Json(json!({"agent":{"id":"000000000001"},"token":"test-agent-token"}))}))
+        .route("/api/v1/agent/hello",axum::routing::post(||async{Json(json!({"agent":"000000000001","protocol":1,"serverTime":1791171023.0}))}))
+        .route("/api/v1/agent/report",axum::routing::post(move |Json(body):Json<Value>|{let seen=seen.clone();let received=received.clone();async move{
+            received.lock().unwrap().push(body);
+            if seen.fetch_add(1,Ordering::SeqCst)==0 {Json(json!({"recorded":[]}))}
+            else {Json(json!({"recorded":[{"id":"000000000010","accepted":false,"duplicate":true,"verdict":{"accepted":false,"reasons":["quality evidence incomplete"],"unverified":[]}}]}))}
+        }}))).await;
+    let id = add(&app, rig, &endpoint, &[]).await;
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &action(id, "pair"),
+            json!({"code":"PAIR"}),
+            &[]
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let route = format!("/collaboration/{id}/work");
+    assert_eq!(
+        call(&app, "POST", &route, setup_filters(), &[]).await.0,
+        StatusCode::OK
+    );
+    let source = Source::new(&endpoint, "000000000001", true).unwrap();
+    let key = source.clone();
+    let queued = state
+        .director
+        .clone()
+        .unwrap()
+        .run(move |s| {
+            let plan = prepare_import(
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/crates/director-interop/tests/fixtures/starfront-tonight.json"
+                )),
+                &source,
+                "2026-10-05",
+                "000000000004",
+            )
+            .unwrap();
+            let preview = s.preview_collaboration_import(&plan, rig)?;
+            s.apply_collaboration_import(&plan, rig, &preview.review_digest, 1000)?;
+            let frame = FrameEvidence {
+                capture_id: Uuid::new_v4(),
+                image_guid: Uuid::new_v4(),
+                source_digest: plan.digest().into(),
+                panel_index: 0,
+                filter: "OIII".into(),
+                exposure_ms: 300000,
+                saved: true,
+                accepted: true,
+                finalized: true,
+                image_fingerprint: "verified-test-frame".into(),
+                solve_fingerprint: "verified-test-frame".into(),
+                solved_footprint: MeasuredFootprint {
+                    ra: 10.5,
+                    dec: 41.0,
+                    width: 1.25,
+                    height: 0.8,
+                    rotation: 0.0,
+                },
+                scale_arcsec: None,
+                focal_length_mm: None,
+                hfr_arcsec: None,
+                guide_rms_arcsec: None,
+                moon_illumination: None,
+                moon_separation_degrees: None,
+                calibrated: false,
+                bandpass_nm: None,
+                colour: false,
+            };
+            s.queue_collaboration_report(&finalize_contribution(&plan, &[frame]).unwrap(), 2000)
+        })
+        .await
+        .unwrap();
+    assert!(
+        !call(&app, "POST", &route, json!({"operation":"checkin"}), &[])
+            .await
+            .0
+            .is_success()
+    );
+    let pending = state
+        .director
+        .clone()
+        .unwrap()
+        .query(move |s| s.pending_collaboration_reports(&key, 200))
+        .await
+        .unwrap();
+    assert_eq!(pending[0].id, queued.id);
+    let (status, body) = call(&app, "POST", &route, json!({"operation":"checkin"}), &[]).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["accepted"], 0);
+    assert_eq!(body["data"]["rejected"], 1);
+    let sent = sent.lock().unwrap();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[0], sent[1]);
+    remote.abort();
+}
+#[tokio::test]
+async fn work_describes_rig_joins_and_requires_current_review_before_import() {
+    let (_dir, state, app, rig) = fixture().await;
+    commissioned(&state, rig).await;
+    let mut wire: Value = serde_json::from_slice(include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/crates/director-interop/tests/fixtures/starfront-tonight.json"
+    )))
+    .unwrap();
+    wire.as_object_mut().unwrap().remove("task");
+    let mutable = Arc::new(Mutex::new(wire));
+    let calls = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let received = calls.clone();
+    let response = mutable.clone();
+    let (endpoint, remote) = mock(
+        Router::new()
+            .route(
+                "/api/v1/health",
+                get(|| async { Json(health(json!(["pairing"]))) }),
+            )
+            .route(
+                "/api/v1/pair",
+                axum::routing::post(|| async {
+                    Json(json!({"agent":{"id":"000000000001"},"token":"test-agent-token"}))
+                }),
+            )
+            .route(
+                "/api/v1/agent/hello",
+                axum::routing::post(move |headers: HeaderMap, Json(body): Json<Value>| {
+                    let received = received.clone();
+                    async move {
+                        assert_eq!(headers["authorization"], "Bearer test-agent-token");
+                        received.lock().unwrap().push(body);
+                        Json(json!({"agent":"000000000001","protocol":1,"serverTime":1791171023.0}))
+                    }
+                }),
+            )
+            .route(
+                "/api/v1/agent/projects/000000000002/join",
+                axum::routing::post(|Json(body): Json<Value>| async move {
+                    assert_eq!(body["night"], "2026-10-05");
+                    assert_eq!(body["exposures"]["Ha"], 300.0);
+                    Json(json!({"task":{}}))
+                }),
+            )
+            .route(
+                "/api/v1/agent/task",
+                get(move |Query(query): Query<HashMap<String, String>>| {
+                    let response = response.clone();
+                    async move {
+                        assert_eq!(query["night"], "2026-10-05");
+                        assert_eq!(query["moon"], "0.12");
+                        Json(response.lock().unwrap().clone())
+                    }
+                }),
+            ),
+    )
+    .await;
+    let id = add(&app, rig, &endpoint, &[]).await;
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &action(id, "pair"),
+            json!({"code":"PAIR"}),
+            &[]
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let route = format!("/collaboration/{id}/work");
+    assert_eq!(
+        call(&app, "POST", &route, setup_filters(), &[]).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &route,
+            json!({"operation":"join","project":"000000000002","night":observing_night()}),
+            &[]
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (status, preview) = call(
+        &app,
+        "POST",
+        &route,
+        json!({"operation":"preview","task":"000000000004","night":observing_night()}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["data"]["preview"]["acquisition_enabled"], false);
+    let digest = preview["data"]["preview"]["review_digest"].clone();
+    let apply = json!({"operation":"apply","task":"000000000004","night":observing_night(),"review_digest":digest});
+    mutable.lock().unwrap()["tasks"][0]["version"] = json!(3);
+    assert_eq!(
+        call(&app, "POST", &route, apply.clone(), &[]).await.0,
+        StatusCode::CONFLICT
+    );
+    mutable.lock().unwrap()["tasks"][0]["version"] = json!(2);
+    let (status, body) = call(&app, "POST", &route, apply, &[]).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!body.to_string().contains("test-agent-token"));
+    let import: Uuid = serde_json::from_value(body["data"]["plan"]["import_id"].clone()).unwrap();
+    let stored = state
+        .director
+        .clone()
+        .unwrap()
+        .query(move |s| s.collaboration_import(import))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.rig_id, rig);
+    assert!(calls
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|v| v["profile"]["focalLength"] == 530.0 && v["presence"].is_null()));
+    remote.abort();
+}
 async fn add(app: &Router, rig: Uuid, endpoint: &str, headers: &[(&str, &str)]) -> Uuid {
     let id = Uuid::new_v4();
     let (status, body) = call(

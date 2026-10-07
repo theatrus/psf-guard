@@ -135,6 +135,13 @@ fn health_retains_absent_features_for_signin_discovery() {
     let health = decode_health(&serde_json::to_vec(&body).unwrap()).unwrap();
     assert_eq!(health.server_time_ms, 1_791_171_001_125);
     assert!(health.features.unwrap().contains("future"));
+    let body = json!({"ok":true,"protocol":1,"version":"reference","time":1791171001.125789});
+    assert_eq!(
+        decode_health(&serde_json::to_vec(&body).unwrap())
+            .unwrap()
+            .server_time_ms,
+        1_791_171_001_125
+    );
 }
 
 #[test]

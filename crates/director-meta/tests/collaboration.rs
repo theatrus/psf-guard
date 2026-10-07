@@ -49,6 +49,7 @@ fn connection_and_import_cannot_bind_one_agent_to_different_rigs() {
         allow_loopback_http: false,
         agent_id: None,
         state: ConnectionState::New,
+        settings: None,
     };
     s.create_collaboration_connection(&binding).unwrap();
     let mut registered = binding.clone();
@@ -473,7 +474,7 @@ fn schema_twenty_two_migrates_without_changing_existing_identity_and_bad_migrati
             assert_eq!(
                 conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                     .unwrap(),
-                24
+                25
             );
         }
     }

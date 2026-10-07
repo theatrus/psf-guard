@@ -18,6 +18,7 @@ fn migration_identity_and_compare_exchange_preserve_original_agent() {
         allow_loopback_http: false,
         agent_id: None,
         state: ConnectionState::New,
+        settings: None,
     };
     store.create_collaboration_connection(&b).unwrap();
     store.create_collaboration_connection(&b).unwrap();
@@ -42,6 +43,10 @@ fn migration_identity_and_compare_exchange_preserve_original_agent() {
         .update_collaboration_connection(&registered, &disabled)
         .unwrap();
     drop(store);
+    // Schema 24 bindings had no settings member. Upgrade without changing identity.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.pragma_update(None, "user_version", 24).unwrap();
+    drop(conn);
     let store = MetaStore::open(&path).unwrap();
     assert_eq!(
         store.collaboration_connections(rig).unwrap(),
@@ -54,6 +59,51 @@ fn migration_identity_and_compare_exchange_preserve_original_agent() {
     drop(conn);
     let store = MetaStore::open(&path).unwrap();
     assert!(store.collaboration_connections(rig).unwrap().is_empty());
+}
+
+#[test]
+fn reviewed_settings_survive_reopen_without_changing_agent() {
+    use psf_guard_director_interop::workflow::{FilterSetup, Settings};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let mut store = MetaStore::create(&path).unwrap();
+    let rig = Uuid::new_v4();
+    store.create_rig(rig, "Rig").unwrap();
+    let binding = ConnectionBinding {
+        id: Uuid::new_v4(),
+        rig_id: rig,
+        base_url: "https://example.com/".into(),
+        name: "Rig".into(),
+        allow_loopback_http: false,
+        agent_id: None,
+        state: ConnectionState::New,
+        settings: None,
+    };
+    store.create_collaboration_connection(&binding).unwrap();
+    let mut configured = binding.clone();
+    configured.settings = Some(Settings {
+        binning: 1,
+        colour: false,
+        hours_per_night: 6.0,
+        share_status: false,
+        filters: [(
+            "Ha".into(),
+            FilterSetup {
+                exposure_seconds: 300.0,
+                bandpass_nm: Some(7.0),
+            },
+        )]
+        .into(),
+    });
+    store
+        .update_collaboration_connection(&binding, &configured)
+        .unwrap();
+    drop(store);
+    let store = MetaStore::open(&path).unwrap();
+    assert_eq!(
+        store.collaboration_connection(binding.id).unwrap(),
+        Some(configured)
+    );
 }
 
 #[test]
@@ -71,6 +121,7 @@ fn indexed_identity_must_match_payload_and_capacity_retries_remain_idempotent() 
         allow_loopback_http: false,
         agent_id: None,
         state: ConnectionState::New,
+        settings: None,
     };
     store.create_collaboration_connection(&first).unwrap();
     for _ in 1..256 {
