@@ -47,12 +47,13 @@ vi.mock('../OrganizationDialog', () => ({
 }));
 
 vi.mock('../ImageCard', () => ({
-  default: ({ image }: { image: Image }) => (
+  default: ({ image, showTarget }: { image: Image; showTarget?: boolean }) => (
     <div
       className="image-card"
       data-testid={`image-${image.id}`}
       data-card-image-id={image.id}
       data-target-id={image.target_id}
+      data-show-target={String(showTarget ?? true)}
     >
       {image.target_name}
     </div>
@@ -102,8 +103,8 @@ function RouteProbe() {
   return <output data-testid="route">{route}</output>;
 }
 
-function mountGrid() {
-  let sourceImages = [firstImage, secondImage];
+function mountGrid(initial: Image[] = [firstImage, secondImage]) {
+  let sourceImages = initial;
   server.use(
     http.get('/api/info', () => HttpResponse.json({
       success: true,
@@ -182,5 +183,19 @@ describe('GroupedImageGrid organization navigation', () => {
     await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent('target=11&current=2'));
     expect(navigation.pending).toBeNull();
     expect(screen.getByTestId('image-2')).toHaveAttribute('data-target-id', '11');
+  });
+});
+
+describe('GroupedImageGrid target names', () => {
+  it('leaves the target off the cards when every frame is of one target', async () => {
+    mountGrid();
+    expect(await screen.findByTestId('image-1')).toHaveAttribute('data-show-target', 'false');
+    expect(screen.getByTestId('image-2')).toHaveAttribute('data-show-target', 'false');
+  });
+
+  it('names it on each card when the frames are of several targets', async () => {
+    mountGrid([firstImage, { ...movedImage, id: 3 }]);
+    expect(await screen.findByTestId('image-1')).toHaveAttribute('data-show-target', 'true');
+    expect(screen.getByTestId('image-3')).toHaveAttribute('data-show-target', 'true');
   });
 });

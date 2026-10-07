@@ -49,6 +49,9 @@ export interface ImageCardProps {
   lazyPreview?: boolean;
   selectionEffects?: boolean;
   className?: string;
+  /** Name the target on the card. A grid of one target's frames says it
+   *  once in its header, not on every card. */
+  showTarget?: boolean;
 }
 
 export default function ImageCard({
@@ -64,6 +67,7 @@ export default function ImageCard({
   lazyPreview = false,
   selectionEffects = true,
   className = '',
+  showTarget = true,
 }: ImageCardProps) {
   const color = useColorPreview();
   const { showNightChip, showAllChip } = useDisplayPreferences();
@@ -119,6 +123,18 @@ export default function ImageCard({
     if (!timestamp) return 'Unknown';
     return new Date(timestamp * 1000).toLocaleString();
   };
+  // Day, hour and minute, and seconds, as separate pieces so a narrow card
+  // can drop the day and the seconds; the full date is the cell's title.
+  const shortDate = (timestamp: number | null) => {
+    if (!timestamp) return null;
+    const date = new Date(timestamp * 1000);
+    return {
+      day: date.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' }),
+      time: date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false }),
+      seconds: `:${String(date.getSeconds()).padStart(2, '0')}`,
+    };
+  };
+  const when = shortDate(image.acquired_date);
 
   // Extract HFR and star count from metadata
   const getImageStats = () => {
@@ -209,15 +225,17 @@ export default function ImageCard({
         )}
       </div>
       <div className="image-info">
-        <h3>{image.target_name}</h3>
-        <p className="image-filter">{image.filter_name || 'No filter'}</p>
-        <p className="image-date">{formatDate(image.acquired_date)}</p>
-        {(stats.hfr || stats.starCount) && (
-          <div className="image-stats">
-            {stats.hfr && <span className="stat-hfr">HFR: {stats.hfr}</span>}
-            {stats.starCount && <span className="stat-stars">★ {stats.starCount}</span>}
-          </div>
-        )}
+        {showTarget && <h3 className="image-target" title={image.target_name}>{image.target_name}</h3>}
+        {/* One row of fixed columns, the same on every card, so nothing
+            wraps and the values line up from card to card. */}
+        <div className="image-facts">
+          <span className="image-filter" title={`Filter: ${image.filter_name || 'none'}`}>{image.filter_name || 'No filter'}</span>
+          <span className="image-date" title={formatDate(image.acquired_date)}>
+            {when ? <><span className="date-day">{when.day} </span>{when.time}<span className="date-seconds">{when.seconds}</span></> : '—'}
+          </span>
+          <span className="stat-hfr" title="Half-flux radius">{stats.hfr && <><span className="fact-label">HFR </span>{stats.hfr}</>}</span>
+          <span className="stat-stars" title="Detected stars">{stats.starCount != null && `★${stats.starCount}`}</span>
+        </div>
         {qualityPresentation === 'full' && quality && (
           <span
             className="sequence-score-basis"
@@ -226,12 +244,16 @@ export default function ImageCard({
             {qualityScoreBasis(quality)}
           </span>
         )}
-        <div className={`image-status ${getStatusClass()}`}>
+        <div
+          className={`image-status ${getStatusClass()}`}
+          title={image.reject_reason ? `${getStatusText()}: ${image.reject_reason}` : getStatusText()}
+        >
           {getStatusText()}
           {image.reject_reason && (
-            <span className="reject-reason-inline"> - {image.reject_reason}</span>
+            <span className="reject-reason-inline"> · {image.reject_reason}</span>
           )}
         </div>
+        <div className="image-signals">
         {qualityPresentation === 'full'
           && quality?.normalized_metrics.spatial_coverage != null
           && quality.normalized_metrics.spatial_coverage < 0.9 && (
@@ -286,6 +308,7 @@ export default function ImageCard({
               : 'pixel match'}
           </span>
         )}
+        </div>
         {qualityPresentation === 'full'
           && (quality?.regrade_reason || quality?.details) && (
           <QualityReasonPopover

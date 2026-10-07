@@ -1237,6 +1237,7 @@ const SequenceStrip = memo(function SequenceStrip({
             onDoubleClick={() => onOpen(quality.image_id)}
             lazyPreview
             selectionEffects={false}
+            showTarget={false}
             className={`sequence-image-card${
               currentImageId === quality.image_id ? ' current-selection' : ''
             }${belowThreshold ? ' below-threshold' : ''}`}

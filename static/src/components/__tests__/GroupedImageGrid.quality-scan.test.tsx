@@ -134,7 +134,8 @@ describe('GroupedImageGrid quality analysis', () => {
       wrapper: wrapper('/grid?db=test&project=1'),
     });
 
-    await screen.findAllByText('Sh2 86');
+    // The cards are drawn (one target, so they leave its name off).
+    await waitFor(() => expect(document.querySelector('.image-card')).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: 'Analyze Quality' })).not.toBeInTheDocument();
   });
 
@@ -155,7 +156,8 @@ describe('GroupedImageGrid quality analysis', () => {
       wrapper: wrapper('/grid?db=test&project=1&target=42&filter=R'),
     });
 
-    await screen.findAllByText('Sh2 86');
+    // The cards are drawn (one target, so they leave its name off).
+    await waitFor(() => expect(document.querySelector('.image-card')).toBeInTheDocument());
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: 'Analyze Quality' })).not.toBeInTheDocument();
     });
