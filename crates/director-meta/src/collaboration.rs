@@ -196,6 +196,47 @@ impl MetaStore {
                 params![project.to_string(), super::configuration::encode(&draft)?],
             )?;
         }
+        if super::framing::read_draft(&tx, project)?.is_none() {
+            let region = &plan.share().region;
+            let mas = psf_guard_director_core::program::MAS_PER_DEGREE as f64;
+            let size = |region: &psf_guard_director_interop::astrocollab::Region| {
+                psf_guard_director_core::framing::PanelSize {
+                    width_degrees: f64::from(region.width_mas) / mas,
+                    height_degrees: f64::from(region.height_mas) / mas,
+                }
+            };
+            // A collaboration's whole sky region can exceed a camera panel.
+            // Keep import independent of the framing editor's panel bounds.
+            let panel = std::iter::once(region)
+                .chain(plan.share().cells.iter().map(|c| &c.region))
+                .map(size)
+                .find(|panel| panel.validate().is_ok());
+            let framing = super::framing::FramingDraft {
+                project_id: project,
+                revision: 1,
+                target_name: name.into(),
+                center: psf_guard_director_core::visibility::IcrsPosition {
+                    ra_degrees: f64::from(region.icrs_ra_mas) / mas,
+                    dec_degrees: f64::from(region.icrs_dec_mas) / mas,
+                },
+                position_angle_degrees: f64::from(region.position_angle_mas) / mas,
+                mosaic: psf_guard_director_core::framing::Mosaic::SINGLE,
+                panel_rig_id: Some(rig),
+                panel,
+                shown_rig_ids: vec![],
+                survey_id: "dss2_color".into(),
+                view_fov_degrees: (f64::from(region.width_mas.max(region.height_mas)) / mas * 1.2)
+                    .clamp(0.02, 180.0),
+                updated_at_ms: now_ms,
+                rig_framings: vec![],
+                layout_revision: 1,
+            };
+            super::framing::validate_draft(&framing)?;
+            tx.execute(
+                "INSERT INTO framing_draft(project_id,revision,payload) VALUES(?1,1,?2)",
+                params![project.to_string(), super::configuration::encode(&framing)?],
+            )?;
+        }
         let revision = reviewed
             .expected_revision
             .checked_add(1)
@@ -459,14 +500,13 @@ impl MetaStore {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current = read_import(&tx, finalized.import_id())?.ok_or(Error::NotFound)?;
+        read_import(&tx, finalized.import_id())?.ok_or(Error::NotFound)?;
         let import = read_import_revision(&tx, finalized.import_id(), finalized.source_digest())?
             .ok_or(Error::NotFound)?;
         if now_ms < import.imported_at_ms {
             return Err(Error::InvalidInput);
         }
         if import.plan.share().geometry_digest != finalized.geometry_digest()
-            || current.plan.share().geometry_digest != finalized.geometry_digest()
             || finalized.integration_ms() > i64::MAX as u64
         {
             return Err(Error::Conflict);
@@ -487,18 +527,36 @@ impl MetaStore {
             tx.commit()?;
             return Ok(old);
         }
-        let mut stmt = tx.prepare("SELECT id FROM collaboration_outbox WHERE import_id=?1 AND panel=?2 AND filter=?3 ORDER BY integration_ms DESC LIMIT 1")?;
+        // The wire key omits our import/revision IDs. Two nightly snapshots of
+        // the same task must not silently replace one another at the server.
+        // Hold this case until their measured cohorts can be merged losslessly.
+        let competing: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM collaboration_outbox o JOIN collaboration_import i ON i.id=o.import_id
+            WHERE i.base_url=?1 AND i.agent_id=?2 AND i.task_id=?3 AND o.import_id!=?4 AND o.panel=?5 AND o.filter=?6 AND json_extract(o.payload,'$.night')=?7)",
+            params![import.plan.source().base_url(),import.plan.source().agent_id(),import.plan.share().task_id,finalized.import_id().to_string(),finalized.panel_index(),finalized.filter(),finalized.observing_night()],|r|r.get(0))?;
+        if competing {
+            return Err(Error::Conflict);
+        }
+        let mut stmt = tx.prepare("SELECT id FROM collaboration_outbox WHERE import_id=?1 AND panel=?2 AND filter=?3 AND json_extract(payload,'$.night')=?4 ORDER BY integration_ms DESC LIMIT 1")?;
         let previous: Option<String> = stmt
             .query_row(
                 params![
                     finalized.import_id().to_string(),
                     finalized.panel_index(),
-                    finalized.filter()
+                    finalized.filter(),
+                    finalized.observing_night()
                 ],
                 |r| r.get(0),
             )
             .optional()?;
         drop(stmt);
+        // A retry may extend one observing night's aggregate, never move the
+        // same saved frame into another night's report and count it twice.
+        let wrong_night: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM collaboration_outbox o WHERE o.import_id=?1 AND json_extract(o.payload,'$.night')!=?2
+            AND EXISTS(SELECT 1 FROM json_each(o.images) old JOIN json_each(?3) new ON old.value=new.value))",
+            params![finalized.import_id().to_string(),finalized.observing_night(),images], |r| r.get(0))?;
+        if wrong_night {
+            return Err(Error::Conflict);
+        }
         if let Some(old) = previous {
             let old = read_report(&tx, parse_id(&old)?)?.ok_or(Error::CorruptDatabase)?;
             let captures: BTreeSet<_> = finalized.captures().iter().copied().collect();
@@ -562,6 +620,7 @@ impl MetaStore {
             "SELECT o.id FROM collaboration_outbox o JOIN collaboration_import i ON i.id=o.import_id
              WHERE i.base_url=?1 AND i.agent_id=?2 AND o.acknowledged_at_ms IS NULL
              AND NOT EXISTS(SELECT 1 FROM collaboration_outbox p WHERE p.import_id=o.import_id AND p.panel=o.panel AND p.filter=o.filter
+                AND json_extract(p.payload,'$.night')=json_extract(o.payload,'$.night')
                 AND p.acknowledged_at_ms IS NULL AND p.integration_ms<o.integration_ms)
              ORDER BY o.created_at_ms,o.id LIMIT ?3")?;
         let ids = stmt
@@ -695,7 +754,6 @@ fn read_report(conn: &Connection, id: Uuid) -> Result<Option<QueuedReport>, Erro
                 || created as u64 > MAX_TIME_MS
                 || ack.is_some_and(|n| n < created || n as u64 > MAX_TIME_MS)
                 || ack.is_some() != recorded.is_some()
-                || geometry != owner.plan.share().geometry_digest
                 || geometry != original.plan.share().geometry_digest
                 || captures_v.is_empty()
                 || captures_v.len() > MAX_REPORT_FRAMES
@@ -706,7 +764,9 @@ fn read_report(conn: &Connection, id: Uuid) -> Result<Option<QueuedReport>, Erro
                 || images_v.iter().collect::<BTreeSet<_>>().len() != images_v.len()
                 || body["project"].as_str() != Some(&owner.plan.share().project_id)
                 || body["task"].as_str() != Some(&owner.plan.share().task_id)
-                || body["night"].as_str() != Some(owner.plan.night())
+                || body["night"].as_str().is_none_or(|night| {
+                    psf_guard_director_interop::astrocollab::validate_night(night).is_err()
+                })
                 || body["filterName"].as_str() != Some(&filter)
                 || body["panel"].as_str() != Some(&panel.to_string())
                 || body["frames"].as_u64() != Some(captures_v.len() as u64)

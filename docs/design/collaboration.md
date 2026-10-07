@@ -2,7 +2,9 @@
 
 Status: shared reader, authentication, reviewed import, managed-host hello/join,
 nightly work retrieval, catalog-evidence review, durable contribution delivery
-and fresh activity forwarding implemented. The NINA adapter has separate
+and fresh activity forwarding implemented. Reviewed assignments can use existing
+Activation to write ordinary Target Scheduler rows, with GUID-based capture
+association and actual-observing-night credit. The NINA adapter has separate
 standalone pairing and browser sign-in. Neither remote registration nor import
 grants acquisition. Plugin-only admission and reporting-owner handoff remain
 planned.
@@ -208,8 +210,8 @@ it does not accept remote bearer tokens or caller-provided scientific evidence.
 | `tonight` | Retrieve work for `night: {night, moon, moon_up}`; date and both fractions are required. |
 | `preview`, `apply` | Refetch the selected `task` for that night. Apply requires the current `review_digest`; changed work conflicts. Imports stay inactive. |
 | `report_inputs` | List this binding's imported visits and databases bound to its rig. |
-| `report_candidates` | List accepted saved-image GUIDs for an `import_id` and `catalog` around its original night. No grades or files are changed. |
-| `preview_report`, `queue_report` | Review `selection: {import_id, catalog, panel, image_guids}` using catalog and fresh pixel evidence. Queue requires its unchanged `review_digest`. |
+| `report_candidates` | List accepted saved-image GUIDs for an `import_id`, `catalog` and optional actual `observing_night` (defaults to the original night). Activated work is scoped by target GUID and assignment lifetime. No grades or files are changed. |
+| `preview_report`, `queue_report` | Review `selection: {import_id, catalog, panel, image_guids, source_digest?, observing_night?}` using catalog and fresh pixel evidence. Queue requires its unchanged `review_digest`. |
 | `checkin` | Send fresh opted-in presence and replay pending immutable reports. Persist receipts only after validating the complete positional reply. |
 
 Accepted live rig telemetry also schedules background check-in at most once a
@@ -227,8 +229,8 @@ contribution is a delivered receipt, not a local grade change or endless retry.
 | Hello profile | NINA equipment snapshot plus reviewed rig setup | Add sensor/optics, fixed-angle or rotator capability, filter bandpass, calibrated exposure defaults and measured arcsecond quality. Send unknown as unknown. |
 | Open projects and join | Browse, compatibility review, explicit participation | Join returns an accepted share; a manually offered share still needs acceptance. Joining does not start a sequence. |
 | Project region, kind and depth goals | Existing project/objective intent, with remote provenance | `single` centers one object; `mosaic` covers a region. Remote depth is hours at a sky position, not a local frame quota or proof of cross-rig equivalence. |
-| Task cells, ordered share, visit and version | Immutable nightly demand translated to targets, recipes and bounded work | Keep server panel indices and geometry. Translate visit frames using the approved rig exposure; do not turn season-long task hours into unlimited nightly attempts. |
-| Requirements | Shared capability checks and stricter effective observing constraints | Remote constraints can narrow, never weaken, local horizon, Moon, safety, equipment, time or attempt limits. Preserve local project ranking and overrides. |
+| Task cells, ordered share, visit and version | Immutable demand translated to targets, recipes and frame goals | Keep server panel indices and geometry. Translate assigned visit frames, not season-long task hours. The assigned night is provenance, not an acquisition deadline. |
+| Requirements | Contribution criteria and shared Director capability checks | TS uses reviewed local scheduling and recipes; remote criteria still govern credit. Director admission can narrow, never weaken, local safety/equipment constraints. Preserve project ranking and overrides. |
 | Presence | Optional projection of Director live status | Opt-in position/name sharing; no commands and no replay of stale presence after reconnect. |
 | Night report and verdict | Durable contribution outbox and remote assessment history | Report actual attributable data; remote accepted/rejected/unverified is separate from local per-frame grades. |
 | Depth map | Advisory combined coverage in the existing project workspace | Never subtract another telescope's remote integration from local authorized attempts or overwrite local capture progress. |
@@ -286,7 +288,8 @@ Names do not establish identity.
 
 The meta store provides preview/Apply with a review digest. Preview writes
 nothing. Apply creates an ordinary project and initial filter objectives, with
-no rig contributions, generated framing, activation or new catalog hierarchy.
+no rig contributions, activation or new catalog hierarchy. The initial framing
+draft shows the imported parent region; activation still uses exact remote cells.
 Exact remote geometry stays in the import, not a regenerated rectangular grid.
 Existing local drafts, priorities and grades are not overwritten on refresh.
 Changed local draft revisions invalidate a pending review. A lost Apply reply
@@ -296,14 +299,45 @@ Schema 23 retains immutable source revisions, so grading after a compatible
 source update can still use the original assignment. One server/agent binds
 to one rig. Older remote versions and changed content at the same version are
 refused. Attaching or detaching an imported project is blocked until provenance
-handoff is supported. The server also blocks its acquisition activation until
-admission can enforce remote requirements, exact panels and local nightly
-limits together. Creating or editing the draft does not remove this block.
+handoff is supported. Activation requires a current reviewed assignment for
+each participating rig and one enabled recipe per assigned filter at its assigned
+exposure. Import alone never grants acquisition.
+
+### Target Scheduler execution
+
+Publication is the existing project workspace's Activation, not another import
+screen or plugin mode. `GET /projects/{id}/activation/collaboration` lists imported
+assignments. Preview and Apply accept `collaboration: [{import_id, source_digest}]`.
+The activation digest binds that choice and refuses changed source content.
+Exact remote panel centers, rotations and frame demands become ordinary TS rows.
+Local observing preferences and native TS safety/scheduling stay in control.
+Remote quality/Moon requirements remain credit criteria, not fabricated evidence
+or a second scheduler.
+
+There is no offline nightly guard, hard attempt cap or date-based expiry in this
+TS path. The protocol calls tonight's list advice and defines no deadline mode;
+TS itself does not enforce stored project dates. Work remains eligible across
+nights until completed, disabled locally or superseded by reviewed new activation.
+Network loss and a missing nightly response do not revoke existing work.
+
+The rig-side `psf_guard_collaboration_plan` table records non-secret provenance:
+exposure-plan/target GUIDs, import ID, source digest, remote panel/filter/exposure,
+activation start, optional supersession cutover and cumulative desired frames.
+It stays on PSF Guard's catalog copy; ordinary TS rows travel through existing
+Sync, and returning image target GUIDs identify their source. Same-source Apply
+does not replenish the goal. Reviewed replacement closes the old association,
+adds requested frames above accepted/acquired progress, and reuses unchanged sky
+targets. Old source revisions remain available for delayed grading and reporting.
+Cutovers use TS capture timestamp precision (seconds). Automatic remote refresh,
+explicit remote revocation and plugin-only admission remain separate follow-ups.
 
 `finalize_contribution` builds a report from host-verified, saved, accepted and
 finalized frames. It binds capture/image GUID pairs to an import revision,
 panel and filter, requires matching image/solve fingerprints, uses the actual
-exposure sum and pixel-derived footprint, and retains the original named night.
+exposure sum and pixel-derived footprint. `finalize_contribution_for_night`
+retains original task/source identity but reports the actual observing night;
+the legacy helper defaults to the assignment night. Reports on different nights
+have separate queue/replay keys. A frame cannot move between nights for credit.
 Unknown measurements remain null. Calibration is asserted only when all frames
 have verified calibration evidence. **The host must still extract and verify
 this evidence from its catalog.** Supplying these Rust structures is not proof
@@ -329,12 +363,12 @@ Remote rejection/unverified evidence never rewrites local grades or progress.
 
 Live presence has a separate fresh-only projection: at most a 60-second lease,
 actual RA in hours, optional names/position for privacy, and no offline replay.
-It does not yet read the running rig or send an HTTP request.
+Fresh opted-in Director activity is forwarded by the managed host. Offline
+activity is not replayed as current presence; scientific reports are replayed.
 
-Still missing: hello/join and user-facing import, authenticated work/report
-transport, catalog evidence extraction/common footprint, report send/backoff,
-plugin IPC and plugin-only admission. These primitives do not yet provide an
-end-to-end connector in either host.
+Still missing: plugin-only work IPC/admission, reporting-owner handoff and
+lossless mixed-revision aggregates. Managed-host hello/join, import, catalog
+evidence, common footprint, report transport and durable replay are implemented.
 
 ### Host and admission work
 
@@ -369,7 +403,8 @@ Current gaps are explicit:
   allocation/start acknowledgement. Plugin-only needs a distinct local issuer,
   not a fabricated coordinator response or a bypass of admission checks.
 - Local issuance must bind the profile, equipment fingerprint, adopted source
-  revision, permitted sky region, recipes, attempt cap and night deadline. The
+  revision, permitted sky region, recipes and reviewed local execution bounds.
+  Do not infer an acquisition deadline from the remote assignment's night. The
   ledger, exclusive local owner and fresh dispatch checks apply to both issuers.
   PSF Guard's server-issued path retains its existing one-shot launch contract.
 - Shared report aggregation needs per-frame provenance, evidence completeness
@@ -396,7 +431,8 @@ every adopted goal and saved capture. Map external 12-hex IDs explicitly to
 local IDs; do not find projects by name or nearest coordinates. Task version
 is not a PSF Guard revision, and server receipt identity is not a capture GUID.
 
-Always send the rig's named observing night. Preserve it through delayed replay,
+Always send the rig's actual named observing night, not its assignment date.
+Preserve it through delayed replay,
 even after midnight or a site/time-zone change. AstroCollab timestamps and
 exposures use seconds, Director uses milliseconds, and core coordinates use
 integer milliarcseconds. Convert with finite/range/overflow checks. Regions and
@@ -435,9 +471,10 @@ same integration to update them; the duplicate behavior below prevents that.
 
 ## Offline behavior and known protocol gaps
 
-Cache an adopted night's immutable list. Continue offline only inside locally
-issued limits; network failure supplies no new budget. At expiry/night end,
-leave the Session through its normal shutdown hooks. Refresh at safe boundaries
+Cache an adopted assignment's immutable list. TS can finish its frame goal on
+later nights; offline operation does not create new work or replenish that goal.
+Director allocations retain their own local limits and normal shutdown hooks,
+but must not infer expiry from AstroCollab's assigned night. Refresh at safe boundaries
 and stage changed work, never mutate an in-flight target or recipe. Unknown,
 declined, complete, superseded, invalid or empty work does not mean "image all
 panels". Only already admitted work can continue during an outage.
@@ -498,8 +535,9 @@ still needs its local issuer, store and reviewed admission policy.
    PSF Guard credentials, pairing and browser sign-in are implemented in rig
    setup. Hello/join, UI preview/Apply, and standalone plugin credentials are
    implemented. Commissioned optics and explicit filters describe the remote
-   rig; the server's compatibility decision is displayed. Remaining: downstream
-   rig database admission and plugin-only work intake.
+   rig; the server's compatibility decision is displayed. Reviewed downstream
+   TS activation and GUID-based capture association are implemented. Remaining:
+   plugin-only work intake and automatic managed refresh policy.
 3. **Plugin-only admission.** Add complete local setup, workload-source choice,
    local issuer/store and versioned IPC. Reuse the Session and ledger; prove
    offline bounded execution, restart/replay refusal, safety/roof interruptions,
@@ -513,8 +551,8 @@ still needs its local issuer, store and reviewed admission policy.
    saved frames and unchanged-source pixel solutions. Header processing evidence
    can establish calibration; filenames and available masters cannot. The host
    never fills missing measurements from planned settings. The operator maps
-   the cohort to its original named night and panel. Remaining: mixed-revision
-   aggregates, automatic capture-to-import association, precise polygon credit,
+   the cohort to its actual observing night and original task/panel. Remaining:
+   mixed-revision aggregates, precise polygon credit,
    and plugin-to-PSF Guard ownership handoff. Unattended report creation stays off
    for unresolved geometry or evidence-correction cases.
 5. **Future files extension.** Implement only after public routes, artifact
@@ -525,8 +563,8 @@ Use AstroCollab's reference server, client proxy and conformance suite, plus an
 isolated Starfront server with copied fixtures. Then run the actual plugin and
 bundled sidecar on supported NINA 3.2 and 3.3 simulator copies, with an isolated
 PSF Guard server for the import mode. Record versions, request assertions,
-ledger evidence and UI captures. Passing a reference suite is not proof that
-our still-unimplemented connector conforms or that acquisition is safe.
+ledger evidence and UI captures. Passing a reference suite alone does not prove
+host interoperability or safe unattended acquisition.
 
 See [Director design](director.md#federation-and-collaboration) for the local
 execution boundary and [data transfer](data-transfer.md) for existing catalog

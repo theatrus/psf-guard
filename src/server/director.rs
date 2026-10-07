@@ -26,6 +26,7 @@ mod catalog_adoption;
 mod catalog_discovery;
 mod catalog_rig;
 mod checkin;
+mod collaboration_activation;
 mod collaboration_auth;
 mod equipment_report;
 mod feasibility;
@@ -578,6 +579,10 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             axum::routing::post(activation::preview),
         )
         .route("/projects/{id}/activation/check", get(activation::check))
+        .route(
+            "/projects/{id}/activation/collaboration",
+            get(collaboration_activation::context),
+        )
         .route(
             "/projects/{id}/activation/apply",
             axum::routing::post(activation::apply),

@@ -65,6 +65,27 @@ function mount(canWrite = true, plan: { unsavedPlan?: boolean; savePlan?: () => 
 }
 
 describe('Activation panel', () => {
+  it('activates an assignment with no deadline and invalidates a preview when assignment changes', async () => {
+    const { applies }=fixture();
+    let requested: unknown;
+    server.use(http.get('/api/director/v1/projects/project/activation/collaboration',()=>HttpResponse.json(ok({imports:[
+      {import_id:'assignment',rig_id:rig.id,rig_name:'RedCat',source_digest:'a'.repeat(64),night:'2026-10-05',task_id:'000000000004',version:2,demands:[{panel_index:0,filter:'O',exposure_ms:300000,requested_frames:11}]},
+    ]}))),http.post('/api/director/v1/projects/project/activation/preview',async({request})=>{requested=await request.json();return HttpResponse.json(ok(report(false)));}));
+    mount();
+    const assignment=await screen.findByRole('checkbox',{name:/RedCat.*2026-10-05/});
+    fireEvent.click(assignment);
+    expect(screen.queryByLabelText(/window end/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button',{name:'Preview'}));
+    await screen.findByRole('button',{name:'Apply'});
+    expect(requested).toEqual({collaboration:[{import_id:'assignment',source_digest:'a'.repeat(64)}]});
+    fireEvent.click(assignment);
+    expect(screen.queryByRole('button',{name:'Apply'})).not.toBeInTheDocument();
+    fireEvent.click(assignment);
+    fireEvent.click(screen.getByRole('button',{name:'Preview'}));
+    fireEvent.click(await screen.findByRole('button',{name:'Apply'}));
+    await waitFor(()=>expect(applies).toEqual([{preview_digest:'d'.repeat(64),collaboration:[{import_id:'assignment',source_digest:'a'.repeat(64)}]}]));
+  });
+
   it('previews per rig, applies with the preview digest, and reports what landed', async () => {
     const { applies } = fixture(); mount();
     expect(screen.queryByRole('button', { name: /^Apply$/ })).not.toBeInTheDocument();
