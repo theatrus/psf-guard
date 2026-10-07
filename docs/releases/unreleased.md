@@ -18,6 +18,10 @@
   accepted images with fresh pixel solves. Check-in replays queued reports
   without changing local grades. Optional live activity sharing keeps names and
   coordinates private and never replays stale presence.
+- Date image cards with the year again. On a narrow card a frame from this
+  year keeps its time and one from another year keeps its year.
+- Filter the image grid by several statuses at once: one box per status, so
+  everything but Rejected is one click.
 
 - Scroll a large image grid smoothly again. Every card ran a hidden
   spinner that never stopped, so the browser restyled thousands of cards on

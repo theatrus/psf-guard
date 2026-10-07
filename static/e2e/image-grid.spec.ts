@@ -17,30 +17,51 @@ test.beforeEach(async ({ request }) => {
   await waitForCacheReady(request, dbId);
 });
 
-test('the Status filter narrows the grid and says so in the summary', async ({ page }) => {
+test('the Status boxes keep any mix of grades and say so in the summary', async ({ page }) => {
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
   const cards = page.locator('.image-card');
   await expect(cards).toHaveCount(3, { timeout: 15_000 });
-  const status = page.getByLabel('Status:');
+  const box = (name: string) => page.getByRole('checkbox', { name });
+  // The boxes follow the address, which changes a moment after the click,
+  // so each click waits for the box rather than check() reading it at once.
+  const set = async (name: string, on: boolean) => {
+    await box(name).click();
+    await expect(box(name)).toBeChecked({ checked: on });
+  };
   const stats = page.locator('.grid-stats');
 
-  await status.selectOption('accepted');
+  // Everything but rejected: one box off.
+  await set('Rejected', false);
+  await expect(cards).toHaveCount(3);
+  await expect(page).toHaveURL(/status=accepted(%2C|,)pending/);
+  await expect(stats).toContainText('Accepted and Pending');
+
+  await set('Pending', false);
   await expect(cards).toHaveCount(1);
   await expect(stats).toContainText('1 of 3 images');
   await expect(stats).toContainText('Accepted');
-  await expect(page).toHaveURL(/status=accepted/);
+  await expect(page).toHaveURL(/status=accepted(?!%2C|,)/);
 
-  await status.selectOption('pending');
+  await set('Pending', true);
+  await set('Accepted', false);
   await expect(cards).toHaveCount(2);
   await expect(stats).toContainText('2 of 3 images');
 
-  await status.selectOption('rejected');
+  await set('Rejected', true);
+  await set('Pending', false);
   await expect(cards).toHaveCount(0);
   await expect(page.getByText('No images found')).toBeVisible();
 
+  // The last box unticked is All again, not an empty grid.
+  await box('Rejected').click();
+  await expect(cards).toHaveCount(3);
+  for (const name of ['Accepted', 'Rejected', 'Pending']) await expect(box(name)).toBeChecked();
+  await expect(page).not.toHaveURL(/status=/);
+
+  await set('Rejected', false);
   await page.getByRole('button', { name: 'Reset' }).click();
   await expect(cards).toHaveCount(3);
-  await expect(status).toHaveValue('all');
+  await expect(box('Rejected')).toBeChecked();
 });
 
 test('a link saved with the old numeric status still filters', async ({ page }) => {
@@ -48,7 +69,8 @@ test('a link saved with the old numeric status still filters', async ({ page }) 
   // carry ?status=1. They must keep meaning Accepted.
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1&status=1`);
   await expect(page.locator('.image-card')).toHaveCount(1, { timeout: 15_000 });
-  await expect(page.getByLabel('Status:')).toHaveValue('accepted');
+  await expect(page.getByRole('checkbox', { name: 'Accepted' })).toBeChecked();
+  await expect(page.getByRole('checkbox', { name: 'Pending' })).not.toBeChecked();
 });
 
 test('a settled grid runs no animations', async ({ page }) => {
