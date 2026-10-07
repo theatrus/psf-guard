@@ -1544,6 +1544,125 @@ async fn turning_a_rig_off_turns_its_rows_off() {
 }
 
 /// Register another rig database and adopt it as its own rig.
+/// The check runs an activation on a copy of the rig's planning tables: it
+/// works while N.I.N.A. holds the database's write lock, writes nothing, and
+/// after an apply finds nothing to change until the plan does.
+#[tokio::test]
+async fn the_check_runs_on_a_copy_and_finds_nothing_to_change_after_an_apply() {
+    let a = activated().await;
+    let check_path = format!("/projects/{}/activation/check", a.project);
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    let (status, before) = call(&a.f.app, "GET", &check_path, Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{before}");
+    assert_eq!(actions(&before["data"], "project"), ["create"]);
+    assert_eq!(count("SELECT count(*) FROM project"), 0);
+    assert_eq!(
+        count("SELECT count(*) FROM sqlite_master WHERE name LIKE 'psf_guard_director_%'"),
+        0
+    );
+
+    activate_now(&a.f, a.project, "first").await;
+    // N.I.N.A. is writing: a preview would wait for the lock; the check reads.
+    let nina = Connection::open(a.f._dir.path().join("rig.sqlite")).unwrap();
+    nina.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let (status, after) = call(&a.f.app, "GET", &check_path, Value::Null, None).await;
+    nina.execute_batch("ROLLBACK").unwrap();
+    assert_eq!(status, StatusCode::OK, "{after}");
+    let changes = after["data"]["rigs"][0]["changes"].as_array().unwrap();
+    assert!(!changes.is_empty(), "{after}");
+    assert!(
+        changes
+            .iter()
+            .all(|c| c["action"] == "unchanged" || c["action"] == "keep"),
+        "{after}"
+    );
+
+    edit_plan(&a.f, a.project, |plan| {
+        plan.objectives[0].goal = Goal::Frames { value: 99 };
+    });
+    let (status, edited) = call(&a.f.app, "GET", &check_path, Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert!(
+        actions(&edited["data"], "plan")
+            .iter()
+            .any(|action| action == "update"),
+        "{edited}"
+    );
+}
+
+/// Rows that already match the plan but carry none of Director's own tables,
+/// the way the Sync plugin copies a Target Scheduler project or a plan taken
+/// in from one finds it: the check reads every row unchanged, so the page
+/// does not ask for an activation that would change nothing there.
+#[tokio::test]
+async fn matching_rows_without_directors_tables_read_unchanged() {
+    let a = activated().await;
+    activate_now(&a.f, a.project, "first").await;
+    // Target Scheduler's own rows leave the length to the template (-1),
+    // whose default is the plan's 300 s.
+    a.db.execute_batch(
+        "DROP TABLE psf_guard_director_project;
+         DROP TABLE psf_guard_director_target;
+         DROP TABLE psf_guard_director_plan;
+         UPDATE exposureplan SET exposure=-1;",
+    )
+    .unwrap();
+    let check = || {
+        let app = a.f.app.clone();
+        let project = a.project;
+        async move {
+            let (status, checked) = call(
+                &app,
+                "GET",
+                &format!("/projects/{project}/activation/check"),
+                Value::Null,
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{checked}");
+            checked["data"].clone()
+        }
+    };
+    let data = check().await;
+    assert_eq!(actions(&data, "project"), ["unchanged"], "{data}");
+    assert_eq!(
+        actions(&data, "target"),
+        ["unchanged", "unchanged"],
+        "{data}"
+    );
+    assert_eq!(actions(&data, "plan"), ["unchanged", "unchanged"], "{data}");
+    let detail = data["rigs"][0]["changes"][0]["detail"].as_str().unwrap();
+    assert!(
+        detail.starts_with("already in Target Scheduler"),
+        "{detail}"
+    );
+    // Taking the rows over writes nothing into them, and leaves nothing for
+    // the next check.
+    activate_now(&a.f, a.project, "taken over").await;
+    let defaulted: i64 =
+        a.db.query_row(
+            "SELECT count(*) FROM exposureplan WHERE exposure=-1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(defaulted, 2);
+    let again = check().await;
+    assert_eq!(
+        actions(&again, "plan"),
+        ["unchanged", "unchanged"],
+        "{again}"
+    );
+    // A Draft would still go Active, so that one is a change.
+    a.db.execute_batch(
+        "DROP TABLE psf_guard_director_project;
+         UPDATE project SET state=0;",
+    )
+    .unwrap();
+    let draft = check().await;
+    assert_eq!(actions(&draft, "project"), ["update"], "{draft}");
+}
+
 async fn add_rig(f: &Fixture, slug: &str) -> (Uuid, rusqlite::Connection) {
     let path = f._dir.path().join(format!("{slug}.sqlite"));
     let db = crate::ts_schema::create_fresh_db(&path).unwrap();

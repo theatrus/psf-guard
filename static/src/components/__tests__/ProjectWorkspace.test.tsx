@@ -40,7 +40,7 @@ vi.mock('../director/ObservingPreferences', () => ({ default: () => <output>Obse
 const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: null });
 function Where() { return <output data-testid="where">{useLocation().search}</output>; }
 /** The saved framing, plan and last activation the summary reads. */
-function summaryHandlers(saved: { framing?: boolean; framingRevision?: number; layoutRevision?: number; planRevision?: number; shoots?: boolean; activated?: { plan_revision: number; rigs?: string[] }; databaseManagement?: boolean } = {}) {
+function summaryHandlers(saved: { framing?: boolean; framingRevision?: number; layoutRevision?: number; planRevision?: number; shoots?: boolean; activated?: { plan_revision: number; rigs?: string[] }; databaseManagement?: boolean; matches?: boolean } = {}) {
   return [
     http.get('/api/director/v1/projects/project/framing', () => ok({ project: { id: 'project', name: 'Andromeda', revision: 1 }, draft: saved.framing ? {
       project_id: 'project', revision: saved.framingRevision ?? 2, layout_revision: saved.layoutRevision, target_name: 'M31', center: { ra_degrees: 10.68, dec_degrees: 41.27 }, position_angle_degrees: 0, mosaic: { rows: 1, columns: 1, overlap_percent: 20 },
@@ -52,6 +52,12 @@ function summaryHandlers(saved: { framing?: boolean; framingRevision?: number; l
     http.get('/api/director/v1/projects/project/activation', () => ok({ activation: saved.activated ? { project_id: 'project', revision: 3, framing_revision: 2, plan_revision: saved.activated.plan_revision,
       coordinator_instance_id: 'c', applied_at_ms: 1, rigs: (saved.activated.rigs ?? (saved.shoots ? ['rig-catalog'] : [])).map(id => ({ rig_id: id, catalog_id: 'x', project_guid: 'guid', profile_id: 'p', targets: [], plans: [] })) } : null })),
     http.get('/api/director/v1/status', () => ok({ protocol_version: 1, enabled: true, instance_id: 'instance', database_management: saved.databaseManagement ?? true })),
+    // What an activation would change, from a copy of each rig's rows: by
+    // default the rig lacks the plan; `matches` holds it already.
+    http.get('/api/director/v1/projects/project/activation/check', () => ok({ project: { id: 'project', name: 'Andromeda', revision: 1 }, framing_revision: 2, plan_revision: saved.planRevision ?? 1, panels: 1,
+      warnings: [], preview_digest: '0'.repeat(64), applied: false, activation_revision: null,
+      rigs: (saved.shoots ? ['rig-catalog'] : []).map(id => ({ rig: { id, name: 'C925', revision: 1 }, catalog_slug: 'catalog', catalog_name: 'C925 data', profile_id: 'profile', warnings: [], applied: false, push: null,
+        changes: [{ kind: 'project', action: saved.matches ? 'unchanged' : 'create', name: 'Andromeda', detail: '' }] })) })),
   ];
 }
 const rig = { id: 'rig', name: 'C925', revision: 1 };
@@ -158,6 +164,19 @@ describe('project workspace', () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4, rigs: [] } });
     expect(await screen.findByRole('region', { name: 'Activation due' })).toHaveTextContent('C925 data not activated yet');
     expect(screen.queryByTestId('summary-activation')).not.toBeInTheDocument();
+  });
+  it('does not ask for an activation when the rigs already hold a plan none was recorded for', async () => {
+    // A plan taken in from Target Scheduler: the rows it came from match it.
+    mount(links, '/plan?plan=project', { framing: true, planRevision: 1, shoots: true, matches: true });
+    expect(await screen.findByTestId('summary-activation')).toHaveTextContent('On the rigs');
+    expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: /Rigs/ }));
+    expect(within(await screen.findByRole('group', { name: 'C925 data' })).getByText(/matches/)).toBeInTheDocument();
+  });
+  it('does not ask when the saved plan is newer than the record but the rows already match it', async () => {
+    mount(links, '/plan?plan=project', { framing: true, planRevision: 5, shoots: true, activated: { plan_revision: 4 }, matches: true });
+    expect(await screen.findByTestId('summary-activation')).toHaveTextContent('On the rigs');
+    expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
   });
   it('leaves the activation bar out on a server that does not write rig databases', async () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 1, shoots: true, databaseManagement: false });

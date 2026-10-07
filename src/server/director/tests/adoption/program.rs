@@ -108,6 +108,20 @@ async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment(
         assert_eq!(goal["exposure_ms"], 300_000);
         assert_eq!(goal["eligible_windows"].as_array().unwrap().len(), 1);
     }
+    // A row left at -1 runs at its template's default length, and the
+    // program says so instead of asking for a -1 s exposure.
+    a.db.execute("UPDATE exposureplan SET exposure=-1", [])
+        .unwrap();
+    let (status, _, defaulted) = raw_get(&a.f.app, &path, None).await;
+    assert_eq!(status, StatusCode::OK, "{defaulted}");
+    for goal in defaulted["data"]["program"]["assignment"]["goals"]
+        .as_array()
+        .unwrap()
+    {
+        assert_eq!(goal["exposure_ms"], 300_000, "{goal}");
+    }
+    a.db.execute("UPDATE exposureplan SET exposure=300", [])
+        .unwrap();
     let assignment = &data["program"]["assignment"];
     assert_eq!(assignment["rig_id"], a.rig.to_string());
     assert_eq!(assignment["configuration_id"], configuration["id"]);
