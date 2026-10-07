@@ -5,6 +5,37 @@ use crate::server::director::collaboration_activation::{associations, matching};
 use collaboration::{FrameEvidence, MeasuredFootprint, PreparedImport};
 use std::collections::BTreeSet;
 
+const IMAGE_SELECT: &str = "SELECT ai.Id,ai.projectId,ai.targetId,ai.acquireddate,ai.filtername,ai.gradingStatus,ai.metadata,ai.profileId,ai.guid,t.name,t.guid FROM acquiredimage ai";
+
+fn image_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<crate::models::AcquiredImage> {
+    Ok(crate::models::AcquiredImage {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        target_id: row.get(2)?,
+        acquired_date: row.get(3)?,
+        filter_name: row.get(4)?,
+        grading_status: row.get(5)?,
+        metadata: row.get(6)?,
+        profile_id: row.get(7)?,
+        guid: row.get(8)?,
+        reject_reason: None,
+    })
+}
+
+fn saved_path(
+    catalog: &DatabaseContext,
+    image: &crate::models::AcquiredImage,
+    target: &str,
+) -> Result<std::path::PathBuf, Failure> {
+    let metadata: Value = serde_json::from_str(&image.metadata).map_err(|_| held())?;
+    let filename = metadata["FileName"]
+        .as_str()
+        .and_then(|file| file.rsplit(['/', '\\']).next())
+        .filter(|file| !file.is_empty())
+        .ok_or_else(held)?;
+    crate::server::handlers::find_fits_file(catalog, image, target, filename).map_err(|_| held())
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Selection {
@@ -78,22 +109,25 @@ pub(super) async fn candidates(
         let conn=crate::server::database_context::open_scheduler_connection_with_flags(&catalog.database_path,rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|_|held())?;
         conn.busy_timeout(Duration::from_secs(2)).map_err(|_|held())?;
         let links=associations(&conn,import_id).map_err(|_|held())?;
-        let sql=if links.is_empty() { "SELECT ai.guid,ai.filtername,ai.acquireddate,ai.metadata,t.name,t.guid FROM acquiredimage ai JOIN target t ON t.Id=ai.targetId WHERE ai.gradingStatus=1 AND ai.guid IS NOT NULL AND ai.acquireddate>=?1 AND ai.acquireddate<?2 ORDER BY ai.acquireddate,ai.Id" }
-            else { "SELECT ai.guid,ai.filtername,ai.acquireddate,ai.metadata,t.name,t.guid FROM acquiredimage ai JOIN target t ON t.Id=ai.targetId WHERE ai.gradingStatus=1 AND ai.guid IS NOT NULL AND ai.acquireddate>=?1 AND ai.acquireddate<?2 AND EXISTS(SELECT 1 FROM psf_guard_collaboration_plan p WHERE p.import_id=?3 AND p.target_guid=t.guid COLLATE NOCASE) ORDER BY ai.acquireddate,ai.Id" };
-        let mut statement=conn.prepare(sql).map_err(|_|held())?;
+        let tail=if links.is_empty() { "JOIN target t ON t.Id=ai.targetId WHERE ai.gradingStatus=1 AND ai.guid IS NOT NULL AND ai.acquireddate>=?1 AND ai.acquireddate<?2 ORDER BY ai.acquireddate,ai.Id LIMIT 4097" }
+            else { "JOIN target t ON t.Id=ai.targetId WHERE ai.gradingStatus=1 AND ai.guid IS NOT NULL AND ai.acquireddate>=?1 AND ai.acquireddate<?2 AND EXISTS(SELECT 1 FROM psf_guard_collaboration_plan p WHERE p.import_id=?3 AND p.target_guid=t.guid COLLATE NOCASE) ORDER BY ai.acquireddate,ai.Id LIMIT 4097" };
+        let mut statement=conn.prepare(&format!("{IMAGE_SELECT} {tail}")).map_err(|_|held())?;
         let mut result=Vec::new();
         let mut args=vec![rusqlite::types::Value::Integer(start),rusqlite::types::Value::Integer(end)];
         if !links.is_empty() { args.push(import_id.to_string().into()); }
-        for row in statement.query_map(rusqlite::params_from_iter(args),|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,Option<String>>(5)?))).map_err(|_|held())? {
-            let (guid,filter,time,metadata,target,target_guid)=row.map_err(|_|held())?;
-            let matches=matching(&links,target_guid.as_deref().unwrap_or(""),&filter,time);
+        let rows=statement.query_map(rusqlite::params_from_iter(args),|r|Ok((image_row(r)?,r.get::<_,String>(9)?,r.get::<_,Option<String>>(10)?))).map_err(|_|held())?.collect::<rusqlite::Result<Vec<_>>>().map_err(|_|held())?;
+        if rows.len()>4096 {return Err(Failure(StatusCode::UNPROCESSABLE_ENTITY,"Too many candidate images; narrow this catalog before preparing a report"));}
+        drop(statement);
+        drop(conn);
+        for (image,target,target_guid) in rows {
+            let Some(time)=image.acquired_date else {continue;};
+            let matches=matching(&links,target_guid.as_deref().unwrap_or(""),&image.filter_name,time);
             if !links.is_empty() && matches.len()!=1 {continue;}
-            let Ok(guid)=Uuid::parse_str(&guid) else {continue;};
-            let metadata:Value=serde_json::from_str(&metadata).unwrap_or(Value::Null);
-            let name=metadata["FileName"].as_str().and_then(|s|std::path::Path::new(s).file_name()).and_then(|s|s.to_str()).unwrap_or("Unknown file");
-            result.push(json!({"guid":guid,"filter":filter,"captured_at":time,"target":target,"file":name,
+            let Some(guid)=image.guid.as_deref().and_then(|g|Uuid::parse_str(g).ok()) else {continue;};
+            let Ok(path)=saved_path(&catalog,&image,&target) else {continue;};
+            let name=path.file_name().and_then(|s|s.to_str()).unwrap_or("Unknown file");
+            result.push(json!({"guid":guid,"filter":image.filter_name,"captured_at":time,"target":target,"file":name,
                 "panel":matches.first().map(|a|a.panel),"source_digest":matches.first().map(|a|a.source_digest.as_str())}));
-            if result.len()>4096 {return Err(Failure(StatusCode::UNPROCESSABLE_ENTITY,"Too many candidate images; narrow this catalog before preparing a report"));}
         }
         Ok(json!({"images":result}))
     }).await?
@@ -199,16 +233,13 @@ fn frames(
     let mut guids = selection.image_guids.clone();
     guids.sort();
     for guid in &guids {
-        let mut statement=conn.prepare("SELECT ai.Id,ai.gradingStatus,ai.filtername,ai.metadata,ai.acquireddate,t.guid FROM acquiredimage ai LEFT JOIN target t ON t.Id=ai.targetId WHERE ai.guid=?1 COLLATE NOCASE LIMIT 2").map_err(|_|held())?;
+        let mut statement=conn.prepare(&format!("{IMAGE_SELECT} LEFT JOIN target t ON t.Id=ai.targetId WHERE ai.guid=?1 COLLATE NOCASE LIMIT 2")).map_err(|_|held())?;
         let mut matches = statement
             .query_map([guid.to_string()], |r| {
                 Ok((
-                    r.get::<_, i32>(0)?,
-                    r.get::<_, i32>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                    r.get::<_, Option<i64>>(4)?,
-                    r.get::<_, Option<String>>(5)?,
+                    image_row(r)?,
+                    r.get::<_, Option<String>>(9)?.unwrap_or_default(),
+                    r.get::<_, Option<String>>(10)?,
                 ))
             })
             .map_err(|_| held())?;
@@ -221,13 +252,16 @@ fn frames(
     drop(conn);
     let mut solutions = Vec::new();
     let mut frames = Vec::new();
-    for (guid, (id, grade, filter, metadata, captured, target_guid)) in rows {
-        if grade != 1 {
+    for (guid, (image, target, target_guid)) in rows {
+        if image.grading_status != 1 {
             return Err(held());
         }
-        let metadata: Value = serde_json::from_str(&metadata).map_err(|_| held())?;
-        let path = catalog.get_image_path(metadata["FileName"].as_str().ok_or_else(held)?);
-        let path = dunce::canonicalize(path).map_err(|_| held())?;
+        let metadata: Value = serde_json::from_str(&image.metadata).map_err(|_| held())?;
+        let path =
+            dunce::canonicalize(saved_path(catalog, &image, &target)?).map_err(|_| held())?;
+        let id = image.id;
+        let captured = image.acquired_date;
+        let filter = image.filter_name;
         let analysis = catalog
             .astrometry_evidence
             .evidence_for_source(&catalog.cache_dir_path, id, None)
@@ -458,7 +492,7 @@ mod tests {
         .unwrap();
         let db_path = dir.path().join("catalog.sqlite");
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conn.execute_batch("CREATE TABLE acquiredimage(Id INTEGER PRIMARY KEY,guid TEXT,gradingStatus INTEGER,filtername TEXT,metadata TEXT,acquireddate INTEGER,targetId INTEGER DEFAULT 1); CREATE TABLE target(Id INTEGER PRIMARY KEY,guid TEXT); INSERT INTO target VALUES(1,'11111111-1111-4111-8111-111111111111')").unwrap();
+        conn.execute_batch("CREATE TABLE acquiredimage(Id INTEGER PRIMARY KEY,guid TEXT,gradingStatus INTEGER,filtername TEXT,metadata TEXT,acquireddate INTEGER,targetId INTEGER DEFAULT 1,projectId INTEGER DEFAULT 1,profileId TEXT); CREATE TABLE target(Id INTEGER PRIMARY KEY,guid TEXT,name TEXT DEFAULT 'Target'); INSERT INTO target(Id,guid) VALUES(1,'11111111-1111-4111-8111-111111111111')").unwrap();
         let guid = Uuid::new_v4();
         conn.execute(
             "INSERT INTO acquiredimage(Id,guid,gradingStatus,filtername,metadata,acquireddate) VALUES(1,?1,1,'Ha',?2,1791171000)",
@@ -468,11 +502,16 @@ mod tests {
             ],
         )
         .unwrap();
+        let empty = dir.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
         let catalog = DatabaseContext::new(
             "catalog".into(),
             "Catalog".into(),
             db_path.to_string_lossy().into(),
-            vec![dir.path().to_string_lossy().into()],
+            vec![
+                empty.to_string_lossy().into(),
+                dir.path().to_string_lossy().into(),
+            ],
             None,
             None,
             None,
@@ -561,7 +600,7 @@ mod tests {
             [],
         )
         .unwrap();
-        conn.execute("INSERT INTO acquiredimage SELECT 2,guid,gradingStatus,filtername,metadata,acquireddate,targetId FROM acquiredimage WHERE Id=1", []).unwrap();
+        conn.execute("INSERT INTO acquiredimage SELECT 2,guid,gradingStatus,filtername,metadata,acquireddate,targetId,projectId,profileId FROM acquiredimage WHERE Id=1", []).unwrap();
         assert!(frames(&catalog, &import, &selection).is_err());
         conn.execute("DELETE FROM acquiredimage WHERE Id=2", [])
             .unwrap();

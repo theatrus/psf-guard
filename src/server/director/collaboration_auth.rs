@@ -705,7 +705,7 @@ impl Remote {
                 StatusCode::FORBIDDEN | StatusCode::CONFLICT => Failure(StatusCode::CONFLICT, "Collaboration server refused this operation; review its configuration and rig identity"),
                 StatusCode::TOO_MANY_REQUESTS => Failure(StatusCode::TOO_MANY_REQUESTS, "Collaboration server is rate limiting requests"),
                 StatusCode::UNPROCESSABLE_ENTITY => Failure(StatusCode::UNPROCESSABLE_ENTITY, "Collaboration server refused the request fields"),
-                _ => Failure(StatusCode::BAD_GATEWAY, "Collaboration server returned an unsuccessful response; no automatic enrollment retry was made"),
+                _ => Failure(StatusCode::BAD_GATEWAY, "Collaboration server returned an unsuccessful response"),
             });
         }
         let content_type = response

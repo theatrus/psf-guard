@@ -43,14 +43,20 @@ unchanged targets, and preserves captures and grades. Its new goal starts above
 the accepted count when grading is enabled, or acquired count otherwise.
 
 Under **Contribution reports**, select an imported visit, a database belonging
-to this rig, its remote panel, and accepted images. **Review images** checks
+to this rig, its remote panel, and accepted images. The open image list refreshes
+every 30 seconds and after catalog imports. Missing files appear only after they
+arrive in a configured image folder. Newly arrived frames are not selected or
+submitted automatically. **Review images** checks
 GUIDs, saved files, exposures, fresh pixel solves and shared measured coverage.
 Set **Observing night** to the night the selected images were captured, even if
 the assignment was issued earlier. Candidates include a time-zone margin, so
 review which images belong to that night. Activated targets associate captures
 by stable target GUID, filter and assignment cutover time; delayed database sync
 does not change their original task or revision. **Queue finalized contribution**
-freezes the reviewed evidence. **Check in** delivers a bounded batch and keeps
+freezes the reviewed evidence. The review shows exposure, scale, focal length,
+HFR, guiding, Moon, bandpass and camera data; unavailable measurements read
+**Unknown**. If a selected image is no longer accepted, the refreshed view
+withdraws that selection and its review. **Check in** delivers a bounded batch and keeps
 failed or partially acknowledged batches for replay. A remote rejection is
 recorded separately and never changes local image grades. Regrading or
 withdrawing previously reported frames requires review; the public protocol

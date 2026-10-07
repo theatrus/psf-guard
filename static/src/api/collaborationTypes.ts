@@ -42,7 +42,7 @@ export interface CollaborationWork {
   imports?: { id: string; name: string | null; night: string; panels: number[] }[];
   images?: { guid: string; filter: string; captured_at: number; target: string; file: string; panel?: number | null; source_digest?: string | null }[];
   review_digest?: string;
-  report?: { frames: number; seconds: number; filterName: string; calibrated: boolean; footprint: { width: number; height: number } };
+  report?: { frames: number; seconds: number; filterName: string; calibrated: boolean; footprint: { width: number; height: number }; exposure?: number; scale?: number | null; focalLength?: number | null; hfr?: number | null; guideRms?: number | null; moonIllumination?: number | null; moonSeparation?: number | null; bandpass?: number | null; colour?: boolean };
 }
 export interface ContributionSelection { import_id: string; catalog: string; panel: number; image_guids: string[]; source_digest?: string; observing_night?: string }
 export interface CollaborationVisit {

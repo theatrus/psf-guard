@@ -165,3 +165,6 @@ button.workspace-pill { cursor: pointer; }
 .collaboration-image-list table { min-width: 600px; }
 .collaboration-image-list th { white-space: nowrap; }
 .collaboration-reports { margin-top: 1rem; min-width: 0; }
+.collaboration-evidence { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 0.5rem 1rem; }
+.collaboration-evidence dt { color: var(--color-text-secondary); }
+.collaboration-evidence dd { margin: 0.2rem 0 0; overflow-wrap: anywhere; }
