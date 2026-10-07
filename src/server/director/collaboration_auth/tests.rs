@@ -597,11 +597,16 @@ async fn browser_flow_validates_origin_and_keeps_person_token_on_host() {
     let endpoint = format!("http://{}/", tcp.local_addr().unwrap());
     let browser = format!("{endpoint}auth/start?code=DEVICE_CODE");
     let browser_copy = browser.clone();
+    let polls = Arc::new(AtomicUsize::new(0));
     let remote = tokio::spawn(async move {
         axum::serve(tcp,Router::new()
         .route("/api/v1/health",get(|| async { Json(health(json!(["signin"]))) }))
         .route("/api/v1/auth/login",axum::routing::post(move || { let browser = browser_copy.clone(); async move { Json(json!({"code":"DEVICE_CODE","url":browser,"expiresIn":300})) }}))
-        .route("/api/v1/auth/poll",get(|Query(query):Query<HashMap<String,String>>| async move { assert_eq!(query["code"],"DEVICE_CODE"); Json(json!({"state":"done","token":"SECRET_PERSON_TOKEN"})) }))
+        .route("/api/v1/auth/poll",get(move |Query(query):Query<HashMap<String,String>>| { let polls = polls.clone(); async move {
+            assert_eq!(query["code"],"DEVICE_CODE");
+            if polls.fetch_add(1, Ordering::SeqCst) == 0 { return StatusCode::TOO_MANY_REQUESTS.into_response(); }
+            Json(json!({"state":"done","token":"SECRET_PERSON_TOKEN"})).into_response()
+        }}))
         .route("/api/v1/agents",axum::routing::post(|headers:HeaderMap,Json(body):Json<Value>| async move {
             assert_eq!(headers["authorization"],"Bearer SECRET_PERSON_TOKEN"); assert_eq!(body["name"],"Rig");
             Json(json!({"agent":{"id":"000000000001"},"token":"SECRET_AGENT_TOKEN"}))
@@ -634,6 +639,19 @@ async fn browser_flow_validates_origin_and_keeps_person_token_on_host() {
         .unwrap()
         .get_mut(&id)
         .unwrap()
+        .next_poll = Instant::now();
+    let (status, reply) = call(&app, "POST", &action(id, "poll"), json!({}), &[]).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{reply}");
+    state
+        .director
+        .as_ref()
+        .unwrap()
+        .collaboration
+        .pending
+        .lock()
+        .unwrap()
+        .get_mut(&id)
+        .expect("remote rate limit must preserve pending approval")
         .next_poll = Instant::now();
     let (status, reply) = call(&app, "POST", &action(id, "poll"), json!({}), &[]).await;
     assert_eq!(status, StatusCode::OK, "{reply}");

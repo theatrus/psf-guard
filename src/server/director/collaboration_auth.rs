@@ -489,9 +489,19 @@ async fn execute(
                 pending_insert(&service, id, pending)?;
                 return Err(error);
             }
-            let bytes = remote
+            let bytes = match remote
                 .get("auth/poll", None, Some(("code", &pending.code)))
-                .await?;
+                .await
+            {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    if error.0 == StatusCode::TOO_MANY_REQUESTS {
+                        pending.next_poll = Instant::now() + Duration::from_secs(5);
+                        pending_insert(&service, id, pending)?;
+                    }
+                    return Err(error);
+                }
+            };
             match wire::poll(&bytes).map_err(|_| invalid())? {
                 wire::Poll::Pending => { pending.next_poll = Instant::now() + Duration::from_secs(2); pending_insert(&service, id, pending)?; return Ok(json!({"status":"awaiting_browser"})); }
                 wire::Poll::Expired | wire::Poll::Claimed => return Err(Failure(StatusCode::CONFLICT, "Sign-in expired or its one-time reply was already claimed; start a new sign-in")),
