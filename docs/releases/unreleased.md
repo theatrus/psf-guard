@@ -8,6 +8,12 @@
   and the plan reads "On the rigs". A row left at its template's exposure
   length counts as matching, and the N.I.N.A. plugin gets that length.
 
+- Browse and join AstroCollab projects from rig setup, review named-night work
+  before importing inactive drafts, and queue finalized contributions from
+  accepted images with fresh pixel solves. Check-in replays queued reports
+  without changing local grades. Optional live activity sharing keeps names and
+  coordinates private and never replays stale presence.
+
 - Scroll a large image grid smoothly again. Every card ran a hidden
   spinner that never stopped, so the browser restyled thousands of cards on
   each frame; Safari felt it most. Cards off screen now skip drawing until
@@ -15,8 +21,7 @@
 - Register a rig with an AstroCollab server from Settings, Rigs, Setup using
   browser sign-in or a pairing code. PSF Guard keeps the agent token in its
   existing config directory with private file permissions, and retains the
-  original identity and queued reports if the credential is deleted. This
-  setup does not yet join projects, import remote work or send reports.
+  original identity and queued reports if the credential is deleted.
 
 - Keep unsaved edits in a plan's workspace when its address changes after a
   detach, an attach or its first activation, and when a newer copy of the

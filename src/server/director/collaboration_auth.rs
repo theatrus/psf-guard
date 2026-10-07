@@ -22,11 +22,16 @@ use std::{
 mod credentials;
 #[cfg(test)]
 mod tests;
+mod workflows;
 
 #[derive(Default)]
 pub(super) struct SessionState {
     gate: tokio::sync::Mutex<()>,
     pending: Mutex<HashMap<Uuid, Pending>>,
+    last_delivery: Mutex<HashMap<Uuid, Instant>>,
+}
+pub(super) fn forward_status(state: Arc<AppState>, rig: Uuid) {
+    workflows::forward_status(state, rig);
 }
 struct Pending {
     owner: String,
@@ -64,6 +69,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/rigs/{rig}/collaboration", get(list).post(create))
         .route("/collaboration/{id}/{action}", axum::routing::post(action))
+        .merge(workflows::routes())
 }
 pub(super) fn credential_path(registry: &FilePath) -> PathBuf {
     credentials::path(registry)
@@ -261,6 +267,7 @@ async fn create(
         allow_loopback_http: input.allow_loopback_http,
         agent_id: None,
         state: ConnectionState::New,
+        settings: None,
     };
     let p = registry(&state)?;
     let path = p.clone();
@@ -639,10 +646,37 @@ impl Remote {
         body: Option<Value>,
         query: Option<(&str, &str)>,
     ) -> Result<Vec<u8>, Failure> {
-        if !matches!(
-            route,
-            "health" | "auth" | "auth/login" | "auth/poll" | "agents" | "pair" | "agent/projects"
-        ) {
+        let query = query
+            .map(|(key, value)| vec![(key, value.to_owned())])
+            .unwrap_or_default();
+        self.send_query(route, token, body, &query).await
+    }
+    async fn send_query(
+        &self,
+        route: &str,
+        token: Option<&str>,
+        body: Option<Value>,
+        query: &[(&str, String)],
+    ) -> Result<Vec<u8>, Failure> {
+        let join = route
+            .strip_prefix("agent/projects/")
+            .and_then(|s| s.strip_suffix("/join"))
+            .is_some_and(psf_guard_director_interop::workflow::valid_remote_id);
+        if !join
+            && !matches!(
+                route,
+                "health"
+                    | "auth"
+                    | "auth/login"
+                    | "auth/poll"
+                    | "agents"
+                    | "pair"
+                    | "agent/projects"
+                    | "agent/hello"
+                    | "agent/task"
+                    | "agent/report"
+            )
+        {
             return Err(invalid());
         }
         let url = self
@@ -663,16 +697,14 @@ impl Remote {
             }
             request = request.bearer_auth(token);
         }
-        if let Some((key, value)) = query {
-            request = request.query(&[(key, value)]);
-        }
+        request = request.query(query);
         let mut response = request.send().await.map_err(|_| Failure(StatusCode::BAD_GATEWAY, "Collaboration request failed; a token-producing request may have completed remotely. Reload before retrying"))?;
         if !response.status().is_success() {
             return Err(match response.status() {
                 StatusCode::UNAUTHORIZED => Failure(StatusCode::UNAUTHORIZED, "Collaboration credential was rejected; repair is required"),
                 StatusCode::FORBIDDEN | StatusCode::CONFLICT => Failure(StatusCode::CONFLICT, "Collaboration server refused this operation; review its configuration and rig identity"),
                 StatusCode::TOO_MANY_REQUESTS => Failure(StatusCode::TOO_MANY_REQUESTS, "Collaboration server is rate limiting requests"),
-                StatusCode::UNPROCESSABLE_ENTITY => Failure(StatusCode::UNPROCESSABLE_ENTITY, "Collaboration server refused the enrollment fields"),
+                StatusCode::UNPROCESSABLE_ENTITY => Failure(StatusCode::UNPROCESSABLE_ENTITY, "Collaboration server refused the request fields"),
                 _ => Failure(StatusCode::BAD_GATEWAY, "Collaboration server returned an unsuccessful response; no automatic enrollment retry was made"),
             });
         }

@@ -16,7 +16,42 @@ add the server's HTTPS URL and remote rig name, then choose **Connect**. PSF Gua
 offers browser sign-in or a pairing code according to the server's capabilities.
 For browser sign-in, open its approval page, approve there, then choose
 **Check sign-in**. Registration does not join a project or enable acquisition;
-remote work import and reporting are not yet connected to this setup.
+then configure the filters, exposure lengths, binning and colour mode used by
+this rig. Optics come from the rig's commissioned setup, not a second telescope
+profile.
+
+Choose **Browse projects** to see compatible projects. Enter the observing
+night, Moon illumination and fraction of dark hours with the Moon above the
+horizon, then **Join** a project or **Pull nightly work**. Joining gives consent
+to a remote share; it does not start a sequence. **Review import** shows the
+panel/filter visits. **Import draft** creates an ordinary inactive project
+draft. Apply refetches the remote work and refuses a changed review. Acquisition
+remains blocked until collaboration-specific admission can enforce its panels
+and remote requirements through local Director allocations.
+
+Under **Contribution reports**, select an imported visit, a database belonging
+to this rig, its remote panel, and accepted images. **Review images** checks
+GUIDs, saved files, exposures, fresh pixel solves and shared measured coverage.
+The visit's named night is explicit; candidates include a time-zone margin, so
+review which images belong to that night. **Queue finalized contribution**
+freezes the reviewed evidence. **Check in** delivers a bounded batch and keeps
+failed or partially acknowledged batches for replay. A remote rejection is
+recorded separately and never changes local image grades. Regrading or
+withdrawing previously reported frames requires review; the public protocol
+cannot replace a report with an equal or lower integration total.
+
+**Share current activity** is off by default. When enabled, incoming Director
+status forwards fresh activity and queued reports at most once per minute.
+Target names and pointing coordinates remain private. Old or replayed status
+never becomes current presence. Offline scientific reports retain their
+original agent, task, panel and observing night.
+
+Reports use a conservative common solved footprint. Frames without a current
+pixel solve, disjoint footprints and unresolved calibration requirements are
+held. Calibration must be recorded by the file's processing tool; a matching
+master or a calibrated-looking filename is not proof. Unknown guide RMS, Moon
+measurements and bandpass stay unknown. Pixel HFR is converted using that
+frame's solved scale; raw-frame HFR is not reused for a resampled derivative.
 
 The server stores the agent token in `collaboration-credentials.json` beside
 `config.json`. A custom registry uses

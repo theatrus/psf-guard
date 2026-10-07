@@ -156,3 +156,12 @@ button.workspace-pill { cursor: pointer; }
 .collaboration-connection .director-actions { margin: 0.5rem 0; flex-wrap: wrap; }
 .collaboration-connections input:not([type="checkbox"]) { box-sizing: border-box; min-width: 0; max-width: 100%; background: var(--color-bg-secondary); color: var(--color-text-primary); border: 1px solid var(--color-border-tertiary); border-radius: 4px; padding: 7px 9px; font: inherit; }
 .collaboration-connection a { display: inline-flex; align-items: center; gap: 0.35rem; }
+.collaboration-workflows fieldset { border: 0; border-top: 1px solid var(--color-border-tertiary); margin: 1rem 0 0; padding: 0.75rem 0; min-width: 0; }
+.collaboration-workflows table { width: 100%; border-collapse: collapse; text-align: left; }
+.collaboration-workflows th, .collaboration-workflows td { padding: 0.35rem; border-bottom: 1px solid var(--color-border-tertiary); }
+.collaboration-workflows td input:not([type="checkbox"]) { width: 100%; }
+.collaboration-workflows select { max-width: 100%; min-width: 0; }
+.collaboration-image-list { max-height: 22rem; overflow: auto; margin: 0.75rem 0; }
+.collaboration-image-list table { min-width: 600px; }
+.collaboration-image-list th { white-space: nowrap; }
+.collaboration-reports { margin-top: 1rem; min-width: 0; }

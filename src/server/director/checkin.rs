@@ -282,6 +282,9 @@ pub(super) async fn report_status(
             })
         })
         .await?;
+    if answer.accepted {
+        collaboration_auth::forward_status(state, rig);
+    }
     Ok(Json(ApiResponse::success(answer)))
 }
 

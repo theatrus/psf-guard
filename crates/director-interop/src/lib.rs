@@ -5,6 +5,7 @@ pub mod astrocollab;
 pub mod auth;
 pub mod collaboration;
 mod json;
+pub mod workflow;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
