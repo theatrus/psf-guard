@@ -113,7 +113,10 @@ export default function PlanRigs({ row, rows, joined, objectives, ready, control
       const shooting = joined.includes(rigId);
       const open = opened.has(key);
       const toggle = () => setOpened(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; });
-      const place = link ? link.source_name ? `project “${link.source_name}”` : 'project row missing in this database' : 'new project on activation';
+      const place = link
+        ? link.source_name ? `project “${link.source_name}”`
+          : link.source_unread ? 'database not read just now' : 'project row missing in this database'
+        : 'new project on activation';
       return <div className="director-rig-database plan-rig" role="group" aria-label={name} key={key}>
         <p className="plan-rig-head"><strong>{name}</strong><span className="plan-rig-place">{place}</span>
           <span className="director-muted">{activated.has(rigId) ? 'activated' : 'not activated'}{shooting ? '' : ' · not shooting'}</span>
@@ -128,7 +131,7 @@ export default function PlanRigs({ row, rows, joined, objectives, ready, control
           <span className="director-actions"><button type="button" disabled={detach.isPending} onClick={() => detach.mutate(link)}>{detach.isPending ? 'Detaching…' : 'Detach'}</button><button type="button" onClick={() => setDetachPick(null)}>Cancel</button></span></p>}
         {link && link.source_row_id !== null
           ? open && load && <ProjectPlanEditor dbId={link.catalog_slug} projectId={link.source_row_id} canEdit={canEditRows} withTemplates={false} />
-          : <p className="director-muted">Created on activation</p>}
+          : <p className="director-muted">{link?.source_unread ? 'Database not read just now' : 'Created on activation'}</p>}
       </div>;
     })}
     {canWrite && (fresh.length > 0 || candidates.length > 0) && <div className="director-attach">

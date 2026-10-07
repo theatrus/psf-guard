@@ -245,7 +245,7 @@ export interface DirectorTemplate {
   moon?: DirectorMoonPolicy;
   bandpass: DirectorBandpass;
 }
-export interface DirectorTemplateList { catalog_slug: string; catalog_name: string; rig: DirectorIdentity | null; templates: DirectorTemplate[] }
+export interface DirectorTemplateList { catalog_slug: string; catalog_name: string; rig: DirectorIdentity | null; templates: DirectorTemplate[]; /** Templates left out by name, with why. */ warnings?: string[] }
 /** A template in Director's own library: settings any rig can shoot with; activation writes it into a rig database that lacks it. */
 export interface DirectorLibraryTemplate {
   id: string;
@@ -377,6 +377,9 @@ export interface DirectorPlanLink {
   source_project_guid: string;
   source_row_id: number | null;
   source_name: string | null;
+  /** The listing could not read this rig's database; the project may well
+   *  be there. */
+  source_unread?: boolean;
   /** Target Scheduler's project state there: 0 draft, 1 active, 2 inactive, 3 closed. */
   source_state?: number | null;
   /** First and last capture of the project's frames there, Unix seconds. */
@@ -497,7 +500,10 @@ export interface DirectorRigFeasibility {
   catalog_name: string;
   site: DirectorSite;
   custom_horizon: boolean;
-  limits: DirectorLimits;
+  /** The rig profile's limits and the plan's, the tighter of each. */
+  limits: DirectorLimits & { horizon_offset_degrees?: number; meridian_window_minutes?: number };
+  /** Where this rig was timed: its own framing's center, else the shared one. */
+  center?: DirectorSkyPosition;
   nights: DirectorNight[];
   curve: { night: DirectorNight; samples: DirectorNightSample[] };
   hours_needed: number | null;

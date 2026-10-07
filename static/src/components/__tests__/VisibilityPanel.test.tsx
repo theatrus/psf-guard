@@ -24,11 +24,11 @@ function rig(name: string, id: string, hoursUp: number, custom: boolean, inPlan:
     limits: { minimum_altitude_degrees: 25, maximum_altitude_degrees: 90, meridian_exclusion: { before_ms: 0, after_ms: 0 } },
     nights: [night, { ...night, date: '2026-09-26', moon_illumination: 0.9 }], curve: { night, samples }, hours_needed: inPlan ? 12 : null, nights_to_complete: inPlan && hoursUp > 0 ? 2 : null, in_plan: inPlan };
 }
-function mount(view: DirectorFeasibility, compact = false) {
+function mount(view: DirectorFeasibility, compact = false, rigCenters?: Record<string, { ra_degrees: number; dec_degrees: number }>) {
   const bodies: unknown[] = [];
   server.use(http.post('/api/director/v1/projects/project/feasibility', async ({ request }) => { bodies.push(await request.json()); return ok(view); }));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  render(<QueryClientProvider client={client}><VisibilityPanel projectId="project" center={{ ra_degrees: 38.2, dec_degrees: 61.45 }} compact={compact} /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><VisibilityPanel projectId="project" center={{ ra_degrees: 38.2, dec_degrees: 61.45 }} rigCenters={rigCenters} compact={compact} /></QueryClientProvider>);
   return bodies;
 }
 
@@ -71,5 +71,14 @@ describe('visibility panel', () => {
     expect(await screen.findByText('No rig has a site yet, so nothing can be timed.')).toBeInTheDocument();
     expect(formatHours(0)).toBe('none');
     expect(formatHours(0.5)).toBe('30 min');
+  });
+
+  it('times a separately framed rig where the view has it, and names the plan limits it used', async () => {
+    const timed = rig('RedCat 61', 'a', 6.2, true, true);
+    timed.limits = { ...timed.limits, horizon_offset_degrees: 2, meridian_window_minutes: 60 };
+    const bodies = mount({ center: { ra_degrees: 38.2, dec_degrees: 61.45 }, target_name: 'IC 1805', nights: 7, warnings: [], rigs: [timed] },
+      false, { a: { ra_degrees: 40.12345, dec_degrees: 60.5 } });
+    expect(await screen.findByText(/custom horizon \+2° and limit · within 60 min of the meridian/)).toBeInTheDocument();
+    expect(bodies[0]).toEqual({ center: { ra_degrees: 38.2, dec_degrees: 61.45 }, rig_centers: { a: { ra_degrees: 40.123, dec_degrees: 60.5 } } });
   });
 });

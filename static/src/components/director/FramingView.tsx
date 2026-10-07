@@ -193,6 +193,11 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     });
   }, [surveys.data, draft.data, state?.surveyId, adjust]);
   const rigList = useMemo(() => rigs.data ?? [], [rigs.data]);
+  // A rig framed on a center of its own is timed where the view has it,
+  // saved or not, so the visibility chart follows the drag.
+  const liveRigCenters = useMemo(() => Object.fromEntries((state?.rigFramings ?? [])
+    .filter(own => own.center !== null)
+    .map(own => [own.rig_id, own.center!])), [state?.rigFramings]);
   // The shared framing is drawn only while some rig shoots it: when every
   // rig that is on has a separate framing, no shared target is planned.
   const sharedInUse = !onToggleRig || !state || rigList.some(entry => (shootingRigIds ?? []).includes(entry.rig.id) && !state.rigFramings.some(own => own.rig_id === entry.rig.id));
@@ -811,7 +816,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         <ul>{mosaic.data.panels.map(panel => <li key={`${panel.rig.id}-${panel.panel_id}`}>{describeStack(panel)}</li>)}</ul>
       </div>}
       <p className="director-muted framing-attribution">{survey ? `${survey.name}: ${survey.bandpass}. ${survey.attribution}.` : 'Choose a survey.'} For composition only.</p>
-      <VisibilityPanel projectId={projectId} center={state.center} compact />
+      <VisibilityPanel projectId={projectId} center={state.center} rigCenters={liveRigCenters} compact />
     </div>
     <form className="framing-controls" onSubmit={event => { event.preventDefault(); if (canWrite && !save.isPending && !stale && !refusal) { setNotice(''); setProblem(''); save.mutate(state); } }}>
       <fieldset>

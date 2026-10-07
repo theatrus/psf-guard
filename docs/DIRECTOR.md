@@ -1126,7 +1126,7 @@ rig from the list to compare sites.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
-| POST | `/projects/{id}/feasibility` | Optional `nights` (1 to 14, default 7), `center` (defaults to the saved framing's center; a rig framed on its own center is timed there) and `start_ms` (default now; the first night is the one under way then). For every rig with a site: the `center` it was timed at, the applied `limits`, `nights` summaries, tonight's `curve` (five-minute samples of Sun, Moon and target altitude with the horizon at each azimuth), `hours_needed` (the plan's goal less accepted frames) and `nights_to_complete`; rigs without a site are named in `warnings`. `400` for a `start_ms` outside 1970-01-02 to 2099-01-01; `422` until there is a center to time. |
+| POST | `/projects/{id}/feasibility` | Optional `nights` (1 to 14, default 7), `center` (defaults to the saved framing's center; a rig framed on its own center is timed there), `rig_centers` (rig id to center: where the framing view has a separately framed rig now, saved or not; up to 64) and `start_ms` (default now; the first night is the one under way then). For every rig with a site: the `center` it was timed at, the applied `limits`, `nights` summaries, tonight's `curve` (five-minute samples of Sun, Moon and target altitude with the horizon at each azimuth), `hours_needed` (the plan's goal less accepted frames) and `nights_to_complete`; rigs without a site are named in `warnings`. `400` for a `start_ms` outside 1970-01-02 to 2099-01-01; `422` until there is a center to time. |
 
 Times come from the shared core's planning-grade Sun and Moon positions and
 the same horizon and limit rules the rig's geometry applies; they are
