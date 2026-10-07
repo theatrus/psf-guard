@@ -36,6 +36,10 @@ copy its implementation into the core without permission.
 
 ## Two modes, one executor
 
+The diagram describes the complete target architecture. Managed PSF Guard
+transfer and standalone NINA authentication are implemented; plugin-only work
+import, local admission and reporting-owner handoff are not implemented yet.
+
 ```mermaid
 flowchart TD
     A[AstroCollab / Starfront server] --> B[Shared Rust protocol adapter]
