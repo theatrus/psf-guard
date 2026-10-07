@@ -74,6 +74,93 @@ Switching mode requires explicit identity, provenance and outbox handoff, not
 two independent reporters using the same telescope token. Later importing
 plugin-only captures preserves their original capture IDs and associations.
 
+## Authentication and credential ownership
+
+Status: agreed design, not implemented. Keep three authorities separate:
+
+- Local PSF Guard login and Director pairing control access to this installation.
+- A temporary collaboration person token enrolls or lists remote rigs. Keep it
+  only for setup, then discard it locally. Do not automatically call remote
+  logout: the server may share that person session with another client.
+- A collaboration agent token belongs to one commissioned rig and authorizes
+  hello, participation, work retrieval and reports. It grants no local database
+  or hardware permission.
+
+In PSF Guard mode, the backend owns the agent credential and reporting queue.
+NINA uses its existing Director pairing and never receives that credential.
+In plugin-only mode, the managed NINA host owns collaboration HTTP and stores
+the credential in a separate Windows Credential Manager entry. The Rust core
+and sidecar receive bounded non-secret payloads, never tokens or pairing codes.
+Do not reuse Director's token format or either plugin's existing credential.
+
+### PSF Guard config file
+
+Use the existing config space for desktop and headless/Docker PSF Guard, not a
+new encrypted vault, external secret service or deployment unlock key. Store
+agent credentials as plaintext JSON in `collaboration-credentials.json` beside
+the normal `config.json`. For a custom registry, use
+`<registry-stem>.collaboration-credentials.json` in that registry's directory,
+following the existing `auth.json` naming pattern. An isolated test registry
+must never read or write the user's normal credential file.
+
+On Unix, create the file and all temporary replacements with mode `0600` from
+the start, owned by the service user. Use `0700` for an application config
+directory created for this purpose. On Windows, restrict the file to the
+running user's access with the appropriate ACL. Check the file type, ownership,
+permissions and parent-directory write access; refuse symlinks and storage
+whose protection cannot be enforced. Do not silently proceed with a world- or
+group-readable credential file, or repair an unsafe path by following it.
+Use a restricted temporary file in the same directory, sync it and replace
+atomically. Serialize concurrent updates so connecting one rig cannot lose
+another rig's credential. Verify durable storage before reporting connected.
+
+Docker persists this file in its existing writable config volume with matching
+service UID and permissions. No extra secret mount is required. File and backup
+readers can use the stored tokens: filesystem permissions are access control,
+not encryption. Exclude this file from config exports, diagnostic bundles and
+version control; protect any deliberate backup like a password file. The draft
+protocol describes a system credential store; this config file is PSF Guard's
+explicit headless storage choice, not a change to the wire protocol.
+
+Bind each credential to the canonical server origin/base path, local rig and
+remote agent. Keep non-secret identity and queue metadata in the meta store;
+never include the token in settings responses, browser storage, logs, generated
+runtime configs, process arguments, environment or IPC. Changing a server or
+rig requires a reviewed binding, not reusing another binding's token.
+
+### Connect and recover
+
+Offer browser sign-in and single-use pairing only as advertised by the server.
+Keep polling and the person token in the host; the UI receives status and the
+validated browser URL, never person or agent tokens. The browser URL can contain
+a sign-in code, so treat it as temporary sensitive data too. Bind pending setup
+to its local caller, rig and server, with expiry and a single claim. Local setup
+writes must pass the existing ReadWrite and database-management checks. Pairing
+or joining never starts acquisition. Check storage availability before enrollment
+where possible; a lost enrollment or pairing reply must not cause a blind retry.
+
+Treat readable credentials, missing credentials, denied file/vault access,
+pending setup, rejected credentials and an unknown enrollment outcome as
+different states. Re-read the credential before requests. Manual deletion must
+enable reconnect, not leave a stale configured flag disabling the Pair button.
+A storage failure must not erase identity or automatically register another rig.
+
+The current draft has no standard way to replace a lost token for the same
+agent. Listing agents does not recover their tokens, and enrollment or pairing
+can create a new agent. Until a capability-discovered same-agent recovery
+contract exists, retain the old binding and queued reports for explicit
+recovery. Registering a new agent creates a separate binding; never relabel old
+reports or send them under that new identity. Switching report owner likewise
+needs an explicit handoff, not copying a token to a second active reporter.
+
+Validate the browser sign-in URL against the reviewed server origin. Never
+forward bearer credentials across an origin change or HTTP redirect. Production
+uses HTTPS; isolated loopback tests have explicit test-only transport consent.
+A `401` stops remote communication and asks for repair, without erasing already
+issued bounded work or overriding hardware safety. Other permanent errors
+require review; transient failures use bounded backoff outside the exposure
+path. Do not invent refresh tokens or renewal routes absent from the protocol.
+
 ## Contract mapping
 
 | External input | Director / PSF Guard mapping | Required change or boundary |
@@ -332,16 +419,8 @@ Local visit exhaustion and remote project/share completion are distinct states.
 Known fixed camera rotation, unknown rotation and a functioning rotator are
 also distinct: protocol null means angle-adjustable, not "we do not know".
 
-Use separate credential-store entries scoped to the collaboration server and
-agent. Never reuse a PSF Guard API key. Keep tokens and pairing codes out of
-IPC payloads, generated configs, process arguments, environment and logs.
-Validate the browser sign-in URL and never forward credentials across an origin
-change or redirect. Production uses HTTPS; isolated loopback tests have explicit
-test-only transport consent. Pairing and token-producing enrollment cannot be
-blindly retried after a lost reply. A `401` stops remote communication and asks
-for repair; it does not itself override local hardware safety or erase already
-issued, bounded local work. Other permanent errors require review, while transient
-failures use bounded backoff outside the exposure path.
+Credential ownership, config-file permissions, repair and transport rules are
+defined in [Authentication and credential ownership](#authentication-and-credential-ownership).
 
 ## Delivery and validation
 
