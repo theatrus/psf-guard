@@ -59,6 +59,8 @@ test_output/
 
 # Frontend
 /static/node_modules/
+# A vitest run from the repository root writes its cache here.
+/node_modules/
 /static/dist/
 /static/.vite/
 

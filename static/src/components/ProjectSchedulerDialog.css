@@ -1,8 +1,3 @@
-.scheduler-dialog {
-  width: min(72rem, 100%);
-  max-height: 92vh;
-}
-
 .scheduler-content,
 .scheduler-section,
 .scheduler-target-body {

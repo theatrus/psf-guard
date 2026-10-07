@@ -18,7 +18,7 @@
   border-radius: 8px;
   padding: 14px;
   background: var(--color-bg-surface);
-  transition: all 0.2s ease;
+  transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .project-card:hover {
@@ -306,7 +306,6 @@
 .library-pill-progress.is-done .library-pill-bar > span { background: #7be495; }
 a.library-name, a.library-family-name { text-decoration: none; color: var(--color-text-primary); }
 a.library-name:hover, a.library-family-name:hover { text-decoration: underline; }
-.library-name.is-static { cursor: default; }
 .library-pill-bar { display: inline-block; width: 64px; height: 6px; border-radius: 3px; background: var(--color-bg-quaternary); overflow: hidden; }
 .library-pill-bar > span { display: block; height: 100%; background: var(--color-primary); }
 .library-pill-grading .grade-accepted::before { content: '✓'; margin-right: 2px; color: #7be495; }

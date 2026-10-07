@@ -145,12 +145,6 @@
   transition: width 0.3s ease;
 }
 
-/* Quick Actions */
-.quick-actions {
-  margin-top: 20px;
-  text-align: center;
-}
-
 .overview .action-button {
   background: var(--color-primary);
   color: var(--color-text-dark);
@@ -319,7 +313,6 @@
   text-transform: uppercase;
 }
 
-
 .project-archive-list {
   display: grid;
   gap: 6px;
@@ -460,7 +453,6 @@
   font-weight: bold;
 }
 
-
 .project-description {
   margin: 0 0 10px 0;
   color: var(--color-text-secondary);
@@ -535,8 +527,7 @@
 }
 
 .project-frame-media > img,
-.project-frame-media > .preview-status-box,
-.project-frame-media > .project-frame-fallback {
+.project-frame-media > .preview-status-box {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -551,15 +542,6 @@
   min-height: 0;
   border: 0;
   border-radius: 0;
-}
-
-.project-frame-fallback {
-  display: grid;
-  place-items: center;
-  padding: 6px;
-  color: var(--color-text-muted);
-  font-size: 0.68rem;
-  text-align: center;
 }
 
 .project-frame-new {
@@ -940,20 +922,6 @@
 }
 
 /* Organize (rename / move / merge) inline editor */
-.organize-button {
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 13px;
-  padding: 2px 6px;
-  opacity: 0.55;
-  transition: opacity 0.15s;
-}
-
-.organize-button:hover {
-  opacity: 1;
-}
-
 .organize-panel {
   display: flex;
   flex-wrap: wrap;
