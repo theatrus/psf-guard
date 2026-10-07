@@ -339,16 +339,40 @@ retains original task/source identity but reports the actual observing night;
 the legacy helper defaults to the assignment night. Reports on different nights
 have separate queue/replay keys. A frame cannot move between nights for credit.
 Unknown measurements remain null. Calibration is asserted only when all frames
-have verified calibration evidence. **The host must still extract and verify
-this evidence from its catalog.** Supplying these Rust structures is not proof
-that an image exists; there is no public evidence-ingress API.
+have verified calibration evidence. The managed host verifies saved-file and
+fresh solve fingerprints from its catalog; supplying Rust structures alone
+is not proof that an image exists. There is no public evidence-ingress API.
 
-The first report builder deliberately accepts only one source revision,
-exposure, colour/bandpass and exactly matching measured-footprint cohort. Real
-frames with different footprints need a verified common-coverage calculation
-before they can form one aggregate. Mixed revisions need a lossless provenance
-merge before combining captures. Neither is silently averaged or substituted
-with planned pointing. This limitation prevents unattended report enablement.
+Director preserves `PGCAPID` independently of the catalog image GUID. Managed
+report review requires one contiguous, acknowledged saved receipt for that
+capture on the bound rig, matching the activated exposure-plan goal, saved
+identity, exposure duration and a capture timestamp not before reservation.
+Native trigger time is not inferred from capture/save duration: autofocus or a
+meridian flip may run between reservation and exposure. File intake and batch check-in can arrive in
+either order; neither receipt alone nor a copied header grants contribution
+credit. Target Scheduler frames without this header keep stable image-GUID
+identity. The lookup reads a bounded receipt batch rather than querying per
+frame. Duplicate capture identity across ledgers is held, not guessed.
+
+Saved `PGGRMS` supplies guider RMS in arcseconds. The NINA adapter converts
+recorded guider-pixel RMS with its recorded guider scale and omits unmeasured
+values. Saved `PGHFR` supplies explicitly pixel-valued HFR for conversion with
+the fresh image solve. Explicit saved `PGBAND` or a single-band nm filter label
+can establish bandpass. Moon context uses the saved exposure midpoint and site
+with shared-core ephemerides and topocentric parallax. Missing site coordinates
+leave separation unknown. Current rig settings and remote limits never stand
+in for capture evidence; required calibration without processing evidence is
+still held.
+
+The report builder accepts only one source revision, exposure recipe and
+colour/bandpass cohort with a verified common footprint. The managed host
+computes conservative shared coverage from the fresh pixel solutions before
+aggregation. Mixed revisions still need a lossless provenance merge before
+combining captures. Disjoint coverage and mixed revisions are never averaged
+or replaced with planned pointing. These limits prevent unattended reporting.
+Exposure matching allows only measured shutter jitter around the assigned
+recipe: 0.1%, with a 10 ms floor and one-second cap. Integration sums the saved
+durations; the reported sub length is their mean, not the assigned duration.
 
 The meta store queues immutable report payloads and their capture/image pairs.
 Exact requeue is idempotent; an extension must increase integration and retain
@@ -551,7 +575,9 @@ still needs its local issuer, store and reviewed admission policy.
    saved frames and unchanged-source pixel solutions. Header processing evidence
    can establish calibration; filenames and available masters cannot. The host
    never fills missing measurements from planned settings. The operator maps
-   the cohort to its actual observing night and original task/panel. Remaining:
+   the cohort to its actual observing night and original task/panel. Director
+   capture receipts and saved guiding/HFR, bandpass and Moon context are linked
+   during managed-host review. Remaining:
    mixed-revision aggregates, precise polygon credit,
    and plugin-to-PSF Guard ownership handoff. Unattended report creation stays off
    for unresolved geometry or evidence-correction cases.

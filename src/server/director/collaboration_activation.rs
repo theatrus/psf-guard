@@ -412,6 +412,7 @@ impl Admitted {
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct Association {
+    pub exposureplan_guid: String,
     pub target_guid: String,
     pub source_digest: String,
     pub panel: u32,
@@ -430,10 +431,11 @@ pub(super) fn associations(conn: &Connection, import: Uuid) -> rusqlite::Result<
     if !exists {
         return Ok(vec![]);
     }
-    let mut stmt = conn.prepare("SELECT target_guid,source_digest,panel_index,filter,exposure_ms,start_at_ms,end_at_ms FROM psf_guard_collaboration_plan WHERE import_id=?1 LIMIT 4097")?;
+    let mut stmt = conn.prepare("SELECT target_guid,source_digest,panel_index,filter,exposure_ms,start_at_ms,end_at_ms,exposureplan_guid FROM psf_guard_collaboration_plan WHERE import_id=?1 LIMIT 4097")?;
     let result: Vec<_> = stmt
         .query_map([import.to_string()], |r| {
             Ok(Association {
+                exposureplan_guid: r.get(7)?,
                 target_guid: r.get(0)?,
                 source_digest: r.get(1)?,
                 panel: r.get(2)?,

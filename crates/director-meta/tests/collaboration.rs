@@ -36,6 +36,31 @@ fn changed() -> PreparedImport {
 }
 
 #[test]
+fn measured_shutter_jitter_survives_queue_reopen_and_idempotent_replay() {
+    let (dir, mut s, rig) = store();
+    let p = import();
+    apply(&mut s, &p, rig);
+    let mut a = frame(&p, 1);
+    let mut b = frame(&p, 2);
+    a.exposure_ms = 300_007;
+    b.exposure_ms = 299_995;
+    let finalized = finalize_contribution(&p, &[a, b]).unwrap();
+    let queued = s.queue_collaboration_report(&finalized, 2000).unwrap();
+    assert_eq!(queued.integration_ms, 600_002);
+    assert_eq!(queued.payload["exposure"], 300.001);
+    drop(s);
+    let mut s = MetaStore::open(&dir.path().join("meta.sqlite")).unwrap();
+    assert_eq!(
+        s.pending_collaboration_reports(p.source(), 1).unwrap()[0].id,
+        queued.id
+    );
+    assert_eq!(
+        s.queue_collaboration_report(&finalized, 3000).unwrap().id,
+        queued.id
+    );
+}
+
+#[test]
 fn connection_and_import_cannot_bind_one_agent_to_different_rigs() {
     use psf_guard_director_meta::collaboration_connection::{ConnectionBinding, ConnectionState};
     let (_, mut s, rig) = store();

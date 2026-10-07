@@ -19,6 +19,57 @@ fn receipt(rig: Uuid, sequence: u64, state: &str, capture: &str) -> Receipt {
 }
 
 #[test]
+fn saved_file_lookup_is_bounded_rig_scoped_and_waits_for_contiguous_checkin() {
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let rig = store.create_rig(Uuid::new_v4(), "Rig").unwrap().id;
+    let other = store.create_rig(Uuid::new_v4(), "Other").unwrap().id;
+    let capture = Uuid::new_v4();
+    let id = capture.to_string();
+    store
+        .store_receipts(&[receipt(rig, 2, "saved", &id)], 5)
+        .unwrap();
+    assert!(store
+        .saved_receipts_for_captures(rig, &[capture])
+        .unwrap()
+        .is_empty());
+    store
+        .store_receipts(&[receipt(rig, 1, "reserved", &id)], 6)
+        .unwrap();
+    let found = store.saved_receipts_for_captures(rig, &[capture]).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].capture_id, id);
+    assert_eq!(found[0].state, "saved");
+    let mut ambiguous = receipt(rig, 1, "saved", &id.to_uppercase());
+    ambiguous.ledger_id = "another-ledger".into();
+    store.store_receipts(&[ambiguous], 7).unwrap();
+    // Return both proofs so review refuses to guess which ledger owns the file.
+    assert_eq!(
+        store
+            .saved_receipts_for_captures(rig, &[capture])
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(store
+        .saved_receipts_for_captures(other, &[capture])
+        .unwrap()
+        .is_empty());
+    assert!(store
+        .saved_receipts_for_captures(rig, &[])
+        .unwrap()
+        .is_empty());
+    assert!(matches!(
+        store.saved_receipts_for_captures(rig, &[Uuid::nil()]),
+        Err(Error::InvalidInput)
+    ));
+    assert!(matches!(
+        store.saved_receipts_for_captures(rig, &vec![capture; 4097]),
+        Err(Error::InvalidInput)
+    ));
+}
+
+#[test]
 fn receipts_are_stored_once_acknowledged_by_contiguous_cursor_and_conflicts_named() {
     let dir = TempDir::new().unwrap();
     let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();

@@ -87,6 +87,26 @@ fn contribution_uses_original_night_actual_saved_exposures_and_pixel_footprint()
 }
 
 #[test]
+fn recorded_shutter_jitter_keeps_actual_integration_but_different_recipes_are_held() {
+    assert!(exposure_matches(1000, 1007)); // Native NINA/ASCOM saved duration.
+    assert!(!exposure_matches(1000, 1011));
+    assert!(exposure_matches(300_000, 300_300));
+    assert!(!exposure_matches(300_000, 300_301));
+    assert!(!exposure_matches(0, 1));
+    assert!(!exposure_matches(1000, 0));
+    assert!(!exposure_matches(1000, u64::MAX));
+    let p = import();
+    let mut a = frame(&p, 1);
+    let mut b = frame(&p, 2);
+    a.exposure_ms = 300_007;
+    b.exposure_ms = 299_995;
+    let report =
+        serde_json::to_value(finalize_contribution(&p, &[a, b]).unwrap().report()).unwrap();
+    assert_eq!(report["seconds"], 600.002);
+    assert_eq!(report["exposure"], 300.001);
+}
+
+#[test]
 fn delayed_capture_retains_task_identity_and_reports_actual_observing_night() {
     let p = import();
     let r = finalize_contribution_for_night(&p, &[frame(&p, 1)], "2026-10-12").unwrap();

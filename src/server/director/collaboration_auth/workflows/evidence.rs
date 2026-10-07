@@ -3,7 +3,57 @@ use super::*;
 use crate::astrometry::{wcs_from_response, AstrometrySolutionResponse};
 use crate::server::director::collaboration_activation::{associations, matching};
 use collaboration::{FrameEvidence, MeasuredFootprint, PreparedImport};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+mod measurements;
+
+struct CatalogFrames {
+    frames: Vec<FrameEvidence>,
+    director: Vec<DirectorCapture>,
+}
+
+struct DirectorCapture {
+    id: Uuid,
+    goal: Uuid,
+    assignment_start_ms: u64,
+    assignment_end_ms: Option<u64>,
+    captured_at_ms: u64,
+    exposure_ms: u64,
+}
+
+impl DirectorCapture {
+    fn matches(&self, receipt: &psf_guard_director_meta::inbox::Receipt) -> bool {
+        let attempt = &receipt.payload["attempt"];
+        let evidence = &attempt["evidence"];
+        let Some(reserved) = attempt["reserved_at_ms"].as_u64() else {
+            return false;
+        };
+        let Some(elapsed) = evidence["elapsed_ms"].as_u64() else {
+            return false;
+        };
+        // Native triggers may run between reservation and exposure. elapsed
+        // measures capture/save, not that intervening autofocus or flip.
+        receipt.state == "saved"
+            && Uuid::parse_str(&receipt.capture_id).ok() == Some(self.id)
+            && Uuid::parse_str(&receipt.goal_id).ok() == Some(self.goal)
+            && attempt["capture_id"]
+                .as_str()
+                .and_then(|v| Uuid::parse_str(v).ok())
+                == Some(self.id)
+            && attempt["goal_id"]
+                .as_str()
+                .and_then(|v| Uuid::parse_str(v).ok())
+                == Some(self.goal)
+            && evidence["state"] == "saved"
+            && evidence["image_id"]
+                .as_str()
+                .and_then(|v| Uuid::parse_str(v).ok())
+                == Some(self.id)
+            && reserved >= self.assignment_start_ms
+            && self.assignment_end_ms.is_none_or(|end| reserved < end)
+            && self.captured_at_ms >= reserved.saturating_sub(2000)
+            && elapsed.saturating_add(2000) >= self.exposure_ms
+    }
+}
 
 const IMAGE_SELECT: &str = "SELECT ai.Id,ai.projectId,ai.targetId,ai.acquireddate,ai.filtername,ai.gradingStatus,ai.metadata,ai.profileId,ai.guid,t.name,t.guid FROM acquiredimage ai";
 
@@ -186,8 +236,9 @@ pub(super) async fn review(
             Ok(import.plan)
         })
         .await?;
-    let (finalized, review_digest) = blocking(move || {
-        let frames = frames(&catalog, &import, &selection)?;
+    let (finalized, review_digest, director) = blocking(move || {
+        let extracted = frames(&catalog, &import, &selection)?;
+        let frames = extracted.frames;
         let night = selection
             .observing_night
             .as_deref()
@@ -196,9 +247,32 @@ pub(super) async fn review(
             .map_err(|_| held())?;
         let digest =
             collaboration::digest(&serde_json::to_vec(&(night, &frames)).map_err(|_| held())?);
-        Ok::<_, Failure>((finalized, digest))
+        Ok::<_, Failure>((finalized, digest, extracted.director))
     })
     .await??;
+    if !director.is_empty() {
+        let matched = service
+            .clone()
+            .query(move |store| {
+                let ids = director.iter().map(|c| c.id).collect::<Vec<_>>();
+                let receipts = store.saved_receipts_for_captures(rig, &ids)?;
+                let mut by_capture = BTreeMap::<Uuid, Vec<_>>::new();
+                for receipt in &receipts {
+                    if let Ok(id) = Uuid::parse_str(&receipt.capture_id) {
+                        by_capture.entry(id).or_default().push(receipt);
+                    }
+                }
+                Ok(director.iter().all(|capture| {
+                    by_capture
+                        .get(&capture.id)
+                        .is_some_and(|found| found.len() == 1 && capture.matches(found[0]))
+                }))
+            })
+            .await?;
+        if !matched {
+            return Err(Failure(StatusCode::UNPROCESSABLE_ENTITY, "Director capture check-in is missing or does not match this assignment; check in and review again"));
+        }
+    }
     let payload = json!(finalized.report());
     let images = finalized.images().to_vec();
     if let Some(expected) = expected {
@@ -220,7 +294,7 @@ fn frames(
     catalog: &DatabaseContext,
     import: &PreparedImport,
     selection: &Selection,
-) -> Result<Vec<FrameEvidence>, Failure> {
+) -> Result<CatalogFrames, Failure> {
     let conn = crate::server::database_context::open_scheduler_connection_with_flags(
         &catalog.database_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -252,6 +326,7 @@ fn frames(
     drop(conn);
     let mut solutions = Vec::new();
     let mut frames = Vec::new();
+    let mut director = Vec::new();
     for (guid, (image, target, target_guid)) in rows {
         if image.grading_status != 1 {
             return Err(held());
@@ -275,9 +350,9 @@ fn frames(
         let fingerprint = collaboration::digest(
             &serde_json::to_vec(&analysis.source_fingerprint).map_err(|_| held())?,
         );
-        let headers = crate::astrometry_headers::FitsAstrometryHeaders::from_path(&path)
-            .map_err(|_| held())?;
         let frame_header = crate::image_io::read_frame_header(&path, &path).map_err(|_| held())?;
+        let headers =
+            crate::astrometry_headers::FitsAstrometryHeaders::from_headers(&frame_header.cards);
         let class = crate::image_io::classify_frame(&path, &path, &frame_header);
         if class.kind == crate::image_io::FrameKind::Integration {
             return Err(held());
@@ -301,6 +376,8 @@ fn frames(
             .map(|v| v.value)
             .filter(|v| v.is_finite() && *v > 0.0 && *v <= 86400.0)
             .ok_or_else(held)?;
+        let capture_id = measurements::director_capture(&frame_header).map_err(|_| held())?;
+        let mut assignment = None;
         if !links.is_empty() {
             let matches = matching(
                 &links,
@@ -311,10 +388,29 @@ fn frames(
             if matches.len() != 1
                 || matches[0].source_digest != import.digest()
                 || matches[0].panel != selection.panel
-                || (exposure * 1000.0 - matches[0].exposure_ms as f64).abs() > 0.001
+                || !collaboration::exposure_matches(
+                    matches[0].exposure_ms,
+                    (exposure * 1000.0).round() as u64,
+                )
             {
                 return Err(held());
             }
+            assignment = Some(matches[0]);
+        }
+        let captured = captured.ok_or_else(held)?;
+        if let Some(id) = capture_id {
+            let assignment = assignment.ok_or_else(held)?;
+            director.push(DirectorCapture {
+                id,
+                goal: Uuid::parse_str(&assignment.exposureplan_guid).map_err(|_| held())?,
+                assignment_start_ms: assignment.start_at_ms,
+                assignment_end_ms: assignment.end_at_ms,
+                captured_at_ms: captured
+                    .checked_mul(1000)
+                    .and_then(|t| u64::try_from(t).ok())
+                    .ok_or_else(held)?,
+                exposure_ms: (exposure * 1000.0).round() as u64,
+            });
         }
         // The actual observing night is reviewed independently of when the
         // assignment was dealt. Do not relabel delayed captures as that night.
@@ -324,7 +420,7 @@ fn frames(
                 .as_deref()
                 .unwrap_or(import.night()),
         )?;
-        if captured.is_none_or(|time| !(start..end).contains(&time)) {
+        if !(start..end).contains(&captured) {
             return Err(held());
         }
         let number = |key: &str| {
@@ -332,8 +428,18 @@ fn frames(
                 .as_f64()
                 .filter(|v| v.is_finite() && *v >= 0.0)
         };
+        let (moon_illumination, moon_separation_degrees) = measurements::moon(
+            &headers,
+            captured,
+            exposure,
+            psf_guard_director_core::visibility::IcrsPosition {
+                ra_degrees: solution.center_ra_deg,
+                dec_degrees: solution.center_dec_deg,
+            },
+        );
         frames.push(FrameEvidence {
-            capture_id: Uuid::new_v5(&Uuid::NAMESPACE_OID, guid.as_bytes()),
+            capture_id: capture_id
+                .unwrap_or_else(|| Uuid::new_v5(&Uuid::NAMESPACE_OID, guid.as_bytes())),
             image_guid: guid,
             source_digest: import.digest().into(),
             panel_index: selection.panel,
@@ -356,13 +462,15 @@ fn frames(
             hfr_arcsec: if class.kind.is_derivative() {
                 None
             } else {
-                number("HFR").map(|hfr| hfr * solution.pixel_scale_arcsec_per_pixel)
+                measurements::number(&frame_header, "PGHFR", 0.0, 1e6)
+                    .or_else(|| number("HFR"))
+                    .map(|hfr| hfr * solution.pixel_scale_arcsec_per_pixel)
             },
-            guide_rms_arcsec: None,
-            moon_illumination: None,
-            moon_separation_degrees: None,
+            guide_rms_arcsec: measurements::number(&frame_header, "PGGRMS", 0.0, 1e6),
+            moon_illumination,
+            moon_separation_degrees,
             calibrated,
-            bandpass_nm: None,
+            bandpass_nm: measurements::bandpass(&frame_header),
             colour: frame_colour,
         });
         solutions.push(solution);
@@ -372,7 +480,7 @@ fn frames(
         frame.solved_footprint = footprint.clone();
     }
     frames.sort_by_key(|f| f.image_guid);
-    Ok(frames)
+    Ok(CatalogFrames { frames, director })
 }
 fn frame_is_colour(header: &crate::image_io::FrameHeader) -> bool {
     header
@@ -448,6 +556,57 @@ fn common_footprint(solutions: &[AstrometrySolutionResponse]) -> Option<Measured
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn director_receipt_requires_exact_identity_without_treating_trigger_time_as_capture_time() {
+        use psf_guard_director_meta::inbox::Receipt;
+        let capture = DirectorCapture {
+            id: Uuid::new_v4(),
+            goal: Uuid::new_v4(),
+            assignment_start_ms: 9_000,
+            assignment_end_ms: Some(11_000),
+            captured_at_ms: 10_000,
+            exposure_ms: 300_000,
+        };
+        let receipt = Receipt {
+            rig_id: Uuid::new_v4(),
+            ledger_id: "ledger".into(),
+            sequence: 2,
+            capture_id: capture.id.to_string(),
+            goal_id: capture.goal.to_string(),
+            state: "saved".into(),
+            received_at_ms: 500_000,
+            payload: json!({"attempt":{"capture_id":capture.id,"goal_id":capture.goal,
+                "reserved_at_ms":10_000,"evidence":{"state":"saved","image_id":capture.id,"elapsed_ms":301_000}}}),
+        };
+        assert!(capture.matches(&receipt));
+        for (key, bad) in [
+            ("capture_id", json!(Uuid::new_v4())),
+            ("goal_id", json!(Uuid::new_v4())),
+            ("reserved_at_ms", json!(20_000)),
+        ] {
+            let mut invalid = receipt.clone();
+            invalid.payload["attempt"][key] = bad;
+            assert!(!capture.matches(&invalid));
+        }
+        for (key, bad) in [
+            ("image_id", json!(Uuid::new_v4())),
+            ("state", json!("uncertain")),
+            ("elapsed_ms", json!(1)),
+        ] {
+            let mut invalid = receipt.clone();
+            invalid.payload["attempt"]["evidence"][key] = bad;
+            assert!(!capture.matches(&invalid));
+        }
+        let mut after_flip = capture;
+        after_flip.captured_at_ms = 400_000;
+        assert!(after_flip.matches(&receipt));
+        after_flip.assignment_start_ms = 10_001;
+        assert!(!after_flip.matches(&receipt));
+        after_flip.assignment_start_ms = 9_000;
+        after_flip.assignment_end_ms = Some(10_000);
+        assert!(!after_flip.matches(&receipt));
+    }
+
     fn solution(ra: f64) -> AstrometrySolutionResponse {
         serde_json::from_value(json!({"center_ra_deg":ra,"center_dec_deg":20.0,"pixel_scale_arcsec_per_pixel":3.6,"matched_stars":30,"rms_arcsec":0.2,"image_width":1000,"image_height":1000,
             "wcs":{"crval":[ra,20.0],"crpix":[500.0,500.0],"cd":[[-0.001,0.0],[0.0,0.001]],"ctype":["RA---TAN","DEC--TAN"],"cunit":["deg","deg"],"radesys":"ICRS","equinox":2000.0},"footprint":[],"objects":[]})).unwrap()
@@ -553,10 +712,10 @@ mod tests {
             observing_night: None,
         };
         let extracted = frames(&catalog, &import, &selection).unwrap();
-        assert_eq!(extracted[0].exposure_ms, 300_000);
-        assert_eq!(extracted[0].hfr_arcsec, Some(7.2));
-        assert!(!extracted[0].calibrated);
-        assert!(!extracted[0].colour);
+        assert_eq!(extracted.frames[0].exposure_ms, 300_000);
+        assert_eq!(extracted.frames[0].hfr_arcsec, Some(7.2));
+        assert!(!extracted.frames[0].calibrated);
+        assert!(!extracted.frames[0].colour);
         conn.execute_batch(crate::server::director::collaboration_activation::DDL)
             .unwrap();
         conn.execute("INSERT INTO psf_guard_collaboration_plan VALUES('plan','11111111-1111-4111-8111-111111111111',?1,?2,0,'H',300000,1791170000000,NULL,11)",

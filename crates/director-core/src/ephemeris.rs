@@ -44,6 +44,43 @@ pub fn moon_position(unix_ms: u64) -> IcrsPosition {
     to_position(&pv[0])
 }
 
+/// Lunar direction from a recorded observing site, including diurnal parallax.
+/// Uses UTC as UT1 and zero polar motion: adequate for contribution metadata
+/// (about an arcminute lunar model accuracy), not precision astrometry or safety.
+pub fn moon_at_site(unix_ms: u64, site: crate::visibility::Site) -> Option<IcrsPosition> {
+    if unix_ms > 4_102_444_800_000
+        || !site.latitude_degrees.is_finite()
+        || !(-90.0..=90.0).contains(&site.latitude_degrees)
+        || !site.longitude_degrees.is_finite()
+        || !(-180.0..=180.0).contains(&site.longitude_degrees)
+        || !site.elevation_meters.is_finite()
+        || !(-500.0..=10_000.0).contains(&site.elevation_meters)
+    {
+        return None;
+    }
+    let (tt1, tt2) = tt_two_part(unix_ms);
+    let terrestrial = sofars::coords::gd2gc(
+        1,
+        site.longitude_degrees.to_radians(),
+        site.latitude_degrees.to_radians(),
+        site.elevation_meters,
+    )
+    .ok()?;
+    let rotation = sofars::pnp::c2t06a(
+        tt1,
+        tt2,
+        UNIX_EPOCH_JD,
+        unix_ms as f64 / 86_400_000.0,
+        0.0,
+        0.0,
+    );
+    let mut observer = [0.0; 3];
+    sofars::vm::trxp(&rotation, &terrestrial, &mut observer);
+    let moon = sofars::eph::moon98(tt1, tt2)[0];
+    let topocentric = std::array::from_fn(|i| moon[i] - observer[i] / 149_597_870_700.0);
+    Some(to_position(&topocentric))
+}
+
 /// Illuminated fraction of the Moon's disc, 0 (new) to 1 (full).
 pub fn moon_illumination(unix_ms: u64) -> Option<f64> {
     let (d1, d2) = tt_two_part(unix_ms);
@@ -125,5 +162,44 @@ mod tests {
         };
         assert!((separation_degrees(a, c) - separation_degrees(c, a)).abs() < 1e-12);
         assert!(separation_degrees(a, c) < 1.0 && separation_degrees(a, c) > 0.7);
+    }
+
+    #[test]
+    fn lunar_parallax_uses_the_recorded_site_and_rejects_bad_sites() {
+        use crate::visibility::Site;
+        let site = Site {
+            latitude_degrees: 90.0,
+            longitude_degrees: 0.0,
+            elevation_meters: 0.0,
+        };
+        let time = ms(1_790_441_340);
+        let north = moon_at_site(time, site).unwrap();
+        let south = moon_at_site(
+            time,
+            Site {
+                latitude_degrees: -90.0,
+                ..site
+            },
+        )
+        .unwrap();
+        assert!((1.0..2.2).contains(&separation_degrees(north, south)));
+        assert!(separation_degrees(north, moon_position(time)) < 1.1);
+        assert!(moon_at_site(
+            time,
+            Site {
+                latitude_degrees: f64::NAN,
+                ..site
+            }
+        )
+        .is_none());
+        assert!(moon_at_site(
+            time,
+            Site {
+                longitude_degrees: 181.0,
+                ..site
+            }
+        )
+        .is_none());
+        assert!(moon_at_site(u64::MAX, site).is_none());
     }
 }

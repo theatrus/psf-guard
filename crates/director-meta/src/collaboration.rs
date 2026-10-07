@@ -5,8 +5,8 @@ use super::*;
 use psf_guard_director_interop::{
     astrocollab::Source,
     collaboration::{
-        decode_recorded, digest, prepare_import, FinalizedContribution, PreparedImport, Recorded,
-        MAX_REPORTS, MAX_REPORT_FRAMES,
+        decode_recorded, digest, exposure_matches, prepare_import, FinalizedContribution,
+        PreparedImport, Recorded, MAX_REPORTS, MAX_REPORT_FRAMES,
     },
 };
 use std::collections::BTreeSet;
@@ -772,8 +772,11 @@ fn read_report(conn: &Connection, id: Uuid) -> Result<Option<QueuedReport>, Erro
                 || body["frames"].as_u64() != Some(captures_v.len() as u64)
                 || body["seconds"].as_f64() != Some(total as f64 / 1000.0)
                 || !demand.is_some_and(|d| {
-                    d.exposure_ms.checked_mul(captures_v.len() as u64) == Some(total as u64)
-                        && body["exposure"].as_f64() == Some(d.exposure_ms as f64 / 1000.0)
+                    let count = captures_v.len() as u64;
+                    let measured = total as u64;
+                    exposure_matches(d.exposure_ms, measured / count)
+                        && exposure_matches(d.exposure_ms, measured.div_ceil(count))
+                        && body["exposure"].as_f64() == Some(total as f64 / count as f64 / 1000.0)
                 })
             {
                 return Err(Error::CorruptDatabase);
