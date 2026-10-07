@@ -1,5 +1,10 @@
 # Unreleased
 
+- Keep what was changed in N.I.N.A. after an activation: the activation
+  preview offers **Take Target Scheduler's values** for a rig, which writes
+  that rig's frame counts, templates, exposure lengths and moved targets into
+  the plan instead of overwriting them, and says what it left as planned.
+
 - Keep a plan taken in from Target Scheduler in step with its project until
   you change it in Planning or activate it: a desired count raised or a
   target moved in N.I.N.A. shows up in the plan on the next listing. Your

@@ -125,6 +125,48 @@ describe('Activation panel', () => {
     expect(pushCount()).toBe(1);
   });
 
+  it("takes a rig's Target Scheduler values instead of overwriting them, then previews again", async () => {
+    const takes: unknown[] = [];
+    let previews = 0;
+    const differing = (same: boolean): DirectorActivationReport => ({
+      ...report(false),
+      rigs: [
+        { rig, catalog_slug: 'redcat', catalog_name: 'RedCat 61', profile_id: 'p', applied: false, warnings: [], push: null, changes: [
+          { kind: 'project', action: 'unchanged', name: 'Heart', detail: '' },
+          { kind: 'plan', action: same ? 'unchanged' : 'update', name: 'Heart r1c1 · Ha 300', detail: same ? '90 frames' : 'desired 90 → 72' },
+        ] },
+        // A rig whose project activation would create has nothing to take.
+        { rig: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Desert', revision: 1 }, catalog_slug: 'desert', catalog_name: 'Desert copy', profile_id: 'p', applied: false, warnings: [], push: null,
+          changes: [{ kind: 'project', action: 'create', name: 'Heart', detail: 'new Target Scheduler project' }] },
+      ],
+    });
+    server.use(
+      http.get('/api/director/v1/projects/project/activation', () => HttpResponse.json(ok({ activation: null }))),
+      http.get('/api/director/v1/projects/project/plan', () => HttpResponse.json(ok({ project: { id: 'project', name: 'Heart', revision: 1 },
+        plan: { project_id: 'project', revision: 3, updated_at_ms: 1, objectives: [], contributions: [] } }))),
+      http.get('/api/director/v1/projects/project/framing', () => HttpResponse.json(ok({ project: { id: 'project', name: 'Heart', revision: 1 },
+        draft: { project_id: 'project', revision: 2, layout_revision: 2 } }))),
+      http.post('/api/director/v1/projects/project/activation/preview', () => { previews++; return HttpResponse.json(ok(differing(previews > 1))); }),
+      http.post('/api/director/v1/projects/project/plan/take-target-scheduler', async ({ request }) => {
+        takes.push(await request.json());
+        return HttpResponse.json(ok({ plan_revision: 4, framing_revision: 2, taken: ['Ha: 90 frames'],
+          left: ['Project: a Draft in Target Scheduler; an activation makes it Active'] }));
+      }),
+    );
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview' }));
+    const take = await screen.findByRole('button', { name: "Take Target Scheduler's values" });
+    expect(screen.getAllByRole('button', { name: "Take Target Scheduler's values" })).toHaveLength(1);
+    await waitFor(() => expect(take).toBeEnabled());
+    fireEvent.click(take);
+    expect(await screen.findByText('Ha: 90 frames')).toBeInTheDocument();
+    expect(screen.getByText('Project: a Draft in Target Scheduler; an activation makes it Active')).toBeInTheDocument();
+    expect(takes).toEqual([{ rig_id: rig.id, plan_revision: 3, framing_revision: 2 }]);
+    // The preview runs again on what is saved now, and has nothing to take.
+    await waitFor(() => expect(previews).toBe(2));
+    await waitFor(() => expect(screen.queryByRole('button', { name: "Take Target Scheduler's values" })).not.toBeInTheDocument());
+  });
+
   it('offers nothing to a read-only account', async () => {
     fixture(); mount(false);
     expect(await screen.findByText('Read only')).toBeInTheDocument();
