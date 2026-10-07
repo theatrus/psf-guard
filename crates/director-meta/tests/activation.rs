@@ -34,6 +34,7 @@ fn activations_advance_a_revision_and_read_back_after_reopen() {
                 target_guid: target,
                 exposureplan_guid: Uuid::new_v4(),
                 required_frames: 72,
+                intent: None,
             }],
         }],
         inactive_rigs: vec![InactiveRig {
@@ -93,6 +94,7 @@ fn validate_refuses_a_record_the_store_would_refuse() {
                 target_guid: Uuid::new_v4(),
                 exposureplan_guid: Uuid::new_v4(),
                 required_frames: 1,
+                intent: None,
             })
             .collect(),
     };

@@ -62,19 +62,34 @@ fn target_row(
         .optional()
 }
 
-fn progress(connection: &rusqlite::Connection, target_id: i64) -> rusqlite::Result<PanelProgress> {
-    connection.query_row(
-        "SELECT COALESCE(SUM(desired), 0), COALESCE(SUM(acquired), 0), COALESCE(SUM(accepted), 0)
-         FROM exposureplan WHERE targetid = ?1",
-        [target_id],
-        |row| {
-            Ok(PanelProgress {
-                desired: row.get(0)?,
-                acquired: row.get(1)?,
-                accepted: row.get(2)?,
-            })
-        },
-    )
+/// A panel's progress over the plans the activation gave it that are still
+/// on: not the target's other plans, ones turned off, or twins.
+fn progress(
+    connection: &rusqlite::Connection,
+    target_id: i64,
+    plans: &[String],
+) -> rusqlite::Result<PanelProgress> {
+    let mut total = PanelProgress {
+        desired: 0,
+        acquired: 0,
+        accepted: 0,
+    };
+    for guid in plans {
+        let row: Option<(i64, i64, i64)> = connection
+            .query_row(
+                "SELECT IFNULL(desired, 0), IFNULL(acquired, 0), IFNULL(accepted, 0)
+                 FROM exposureplan WHERE guid = ?1 AND targetid = ?2 AND COALESCE(enabled, 1) = 1",
+                rusqlite::params![guid, target_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        if let Some((desired, acquired, accepted)) = row {
+            total.desired += desired;
+            total.acquired += acquired;
+            total.accepted += accepted;
+        }
+    }
+    Ok(total)
 }
 
 pub(super) async fn get(
@@ -161,8 +176,14 @@ pub(super) async fn get(
                         Some((target_id, name)) => (Some(target_id), Some(name)),
                         None => (None, None),
                     };
+                    let plans: Vec<String> = activated
+                        .plans
+                        .iter()
+                        .filter(|plan| plan.target_guid == target.target_guid)
+                        .map(|plan| plan.exposureplan_guid.to_string())
+                        .collect();
                     let progress = target_id
-                        .map(|target_id| progress(&connection, target_id))
+                        .map(|target_id| progress(&connection, target_id, &plans))
                         .transpose()
                         .map_err(StoreError::from)?;
                     let preview = target_id

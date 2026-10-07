@@ -260,8 +260,10 @@ async fn activation_previews_without_writing_then_applies_and_updates_in_place()
     );
     assert_eq!(actions(&again["data"], "plan"), ["unchanged", "unchanged"]);
 
-    // Turn the camera and ask for frames instead of hours: rows update in place,
-    // and a rename by the operator survives.
+    // Turn the camera a little and ask for frames instead of hours: rows
+    // update in place, and a rename by the operator survives. (A turn that
+    // moves a panel with frames by more than a quarter of its size makes a
+    // new target; see a_grid_change_gives_a_moved_panel_with_frames_a_new_target.)
     a.db.execute(
         "UPDATE target SET name='Heart top' WHERE name='IC 1805 r1c1'",
         [],
@@ -272,7 +274,7 @@ async fn activation_previews_without_writing_then_applies_and_updates_in_place()
     {
         let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut framing = store.framing_draft(a.project).unwrap().unwrap();
-        framing.position_angle_degrees = 95.0;
+        framing.position_angle_degrees = 18.0;
         store.save_framing_draft(&framing, 1).unwrap();
         let mut plan = store.plan_draft(a.project).unwrap().unwrap();
         plan.objectives[0].goal = Goal::Frames { value: 40 };
@@ -294,7 +296,7 @@ async fn activation_previews_without_writing_then_applies_and_updates_in_place()
     assert_eq!(count("SELECT count(*) FROM project"), 1);
     assert_eq!(count("SELECT count(*) FROM target"), 2);
     assert_eq!(
-        count("SELECT count(*) FROM target WHERE name='Heart top' AND rotation=95.0"),
+        count("SELECT count(*) FROM target WHERE name='Heart top' AND rotation=18.0"),
         1
     );
     assert_eq!(
@@ -1902,4 +1904,190 @@ async fn a_duplicate_contribution_plans_the_work_once() {
         2,
         "one plan per panel, not two"
     );
+}
+
+fn edit_framing(f: &Fixture, project: Uuid, edit: impl FnOnce(&mut FramingDraft)) {
+    let mut store = f.state.director.as_ref().unwrap().writer.lock().unwrap();
+    let mut framing = store.framing_draft(project).unwrap().unwrap();
+    let revision = framing.revision;
+    edit(&mut framing);
+    store.save_framing_draft(&framing, revision).unwrap();
+}
+
+/// Panel ids are grid places. A grid change that moves a panel with frames
+/// by more than a quarter of its size gives the new place a new target; the
+/// old one keeps its frames and its plans go off. A panel with no frames
+/// moves in place.
+#[tokio::test]
+async fn a_grid_change_gives_a_moved_panel_with_frames_a_new_target() {
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    activate_now(&a.f, a.project, "2 rows").await;
+    assert_eq!(count("SELECT count(*) FROM target"), 2);
+    a.db.execute("UPDATE exposureplan SET acquired=5 WHERE targetid=(SELECT Id FROM target WHERE name='IC 1805 r1c1')", []).unwrap();
+    edit_framing(&a.f, a.project, |framing| framing.mosaic.rows = 3);
+    let data = activate_now(&a.f, a.project, "3 rows").await;
+    let details: Vec<String> = data["rigs"][0]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "target")
+        .map(|c| {
+            format!(
+                "{} {}: {}",
+                c["action"].as_str().unwrap(),
+                c["name"].as_str().unwrap(),
+                c["detail"].as_str().unwrap()
+            )
+        })
+        .collect();
+    assert!(
+        details
+            .iter()
+            .any(|d| d.starts_with("create IC 1805 r1c1") && d.contains("keeps its 5 frames")),
+        "{details:?}"
+    );
+    assert!(
+        details.iter().any(|d| d.starts_with("update IC 1805 r2c1")),
+        "{details:?}"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM target"),
+        4,
+        "old r1c1, new r1c1, r2c1 moved, new r3c1"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE acquired=5 AND enabled=0"),
+        1,
+        "the old place keeps its frames, off"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE enabled=1"),
+        3
+    );
+}
+
+/// Taking over a target puts it right for Director: J2000 coordinates and
+/// switched on, since the program serves only those. A Draft project linked
+/// to the plan goes Active on its first activation.
+#[tokio::test]
+async fn taking_over_a_jnow_target_in_a_draft_project_puts_both_right() {
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    edit_framing(&a.f, a.project, |framing| framing.mosaic.rows = 1);
+    let source = Uuid::new_v4();
+    a.db.execute(
+        "INSERT INTO project (Id, profileId, name, description, state, priority, isMosaic, flatsHandling, guid)
+         VALUES (1, 'profile-a', 'Heart by hand', '', 0, 1, 0, 0, ?1)",
+        [source.to_string()],
+    )
+    .unwrap();
+    a.db.execute(
+        "INSERT INTO target (Id, name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+         VALUES (1, 'IC 1805', 0, 2.55, 61.6, 0, 15.0, 100, 1, ?1)",
+        [Uuid::new_v4().to_string()],
+    )
+    .unwrap();
+    let catalog = crate::catalog_identity::read(&a.db).unwrap().unwrap().id;
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        store
+            .link_catalog_project(&psf_guard_director_meta::catalog::ProjectMapping {
+                catalog_id: catalog,
+                source_project_guid: source,
+                source_profile_id: "profile-a".into(),
+                project_id: a.project,
+                rig_id: a.rig,
+            })
+            .unwrap();
+    }
+    let data = activate_now(&a.f, a.project, "take over").await;
+    let target = data["rigs"][0]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["kind"] == "target")
+        .unwrap()
+        .clone();
+    assert_eq!(target["action"], "adopt", "{target}");
+    assert!(
+        target["detail"]
+            .as_str()
+            .unwrap()
+            .contains("now J2000, turned on"),
+        "{target}"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM target WHERE Id=1 AND epochcode=2 AND active=1"),
+        1
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM project WHERE Id=1 AND state=1"),
+        1,
+        "Draft went Active"
+    );
+}
+
+/// A template id that came back on another template (Target Scheduler's
+/// tables reuse ids) is not trusted unless its settings still match, and a
+/// template is taken from the project's own N.I.N.A. profile.
+#[tokio::test]
+async fn a_reused_template_id_with_other_settings_is_not_bound() {
+    let a = activated().await;
+    // Template 1 is now something else under the same id: another GUID and
+    // gain.
+    a.db.execute(
+        "UPDATE exposuretemplate SET guid=?1, gain=200 WHERE Id=1",
+        [Uuid::new_v4().to_string()],
+    )
+    .unwrap();
+    let data = activate_now(&a.f, a.project, "reused id").await;
+    assert_eq!(actions(&data, "template"), ["create"], "{data}");
+    let bound: i64 =
+        a.db.query_row(
+            "SELECT DISTINCT exposureTemplateId FROM exposureplan",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_ne!(bound, 1);
+}
+
+/// A frame saved between the preview and Apply changes the counts the
+/// preview quotes, not what Apply writes, so the digest still matches.
+#[tokio::test]
+async fn a_frame_saved_between_preview_and_apply_does_not_refuse_it() {
+    let a = activated().await;
+    activate_now(&a.f, a.project, "first").await;
+    // Other work on r1c1, listed with its counts.
+    a.db.execute(
+        "INSERT INTO exposureplan (profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, enabled, guid)
+         VALUES ('profile-a', 600, 10, 0, 0, (SELECT Id FROM target WHERE name='IC 1805 r1c1'), 1, 1, ?1)",
+        [Uuid::new_v4().to_string()],
+    )
+    .unwrap();
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert!(
+        preview.to_string().contains("(0 of 10 frames taken)"),
+        "{preview}"
+    );
+    a.db.execute("UPDATE exposureplan SET acquired=1 WHERE exposure=600", [])
+        .unwrap();
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/apply", a.project),
+        json!({"preview_digest": preview["data"]["preview_digest"]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
 }

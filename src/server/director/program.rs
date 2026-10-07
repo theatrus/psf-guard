@@ -501,6 +501,19 @@ struct PlanRow {
     template_moon: psf_guard_director_core::moon::MoonPolicy,
 }
 
+/// The core's limit on goals in one program.
+const MAX_PROGRAM_GOALS: usize = 256;
+
+/// Drop targets and recipes no goal is bound to.
+fn prune_unbound(built: &mut Built) {
+    let targets: std::collections::BTreeSet<String> =
+        built.bindings.iter().map(|b| b.target_id.clone()).collect();
+    let recipes: std::collections::BTreeSet<String> =
+        built.bindings.iter().map(|b| b.recipe_id.clone()).collect();
+    built.targets.retain(|t| targets.contains(&t.id));
+    built.recipes.retain(|r| recipes.contains(&r.id));
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build(
     connection: &Connection,
@@ -538,14 +551,13 @@ fn build(
             continue;
         };
         let project = &projects[&activation.project_id];
+        // The rig keeps the reviewed activation while the plan is edited:
+        // goals come from the record, not the draft, until the next
+        // activation. A record written before it kept the objective's band,
+        // purpose and priority reads them from the draft where it still has
+        // the objective.
         let plan = plans.get(&activation.project_id);
-        if plan.is_none_or(|p| p.revision != activation.plan_revision) {
-            built.omitted.push(format!(
-                "{}: planning changed since activation; activate the reviewed plan again",
-                project.name
-            ));
-            continue;
-        }
+        let mut done = 0usize;
         for activated in &entry.plans {
             let goal_id = activated.exposureplan_guid.to_string();
             let Some(row) = read_plan_row(
@@ -577,20 +589,14 @@ fn build(
                 ));
                 continue;
             };
-            let (objective, contribution) = plan
-                .and_then(|p| {
-                    let objective = p
-                        .objectives
-                        .iter()
-                        .find(|o| o.id == activated.objective_id)?;
-                    let contribution = p
-                        .contributions
-                        .iter()
-                        .find(|c| c.id == activated.contribution_id)?;
-                    Some((objective, contribution))
-                })
-                .map(|(o, c)| (Some(o), Some(c)))
-                .unwrap_or((None, None));
+            let intent = activated.intent.clone().or_else(|| {
+                plan.and_then(|p| p.objectives.iter().find(|o| o.id == activated.objective_id))
+                    .map(|o| psf_guard_director_meta::activation::PlanIntent {
+                        bandpass_id: o.bandpass_id.clone(),
+                        purpose: o.purpose.clone(),
+                        priority: o.priority,
+                    })
+            });
             // The filter the plugin reported that serves this template's filter.
             let wanted = bandpass_for_filter(&row.template_filter).id;
             let names = profile.map(|p| &p.filter_names);
@@ -712,6 +718,13 @@ fn build(
                 .unwrap_or(u32::MAX)
                 .min(requested);
             let remaining = requested.saturating_sub(accepted);
+            // A finished goal has nothing to offer the rig; leaving it out
+            // keeps a long history of done projects from crowding the
+            // program past its goal limit.
+            if remaining == 0 {
+                done += 1;
+                continue;
+            }
             let attempts_remaining = ((f64::from(remaining) * ATTEMPT_MARGIN).ceil() as u32)
                 .max(if remaining > 0 { 1 } else { 0 });
             // Saved captures the rig has reported that grading has not yet
@@ -724,7 +737,7 @@ fn build(
                 .min(remaining);
             built.goals.push(Goal {
                 id: goal_id.clone(),
-                priority: objective.map_or(1, |o| o.priority),
+                priority: intent.as_ref().map_or(1, |i| i.priority),
                 requested,
                 accepted,
                 pending,
@@ -755,11 +768,57 @@ fn build(
                 source_project_guid: entry.project_guid,
                 target_guid: activated.target_guid,
                 exposureplan_guid: activated.exposureplan_guid,
-                bandpass_id: objective.map(|o| o.bandpass_id.clone()).unwrap_or_default(),
-                purpose: objective.map(|o| o.purpose.clone()).unwrap_or_default(),
+                bandpass_id: intent
+                    .as_ref()
+                    .map(|i| i.bandpass_id.clone())
+                    .unwrap_or_default(),
+                purpose: intent
+                    .as_ref()
+                    .map(|i| i.purpose.clone())
+                    .unwrap_or_default(),
             });
-            let _ = contribution;
         }
+        if done > 0 {
+            built.omitted.push(format!(
+                "{}: {done} finished goal{} left out",
+                project.name,
+                if done == 1 { "" } else { "s" }
+            ));
+        }
+    }
+    // Targets and recipes only a finished goal used go with it.
+    prune_unbound(&mut built);
+    // The core takes at most MAX_PROGRAM_GOALS goals. Past that, the most
+    // important are kept and the rest named, rather than the whole program
+    // refused.
+    if built.goals.len() > MAX_PROGRAM_GOALS {
+        let mut order: Vec<usize> = (0..built.goals.len()).collect();
+        order.sort_by(|&a, &b| {
+            built.goals[b]
+                .priority
+                .cmp(&built.goals[a].priority)
+                .then(a.cmp(&b))
+        });
+        let kept: std::collections::BTreeSet<usize> =
+            order.into_iter().take(MAX_PROGRAM_GOALS).collect();
+        let dropped = built.goals.len() - kept.len();
+        let keep = |index: &usize| kept.contains(index);
+        let goals: Vec<_> = built
+            .goals
+            .drain(..)
+            .enumerate()
+            .filter(|(i, _)| keep(i))
+            .map(|(_, g)| g)
+            .collect();
+        let ids: std::collections::BTreeSet<String> = goals.iter().map(|g| g.id.clone()).collect();
+        built.goals = goals;
+        built.bindings.retain(|b| ids.contains(&b.goal_id));
+        built.links.retain(|l| ids.contains(&l.goal_id));
+        prune_unbound(&mut built);
+        built.omitted.push(format!(
+            "{dropped} lower-priority goal{} left out: a rig's program holds at most {MAX_PROGRAM_GOALS}",
+            if dropped == 1 { "" } else { "s" }
+        ));
     }
     Ok(built)
 }

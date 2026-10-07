@@ -21,6 +21,20 @@ pub struct ActivatedPlan {
     pub target_guid: Uuid,
     pub exposureplan_guid: Uuid,
     pub required_frames: u32,
+    /// What the objective asked for when this was activated, so the rig's
+    /// program keeps serving the reviewed activation while the plan is
+    /// edited. Absent in records written before it was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<PlanIntent>,
+}
+
+/// The objective's band, purpose and priority as activated.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PlanIntent {
+    pub bandpass_id: String,
+    pub purpose: String,
+    pub priority: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -103,6 +117,14 @@ fn validate_activation(activation: &Activation) -> Result<(), Error> {
             valid_id(plan.objective_id)?;
             valid_id(plan.target_guid)?;
             valid_id(plan.exposureplan_guid)?;
+            if let Some(intent) = &plan.intent
+                && (intent.bandpass_id.is_empty()
+                    || intent.bandpass_id.len() > 64
+                    || intent.purpose.len() > 64
+                    || intent.priority > 1000)
+            {
+                return Err(Error::InvalidInput);
+            }
         }
     }
     Ok(())
