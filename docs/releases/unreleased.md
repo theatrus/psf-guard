@@ -1,5 +1,9 @@
 # Unreleased
 
+- Scroll a large image grid smoothly again. Every card ran a hidden
+  spinner that never stopped, so the browser restyled thousands of cards on
+  each frame; Safari felt it most. Cards off screen now skip drawing until
+  they come near.
 - Register a rig with an AstroCollab server from Settings, Rigs, Setup using
   browser sign-in or a pairing code. PSF Guard keeps the agent token in its
   existing config directory with private file permissions, and retains the
