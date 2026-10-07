@@ -155,6 +155,9 @@ button.workspace-pill { cursor: pointer; }
 .director-page .workspace-tabs button.workspace-tab:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
 .director-page .workspace-tabs button.workspace-tab.active { color: var(--color-primary); border-bottom-color: var(--color-primary); background: var(--color-bg-secondary); }
 .workspace-tab-edited { margin-left: 6px; font-size: 10px; color: var(--color-warning-light); }
+/* What a screen reader hears for the dot. */
+.workspace-tab-edited-text { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+.workspace-note { margin: 0; font-size: 13px; }
 .workspace-panel { padding-top: 12px; }
 .workspace-panel[hidden] { display: none; }
 .observing-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }

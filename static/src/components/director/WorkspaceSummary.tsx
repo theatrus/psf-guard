@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Check, TriangleAlert } from 'lucide-react';
 import { apiClient } from '../../api/client';
+import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import type { DirectorObjective, DirectorRigProfileSummary } from '../../api/directorTypes';
 import { useActivationState } from './activationState';
 import { formatDec, formatRaHours } from './framingModel';
@@ -20,6 +21,7 @@ function rigGaps(rig: DirectorRigProfileSummary | undefined): string[] {
 }
 
 const bandpassName = (id: string) => KNOWN_BANDPASSES.find(entry => entry.id === id)?.name ?? id;
+const listed = (words: string[]) => words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
 
 function goalText(objective: DirectorObjective): string {
   const { kind, value } = objective.goal;
@@ -35,26 +37,31 @@ export default function WorkspaceSummary({ projectId, projectName, back, rigs, o
   projectName: string;
   /** The Library address to go back to. */
   back: string;
-  /** Rigs the plan names: a linked database, or a contribution. */
-  rigs: Array<{ id: string; name: string }>;
+  /** Rigs the plan names: a linked database, or a contribution. `off`: a
+   *  linked rig that shoots none of it. */
+  rigs: Array<{ id: string; name: string; off?: boolean }>;
   /** Open the activation preview from the line that says where it stands. */
   onActivation?: () => void;
   /** The activation bar is up and says it already. */
   hideActivation?: boolean;
 }) {
   const { last, savedPlan, savedFraming, behind } = useActivationState(projectId);
+  const status = useDirectorStatus();
   const profiles = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
   const framing = savedFraming.data?.draft;
   const objectives = savedPlan.data?.plan?.objectives ?? [];
   const activation = last.data
     ? behind.length > 0
-      ? { ok: false, text: `${behind.join(' and ')} not activated` }
-      : { ok: true, text: 'Active' }
+      ? { ok: false, text: `${listed(behind)} not activated` }
+      // Not "Active": that is a Target Scheduler project state, which the
+      // project in each database keeps whatever this says.
+      : { ok: true, text: 'On the rigs' }
     : last.isSuccess ? { ok: false, text: 'Not activated yet' } : null;
   return <div className="workspace-summary" aria-label="Plan summary" role="region">
     <div className="workspace-summary-head">
       <Link className="workspace-pill workspace-back" to={`/?${back}`}><ArrowLeft size={14} />Library</Link>
       <h2 className="workspace-summary-name">{projectName}</h2>
+      {status.data && !status.data.database_management && <span className="workspace-pill" title="This server does not write to rig databases" data-testid="summary-drafts-only">Drafts only</span>}
       {activation && !hideActivation && (onActivation
         ? <button type="button" className={`workspace-pill workspace-activation${activation.ok ? ' is-ok' : ' is-behind'}`} data-testid="summary-activation" title="Preview an activation, or push the last one again" onClick={onActivation}>{activation.ok ? <Check size={14} aria-hidden="true" /> : <TriangleAlert size={14} aria-hidden="true" />}{activation.text}</button>
         : <span className={`workspace-pill workspace-activation${activation.ok ? ' is-ok' : ' is-behind'}`} data-testid="summary-activation">{activation.text}</span>)}
@@ -71,7 +78,7 @@ export default function WorkspaceSummary({ projectId, projectName, back, rigs, o
         return <span key={rig.id} className={`workspace-pill workspace-rig${gaps.length ? ' is-missing' : ' is-ok'}`}
           title={gaps.length ? `${rig.name}: ${gaps.join(', ')}. Set it up under Settings → Rigs.` : `${rig.name} is set up`}>
           {gaps.length ? <TriangleAlert size={14} aria-hidden="true" /> : <Check size={14} aria-hidden="true" />}
-          {rig.name}{gaps.length > 0 && <small> · {gaps.join(', ')}</small>}
+          {rig.name}{gaps.length > 0 && <small> · {gaps.join(', ')}</small>}{rig.off && <small> · off</small>}
         </span>;
       })}
       {rigs.length === 0 && <span className="workspace-pill">No rig in this plan yet</span>}

@@ -73,11 +73,21 @@ export function describePlanChanges(before: DirectorPlanDraft | null, after: Dir
   const parts = (plan: DirectorPlanDraft) => new Map(plan.contributions.map(contribution => [key(contribution), contribution]));
   const oldParts = parts(before);
   const newParts = parts(after);
+  // A rig added to or dropped from the plan is one change, not one per
+  // objective it turns on or off.
+  const shooting = (plan: DirectorPlanDraft) => new Set(plan.contributions.filter(c => c.enabled).map(c => c.rig_id));
+  const wasShooting = shooting(before);
+  const nowShooting = shooting(after);
+  const joined = new Set([...nowShooting].filter(id => !wasShooting.has(id)));
+  const dropped = new Set([...wasShooting].filter(id => !nowShooting.has(id)));
+  for (const id of joined) changes.push(`${rigName(id)} added`);
+  for (const id of dropped) changes.push(`${rigName(id)} dropped`);
   for (const [part, contribution] of newParts) {
     const old = oldParts.get(part);
     const label = `${rigName(contribution.rig_id)} ${objectiveName(after, contribution.objective_id)}`;
-    if (!old) { changes.push(`${label} added`); continue; }
-    if (old.enabled !== contribution.enabled) changes.push(`${label} ${contribution.enabled ? 'on' : 'off'}`);
+    const whole = joined.has(contribution.rig_id) || dropped.has(contribution.rig_id);
+    if (!old) { if (!whole) changes.push(`${label} added`); continue; }
+    if (old.enabled !== contribution.enabled && !whole) changes.push(`${label} ${contribution.enabled ? 'on' : 'off'}`);
     if (old.exposure_seconds !== contribution.exposure_seconds) changes.push(`${label} exposure ${old.exposure_seconds} s → ${contribution.exposure_seconds} s`);
     if (!same(old.template, contribution.template)) changes.push(`${label} template ${old.template.name} → ${contribution.template.name}`);
     if (!same(old.goal ?? null, contribution.goal ?? null)) {
@@ -87,7 +97,7 @@ export function describePlanChanges(before: DirectorPlanDraft | null, after: Dir
     if (!same([...old.panel_ids].sort(), [...contribution.panel_ids].sort())) changes.push(`${label} panels`);
   }
   for (const [part, contribution] of oldParts) {
-    if (!newParts.has(part)) changes.push(`${rigName(contribution.rig_id)} ${objectiveName(before, contribution.objective_id)} removed`);
+    if (!newParts.has(part) && !dropped.has(contribution.rig_id)) changes.push(`${rigName(contribution.rig_id)} ${objectiveName(before, contribution.objective_id)} removed`);
   }
   return changes;
 }

@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createMemoryRouter, Link, RouterProvider } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DraftProvider, EditedMark, SaveBar } from '../pageDrafts';
-import { useDraftSection, usePageDrafts } from '../pageDraftsState';
+import { leavesPage, samePageAs, useDraftSection, usePageDrafts, type Drafts } from '../pageDraftsState';
 
 /** A section holding one value, saved by a stand-in for its API call. */
 function Field({ id, label, order, saved: stored, saves, fail = false }: { id: string; label: string; order: number; saved: string; saves: string[]; fail?: boolean | string }) {
@@ -17,10 +17,12 @@ function Field({ id, label, order, saved: stored, saves, fail = false }: { id: s
   return <input aria-label={label} value={value} onChange={event => setValue(event.target.value)} />;
 }
 
-function Page({ saves, failPlan = false }: { saves: string[]; failPlan?: boolean | string }) {
+function Page({ saves, failPlan = false, out }: { saves: string[]; failPlan?: boolean | string; out?: { current: Drafts | null } }) {
   const drafts = usePageDrafts();
+  if (out) out.current = drafts;
   return <DraftProvider drafts={drafts}>
-    <SaveBar drafts={drafts} canWrite />
+    {/* The plan named in the address is what the page edits. */}
+    <SaveBar drafts={drafts} canWrite pageKeys={['plan']} />
     <h3>Plan<EditedMark drafts={drafts} id="plan" /></h3>
     {/* Registered out of order: saving still goes framing, then plan. */}
     <Field id="plan" label="Plan" order={2} saved="40" saves={saves} fail={failPlan} />
@@ -29,14 +31,15 @@ function Page({ saves, failPlan = false }: { saves: string[]; failPlan?: boolean
   </DraftProvider>;
 }
 
-function mount(failPlan: boolean | string = false) {
+function mount(failPlan: boolean | string = false, initial = '/') {
   const saves: string[] = [];
+  const out: { current: Drafts | null } = { current: null };
   const router = createMemoryRouter([
-    { path: '/', element: <Page saves={saves} failPlan={failPlan} /> },
+    { path: '/', element: <Page saves={saves} failPlan={failPlan} out={out} /> },
     { path: '/elsewhere', element: <p>Library page</p> },
-  ]);
+  ], { initialEntries: [initial] });
   render(<RouterProvider router={router} />);
-  return { saves, router };
+  return { saves, router, drafts: out };
 }
 
 const bar = () => screen.queryByRole('region', { name: 'Unsaved changes' });
@@ -108,6 +111,59 @@ describe('page save bar', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Save and leave' }));
     expect(await screen.findByText('Library page')).toBeInTheDocument();
     expect(saves).toEqual(['Plan=120']);
+  });
+
+  it('asks before another plan opens in its place, but lets the same plan take a new address', async () => {
+    const { router } = mount(false, '/?plan=a');
+    fireEvent.change(screen.getByLabelText('Plan'), { target: { value: '120' } });
+    // The header's plan picker, Back, or a link: the path stays, the plan changes.
+    await act(() => router.navigate('/?plan=b'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Leave with unsaved changes in Plan?');
+    expect(router.state.location.search).toBe('?plan=a');
+    fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
+    // Another parameter is the same page.
+    await act(() => router.navigate('/?plan=a&planTab=rigs'));
+    expect(router.state.location.search).toBe('?plan=a&planTab=rigs');
+    // The plan's key turning canonical (after a detach, an attach or a first
+    // activation) rewrites this address and keeps the edits.
+    await act(() => router.navigate('/?plan=guid', { replace: true, state: samePageAs('?plan=a&planTab=rigs') }));
+    expect(router.state.location.search).toBe('?plan=guid');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByLabelText('Plan')).toHaveValue('120');
+  });
+
+  it('marks only a rewrite of the address it was made from as the same page', () => {
+    const at = (search: string, state: unknown = null) => ({ pathname: '/plan', search, hash: '', state, key: search });
+    expect(leavesPage(at('?plan=a'), at('?plan=b'), ['plan'])).toBe(true);
+    expect(leavesPage(at('?plan=a'), at('?plan=a&planTab=rigs'), ['plan'])).toBe(false);
+    expect(leavesPage(at('?plan=a'), at('?plan=guid', samePageAs('?plan=a')), ['plan'])).toBe(false);
+    // Stepping forward from plan b onto that rewritten history entry still leaves b.
+    expect(leavesPage(at('?plan=b'), at('?plan=guid', samePageAs('?plan=a')), ['plan'])).toBe(true);
+    expect(leavesPage(at('?plan=a'), { ...at(''), pathname: '/' }, ['plan'])).toBe(true);
+  });
+
+  it('runs one save at a time: a second Save gets the first one\'s result', async () => {
+    const { saves, drafts } = mount();
+    fireEvent.change(screen.getByLabelText('Plan'), { target: { value: '120' } });
+    await waitFor(() => expect(drafts.current?.unsaved).toHaveLength(1));
+    // The bar's Save, then activation's "Save and preview" before it ends.
+    const [first, second] = await act(async () => {
+      const both = [drafts.current!.saveAll(), drafts.current!.saveAll()];
+      return Promise.all(both);
+    });
+    expect(first).toBeNull();
+    expect(second).toBeNull();
+    expect(saves).toEqual(['Plan=120']);
+  });
+
+  it('moves focus to the saved status once the Save button is gone', async () => {
+    mount();
+    fireEvent.change(screen.getByLabelText('Plan'), { target: { value: '120' } });
+    const save = screen.getByRole('button', { name: 'Save changes' });
+    save.focus();
+    fireEvent.click(save);
+    const status = await screen.findByText('All changes saved.');
+    await waitFor(() => expect(document.activeElement).toBe(status));
   });
 
   it('warns before the tab closes with edits', () => {

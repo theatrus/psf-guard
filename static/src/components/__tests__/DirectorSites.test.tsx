@@ -99,6 +99,45 @@ describe('Director sites', () => {
     expect(saves).toHaveLength(0);
   });
 
+  it('renames once when the profile step after a rename fails, and offers a Reload after a lost race', async () => {
+    const { saves } = fixture();
+    const renames: Array<{ expected_revision: number; name: string }> = [];
+    let failProfile: false | 500 | 409 = 500;
+    server.use(
+      http.patch('/api/director/v1/sites/:id', async ({ params, request }) => {
+        const body = await request.json() as { expected_revision: number; name: string };
+        renames.push(body);
+        if (body.expected_revision !== 1) return HttpResponse.json({ success: false, data: null, error: 'stale' }, { status: 409 });
+        return HttpResponse.json(ok({ id: params.id, name: body.name, revision: 2 }));
+      }),
+      http.put('/api/director/v1/sites/:id/profile', () => {
+        if (failProfile) { const status = failProfile; failProfile = false; return HttpResponse.json({ success: false, data: null, error: status === 500 ? 'metadata is busy' : 'stale' }, { status }); }
+        return undefined;
+      }),
+    );
+    mount();
+    fireEvent.change(await screen.findByLabelText('New site name'), { target: { value: 'Ridge' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add site' }));
+    const card = await screen.findByRole('region', { name: 'Site Ridge' });
+    fireEvent.change(await within(card).findByLabelText('Site name'), { target: { value: 'High ridge' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Save site' }));
+    expect(await within(card).findByRole('alert')).toHaveTextContent('metadata is busy');
+    // The rename went through; Save again sends only the profile.
+    fireEvent.click(within(card).getByRole('button', { name: 'Save site' }));
+    expect(await within(card).findByText('Saved High ridge.')).toBeInTheDocument();
+    expect(renames).toEqual([{ expected_revision: 1, name: 'High ridge' }]);
+    expect(saves).toHaveLength(1);
+    // Someone else saved the site first: say so, with a way back.
+    failProfile = 409;
+    fireEvent.change(within(card).getByLabelText('Latitude'), { target: { value: '34' } });
+    fireEvent.change(within(card).getByLabelText('Longitude (east +)'), { target: { value: '-118' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Save site' }));
+    const alert = await within(card).findByRole('alert');
+    expect(alert).toHaveTextContent('This site changed since you loaded it.');
+    fireEvent.click(within(alert).getByRole('button', { name: 'Reload' }));
+    await waitFor(() => expect(within(card).getByRole('button', { name: 'Save site' })).toBeEnabled());
+  });
+
   it('writes a flat horizon as no file', () => {
     expect(horizonToHrz({ mode: 'fixed_minimum' })).toBeNull();
     expect(horizonToHrz(curve)).toBe('# Azimuth Altitude, degrees\n0 12\n180 30\n360 12\n');

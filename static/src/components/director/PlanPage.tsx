@@ -1,11 +1,12 @@
 import { useEffect, useRef } from 'react';
-import { Link, Navigate, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import { withoutPlanningParams } from '../../hooks/useUrlState';
 import { usePlans } from '../header/useCurrentPlan';
 import './DirectorPage.css';
 import DirectorProjectContext from './DirectorProjectContext';
 import ProjectWorkspace from './ProjectWorkspace';
+import { samePageAs } from './pageDraftsState';
 import { planHref, planKey, resolvePlan } from './planAddress';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
@@ -15,6 +16,8 @@ const message = (error: unknown) => error instanceof Error ? error.message : 'Di
  *  not planned yet (see planAddress). */
 export default function PlanPage() {
   const [params] = useSearchParams();
+  const { search } = useLocation();
+  const navigate = useNavigate();
   const status = useDirectorStatus();
   const plans = usePlans();
   // The plan this page showed last: when a detach leaves two plans holding
@@ -22,16 +25,21 @@ export default function PlanPage() {
   const shown = useRef<string | null>(null);
   const available = status.data?.enabled && status.data.protocol_version === 1 && !!status.data.instance_id;
   const key = params.get('plan');
-  // A plan opens at its top, not at the scroll offset of the list it came from.
-  useEffect(() => { document.querySelector('.app-main')?.scrollTo?.({ top: 0 }); }, [key]);
   const resolved = resolvePlan(plans.rows, key, shown.current);
-  if (resolved.kind === 'plan') {
-    shown.current = resolved.row.project.id;
-    // Keep the address current: a row, an old id or a GUID another plan now
-    // shares becomes the plan's own key, so bookmarks and history stay right.
-    const canonical = planKey(resolved.row, plans.rows);
-    if (key !== canonical) return <Navigate to={planHref(canonical, params)} replace />;
-  }
+  if (resolved.kind === 'plan') shown.current = resolved.row.project.id;
+  // Keep the address current: a row, an old id or a GUID another plan now
+  // shares becomes the plan's own key, so bookmarks and history stay right.
+  // The workspace stays mounted meanwhile: a detach, an attach or a first
+  // activation changes the key of the plan already open, and its unsaved
+  // edits, notices and open dialog must survive that.
+  const canonical = resolved.kind === 'plan' ? planKey(resolved.row, plans.rows) : null;
+  useEffect(() => {
+    if (canonical && key !== canonical) navigate(planHref(canonical, params), { replace: true, state: samePageAs(search) });
+  }, [canonical, key, params, search, navigate]);
+  // A plan opens at its top, not at the scroll offset of the list it came
+  // from; a new key for the plan already open keeps the place.
+  const opened = resolved.kind === 'plan' ? resolved.row.project.id : key;
+  useEffect(() => { document.querySelector('.app-main')?.scrollTo?.({ top: 0 }); }, [opened]);
   const back = withoutPlanningParams(params.toString()).toString();
   const library = <Link to={back ? `/?${back}` : '/'}>Library</Link>;
   return (
@@ -42,7 +50,8 @@ export default function PlanPage() {
       {status.isError && <div role="alert"><p>{message(status.error)}</p><button type="button" onClick={() => void status.refetch()}>Retry</button></div>}
       {status.data && !available && <p>Plans are unavailable on this server.</p>}
       {available && status.data && <>
-        {!status.data.database_management && <p className="director-muted" role="note">Read only: plans can be drafted here, but this server does not write to rig databases.</p>}
+        {/* The workspace says so in its summary, inside the sticky top it measures. */}
+        {!status.data.database_management && resolved.kind !== 'plan' && <p className="director-muted" role="note">Drafts only: this server does not write to rig databases.</p>}
         {!key
           ? <Navigate to={back ? `/?${back}` : '/'} replace />
           : resolved.kind === 'plan'

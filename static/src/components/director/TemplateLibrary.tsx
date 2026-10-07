@@ -4,6 +4,7 @@ import { Check, Copy, Moon, Plus, Trash2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorLibraryTemplate, DirectorTemplate } from '../../api/directorTypes';
+import NumberInput from '../NumberInput';
 import { retryWhenBusy } from './retry';
 import { newId } from './planModel';
 import MoonSettings from './MoonSettings';
@@ -112,7 +113,7 @@ export default function TemplateLibrary() {
           <td><input aria-label="Template offset" type="number" min={0} step={1} value={row.offset ?? ''} disabled={!canWrite} onChange={event => edit(row.id, { offset: numberOrNull(event.target.value) })} /></td>
           <td><input aria-label="Template binning" type="number" min={1} max={8} step={1} value={row.bin ?? ''} disabled={!canWrite} onChange={event => edit(row.id, { bin: numberOrNull(event.target.value) })} /></td>
           <td><input aria-label="Template readout mode" type="number" min={0} step={1} value={row.readout_mode ?? ''} disabled={!canWrite} onChange={event => edit(row.id, { readout_mode: numberOrNull(event.target.value) })} /></td>
-          <td><span className="plan-goal"><input aria-label="Template exposure seconds" type="number" min={1} step="any" value={row.default_exposure_seconds} disabled={!canWrite} onChange={event => edit(row.id, { default_exposure_seconds: Number(event.target.value) })} /><small>s</small></span></td>
+          <td><span className="plan-goal"><NumberInput aria-label="Template exposure seconds" min={1} step="any" value={row.default_exposure_seconds} disabled={!canWrite} onChange={event => edit(row.id, { default_exposure_seconds: Number(event.target.value) })} /><small>s</small></span></td>
           <td className="template-actions">
             <button type="button" aria-label={`Moon settings for ${row.name || 'template'}`} title="Moon avoidance" aria-expanded={moonEditor === row.id} onClick={() => setMoonEditor(moonEditor === row.id ? null : row.id)}><Moon size={16} />{row.moon?.enabled ? `${row.moon.separation_degrees}°` : 'Off'}</button>
           </td>
@@ -120,7 +121,7 @@ export default function TemplateLibrary() {
             {canWrite && dirty && <button type="button" aria-label={`Save ${row.name || 'template'}`} title={trouble ?? 'Save'} disabled={!!trouble || save.isPending} onClick={() => save.mutate(row)}><Check size={16} /></button>}
             {canWrite && dirty && stored && <button type="button" aria-label={`Drop changes to ${stored.name}`} title="Drop changes" onClick={() => forget(row.id)}>Undo</button>}
             {canWrite && (stored
-              ? <button type="button" aria-label={`Remove ${stored.name}`} title="Remove from the library" disabled={remove.isPending} onClick={() => remove.mutate(stored)}><Trash2 size={16} /></button>
+              ? <button type="button" aria-label={`Remove ${stored.name}`} title="Remove from the library" disabled={remove.isPending} onClick={() => { if (window.confirm(`Remove ${stored.name} from the library? Plans keep their copy.`)) remove.mutate(stored); }}><Trash2 size={16} /></button>
               : <button type="button" aria-label="Discard new template" title="Discard" onClick={() => forget(row.id)}><Trash2 size={16} /></button>)}
           </td>
         </tr>{moonEditor === row.id && <tr><td colSpan={10}><MoonSettings value={row.moon} disabled={!canWrite || save.isPending} onChange={moon => edit(row.id, { moon })} /></td></tr>}</Fragment>;

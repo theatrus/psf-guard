@@ -111,9 +111,27 @@ fn dangling_and_malformed_plans_are_refused() {
         store.save_plan_draft(&bad, 0),
         Err(Error::InvalidInput)
     ));
+    // A rig shooting one objective twice, as a rig dropped, discarded and
+    // added again once saved; the ids differ, the work is the same.
+    let mut twice = plan(project.id, rig.id);
+    let mut again = twice.contributions[0].clone();
+    again.id = Uuid::new_v4();
+    twice.contributions.push(again);
+    assert!(matches!(
+        store.save_plan_draft(&twice, 0),
+        Err(Error::InvalidInput)
+    ));
+    // Another rig on the same objective is fine.
+    let other = store.create_rig(Uuid::new_v4(), "C925").unwrap();
+    let mut both = plan(project.id, rig.id);
+    let mut second = both.contributions[0].clone();
+    second.id = Uuid::new_v4();
+    second.rig_id = other.id;
+    both.contributions.push(second);
+    assert_eq!(store.save_plan_draft(&both, 0).unwrap().revision, 1);
     let mut empty = PlanDraft::empty(project.id, 0);
     empty.objectives.clear();
-    assert_eq!(store.save_plan_draft(&empty, 0).unwrap().revision, 1);
+    assert_eq!(store.save_plan_draft(&empty, 1).unwrap().revision, 2);
 }
 
 #[test]

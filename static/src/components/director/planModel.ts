@@ -155,6 +155,33 @@ export function emptyPlan(projectId: string): DirectorPlanDraft {
   return { project_id: projectId, revision: 0, objectives: [], contributions: [], updated_at_ms: 0 };
 }
 
+/** The rigs that shoot a plan: those with an enabled contribution. A rig
+ *  dropped from the plan keeps its contributions, switched off, so
+ *  activation can set its Target Scheduler project inactive. */
+export function shootingRigs(plan: DirectorPlanDraft | null | undefined): string[] {
+  return [...new Set((plan?.contributions ?? []).filter(c => c.enabled).map(c => c.rig_id))];
+}
+
+/** The plan with one contribution per rig and objective, the first. The
+ *  server refuses a second one; a plan saved before it did keeps loading,
+ *  and its next save drops the repeat. */
+export function onePartEach(plan: DirectorPlanDraft): DirectorPlanDraft {
+  const seen = new Set<string>();
+  const contributions = plan.contributions.filter(c => {
+    const part = `${c.rig_id}:${c.objective_id}`;
+    if (seen.has(part)) return false;
+    seen.add(part);
+    return true;
+  });
+  return contributions.length === plan.contributions.length ? plan : { ...plan, contributions };
+}
+
+/** Whether two copies of a plan ask for the same work, whatever their
+ *  revision and save time. */
+export function samePlan(left: DirectorPlanDraft, right: DirectorPlanDraft): boolean {
+  return JSON.stringify([left.objectives, left.contributions]) === JSON.stringify([right.objectives, right.contributions]);
+}
+
 /** Name the first thing that cannot be sent, or null when the plan is sound. */
 export function planProblem(plan: DirectorPlanDraft): string | null {
   for (const objective of plan.objectives) {

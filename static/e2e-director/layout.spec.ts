@@ -81,7 +81,9 @@ async function layoutProblems(page: Page, scope = '.director-page'): Promise<str
     for (const el of root.querySelectorAll('*')) {
       if (el.closest('svg') || el.matches('.framing-stage, .framing-stage *') || !visibleBox(el)) continue;
       const style = getComputedStyle(el);
-      if (['hidden', 'clip'].includes(style.overflowY) && el.scrollHeight > el.clientHeight + 2) {
+      // Text kept for screen readers only sits in a 1px box on purpose.
+      const screenReaderOnly = el.clientWidth <= 1 || el.clientHeight <= 1;
+      if (!screenReaderOnly && ['hidden', 'clip'].includes(style.overflowY) && el.scrollHeight > el.clientHeight + 2) {
         problems.push(`clipped: ${name(el)} (${el.scrollHeight} > ${el.clientHeight})`);
       }
     }

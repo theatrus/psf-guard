@@ -25,12 +25,12 @@ vi.mock('../director/PlanEditor', async () => {
   }
   function StubPlanEditor({ projectId, controls, onRigsChange }: {
     projectId: string;
-    controls?: { current: { setRig: (id: string, on: boolean) => void } | null };
-    onRigsChange?: (state: { rigIds: string[]; objectives: number }) => void;
+    controls?: { current: { setRig: (id: string, on: boolean) => { done: boolean; note: string | null } } | null };
+    onRigsChange?: (state: { rigIds: string[]; objectives: number; ready: boolean }) => void;
   }) {
     const [joined, setJoined] = useState<string[]>([]);
-    useEffect(() => { if (controls) controls.current = { setRig: (id, on) => setJoined(ids => on ? [...ids, id] : ids.filter(other => other !== id)) }; });
-    useEffect(() => { onRigsChange?.({ rigIds: joined, objectives: 1 }); }, [joined, onRigsChange]);
+    useEffect(() => { if (controls) controls.current = { setRig: (id, on) => { setJoined(ids => on ? [...ids, id] : ids.filter(other => other !== id)); return { done: true, note: null }; } }; });
+    useEffect(() => { onRigsChange?.({ rigIds: joined, objectives: 1, ready: true }); }, [joined, onRigsChange]);
     return <div><output>{`Plan ${projectId}: ${joined.join(', ') || 'no rigs'}`}</output><Goal /></div>;
   }
   return { default: StubPlanEditor };
@@ -40,7 +40,7 @@ vi.mock('../director/ObservingPreferences', () => ({ default: () => <output>Obse
 const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: null });
 function Where() { return <output data-testid="where">{useLocation().search}</output>; }
 /** The saved framing, plan and last activation the summary reads. */
-function summaryHandlers(saved: { framing?: boolean; framingRevision?: number; layoutRevision?: number; planRevision?: number; shoots?: boolean; activated?: { plan_revision: number } } = {}) {
+function summaryHandlers(saved: { framing?: boolean; framingRevision?: number; layoutRevision?: number; planRevision?: number; shoots?: boolean; activated?: { plan_revision: number; rigs?: string[] }; databaseManagement?: boolean } = {}) {
   return [
     http.get('/api/director/v1/projects/project/framing', () => ok({ project: { id: 'project', name: 'Andromeda', revision: 1 }, draft: saved.framing ? {
       project_id: 'project', revision: saved.framingRevision ?? 2, layout_revision: saved.layoutRevision, target_name: 'M31', center: { ra_degrees: 10.68, dec_degrees: 41.27 }, position_angle_degrees: 0, mosaic: { rows: 1, columns: 1, overlap_percent: 20 },
@@ -48,8 +48,10 @@ function summaryHandlers(saved: { framing?: boolean; framingRevision?: number; l
     http.get('/api/director/v1/projects/project/plan', () => ok({ project: { id: 'project', name: 'Andromeda', revision: 1 }, plan: saved.planRevision === undefined ? null : {
       project_id: 'project', revision: saved.planRevision, updated_at_ms: 1, contributions: saved.shoots ? [{ id: 'c1', rig_id: 'rig-catalog', objective_id: 'o1', enabled: true, exposure_seconds: 300, panel_ids: [], template: { template_guid: 't', template_id: 1, name: 'Ha', filter_name: 'Ha', gain: null, offset: null, bin: 1, readout_mode: null } }] : [],
       objectives: [{ id: 'o1', bandpass_id: 'h_alpha', purpose: 'faint_detail', goal: { kind: 'frames', value: 40 }, priority: 1 }] } })),
+    // The rigs the activation reached: by default each rig the plan shoots.
     http.get('/api/director/v1/projects/project/activation', () => ok({ activation: saved.activated ? { project_id: 'project', revision: 3, framing_revision: 2, plan_revision: saved.activated.plan_revision,
-      coordinator_instance_id: 'c', applied_at_ms: 1, rigs: [] } : null })),
+      coordinator_instance_id: 'c', applied_at_ms: 1, rigs: (saved.activated.rigs ?? (saved.shoots ? ['rig-catalog'] : [])).map(id => ({ rig_id: id, catalog_id: 'x', project_guid: 'guid', profile_id: 'p', targets: [], plans: [] })) } : null })),
+    http.get('/api/director/v1/status', () => ok({ protocol_version: 1, enabled: true, instance_id: 'instance', database_management: saved.databaseManagement ?? true })),
   ];
 }
 const rig = { id: 'rig', name: 'C925', revision: 1 };
@@ -111,7 +113,8 @@ describe('project workspace', () => {
     mount(links, '/plan?plan=project&planTab=plan');
     const goal = await screen.findByLabelText('Stub goal');
     fireEvent.change(goal, { target: { value: '120' } });
-    expect(screen.getByRole('tab', { name: /Exposures/ })).toContainElement(screen.getByLabelText('edited'));
+    // The dot is for the eye; a screen reader hears "edited" in the tab's name.
+    expect(screen.getByRole('tab', { name: 'Exposures, edited' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Unsaved changes' })).toHaveTextContent('Unsaved changes in Exposures.');
     fireEvent.click(screen.getByRole('tab', { name: 'Framing' }));
     fireEvent.click(screen.getByRole('tab', { name: /Exposures/ }));
@@ -135,7 +138,7 @@ describe('project workspace', () => {
   it('does not ask for an activation when only the view of the framing changed', async () => {
     // Revision 5 changed the survey; the layout the rigs have is still revision 2's.
     mount(links, '/plan?plan=project', { framing: true, framingRevision: 5, layoutRevision: 2, planRevision: 4, shoots: true, activated: { plan_revision: 4 } });
-    expect(await screen.findByTestId('summary-activation')).toHaveTextContent('Active');
+    expect(await screen.findByTestId('summary-activation')).toHaveTextContent('On the rigs');
     expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
   });
   it('asks for one when the layout moved after the activation', async () => {
@@ -144,11 +147,24 @@ describe('project workspace', () => {
   });
   it('does not ask for an activation the rigs already have', async () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4 } });
-    expect(await screen.findByTestId('summary-activation')).toHaveTextContent('Active');
+    // Not "Active", which is a Target Scheduler project state of its own.
+    expect(await screen.findByTestId('summary-activation')).toHaveTextContent('On the rigs');
     expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
     // The summary line still opens the activation, to push it again.
     fireEvent.click(screen.getByTestId('summary-activation'));
     expect(screen.getByRole('dialog', { name: 'Activate on the rigs' })).toBeInTheDocument();
+  });
+  it('asks again for a rig the last activation left out, though the revisions match', async () => {
+    mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4, rigs: [] } });
+    expect(await screen.findByRole('region', { name: 'Activation due' })).toHaveTextContent('C925 data not activated yet');
+    expect(screen.queryByTestId('summary-activation')).not.toBeInTheDocument();
+  });
+  it('leaves the activation bar out on a server that does not write rig databases', async () => {
+    mount(links, '/plan?plan=project', { framing: true, planRevision: 1, shoots: true, databaseManagement: false });
+    expect(await screen.findByTestId('summary-drafts-only')).toHaveTextContent('Drafts only');
+    // The summary still says where it stands and opens the preview.
+    expect(await screen.findByTestId('summary-activation')).toHaveTextContent('Not activated yet');
+    expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
   });
   it('sums the plan up once: target, goals, each rig and whether it is ready, and the activation', async () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 5, activated: { plan_revision: 4 } });
@@ -157,6 +173,8 @@ describe('project workspace', () => {
     const summary = screen.getByRole('region', { name: 'Plan summary' });
     expect(await within(summary).findByText('C925 data')).toBeInTheDocument();
     expect(within(summary).getAllByText(/no rig profile/).length).toBe(2);
+    // Both databases hold a project, but neither rig shoots the plan now.
+    expect(within(summary).getAllByText(/· off/).length).toBe(2);
     expect(await screen.findByTestId('summary-activation')).toHaveTextContent('plan not activated');
   });
   it('opens on framing, saved or not, unless the address names a tab', async () => {

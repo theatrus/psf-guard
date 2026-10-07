@@ -2,10 +2,10 @@ import { type MutableRefObject, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import { AccessContext, useAccess } from '../../auth/access';
-import PlanEditor, { type PlanRigControls } from '../director/PlanEditor';
+import PlanEditor, { type PlanRigControls, type RigChange } from '../director/PlanEditor';
 import { DraftProvider } from '../director/pageDrafts';
 import { usePageDrafts } from '../director/pageDraftsState';
 import type { DirectorPlanDraft } from '../../api/directorTypes';
@@ -133,13 +133,13 @@ describe('Plan editor', () => {
   it('lets the Rigs tab add and drop rigs, listing only the rigs that shoot the plan', async () => {
     fixture(null, null, []);
     const controls: MutableRefObject<PlanRigControls | null> = { current: null };
-    const reported: Array<{ rigIds: string[]; objectives: number }> = [];
+    const reported: Array<{ rigIds: string[]; objectives: number; ready: boolean }> = [];
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     render(<QueryClientProvider client={client}><PlanEditor projectId="project" controls={controls} onRigsChange={state => reported.push(state)} /></QueryClientProvider>);
     expect(await screen.findByText('No rigs yet')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Add objective' }));
     fireEvent.change(screen.getByLabelText('Objective bandpass'), { target: { value: 'h_alpha' } });
-    await waitFor(() => expect(reported.at(-1)).toEqual({ rigIds: [], objectives: 1 }));
+    await waitFor(() => expect(reported.at(-1)).toEqual({ rigIds: [], objectives: 1, ready: true }));
     await waitFor(() => expect(controls.current).not.toBeNull());
     // Rigs join from elsewhere, with a template for each objective as a tick gives them.
     act(() => controls.current!.setRig(redcat.rig.id, true));
@@ -148,10 +148,10 @@ describe('Plan editor', () => {
     expect(within(rig).queryByRole('checkbox', { name: /takes part/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'C925 data' })).not.toBeInTheDocument();
     expect(screen.queryByText(/Other rigs/)).not.toBeInTheDocument();
-    await waitFor(() => expect(reported.at(-1)).toEqual({ rigIds: [redcat.rig.id], objectives: 1 }));
+    await waitFor(() => expect(reported.at(-1)).toEqual({ rigIds: [redcat.rig.id], objectives: 1, ready: true }));
     act(() => controls.current!.setRig(redcat.rig.id, false));
     await waitFor(() => expect(screen.queryByRole('group', { name: 'RedCat 61' })).not.toBeInTheDocument());
-    expect(reported.at(-1)).toEqual({ rigIds: [], objectives: 1 });
+    expect(reported.at(-1)).toEqual({ rigIds: [], objectives: 1, ready: true });
   });
   it('lets a slow rig carry its own goal, with an f-ratio suggestion, and saves it', async () => {
     const slow = { ...redcat, rig: { ...redcat.rig, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'C925 slow' }, catalog_slug: 'redcat', catalog_name: 'C925 slow',
@@ -206,9 +206,11 @@ describe('Plan editor', () => {
     expect(screen.getByLabelText('RedCat 61 exposure for H-alpha')).toHaveValue(300);
     fireEvent.change(screen.getByLabelText('RedCat 61 exposure for H-alpha'), { target: { value: '600' } });
     expect(screen.getByTestId('frames-redcat-h_alpha')).toHaveTextContent('36');
-    // The other rig has no H-alpha template of its own; with the library empty it says so instead of guessing.
+    // The other rig has no H-alpha template of its own; with the library
+    // empty it stays out and says so instead of joining with nothing.
     fireEvent.click(screen.getByRole('checkbox', { name: /C925 data/ }));
-    expect(screen.getByText('No H-alpha template in this database or the library')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('C925 data: no H-alpha template');
+    expect(screen.getByRole('checkbox', { name: /C925 data/ })).not.toBeChecked();
     fireEvent.click(screen.getByRole('button', { name: 'Save plan' }));
     expect(await screen.findByText('Saved plan revision 1.')).toBeInTheDocument();
     expect(saves).toHaveLength(1);
@@ -220,7 +222,7 @@ describe('Plan editor', () => {
     expect(saves[0].contributions[0]).toMatchObject({ rig_id: redcat.rig.id, exposure_seconds: 600, template: { template_id: 2, filter_name: 'H-alpha' }, enabled: true, panel_ids: [] });
     // Switching the objective's bandpass drops templates chosen for the old one.
     fireEvent.change(screen.getByLabelText('Objective bandpass'), { target: { value: 'red' } });
-    expect(screen.getByLabelText('C925 data template for Red')).toHaveValue('');
+    expect(screen.getByText('No Red template in this database or the library')).toBeInTheDocument();
     expect(screen.queryByTestId('frames-redcat-h_alpha')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save plan' }));
     await waitFor(() => expect(saves).toHaveLength(2));
@@ -302,5 +304,126 @@ describe('Plan editor', () => {
     await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(1));
     act(() => drafts.current!.discardAll());
     await waitFor(() => expect(goal).toHaveValue(120));
+  });
+});
+
+/** The editor with the Rigs tab's controls on a page that keeps drafts, as
+ *  the workspace has it, and the query client the test can refresh. */
+function mountWorkspace() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const controls: MutableRefObject<PlanRigControls | null> = { current: null };
+  const drafts: MutableRefObject<Drafts | null> = { current: null };
+  function Page() {
+    const page = usePageDrafts();
+    drafts.current = page;
+    return <DraftProvider drafts={page}><PlanEditor projectId="project" controls={controls} /></DraftProvider>;
+  }
+  render(<QueryClientProvider client={client}><Page /></QueryClientProvider>);
+  return { client, controls, drafts };
+}
+
+describe('Plan editor on the workspace', () => {
+  const objective = { id: 'o1', bandpass_id: 'h_alpha', purpose: 'faint_detail', goal: { kind: 'hours' as const, value: 6 }, priority: 1 };
+  const stored = (revision = 4, value = 6): DirectorPlanDraft => ({ project_id: 'project', revision, updated_at_ms: 1, objectives: [{ ...objective, goal: { kind: 'hours', value } }], contributions: [
+    { id: 'c1', objective_id: 'o1', rig_id: redcat.rig.id, template: { template_guid: null, template_id: 1, name: 'Ha 300', filter_name: 'Ha', gain: 100, offset: 30, bin: 1, readout_mode: null }, exposure_seconds: 300, panel_ids: [], enabled: true },
+  ] });
+
+  it('drops a rig by switching its parts off, and takes the same parts back without doubling them', async () => {
+    const { saves } = fixture(stored());
+    const { controls, drafts } = mountWorkspace();
+    await screen.findByText(/3 templates/);
+    await waitFor(() => expect(controls.current).not.toBeNull());
+    let change: RigChange | undefined;
+    act(() => { change = controls.current!.setRig(redcat.rig.id, false); });
+    expect(change).toEqual({ done: true, note: null });
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(1));
+    expect(drafts.current!.unsaved[0].changes).toEqual(['RedCat 61 dropped']);
+    // Discard, then on again: the rig had its part back already.
+    act(() => drafts.current!.discardAll());
+    act(() => { change = controls.current!.setRig(redcat.rig.id, true); });
+    expect(change).toEqual({ done: true, note: null });
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(0));
+    // Off and saved: the part stays, switched off, for activation to see.
+    act(() => { controls.current!.setRig(redcat.rig.id, false); });
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(1));
+    expect(await drafts.current!.saveAll()).toBeNull();
+    expect(saves[0].contributions).toEqual([expect.objectContaining({ id: 'c1', enabled: false })]);
+    // On again: the same part, not a second one.
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(0));
+    act(() => { controls.current!.setRig(redcat.rig.id, true); });
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(1));
+    expect(await drafts.current!.saveAll()).toBeNull();
+    expect(saves[1].contributions).toEqual([expect.objectContaining({ id: 'c1', enabled: true })]);
+  });
+
+  it('says a rig with no template for the band does not join', async () => {
+    fixture(stored(), null, []);
+    const { controls } = mountWorkspace();
+    await screen.findByText(/3 templates/);
+    await waitFor(() => expect(controls.current).not.toBeNull());
+    let change: RigChange | undefined;
+    act(() => { change = controls.current!.setRig(c925.rig.id, true); });
+    expect(change).toEqual({ done: false, note: 'no H-alpha template' });
+    expect(screen.queryByRole('group', { name: 'C925 data' })).not.toBeInTheDocument();
+  });
+
+  it('loads a plan saved with a rig on one objective twice as one part', async () => {
+    const twice = stored();
+    twice.contributions.push({ ...twice.contributions[0], id: 'c2', exposure_seconds: 600 });
+    const { saves } = fixture(twice);
+    const { drafts } = mountWorkspace();
+    const goal = await screen.findByLabelText('Objective goal');
+    expect(screen.getAllByLabelText('RedCat 61 exposure for H-alpha')).toHaveLength(1);
+    fireEvent.change(goal, { target: { value: '8' } });
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(1));
+    expect(await drafts.current!.saveAll()).toBeNull();
+    expect(saves[0].contributions.map(c => c.id)).toEqual(['c1']);
+  });
+
+  it('keeps edits typed while a save runs', async () => {
+    const { saves } = fixture(stored());
+    let release = () => {};
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    server.use(http.put('/api/director/v1/projects/project/plan', async ({ request }) => {
+      const body = await request.json() as DirectorPlanDraft;
+      saves.push(body);
+      if (saves.length === 1) await gate;
+      return HttpResponse.json(ok({ project: { id: 'project', name: 'Heart', revision: 1 }, plan: { ...body, revision: body.revision + 1, updated_at_ms: 9 } }));
+    }));
+    const { drafts } = mountWorkspace();
+    const goal = await screen.findByLabelText('Objective goal');
+    fireEvent.change(goal, { target: { value: '8' } });
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(1));
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => { saving = drafts.current!.saveAll(); });
+    await waitFor(() => expect(saves).toHaveLength(1));
+    fireEvent.change(goal, { target: { value: '9' } });
+    await act(async () => { release(); await saving; });
+    expect(saves[0].objectives[0].goal).toEqual({ kind: 'hours', value: 8 });
+    // The 9 stays, unsaved, over the new revision, and saves against it.
+    expect(screen.getByLabelText('Objective goal')).toHaveValue(9);
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(1));
+    expect(await drafts.current!.saveAll()).toBeNull();
+    expect(saves[1]).toMatchObject({ revision: 5, objectives: [expect.objectContaining({ goal: { kind: 'hours', value: 9 } })] });
+  });
+
+  it('keeps unsaved edits over a newer saved copy and marks the conflict', async () => {
+    fixture(stored());
+    const { client, drafts } = mountWorkspace();
+    const goal = await screen.findByLabelText('Objective goal');
+    fireEvent.change(goal, { target: { value: '8' } });
+    // Another browser saves, or an attach brings a plan in; the page refetches.
+    server.use(http.get('/api/director/v1/projects/project/plan', () => HttpResponse.json(ok({ project: { id: 'project', name: 'Heart', revision: 1 }, plan: stored(5, 12) }))));
+    await act(() => client.invalidateQueries({ queryKey: ['directorPlan', 'project'] }));
+    expect(await screen.findByText(/This plan changed since you loaded it/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Objective goal')).toHaveValue(8);
+    expect(await drafts.current!.saveAll()).toEqual({ label: 'Exposures', reason: 'the plan changed elsewhere; reload it first' });
+    // Reload asks, then shows the saved copy.
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Reload' }));
+    expect(confirm).toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByLabelText('Objective goal')).toHaveValue(12));
+    expect(screen.queryByText(/This plan changed since you loaded it/)).not.toBeInTheDocument();
+    confirm.mockRestore();
   });
 });

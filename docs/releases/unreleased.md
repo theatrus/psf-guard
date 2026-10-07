@@ -1,5 +1,22 @@
 # Unreleased
 
+- Keep unsaved edits in a plan's workspace when its address changes after a
+  detach, an attach or its first activation, and when a newer copy of the
+  plan or its limits arrives from elsewhere: the tab marks the change and
+  offers Reload. Opening another plan from the header, Back or a link with
+  edits unsaved now asks first, as leaving the page does.
+
+- Drop from plan switches a rig's exposures off instead of deleting them, so
+  adding the rig back brings them back, and a rig never shoots one objective
+  twice. A rig with no template for a band says so instead of joining with
+  nothing. The activation bar also asks when the last activation skipped a
+  rig and no longer shows on servers that do not write rig databases. The
+  plan summary says "On the rigs" instead of "Active".
+
+- Ask before removing a library exposure template, and let its exposure
+  field be cleared and typed over. A rig profile or site whose second save
+  step failed now saves on the next try, and a save conflict there offers
+  Reload.
 - In Director's framing view, turn the camera by its handle with the sky
   turned without it spinning, save views wider than 40°, and keep the view
   and any edit typed while a save is out. A value the server would refuse
