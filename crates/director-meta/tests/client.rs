@@ -115,7 +115,7 @@ fn schema_ten_migrates_without_changing_coordinator_or_inbox() {
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        24
+        25
     );
     conn.prepare("SELECT * FROM rig_event").unwrap();
 }

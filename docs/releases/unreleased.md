@@ -1,5 +1,11 @@
 # Unreleased
 
+- Keep a plan taken in from Target Scheduler in step with its project until
+  you change it in Planning or activate it: a desired count raised or a
+  target moved in N.I.N.A. shows up in the plan on the next listing. Your
+  survey and view choices stay. Plans imported before this update follow
+  too, unless someone already edited them.
+
 - Scroll a large image grid smoothly again. Every card ran a hidden
   spinner that never stopped, so the browser restyled thousands of cards on
   each frame; Safari felt it most. Cards off screen now skip drawing until

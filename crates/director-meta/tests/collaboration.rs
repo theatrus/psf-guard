@@ -473,7 +473,7 @@ fn schema_twenty_two_migrates_without_changing_existing_identity_and_bad_migrati
             assert_eq!(
                 conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                     .unwrap(),
-                24
+                25
             );
         }
     }

@@ -305,8 +305,15 @@ there, so no target's exposure plans are taken over while others stay
 unplanned. New
 imports retain the source project's Low/Normal/High priority (0/1/2) on each
 objective; missing, null or unknown priorities use Normal. Filters do not gain
-priority from alphabetical ordering. From
-then on the drafts are the operator's; nothing is imported twice. The
+priority from alphabetical ordering. Until someone saves the plan or its
+layout here, or activates it, the plan follows its project: a listing after a
+change in Target Scheduler (a desired count raised, a target moved) takes the
+drafts in again under the same objectives, and keeps the survey and view the
+person chose. From the first save or activation on, the drafts are the
+operator's and nothing is imported again. The meta store's `draft_import`
+table records which project a plan came from and the revisions the import
+saved; plans imported before schema 25 are marked when both drafts are still
+the import's (revision 1, saved together) and nothing activated them. The
 targets are measured in the plane of the mosaic's centre, where N.I.N.A.
 lays panels out, so a mosaic far from the equator still reads as its grid.
 
