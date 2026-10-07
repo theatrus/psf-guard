@@ -8,7 +8,7 @@
 %global rustflags_debuginfo 0
 
 Name:           psf-guard
-Version:        0.10.4
+Version:        0.10.5
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -93,6 +93,12 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Wed Oct 07 2026 Yann Ramin <github@theatr.us> - 0.10.5-1
+- WBPP exports and runs give each night's darks their own set, so WBPP no longer averages them into one master
+- Dark masters use the nearest complete night of darks, and darks more than six months from the lights no longer match
+- The calibration coverage report says why a night has no flats and which masters from other software it uses
+- The desktop app writes a daily log file; Settings, Open logs opens the folder
+
 * Sat Oct 03 2026 Yann Ramin <github@theatr.us> - 0.10.4-1
 - Analyze new frames as they arrive, an option per database, scores frames that sync, upload or import brings in
 - Frames with plenty of stars no longer score near zero because one measurement found none
