@@ -63,6 +63,9 @@ withdrawing previously reported frames requires review; the public protocol
 cannot replace a report with an equal or lower integration total. The same
 saved image cannot be credited under two nights. Reports from mixed assignment
 revisions require review rather than silently replacing an earlier aggregate.
+Recorded exposure durations may differ from the assigned recipe by at most
+0.1%, with a 10 ms floor and one-second cap, to tolerate shutter timing. Reports
+use the actual saved durations and their mean, never planned integration.
 
 **Share current activity** is off by default. When enabled, incoming Director
 status forwards fresh activity and queued reports at most once per minute.
@@ -73,9 +76,29 @@ original agent, task, panel and observing night.
 Reports use a conservative common solved footprint. Frames without a current
 pixel solve, disjoint footprints and unresolved calibration requirements are
 held. Calibration must be recorded by the file's processing tool; a matching
-master or a calibrated-looking filename is not proof. Unknown guide RMS, Moon
-measurements and bandpass stay unknown. Pixel HFR is converted using that
-frame's solved scale; raw-frame HFR is not reused for a resampled derivative.
+master or a calibrated-looking filename is not proof. Director saves measured
+guiding RMS in arcseconds (`PGGRMS`) and HFR with explicit pixel units (`PGHFR`)
+in FITS and XISF headers. Pixel HFR is converted using that frame's solved
+scale; raw-frame HFR is not reused for a resampled derivative. Missing guiding
+data stays unknown, not zero. Bandpass comes from an explicit saved `PGBAND`
+value in nm or a single-band filter label such as `Ha 3nm`, never the rig's
+current configuration or the remote requirement.
+
+Moon illumination uses the saved exposure midpoint. Separation uses the fresh
+solved center and saved observing site, including lunar parallax. Missing site
+coordinates leave separation unknown. These are planning-grade calculations,
+not precision astrometry. An explicitly invalid saved timestamp is not replaced
+with the current time.
+
+For Director images, `PGCAPID` must match one acknowledged saved capture
+receipt for this rig and its activated exposure goal. Images may arrive before
+or after batch check-in, but review waits for both. Missing, malformed or
+ambiguous receipts hold the report. The link never changes the catalog image
+GUID used by Sync. Target Scheduler images without `PGCAPID` keep the existing
+stable-GUID evidence path.
+The reservation must also belong to that assignment's cutover interval. A
+capture straddling an assignment change is held if its catalog timestamp and
+receipt cannot resolve the same assignment; it is never relabeled as new work.
 
 The server stores the agent token in `collaboration-credentials.json` beside
 `config.json`. A custom registry uses

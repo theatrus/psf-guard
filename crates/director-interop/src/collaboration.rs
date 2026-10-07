@@ -12,6 +12,15 @@ pub const MAX_REPORTS: usize = 200;
 pub const MAX_REPORT_FRAMES: usize = 4096;
 pub const MAX_PRESENCE_AGE_MS: u64 = 60_000;
 
+/// Accommodate recorded shutter timing, not a different exposure recipe.
+/// Allow 0.1%, with a 10 ms floor and a one-second cap. Keep the measured
+/// duration in evidence and integration totals rather than rounding to a plan.
+pub fn exposure_matches(requested_ms: u64, measured_ms: u64) -> bool {
+    requested_ms > 0
+        && measured_ms > 0
+        && requested_ms.abs_diff(measured_ms) <= requested_ms.div_ceil(1000).clamp(10, 1000)
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct PreparedImport {
     source: Source,
@@ -330,7 +339,7 @@ pub fn finalize_contribution_for_night(
             || f.source_digest != import.digest
             || f.panel_index != first.panel_index
             || fold_filter(&f.filter)? != filter
-            || f.exposure_ms != demand.exposure_ms
+            || !exposure_matches(demand.exposure_ms, f.exposure_ms)
             || !f.saved
             || !f.accepted
             || !f.finalized
@@ -394,7 +403,7 @@ pub fn finalize_contribution_for_night(
         panel: first.panel_index.to_string(),
         frames: frames.len() as u32,
         seconds: integration_ms as f64 / 1000.0,
-        exposure: demand.exposure_ms as f64 / 1000.0,
+        exposure: integration_ms as f64 / frames.len() as f64 / 1000.0,
         footprint: first.solved_footprint.clone(),
         scale: mean(|f| f.scale_arcsec),
         focal_length: mean(|f| f.focal_length_mm),

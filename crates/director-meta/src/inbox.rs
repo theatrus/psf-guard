@@ -251,6 +251,56 @@ impl MetaStore {
             .collect())
     }
 
+    /// Resolve saved-file identities in one bounded read. Only acknowledged
+    /// events qualify; missing or ambiguous captures must be held by callers.
+    pub fn saved_receipts_for_captures(
+        &self,
+        rig: Uuid,
+        captures: &[Uuid],
+    ) -> Result<Vec<Receipt>, Error> {
+        valid_id(rig)?;
+        let max = psf_guard_director_interop::collaboration::MAX_REPORT_FRAMES;
+        if captures.len() > max || captures.iter().any(Uuid::is_nil) {
+            return Err(Error::InvalidInput);
+        }
+        if captures.is_empty() {
+            return Ok(vec![]);
+        }
+        let marks = vec!["?"; captures.len()].join(",");
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT e.ledger_id,e.sequence,e.goal_id,e.capture_id,e.payload,e.received_at_ms
+             FROM rig_event e JOIN rig_feed f ON f.ledger_id=e.ledger_id AND f.rig_id=e.rig_id
+             WHERE e.rig_id=? AND e.capture_id COLLATE NOCASE IN ({marks}) AND e.state='saved'
+             AND e.sequence<=f.highest_contiguous LIMIT 4097"
+        ))?;
+        let args = std::iter::once(rig.to_string()).chain(captures.iter().map(Uuid::to_string));
+        let rows = statement
+            .query_map(rusqlite::params_from_iter(args), |row| {
+                let payload: String = row.get(4)?;
+                Ok(Receipt {
+                    rig_id: rig,
+                    ledger_id: row.get(0)?,
+                    sequence: row.get::<_, i64>(1)? as u64,
+                    goal_id: row.get(2)?,
+                    capture_id: row.get(3)?,
+                    state: "saved".into(),
+                    payload: serde_json::from_str(&payload).map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            4,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?,
+                    received_at_ms: row.get::<_, i64>(5)? as u64,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        if rows.len() > max {
+            return Err(Error::InvalidInput);
+        }
+        Ok(rows)
+    }
+
     /// Keep the newest status per rig. An older report for the same session,
     /// or any report from an older session, is refused rather than applied.
     pub fn record_status(&mut self, status: &RigStatus) -> Result<bool, Error> {

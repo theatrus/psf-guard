@@ -12,7 +12,8 @@ async function api(request: APIRequestContext, method: string, url: string, data
   return (await response.json()).data;
 }
 
-test('arriving files offer only accepted images, review measured data, and replay a queued submission', async ({ page, request }, testInfo) => {
+for (const executor of ['Target Scheduler', 'Director']) {
+test(`${executor}: arriving M31 files review measured data and replay a queued submission`, async ({ page, request }, testInfo) => {
   test.setTimeout(90_000);
   const run = process.env.PSF_GUARD_DIRECTOR_E2E_TMP!;
   const root = mkdtempSync(path.join(run, 'contribution-arrival-'));
@@ -22,6 +23,7 @@ test('arriving files offer only accepted images, review measured data, and repla
   const slug = `arrival-${randomUUID().slice(0, 8)}`;
   const db = new Database(path.join(root, 'catalog.sqlite'));
   applyRealSchema(db);
+  db.prepare('INSERT INTO profilepreference(profileId,guid) VALUES(?,?)').run('profile', randomUUID());
   db.prepare("INSERT INTO project (Id,profileId,name,description,state,priority,isMosaic,flatsHandling,guid) VALUES(1,'profile','Arrival test','',1,1,0,0,?)").run(randomUUID());
   db.prepare("INSERT INTO target (Id,name,active,ra,dec,epochcode,projectid,guid) VALUES(1,'Arrival target',1,0.509933,39.769,0,1,?)").run(randomUUID());
   db.prepare("INSERT INTO exposuretemplate (Id,profileId,name,filtername,gain,offset,bin,readoutmode,guid) VALUES(1,'profile','Ha 300','Ha',100,30,1,0,?)").run(randomUUID());
@@ -79,15 +81,30 @@ test('arriving files offer only accepted images, review measured data, and repla
     await work({ operation: 'configure', settings: { binning: 1, colour: false, hours_per_night: 6, share_status: false, filters: { Ha: { exposure_seconds: 300, bandpass_nm: 7 } } } });
     const night = { night: '2026-10-05', moon: 0.12, moon_up: 0.3 };
     const preview = await work({ operation: 'preview', task: '000000000004', night });
-    await work({ operation: 'apply', task: '000000000004', night, review_digest: preview.preview.review_digest });
+    const imported = await work({ operation: 'apply', task: '000000000004', night, review_digest: preview.preview.review_digest });
+    const project = imported.plan.project_id;
+    const draft = (await api(request, 'GET', `/api/director/v1/projects/${project}/plan`)).plan;
+    draft.contributions = [{ id: randomUUID(), objective_id: draft.objectives[0].id, rig_id: rig,
+      template: { template_guid: null, template_id: null, name: 'M31 Ha', filter_name: 'Ha', gain: 100, offset: 30, bin: 1, readout_mode: 0, moon: null },
+      exposure_seconds: 300, panel_ids: [], enabled: true }];
+    await api(request, 'PUT', `/api/director/v1/projects/${project}/plan`, draft);
+    const collaborationVisit = [{ import_id: imported.plan.import_id, source_digest: imported.plan.digest }];
+    const activation = await api(request, 'POST', `/api/director/v1/projects/${project}/activation/preview`, { collaboration: collaborationVisit });
+    await api(request, 'POST', `/api/director/v1/projects/${project}/activation/apply`, { preview_digest: activation.preview_digest, collaboration: collaborationVisit });
+    const assigned = db.prepare('SELECT e.Id AS exposure_id,e.guid AS goal,t.Id AS target_id,t.projectId AS project_id,t.name FROM exposureplan e JOIN target t ON t.Id=e.targetId JOIN psf_guard_collaboration_plan c ON c.exposureplan_guid=e.guid WHERE c.import_id=?').get(imported.plan.import_id) as { exposure_id: number; goal: string; target_id: number; project_id: number; name: string };
 
-    const acquired = Math.floor(Date.parse('2026-10-06T04:00:00Z') / 1000);
+    const acquired = Math.floor(Date.now() / 1000) + 1;
+    const observingNight = new Date(acquired * 1000).toISOString().slice(0, 10);
     const guids = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
-    const addRow = (id: number, grade: number) => db.prepare("INSERT INTO acquiredimage (Id,projectId,targetId,acquireddate,filtername,gradingStatus,metadata,profileId,exposureId,guid) VALUES(?,1,1,?,'Ha',?,?,'profile',1,?)")
-      .run(id, acquired + id * 300, grade, JSON.stringify({ FileName: `Q:\\NINA\\arrival-${id}.fits`, HFR: id === 1 ? 0.5 : 1 }), guids[id - 1]);
+    const captures = guids.map(() => randomUUID());
+    const exposure = executor === 'Director' ? 300.007 : 300;
+    const addRow = (id: number, grade: number) => db.prepare("INSERT INTO acquiredimage (Id,projectId,targetId,acquireddate,filtername,gradingStatus,metadata,profileId,exposureId,guid) VALUES(?,?,?,?,'Ha',?,?,'profile',?,?)")
+      .run(id, assigned.project_id, assigned.target_id, acquired + id * 300, grade, JSON.stringify({ FileName: `Q:\\NINA\\arrival-${id}.fits`, HFR: id === 1 ? 0.5 : 1 }), assigned.exposure_id, guids[id - 1]);
     const save = (id: number) => {
       const file = path.join(incoming, `arrival-${id}.fits`);
-      writeFileSync(file, fitsLight('Arrival target', '2026-10-06T04:00:00Z', ['FOCALLEN=                530.0']));
+      const headers = ['FOCALLEN=                530.0', 'SITELAT =                 35.0', 'SITELONG=               -120.0', 'SITEELEV=               1000.0', 'PGBAND  =                  7.0'];
+      if (executor === 'Director') headers.push(`PGCAPID = '${captures[id - 1]}'`, 'PGGRMS  =                  0.5', `PGHFR   =                  ${id === 1 ? '0.5' : '1.0'}`);
+      writeFileSync(file, fitsLight(assigned.name, new Date((acquired + id * 300) * 1000).toISOString(), headers, exposure));
       const stat = statSync(file, { bigint: true });
       const canonical = realpathSync.native(file);
       const source = process.platform === 'win32' ? `\\\\?\\${canonical}` : canonical;
@@ -117,7 +134,7 @@ test('arriving files offer only accepted images, review measured data, and repla
     const collaboration = settings.getByRole('region', { name: 'Collaboration', exact: true });
     await collaboration.getByRole('button', { name: 'Contribution reports' }).click();
     await collaboration.getByLabel('Imported visit').selectOption({ label: 'M31 halo in narrowband (2026-10-05)' });
-    await collaboration.getByLabel('Observing night', { exact: true }).fill('2026-10-06');
+    await collaboration.getByLabel('Observing night', { exact: true }).fill(observingNight);
     await collaboration.getByLabel('Rig database').selectOption(slug);
     await collaboration.getByLabel('Remote panel').selectOption('0');
     await expect(collaboration).toContainText('0 accepted images');
@@ -133,13 +150,33 @@ test('arriving files offer only accepted images, review measured data, and repla
     await expect(collaboration.getByLabel('Select arrival-4.fits')).not.toBeChecked();
     await collaboration.getByRole('button', { name: 'Select shown' }).click();
     await collaboration.getByRole('button', { name: 'Review 2 images' }).click();
+    if (executor === 'Director') {
+      await expect(collaboration.getByRole('alert')).toContainText('Director capture check-in is missing');
+      const identity = await api(request, 'GET', '/api/director/v1/status');
+      const mapping = await api(request, 'GET', `/api/director/v1/catalogs/${slug}/mappings`);
+      const ledger = randomUUID();
+      const events = [1, 4].flatMap((id, index) => ['reserved', 'saved'].map((state, step) => ({
+        schema_version: 1, ledger_id: ledger, sequence: index * 2 + step + 1,
+        rig_id: rig, attempt: { capture_id: captures[id - 1], goal_id: assigned.goal,
+          reserved_at_ms: (acquired + id * 300) * 1000,
+          evidence: state === 'reserved' ? { state } : { state, image_id: captures[id - 1], elapsed_ms: 301000 } },
+      })));
+      const checkin = { coordinator_instance_id: identity.instance_id, catalog_id: mapping.catalog_identity.id, ledger_id: ledger, events };
+      const checked = await api(request, 'POST', `/api/director/v1/rigs/${rig}/checkin`, checkin);
+      expect(checked.applied).toBe(4);
+      const replay = await api(request, 'POST', `/api/director/v1/rigs/${rig}/checkin`, checkin);
+      expect(replay.duplicates).toBe(4);
+      await collaboration.getByRole('button', { name: 'Review 2 images' }).click();
+      // Capture receipts never replace the catalog's stable sync identities.
+      expect(db.prepare('SELECT guid FROM acquiredimage ORDER BY Id').all()).toEqual(guids.map(guid => ({ guid })));
+    }
     const reviewed = collaboration.getByRole('region', { name: 'Review contribution' });
-    await expect(reviewed).toContainText('2 frames; 600 seconds; H; uncalibrated');
-    await expect(reviewed).toContainText('2026-10-06');
-    await expect(reviewed).toContainText('300.00 s');
+    await expect(reviewed).toContainText(`2 frames; ${exposure * 2} seconds; H; uncalibrated`);
+    await expect(reviewed).toContainText(observingNight);
+    await expect(reviewed).toContainText(`${exposure.toFixed(2)} s`);
     await expect(reviewed).toContainText('530.00 mm');
     await expect(reviewed).toContainText('2.70 arcsec');
-    await expect(reviewed).toContainText('Guiding RMSUnknown');
+    await expect(reviewed).toContainText(executor === 'Director' ? '0.50 arcsec' : 'Guiding RMSUnknown');
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 1000 });
       await reviewed.scrollIntoViewIfNeeded();
@@ -158,7 +195,10 @@ test('arriving files offer only accepted images, review measured data, and repla
     await expect(collaboration).toContainText('1 reports delivered; 1 accepted; 0 rejected');
     expect(received).toHaveLength(2);
     expect(received[1]).toEqual(received[0]);
-    expect(received[1].contributions[0]).toMatchObject({ project: '000000000002', task: '000000000004', night: '2026-10-06', panel: '0', filterName: 'H', frames: 2, seconds: 600, exposure: 300, focalLength: 530, hfr: 2.7, guideRms: null, calibrated: false, colour: false });
+    expect(received[1].contributions[0]).toMatchObject({ project: '000000000002', task: '000000000004', night: observingNight, panel: '0', filterName: 'H', frames: 2, seconds: exposure * 2, exposure, focalLength: 530, hfr: 2.7, guideRms: executor === 'Director' ? 0.5 : null, calibrated: false, colour: false, bandpass: 7 });
+    expect(received[1].contributions[0].moonIllumination).toBeGreaterThanOrEqual(0);
+    expect(received[1].contributions[0].moonSeparation).toBeGreaterThanOrEqual(0);
+    await testInfo.attach('local-M31-contribution.json', { body: JSON.stringify(received[1], null, 2), contentType: 'application/json' });
     await collaboration.getByRole('button', { name: 'Check in', exact: true }).click();
     await expect(collaboration).toContainText('0 reports delivered; 0 accepted; 0 rejected');
     expect(received).toHaveLength(2);
@@ -171,3 +211,4 @@ test('arriving files offer only accepted images, review measured data, and repla
     await new Promise<void>((resolve, reject) => remote.close(error => error ? reject(error) : resolve()));
   }
 });
+}

@@ -1,5 +1,12 @@
 # Unreleased
 
+- Include saved guiding RMS, pixel HFR, filter bandpass and exposure-time Moon
+  context in collaboration reviews when the evidence is available. Director
+  images must also match an acknowledged save receipt for their rig and
+  assigned exposure goal before reporting; delayed files and check-ins can
+  arrive in either order without changing catalog image identities. Small
+  measured shutter-timing differences no longer reject the assigned exposure;
+  reports retain the actual saved integration rather than planned time.
 - See accepted collaboration images as their files arrive, without reloading
   rig setup. Review the measured contribution data before queueing a submission;
   pending, rejected and missing files are not offered, and new frames are never
