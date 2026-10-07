@@ -8,6 +8,370 @@ use psf_guard_director_meta::{
     plan::{Contribution, Goal, Objective, PlanDraft, TemplateChoice},
 };
 
+#[tokio::test]
+async fn collaboration_activation_uses_exact_panels_and_returns_guid_associations_without_a_guard()
+{
+    use psf_guard_director_interop::{astrocollab::Source, collaboration::prepare_import};
+    let a = activated().await;
+    let (project, import_id, source_digest) = {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let source = Source::new("https://collab.example", "000000000001", false).unwrap();
+        let p = prepare_import(
+            include_bytes!(
+                "../../../../../crates/director-interop/tests/fixtures/starfront-tonight.json"
+            ),
+            &source,
+            "2026-10-05",
+            "000000000004",
+        )
+        .unwrap();
+        let preview = store.preview_collaboration_import(&p, a.rig).unwrap();
+        store
+            .apply_collaboration_import(&p, a.rig, &preview.review_digest, 1000)
+            .unwrap();
+        let mut plan = store.plan_draft(p.project_id()).unwrap().unwrap();
+        plan.contributions.push(Contribution {
+            id: Uuid::new_v4(),
+            objective_id: plan.objectives[0].id,
+            rig_id: a.rig,
+            template: TemplateChoice {
+                template_guid: None,
+                template_id: None,
+                name: "O 300".into(),
+                filter_name: "OIII".into(),
+                gain: Some(100),
+                offset: Some(30),
+                bin: Some(1),
+                readout_mode: None,
+                moon: None,
+            },
+            exposure_seconds: 300.0,
+            panel_ids: vec![],
+            enabled: true,
+            goal: None,
+        });
+        store.save_plan_draft(&plan, plan.revision).unwrap();
+        (p.project_id(), p.import_id(), p.digest().to_string())
+    };
+    let visit = json!({"import_id":import_id,"source_digest":source_digest});
+    let preview_path = format!("/projects/{project}/activation/preview");
+    let apply_path = format!("/projects/{project}/activation/apply");
+    let (status, context) = call(
+        &a.f.app,
+        "GET",
+        &format!("/projects/{project}/activation/collaboration"),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{context}");
+    assert_eq!(
+        context["data"]["imports"][0]["import_id"],
+        import_id.to_string()
+    );
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &preview_path,
+        json!({"collaboration":[visit.clone()]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert!(preview["data"]["rigs"][0]["warnings"]
+        .to_string()
+        .contains("no nightly deadline"));
+    assert_eq!(
+        a.db.query_row("SELECT COUNT(*) FROM target", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let mut changed = visit.clone();
+    changed["source_digest"] = json!("0".repeat(64));
+    let (status, _) = call(
+        &a.f.app,
+        "POST",
+        &apply_path,
+        json!({"preview_digest":preview["data"]["preview_digest"],"collaboration":[changed]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &apply_path,
+        json!({"preview_digest":preview["data"]["preview_digest"],"collaboration":[visit.clone()]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert!(applied["data"]["rigs"][0]["applied"].as_bool().unwrap());
+    assert_eq!(
+        a.db.query_row(
+            "SELECT COUNT(*) FROM psf_guard_collaboration_plan",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        6
+    );
+    let (ra, dec, rotation, desired, grader):(f64,f64,f64,i64,i64)=a.db.query_row(
+        "SELECT t.ra,t.dec,t.rotation,e.desired,p.enablegrader FROM target t JOIN exposureplan e ON e.targetId=t.Id JOIN project p ON p.Id=t.projectId ORDER BY t.Id LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).unwrap();
+    assert!((ra * 15.0 - 7.64899472222).abs() < 1e-6);
+    assert!((dec - 39.769).abs() < 1e-6);
+    assert_eq!(rotation, 35.0);
+    assert_eq!(desired, 11);
+    assert_eq!(grader, 1);
+    assert_eq!(
+        a.db.query_row(
+            "SELECT COUNT(*) FROM project WHERE inactivedate IS NOT NULL",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    let links =
+        crate::server::director::collaboration_activation::associations(&a.db, import_id).unwrap();
+    let link = &links[0];
+    let captured = (link.start_at_ms / 1000) as i64 + 1;
+    assert_eq!(
+        crate::server::director::collaboration_activation::matching(
+            &links,
+            &link.target_guid,
+            "OIII",
+            captured
+        )
+        .len(),
+        1
+    );
+    assert_eq!(
+        crate::server::director::collaboration_activation::matching(
+            &links,
+            &link.target_guid,
+            "OIII",
+            captured + 7 * 86400
+        )
+        .len(),
+        1
+    );
+    assert!(crate::server::director::collaboration_activation::matching(
+        &links,
+        &Uuid::new_v4().to_string(),
+        "OIII",
+        captured
+    )
+    .is_empty());
+    // Offline replay is a local repeat, not new rows or a refreshed budget.
+    a.db.execute("UPDATE exposureplan SET acquired=4,accepted=3", [])
+        .unwrap();
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &preview_path,
+        json!({"collaboration":[visit.clone()]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let (status, repeated) = call(
+        &a.f.app,
+        "POST",
+        &apply_path,
+        json!({"preview_digest":preview["data"]["preview_digest"],"collaboration":[visit.clone()]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{repeated}");
+    assert_eq!(
+        a.db.query_row("SELECT COUNT(*) FROM target", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        6
+    );
+    assert_eq!(
+        a.db.query_row("SELECT SUM(acquired) FROM exposureplan", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        24
+    );
+    assert_eq!(
+        a.db.query_row("SELECT SUM(desired) FROM exposureplan", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        66
+    );
+    let (status, checked) = call(
+        &a.f.app,
+        "GET",
+        &format!("/projects/{project}/activation/check"),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{checked}");
+    assert!(
+        checked["data"]["rigs"][0]["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["action"] == "unchanged" || c["action"] == "keep"),
+        "{checked}"
+    );
+
+    // Recreating a recipe cannot replenish an unchanged assignment's quota.
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut plan = store.plan_draft(project).unwrap().unwrap();
+        plan.contributions[0].id = Uuid::new_v4();
+        store.save_plan_draft(&plan, plan.revision).unwrap();
+    }
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &preview_path,
+        json!({"collaboration":[visit.clone()]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let (status, recreated) = call(
+        &a.f.app,
+        "POST",
+        &apply_path,
+        json!({"preview_digest":preview["data"]["preview_digest"],"collaboration":[visit.clone()]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{recreated}");
+    assert!(
+        recreated["data"]["rigs"][0]["applied"].as_bool().unwrap(),
+        "{recreated}"
+    );
+    assert_eq!(
+        a.db.query_row(
+            "SELECT COUNT(*),SUM(desired) FROM exposureplan",
+            [],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+        )
+        .unwrap(),
+        (6, 66)
+    );
+
+    // A reviewed later assignment replaces remaining work, reuses target GUIDs,
+    // and adds its quota above accepted (not merely attempted) captures.
+    a.db.execute(
+        "UPDATE psf_guard_collaboration_plan SET start_at_ms=start_at_ms-60000",
+        [],
+    )
+    .unwrap();
+    let next = {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let source = Source::new("https://collab.example", "000000000001", false).unwrap();
+        let mut wire: Value = serde_json::from_slice(include_bytes!(
+            "../../../../../crates/director-interop/tests/fixtures/starfront-tonight.json"
+        ))
+        .unwrap();
+        wire["night"] = json!("2026-10-08");
+        wire.as_object_mut().unwrap().remove("task");
+        wire["tasks"][0]["assignedNight"] = json!("2026-10-08");
+        let p = prepare_import(
+            &serde_json::to_vec(&wire).unwrap(),
+            &source,
+            "2026-10-08",
+            "000000000004",
+        )
+        .unwrap();
+        let review = store.preview_collaboration_import(&p, a.rig).unwrap();
+        store
+            .apply_collaboration_import(&p, a.rig, &review.review_digest, 2000)
+            .unwrap();
+        json!({"import_id":p.import_id(),"source_digest":p.digest()})
+    };
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &preview_path,
+        json!({"collaboration":[next.clone()]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &apply_path,
+        json!({"preview_digest":preview["data"]["preview_digest"],"collaboration":[next.clone()]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert!(
+        applied["data"]["rigs"][0]["applied"].as_bool().unwrap(),
+        "{applied}"
+    );
+    assert_eq!(
+        a.db.query_row("SELECT COUNT(*) FROM target", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        6
+    );
+    assert_eq!(
+        a.db.query_row("SELECT SUM(desired) FROM exposureplan", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        84
+    );
+    let old =
+        crate::server::director::collaboration_activation::associations(&a.db, import_id).unwrap();
+    assert!(old.iter().all(|l| l.end_at_ms.is_some()));
+    let cutover = old[0].end_at_ms.unwrap() / 1000;
+    assert_eq!(
+        crate::server::director::collaboration_activation::matching(
+            &old,
+            &link.target_guid,
+            "OIII",
+            cutover as i64 - 1
+        )
+        .len(),
+        1
+    );
+    assert!(crate::server::director::collaboration_activation::matching(
+        &old,
+        &link.target_guid,
+        "OIII",
+        cutover as i64
+    )
+    .is_empty());
+    let next_id = Uuid::parse_str(next["import_id"].as_str().unwrap()).unwrap();
+    let current =
+        crate::server::director::collaboration_activation::associations(&a.db, next_id).unwrap();
+    assert_eq!(
+        crate::server::director::collaboration_activation::matching(
+            &current,
+            &link.target_guid,
+            "OIII",
+            cutover as i64 + 86400
+        )
+        .len(),
+        1
+    );
+    let (status, stale) = call(
+        &a.f.app,
+        "POST",
+        &preview_path,
+        json!({"collaboration":[visit]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stale}");
+    assert!(
+        stale["data"]["rigs"][0]["warnings"]
+            .to_string()
+            .contains("superseded"),
+        "{stale}"
+    );
+}
+
 /// A real Target Scheduler schema with one profile's H-alpha template, bound
 /// to a rig, plus a global project with a two-panel framing and an H-alpha plan.
 pub(super) struct Activated {

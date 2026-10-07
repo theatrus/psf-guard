@@ -87,6 +87,19 @@ fn contribution_uses_original_night_actual_saved_exposures_and_pixel_footprint()
 }
 
 #[test]
+fn delayed_capture_retains_task_identity_and_reports_actual_observing_night() {
+    let p = import();
+    let r = finalize_contribution_for_night(&p, &[frame(&p, 1)], "2026-10-12").unwrap();
+    assert_eq!(r.observing_night(), "2026-10-12");
+    assert_eq!(r.import_id(), p.import_id());
+    assert_eq!(r.source_digest(), p.digest());
+    let v = serde_json::to_value(r.report()).unwrap();
+    assert_eq!(v["task"], p.share().task_id);
+    assert_eq!(v["seconds"], 300.0);
+    assert!(finalize_contribution_for_night(&p, &[frame(&p, 1)], "2026-02-30").is_err());
+}
+
+#[test]
 fn failed_uncertain_rejected_unfinalized_or_stale_solve_frames_cannot_earn_credit() {
     let p = import();
     let f = frame(&p, 1);

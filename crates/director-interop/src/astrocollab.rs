@@ -759,7 +759,7 @@ fn protocol(map: &Map<String, Value>) -> Result<(), Error> {
         Ok(())
     }
 }
-fn validate_night(value: &str) -> Result<(), Error> {
+pub fn validate_night(value: &str) -> Result<(), Error> {
     if value.len() != 10
         || !value.bytes().enumerate().all(|(i, b)| {
             if i == 4 || i == 7 {

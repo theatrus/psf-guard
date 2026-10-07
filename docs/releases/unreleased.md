@@ -2,6 +2,10 @@
 
 - Pick a sky survey layer in Planning's framing without it counting as an
   unsaved change: the layer is kept in your browser for every plan.
+- Activate reviewed collaboration assignments into existing rig databases with
+  exact remote panels and frame goals. Target Scheduler can finish on later
+  nights without an extra guard; contribution reports retain task identity and
+  use the actual observing night, including after delayed database sync.
 
 - Keep a plan taken in from Target Scheduler in step with its project until
   you change it in Planning or activate it: a desired count raised or a

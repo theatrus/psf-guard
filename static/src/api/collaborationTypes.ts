@@ -40,14 +40,20 @@ export interface CollaborationWork {
   rejected?: number;
   catalogs?: { id: string; name: string }[];
   imports?: { id: string; name: string | null; night: string; panels: number[] }[];
-  images?: { guid: string; filter: string; captured_at: number; target: string; file: string }[];
+  images?: { guid: string; filter: string; captured_at: number; target: string; file: string; panel?: number | null; source_digest?: string | null }[];
   review_digest?: string;
   report?: { frames: number; seconds: number; filterName: string; calibrated: boolean; footprint: { width: number; height: number } };
 }
-export interface ContributionSelection { import_id: string; catalog: string; panel: number; image_guids: string[] }
+export interface ContributionSelection { import_id: string; catalog: string; panel: number; image_guids: string[]; source_digest?: string; observing_night?: string }
+export interface CollaborationVisit {
+  import_id: string; source_digest: string;
+}
+export interface CollaborationActivationContext {
+  imports: { import_id: string; rig_id: string; rig_name: string; night: string; task_id: string; version: number; source_digest: string; demands: RemoteShare['demands'] }[];
+}
 export type CollaborationWorkInput =
   | { operation: 'report_inputs' }
-  | { operation: 'report_candidates'; import_id: string; catalog: string }
+  | { operation: 'report_candidates'; import_id: string; catalog: string; observing_night?: string }
   | { operation: 'preview_report'; selection: ContributionSelection }
   | { operation: 'queue_report'; selection: ContributionSelection; review_digest: string }
   | { operation: 'configure'; settings: CollaborationSettings }
