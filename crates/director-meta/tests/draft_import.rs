@@ -93,7 +93,7 @@ fn an_upgrade_marks_the_plans_an_import_left_untouched() {
     assert_eq!(store.save_framing_draft(&again, 1).unwrap().revision, 2);
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("DROP TABLE draft_import; PRAGMA user_version=24")
+    conn.execute_batch("DROP TABLE draft_import; PRAGMA user_version=25")
         .unwrap();
     drop(conn);
 

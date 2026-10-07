@@ -347,7 +347,7 @@ drafts in again under the same objectives, and keeps the survey and view the
 person chose. From the first save or activation on, the drafts are the
 operator's and nothing is imported again. The meta store's `draft_import`
 table records which project a plan came from and the revisions the import
-saved; plans imported before schema 25 are marked when both drafts are still
+saved; plans imported before schema 26 are marked when both drafts are still
 the import's (revision 1, saved together) and nothing activated them. The
 targets are measured in the plane of the mosaic's centre, where N.I.N.A.
 lays panels out, so a mosaic far from the equator still reads as its grid.

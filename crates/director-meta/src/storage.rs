@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 25;
+const SCHEMA_VERSION: i32 = 26;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -136,7 +136,7 @@ impl MetaStore {
             if version < 24 {
                 super::collaboration_connection::create_table(&tx)?;
             }
-            if version < 25 {
+            if version < 26 {
                 super::draft_import::create_table(&tx)?;
                 super::draft_import::backfill(&tx)?;
             }
@@ -338,7 +338,7 @@ fn validate(conn: &Connection) -> Result<Uuid, Error> {
     if version >= 24 {
         super::collaboration_connection::validate_table(conn)?;
     }
-    if version >= 25 {
+    if version >= 26 {
         super::draft_import::validate_table(conn)?;
     }
     let id: String = conn.query_row(
