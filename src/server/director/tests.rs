@@ -173,6 +173,8 @@ fn metadata_cannot_claim_existing_or_future_registry_files() {
         registry.clone(),
         AuthRegistry::path_for_database_registry(&registry),
         crate::processing_setups::ProcessingSetupsRegistry::path_for_database_registry(&registry),
+        collaboration_auth::credential_path(&registry),
+        collaboration_auth::credential_path(&registry).with_extension("lock"),
     ];
     for path in paths {
         assert!(validate_registry_separation(Some(&path), Some(&registry)).is_err());

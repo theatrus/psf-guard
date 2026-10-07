@@ -9,6 +9,33 @@ project, site and rig identities in a separate meta database. Director clients c
 receipts/status. Pairing does not allocate work or enable acquisition. The NINA
 runtime preview and PSF Guard Sync remain separate.
 
+## Collaboration Sign-In
+
+Open **Settings**, **Rigs**, then **Setup** for a rig. Under **Collaboration**,
+add the server's HTTPS URL and remote rig name, then choose **Connect**. PSF Guard
+offers browser sign-in or a pairing code according to the server's capabilities.
+For browser sign-in, open its approval page, approve there, then choose
+**Check sign-in**. Registration does not join a project or enable acquisition;
+remote work import and reporting are not yet connected to this setup.
+
+The server stores the agent token in `collaboration-credentials.json` beside
+`config.json`. A custom registry uses
+`<registry-stem>.collaboration-credentials.json` instead. Unix files use mode
+`0600`; Windows files use a user-only ACL. The config directory must not be
+writable by other ordinary users. Docker uses its existing writable config
+volume and service UID, with no separate vault or unlock secret. Tokens are
+plaintext on disk: restrict backups and do not include this file in diagnostic
+bundles or shared configuration exports.
+
+**Check connection** rereads the saved credential and checks the remote server.
+If the credential file is missing, unreadable or the server rejects its token,
+the original agent identity and queued reports remain intact. The current
+AstroCollab protocol cannot reissue that same agent's token. Recover it through
+the server when possible, or explicitly add a new connection; reports belonging
+to the old agent are never reassigned to the new one. **Disconnect** removes the
+local token but retains its identity and work. It does not revoke the remote
+agent. HTTPS is required except for explicitly enabled loopback HTTP tests.
+
 ## Project Priority
 
 Open a plan workspace and unfold **Project priority**, which says where the

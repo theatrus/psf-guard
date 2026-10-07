@@ -36,6 +36,47 @@ fn changed() -> PreparedImport {
 }
 
 #[test]
+fn connection_and_import_cannot_bind_one_agent_to_different_rigs() {
+    use psf_guard_director_meta::collaboration_connection::{ConnectionBinding, ConnectionState};
+    let (_, mut s, rig) = store();
+    let other = s.create_rig(Uuid::new_v4(), "Other rig").unwrap().id;
+    let p = import();
+    let binding = ConnectionBinding {
+        id: Uuid::new_v4(),
+        rig_id: rig,
+        base_url: p.source().base_url().into(),
+        name: "Collaboration".into(),
+        allow_loopback_http: false,
+        agent_id: None,
+        state: ConnectionState::New,
+    };
+    s.create_collaboration_connection(&binding).unwrap();
+    let mut registered = binding.clone();
+    registered.agent_id = Some(p.source().agent_id().into());
+    registered.state = ConnectionState::Registered;
+    s.update_collaboration_connection(&binding, &registered)
+        .unwrap();
+    assert!(matches!(
+        s.preview_collaboration_import(&p, other),
+        Err(Error::Conflict)
+    ));
+    apply(&mut s, &p, rig);
+    let second = ConnectionBinding {
+        id: Uuid::new_v4(),
+        rig_id: other,
+        ..binding
+    };
+    s.create_collaboration_connection(&second).unwrap();
+    let wrong = ConnectionBinding {
+        id: second.id,
+        rig_id: other,
+        ..registered
+    };
+    assert!(s.update_collaboration_connection(&second, &wrong).is_err());
+    assert_eq!(s.collaboration_connection(second.id).unwrap(), Some(second));
+}
+
+#[test]
 fn preview_is_read_only_and_apply_keeps_exact_panels_in_an_inactive_project_draft() {
     let (dir, mut s, rig) = store();
     let p = import();
@@ -432,7 +473,7 @@ fn schema_twenty_two_migrates_without_changing_existing_identity_and_bad_migrati
             assert_eq!(
                 conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                     .unwrap(),
-                23
+                24
             );
         }
     }

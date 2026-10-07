@@ -2,7 +2,7 @@ import { type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
 import { AccessContext, useAccess } from '../../auth/access';
 import RigProfileCard from '../director/RigProfileCard';
@@ -11,6 +11,9 @@ import { editFromForm, formFromProfile } from '../director/rigProfileForm';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
 const rig = { id: '22222222-2222-4222-8222-222222222222', name: 'RedCat', revision: 1 };
+beforeEach(() => {
+  server.use(http.get(`/api/director/v1/rigs/${rig.id}/collaboration`, () => HttpResponse.json(ok([]))));
+});
 const optics = { sensor_width_px: 6248, sensor_height_px: 4176, pixel_size_um: 3.76, focal_length_mm: 250, aperture_mm: 51, rotation: { mode: 'manual' as const, angle_degrees: 0 } };
 const site = { latitude_degrees: 34.2, longitude_degrees: -118.3, elevation_meters: 400 };
 const empty: DirectorRigProfile = {

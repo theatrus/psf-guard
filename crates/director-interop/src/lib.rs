@@ -2,6 +2,7 @@
 //! Hosts own HTTP, credentials, persistence, reviewed admission and execution.
 
 pub mod astrocollab;
+pub mod auth;
 pub mod collaboration;
 mod json;
 

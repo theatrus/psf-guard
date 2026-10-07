@@ -26,6 +26,7 @@ mod catalog_adoption;
 mod catalog_discovery;
 mod catalog_rig;
 mod checkin;
+mod collaboration_auth;
 mod equipment_report;
 mod feasibility;
 mod framing;
@@ -101,6 +102,8 @@ pub(super) fn validate_registry_separation(
         registry.to_path_buf(),
         crate::auth_registry::AuthRegistry::path_for_database_registry(registry),
         crate::processing_setups::ProcessingSetupsRegistry::path_for_database_registry(registry),
+        collaboration_auth::credential_path(registry),
+        collaboration_auth::credential_path(registry).with_extension("lock"),
     ];
     for path in protected {
         if let (Some(meta), Some(other)) = (&meta, location(&path)?) {
@@ -144,6 +147,7 @@ pub struct Service {
     discovery_admission: Arc<Semaphore>,
     /// What earlier plan listings read, for the next one.
     plans_memo: Mutex<plans::Memo>,
+    collaboration: collaboration_auth::SessionState,
 }
 
 impl Service {
@@ -164,6 +168,7 @@ impl Service {
             admission: Arc::new(Semaphore::new(1)),
             discovery_admission: Arc::new(Semaphore::new(1)),
             plans_memo: Mutex::new(plans::Memo::default()),
+            collaboration: collaboration_auth::SessionState::default(),
         })))
     }
 
@@ -451,6 +456,7 @@ pub(super) fn read_identity(path: &str) -> Option<CatalogIdentity> {
 pub(super) fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .merge(pairing::routes())
+        .merge(collaboration_auth::routes())
         .route("/status", get(status))
         .route(
             "/catalogs/{slug}/discovery",
