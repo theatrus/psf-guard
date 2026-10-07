@@ -6,6 +6,7 @@ import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorRigProfileView, DirectorRigSite } from '../../api/directorTypes';
 import HorizonEditor from './HorizonEditor';
+import CollaborationConnections from './CollaborationConnections';
 import { applyDefaults, describeSource, editFromForm, fieldOfView, formFromProfile, formatFieldOfView, opticsFromForm, type RigProfileForm } from './rigProfileForm';
 
 const message = (error: unknown) => isAxiosError(error)
@@ -183,6 +184,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       {canWrite && <div className="director-actions"><button type="submit" disabled={disabled}><Check size={16} />{save.isPending ? 'Saving...' : 'Save rig profile'}</button></div>}
       {!canWrite && <p className="director-muted">Read only</p>}
     </form>}
+    {data && <CollaborationConnections rig={data.rig.id} name={data.rig.name} />}
   </section>;
 }
 

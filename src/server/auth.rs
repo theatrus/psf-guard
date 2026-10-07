@@ -789,6 +789,20 @@ fn session_from_headers(auth: &ServerAuth, headers: &HeaderMap) -> Option<Sessio
     auth.session(cookie_value(headers, &auth.session_cookie_name)?)
 }
 
+/// Scope one-shot outbound sign-in to the local interactive session. The
+/// trusted account-free desktop has no session cookie and is one local owner.
+pub(super) fn setup_owner(state: &AppState, headers: &HeaderMap) -> Option<String> {
+    match state.server_auth() {
+        None if state.anonymous_access_trusted() => Some("trusted-local".into()),
+        None => None,
+        Some(auth) => {
+            let token = cookie_value(headers, &auth.session_cookie_name)?;
+            let session = auth.session(token)?;
+            (session.role == AccessRole::ReadWrite).then(|| crate::auth_registry::hash_token(token))
+        }
+    }
+}
+
 /// Infer the browser-facing scheme only from a same-origin request. `Origin`
 /// is supplied by browsers for the login POST and survives an ordinary HTTPS
 /// reverse proxy. Missing or mismatched headers return `None`, which keeps the

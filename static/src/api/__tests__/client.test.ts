@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
 import { apiClient } from '../client';
@@ -153,5 +153,22 @@ describe('apiClient database errors', () => {
     ).rejects.toThrow(
       'opening database: Database file not found: /missing/scheduler.sqlite'
     );
+  });
+});
+
+describe('collaboration authentication errors', () => {
+  it('does not log or retain one-time codes in Axios request details', async () => {
+    server.use(http.post('/api/director/v1/collaboration/test/pair', () =>
+      HttpResponse.json({ success: false, data: null, error: 'Pairing code rejected' }, { status: 409 })));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const error = await apiClient.collaborationAction('test', 'pair', 'private-one-time-code').catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe('Pairing code rejected');
+      expect((error as Error).cause).toBeUndefined();
+      expect(log.mock.calls).toEqual([['Collaboration API error:', { status: 409 }]]);
+    } finally {
+      log.mockRestore();
+    }
   });
 });

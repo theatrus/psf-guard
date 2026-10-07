@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type { AxiosInstance } from 'axios';
+import type { CollaborationAction, CollaborationConnection, CollaborationReply } from './collaborationTypes';
 import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorFeasibility, DirectorMosaicPreview, DirectorResolvedName,
@@ -138,6 +139,15 @@ import type { GuidFillReport, GuidReport,
 let initializedApi: AxiosInstance | null = null;
 let cachedServerUrl: string | null = null;
 
+export class CollaborationRequestError extends Error {
+  readonly status: number | undefined;
+  constructor(message: string, status: number | undefined) {
+    super(message);
+    this.name = 'CollaborationRequestError';
+    this.status = status;
+  }
+}
+
 // Initialize the API client
 const initializeApi = async () => {
   if (!initializedApi) {
@@ -156,7 +166,6 @@ const initializeApi = async () => {
     initializedApi.interceptors.response.use(
       (response) => response,
       (error) => {
-        console.error('API Error:', error);
         if (axios.isAxiosError<ApiResponse<unknown>>(error)) {
           if (
             error.response?.status === 401
@@ -165,7 +174,15 @@ const initializeApi = async () => {
             window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT));
           }
           const message = error.response?.data?.error;
+          // Axios retains request bodies and one-time sign-in replies.
+          if (error.config?.url?.match(/^\/director\/v1\/(?:collaboration\/|rigs\/[^/]+\/collaboration)/)) {
+            console.error('Collaboration API error:', { status: error.response?.status });
+            return Promise.reject(new CollaborationRequestError(message || 'Collaboration request failed', error.response?.status));
+          }
+          console.error('API Error:', error);
           if (message) return Promise.reject(new Error(message, { cause: error }));
+        } else {
+          console.error('API Error:', error);
         }
         return Promise.reject(error);
       }
@@ -291,6 +308,24 @@ export type StackPreviewStartRequest = {
 };
 
 export const apiClient = {
+  getCollaborationConnections: async (rig: string): Promise<CollaborationConnection[]> => {
+    const api = await getApi();
+    const result = await api.get<ApiResponse<CollaborationConnection[]>>(`/director/v1/rigs/${encodeURIComponent(rig)}/collaboration`);
+    if (!result.data.data) throw new Error(result.data.error || 'Could not load collaboration connections');
+    return result.data.data;
+  },
+  createCollaborationConnection: async (rig: string, input: { id: string; server_url: string; name: string; allow_loopback_http: boolean }): Promise<CollaborationConnection> => {
+    const api = await getApi();
+    const result = await api.post<ApiResponse<CollaborationConnection>>(`/director/v1/rigs/${encodeURIComponent(rig)}/collaboration`, input);
+    if (!result.data.data) throw new Error(result.data.error || 'Could not save collaboration connection');
+    return result.data.data;
+  },
+  collaborationAction: async (id: string, action: CollaborationAction, code?: string): Promise<CollaborationReply | CollaborationConnection> => {
+    const api = await getApi();
+    const result = await api.post<ApiResponse<CollaborationReply | CollaborationConnection>>(`/director/v1/collaboration/${encodeURIComponent(id)}/${action}`, code === undefined ? {} : { code });
+    if (!result.data.data) throw new Error(result.data.error || 'Collaboration request failed');
+    return result.data.data;
+  },
   getDirectorStatus: async (): Promise<DirectorStatus> => {
     const api = await getApi();
     const { data } = await api.get<ApiResponse<DirectorStatus>>('/director/v1/status');
