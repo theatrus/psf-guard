@@ -3765,6 +3765,13 @@
   margin: 0 auto;
 }
 
+/* With no size chosen the cards fill the row: one to a row, or two once
+   each can be 1000px wide, never more. */
+.stack-preview-panel.is-fit .stack-preview-grid,
+.stack-preview-panel.is-fit .stack-color-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, max(1000px, calc(50% - 0.5rem))), 1fr));
+}
+
 .stack-preview-card {
   overflow: hidden;
   background: var(--color-bg-primary);

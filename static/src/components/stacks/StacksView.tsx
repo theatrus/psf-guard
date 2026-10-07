@@ -6,7 +6,7 @@ import { useDbProjectTarget, useUrlParams } from '../../hooks/useUrlState';
 import { useAccess } from '../../auth/access';
 import ProjectExposureGrouping from '../ProjectExposureGrouping';
 import { imageDetailPath } from '../../utils/imageDetailRoutes';
-import StackPreviewPanel, { DEFAULT_STACK_CARD_SIZE } from '../StackPreviewPanel';
+import StackPreviewPanel from '../StackPreviewPanel';
 import ThumbnailSizeControl from '../ThumbnailSizeControl';
 import WbppRunDialog from '../WbppRunDialog';
 import { describeWbppRunForProject, useWbppRun } from '../../hooks/useWbppRun';
@@ -24,6 +24,30 @@ export interface StackSelectionState {
 const CARD_SIZE_MIN = 300;
 const CARD_SIZE_MAX = 1600;
 const CARD_SIZE_STEP = 50;
+/** A card size chosen in this browser, kept until Fit clears it. */
+const CARD_SIZE_KEY = 'psf-guard.stacks.card-size';
+/** A row this wide holds two fitted cards; the CSS draws the same line. */
+const TWO_UP_WIDTH = 2016;
+
+function storedCardSize(): number | null {
+  try {
+    const value = Number(window.localStorage.getItem(CARD_SIZE_KEY));
+    return Number.isFinite(value) && value > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeCardSize(size: number | null) {
+  try {
+    if (size === null) window.localStorage.removeItem(CARD_SIZE_KEY);
+    else window.localStorage.setItem(CARD_SIZE_KEY, String(size));
+  } catch {
+    // Private windows and blocked storage keep the size for this page only.
+  }
+}
+
+const clampCardSize = (size: number) => Math.min(CARD_SIZE_MAX, Math.max(CARD_SIZE_MIN, size));
 
 /**
  * Stacks: PSF Guard's stack previews and their color, and the stacks WBPP
@@ -38,12 +62,30 @@ export default function StacksView() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const handed = (location.state as StackSelectionState | null)?.stackImageIds;
-  // How wide the cards are; in the URL so a reload keeps the layout.
+  // How wide the cards are: a size in the link, else one chosen earlier in
+  // this browser, else they fill the row (one card, or two on a wide screen).
   const { getNumberParam, updateParams } = useUrlParams();
   const requestedSize = getNumberParam('cardsize');
-  const cardSize = Math.min(
-    CARD_SIZE_MAX,
-    Math.max(CARD_SIZE_MIN, Number.isFinite(requestedSize) ? requestedSize! : DEFAULT_STACK_CARD_SIZE)
+  const [storedSize, setStoredSize] = useState(storedCardSize);
+  const chosenSize = requestedSize !== null && Number.isFinite(requestedSize) ? requestedSize : storedSize;
+  const cardSize = chosenSize === null ? null : clampCardSize(chosenSize);
+  const chooseCardSize = (size: number | null) => {
+    updateParams({ cardsize: size });
+    storeCardSize(size);
+    setStoredSize(size);
+  };
+  // Where the slider sits while the cards fit: about as wide as they are.
+  const viewRef = useRef<HTMLDivElement>(null);
+  const [viewWidth, setViewWidth] = useState(0);
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => setViewWidth(entry.contentRect.width));
+    observer.observe(view);
+    return () => observer.disconnect();
+  }, []);
+  const fittedSize = clampCardSize(
+    Math.round((viewWidth >= TWO_UP_WIDTH ? (viewWidth - 16) / 2 : viewWidth) / CARD_SIZE_STEP) * CARD_SIZE_STEP
   );
   const queryClient = useQueryClient();
   const [wbppOpen, setWbppOpen] = useState(false);
@@ -123,18 +165,24 @@ export default function StacksView() {
   if (isLoading) return <div className="loading">Loading images...</div>;
 
   return (
-    <div className="stacks-view">
+    <div className="stacks-view" ref={viewRef}>
       {/* Whether exposure lengths stack apart is a choice about stacks first. */}
       <div className="stacks-toolbar">
         <ThumbnailSizeControl
           id="stacks-card-size"
           label="Card size"
-          value={cardSize}
+          value={cardSize ?? fittedSize}
+          valueText={cardSize === null ? 'Fit' : undefined}
           min={CARD_SIZE_MIN}
           max={CARD_SIZE_MAX}
           step={CARD_SIZE_STEP}
-          onChange={(size) => updateParams({ cardsize: size })}
+          onChange={chooseCardSize}
         />
+        {cardSize !== null && (
+          <button type="button" className="link-button" title="Fill the row: one card, or two on a wide screen" onClick={() => chooseCardSize(null)}>
+            Fit
+          </button>
+        )}
         <ProjectExposureGrouping
           key={`${dbId}:${projectId}`}
           dbId={dbId}

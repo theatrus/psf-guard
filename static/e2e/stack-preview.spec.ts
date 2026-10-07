@@ -391,10 +391,11 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   const panel = page.locator('.stack-preview-panel');
   await expect(panel).toBeVisible({ timeout: 15_000 });
   await expect(panel).toContainText('integrate the 3 images');
+  // With no size chosen, a card fills a 1440px window's row.
   const gridColumns = await panel.locator('.stack-preview-grid').evaluate(
     (grid) => getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length
   );
-  expect(gridColumns).toBe(2);
+  expect(gridColumns).toBe(1);
   await panel.getByRole('button', { name: 'Build channel', exact: true }).click();
 
   const progress = panel.locator('.stack-preview-progress');
