@@ -61,6 +61,15 @@ pub struct Activation {
     pub inactive_rigs: Vec<InactiveRig>,
 }
 
+impl Activation {
+    /// Whether the store would take this record, size included, so a caller
+    /// can check before it writes anything the record must describe.
+    pub fn validate(&self) -> Result<(), Error> {
+        validate_activation(self)?;
+        super::configuration::encode(self).map(|_| ())
+    }
+}
+
 fn validate_activation(activation: &Activation) -> Result<(), Error> {
     valid_id(activation.project_id)?;
     valid_id(activation.coordinator_instance_id)?;
