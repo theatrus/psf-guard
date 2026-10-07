@@ -45,12 +45,13 @@ export default function WorkspaceSummary({ projectId, projectName, back, rigs, o
   /** The activation bar is up and says it already. */
   hideActivation?: boolean;
 }) {
-  const { last, savedPlan, savedFraming, behind } = useActivationState(projectId);
+  const { last, savedPlan, savedFraming, behind, matches } = useActivationState(projectId);
   const status = useDirectorStatus();
   const profiles = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
   const framing = savedFraming.data?.draft;
   const objectives = savedPlan.data?.plan?.objectives ?? [];
-  const activation = last.data
+  // Rows that already match count as on the rigs, recorded or not.
+  const activation = matches ? { ok: true, text: 'On the rigs' } : last.data
     ? behind.length > 0
       ? { ok: false, text: `${listed(behind)} not activated` }
       // Not "Active": that is a Target Scheduler project state, which the

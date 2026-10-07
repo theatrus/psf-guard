@@ -1,5 +1,11 @@
 # Unreleased
 
+- Stop asking to activate a plan whose rigs already hold it: one taken in
+  from Target Scheduler, or rows that came by Sync. Planning checks each rig
+  on a copy of its planning tables, so it never locks N.I.N.A.'s database,
+  and the plan reads "On the rigs". A row left at its template's exposure
+  length counts as matching, and the N.I.N.A. plugin gets that length.
+
 - Scroll a large image grid smoothly again. Every card ran a hidden
   spinner that never stopped, so the browser restyled thousands of cards on
   each frame; Safari felt it most. Cards off screen now skip drawing until
