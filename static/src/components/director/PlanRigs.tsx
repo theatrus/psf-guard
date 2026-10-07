@@ -40,7 +40,7 @@ export default function PlanRigs({ row, rows, joined, objectives, ready, control
   const manageable = status.data?.database_management ?? true;
   const info = useQuery({ queryKey: ['serverInfo'], queryFn: apiClient.getServerInfo, staleTime: 300_000 });
   const profiles = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
-  const { last } = useActivationState(projectId);
+  const { last, holding } = useActivationState(projectId);
   const client = useQueryClient();
   const [pick, setPick] = useState('');
   const [detachPick, setDetachPick] = useState<string | null>(null);
@@ -133,7 +133,7 @@ export default function PlanRigs({ row, rows, joined, objectives, ready, control
         : 'new project on activation';
       return <div className="director-rig-database plan-rig" role="group" aria-label={name} key={key}>
         <p className="plan-rig-head"><strong>{name}</strong><span className="plan-rig-place">{place}</span>
-          <span className="director-muted">{activated.has(rigId) ? 'activated' : 'not activated'}{shooting ? '' : ' · not shooting'}</span>
+          <span className="director-muted">{activated.has(rigId) ? 'activated' : holding.has(rigId) ? 'matches' : 'not activated'}{shooting ? '' : ' · not shooting'}</span>
           {link && cameFrom === link.catalog_slug && <span className="director-muted"> · opened from here</span>}</p>
         <div className="director-actions">
           {canWrite && !shooting && <button type="button" disabled={!!waitTitle} title={waitTitle} onClick={() => setRig(rigId, true)}><Plus size={16} />Shoot this plan</button>}

@@ -577,6 +577,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             "/projects/{id}/activation/preview",
             axum::routing::post(activation::preview),
         )
+        .route("/projects/{id}/activation/check", get(activation::check))
         .route(
             "/projects/{id}/activation/apply",
             axum::routing::post(activation::apply),

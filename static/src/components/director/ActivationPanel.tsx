@@ -110,7 +110,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   const status = useDirectorStatus();
   const manageable = status.data?.database_management ?? true;
   const client = useQueryClient();
-  const { last, planRevision, behind, behindText } = useActivationState(projectId);
+  const { last, planRevision, behind, behindText, matches } = useActivationState(projectId);
   const [report, setReport] = useState<DirectorActivationReport | null>(null);
   const busy = useRef(false);
   // Activation writes the saved plan, so edits still in the editor are saved
@@ -127,7 +127,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   const apply = useMutation({
     retry: false,
     mutationFn: () => { if (!report) throw new Error('Preview first'); return apiClient.applyDirectorActivation(projectId, report.preview_digest); },
-    onSuccess: applied => { setReport(applied); for (const key of [['directorActivation', projectId], ['db'], ['directorCatalog'], ['directorPlans']]) void client.invalidateQueries({ queryKey: key }); },
+    onSuccess: applied => { setReport(applied); for (const key of [['directorActivation', projectId], ['directorActivationCheck', projectId], ['db'], ['directorCatalog'], ['directorPlans']]) void client.invalidateQueries({ queryKey: key }); },
     onError: error => { if (httpStatus(error) === 409) setReport(null); },
   });
   const [pushed, setPushed] = useState<DirectorActivationPushReport | null>(null);
@@ -145,7 +145,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
     {last.data && <p className="director-muted">Last activated {new Date(last.data.applied_at_ms).toLocaleString()} · {last.data.rigs.length} rig{last.data.rigs.length === 1 ? '' : 's'}</p>}
     {last.data && behind.length > 0 && <p className="activation-behind" role="note">{behindText}</p>}
     {last.data && behind.length === 0 && !unsavedPlan && planRevision !== undefined && <p className="director-muted">Rigs are up to date</p>}
-    {!last.data && last.isSuccess && <p className="director-muted">Not activated yet</p>}
+    {!last.data && last.isSuccess && <p className="director-muted">{matches ? 'The rigs already match the saved plan' : 'Not activated yet'}</p>}
     {error && !(apply.isError && httpStatus(apply.error) === 409) && <p className="director-error" role="alert">{message(error)}</p>}
     {apply.isError && httpStatus(apply.error) === 409 && <p className="director-error" role="alert">Changed since the preview. Preview again.</p>}
     {report && <div className="activation-report">

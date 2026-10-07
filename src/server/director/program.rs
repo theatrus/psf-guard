@@ -872,7 +872,8 @@ fn read_plan_row(
 ) -> rusqlite::Result<Option<PlanRow>> {
     connection
         .query_row(
-            "SELECT ep.exposure, IFNULL(ep.desired, 0), IFNULL(ep.accepted, 0), COALESCE(ep.enabled,1), et.filtername, et.gain, et.offset, et.bin, et.readoutmode, et.Id
+            // A row left at -1 runs at its template's default length.
+            "SELECT CASE WHEN ep.exposure IS NULL OR ep.exposure < 0 THEN et.defaultexposure ELSE ep.exposure END, IFNULL(ep.desired, 0), IFNULL(ep.accepted, 0), COALESCE(ep.enabled,1), et.filtername, et.gain, et.offset, et.bin, et.readoutmode, et.Id
              FROM exposureplan ep JOIN exposuretemplate et ON et.Id = ep.exposureTemplateId
              JOIN target t ON t.Id=ep.targetId JOIN project p ON p.Id=t.projectId
              WHERE ep.guid=?1 AND t.guid=?2 AND p.guid=?3 AND t.active=1 AND p.state=1",
