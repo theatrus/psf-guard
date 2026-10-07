@@ -35,6 +35,8 @@ test_output/
 *.backup
 *.bak
 *.tmp
+*collaboration-credentials.json
+*collaboration-credentials.lock
 
 # Log files
 *.log

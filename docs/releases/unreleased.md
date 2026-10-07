@@ -1,5 +1,11 @@
 # Unreleased
 
+- Register a rig with an AstroCollab server from Settings, Rigs, Setup using
+  browser sign-in or a pairing code. PSF Guard keeps the agent token in its
+  existing config directory with private file permissions, and retains the
+  original identity and queued reports if the credential is deleted. This
+  setup does not yet join projects, import remote work or send reports.
+
 - Keep unsaved edits in a plan's workspace when its address changes after a
   detach, an attach or its first activation, and when a newer copy of the
   plan or its limits arrives from elsewhere: the tab marks the change and

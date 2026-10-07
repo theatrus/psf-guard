@@ -288,7 +288,8 @@ fn preview(conn: &Connection, plan: &PreparedImport, rig: Uuid) -> Result<Import
         return Err(Error::NotFound);
     }
     let wrong_rig: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM collaboration_import WHERE base_url=?1 AND agent_id=?2 AND rig_id!=?3)",
+        "SELECT EXISTS(SELECT 1 FROM collaboration_import WHERE base_url=?1 AND agent_id=?2 AND rig_id!=?3
+            UNION ALL SELECT 1 FROM collaboration_connection WHERE base_url=?1 AND agent_id=?2 AND rig_id!=?3)",
         params![plan.source().base_url(), plan.source().agent_id(), rig.to_string()], |r| r.get(0))?;
     if wrong_rig {
         return Err(Error::Conflict);

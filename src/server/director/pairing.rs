@@ -40,7 +40,7 @@ fn denied() -> Response {
         .into_response()
 }
 
-fn no_store(response: impl IntoResponse) -> Response {
+pub(super) fn no_store(response: impl IntoResponse) -> Response {
     let mut response = response.into_response();
     response
         .headers_mut()
