@@ -1,5 +1,9 @@
 # Unreleased
 
+- See accepted collaboration images as their files arrive, without reloading
+  rig setup. Review the measured contribution data before queueing a submission;
+  pending, rejected and missing files are not offered, and new frames are never
+  selected or submitted automatically.
 - Keep what was changed in N.I.N.A. after an activation: the activation
   preview offers **Take Target Scheduler's values** for a rig, which writes
   that rig's frame counts, templates, exposure lengths and moved targets into

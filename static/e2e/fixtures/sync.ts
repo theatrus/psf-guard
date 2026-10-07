@@ -85,7 +85,7 @@ const FITS_BLOCK_BYTES = 2880;
  * place the frame, so a stub of zeroes would not do; this carries the cards
  * the importer looks at and a 10x10 16-bit image.
  */
-export function fitsLight(object: string, dateObs: string): Buffer {
+export function fitsLight(object: string, dateObs: string, extraCards: string[] = []): Buffer {
   const cards = [
     'SIMPLE  =                    T',
     'BITPIX  =                   16',
@@ -99,6 +99,7 @@ export function fitsLight(object: string, dateObs: string): Buffer {
     'EXPTIME =                300.0',
     'GAIN    =                  100',
     'OFFSET  =                   30',
+    ...extraCards,
     'END',
   ];
   const headerBlocks = Math.ceil(

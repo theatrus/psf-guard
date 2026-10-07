@@ -70,7 +70,7 @@ export default function CollaborationWorkflows({ connection, canWrite, refresh }
       <button type="button" disabled={!initial} onClick={() => mutation.mutate({ operation: 'checkin' })}><Upload size={16} />Check in</button>
     </div></fieldset>
     {mutation.isPending && <p role="status">Contacting collaboration server...</p>}
-    {mutation.isError && <p role="alert">{mutation.error.message}</p>}
+    {mutation.isError && <p role="alert">{mutation.variables?.operation === 'checkin' && 'Check-in failed; queued reports retained. '}{mutation.error.message}</p>}
     {notice && <p role="status">{notice}</p>}
     {work?.projects && <table><thead><tr><th>Project</th><th>Compatibility</th><th /></tr></thead><tbody>{work.projects.map(p => <tr key={p.project_id}><td>{p.name}</td><td>{p.compatible === null ? 'Unknown' : p.compatible ? 'Compatible' : 'Incompatible'}</td><td><button type="button" disabled={busy || !nightValid || p.joined || p.compatible === false} onClick={() => { if (window.confirm(`Join ${p.name} with this rig?`)) mutation.mutate({ operation: 'join', project: p.project_id, night: observingNight }); }}><Link2 size={16} />{p.joined ? 'Joined' : 'Join'}</button></td></tr>)}</tbody></table>}
     {work?.shares?.map(share => <div key={share.task_id}><h4>{share.name ?? share.task_id}</h4>

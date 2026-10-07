@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -16,8 +16,17 @@ const share = { task_id: '000000000004', name: 'M31', version: 2, review_reasons
 function setup() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   render(<MemoryRouter><QueryClientProvider client={client}><CollaborationWorkflows connection={connection} canWrite refresh={() => undefined} /></QueryClientProvider></MemoryRouter>);
+  return client;
 }
 describe('Collaboration work transfer', () => {
+  it('explains that failed check-ins retain queued contributions and permits retry', async () => {
+    server.use(http.post('/api/director/v1/collaboration/connection/work', () =>
+      HttpResponse.json({ error: 'Collaboration server returned an unsuccessful response' }, { status: 502 })));
+    setup();
+    await userEvent.click(screen.getByRole('button', { name: 'Check in' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Check-in failed; queued reports retained. Collaboration server returned an unsuccessful response');
+    expect(screen.getByRole('button', { name: 'Check in' })).toBeEnabled();
+  });
   it('requires explicit observing-night context and a preview before applying', async () => {
     const requests: Record<string, unknown>[] = [];
     server.use(http.post('/api/director/v1/collaboration/connection/work', async ({ request }) => {
@@ -96,5 +105,38 @@ describe('Collaboration work transfer', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Review 1 images' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Queue finalized contribution' }));
     await waitFor(() => expect(requests.at(-1)).toEqual({ operation: 'queue_report', selection: { import_id: 'import', catalog: 'rig-db', panel: 7, image_guids: ['old-image'], observing_night: '2026-10-05', source_digest: 'original-revision' }, review_digest: 'old-evidence' }));
+  });
+  it('offers arriving accepted frames without selecting them and withdraws a rejected selection', async () => {
+    const image = (guid: string) => ({ guid, file: `${guid}.fits`, target: 'M31', filter: 'Ha', captured_at: 1791171000 });
+    let images = [image('first')];
+    const requests: Record<string, unknown>[] = [];
+    server.use(http.post('/api/director/v1/collaboration/connection/work', async ({ request }) => {
+      const body = await request.json() as Record<string, unknown>; requests.push(body);
+      const data = body.operation === 'report_inputs' ? { imports: [{ id: 'import', name: 'M31', night: '2026-10-05', panels: [0] }], catalogs: [{ id: 'rig-db', name: 'Rig DB' }] }
+        : body.operation === 'report_candidates' ? { images }
+        : body.operation === 'preview_report' ? { review_digest: 'review', report: { frames: 1, seconds: 300, exposure: 300, filterName: 'H', hfr: 2.5, scale: 1.2, focalLength: 300, colour: false, calibrated: false, footprint: { width: 1, height: 1 } } } : {};
+      return HttpResponse.json({ success: true, data });
+    }));
+    const client = setup();
+    await userEvent.click(screen.getByRole('button', { name: 'Contribution reports' }));
+    await screen.findByRole('option', { name: 'M31 (2026-10-05)' });
+    await userEvent.selectOptions(screen.getByLabelText('Imported visit'), 'import');
+    await userEvent.selectOptions(screen.getByLabelText('Rig database'), 'rig-db');
+    await userEvent.selectOptions(screen.getByLabelText('Remote panel'), '0');
+    await userEvent.click(await screen.findByLabelText('Select first.fits'));
+    await userEvent.click(screen.getByRole('button', { name: 'Review 1 images' }));
+    const review = await screen.findByRole('region', { name: 'Review contribution' });
+    expect(review).toHaveTextContent('2.50 arcsec');
+    expect(review).toHaveTextContent('Guiding RMSUnknown');
+    images = [image('first'), image('later')];
+    await act(() => client.invalidateQueries({ queryKey: ['db', 'rig-db'] }));
+    expect(await screen.findByText('2 accepted images')).toBeVisible();
+    expect(screen.getByLabelText('Select later.fits')).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Review 1 images' })).toBeEnabled();
+    images = [image('later')];
+    await act(() => client.invalidateQueries({ queryKey: ['db', 'rig-db'] }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Queue finalized contribution' })).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Review 0 images' })).toBeDisabled();
+    expect(requests.some(r => r.operation === 'queue_report')).toBe(false);
   });
 });
