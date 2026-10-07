@@ -35,7 +35,6 @@ export function describeFramingChanges(before: FramingState | null, after: Frami
     changes.push(`panel size ${size(before.panel)} → ${size(after.panel)}`);
   }
   if (!same([...before.shownRigIds].sort(), [...after.shownRigIds].sort())) changes.push('rigs compared');
-  if (before.surveyId !== after.surveyId) changes.push('sky survey');
   const framed = (state: FramingState) => new Map(state.rigFramings.map(own => [own.rig_id, own]));
   const was = framed(before);
   const now = framed(after);
