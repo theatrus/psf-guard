@@ -2,7 +2,7 @@
 use super::*;
 use psf_guard_director_interop::astrocollab::Source;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionBinding {
     pub id: Uuid,
@@ -12,6 +12,8 @@ pub struct ConnectionBinding {
     pub allow_loopback_http: bool,
     pub agent_id: Option<String>,
     pub state: ConnectionState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<psf_guard_director_interop::workflow::Settings>,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -49,6 +51,9 @@ impl ConnectionBinding {
         .map_err(|_| Error::InvalidInput)
     }
     fn validate(&self) -> Result<(), Error> {
+        if let Some(settings) = &self.settings {
+            settings.validate().map_err(|_| Error::InvalidInput)?;
+        }
         valid_id(self.id)?;
         valid_id(self.rig_id)?;
         valid_name(&self.name)?;
@@ -70,6 +75,31 @@ impl ConnectionBinding {
     }
 }
 impl MetaStore {
+    pub fn collaboration_imports_for_connection(
+        &self,
+        id: Uuid,
+    ) -> Result<Vec<super::collaboration::Imported>, Error> {
+        let binding = self.collaboration_connection(id)?.ok_or(Error::NotFound)?;
+        let Some(agent) = binding.agent_id else {
+            return Ok(vec![]);
+        };
+        let mut statement=self.connection.prepare("SELECT id FROM collaboration_import WHERE base_url=?1 AND agent_id=?2 AND rig_id=?3 ORDER BY imported_at_ms DESC LIMIT 257")?;
+        let ids = statement
+            .query_map(
+                params![binding.base_url, agent, binding.rig_id.to_string()],
+                |r| r.get::<_, String>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        if ids.len() > 256 {
+            return Err(Error::InvalidInput);
+        }
+        ids.into_iter()
+            .map(|id| {
+                self.collaboration_import(parse_id(&id)?)?
+                    .ok_or(Error::CorruptDatabase)
+            })
+            .collect()
+    }
     pub fn create_collaboration_connection(
         &mut self,
         binding: &ConnectionBinding,

@@ -5,6 +5,7 @@ import { ExternalLink, Link2, Plus, RefreshCw, Unplug, X } from 'lucide-react';
 import { apiClient, CollaborationRequestError } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { CollaborationAction, CollaborationConnection, CollaborationReply } from '../../api/collaborationTypes';
+import CollaborationWorkflows from './CollaborationWorkflows';
 
 const message = (error: unknown) => isAxiosError(error)
   ? error.response?.data?.error || 'Collaboration request failed'
@@ -97,5 +98,6 @@ function Connection({ connection, canWrite, refresh }: { connection: Collaborati
       <button type="submit" disabled={busy || !code.trim()}><Link2 size={16} />Pair</button>
     </form>}
     {capabilities && !capabilities.signin && !capabilities.pairing && <p role="alert">This server offers no supported authentication method.</p>}
+    {connection.status === 'registered' && <CollaborationWorkflows connection={connection} canWrite={canWrite} refresh={refresh} />}
   </div>;
 }

@@ -49,6 +49,7 @@ fn connection_and_import_cannot_bind_one_agent_to_different_rigs() {
         allow_loopback_http: false,
         agent_id: None,
         state: ConnectionState::New,
+        settings: None,
     };
     s.create_collaboration_connection(&binding).unwrap();
     let mut registered = binding.clone();

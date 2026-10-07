@@ -40,9 +40,10 @@ pub fn enrollment(bytes: &[u8]) -> Result<Enrollment, Error> {
 pub fn login(bytes: &[u8]) -> Result<Login, Error> {
     let value = json::decode(bytes)?;
     let expires_in = value["expiresIn"]
-        .as_u64()
-        .filter(|n| (1..=3600).contains(n))
-        .ok_or(Error::InvalidReply)?;
+        .as_f64()
+        .filter(|n| n.is_finite() && (1.0..=3600.0).contains(n))
+        .ok_or(Error::InvalidReply)?
+        .floor() as u64;
     Ok(Login {
         code: field(&value, "code", 512)?,
         url: field(&value, "url", 4096)?,
@@ -82,5 +83,20 @@ mod tests {
         assert!(poll(br#"{"state":"done","token":"bad\r\nheader"}"#).is_err());
         assert!(matches!(poll(br#"{"state":"claimed"}"#), Ok(Poll::Claimed)));
         assert!(login(br#"{"code":"code","url":"https://example.com/","expiresIn":0}"#).is_err());
+    }
+    #[test]
+    fn login_accepts_protocol_numeric_seconds_without_extending_expiry() {
+        assert_eq!(
+            login(br#"{"code":"code","url":"https://example.com/","expiresIn":600.0}"#)
+                .unwrap()
+                .expires_in,
+            600
+        );
+        assert_eq!(
+            login(br#"{"code":"code","url":"https://example.com/","expiresIn":1.9}"#)
+                .unwrap()
+                .expires_in,
+            1
+        );
     }
 }

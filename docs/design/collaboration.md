@@ -1,11 +1,12 @@
 # AstroCollab and Starfront interoperability
 
-Status: shared reader, reviewed import storage, fresh presence projection,
-finalized contribution outbox and PSF Guard authentication/setup implemented.
-Rig setup supports pairing and browser sign-in. Work retrieval/join, user-facing
-import, catalog evidence extraction and report delivery remain unimplemented.
-Collaboration setup does not enable acquisition.
-Last reviewed: 2026-10-06.
+Status: shared reader, authentication, reviewed import, managed-host hello/join,
+nightly work retrieval, catalog-evidence review, durable contribution delivery
+and fresh activity forwarding implemented. The NINA adapter has separate
+standalone pairing and browser sign-in. Neither remote registration nor import
+grants acquisition. Plugin-only admission and reporting-owner handoff remain
+planned.
+Last reviewed: 2026-10-07.
 
 ## Sources and scope
 
@@ -34,6 +35,10 @@ file and GitHub reports no license: use it to inspect interoperability, not to
 copy its implementation into the core without permission.
 
 ## Two modes, one executor
+
+The diagram describes the complete target architecture. Managed PSF Guard
+transfer and standalone NINA authentication are implemented; plugin-only work
+import, local admission and reporting-owner handoff are not implemented yet.
 
 ```mermaid
 flowchart TD
@@ -77,8 +82,8 @@ plugin-only captures preserves their original capture IDs and associations.
 
 ## Authentication and credential ownership
 
-Status: PSF Guard setup, config-file credentials and recovery states implemented.
-Standalone NINA collaboration authentication and credential handoff remain
+Status: PSF Guard setup, config-file credentials, standalone NINA authentication
+and recovery states implemented. Reporting-owner credential handoff remains
 planned. Keep three authorities separate:
 
 - Local PSF Guard login and Director pairing control access to this installation.
@@ -188,6 +193,30 @@ uncertain binding cannot enroll again automatically. Local callers see a remote
 credential rejection as a connection conflict, not a local-login `401`.
 An explicit enrollment rejection permits a corrected code or new browser sign-in;
 a lost or malformed token-producing reply remains uncertain, with no blind retry.
+
+### Managed Work API
+
+`POST /api/director/v1/collaboration/{id}/work` uses a tagged `operation` body.
+It requires the same interactive editor and database-management gate as setup;
+it does not accept remote bearer tokens or caller-provided scientific evidence.
+
+| Operation | Input and result |
+| --- | --- |
+| `configure` | Save non-secret `settings`: binning, colour, hours per night, filter exposure/bandpass map and opt-in activity sharing. Optics come from the commissioned rig profile. |
+| `browse` | Send hello, then return the authenticated project list and compatibility. |
+| `join` | Join one remote project with explicit `night` context, then retrieve authenticated nightly work. |
+| `tonight` | Retrieve work for `night: {night, moon, moon_up}`; date and both fractions are required. |
+| `preview`, `apply` | Refetch the selected `task` for that night. Apply requires the current `review_digest`; changed work conflicts. Imports stay inactive. |
+| `report_inputs` | List this binding's imported visits and databases bound to its rig. |
+| `report_candidates` | List accepted saved-image GUIDs for an `import_id` and `catalog` around its original night. No grades or files are changed. |
+| `preview_report`, `queue_report` | Review `selection: {import_id, catalog, panel, image_guids}` using catalog and fresh pixel evidence. Queue requires its unchanged `review_digest`. |
+| `checkin` | Send fresh opted-in presence and replay pending immutable reports. Persist receipts only after validating the complete positional reply. |
+
+Accepted live rig telemetry also schedules background check-in at most once a
+minute when activity sharing is enabled. Network failure never blocks the local
+telemetry acknowledgement. Historical batches do not become fresh presence.
+An explicit check-in works when activity sharing is off. A rejected remote
+contribution is a delivered receipt, not a local grade change or endless retry.
 
 ## Contract mapping
 
@@ -454,20 +483,23 @@ defined in [Authentication and credential ownership](#authentication-and-credent
 
 This is an additive backlog, not a replacement for unfinished local Director
 commissioning or unattended-night validation. Shared import/report primitives
-and PSF Guard authentication/setup are implemented; workload connectors and
-user-facing import/report workflows are not.
+and managed PSF Guard browse/import/report workflows are implemented. Direct
+NINA authentication is separate from PSF Guard pairing; plugin-only acquisition
+still needs its local issuer, store and reviewed admission policy.
 
 1. **Shared read-only adapter (reader implemented).** The pinned reader and
    checked-in examples cover health, profiles, projects, requirements and nightly
    demand/provenance. Rust adapter and runtime-consumer tests cover unknown
    fields, units, filter/colour identity, rotation, empty shares and bounds.
-   Remaining: managed-host transport, versioned non-secret IPC and tests against
+   Managed-host transport is implemented. Remaining: versioned non-secret IPC and tests against
    both live implementations through our hosts. No hardware launch.
 2. **Browse and import (storage implemented).** Origin maps, source history,
    reviewed draft Apply and local-edit preservation have regression tests.
    PSF Guard credentials, pairing and browser sign-in are implemented in rig
-   setup. Remaining: standalone plugin credentials, hello/join, UI preview/Apply,
-   capability matching and downstream rig database admission.
+   setup. Hello/join, UI preview/Apply, and standalone plugin credentials are
+   implemented. Commissioned optics and explicit filters describe the remote
+   rig; the server's compatibility decision is displayed. Remaining: downstream
+   rig database admission and plugin-only work intake.
 3. **Plugin-only admission.** Add complete local setup, workload-source choice,
    local issuer/store and versioned IPC. Reuse the Session and ledger; prove
    offline bounded execution, restart/replay refusal, safety/roof interruptions,
@@ -475,10 +507,16 @@ user-facing import/report workflows are not.
 4. **Reports and handoff (outbox implemented).** Finalized evidence contracts,
    calibration gating, separate remote verdicts and immutable queue/replay have
    tests for partial replies, new frames in flight, retile collisions and
-   correction refusal. Remaining: catalog evidence extraction, common footprint,
-   mixed-revision aggregates, actual transport/retry, live rig status wiring and
-   plugin-to-PSF Guard ownership handoff. Do not enable unattended reporting for
-   unresolved geometry or evidence-correction cases.
+   correction refusal. Catalog evidence extraction, conservative common solved
+   coverage, reviewed queueing, bounded transport/replay and live activity
+   forwarding are implemented. Reporting uses stable image GUIDs, only accepted
+   saved frames and unchanged-source pixel solutions. Header processing evidence
+   can establish calibration; filenames and available masters cannot. The host
+   never fills missing measurements from planned settings. The operator maps
+   the cohort to its original named night and panel. Remaining: mixed-revision
+   aggregates, automatic capture-to-import association, precise polygon credit,
+   and plugin-to-PSF Guard ownership handoff. Unattended report creation stays off
+   for unresolved geometry or evidence-correction cases.
 5. **Future files extension.** Implement only after public routes, artifact
    identity, retries and calibration/stack provenance are specified. Keep raw
    image intake and collaborative contribution transport separate.

@@ -185,6 +185,7 @@ mod tests {
             allow_loopback_http: false,
             agent_id: Some("000000000001".into()),
             state: psf_guard_director_meta::collaboration_connection::ConnectionState::Registered,
+            settings: None,
         }
     }
     #[test]

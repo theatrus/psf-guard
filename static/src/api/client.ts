@@ -1,6 +1,6 @@
 import axios from 'axios';
 import type { AxiosInstance } from 'axios';
-import type { CollaborationAction, CollaborationConnection, CollaborationReply } from './collaborationTypes';
+import type { CollaborationAction, CollaborationConnection, CollaborationReply, CollaborationWork, CollaborationWorkInput } from './collaborationTypes';
 import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorFeasibility, DirectorMosaicPreview, DirectorResolvedName,
@@ -312,6 +312,12 @@ export const apiClient = {
     const api = await getApi();
     const result = await api.get<ApiResponse<CollaborationConnection[]>>(`/director/v1/rigs/${encodeURIComponent(rig)}/collaboration`);
     if (!result.data.data) throw new Error(result.data.error || 'Could not load collaboration connections');
+    return result.data.data;
+  },
+  collaborationWork: async (id: string, input: CollaborationWorkInput): Promise<CollaborationWork> => {
+    const api = await getApi();
+    const result = await api.post<ApiResponse<CollaborationWork>>(`/director/v1/collaboration/${encodeURIComponent(id)}/work`, input);
+    if (!result.data.data) throw new Error(result.data.error || 'Collaboration request failed');
     return result.data.data;
   },
   createCollaborationConnection: async (rig: string, input: { id: string; server_url: string; name: string; allow_loopback_http: boolean }): Promise<CollaborationConnection> => {
