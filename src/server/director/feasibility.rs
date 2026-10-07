@@ -35,6 +35,10 @@ pub(super) struct Request {
     /// rig framed on a center of its own is timed there instead.
     #[serde(default)]
     center: Option<IcrsPosition>,
+    /// Centers of rigs framed on a center of their own, as the framing view
+    /// has them now, saved or not; a rig not named here uses its saved one.
+    #[serde(default)]
+    rig_centers: BTreeMap<Uuid, IcrsPosition>,
     #[serde(default)]
     start_ms: Option<u64>,
 }
@@ -156,7 +160,8 @@ pub(super) async fn evaluate(
             .center
             .or_else(|| framing.as_ref().map(|f| f.center))
             .ok_or_else(|| FeasibilityError::NotReady("Frame the project or send a center first.".into()))?;
-        if !(0.0..360.0).contains(&center.ra_degrees) || !(-90.0..=90.0).contains(&center.dec_degrees) {
+        let in_range = |c: &IcrsPosition| (0.0..360.0).contains(&c.ra_degrees) && (-90.0..=90.0).contains(&c.dec_degrees);
+        if !in_range(&center) || request.rig_centers.len() > 64 || !request.rig_centers.values().all(in_range) {
             return Err(Error::Invalid.into());
         }
         let target_name = framing
@@ -229,10 +234,13 @@ pub(super) async fn evaluate(
                 ));
                 BTreeMap::new()
             });
-            let rig_center = framing
-                .as_ref()
-                .and_then(|f| f.rig_framing(rig_id))
-                .and_then(|own| own.center)
+            // A rig framed on its own center: where the view has it now,
+            // else where it was saved.
+            let own = framing.as_ref().and_then(|f| f.rig_framing(rig_id));
+            let rig_center = own
+                .and_then(|own| own.center.map(|_| request.rig_centers.get(&rig_id).copied()))
+                .flatten()
+                .or_else(|| own.and_then(|own| own.center))
                 .unwrap_or(center);
             if placed.location.is_some()
                 && !scheduling.use_custom_horizon

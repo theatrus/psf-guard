@@ -62,6 +62,16 @@ function mount(canWrite = true, extra: { drafts?: MutableRefObject<Drafts | null
 }
 
 describe('Plan editor', () => {
+  it("says which of a rig's templates the server left out, and why", async () => {
+    fixture();
+    server.use(http.get('/api/director/v1/catalogs/redcat/templates', () => HttpResponse.json(ok({ catalog_slug: 'redcat', catalog_name: 'RedCat 61', rig: redcat.rig,
+      templates: [template(1, 'Ha 300', 'Ha', 'h_alpha', 'narrowband', 300)],
+      warnings: ['Template #5 Ha deep: its Moon avoidance rules are out of range.'] }))));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    render(<QueryClientProvider client={client}><PlanEditor projectId="project" linkedRigIds={[redcat.rig.id]} /></QueryClientProvider>);
+    expect(await screen.findByRole('note', { name: 'RedCat 61 templates left out' })).toHaveTextContent('Template #5 Ha deep: its Moon avoidance rules are out of range.');
+  });
+
   it('shows each rig as one block with its project, and folds rigs outside the plan away', async () => {
     fixture();
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });

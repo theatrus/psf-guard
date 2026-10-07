@@ -329,4 +329,17 @@ async fn feasibility_owes_only_unaccepted_frames_and_times_a_rig_at_its_own_cent
     assert_eq!(rig["center"]["dec_degrees"], -75.0);
     assert_eq!(hours_up(rig), 0.0);
     assert_eq!(rig["nights_to_complete"], Value::Null);
+    // Moved in the view and not saved yet: timed where the view has it.
+    let body = json!({"nights": 1, "start_ms": 1_790_294_400_000u64,
+        "rig_centers": {a.rig.to_string(): {"ra_degrees": 38.2, "dec_degrees": 61.45}}});
+    let (status, view) = call(&a.f.app, "POST", &path, body, None).await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    let rig = &view["data"]["rigs"][0];
+    assert_eq!(rig["center"]["dec_degrees"], 61.45);
+    assert!(hours_up(rig) > 0.0, "{rig}");
+    // A center out of range is refused.
+    let body =
+        json!({"rig_centers": {a.rig.to_string(): {"ra_degrees": 400.0, "dec_degrees": 0.0}}});
+    let (status, _) = call(&a.f.app, "POST", &path, body, None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

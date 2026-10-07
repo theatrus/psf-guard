@@ -574,7 +574,7 @@ export const apiClient = {
     return data.data;
   },
 
-  getDirectorFeasibility: async (projectId: string, request: { nights?: number; center?: { ra_degrees: number; dec_degrees: number }; start_ms?: number }): Promise<DirectorFeasibility> => {
+  getDirectorFeasibility: async (projectId: string, request: { nights?: number; center?: { ra_degrees: number; dec_degrees: number }; rig_centers?: Record<string, { ra_degrees: number; dec_degrees: number }>; start_ms?: number }): Promise<DirectorFeasibility> => {
     const api = await getApi();
     const { data } = await api.post<ApiResponse<DirectorFeasibility>>(`/director/v1/projects/${encodeURIComponent(projectId)}/feasibility`, request);
     if (!data.data) throw new Error(data.error || 'Failed to compute feasibility');

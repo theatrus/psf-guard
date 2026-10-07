@@ -625,6 +625,11 @@
 
 ## Fixed
 
+- The visibility chart follows a separately framed rig as it is moved,
+  before the framing is saved, and its legend names the plan's meridian
+  window and horizon offset. A rig whose database could not be read says so
+  on the Rigs tab instead of calling its project missing, and the Exposures
+  tab names the templates the server left out and why.
 - Activation no longer fails as a whole when one rig database is busy,
   read-only or refuses a write: that rig says why and the others are
   applied and recorded. A rig database now gets a minute for its write lock

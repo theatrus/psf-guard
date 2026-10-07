@@ -102,12 +102,26 @@ export function AltitudeChart({ rig, compact = false }: { rig: DirectorRigFeasib
 /** `compact` keeps the panel to the verdict, the chart and one line of
  *  estimate, with the nights table folded away, so it fits under the
  *  framing stage and stays on screen. */
-export default function VisibilityPanel({ projectId, center, enabled = true, compact = false }: { projectId: string; center: DirectorSkyPosition; enabled?: boolean; compact?: boolean }) {
-  const rounded = useMemo(() => ({ ra_degrees: roundRa(center.ra_degrees, 3), dec_degrees: Number(center.dec_degrees.toFixed(3)) }), [center.ra_degrees, center.dec_degrees]);
+export default function VisibilityPanel({ projectId, center, rigCenters, enabled = true, compact = false }: {
+  projectId: string;
+  center: DirectorSkyPosition;
+  /** Centers of rigs framed on a center of their own, as the view has them. */
+  rigCenters?: Record<string, DirectorSkyPosition>;
+  enabled?: boolean;
+  compact?: boolean;
+}) {
+  const round = (c: DirectorSkyPosition) => ({ ra_degrees: roundRa(c.ra_degrees, 3), dec_degrees: Number(c.dec_degrees.toFixed(3)) });
+  const rigKey = JSON.stringify(Object.entries(rigCenters ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([id, c]) => [id, round(c)]));
+  const rounded = useMemo(() => ({ center: round(center), rigs: rigKey }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [center.ra_degrees, center.dec_degrees, rigKey]);
   const debounced = useDebounced(rounded, 350);
   const query = useQuery({
     queryKey: ['directorFeasibility', projectId, debounced],
-    queryFn: () => apiClient.getDirectorFeasibility(projectId, { center: debounced }),
+    queryFn: () => apiClient.getDirectorFeasibility(projectId, {
+      center: debounced.center,
+      ...(debounced.rigs !== '[]' ? { rig_centers: Object.fromEntries(JSON.parse(debounced.rigs) as Array<[string, DirectorSkyPosition]>) } : {}),
+    }),
     enabled, retry: retryWhenBusy, retryDelay: 1200, staleTime: 60_000, placeholderData: previous => previous,
   });
   const [chosen, setChosen] = useState<string | null>(null);
@@ -122,7 +136,7 @@ export default function VisibilityPanel({ projectId, center, enabled = true, com
       : `Visible ${formatHours(up)} tonight from ${rig.catalog_name} (${formatHours(tonight.dark_hours)} dark, peak ${tonight.targets[0].max_altitude_degrees.toFixed(0)}°${tonight.targets[0].hours_lost_to_meridian > 0 ? `, ${formatHours(tonight.targets[0].hours_lost_to_meridian)} lost to the meridian pause` : ''}). Moon ${Math.round(tonight.moon_illumination * 100)}% lit, ${tonight.targets[0].min_moon_separation_degrees.toFixed(0)}° away, up ${formatHours(tonight.moon_hours_up_in_dark)} of the dark.`;
     return <p className={up > 0 ? 'visibility-verdict' : 'visibility-verdict is-down'} data-testid="visibility-verdict">{text}</p>;
   })();
-  const legend = rig && <p className="director-muted visibility-legend"><span className="key target" />target <span className="key horizon" />{rig.custom_horizon ? 'custom horizon and limit' : `minimum altitude ${rig.limits.minimum_altitude_degrees}°`} <span className="key moon" />Moon <span className="key paused" />meridian pause <span className="key dark" />dark (Sun below −12°) <span className="key deep" />astronomical night</p>;
+  const legend = rig && <p className="director-muted visibility-legend"><span className="key target" />target <span className="key horizon" />{rig.custom_horizon ? `custom horizon${rig.limits.horizon_offset_degrees ? ` +${rig.limits.horizon_offset_degrees}°` : ''} and limit` : `minimum altitude ${rig.limits.minimum_altitude_degrees}°`}{rig.limits.meridian_window_minutes ? ` · within ${rig.limits.meridian_window_minutes} min of the meridian` : ''} <span className="key moon" />Moon <span className="key paused" />meridian pause <span className="key dark" />dark (Sun below −12°) <span className="key deep" />astronomical night</p>;
   const rigSelect = data && data.rigs.length > 1 && <select aria-label="Visibility rig" value={rig?.rig.id ?? ''} onChange={event => setChosen(event.target.value)}>
     {data.rigs.map(r => <option key={r.rig.id} value={r.rig.id}>{r.catalog_name}{r.in_plan ? '' : ' (not in plan)'}</option>)}
   </select>;

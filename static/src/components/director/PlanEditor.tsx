@@ -252,6 +252,8 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
     const panels = panelsFor[rig.rig.id] ?? sharedPanels;
     const ownGrid = ownFramed.includes(rig.rig.id);
     const loadingTemplates = templateQueries[index]?.isPending;
+    // Templates the server left out (Moon rules it cannot use), by name.
+    const templateWarnings = templateQueries[index]?.data?.warnings ?? [];
     const on = participating(rig);
     const total = totals.find(t => t.rigId === rig.rig.id);
     const extras = rigExtras?.(rig) ?? {};
@@ -264,6 +266,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
         {total && <span className="plan-rig-total">{total.frames} frames, {formatHours(total.hours)}</span>}
         {on && !shooting.includes(rig.rig.id) && <span className="director-muted">not shooting</span>}
       </label>
+      {templateWarnings.length > 0 && <p className="director-muted" role="note" aria-label={`${rig.catalog_name} templates left out`}>{templateWarnings.join(' ')}</p>}
       {on && panels.length > 1 && (() => {
         const owned = rigPanels(plan, rig.rig.id, panels);
         return <div className="plan-panels" role="group" aria-label={`${rig.catalog_name} panels`}>

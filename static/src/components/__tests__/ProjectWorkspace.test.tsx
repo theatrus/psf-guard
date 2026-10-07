@@ -237,6 +237,19 @@ describe('attaching and detaching database projects', () => {
     expect(posts).toEqual([{ url: 'attach', body: { from_project_id: 'other' } }]);
   });
 
+  it('says a database could not be read rather than calling its project missing', async () => {
+    mountTwo();
+    server.use(http.get('/api/director/v1/plans', () => ok({ warnings: [], rows: [
+      { project: { id: 'project', name: 'Heart', revision: 1 }, framing: null, plan: null, activation: null,
+        links: [{ catalog_slug: 'catalog', catalog_name: 'C925 data', rig: rigA, source_project_guid: 'guid-a', source_row_id: 7, source_name: 'Heart' },
+          { catalog_slug: 'third', catalog_name: 'Third data', rig: { id: 'rig-c', name: 'Third', revision: 1 }, source_project_guid: 'guid-c', source_row_id: null, source_name: null, source_unread: true }] },
+    ] })));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Rigs' }));
+    const third = await screen.findByRole('group', { name: 'Third data' });
+    expect(third).toHaveTextContent('database not read just now');
+    expect(third).not.toHaveTextContent('project row missing');
+  });
+
   it('detaches one database into a plan of its own, naming it after the project', async () => {
     const posts = mountTwo();
     fireEvent.click(await screen.findByRole('tab', { name: 'Rigs' }));
