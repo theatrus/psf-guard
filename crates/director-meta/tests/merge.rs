@@ -169,6 +169,7 @@ fn attaching_moves_links_takes_missing_drafts_and_retires_the_absorbed_plan() {
             other_guid,
             Uuid::new_v4(),
             "Heart by C925",
+            false,
         )
         .unwrap();
     assert_eq!(fresh.name, "Heart by C925");
@@ -182,7 +183,7 @@ fn attaching_moves_links_takes_missing_drafts_and_retires_the_absorbed_plan() {
         "the old plan keeps its drafts"
     );
     assert!(matches!(
-        store.detach_project(keep, other_catalog, other_guid, Uuid::new_v4(), "x"),
+        store.detach_project(keep, other_catalog, other_guid, Uuid::new_v4(), "x", false),
         Err(Error::NotFound)
     ));
     let reopened = MetaStore::open(&path).unwrap();

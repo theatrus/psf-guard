@@ -2091,3 +2091,78 @@ async fn a_frame_saved_between_preview_and_apply_does_not_refuse_it() {
     .await;
     assert_eq!(status, StatusCode::OK, "{applied}");
 }
+
+/// Detaching a database's project from a plan that has work for that rig
+/// asks first, then takes the work out of the plan and the rig out of its
+/// activation record. The plan's next activation leaves the detached project
+/// alone: no Inactive for a rig it no longer holds, and no fight over rows
+/// another plan now owns.
+#[tokio::test]
+async fn a_detach_asks_before_dropping_work_and_then_leaves_the_project_alone() {
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    activate_now(&a.f, a.project, "first").await;
+    let (guid, contribution) = {
+        let store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let record = store.activation(a.project).unwrap().unwrap();
+        (
+            record.rigs[0].project_guid,
+            store.plan_draft(a.project).unwrap().unwrap().contributions[0].clone(),
+        )
+    };
+    let detach = |drop: bool| {
+        let app = a.f.app.clone();
+        let project = a.project;
+        async move {
+            call(&app, "POST", &format!("/projects/{project}/detach"),
+                json!({"catalog_slug": "rig", "source_project_guid": guid, "name": "Heart split", "drop_rig_work": drop}), None).await
+        }
+    };
+    let (status, asked) = detach(false).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{asked}");
+    assert!(
+        asked["error"]
+            .as_str()
+            .unwrap()
+            .contains("1 exposure goal for RedCat rig"),
+        "{asked}"
+    );
+    let (status, detached) = detach(true).await;
+    assert_eq!(status, StatusCode::OK, "{detached}");
+    {
+        let store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        assert!(store
+            .plan_draft(a.project)
+            .unwrap()
+            .unwrap()
+            .contributions
+            .is_empty());
+        assert!(store
+            .activation(a.project)
+            .unwrap()
+            .unwrap()
+            .rigs
+            .is_empty());
+    }
+    // The plan shoots the rig again: a project of its own, never the
+    // detached one, which stays Active with its rows on.
+    edit_plan(&a.f, a.project, |draft| {
+        draft.contributions.push(Contribution {
+            id: Uuid::new_v4(),
+            ..contribution
+        })
+    });
+    activate_now(&a.f, a.project, "again").await;
+    assert_eq!(
+        count("SELECT count(*) FROM project"),
+        2,
+        "a new project, not the detached one"
+    );
+    assert_eq!(
+        count(&format!(
+            "SELECT count(*) FROM project WHERE guid='{guid}' AND state=1"
+        )),
+        1
+    );
+    assert_eq!(count(&format!("SELECT count(*) FROM exposureplan e JOIN target t ON t.Id=e.targetid JOIN project p ON p.Id=t.projectid WHERE p.guid='{guid}' AND e.enabled=1")), 2);
+}

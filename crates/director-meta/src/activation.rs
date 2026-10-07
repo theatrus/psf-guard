@@ -185,7 +185,10 @@ impl MetaStore {
     }
 }
 
-fn read_activation(conn: &Connection, project: Uuid) -> Result<Option<Activation>, Error> {
+pub(crate) fn read_activation(
+    conn: &Connection,
+    project: Uuid,
+) -> Result<Option<Activation>, Error> {
     valid_id(project)?;
     let row: Option<(i64, Vec<u8>)> = conn
         .query_row(

@@ -332,7 +332,13 @@ activation takes the attached project's targets over where they stand, by
 name, place, or as the lone target, and takes over their exposure plans for
 the same work rather than adding twins.
 **Detach** beside a linked database hands that project a plan of its own
-again, named after the project; this plan keeps its drafts. A plan never
+again, named after the project; this plan keeps its drafts, less the work it
+planned for that database's rig. When there is such work, Detach first says
+how many exposure goals go and asks again (**Detach anyway**); the project
+keeps its rows in Target Scheduler either way. This plan's activation record
+forgets the rig, so its next activation neither sets the detached project
+Inactive nor writes to it: a rig database's own record of which plan owns a
+project follows the plan links, and activation updates it when a link moves. A plan never
 holds two projects in one database, so attaching such a plan is refused.
 
 ### Plans are Library projects

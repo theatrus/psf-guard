@@ -396,3 +396,16 @@ fn old_schema_two_backup_is_read_only_and_restored_configurations_bind_new_inten
         Some(project)
     );
 }
+
+#[test]
+fn attaching_retires_a_plan_that_holds_an_intent() {
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let project = fixture(&mut store);
+    store.register_project_intent(&project).unwrap();
+    let into = store.create_project(Uuid::new_v4(), "Keeper").unwrap();
+    let absorbed = uuid(&project.project_id);
+    store.attach_project(into.id, absorbed).unwrap();
+    assert!(store.project(absorbed).unwrap().is_none());
+    assert!(store.project_intent(uuid(&project.id)).unwrap().is_none());
+}

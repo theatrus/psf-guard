@@ -394,7 +394,8 @@ fn imported_projects_cannot_lose_provenance_through_attach_or_detach() {
             Uuid::new_v4(),
             Uuid::new_v4(),
             Uuid::new_v4(),
-            "New"
+            "New",
+            false
         ),
         Err(Error::Conflict)
     ));
