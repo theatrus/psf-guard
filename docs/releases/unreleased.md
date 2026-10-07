@@ -640,6 +640,10 @@
   window and horizon offset. A rig whose database could not be read says so
   on the Rigs tab instead of calling its project missing, and the Exposures
   tab names the templates the server left out and why.
+- A Director rig's program no longer fails as a whole when one exposure
+  plan or target row cannot be read; that goal is left out and named. The
+  meridian window's hint now says what Target Scheduler does with it: image
+  only that close to the meridian.
 - Detaching a database's project from a plan that has work for that rig now
   says what goes and asks first. Afterwards the old plan no longer writes to
   the detached project or sets it Inactive, and an attached plan takes over

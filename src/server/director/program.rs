@@ -560,13 +560,24 @@ fn build(
         let mut done = 0usize;
         for activated in &entry.plans {
             let goal_id = activated.exposureplan_guid.to_string();
-            let Some(row) = read_plan_row(
+            // A row the program cannot use (a template's Moon rules out of
+            // range, a value of the wrong type) costs that goal only.
+            let row = match read_plan_row(
                 connection,
                 &activated.exposureplan_guid.to_string(),
                 &activated.target_guid.to_string(),
                 &entry.project_guid.to_string(),
-            )?
-            else {
+            ) {
+                Ok(row) => row,
+                Err(error) => {
+                    built.omitted.push(format!(
+                        "{}: exposure plan {} cannot be read ({error})",
+                        project.name, activated.exposureplan_guid
+                    ));
+                    continue;
+                }
+            };
+            let Some(row) = row else {
                 built.omitted.push(format!(
                     "{}: exposure plan {} is missing, inactive, or no longer belongs to its activated target and project",
                     project.name, activated.exposureplan_guid
@@ -580,9 +591,18 @@ fn build(
                 ));
                 continue;
             }
-            let Some(target) =
-                read_target(connection, &activated.target_guid.to_string(), rotator)?
-            else {
+            let target = match read_target(connection, &activated.target_guid.to_string(), rotator)
+            {
+                Ok(target) => target,
+                Err(error) => {
+                    built.omitted.push(format!(
+                        "{}: target {} cannot be read ({error})",
+                        project.name, activated.target_guid
+                    ));
+                    continue;
+                }
+            };
+            let Some(target) = target else {
                 built.omitted.push(format!(
                     "{}: target {} is missing or has unsupported coordinates/epoch",
                     project.name, activated.target_guid
@@ -852,7 +872,7 @@ fn read_plan_row(
 ) -> rusqlite::Result<Option<PlanRow>> {
     connection
         .query_row(
-            "SELECT ep.exposure, ep.desired, ep.accepted, COALESCE(ep.enabled,1), et.filtername, et.gain, et.offset, et.bin, et.readoutmode, et.Id
+            "SELECT ep.exposure, IFNULL(ep.desired, 0), IFNULL(ep.accepted, 0), COALESCE(ep.enabled,1), et.filtername, et.gain, et.offset, et.bin, et.readoutmode, et.Id
              FROM exposureplan ep JOIN exposuretemplate et ON et.Id = ep.exposureTemplateId
              JOIN target t ON t.Id=ep.targetId JOIN project p ON p.Id=t.projectId
              WHERE ep.guid=?1 AND t.guid=?2 AND p.guid=?3 AND t.active=1 AND p.state=1",
@@ -888,7 +908,7 @@ fn read_target(
                 let name: String = row.get(0)?;
                 let ra_hours: f64 = row.get(1)?;
                 let dec: f64 = row.get(2)?;
-                let rotation: f64 = row.get(3)?;
+                let rotation: f64 = row.get::<_, Option<f64>>(3)?.unwrap_or(f64::NAN);
                 let ra_degrees = (ra_hours * 15.0).rem_euclid(360.0);
                 Ok(Target {
                     id: String::new(),
