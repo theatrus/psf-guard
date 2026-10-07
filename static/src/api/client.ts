@@ -572,16 +572,23 @@ export const apiClient = {
     return data.data;
   },
 
-  previewDirectorActivation: async (projectId: string): Promise<DirectorActivationReport> => {
+  getCollaborationActivation: async (projectId: string): Promise<import('./collaborationTypes').CollaborationActivationContext> => {
     const api = await getApi();
-    const { data } = await api.post<ApiResponse<DirectorActivationReport>>(`/director/v1/projects/${encodeURIComponent(projectId)}/activation/preview`, {});
+    const { data } = await api.get<ApiResponse<import('./collaborationTypes').CollaborationActivationContext>>(`/director/v1/projects/${encodeURIComponent(projectId)}/activation/collaboration`);
+    if (!data.data) throw new Error(data.error || 'Failed to load collaboration assignments');
+    return data.data;
+  },
+
+  previewDirectorActivation: async (projectId: string, collaboration?: import('./collaborationTypes').CollaborationVisit[]): Promise<DirectorActivationReport> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<DirectorActivationReport>>(`/director/v1/projects/${encodeURIComponent(projectId)}/activation/preview`, collaboration?.length ? { collaboration } : {});
     if (!data.data) throw new Error(data.error || 'Failed to preview activation');
     return data.data;
   },
 
-  applyDirectorActivation: async (projectId: string, preview_digest: string): Promise<DirectorActivationReport> => {
+  applyDirectorActivation: async (projectId: string, preview_digest: string, collaboration?: import('./collaborationTypes').CollaborationVisit[]): Promise<DirectorActivationReport> => {
     const api = await getApi();
-    const { data } = await api.post<ApiResponse<DirectorActivationReport>>(`/director/v1/projects/${encodeURIComponent(projectId)}/activation/apply`, { preview_digest });
+    const { data } = await api.post<ApiResponse<DirectorActivationReport>>(`/director/v1/projects/${encodeURIComponent(projectId)}/activation/apply`, { preview_digest, ...(collaboration?.length ? { collaboration } : {}) });
     if (!data.data) throw new Error(data.error || 'Failed to apply activation');
     return data.data;
   },

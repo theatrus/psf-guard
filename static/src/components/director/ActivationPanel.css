@@ -13,6 +13,8 @@
 .activation-rig-summary { margin: 0 0 4px; }
 .activation-rig-name { margin: 8px 0 2px; font-size: 14px; }
 .activation-behind { color: var(--color-warning-light); }
+.collaboration-activation { min-width: 0; margin: 0 0 12px; padding: 8px 0; border: 0; border-top: 1px solid var(--color-border-secondary); }
+.collaboration-activation label { overflow-wrap: anywhere; }
 
 .activation-taken { margin: 6px 0 0; font-size: 14px; }
 .activation-taken ul { margin: 0; padding-left: 18px; }

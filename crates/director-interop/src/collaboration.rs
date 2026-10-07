@@ -258,6 +258,9 @@ pub struct FinalizedContribution {
 }
 
 impl FinalizedContribution {
+    pub fn observing_night(&self) -> &str {
+        &self.report.night
+    }
     pub fn import_id(&self) -> Uuid {
         self.import_id
     }
@@ -293,6 +296,17 @@ pub fn finalize_contribution(
     import: &PreparedImport,
     frames: &[FrameEvidence],
 ) -> Result<FinalizedContribution, Error> {
+    finalize_contribution_for_night(import, frames, import.night())
+}
+
+/// An assignment is not a deadline. Keep its identity but report the actual
+/// observing night, including captures acquired after it was first dealt.
+pub fn finalize_contribution_for_night(
+    import: &PreparedImport,
+    frames: &[FrameEvidence],
+    observing_night: &str,
+) -> Result<FinalizedContribution, Error> {
+    validate_night(observing_night)?;
     let first = frames.first().ok_or(Error::InvalidEvidence)?;
     if frames.len() > MAX_REPORT_FRAMES {
         return Err(Error::LimitExceeded);
@@ -375,7 +389,7 @@ pub fn finalize_contribution(
     let report = ContributionReport {
         project: import.share.project_id.clone(),
         task: import.share.task_id.clone(),
-        night: import.night.clone(),
+        night: observing_night.into(),
         filter_name: filter.clone(),
         panel: first.panel_index.to_string(),
         frames: frames.len() as u32,

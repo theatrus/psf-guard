@@ -25,20 +25,38 @@ night, Moon illumination and fraction of dark hours with the Moon above the
 horizon, then **Join** a project or **Pull nightly work**. Joining gives consent
 to a remote share; it does not start a sequence. **Review import** shows the
 panel/filter visits. **Import draft** creates an ordinary inactive project
-draft. Apply refetches the remote work and refuses a changed review. Acquisition
-remains blocked until collaboration-specific admission can enforce its panels
-and remote requirements through local Director allocations.
+draft. Apply refetches the remote work and refuses a changed review.
+
+Open that project's plan workspace, add one enabled rig recipe for each assigned
+filter at its assigned exposure length, then select the rig's assignment under
+**Activation**. Preview and Apply use the assignment's exact panels, camera
+angles and frame counts, not an edited rectangular mosaic. This writes ordinary
+Target Scheduler projects and exposure plans; use the existing database sync to
+send them to NINA. Local priorities, scheduling limits and grading retries
+remain in effect. Remote quality requirements govern contribution credit, not
+permission for TS to run an exposure.
+
+An assignment is not a deadline. Target Scheduler may finish it on later nights;
+there is no extra nightly guard or forced stop. Reapplying it does not replenish
+its quota. Activating reviewed newer work supersedes the old assignment, reuses
+unchanged targets, and preserves captures and grades. Its new goal starts above
+the accepted count when grading is enabled, or acquired count otherwise.
 
 Under **Contribution reports**, select an imported visit, a database belonging
 to this rig, its remote panel, and accepted images. **Review images** checks
 GUIDs, saved files, exposures, fresh pixel solves and shared measured coverage.
-The visit's named night is explicit; candidates include a time-zone margin, so
-review which images belong to that night. **Queue finalized contribution**
+Set **Observing night** to the night the selected images were captured, even if
+the assignment was issued earlier. Candidates include a time-zone margin, so
+review which images belong to that night. Activated targets associate captures
+by stable target GUID, filter and assignment cutover time; delayed database sync
+does not change their original task or revision. **Queue finalized contribution**
 freezes the reviewed evidence. **Check in** delivers a bounded batch and keeps
 failed or partially acknowledged batches for replay. A remote rejection is
 recorded separately and never changes local image grades. Regrading or
 withdrawing previously reported frames requires review; the public protocol
-cannot replace a report with an equal or lower integration total.
+cannot replace a report with an equal or lower integration total. The same
+saved image cannot be credited under two nights. Reports from mixed assignment
+revisions require review rather than silently replacing an earlier aggregate.
 
 **Share current activity** is off by default. When enabled, incoming Director
 status forwards fresh activity and queued reports at most once per minute.
@@ -809,6 +827,8 @@ step. Chips on the sky switch the layer:
 the DSS2 colour plates N.I.N.A. starts from, and the narrowband surveys
 (Finkbeiner H-alpha and the Northern Sky Narrowband Survey's H-alpha, O III,
 SHO and colour layers); the **Survey** list under View holds every layer.
+The layer is how the sky is shown, not part of the framing: picking one is
+never an unsaved change, and this browser keeps it for every plan.
 On a narrow stage, such as a phone's, the chips fold behind one chip that
 names the layer on screen, so they keep clear of the sky and the scale. The rectangle is the field of the **panel rig**: the first rig
 holding the project that knows its optics is chosen for you (rigs take their
@@ -1303,7 +1323,7 @@ the DSS set for the DSS2 colour plates and the SHO set with stars for the
 online NSNS SHO layer (`stands_in_for` on the survey listing names the
 pair). A plan whose framing was saved on the online layer opens on the
 offline map; the online layer stays a click away on its chip, and a layer
-picked by hand is kept.
+picked by hand is kept in this browser and comes first.
 When the server first lists a set it decodes the smallest version of every
 tile into memory in the background, a few tens of megabytes, so the first
 wide view renders at once; and once a framing view has its own tile, the

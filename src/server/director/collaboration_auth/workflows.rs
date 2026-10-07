@@ -20,6 +20,8 @@ enum Input {
     ReportCandidates {
         import_id: Uuid,
         catalog: String,
+        #[serde(default)]
+        observing_night: Option<String>,
     },
     Configure {
         settings: Settings,
@@ -136,8 +138,20 @@ async fn execute(
     let b = binding(service.clone(), id).await?;
     match &input {
         Input::ReportInputs {} => return evidence::inputs(state, service, &b).await,
-        Input::ReportCandidates { import_id, catalog } => {
-            return evidence::candidates(state, service, &b, *import_id, catalog).await
+        Input::ReportCandidates {
+            import_id,
+            catalog,
+            observing_night,
+        } => {
+            return evidence::candidates(
+                state,
+                service,
+                &b,
+                *import_id,
+                catalog,
+                observing_night.as_deref(),
+            )
+            .await
         }
         Input::PreviewReport { selection } => {
             return evidence::review(state, service, &b, selection.clone(), None).await

@@ -36,6 +36,9 @@ const NARROW_STAGE_PX = 560;
 type DragMode = 'rectangle' | 'sky';
 const DRAG_MODE_KEY = 'psf-guard.framing.dragMode';
 const ROTATE_SKY_KEY = 'psf-guard.framing.rotateSky';
+/** The survey layer last picked in this browser: how the sky is shown, not
+ *  part of the framing. */
+const SURVEY_KEY = 'psf-guard.framing.survey';
 const MARK_KEYS = { objects: 'psf-guard.framing.marks.objects', bodies: 'psf-guard.framing.marks.bodies', solar: 'psf-guard.framing.marks.solar' } as const;
 const SHOWN_CATALOGS_KEY = 'psf-guard.framing.marks.catalogs';
 /** The catalog families a mark can come from, by the letters a designation
@@ -72,6 +75,9 @@ const MARKS_TIME_BUCKET_MS = 10 * 60 * 1000;
 const SOLAR_SYSTEM_LABEL: Record<string, string> = { sun: 'Sun', moon: 'Moon' };
 function remembered<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
   try { const value = window.localStorage.getItem(key); return allowed.includes(value as T) ? (value as T) : fallback; } catch { return fallback; }
+}
+function rememberedSurvey(): string | null {
+  try { return window.localStorage.getItem(SURVEY_KEY); } catch { return null; }
 }
 function remember(key: string, value: string) {
   try { window.localStorage.setItem(key, value); } catch { /* a private window or blocked storage keeps the default */ }
@@ -179,19 +185,29 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
       setBaseline(null);
     }
   }, [draft.data, seed, started]);
-  // A fresh framing starts on the offline DSS map when the server has one,
-  // and a saved survey gives way to the offline map that stands in for it.
-  // The list may land after the draft did; a layer picked by hand stays.
+  // The layer last picked in this browser comes first. Else a fresh framing
+  // starts on the offline DSS map when the server has one, and a saved
+  // survey gives way to the offline map that stands in for it. The list may
+  // land after the draft did; a layer picked by hand stays.
   const surveyChosen = useRef(false);
   useEffect(() => {
     if (!surveys.data || surveyChosen.current) return;
     adjust(current => {
       if (!current) return current;
-      const wanted = current.surveyId === DEFAULT_SURVEY && !draft.data?.draft ? defaultSurveyId(surveys.data, DEFAULT_SURVEY) : current.surveyId;
+      const picked = rememberedSurvey();
+      const wanted = picked && surveys.data!.some(entry => entry.id === picked) ? picked
+        : current.surveyId === DEFAULT_SURVEY && !draft.data?.draft ? defaultSurveyId(surveys.data, DEFAULT_SURVEY) : current.surveyId;
       const preferred = preferredSurveyId(wanted, surveys.data, DEFAULT_SURVEY);
       return preferred === current.surveyId ? current : { ...current, surveyId: preferred };
     });
   }, [surveys.data, draft.data, state?.surveyId, adjust]);
+  // A layer picked by hand is kept in this browser for every plan; the
+  // framing's next save carries it along, but it is never an edit.
+  const chooseSurvey = (id: string) => {
+    surveyChosen.current = true;
+    remember(SURVEY_KEY, id);
+    adjust(current => current && { ...current, surveyId: id });
+  };
   const rigList = useMemo(() => rigs.data ?? [], [rigs.data]);
   // A rig framed on a center of its own is timed where the view has it,
   // saved or not, so the visibility chart follows the drag.
@@ -270,7 +286,8 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   };
   const savedState = draft.data?.draft ? stateFromDraft(draft.data.draft) : null;
   // The name is saved trimmed, so a trailing space is no difference.
-  const planFields = (s: FramingState) => JSON.stringify([s.targetName.trim(), s.center, s.positionAngle, s.mosaic, s.panelRigId, s.panel, s.shownRigIds, s.surveyId, s.rigFramings]);
+  // The survey layer is how the sky is shown, so it is no difference.
+  const planFields = (s: FramingState) => JSON.stringify([s.targetName.trim(), s.center, s.positionAngle, s.mosaic, s.panelRigId, s.panel, s.shownRigIds, s.rigFramings]);
   const differsFromSaved = !!state && !!savedState && planFields(state) !== planFields(savedState);
   // The stage takes the shape of its element, so the sky fills whatever
   // width and height the window gives it. The element is held in state as
@@ -801,7 +818,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
           {narrow && <button type="button" className="framing-layers-chip" aria-expanded={layersOpen} aria-label="Survey layers" title="Survey layers" onClick={() => setLayersOpen(!layersOpen)}>
             <Layers size={14} aria-hidden="true" /><span>{layerLabel ?? 'Layers'}</span></button>}
           {(!narrow || layersOpen) && <div className="framing-stage-chips" role="group" aria-label="Survey layers">
-            {chips.map(({ survey: entry, label }) => <button key={entry.id} type="button" aria-pressed={entry.id === state.surveyId} title={`${entry.name}: ${entry.bandpass}`} onClick={() => { surveyChosen.current = true; setLayersOpen(false); update({ surveyId: entry.id }); }}>{label}</button>)}
+            {chips.map(({ survey: entry, label }) => <button key={entry.id} type="button" aria-pressed={entry.id === state.surveyId} title={`${entry.name}: ${entry.bandpass}`} onClick={() => { setLayersOpen(false); chooseSurvey(entry.id); }}>{label}</button>)}
           </div>}
         </div>
       </div>
@@ -896,7 +913,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         <legend>View</legend>
         <div className="framing-grid">
           <label>Survey
-            <select aria-label="Survey" value={state.surveyId} onChange={event => { surveyChosen.current = true; update({ surveyId: event.target.value }); }}>
+            <select aria-label="Survey" value={state.surveyId} onChange={event => chooseSurvey(event.target.value)}>
               {(surveys.data ?? []).map(entry => <option key={entry.id} value={entry.id}>{entry.name}{entry.kind === 'narrowband' ? ' (narrowband)' : ''}</option>)}
             </select>
           </label>
