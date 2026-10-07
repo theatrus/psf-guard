@@ -9,6 +9,8 @@ import type { DirectorActivationAction, DirectorActivationChange, DirectorActiva
 import { describeFailure, useDrafts } from './pageDraftsState';
 import { useActivationState } from './activationState';
 import './ActivationPanel.css';
+import CollaborationActivation from './CollaborationActivation';
+import type { CollaborationVisit } from '../../api/collaborationTypes';
 
 const message = (error: unknown) => isAxiosError(error) ? error.response?.data?.error || error.message
   : error instanceof Error ? error.message : 'Activation request failed';
@@ -112,6 +114,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   const client = useQueryClient();
   const { last, planRevision, behind, behindText, matches } = useActivationState(projectId);
   const [report, setReport] = useState<DirectorActivationReport | null>(null);
+  const [visits, setVisits] = useState<CollaborationVisit[]>([]);
   const busy = useRef(false);
   // Activation writes the saved plan, so edits still in the editor are saved
   // first; otherwise the rig databases would get the plan as it was before.
@@ -120,14 +123,14 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
     mutationFn: async () => {
       const failed = drafts ? await drafts.saveAll() : null;
       if (failed) throw new Error(`${describeFailure(failed)} Fix it, then preview again.`);
-      return apiClient.previewDirectorActivation(projectId);
+      return apiClient.previewDirectorActivation(projectId, visits);
     },
     onSuccess: setReport,
   });
   const apply = useMutation({
     retry: false,
-    mutationFn: () => { if (!report) throw new Error('Preview first'); return apiClient.applyDirectorActivation(projectId, report.preview_digest); },
-    onSuccess: applied => { setReport(applied); for (const key of [['directorActivation', projectId], ['directorActivationCheck', projectId], ['db'], ['directorCatalog'], ['directorPlans']]) void client.invalidateQueries({ queryKey: key }); },
+    mutationFn: () => { if (!report) throw new Error('Preview first'); return apiClient.applyDirectorActivation(projectId, report.preview_digest, visits); },
+    onSuccess: applied => { setReport(applied); for (const key of [['directorActivation', projectId], ['directorActivationCheck', projectId], ['collaborationActivation', projectId], ['db'], ['directorCatalog'], ['directorPlans']]) void client.invalidateQueries({ queryKey: key }); },
     onError: error => { if (httpStatus(error) === 409) setReport(null); },
   });
   const [pushed, setPushed] = useState<DirectorActivationPushReport | null>(null);
@@ -142,6 +145,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   const pending = preview.isPending || apply.isPending || push.isPending;
   const error = preview.error ?? apply.error ?? push.error;
   return <section className="activation" aria-label="Activation">
+    <CollaborationActivation projectId={projectId} value={visits} disabled={pending || !canWrite} onChange={next => { setVisits(next); setReport(null); }} />
     {last.data && <p className="director-muted">Last activated {new Date(last.data.applied_at_ms).toLocaleString()} · {last.data.rigs.length} rig{last.data.rigs.length === 1 ? '' : 's'}</p>}
     {last.data && behind.length > 0 && <p className="activation-behind" role="note">{behindText}</p>}
     {last.data && behind.length === 0 && !unsavedPlan && planRevision !== undefined && <p className="director-muted">Rigs are up to date</p>}

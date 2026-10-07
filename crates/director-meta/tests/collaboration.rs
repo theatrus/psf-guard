@@ -93,7 +93,12 @@ fn preview_is_read_only_and_apply_keeps_exact_panels_in_an_inactive_project_draf
     assert_eq!(draft.objectives[0].bandpass_id, "oiii");
     assert_eq!(draft.objectives[0].goal, Goal::Frames { value: 11 });
     assert!(draft.contributions.is_empty());
-    assert!(s.framing_draft(p.project_id()).unwrap().is_none());
+    let framing = s.framing_draft(p.project_id()).unwrap().unwrap();
+    assert!((framing.center.ra_degrees - 10.6847).abs() < 1e-6);
+    assert_eq!(
+        framing.mosaic,
+        psf_guard_director_core::framing::Mosaic::SINGLE
+    );
     assert!(s.collaboration_requires_admission(p.project_id()).unwrap());
     assert!(s.activation(p.project_id()).unwrap().is_none());
     drop(s);
@@ -261,6 +266,114 @@ fn original_assignment_survives_updates_and_report_replay_survives_backup_and_re
         1
     );
     assert!(copy.pending_collaboration_reports(&source(), 201).is_err());
+}
+
+#[test]
+fn later_nights_have_independent_report_keys_and_cannot_recredit_the_same_image() {
+    let (dir, mut s, rig) = store();
+    let p = import();
+    apply(&mut s, &p, rig);
+    let original = report(&mut s, &p, &[1]);
+    let later = finalize_contribution_for_night(&p, &[frame(&p, 2)], "2026-10-12").unwrap();
+    let queued = s.queue_collaboration_report(&later, 3000).unwrap();
+    assert_eq!(queued.payload["night"], "2026-10-12");
+    assert_eq!(queued.payload["task"], p.share().task_id);
+    let duplicate = finalize_contribution_for_night(&p, &[frame(&p, 1)], "2026-10-12").unwrap();
+    assert!(matches!(
+        s.queue_collaboration_report(&duplicate, 3000),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(
+        s.pending_collaboration_reports(&source(), 200)
+            .unwrap()
+            .len(),
+        2
+    );
+    let extended =
+        finalize_contribution_for_night(&p, &[frame(&p, 2), frame(&p, 3)], "2026-10-12").unwrap();
+    let extension = s.queue_collaboration_report(&extended, 4000).unwrap();
+    assert_eq!(
+        s.pending_collaboration_reports(&source(), 200)
+            .unwrap()
+            .iter()
+            .map(|r| r.id)
+            .collect::<Vec<_>>(),
+        vec![original.id, queued.id]
+    );
+    let path = dir.path().join("meta.sqlite");
+    drop(s);
+    let mut reopened = MetaStore::open(&path).unwrap();
+    assert_eq!(
+        reopened
+            .queue_collaboration_report(&later, 5000)
+            .unwrap()
+            .id,
+        queued.id
+    );
+    let pending = reopened
+        .pending_collaboration_reports(&source(), 200)
+        .unwrap();
+    let response = serde_json::to_vec(&json!({"recorded":[reply(1,true),reply(2,true)]})).unwrap();
+    reopened
+        .acknowledge_collaboration_reports(
+            &source(),
+            &pending.iter().map(|r| r.id).collect::<Vec<_>>(),
+            &response,
+            6000,
+        )
+        .unwrap();
+    assert_eq!(
+        reopened
+            .pending_collaboration_reports(&source(), 200)
+            .unwrap()[0]
+            .id,
+        extension.id
+    );
+}
+
+#[test]
+fn delayed_credit_survives_a_retile_but_different_snapshots_cannot_replace_one_wire_key() {
+    let (_, mut s, rig) = store();
+    let p = import();
+    apply(&mut s, &p, rig);
+    let mut v = wire();
+    v.as_object_mut().unwrap().remove("task");
+    v["tasks"][0]["version"] = json!(3);
+    v["tasks"][0]["cells"][0]["ra"] = json!(7.7);
+    let retiled = prepared(&v);
+    apply(&mut s, &retiled, rig);
+    let late = finalize_contribution_for_night(&p, &[frame(&p, 1)], "2026-10-12").unwrap();
+    let old = s.queue_collaboration_report(&late, 3000).unwrap();
+    assert_eq!(late.source_digest(), p.digest());
+    assert_eq!(
+        s.collaboration_report(old.id).unwrap().unwrap().payload["night"],
+        "2026-10-12"
+    );
+
+    v["tasks"][0]["assignedNight"] = json!("2026-10-08");
+    let next = prepare_import(
+        &serde_json::to_vec(&v).unwrap(),
+        &source(),
+        "2026-10-08",
+        TASK,
+    )
+    .unwrap();
+    apply(&mut s, &next, rig);
+    let same_key =
+        finalize_contribution_for_night(&next, &[frame(&next, 2)], "2026-10-12").unwrap();
+    assert!(matches!(
+        s.queue_collaboration_report(&same_key, 4000),
+        Err(Error::Conflict)
+    ));
+    let next_night =
+        finalize_contribution_for_night(&next, &[frame(&next, 3)], "2026-10-13").unwrap();
+    s.queue_collaboration_report(&next_night, 4000).unwrap();
+    assert_eq!(
+        s.pending_collaboration_reports(&source(), 200)
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[test]

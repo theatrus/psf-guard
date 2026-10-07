@@ -25,20 +25,38 @@ night, Moon illumination and fraction of dark hours with the Moon above the
 horizon, then **Join** a project or **Pull nightly work**. Joining gives consent
 to a remote share; it does not start a sequence. **Review import** shows the
 panel/filter visits. **Import draft** creates an ordinary inactive project
-draft. Apply refetches the remote work and refuses a changed review. Acquisition
-remains blocked until collaboration-specific admission can enforce its panels
-and remote requirements through local Director allocations.
+draft. Apply refetches the remote work and refuses a changed review.
+
+Open that project's plan workspace, add one enabled rig recipe for each assigned
+filter at its assigned exposure length, then select the rig's assignment under
+**Activation**. Preview and Apply use the assignment's exact panels, camera
+angles and frame counts, not an edited rectangular mosaic. This writes ordinary
+Target Scheduler projects and exposure plans; use the existing database sync to
+send them to NINA. Local priorities, scheduling limits and grading retries
+remain in effect. Remote quality requirements govern contribution credit, not
+permission for TS to run an exposure.
+
+An assignment is not a deadline. Target Scheduler may finish it on later nights;
+there is no extra nightly guard or forced stop. Reapplying it does not replenish
+its quota. Activating reviewed newer work supersedes the old assignment, reuses
+unchanged targets, and preserves captures and grades. Its new goal starts above
+the accepted count when grading is enabled, or acquired count otherwise.
 
 Under **Contribution reports**, select an imported visit, a database belonging
 to this rig, its remote panel, and accepted images. **Review images** checks
 GUIDs, saved files, exposures, fresh pixel solves and shared measured coverage.
-The visit's named night is explicit; candidates include a time-zone margin, so
-review which images belong to that night. **Queue finalized contribution**
+Set **Observing night** to the night the selected images were captured, even if
+the assignment was issued earlier. Candidates include a time-zone margin, so
+review which images belong to that night. Activated targets associate captures
+by stable target GUID, filter and assignment cutover time; delayed database sync
+does not change their original task or revision. **Queue finalized contribution**
 freezes the reviewed evidence. **Check in** delivers a bounded batch and keeps
 failed or partially acknowledged batches for replay. A remote rejection is
 recorded separately and never changes local image grades. Regrading or
 withdrawing previously reported frames requires review; the public protocol
-cannot replace a report with an equal or lower integration total.
+cannot replace a report with an equal or lower integration total. The same
+saved image cannot be credited under two nights. Reports from mixed assignment
+revisions require review rather than silently replacing an earlier aggregate.
 
 **Share current activity** is off by default. When enabled, incoming Director
 status forwards fresh activity and queued reports at most once per minute.

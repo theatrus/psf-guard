@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -67,12 +67,13 @@ describe('Collaboration work transfer', () => {
     expect(screen.queryByRole('button', { name: 'Queue finalized contribution' })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Review 1 images' }));
     await screen.findByRole('button', { name: 'Queue finalized contribution' });
-    await userEvent.selectOptions(screen.getByLabelText('Remote panel'), '1');
+    fireEvent.change(screen.getByLabelText('Observing night'),{target:{value:'2026-10-12'}});
     expect(screen.queryByRole('button', { name: 'Queue finalized contribution' })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByLabelText('Select saved.fits'));
+    await waitFor(()=>expect(requests.at(-1)).toEqual({operation:'report_candidates',import_id:'import',catalog:'rig-db',observing_night:'2026-10-12'}));
+    await userEvent.click(await screen.findByLabelText('Select saved.fits'));
     await userEvent.click(screen.getByRole('button', { name: 'Review 1 images' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Queue finalized contribution' }));
-    await waitFor(() => expect(requests.at(-1)).toEqual({ operation: 'queue_report', selection: { import_id: 'import', catalog: 'rig-db', panel: 1, image_guids: ['image-guid'] }, review_digest: 'evidence-digest' }));
+    await waitFor(() => expect(requests.at(-1)).toEqual({ operation: 'queue_report', selection: { import_id: 'import', catalog: 'rig-db', panel: 0, image_guids: ['image-guid'], observing_night: '2026-10-12' }, review_digest: 'evidence-digest' }));
     expect(await screen.findByText('Contribution queued for check-in')).toBeVisible();
   });
 });

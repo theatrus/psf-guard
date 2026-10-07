@@ -107,6 +107,15 @@ pub(super) struct Report {
 #[serde(deny_unknown_fields)]
 pub(super) struct Apply {
     preview_digest: String,
+    #[serde(default)]
+    collaboration: Vec<collaboration_activation::Visit>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Preview {
+    #[serde(default)]
+    collaboration: Vec<collaboration_activation::Visit>,
 }
 
 #[derive(Serialize)]
@@ -162,8 +171,10 @@ pub(super) async fn last(
 pub(super) async fn preview(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
+    request: Option<Json<Preview>>,
 ) -> Result<Json<ApiResponse<Report>>, ActivationError> {
-    execute(state, id, None, false).await
+    let request = request.map(|Json(request)| request).unwrap_or_default();
+    execute(state, id, None, false, request.collaboration).await
 }
 
 /// What an activation would change, worked out on a copy of each rig
@@ -174,7 +185,7 @@ pub(super) async fn check(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<Report>>, ActivationError> {
-    execute(state, id, None, true).await
+    execute(state, id, None, true, vec![]).await
 }
 
 pub(super) async fn apply(
@@ -190,7 +201,14 @@ pub(super) async fn apply(
     {
         return Err(Error::Invalid.into());
     }
-    execute(state, id, Some(request.preview_digest), false).await
+    execute(
+        state,
+        id,
+        Some(request.preview_digest),
+        false,
+        request.collaboration,
+    )
+    .await
 }
 
 fn now_ms() -> u64 {
@@ -266,6 +284,7 @@ async fn execute(
     id: Uuid,
     expected: Option<String>,
     on_copy: bool,
+    visits: Vec<collaboration_activation::Visit>,
 ) -> Result<Json<ApiResponse<Report>>, ActivationError> {
     // A preview only reads; applying writes every participating rig database.
     let service = if expected.is_some() {
@@ -292,11 +311,18 @@ async fn execute(
         let _catalog_permit = catalog_permit;
         let applying = expected.is_some();
         let project = store.project(id)?.ok_or(Error::Missing)?;
-        if store.collaboration_requires_admission(id)? {
+        let is_collaboration = store.collaboration_requires_admission(id)?;
+        let visits = if is_collaboration && on_copy && visits.is_empty() {
+            collaboration_activation::current(store, id, service.instance_id, &catalogs)?
+        } else { visits };
+        if is_collaboration && visits.is_empty() {
             return Err(ActivationError::NotReady(
-                "This collaboration import is an inactive draft. Remote constraints, exact panels and a local nightly budget must be admitted before acquisition.",
+                "This collaboration import is an inactive draft. Select its assignments in Activation first.",
             ));
         }
+        if !is_collaboration && !visits.is_empty() { return Err(Error::Invalid.into()); }
+        if visits.len() > 32 { return Err(Error::Invalid.into()); }
+        let admitted = collaboration_activation::admit(store, id, &visits)?;
         let framing = store
             .framing_draft(id)?
             .ok_or(ActivationError::NotReady("Save a framing first."))?;
@@ -366,6 +392,12 @@ async fn execute(
             return Err(ActivationError::NotReady(
                 "Tick at least one rig in the plan first.",
             ));
+        }
+        if is_collaboration && (by_rig.len() != admitted.len() || by_rig.keys().any(|rig| !admitted.contains_key(rig))) {
+            return Err(ActivationError::NotReady("Select one collaboration assignment for every enabled rig, and no other rigs."));
+        }
+        for (rig, contributions) in &by_rig {
+            if let Some(a) = admitted.get(rig) { a.validate_recipes(contributions)?; }
         }
         // Every objective should have some rig on every shared panel; say
         // where not. A rig framed on its own covers its own grid.
@@ -469,7 +501,11 @@ async fn execute(
                 carried.extend(previous_rig(*rig_id));
                 continue;
             };
-            let rig_panels = if layout.own {
+            let assignment = admitted.get(rig_id);
+            let rig_panels = if let Some(assignment) = assignment {
+                warnings.push("Uses the assignment's exact panels, exposures and frame goals, not the editable framing grid. Target Scheduler runs normally, including later nights and grading retries; there is no nightly deadline. Reports retain the task and use the actual observing night. Remote quality and Moon requirements determine contribution credit, not TS scheduling.".into());
+                assignment.panels.clone()
+            } else if layout.own {
                 // A separate framing sized from the rig's own field is only
                 // laid out here; one the core refuses (too wide a mosaic)
                 // is this rig's warning, not a refused request.
@@ -592,6 +628,7 @@ async fn execute(
                         instance: service.instance_id,
                         now,
                         scheduling: &scheduling,
+                        collaboration: assignment,
                     },
                 );
                 match outcome {
@@ -741,6 +778,7 @@ async fn execute(
         }
         let bytes = serde_json::to_vec(&(
             "activation-v2",
+            &visits,
             id,
             framing.revision,
             plan.revision,
@@ -942,7 +980,7 @@ fn open_rig_for(path: &str, on_copy: bool) -> Result<Connection, String> {
 }
 
 /// Every table an activation reads or writes in a rig database.
-const PLANNING_TABLES: [&str; 9] = [
+const PLANNING_TABLES: [&str; 10] = [
     "project",
     "target",
     "exposuretemplate",
@@ -952,6 +990,7 @@ const PLANNING_TABLES: [&str; 9] = [
     "psf_guard_director_project",
     "psf_guard_director_target",
     "psf_guard_director_plan",
+    collaboration_activation::TABLE,
 ];
 
 /// A rig database's planning tables, schema and rows, copied into memory in
@@ -1200,6 +1239,7 @@ struct Inputs<'a> {
     now: u64,
     /// Target Scheduler scheduling limits for this rig and project.
     scheduling: &'a ResolvedScheduling,
+    collaboration: Option<&'a collaboration_activation::Admitted>,
 }
 
 struct Outcome {
@@ -1210,7 +1250,7 @@ struct Outcome {
 
 /// A rig that cannot take the plan carries the reason the operator sees;
 /// anything else is a real failure.
-enum RigError {
+pub(super) enum RigError {
     Skip(String),
     Failed(Error),
 }
@@ -1230,7 +1270,7 @@ impl From<Error> for RigError {
     }
 }
 
-fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+pub(super) fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
     let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let names = statement
         .query_map([], |row| row.get::<_, String>(1))?
@@ -1419,10 +1459,19 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
             }
         },
     };
+    let mut scheduling = inputs.scheduling.clone();
+    if let Some(minimum) = inputs
+        .collaboration
+        .and_then(|a| a.import.plan.share().requirements.as_ref())
+        .and_then(|r| r.min_altitude_degrees)
+    {
+        scheduling.values.minimum_altitude_degrees =
+            scheduling.values.minimum_altitude_degrees.max(minimum);
+    }
     write_scheduling(
         tx,
         &project_guid,
-        inputs.scheduling,
+        &scheduling,
         fresh_row,
         &project_name,
         &mut changes,
@@ -1440,6 +1489,31 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
         ],
     )?;
     let (project_row_id, _) = project_row(tx, &project_guid)?.ok_or(Error::Internal)?;
+    if let Some(assignment) = inputs.collaboration {
+        let new_assignment = assignment.prepare(tx, &project_guid, inputs.now)?;
+        let minimum = assignment
+            .import
+            .plan
+            .share()
+            .requirements
+            .as_ref()
+            .and_then(|r| r.min_altitude_degrees)
+            .unwrap_or(0.0);
+        let mut limits_changed = false;
+        if minimum > 0.0 {
+            if !has_column(tx, "project", "minimumaltitude")? {
+                return Err(RigError::Skip(
+                    "This Target Scheduler schema cannot hold collaboration limits.".into(),
+                ));
+            }
+            limits_changed = tx.execute(
+            "UPDATE project SET minimumaltitude=?2 WHERE guid=?1 AND COALESCE(minimumaltitude,0)<?2",
+            params![project_guid, minimum],
+            )? > 0;
+        }
+        changes.push(Change { kind:"project",action:if new_assignment || limits_changed {"update"} else {"unchanged"},name:project_name.clone(),detail:format!("Collaboration {} assigned {}, revision {}; ordinary TS scheduling, no nightly deadline",
+            assignment.import.plan.share().task_id,assignment.import.plan.night(),assignment.import.plan.share().version) });
+    }
     // Rows added to an existing project go under that project's N.I.N.A.
     // profile, not the file's most common one.
     let profile_id: String = tx
@@ -1475,14 +1549,20 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
         .iter()
         .filter(|p| owned_panels.contains(p.footprint.id.as_str()))
     {
-        let name = if mosaic {
+        let name = if let Some(a) = inputs.collaboration {
+            let index = a.panel_index(&panel.footprint.id).ok_or(Error::Invalid)?;
+            format!("{target_base} panel {index}")
+        } else if mosaic {
             format!("{target_base} {}", panel.footprint.id)
         } else {
             target_base.clone()
         };
         let ra_hours = panel.footprint.center.ra_degrees / 15.0;
         let dec = panel.footprint.center.dec_degrees;
-        let rotation = inputs.position_angle_degrees;
+        let rotation = inputs
+            .collaboration
+            .and_then(|a| a.rotation(&panel.footprint.id))
+            .unwrap_or(inputs.position_angle_degrees);
         let detail = format!(
             "{} {}, angle {rotation:.1}°",
             format_ra(ra_hours),
@@ -1587,7 +1667,11 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
             // Nothing owned yet: a target already in this project (imported
             // from Target Scheduler, or made by hand) is taken over rather
             // than doubled.
-            None => match adoptable_target(tx, project_row_id, &name, ra_hours, dec, !mosaic)? {
+            None => match if inputs.collaboration.is_some() {
+                None
+            } else {
+                adoptable_target(tx, project_row_id, &name, ra_hours, dec, !mosaic)?
+            } {
                 Some(found) => {
                     // Director writes J2000 coordinates and plans the target,
                     // so a JNOW or switched-off target is put right too; the
@@ -1703,6 +1787,13 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
         for (panel_id, target_guid, target_name) in targets.iter().filter(|(panel_id, _, _)| {
             contribution.panel_ids.is_empty() || contribution.panel_ids.contains(panel_id)
         }) {
+            let frames = match inputs.collaboration {
+                Some(a) => a
+                    .frames(panel_id, &contribution.template.filter_name)
+                    .map(|(_, frames)| frames)
+                    .ok_or(Error::Invalid)?,
+                None => frames,
+            };
             let _ = panel_id;
             let target_row: i64 = tx.query_row(
                 "SELECT Id FROM target WHERE guid=?1",
@@ -1713,10 +1804,6 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                 "{target_name} · {} · {} s",
                 template.name, contribution.exposure_seconds
             );
-            let detail = format!(
-                "{frames} frames, template #{} {}",
-                template.id, template.name
-            );
             let owned: Option<String> = tx
                 .query_row(
                     "SELECT exposureplan_guid FROM psf_guard_director_plan WHERE target_guid=?1 AND contribution_id=?2",
@@ -1724,6 +1811,20 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                     |row| row.get(0),
                 )
                 .optional()?;
+            let owned = match (owned, inputs.collaboration) {
+                (None, Some(a)) => {
+                    a.plan_for(tx, target_guid, &contribution.template.filter_name)?
+                }
+                (owned, _) => owned,
+            };
+            let frames = match inputs.collaboration {
+                Some(a) => a.frame_goal(tx, owned.as_deref(), frames)?,
+                None => frames,
+            };
+            let detail = format!(
+                "{frames} frames, template #{} {}",
+                template.id, template.name
+            );
             let plan_guid = match owned {
                 Some(guid) => {
                     // The length the row runs at: its own, or its
@@ -1863,6 +1964,17 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                         guid
                     }
                 },
+            };
+            let frames = match inputs.collaboration {
+                Some(a) => a.record(
+                    tx,
+                    &plan_guid,
+                    target_guid,
+                    panel_id,
+                    contribution,
+                    inputs.now,
+                )?,
+                None => frames,
             };
             tx.execute(
                 "INSERT INTO psf_guard_director_plan(exposureplan_guid,target_guid,contribution_id,objective_id,bandpass_id,purpose,required_frames,plan_revision)

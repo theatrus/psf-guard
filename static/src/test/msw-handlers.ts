@@ -1,5 +1,7 @@
 import { http, HttpResponse } from 'msw';
 
+const emptyCollaborationActivation = http.get('/api/director/v1/projects/:id/activation/collaboration', () => HttpResponse.json({ success: true, data: { imports: [] }, error: null }));
+
 // Default empty responses for handlers
 const emptySequenceAnalysis = {
   success: true,
@@ -68,6 +70,7 @@ const idleWbppRun = {
 };
 
 export const handlers = [
+  emptyCollaborationActivation,
   // A whole-set build asks for one build per channel. A test that mocks only
   // the single build gets that build back as the one channel.
   http.post('/api/db/:dbId/projects/:projectId/stack-previews/channels', async ({ request, params }) => {

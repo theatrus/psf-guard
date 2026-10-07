@@ -1,6 +1,7 @@
 //! Catalog-derived contribution evidence; the browser supplies identities only.
 use super::*;
 use crate::astrometry::{wcs_from_response, AstrometrySolutionResponse};
+use crate::server::director::collaboration_activation::{associations, matching};
 use collaboration::{FrameEvidence, MeasuredFootprint, PreparedImport};
 use std::collections::BTreeSet;
 
@@ -11,6 +12,10 @@ pub(super) struct Selection {
     pub catalog: String,
     pub panel: u32,
     pub image_guids: Vec<Uuid>,
+    #[serde(default)]
+    pub source_digest: Option<String>,
+    #[serde(default)]
+    pub observing_night: Option<String>,
 }
 fn held() -> Failure {
     Failure(StatusCode::UNPROCESSABLE_ENTITY,"Report held: select accepted, saved images with stable GUIDs, matching exposures and fresh pixel solves; required calibration evidence must be present")
@@ -46,6 +51,7 @@ pub(super) async fn candidates(
     b: &ConnectionBinding,
     import_id: Uuid,
     slug: &str,
+    observing_night: Option<&str>,
 ) -> Result<Value, Failure> {
     let catalog = state.get_database(slug).ok_or(Error::Missing)?;
     let path = catalog.database_path.clone();
@@ -67,22 +73,42 @@ pub(super) async fn candidates(
             Ok(import.plan)
         })
         .await?;
+    let (start, end) = night_bounds(observing_night.unwrap_or(import.night()))?;
     blocking(move||{
         let conn=crate::server::database_context::open_scheduler_connection_with_flags(&catalog.database_path,rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|_|held())?;
         conn.busy_timeout(Duration::from_secs(2)).map_err(|_|held())?;
-        let date=chrono::NaiveDate::parse_from_str(import.night(),"%Y-%m-%d").map_err(|_|held())?.and_hms_opt(0,0,0).ok_or_else(held)?.and_utc().timestamp();
-        let mut statement=conn.prepare("SELECT ai.guid,ai.filtername,ai.acquireddate,ai.metadata,t.name FROM acquiredimage ai JOIN target t ON t.Id=ai.targetId WHERE ai.gradingStatus=1 AND ai.guid IS NOT NULL AND ai.acquireddate>=?1 AND ai.acquireddate<?2 ORDER BY ai.acquireddate,ai.Id LIMIT 4097").map_err(|_|held())?;
+        let links=associations(&conn,import_id).map_err(|_|held())?;
+        let sql=if links.is_empty() { "SELECT ai.guid,ai.filtername,ai.acquireddate,ai.metadata,t.name,t.guid FROM acquiredimage ai JOIN target t ON t.Id=ai.targetId WHERE ai.gradingStatus=1 AND ai.guid IS NOT NULL AND ai.acquireddate>=?1 AND ai.acquireddate<?2 ORDER BY ai.acquireddate,ai.Id" }
+            else { "SELECT ai.guid,ai.filtername,ai.acquireddate,ai.metadata,t.name,t.guid FROM acquiredimage ai JOIN target t ON t.Id=ai.targetId WHERE ai.gradingStatus=1 AND ai.guid IS NOT NULL AND ai.acquireddate>=?1 AND ai.acquireddate<?2 AND EXISTS(SELECT 1 FROM psf_guard_collaboration_plan p WHERE p.import_id=?3 AND p.target_guid=t.guid COLLATE NOCASE) ORDER BY ai.acquireddate,ai.Id" };
+        let mut statement=conn.prepare(sql).map_err(|_|held())?;
         let mut result=Vec::new();
-        for row in statement.query_map([date-12*3600,date+60*3600],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?))).map_err(|_|held())? {
-            let (guid,filter,time,metadata,target)=row.map_err(|_|held())?;
+        let mut args=vec![rusqlite::types::Value::Integer(start),rusqlite::types::Value::Integer(end)];
+        if !links.is_empty() { args.push(import_id.to_string().into()); }
+        for row in statement.query_map(rusqlite::params_from_iter(args),|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,Option<String>>(5)?))).map_err(|_|held())? {
+            let (guid,filter,time,metadata,target,target_guid)=row.map_err(|_|held())?;
+            let matches=matching(&links,target_guid.as_deref().unwrap_or(""),&filter,time);
+            if !links.is_empty() && matches.len()!=1 {continue;}
             let Ok(guid)=Uuid::parse_str(&guid) else {continue;};
             let metadata:Value=serde_json::from_str(&metadata).unwrap_or(Value::Null);
             let name=metadata["FileName"].as_str().and_then(|s|std::path::Path::new(s).file_name()).and_then(|s|s.to_str()).unwrap_or("Unknown file");
-            result.push(json!({"guid":guid,"filter":filter,"captured_at":time,"target":target,"file":name}));
+            result.push(json!({"guid":guid,"filter":filter,"captured_at":time,"target":target,"file":name,
+                "panel":matches.first().map(|a|a.panel),"source_digest":matches.first().map(|a|a.source_digest.as_str())}));
+            if result.len()>4096 {return Err(Failure(StatusCode::UNPROCESSABLE_ENTITY,"Too many candidate images; narrow this catalog before preparing a report"));}
         }
-        if result.len()>4096 {return Err(Failure(StatusCode::UNPROCESSABLE_ENTITY,"Too many candidate images; narrow this catalog before preparing a report"));}
         Ok(json!({"images":result}))
     }).await?
+}
+fn night_bounds(night: &str) -> Result<(i64, i64), Failure> {
+    psf_guard_director_interop::astrocollab::validate_night(night).map_err(|_| invalid())?;
+    let date = chrono::NaiveDate::parse_from_str(night, "%Y-%m-%d")
+        .map_err(|_| invalid())?
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(invalid)?
+        .and_utc()
+        .timestamp();
+    // Rig-local observing nights can straddle UTC dates. This is a plausibility
+    // bound, not assignment expiry; the operator reviews the actual night.
+    Ok((date - 12 * 3600, date + 60 * 3600))
 }
 pub(super) async fn review(
     state: &AppState,
@@ -108,15 +134,18 @@ pub(super) async fn review(
     let import_id = selection.import_id;
     let rig = b.rig_id;
     let source = b.source().map_err(Error::from)?;
+    let source_digest = selection.source_digest.clone();
     let import = service
         .clone()
         .query(move |s| {
             if s.catalog_rig(identity.id)?.is_none_or(|r| r.rig.id != rig) {
                 return Err(StoreError::Conflict);
             }
-            let import = s
-                .collaboration_import(import_id)?
-                .ok_or(StoreError::NotFound)?;
+            let import = match source_digest.as_deref() {
+                Some(digest) => s.collaboration_import_revision(import_id, digest)?,
+                None => s.collaboration_import(import_id)?,
+            }
+            .ok_or(StoreError::NotFound)?;
             if import.rig_id != rig || import.plan.source() != &source {
                 return Err(StoreError::Conflict);
             }
@@ -125,9 +154,14 @@ pub(super) async fn review(
         .await?;
     let (finalized, review_digest) = blocking(move || {
         let frames = frames(&catalog, &import, &selection)?;
-        let finalized =
-            collaboration::finalize_contribution(&import, &frames).map_err(|_| held())?;
-        let digest = collaboration::digest(&serde_json::to_vec(&frames).map_err(|_| held())?);
+        let night = selection
+            .observing_night
+            .as_deref()
+            .unwrap_or(import.night());
+        let finalized = collaboration::finalize_contribution_for_night(&import, &frames, night)
+            .map_err(|_| held())?;
+        let digest =
+            collaboration::digest(&serde_json::to_vec(&(night, &frames)).map_err(|_| held())?);
         Ok::<_, Failure>((finalized, digest))
     })
     .await??;
@@ -161,10 +195,11 @@ fn frames(
     conn.busy_timeout(Duration::from_secs(2))
         .map_err(|_| held())?;
     let mut rows = Vec::new();
+    let links = associations(&conn, import.import_id()).map_err(|_| held())?;
     let mut guids = selection.image_guids.clone();
     guids.sort();
     for guid in &guids {
-        let mut statement=conn.prepare("SELECT Id,gradingStatus,filtername,metadata,acquireddate FROM acquiredimage WHERE guid=?1 COLLATE NOCASE LIMIT 2").map_err(|_|held())?;
+        let mut statement=conn.prepare("SELECT ai.Id,ai.gradingStatus,ai.filtername,ai.metadata,ai.acquireddate,t.guid FROM acquiredimage ai LEFT JOIN target t ON t.Id=ai.targetId WHERE ai.guid=?1 COLLATE NOCASE LIMIT 2").map_err(|_|held())?;
         let mut matches = statement
             .query_map([guid.to_string()], |r| {
                 Ok((
@@ -173,6 +208,7 @@ fn frames(
                     r.get::<_, String>(2)?,
                     r.get::<_, String>(3)?,
                     r.get::<_, Option<i64>>(4)?,
+                    r.get::<_, Option<String>>(5)?,
                 ))
             })
             .map_err(|_| held())?;
@@ -185,7 +221,7 @@ fn frames(
     drop(conn);
     let mut solutions = Vec::new();
     let mut frames = Vec::new();
-    for (guid, (id, grade, filter, metadata, captured)) in rows {
+    for (guid, (id, grade, filter, metadata, captured, target_guid)) in rows {
         if grade != 1 {
             return Err(held());
         }
@@ -231,15 +267,30 @@ fn frames(
             .map(|v| v.value)
             .filter(|v| v.is_finite() && *v > 0.0 && *v <= 86400.0)
             .ok_or_else(held)?;
-        // The named night comes from explicit operator review, not UTC-date
-        // guessing. Reject unrelated captures while allowing time-zone offsets.
-        let date = chrono::NaiveDate::parse_from_str(import.night(), "%Y-%m-%d")
-            .map_err(|_| held())?
-            .and_hms_opt(0, 0, 0)
-            .ok_or_else(held)?
-            .and_utc()
-            .timestamp();
-        if captured.is_none_or(|time| !(date - 12 * 3600..date + 60 * 3600).contains(&time)) {
+        if !links.is_empty() {
+            let matches = matching(
+                &links,
+                target_guid.as_deref().unwrap_or(""),
+                &filter,
+                captured.ok_or_else(held)?,
+            );
+            if matches.len() != 1
+                || matches[0].source_digest != import.digest()
+                || matches[0].panel != selection.panel
+                || (exposure * 1000.0 - matches[0].exposure_ms as f64).abs() > 0.001
+            {
+                return Err(held());
+            }
+        }
+        // The actual observing night is reviewed independently of when the
+        // assignment was dealt. Do not relabel delayed captures as that night.
+        let (start, end) = night_bounds(
+            selection
+                .observing_night
+                .as_deref()
+                .unwrap_or(import.night()),
+        )?;
+        if captured.is_none_or(|time| !(start..end).contains(&time)) {
             return Err(held());
         }
         let number = |key: &str| {
@@ -407,10 +458,10 @@ mod tests {
         .unwrap();
         let db_path = dir.path().join("catalog.sqlite");
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conn.execute_batch("CREATE TABLE acquiredimage(Id INTEGER PRIMARY KEY,guid TEXT,gradingStatus INTEGER,filtername TEXT,metadata TEXT,acquireddate INTEGER)").unwrap();
+        conn.execute_batch("CREATE TABLE acquiredimage(Id INTEGER PRIMARY KEY,guid TEXT,gradingStatus INTEGER,filtername TEXT,metadata TEXT,acquireddate INTEGER,targetId INTEGER DEFAULT 1); CREATE TABLE target(Id INTEGER PRIMARY KEY,guid TEXT); INSERT INTO target VALUES(1,'11111111-1111-4111-8111-111111111111')").unwrap();
         let guid = Uuid::new_v4();
         conn.execute(
-            "INSERT INTO acquiredimage VALUES(1,?1,1,'Ha',?2,1791171000)",
+            "INSERT INTO acquiredimage(Id,guid,gradingStatus,filtername,metadata,acquireddate) VALUES(1,?1,1,'Ha',?2,1791171000)",
             rusqlite::params![
                 guid.to_string(),
                 json!({"FileName":"saved.fits","HFR":2.0}).to_string()
@@ -459,13 +510,58 @@ mod tests {
             catalog: "catalog".into(),
             panel: 0,
             image_guids: vec![guid],
+            source_digest: None,
+            observing_night: None,
         };
         let extracted = frames(&catalog, &import, &selection).unwrap();
         assert_eq!(extracted[0].exposure_ms, 300_000);
         assert_eq!(extracted[0].hfr_arcsec, Some(7.2));
         assert!(!extracted[0].calibrated);
         assert!(!extracted[0].colour);
-        conn.execute("INSERT INTO acquiredimage SELECT 2,guid,gradingStatus,filtername,metadata,acquireddate FROM acquiredimage WHERE Id=1", []).unwrap();
+        conn.execute_batch(crate::server::director::collaboration_activation::DDL)
+            .unwrap();
+        conn.execute("INSERT INTO psf_guard_collaboration_plan VALUES('plan','11111111-1111-4111-8111-111111111111',?1,?2,0,'H',300000,1791170000000,NULL,11)",
+            rusqlite::params![import.import_id().to_string(),import.digest()]).unwrap();
+        assert!(frames(&catalog, &import, &selection).is_ok());
+        conn.execute(
+            "UPDATE acquiredimage SET acquireddate=acquireddate+7*86400",
+            [],
+        )
+        .unwrap();
+        assert!(frames(&catalog, &import, &selection).is_err());
+        let late = Selection {
+            observing_night: Some("2026-10-12".into()),
+            ..selection.clone()
+        };
+        assert!(frames(&catalog, &import, &late).is_ok());
+        conn.execute(
+            "UPDATE acquiredimage SET acquireddate=acquireddate-7*86400",
+            [],
+        )
+        .unwrap();
+        let wrong_panel = Selection {
+            panel: 1,
+            ..selection.clone()
+        };
+        assert!(frames(&catalog, &import, &wrong_panel).is_err());
+        conn.execute(
+            "UPDATE psf_guard_collaboration_plan SET end_at_ms=1791171000000",
+            [],
+        )
+        .unwrap();
+        assert!(frames(&catalog, &import, &selection).is_err());
+        conn.execute(
+            "UPDATE psf_guard_collaboration_plan SET end_at_ms=1791180000000,exposure_ms=2000",
+            [],
+        )
+        .unwrap();
+        assert!(frames(&catalog, &import, &selection).is_err());
+        conn.execute(
+            "UPDATE psf_guard_collaboration_plan SET exposure_ms=300000",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO acquiredimage SELECT 2,guid,gradingStatus,filtername,metadata,acquireddate,targetId FROM acquiredimage WHERE Id=1", []).unwrap();
         assert!(frames(&catalog, &import, &selection).is_err());
         conn.execute("DELETE FROM acquiredimage WHERE Id=2", [])
             .unwrap();
