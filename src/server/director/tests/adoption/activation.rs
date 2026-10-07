@@ -1827,3 +1827,79 @@ async fn a_rig_skipped_for_one_activation_keeps_its_record() {
         1
     );
 }
+
+/// A rig database that refuses the write skips that rig with a reason; the
+/// other rigs are applied and recorded, and the refused rig keeps what the
+/// last activation knew of it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_rig_database_that_refuses_the_write_skips_only_that_rig() {
+    use std::os::unix::fs::PermissionsExt;
+    let a = activated().await;
+    let (other_rig, other_db) = add_rig(&a.f, "rig-b").await;
+    edit_plan(&a.f, a.project, |draft| {
+        let mut second = draft.contributions[0].clone();
+        second.id = Uuid::new_v4();
+        second.rig_id = other_rig;
+        draft.contributions.push(second);
+    });
+    activate_now(&a.f, a.project, "both").await;
+    edit_plan(&a.f, a.project, |draft| {
+        draft.contributions[0].exposure_seconds = 600.0
+    });
+    drop(other_db);
+    let path = a.f._dir.path().join("rig-b.sqlite");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+    let data = activate_now(&a.f, a.project, "read-only").await;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let rigs = data["rigs"].as_array().unwrap();
+    let b = rigs
+        .iter()
+        .find(|r| r["rig"]["id"] == other_rig.to_string())
+        .unwrap();
+    assert_eq!(b["applied"], false, "{b}");
+    assert!(b["warnings"].to_string().contains("Its database"), "{b}");
+    let first = rigs
+        .iter()
+        .find(|r| r["rig"]["id"] == a.rig.to_string())
+        .unwrap();
+    assert_eq!(first["applied"], true, "{first}");
+    let store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+    let record = store.activation(a.project).unwrap().unwrap();
+    assert!(
+        record.rigs.iter().any(|r| r.rig_id == other_rig),
+        "kept in the record"
+    );
+    assert!(record.rigs.iter().any(|r| r.rig_id == a.rig));
+}
+
+/// A plan stored with two contributions for one rig and objective (saved
+/// before such plans were refused) plans the work once.
+#[tokio::test]
+async fn a_duplicate_contribution_plans_the_work_once() {
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    // Written straight into the store, past the save check.
+    {
+        let store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut draft = store.plan_draft(a.project).unwrap().unwrap();
+        let mut twin = draft.contributions[0].clone();
+        twin.id = Uuid::new_v4();
+        draft.contributions.push(twin);
+        let payload = serde_json::to_string(&draft).unwrap();
+        let meta = rusqlite::Connection::open(a.f._dir.path().join("meta.sqlite")).unwrap();
+        meta.busy_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        meta.execute(
+            "UPDATE plan_draft SET payload=?2 WHERE project_id=?1",
+            rusqlite::params![a.project.to_string(), payload],
+        )
+        .unwrap();
+    }
+    activate_now(&a.f, a.project, "with a twin").await;
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE enabled=1"),
+        2,
+        "one plan per panel, not two"
+    );
+}

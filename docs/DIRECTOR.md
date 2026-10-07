@@ -972,11 +972,22 @@ meta store, so it appears under Project planning links at once.
 **Preview activation** shows, per rig database, what would be created,
 updated or left alone, names any objective and panel no rig covers, and gives
 any reason a rig is skipped: no registered database on this server, a Target
-Scheduler schema older than 22, or a database with no N.I.N.A. profile yet.
+Scheduler schema older than 22, a database with no N.I.N.A. profile yet, or
+one that cannot be opened, locked or written. Each rig database waits up to a
+minute for its write lock, as every other writer on the server does, since
+N.I.N.A. and a directory refresh can hold the file that long. A plan saved
+before duplicates were refused may hold two contributions for one rig and
+objective; the first counts.
 **Apply** carries the preview digest and is refused when the framing, plan or
-database changed in between. A rig whose plugin has not yet reported its
-camera still gets its rows; the Target Scheduler plugin can run them until
-Director acquisition arrives.
+database changed in between. The activation record is checked before any rig
+database commits, so a record too large to keep refuses the Apply with
+nothing written. Each rig database then commits on its own: one whose commit
+fails says so in its row and keeps what the last activation knew of it, and
+the rest are applied and recorded. Preview and Apply read the metadata store
+on a read connection and take its one writer only to record the result, so
+check-ins, program pulls and saves never wait behind rig databases. A rig
+whose plugin has not yet reported its camera still gets its rows; the Target
+Scheduler plugin can run them until Director acquisition arrives.
 
 ### Rigs at another site
 

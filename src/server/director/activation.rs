@@ -27,7 +27,7 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBeha
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Clone, Serialize)]
@@ -271,7 +271,12 @@ async fn execute(
     let catalog_permit = admit(&service.discovery_admission).await?;
     let peers = registered_peers(&state);
     let known_peers = peers.clone();
-    let mut report = service.clone().with_writer(move |store| {
+    // Everything up to the record runs on a pooled reader: the store's one
+    // writer is taken only to record the result, so check-ins, program pulls
+    // and saves never wait behind rig databases. The rig-database gate held
+    // throughout keeps two activations apart.
+    let recorder = service.clone();
+    let (mut report, to_record) = service.clone().with_reader(move |store| {
         let _catalog_permit = catalog_permit;
         let applying = expected.is_some();
         let project = store.project(id)?.ok_or(Error::Missing)?;
@@ -310,8 +315,14 @@ async fn execute(
             None => vec![],
         };
         let mut by_rig: BTreeMap<Uuid, Vec<&Contribution>> = BTreeMap::new();
+        // A plan saved before duplicates were refused may hold two
+        // contributions for one rig and objective; the first counts, so the
+        // work is never planned twice.
+        let mut seen = std::collections::BTreeSet::new();
         for contribution in plan.contributions.iter().filter(|c| c.enabled) {
-            by_rig.entry(contribution.rig_id).or_default().push(contribution);
+            if seen.insert((contribution.rig_id, contribution.objective_id)) {
+                by_rig.entry(contribution.rig_id).or_default().push(contribution);
+            }
         }
         // The last activation: which rigs had rows, and which projects it
         // set Inactive when their rig was turned off.
@@ -469,14 +480,43 @@ async fn execute(
             let push = planned_push(profile.as_ref(), &known_peers, &mut warnings);
             // A preview performs the same writes and rolls them back, so the
             // connection is read-write either way; nothing lands without Apply.
-            let mut connection = super::super::database_context::open_scheduler_connection_with_flags(
-                FilePath::new(&catalog.context.database_path),
-                OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            )
-            .map_err(StoreError::from)?;
-            connection.busy_timeout(Duration::from_secs(2))?;
+            let mut connection = match open_rig(&catalog.context.database_path) {
+                Ok(connection) => connection,
+                Err(reason) => {
+                    warnings.push(reason);
+                    reports.push(RigReport {
+                        rig,
+                        catalog_slug: Some(catalog.context.id.clone()),
+                        catalog_name: catalog.context.name.clone(),
+                        profile_id: None,
+                        changes: vec![],
+                        warnings,
+                        applied: false,
+                        push: None,
+                    });
+                    carried.extend(previous_rig(*rig_id));
+                    continue;
+                }
+            };
             let outcome = {
-                let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let tx = match begin_rig(&mut connection) {
+                    Ok(tx) => tx,
+                    Err(reason) => {
+                        warnings.push(reason);
+                        reports.push(RigReport {
+                            rig,
+                            catalog_slug: Some(catalog.context.id.clone()),
+                            catalog_name: catalog.context.name.clone(),
+                            profile_id: None,
+                            changes: vec![],
+                            warnings,
+                            applied: false,
+                            push: None,
+                        });
+                        carried.extend(previous_rig(*rig_id));
+                        continue;
+                    }
+                };
                 let existing_link = {
                     // Every page: a rig with more linked projects than one
                     // page holds must still find this one, or it would make
@@ -584,13 +624,26 @@ async fn execute(
             let profile = store.rig_profile(*rig_id)?;
             let mut warnings = Vec::new();
             let push = planned_push(profile.as_ref(), &known_peers, &mut warnings);
-            let mut connection = super::super::database_context::open_scheduler_connection_with_flags(
-                FilePath::new(&catalog.context.database_path),
-                OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            )
-            .map_err(StoreError::from)?;
-            connection.busy_timeout(Duration::from_secs(2))?;
-            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            // A database that cannot be opened or locked now keeps what the
+            // last activation knew, so a later one can finish the job.
+            let mut connection = match open_rig(&catalog.context.database_path) {
+                Ok(connection) => connection,
+                Err(reason) => {
+                    warnings.push(reason);
+                    reports.push(RigReport { rig, catalog_slug: Some(catalog.context.id.clone()), catalog_name: catalog.context.name.clone(), profile_id: None, changes: vec![], warnings, applied: false, push: None });
+                    if already { inactive.push(was); } else { carried.extend(previous_rig(*rig_id)); }
+                    continue;
+                }
+            };
+            let tx = match begin_rig(&mut connection) {
+                Ok(tx) => tx,
+                Err(reason) => {
+                    warnings.push(reason);
+                    reports.push(RigReport { rig, catalog_slug: Some(catalog.context.id.clone()), catalog_name: catalog.context.name.clone(), profile_id: None, changes: vec![], warnings, applied: false, push: None });
+                    if already { inactive.push(was); } else { carried.extend(previous_rig(*rig_id)); }
+                    continue;
+                }
+            };
             let project_guid = was.project_guid.to_string();
             let mut changes = Vec::new();
             if let Some((row_id, name)) = project_row(&tx, &project_guid)? {
@@ -664,15 +717,56 @@ async fn execute(
         if expected.as_ref().is_some_and(|value| value != &digest) {
             return Err(Error::Conflict.into());
         }
-        let mut activation_revision = None;
+        let mut to_record = None;
         if applying {
+            let previously_inactive = |rig: Uuid| previous.as_ref().is_some_and(|p| p.inactive_rigs.iter().any(|r| r.rig_id == rig));
+            let record_of = |rigs: Vec<ActivatedRig>, inactive: Vec<InactiveRig>, carried: &[ActivatedRig]| {
+                let mut all = rigs;
+                for record in carried {
+                    if !all.iter().any(|r| r.rig_id == record.rig_id) {
+                        all.push(record.clone());
+                    }
+                }
+                Activation {
+                    project_id: id,
+                    revision: 0,
+                    framing_revision: framing.revision,
+                    plan_revision: plan.revision,
+                    coordinator_instance_id: service.instance_id,
+                    applied_at_ms: now,
+                    rigs: all,
+                    inactive_rigs: inactive,
+                }
+            };
+            // The record is built and checked before any rig commits, so one
+            // the store would refuse never leaves rows written but unrecorded.
+            let whole = record_of(
+                pending.iter().filter_map(|(_, _, record, _)| record.clone()).collect(),
+                inactive.clone(),
+                &carried,
+            );
+            if whole.validate().is_err() {
+                return Err(ActivationError::NotReady(
+                    "This activation is too large to record; nothing was written. Split the plan or turn some rigs off.",
+                ));
+            }
+            // Each rig database commits on its own. One that fails is said
+            // so and keeps what the last activation knew of it; the others
+            // stand and are recorded.
             let mut rigs = Vec::new();
             let mut links = Vec::new();
+            let mut failed: std::collections::BTreeSet<Uuid> = std::collections::BTreeSet::new();
             for (rig_id, connection, record, created_project) in pending {
-                connection.execute_batch("COMMIT").map_err(|error| {
-                    tracing::error!(%error, "Director activation commit failed");
-                    Error::Internal
-                })?;
+                if let Err(error) = connection.execute_batch("COMMIT") {
+                    tracing::error!(%error, rig = %rig_id, "Director activation commit failed");
+                    let _ = connection.execute_batch("ROLLBACK");
+                    if let Some(report) = reports.iter_mut().find(|r| r.rig.id == rig_id) {
+                        report.warnings.push(format!("Nothing was written to this database: its commit failed ({error})."));
+                    }
+                    failed.insert(rig_id);
+                    carried.extend(previous_rig(rig_id));
+                    continue;
+                }
                 if let Some(report) = reports.iter_mut().find(|r| r.rig.id == rig_id) {
                     report.applied = true;
                 }
@@ -690,37 +784,17 @@ async fn execute(
                 }
                 rigs.push(record);
             }
-            for record in carried {
-                if !rigs.iter().any(|r: &ActivatedRig| r.rig_id == record.rig_id) {
-                    rigs.push(record);
-                }
+            if !failed.is_empty() {
+                let names: Vec<&str> = reports.iter().filter(|r| failed.contains(&r.rig.id)).map(|r| r.catalog_name.as_str()).collect();
+                warnings.push(format!("Not applied to {}; the other rigs were. Activate again to finish.", names.join(", ")));
             }
-            let recorded = store.record_activation(&Activation {
-                project_id: id,
-                revision: 0,
-                framing_revision: framing.revision,
-                plan_revision: plan.revision,
-                coordinator_instance_id: service.instance_id,
-                applied_at_ms: now,
-                rigs,
-                inactive_rigs: inactive,
-            })?;
-            activation_revision = Some(recorded.revision);
-            for link in links {
-                if let Err(error) = store.link_catalog_project(&link) {
-                    tracing::warn!(error = ?error, "Activated project could not be linked in meta");
-                    warnings.push(format!(
-                        "The new project in {} was written but could not be linked under Project planning links; link it there by hand.",
-                        reports
-                            .iter()
-                            .find(|r| r.rig.id == link.rig_id)
-                            .map(|r| r.catalog_name.as_str())
-                            .unwrap_or("its database")
-                    ));
-                }
-            }
+            let inactive: Vec<InactiveRig> = inactive
+                .into_iter()
+                .filter(|r| !failed.contains(&r.rig_id) || previously_inactive(r.rig_id))
+                .collect();
+            to_record = Some((record_of(rigs, inactive, &carried), links));
         }
-        Ok::<_, ActivationError>(Report {
+        Ok::<_, ActivationError>((Report {
             project,
             framing_revision: framing.revision,
             plan_revision: plan.revision,
@@ -729,10 +803,44 @@ async fn execute(
             warnings,
             preview_digest: digest,
             applied: applying,
-            activation_revision,
-        })
+            activation_revision: None,
+        }, to_record))
     })
     .await?;
+    if let Some((record, links)) = to_record {
+        let names: Vec<(Uuid, String)> = report
+            .rigs
+            .iter()
+            .map(|r| (r.rig.id, r.catalog_name.clone()))
+            .collect();
+        let (revision, link_warnings) = recorder
+            .with_writer(move |store| {
+                let recorded = store.record_activation(&record).map_err(|error| {
+                    tracing::error!(error = ?error, "Applied activation could not be recorded");
+                    ActivationError::NotReady(
+                        "The rig databases were written but the activation could not be recorded; activate again.",
+                    )
+                })?;
+                let mut warnings = Vec::new();
+                for link in links {
+                    if let Err(error) = store.link_catalog_project(&link) {
+                        tracing::warn!(error = ?error, "Activated project could not be linked in meta");
+                        warnings.push(format!(
+                            "The new project in {} was written but could not be linked under Project planning links; link it there by hand.",
+                            names
+                                .iter()
+                                .find(|(rig, _)| *rig == link.rig_id)
+                                .map(|(_, name)| name.as_str())
+                                .unwrap_or("its database")
+                        ));
+                    }
+                }
+                Ok::<_, ActivationError>((recorded.revision, warnings))
+            })
+            .await?;
+        report.activation_revision = Some(revision);
+        report.warnings.extend(link_warnings);
+    }
     if report.applied {
         // The local rows are committed; now each remote rig's peer. A push
         // that fails leaves the activation standing and says so in its row.
@@ -750,6 +858,33 @@ async fn execute(
         }
     }
     Ok(Json(ApiResponse::success(report)))
+}
+
+/// Open a rig database for an activation, read-write (a preview makes the
+/// same writes and rolls them back), with the server's shared lock wait:
+/// N.I.N.A. and a directory refresh can hold the file for tens of seconds.
+/// A failure is the rig's, said in words, not the request's.
+fn open_rig(path: &str) -> Result<Connection, String> {
+    let connection = super::super::database_context::open_scheduler_connection_with_flags(
+        FilePath::new(path),
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|error| format!("Its database could not be opened for writing: {error}."))?;
+    super::super::database_context::configure_scheduler_busy_timeout(&connection)
+        .map_err(|error| format!("Its database could not be opened for writing: {error}."))?;
+    Ok(connection)
+}
+
+/// Take the rig database's write lock for an activation.
+fn begin_rig(connection: &mut Connection) -> Result<rusqlite::Transaction<'_>, String> {
+    connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| match error.sqlite_error_code() {
+            Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
+                "Its database stayed locked (N.I.N.A. or a refresh may be writing it); try again in a moment.".to_string()
+            }
+            _ => format!("Its database could not be locked for writing: {error}."),
+        })
 }
 
 /// The Sync peer a remote rig's rows go to after Apply, if its profile
@@ -941,9 +1076,12 @@ enum RigError {
     Skip(String),
     Failed(Error),
 }
+// Every SQLite error inside a rig's write comes from that rig's database
+// (read-only, full, corrupt, locked): the rig is skipped and says why, and
+// the other rigs go ahead.
 impl From<rusqlite::Error> for RigError {
     fn from(error: rusqlite::Error) -> Self {
-        Self::Failed(StoreError::Sqlite(error).into())
+        Self::Skip(format!("Its database refused the write: {error}."))
     }
 }
 impl From<Error> for RigError {
