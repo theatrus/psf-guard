@@ -51,8 +51,8 @@ interface StackPreviewPanelProps {
    *  passes them. */
   selectionSource: 'selected' | 'visible' | 'scope';
   /** How wide a result card is, in pixels; as many fit to a row as the
-   *  page allows. */
-  cardSize?: number;
+   *  page allows. `null` fills the row: one card, or two on a wide screen. */
+  cardSize?: number | null;
   /** More run options beside the build buttons, such as stacking in WBPP. */
   actions?: ReactNode;
   onOpenImage: (imageId: number) => void;
@@ -789,10 +789,10 @@ export default function StackPreviewPanel({
   return (
     <>
       <section
-        className="stack-preview-panel"
+        className={`stack-preview-panel${cardSize === null ? ' is-fit' : ''}`}
         aria-labelledby="stack-preview-title"
         data-collapsed={collapsed || undefined}
-        style={{ '--stack-card-size': `${cardSize}px` } as CSSProperties}
+        style={cardSize === null ? undefined : { '--stack-card-size': `${cardSize}px` } as CSSProperties}
       >
         <div className="stack-preview-heading">
           <div>

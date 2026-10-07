@@ -302,14 +302,22 @@ test('the Stacks view runs WBPP for its project and offers its masters after', a
   await expect(page.getByRole('button', { name: 'Take in the last run' })).toHaveCount(0);
 });
 
-test('the Stacks view sizes its cards and keeps the size in the address', async ({ page }) => {
+test('the Stacks view fits its cards until a size is chosen, and keeps that size in this browser', async ({ page }) => {
   await page.goto(`/#/stacks?db=${dbId}&project=1`);
   const size = page.locator('#stacks-card-size');
+  const panel = page.locator('.stack-preview-panel');
   await expect(size).toBeVisible({ timeout: 15_000 });
-  await expect(page.locator('.stack-preview-panel')).toHaveCSS('--stack-card-size', '550px');
+  await expect(panel).toHaveClass(/is-fit/);
+  await expect(page.locator('.stacks-toolbar .size-value')).toHaveText('Fit');
   await size.fill('400');
   await expect(page).toHaveURL(/cardsize=400/);
-  await expect(page.locator('.stack-preview-panel')).toHaveCSS('--stack-card-size', '400px');
+  await expect(panel).toHaveCSS('--stack-card-size', '400px');
   await page.reload();
   await expect(page.locator('#stacks-card-size')).toHaveValue('400');
+  // A link without a size keeps the one chosen in this browser.
+  await page.goto(`/#/stacks?db=${dbId}&project=1`);
+  await expect(panel).toHaveCSS('--stack-card-size', '400px');
+  await page.getByRole('button', { name: 'Fit' }).click();
+  await expect(panel).toHaveClass(/is-fit/);
+  await expect(page).not.toHaveURL(/cardsize=/);
 });
