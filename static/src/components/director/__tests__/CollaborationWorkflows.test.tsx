@@ -76,4 +76,25 @@ describe('Collaboration work transfer', () => {
     await waitFor(() => expect(requests.at(-1)).toEqual({ operation: 'queue_report', selection: { import_id: 'import', catalog: 'rig-db', panel: 0, image_guids: ['image-guid'], observing_night: '2026-10-12' }, review_digest: 'evidence-digest' }));
     expect(await screen.findByText('Contribution queued for check-in')).toBeVisible();
   });
+  it('can report an original panel removed from the current assignment', async () => {
+    const requests: Record<string, unknown>[] = [];
+    server.use(http.post('/api/director/v1/collaboration/connection/work', async ({ request }) => {
+      const body = await request.json() as Record<string, unknown>; requests.push(body);
+      const data = body.operation === 'report_inputs' ? { imports: [{ id: 'import', name: 'M31', night: '2026-10-05', panels: [0] }], catalogs: [{ id: 'rig-db', name: 'Rig DB' }] }
+        : body.operation === 'report_candidates' ? { images: [{ guid: 'old-image', file: 'old-panel.fits', target: 'M31', filter: 'Ha', captured_at: 1791171000, panel: 7, source_digest: 'original-revision' }] }
+        : body.operation === 'preview_report' ? { review_digest: 'old-evidence', report: { frames: 1, seconds: 300, filterName: 'H', calibrated: false, footprint: { width: 1, height: 1 } } } : {};
+      return HttpResponse.json({ success: true, data });
+    }));
+    setup();
+    await userEvent.click(screen.getByRole('button', { name: 'Contribution reports' }));
+    await screen.findByRole('option', { name: 'M31 (2026-10-05)' });
+    await userEvent.selectOptions(screen.getByLabelText('Imported visit'), 'import');
+    await userEvent.selectOptions(screen.getByLabelText('Rig database'), 'rig-db');
+    await screen.findByRole('option', { name: '7' });
+    await userEvent.selectOptions(screen.getByLabelText('Remote panel'), '7');
+    await userEvent.click(await screen.findByLabelText('Select old-panel.fits'));
+    await userEvent.click(screen.getByRole('button', { name: 'Review 1 images' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Queue finalized contribution' }));
+    await waitFor(() => expect(requests.at(-1)).toEqual({ operation: 'queue_report', selection: { import_id: 'import', catalog: 'rig-db', panel: 7, image_guids: ['old-image'], observing_night: '2026-10-05', source_digest: 'original-revision' }, review_digest: 'old-evidence' }));
+  });
 });

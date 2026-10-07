@@ -563,8 +563,8 @@ Use AstroCollab's reference server, client proxy and conformance suite, plus an
 isolated Starfront server with copied fixtures. Then run the actual plugin and
 bundled sidecar on supported NINA 3.2 and 3.3 simulator copies, with an isolated
 PSF Guard server for the import mode. Record versions, request assertions,
-ledger evidence and UI captures. Passing a reference suite is not proof that
-our still-unimplemented connector conforms or that acquisition is safe.
+ledger evidence and UI captures. Passing a reference suite alone does not prove
+host interoperability or safe unattended acquisition.
 
 See [Director design](director.md#federation-and-collaboration) for the local
 execution boundary and [data transfer](data-transfer.md) for existing catalog
