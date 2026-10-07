@@ -1,9 +1,10 @@
 # AstroCollab and Starfront interoperability
 
-Status: shared reader, reviewed import storage, fresh presence projection and
-finalized contribution outbox implemented. HTTP connectors, user-facing import,
-catalog evidence extraction and report delivery remain unimplemented. No
-collaboration UI or acquisition is enabled.
+Status: shared reader, reviewed import storage, fresh presence projection,
+finalized contribution outbox and PSF Guard authentication/setup implemented.
+Rig setup supports pairing and browser sign-in. Work retrieval/join, user-facing
+import, catalog evidence extraction and report delivery remain unimplemented.
+Collaboration setup does not enable acquisition.
 Last reviewed: 2026-10-06.
 
 ## Sources and scope
@@ -76,7 +77,9 @@ plugin-only captures preserves their original capture IDs and associations.
 
 ## Authentication and credential ownership
 
-Status: agreed design, not implemented. Keep three authorities separate:
+Status: PSF Guard setup, config-file credentials and recovery states implemented.
+Standalone NINA collaboration authentication and credential handoff remain
+planned. Keep three authorities separate:
 
 - Local PSF Guard login and Director pairing control access to this installation.
 - A temporary collaboration person token enrolls or lists remote rigs. Keep it
@@ -160,6 +163,31 @@ A `401` stops remote communication and asks for repair, without erasing already
 issued bounded work or overriding hardware safety. Other permanent errors
 require review; transient failures use bounded backoff outside the exposure
 path. Do not invent refresh tokens or renewal routes absent from the protocol.
+
+PSF Guard exposes these setup routes under `/api/director/v1`:
+
+| Route | Behavior |
+| --- | --- |
+| `GET /rigs/{rig}/collaboration` | Non-secret bindings and current credential availability, including pending browser setup. |
+| `POST /rigs/{rig}/collaboration` | Register local setup intent with a caller-minted UUID, server URL, name and explicit loopback test consent; no remote enrollment yet. |
+| `POST /collaboration/{id}/discover` | Read health/features, with `/auth` fallback for sign-in only. |
+| `POST /collaboration/{id}/pair` | Consume one user-supplied code once, persist remote identity and credential, never start acquisition. |
+| `POST /collaboration/{id}/signin` | Begin browser approval; return only its validated URL and expiry. |
+| `POST /collaboration/{id}/poll` | Check approval in the original local session, at most every two seconds, then enroll once and store the agent token. |
+| `POST /collaboration/{id}/cancel` | Cancel this session's pending browser setup locally. |
+| `POST /collaboration/{id}/validate` | Explicitly check the saved token with a bounded project-list read. No work is adopted. |
+| `POST /collaboration/{id}/disconnect` | Disable the binding and remove its credential, preserving identity, work and reports. No unsupported remote revocation is invented. |
+
+Setup is serialized separately from planning and acquisition. Token-producing
+operations finish local persistence even if their browser request disconnects.
+The meta store records uncertain enrollment before sending it and records a
+returned agent ID before saving the token. A failed token write therefore keeps
+the known agent for recovery. Pending browser codes live only in memory and
+expire; after restart, start browser sign-in again. An existing registered or
+uncertain binding cannot enroll again automatically. Local callers see a remote
+credential rejection as a connection conflict, not a local-login `401`.
+An explicit enrollment rejection permits a corrected code or new browser sign-in;
+a lost or malformed token-producing reply remains uncertain, with no blind retry.
 
 ## Contract mapping
 
@@ -274,8 +302,8 @@ Live presence has a separate fresh-only projection: at most a 60-second lease,
 actual RA in hours, optional names/position for privacy, and no offline replay.
 It does not yet read the running rig or send an HTTP request.
 
-Still missing: credentials and authenticated transport, hello/join and user-facing
-import, catalog evidence extraction/common footprint, report send/backoff,
+Still missing: hello/join and user-facing import, authenticated work/report
+transport, catalog evidence extraction/common footprint, report send/backoff,
 plugin IPC and plugin-only admission. These primitives do not yet provide an
 end-to-end connector in either host.
 
@@ -426,7 +454,8 @@ defined in [Authentication and credential ownership](#authentication-and-credent
 
 This is an additive backlog, not a replacement for unfinished local Director
 commissioning or unattended-night validation. Shared import/report primitives
-are implemented; the host connectors and user-facing workflows are not.
+and PSF Guard authentication/setup are implemented; workload connectors and
+user-facing import/report workflows are not.
 
 1. **Shared read-only adapter (reader implemented).** The pinned reader and
    checked-in examples cover health, profiles, projects, requirements and nightly
@@ -436,7 +465,8 @@ are implemented; the host connectors and user-facing workflows are not.
    both live implementations through our hosts. No hardware launch.
 2. **Browse and import (storage implemented).** Origin maps, source history,
    reviewed draft Apply and local-edit preservation have regression tests.
-   Remaining: server-specific credentials, hello/join, UI preview/Apply,
+   PSF Guard credentials, pairing and browser sign-in are implemented in rig
+   setup. Remaining: standalone plugin credentials, hello/join, UI preview/Apply,
    capability matching and downstream rig database admission.
 3. **Plugin-only admission.** Add complete local setup, workload-source choice,
    local issuer/store and versioned IPC. Reuse the Session and ledger; prove
