@@ -1220,10 +1220,38 @@
   }
 }
 
-@container (max-width: 210px) {
-  .image-facts .date-day,
+/* The date gives way in steps, measured on the date column: its seconds,
+   then two digits of its year, then all but what matters most, the time of
+   a frame from this year and the year of one from another. */
+.image-facts .date-day-short,
+.image-facts .date-year {
+  display: none;
+}
+
+@container (max-width: 285px) {
   .image-facts .date-seconds {
     display: none;
+  }
+}
+
+@container (max-width: 245px) {
+  .image-facts .date-day {
+    display: none;
+  }
+
+  .image-facts .date-day-short {
+    display: inline;
+  }
+}
+
+@container (max-width: 225px) {
+  .image-facts .date-day-short,
+  .image-facts .image-date.is-other-year .date-time {
+    display: none;
+  }
+
+  .image-facts .image-date.is-other-year .date-year {
+    display: inline;
   }
 }
 
