@@ -262,9 +262,10 @@ pub async fn validate_astrometry_catalogs(
 ) -> Result<Json<ApiResponse<crate::astrometry::AstrometryValidationReport>>, AppError> {
     let guard = state.begin_interactive_job();
     let astrometry = Arc::clone(&state.astrometry);
+    let pools = Arc::clone(&state);
     let report = tokio::task::spawn_blocking(move || {
         let _guard = guard;
-        astrometry.try_validate_all()
+        pools.run_interactive(|| astrometry.try_validate_all())
     })
     .await
     .map_err(|error| {
@@ -335,6 +336,7 @@ pub async fn solve_image_astrometry(
     let cache_dir = ctx.cache_dir_path.clone();
     let astrometry = Arc::clone(&state.astrometry);
     let guard = state.begin_interactive_job();
+    let pools = Arc::clone(&state);
     let analysis = tokio::task::spawn_blocking(move || {
         let _guard = guard;
         let fresh = astrometry.analyze_image(image_id, &fits_path, expected_target)?;
@@ -343,7 +345,9 @@ pub async fn solve_image_astrometry(
             (cached, false)
         } else {
             (
-                astrometry.solve_image(image_id, &fits_path, expected_target)?,
+                pools.run_interactive(|| {
+                    astrometry.solve_image(image_id, &fits_path, expected_target)
+                })?,
                 true,
             )
         };
@@ -420,6 +424,7 @@ pub async fn predict_image_satellites(
         let _solve_guard = ctx.astrometry_solve_mutex.lock().await;
         let solve_path = fits_path.clone();
         let solve_cache = cache_dir.clone();
+        let pools = Arc::clone(&state);
         tokio::task::spawn_blocking(move || {
             let fresh = astrometry.analyze_image(image_id, &solve_path, expected_target)?;
             let cached = astrometry.with_cached_solution(&solve_cache, fresh);
@@ -427,7 +432,9 @@ pub async fn predict_image_satellites(
                 (cached, false)
             } else {
                 (
-                    astrometry.solve_image(image_id, &solve_path, expected_target)?,
+                    pools.run_interactive(|| {
+                        astrometry.solve_image(image_id, &solve_path, expected_target)
+                    })?,
                     true,
                 )
             };
@@ -456,17 +463,20 @@ pub async fn predict_image_satellites(
     let satellite_context = Arc::clone(&state.satellites);
     let prediction_path = fits_path;
     let prediction_cache = cache_dir;
+    let pools = Arc::clone(&state);
     let prediction = tokio::task::spawn_blocking(move || {
         let _guard = guard;
         let snapshot = satellite_context
             .cached_for_exposure(&prediction_path)?
             .ok_or_else(|| "no cached satellite elements are available".to_string())?;
-        let analysis = crate::satellites::predict_tracks(
-            image_id,
-            &prediction_path,
-            &astrometry_analysis,
-            &snapshot,
-        )?;
+        let analysis = pools.run_interactive(|| {
+            crate::satellites::predict_tracks(
+                image_id,
+                &prediction_path,
+                &astrometry_analysis,
+                &snapshot,
+            )
+        })?;
         crate::satellites::persist_analysis(&prediction_cache, &analysis)?;
         Ok::<_, String>(analysis)
     })
@@ -4212,6 +4222,7 @@ pub async fn get_images(
 
 #[axum::debug_handler(state = Arc<AppState>)]
 pub async fn get_image(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,
 ) -> Result<Json<ApiResponse<ImageResponse>>, AppError> {
@@ -4331,9 +4342,10 @@ pub async fn get_image(
         (resolved_fits_path.as_ref(), stats_cache.as_ref())
     {
         // Calculate statistics from FITS file
-        if let Ok(fits) = FitsImage::from_file(fits_path) {
-            let stats = fits.calculate_basic_statistics();
-
+        let decoded = state.run_interactive(|| {
+            FitsImage::from_file(fits_path).map(|fits| fits.calculate_basic_statistics())
+        });
+        if let Ok(stats) = decoded {
             // Extract temperature and camera model from FITS headers
             let temperature = FitsImage::extract_temperature(fits_path);
             let camera_model = FitsImage::extract_camera_model(fits_path);
@@ -5698,6 +5710,7 @@ fn basename_headers_match(path: &FsPath, image: &crate::models::AcquiredImage) -
 
 #[axum::debug_handler(state = Arc<AppState>)]
 pub async fn get_image_stars(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,
     Query(copy_query): Query<CopyQuery>,
@@ -5789,9 +5802,6 @@ pub async fn get_image_stars(
     let fits_path_str = fits_path.to_string_lossy().to_string();
     let (stars, detected_count, average_hfr, average_fwhm, frame_width, frame_height) =
         tokio::task::spawn_blocking(move || {
-            // Load FITS file
-            let fits = FitsImage::from_file(std::path::Path::new(&fits_path_str))?;
-
             // Telescope-class preset from the frame's headers, with the
             // endpoint's PSF fitting on top.
             let (mut params, _class) = crate::hocus_focus_star_detection::params_for_frame_path(
@@ -5799,8 +5809,12 @@ pub async fn get_image_stars(
             );
             params.psf_type = PSFType::Moffat4;
 
-            let detection_result =
-                detect_stars_hocus_focus(&fits.data, fits.width, fits.height, &params);
+            let (fits, detection_result) = state.run_interactive(|| {
+                let fits = FitsImage::from_file(std::path::Path::new(&fits_path_str))?;
+                let detection_result =
+                    detect_stars_hocus_focus(&fits.data, fits.width, fits.height, &params);
+                Ok::<_, anyhow::Error>((fits, detection_result))
+            })?;
 
             // Convert to API response format
             let stars: Vec<StarInfo> = detection_result
@@ -6314,6 +6328,7 @@ pub struct PsfMultiOptions {
 
 #[axum::debug_handler(state = Arc<AppState>)]
 pub async fn get_psf_visualization(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,
     Query(options): Query<PsfMultiOptions>,
@@ -6429,14 +6444,15 @@ pub async fn get_psf_visualization(
     tokio::task::spawn_blocking(move || {
         let temporary =
             cache_path_clone.with_extension(format!("png.tmp.{}", uuid::Uuid::new_v4().simple()));
-        // Load FITS file
-        let fits = FitsImage::from_file(&fits_path_clone)
-            .map_err(|e| anyhow::anyhow!("Failed to load FITS: {}", e))?;
+        let rgba_image = state.run_interactive(|| {
+            // Load FITS file
+            let fits = FitsImage::from_file(&fits_path_clone)
+                .map_err(|e| anyhow::anyhow!("Failed to load FITS: {}", e))?;
 
-        // Create PSF multi visualization using the common function
-        let rgba_image =
+            // Create PSF multi visualization using the common function
             create_psf_multi_image(&fits, num_stars, psf_type, &sort_by, grid_cols, &selection)
-                .map_err(|e| anyhow::anyhow!("Failed to create PSF visualization: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to create PSF visualization: {}", e))
+        })?;
 
         // Save to cache
         let cache_file = std::fs::File::create(&temporary)

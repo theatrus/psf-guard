@@ -886,6 +886,7 @@ async fn launch(
     let wbpp_options = req.options.clone();
     let extra = req.extra_params.clone();
 
+    let job_state = Arc::clone(&state);
     tokio::spawn(async move {
         let import_output = output_dir.clone();
         let outcome = run(
@@ -962,12 +963,16 @@ async fn launch(
                         &conn, project_id, target_id,
                     )?
                 };
-                crate::server::stack_preview::wbpp_stacks::import_masters(
-                    &import_ctx,
-                    project_id,
-                    target,
-                    &import_output,
-                )
+                // The previews' stretches run in the pool interactive work
+                // shares.
+                job_state.run_interactive(|| {
+                    crate::server::stack_preview::wbpp_stacks::import_masters(
+                        &import_ctx,
+                        project_id,
+                        target,
+                        &import_output,
+                    )
+                })
             })
             .await
             .unwrap_or_else(|error| Err(error.to_string()));

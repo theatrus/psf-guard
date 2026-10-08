@@ -86,6 +86,10 @@ pub struct AppState {
     /// The interactive and background worker budgets every CPU-heavy job
     /// leases its workers from (see [`crate::concurrency::WorkerBudgets`]).
     worker_budgets: Arc<crate::concurrency::WorkerBudgets>,
+    /// The pool interactive previews and one-off requests run Seiza in (see
+    /// [`AppState::run_interactive`]), built when first needed and again
+    /// when the interactive share changes.
+    interactive_pool: std::sync::Mutex<Option<Arc<rayon::ThreadPool>>>,
     /// Bounded, interactive-priority queue for on-demand preview / annotated
     /// PNG generation (see `preview_queue`). Process-global so total concurrent
     /// generation is bounded regardless of how many databases are loaded.
@@ -466,6 +470,7 @@ impl AppState {
             preview_color_default: RwLock::new(true),
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
             worker_budgets: Arc::default(),
+            interactive_pool: Default::default(),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
             auto_stacks: crate::server::stack_preview::automatic::AutomaticStackRefresh::default(),
@@ -592,6 +597,53 @@ impl AppState {
             .lease(&self.worker_policy(), priority, wanted)
     }
 
+    /// Run `work` in the pool interactive previews and one-off requests
+    /// share, the size of the interactive budget.
+    ///
+    /// Seiza does its parallel work in the pool of the calling thread, so
+    /// these requests together stay inside the interactive share, while one
+    /// running alone gets all of it. A preview still counts as one leased
+    /// worker for the jobs planning around it. If the pool cannot be built,
+    /// `work` runs on Rayon's global pool as before.
+    pub fn run_interactive<T: Send>(&self, work: impl FnOnce() -> T + Send) -> T {
+        match self.interactive_pool() {
+            Some(pool) => pool.install(work),
+            None => work(),
+        }
+    }
+
+    fn interactive_pool(&self) -> Option<Arc<rayon::ThreadPool>> {
+        let threads = crate::concurrency::priority_budget(
+            &self.worker_policy(),
+            crate::concurrency::Priority::Interactive,
+        );
+        let mut slot = self
+            .interactive_pool
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if let Some(pool) = slot
+            .as_ref()
+            .filter(|pool| pool.current_num_threads() == threads)
+        {
+            return Some(Arc::clone(pool));
+        }
+        match rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .thread_name(|index| format!("interactive-{index}"))
+            .build()
+        {
+            Ok(pool) => {
+                let pool = Arc::new(pool);
+                *slot = Some(Arc::clone(&pool));
+                Some(pool)
+            }
+            Err(error) => {
+                tracing::warn!("Could not build the {threads}-thread interactive pool: {error}");
+                slot.clone()
+            }
+        }
+    }
+
     pub fn begin_interactive_job(&self) -> InteractiveJobGuard {
         self.active_interactive_jobs.fetch_add(1, Ordering::SeqCst);
         InteractiveJobGuard(Arc::clone(&self.active_interactive_jobs))
@@ -678,6 +730,7 @@ impl AppState {
             preview_color_default: RwLock::new(true),
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
             worker_budgets: Arc::default(),
+            interactive_pool: Default::default(),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
             auto_stacks: crate::server::stack_preview::automatic::AutomaticStackRefresh::default(),
@@ -711,6 +764,33 @@ mod tests {
 
     fn test_state() -> AppState {
         AppState::new_for_test(Connection::open_in_memory().unwrap())
+    }
+
+    #[test]
+    fn interactive_work_runs_in_a_pool_the_size_of_the_interactive_share() {
+        let state = test_state();
+        let share = |state: &AppState| {
+            crate::concurrency::priority_budget(
+                &state.worker_policy(),
+                crate::concurrency::Priority::Interactive,
+            )
+        };
+        let seen = state.run_interactive(|| {
+            (
+                rayon::current_thread_index().is_some(),
+                rayon::current_num_threads(),
+                std::thread::current().name().map(str::to_owned),
+            )
+        });
+        assert!(seen.0, "interactive work ran outside a pool");
+        assert_eq!(seen.1, share(&state));
+        assert!(seen.2.is_some_and(|name| name.starts_with("interactive-")));
+
+        // A changed share applies to the next request.
+        let smaller = state.worker_policy().with_interactive_ratio(0.0);
+        *state.worker_policy.write().unwrap() = smaller;
+        assert_eq!(share(&state), 1);
+        assert_eq!(state.run_interactive(rayon::current_num_threads), 1);
     }
 
     #[test]

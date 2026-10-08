@@ -669,7 +669,9 @@ fn run_search(state: &Arc<AppState>, prepared: PreparedSearch) {
             job.state = ArtifactSearchState::Running;
             job.phase = "Preparing source frames".into();
         });
-    let result = run_search_inner(state, &prepared);
+    // Master builds and source crops run in the pool interactive work
+    // shares, not on every core.
+    let result = state.run_interactive(|| run_search_inner(state, &prepared));
     state
         .stack_previews
         .update_artifact_search(&search_id, |job| match result {

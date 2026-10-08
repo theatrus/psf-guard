@@ -1,5 +1,11 @@
 # Unreleased
 
+- Keep preview pre-generation, quality scans and stack builds inside their
+  share of the processor. Since Seiza 0.23.1, one background preview could
+  keep every core busy; each job now runs Seiza on the workers it was given.
+  Previews you look at, plate solves, star lists and PSF views together stay
+  within the share for work you wait on.
+
 - Seiza 0.23.1 builds calibration masters on every core and runs stacking,
   debayering, display stretches, background models and deconvolution faster,
   so stacks and image previews come sooner with the same output. A master dark

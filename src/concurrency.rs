@@ -4,8 +4,8 @@
 //!
 //! Each of these processes one FITS frame per worker; the heavy per-frame work
 //! (`FitsImage::from_file` → star detection → `compute_spatial_metrics`, or a
-//! stretch-to-PNG) is single-threaded internally, so the only lever is *how
-//! many frames run at once*. Historically these paths hardcoded low caps (2
+//! stretch-to-PNG) is mostly single-threaded internally, so the main lever is
+//! *how many frames run at once*. Historically these paths hardcoded low caps (2
 //! for the server scan, 4 for the CLI) or ran fully sequentially, leaving most
 //! cores idle. This module scales the worker count to the machine while
 //! staying inside three guardrails:
@@ -29,6 +29,14 @@
 //!
 //! An explicit operator override (`--threads`) bypasses the ratio and is
 //! trusted, clamped only to `[1, hard_max_workers]`.
+//!
+//! What Seiza does split across threads (debayering, stretches, parts of
+//! detection and stacking) runs in the Rayon pool of the thread that calls
+//! it, and Rayon's global pool has a thread for every core. So a job runs its
+//! Seiza calls inside a pool of the workers it leased, from [`ComputePool`],
+//! and the job's work stays on that many threads. Interactive previews and
+//! one-off requests share one pool the size of the interactive budget (see
+//! `AppState::run_interactive`).
 
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -127,15 +135,7 @@ impl WorkerBudgets {
         priority: Priority,
         wanted: usize,
     ) -> WorkerLease {
-        let (budget, _) = compute_worker_count(
-            None,
-            logical_cores(),
-            None,
-            None,
-            policy,
-            policy.ratio_for(priority),
-        );
-        self.lease_from(budget, priority, wanted)
+        self.lease_from(priority_budget(policy, priority), priority, wanted)
     }
 
     fn lease_from(
@@ -253,6 +253,20 @@ impl WorkerPolicy {
 pub struct WorkerBudget {
     pub workers: usize,
     pub rationale: String,
+}
+
+/// Workers the whole of `priority`'s share of the cores allows, before any
+/// memory ceiling: what the jobs of that priority split between them.
+pub fn priority_budget(policy: &WorkerPolicy, priority: Priority) -> usize {
+    compute_worker_count(
+        None,
+        logical_cores(),
+        None,
+        None,
+        policy,
+        policy.ratio_for(priority),
+    )
+    .0
 }
 
 /// Logical core count, or [`FALLBACK_CORES`] if the platform won't say.
@@ -389,7 +403,7 @@ where
         return;
     }
     let workers = workers.clamp(1, len);
-    match rayon::ThreadPoolBuilder::new().num_threads(workers).build() {
+    match ComputePool::take("parallel", workers) {
         // One item per split, so a slow frame never holds others behind it.
         Ok(pool) => pool.install(|| (0..len).into_par_iter().with_max_len(1).for_each(&f)),
         Err(error) => {
@@ -397,6 +411,139 @@ where
                 "Could not build a {workers}-thread pool ({error}); using plain threads"
             );
             parallel_index(len, workers, f);
+        }
+    }
+}
+
+/// Most threads idle pools may hold between them, as a multiple of the
+/// logical cores. Beyond it the oldest idle pool is dropped, which ends its
+/// threads.
+const IDLE_THREADS_PER_CORE: usize = 2;
+
+/// Pools no job holds, oldest first, kept for the next job that wants one of
+/// the same name and size.
+#[derive(Default)]
+struct IdlePools {
+    pools: std::sync::Mutex<std::collections::VecDeque<(&'static str, rayon::ThreadPool)>>,
+}
+
+static IDLE_POOLS: IdlePools = IdlePools {
+    pools: std::sync::Mutex::new(std::collections::VecDeque::new()),
+};
+
+impl IdlePools {
+    fn lock(
+        &self,
+    ) -> std::sync::MutexGuard<'_, std::collections::VecDeque<(&'static str, rayon::ThreadPool)>>
+    {
+        self.pools
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    /// The idle pool of `name` and `threads` returned last, if one is kept.
+    fn take(&self, name: &'static str, threads: usize) -> Option<rayon::ThreadPool> {
+        let mut pools = self.lock();
+        pools
+            .iter()
+            .rposition(|(kept, pool)| *kept == name && pool.current_num_threads() == threads)
+            .and_then(|position| pools.remove(position))
+            .map(|(_, pool)| pool)
+    }
+
+    /// Keep `pool`, then drop the oldest pools until those kept hold no more
+    /// than `limit` threads.
+    fn keep(&self, name: &'static str, pool: rayon::ThreadPool, limit: usize) {
+        let mut dropped = Vec::new();
+        {
+            let mut pools = self.lock();
+            pools.push_back((name, pool));
+            let mut kept = pools
+                .iter()
+                .map(|(_, pool)| pool.current_num_threads())
+                .sum::<usize>();
+            while kept > limit
+                && let Some((_, oldest)) = pools.pop_front()
+            {
+                kept -= oldest.current_num_threads();
+                dropped.push(oldest);
+            }
+        }
+        // Ended outside the lock.
+        drop(dropped);
+    }
+
+    #[cfg(test)]
+    fn threads(&self) -> usize {
+        self.lock()
+            .iter()
+            .map(|(_, pool)| pool.current_num_threads())
+            .sum()
+    }
+}
+
+/// A Rayon pool of a job's leased workers, kept for the next job when this
+/// one drops it rather than built for each.
+///
+/// Run the job's Seiza calls inside it with `install`: Seiza does its
+/// parallel work in the pool of the calling thread, so the work stays on
+/// these threads. A job has its pool to itself while it holds it.
+pub struct ComputePool {
+    name: &'static str,
+    pool: Option<rayon::ThreadPool>,
+    idle: &'static IdlePools,
+    idle_limit: usize,
+}
+
+impl ComputePool {
+    /// A pool of `threads` threads named `{name}-{index}`, reused when an
+    /// idle one of that name and size is kept.
+    pub fn take(name: &'static str, threads: usize) -> Result<Self, rayon::ThreadPoolBuildError> {
+        Self::take_from(
+            &IDLE_POOLS,
+            logical_cores().saturating_mul(IDLE_THREADS_PER_CORE),
+            name,
+            threads,
+        )
+    }
+
+    fn take_from(
+        idle: &'static IdlePools,
+        idle_limit: usize,
+        name: &'static str,
+        threads: usize,
+    ) -> Result<Self, rayon::ThreadPoolBuildError> {
+        let threads = threads.max(1);
+        let pool = match idle.take(name, threads) {
+            Some(pool) => pool,
+            None => rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .thread_name(move |index| format!("{name}-{index}"))
+                .build()?,
+        };
+        Ok(Self {
+            name,
+            pool: Some(pool),
+            idle,
+            idle_limit,
+        })
+    }
+}
+
+impl std::ops::Deref for ComputePool {
+    type Target = rayon::ThreadPool;
+
+    fn deref(&self) -> &rayon::ThreadPool {
+        self.pool
+            .as_ref()
+            .expect("a pool is held until it is dropped")
+    }
+}
+
+impl Drop for ComputePool {
+    fn drop(&mut self) {
+        if let Some(pool) = self.pool.take() {
+            self.idle.keep(self.name, pool, self.idle_limit);
         }
     }
 }
@@ -557,6 +704,71 @@ mod tests {
             .unwrap()
             .iter()
             .all(|threads| *threads == 3));
+    }
+
+    /// The threads of `pool`, one id each.
+    fn pool_threads(pool: &rayon::ThreadPool) -> Vec<std::thread::ThreadId> {
+        let mut threads = pool.broadcast(|_| std::thread::current().id());
+        threads.sort_by_key(|id| format!("{id:?}"));
+        threads
+    }
+
+    /// Pools kept apart from the process's own, so tests running at once
+    /// do not take or drop each other's.
+    fn idle_pools() -> &'static IdlePools {
+        Box::leak(Box::default())
+    }
+
+    #[test]
+    fn a_compute_pool_is_kept_for_the_next_job_of_its_name_and_size() {
+        let idle = idle_pools();
+        let take = |name, threads| ComputePool::take_from(idle, 64, name, threads).unwrap();
+        let first = take("reuse", 3);
+        assert_eq!(first.current_num_threads(), 3);
+        // Work inside sees the pool, which is all Seiza's own work uses.
+        assert_eq!(first.install(rayon::current_num_threads), 3);
+        let threads = pool_threads(&first);
+
+        // A job running alongside gets a pool of its own.
+        let second = take("reuse", 3);
+        assert_ne!(pool_threads(&second), threads);
+        drop(second);
+        drop(first);
+
+        // The next job takes the pool returned last, threads and all; one of
+        // another size or name builds its own.
+        let again = take("reuse", 3);
+        assert_eq!(pool_threads(&again), threads);
+        let other = take("reuse", 2);
+        assert_eq!(other.current_num_threads(), 2);
+        let renamed = take("renamed", 3);
+        assert_ne!(pool_threads(&renamed), threads);
+    }
+
+    #[test]
+    fn idle_pools_hold_a_bounded_number_of_threads() {
+        let idle = idle_pools();
+        let pools = (0..5)
+            .map(|_| ComputePool::take_from(idle, 10, "bound", 4).unwrap())
+            .collect::<Vec<_>>();
+        let threads = pools
+            .iter()
+            .map(|pool| pool_threads(pool))
+            .collect::<Vec<_>>();
+        drop(pools);
+        // Two four-thread pools fit in ten; the last two returned are kept.
+        assert_eq!(idle.threads(), 8);
+        let again = (0..2)
+            .map(|_| ComputePool::take_from(idle, 10, "bound", 4).unwrap())
+            .collect::<Vec<_>>();
+        let mut kept = again
+            .iter()
+            .map(|pool| pool_threads(pool))
+            .collect::<Vec<_>>();
+        kept.sort_by_key(|threads| format!("{threads:?}"));
+        let mut expected = threads[3..].to_vec();
+        expected.sort_by_key(|threads| format!("{threads:?}"));
+        assert_eq!(kept, expected);
     }
 
     fn pol() -> WorkerPolicy {

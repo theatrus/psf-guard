@@ -31,7 +31,6 @@ use axum::{
     response::Response,
     Json,
 };
-use rayon::ThreadPoolBuilder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -2061,7 +2060,8 @@ pub async fn import_wbpp_stacks(
             let conn = conn.lock().map_err(|error| error.to_string())?;
             wbpp_stacks::run_target(&conn, project_id, target_id)?
         };
-        wbpp_stacks::import_masters(&ctx, project_id, target, &output_dir)
+        // The previews' stretches run in the pool interactive work shares.
+        state.run_interactive(|| wbpp_stacks::import_masters(&ctx, project_id, target, &output_dir))
     })
     .await
     .map_err(|error| AppError::InternalError(error.to_string()))?
@@ -3231,11 +3231,7 @@ fn choose_references(
             crate::concurrency::probe_frame_pixels(&group.frames[0].path),
         );
         let lease = state.lease_workers(priority, budget.workers);
-        let pool = match ThreadPoolBuilder::new()
-            .num_threads(lease.workers)
-            .thread_name(|index| format!("stack-reference-{index}"))
-            .build()
-        {
+        let pool = match crate::concurrency::ComputePool::take("stack-reference", lease.workers) {
             Ok(pool) => pool,
             Err(error) => {
                 tracing::warn!("Reference scoring pool: {error}");
@@ -3488,10 +3484,7 @@ fn run_group(
     // other jobs of this priority share.
     let lease = state.lease_workers(priority, budget.workers);
     let threads = execution::ThreadBudget::from_total(lease.workers);
-    let pool = ThreadPoolBuilder::new()
-        .num_threads(lease.workers)
-        .thread_name(|index| format!("stack-preview-{index}"))
-        .build()
+    let pool = crate::concurrency::ComputePool::take("stack-preview", lease.workers)
         .map_err(|error| error.to_string())?;
     tracing::info!(
         job_id,
@@ -4005,10 +3998,7 @@ fn run_group(
         None
     } else {
         Some(
-            ThreadPoolBuilder::new()
-                .num_threads(threads.compute_workers)
-                .thread_name(|index| format!("stack-pipeline-{index}"))
-                .build()
+            crate::concurrency::ComputePool::take("stack-pipeline", threads.compute_workers)
                 .map_err(|error| error.to_string())?,
         )
     };

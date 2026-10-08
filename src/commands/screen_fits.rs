@@ -606,7 +606,9 @@ fn analyze_frames(files: &[PathBuf], options: &ScreenOptions) -> Result<Vec<Fram
     let records: Mutex<Vec<FrameRecord>> = Mutex::new(Vec::with_capacity(files.len()));
     let total = files.len();
 
-    crate::concurrency::parallel_index(total, budget.workers, |i| {
+    // In a pool of the workers, so `--threads` also holds Seiza's own
+    // parallel work to that many threads.
+    crate::concurrency::parallel_in_pool(total, budget.workers, |i| {
         let path = &files[i];
         match analyze_one_frame(path, options) {
             Ok(record) => {

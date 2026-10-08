@@ -358,7 +358,12 @@ impl PsfGuardMcp {
         };
         let db_id = ctx.id.clone();
         Ok(render(
-            handlers::get_image(ctx, Path((db_id, args.image_id))).await,
+            handlers::get_image(
+                State(Arc::clone(&self.state)),
+                ctx,
+                Path((db_id, args.image_id)),
+            )
+            .await,
         ))
     }
 
