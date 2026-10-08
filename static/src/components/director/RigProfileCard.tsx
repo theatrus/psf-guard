@@ -1,7 +1,7 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { Check, Download, RefreshCw } from 'lucide-react';
+import { Camera, Check, Download, Link2, MapPin, RefreshCw, SlidersHorizontal } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorRigProfileView, DirectorRigSite } from '../../api/directorTypes';
@@ -15,7 +15,7 @@ const message = (error: unknown) => isAxiosError(error)
   ? error.response?.data?.error || error.message
   : error instanceof Error ? error.message : 'Rig profile request failed';
 
-const TABS = [{ id: 'optics', label: 'Optics' }, { id: 'site', label: 'Site' }, { id: 'limits', label: 'Limits and delivery' }, { id: 'collaboration', label: 'Collaboration' }] as const;
+const TABS = [{ id: 'optics', label: 'Optics', icon: <Camera size={16} /> }, { id: 'site', label: 'Site', icon: <MapPin size={16} /> }, { id: 'limits', label: 'Limits and delivery', icon: <SlidersHorizontal size={16} /> }, { id: 'collaboration', label: 'Collaboration', icon: <Link2 size={16} /> }] as const;
 type Tab = (typeof TABS)[number]['id'];
 
 function Field({ id, label, value, onChange, disabled, unit, step = 'any' }: {
@@ -32,6 +32,14 @@ export default function RigProfileCard({ slug }: { slug: string }) {
   const id = useId();
   const [tab, setTab] = useState<Tab>('optics');
   const [collaborationVisited, setCollaborationVisited] = useState(false);
+  const [vertical, setVertical] = useState(() => window.matchMedia?.('(min-width: 800px)').matches ?? false);
+  useEffect(() => {
+    const media = window.matchMedia?.('(min-width: 800px)');
+    if (!media) return;
+    const update = () => setVertical(media.matches);
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const queryKey = ['directorRigProfile', slug];
@@ -99,15 +107,17 @@ export default function RigProfileCard({ slug }: { slug: string }) {
   const optics = form ? opticsFromForm(form) : null;
   const preview = optics ? fieldOfView(optics) : null;
   return <section className="rig-profile" aria-label="Rig profile">
-    <div className="director-toolbar"><h3>Rig profile</h3>
+    <div className="director-toolbar rig-profile-heading"><h4>Setup</h4>
       <button type="button" aria-label="Reload rig profile" title="Reload rig profile" disabled={loaded.isFetching || save.isPending} onClick={reload}><RefreshCw size={16} /></button>
     </div>
     {loaded.isPending && <p role="status">Loading rig profile...</p>}
     {loaded.isError && <p className="director-error" role="alert">{message(loaded.error)}</p>}
     {notice && <p role="status">{notice}</p>}
     {stale && <p className="director-error" role="alert">This rig changed since you loaded it. <button type="button" onClick={reload}>Reload</button></p>}
-    {data && form && <WorkspaceTabs id={id} label="Rig setup sections" tabs={TABS} value={tab} onChange={next => { setTab(next); if (next === 'collaboration') setCollaborationVisited(true); }} />}
-    {data && form && <form onSubmit={submit} className="rig-profile-form" hidden={tab === 'collaboration'}>
+    {data && form && <div className="rig-setup-layout">
+    <WorkspaceTabs id={id} className="rig-setup-nav" orientation={vertical ? 'vertical' : 'horizontal'} label="Rig setup sections" tabs={TABS} value={tab} onChange={next => { setTab(next); if (next === 'collaboration') setCollaborationVisited(true); }} />
+    <div className="rig-setup-content">
+    <form onSubmit={submit} className="rig-profile-form" hidden={tab === 'collaboration'}>
       <div {...workspacePanel(id, 'optics', tab)}>
       <fieldset disabled={disabled}>
         <legend>Optics</legend>
@@ -120,7 +130,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
           <Field id={`${slug}-pixel-size`} label="Pixel size" unit="µm" value={form.pixelSize} disabled={disabled} onChange={pixelSize => update({ pixelSize, opticsSource: { kind: 'manual' } })} />
           <Field id={`${slug}-focal-length`} label="Focal length" unit="mm" value={form.focalLength} disabled={disabled} onChange={focalLength => update({ focalLength, opticsSource: { kind: 'manual' } })} />
           <Field id={`${slug}-aperture`} label="Aperture" unit="mm" value={form.aperture} disabled={disabled} onChange={aperture => update({ aperture, opticsSource: { kind: 'manual' } })} />
-          <label className="rig-profile-field" htmlFor={`${slug}-rotation`}><span>Camera angle</span>
+          <label className="rig-profile-field rig-profile-rotation" htmlFor={`${slug}-rotation`}><span>Camera angle</span>
             <span className="rig-profile-input">
               <select id={`${slug}-rotation`} aria-label="Camera angle" value={form.rotationMode} onChange={event => update({ rotationMode: event.target.value as RigProfileForm['rotationMode'], opticsSource: { kind: 'manual' } })}>
                 <option value="rotator">Rotator</option>
@@ -197,8 +207,10 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       {(problem || save.isError) && !stale && <p className="director-error" role="alert">{problem || message(save.error)}</p>}
       {canWrite && <div className="director-actions"><button type="submit" disabled={disabled}><Check size={16} />{save.isPending ? 'Saving...' : 'Save rig profile'}</button></div>}
       {!canWrite && <p className="director-muted">Read only</p>}
-    </form>}
+    </form>
     <div {...workspacePanel(id, 'collaboration', tab)}>{data && collaborationVisited && <CollaborationConnections rig={data.rig.id} name={data.rig.name} active={tab === 'collaboration'} />}</div>
+    </div>
+    </div>}
   </section>;
 }
 

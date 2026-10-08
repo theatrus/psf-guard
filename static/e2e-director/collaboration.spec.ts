@@ -71,6 +71,9 @@ test('rig setup reviews remote work and saved contributions before importing or 
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 1000 });
       await collaboration.getByRole('tab', { name: 'Reports' }).scrollIntoViewIfNeeded();
+      if (width >= 800) await settings.locator('.modal-body').evaluate(e => { e.scrollTop = 0; });
+      await expect(collaboration.getByRole('tablist', { name: 'Collaboration sections' })).toHaveAttribute('aria-orientation', 'horizontal');
+      await expect(collaboration.getByRole('tab', { name: 'Reports' })).toHaveCSS('font-size', '13px');
       expect(await collaboration.evaluate(e => e.scrollWidth <= e.clientWidth)).toBeTruthy();
       await page.screenshot({ path: testInfo.outputPath(`collaboration-${width}.png`) });
     }
