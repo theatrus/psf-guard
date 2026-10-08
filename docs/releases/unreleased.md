@@ -1,9 +1,10 @@
 # Unreleased
 
-- Seiza 0.23 builds calibration masters on every core and runs stacking,
-  background models and deconvolution faster, with the same output. A master
-  dark that records no sensor temperature, such as one from PixInsight's WBPP,
-  now calibrates cooled lights; before, the stack ran uncalibrated. Satellite
+- Seiza 0.23.1 builds calibration masters on every core and runs stacking,
+  debayering, display stretches, background models and deconvolution faster,
+  so stacks and image previews come sooner with the same output. A master dark
+  that records no sensor temperature, such as one from PixInsight's WBPP, now
+  calibrates cooled lights; before, the stack ran uncalibrated. Satellite
   tracks are now predicted with the WGS72 constants their orbital elements
   were fitted with, which moves a track by up to tens of arcseconds, and the
   next quality scan recomputes each image's prediction. FITS header values
