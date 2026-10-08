@@ -1053,6 +1053,17 @@ async fn calibration_uploads_are_cataloged_without_scheduler_images() {
         ("DARK FLAT", "dark_flat", "dark-flat-001.fits"),
         ("FLAT DARK", "dark_flat", "flat-dark-001.fits"),
         ("FLAT", "flat", "flat-001.fits"),
+        ("TWILIGHT FLAT", "flat", "twilight-flat-001.fits"),
+        (
+            "MASTER TWILIGHT FLAT",
+            "flat",
+            "master-twilight-flat-001.fits",
+        ),
+        (
+            "TWILIGHT DARK FLAT",
+            "dark_flat",
+            "twilight-dark-flat-001.fits",
+        ),
     ];
 
     for (index, (image_type, kind, filename)) in cases.iter().enumerate() {
@@ -1084,8 +1095,17 @@ async fn calibration_uploads_are_cataloged_without_scheduler_images() {
     }
 
     assert_eq!(image_count(&fixture.database_a), 0);
-    assert_eq!(calibration_count(&fixture.database_a), 5);
+    assert_eq!(calibration_count(&fixture.database_a), cases.len() as i64);
     assert_eq!(calibration_count(&fixture.database_b), 0);
+    let connection = rusqlite::Connection::open(&fixture.database_a).unwrap();
+    for table in ["project", "target", "exposuretemplate", "exposureplan"] {
+        let count: i64 = connection
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0, "calibration upload created {table} rows");
+    }
 
     let retry = fits_bytes_with_type("FLAT", "Calibration", "2026-07-24T08:04:00");
     let (status, body) = upload(
@@ -1102,7 +1122,7 @@ async fn calibration_uploads_are_cataloged_without_scheduler_images() {
     assert_eq!(body["data"]["already_present"], true);
     assert_eq!(body["data"]["import"]["calibration"]["skipped_existing"], 1);
     assert_eq!(image_count(&fixture.database_a), 0);
-    assert_eq!(calibration_count(&fixture.database_a), 5);
+    assert_eq!(calibration_count(&fixture.database_a), cases.len() as i64);
 }
 
 #[tokio::test]

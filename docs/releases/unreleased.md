@@ -1,5 +1,8 @@
 # Unreleased
 
+- Keep twilight flats in the calibration library during folder imports and
+  remote uploads. They no longer create light-image rows or exposure templates
+  that could be synced back to Target Scheduler.
 - Include saved guiding RMS, pixel HFR, filter bandpass and exposure-time Moon
   context in collaboration reviews when the evidence is available. Director
   images must also match an acknowledged save receipt for their rig and

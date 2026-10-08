@@ -2085,6 +2085,80 @@ mod tests {
     }
 
     #[test]
+    fn twilight_flats_never_create_scheduler_rows() {
+        for scope in [
+            ImportScope::All,
+            ImportScope::Lights,
+            ImportScope::Calibration,
+        ] {
+            let mut conn = fresh_conn();
+            seed_existing_target(&conn, "M31", 10.68, 41.27);
+            conn.execute_batch(
+                "INSERT INTO exposuretemplate
+                    (profileId, name, filtername, gain, offset, bin, defaultexposure,
+                     moonavoidanceenabled, ditherevery, guid)
+                 VALUES ('p1', 'BLong', 'B', -1, -1, 1, 300, 1, 3, 'template-guid');",
+            )
+            .unwrap();
+            let mut frame = flat("B", 1_000);
+            frame.image_type = Some("TWILIGHT FLAT".into());
+            frame.object = Some("M31".into());
+            frame.exposure_s = Some(0.04);
+            frame.gain = Some(100);
+            frame.offset = Some(30);
+            let outcome = import_frames(
+                &mut conn,
+                vec![frame],
+                &ImportOptions {
+                    scope,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(outcome.imported, 0, "{scope:?}");
+            assert_eq!(outcome.templates_created, 0, "{scope:?}");
+            assert_eq!(outcome.plans_created, 0, "{scope:?}");
+            assert_eq!(outcome.projects_created, 0, "{scope:?}");
+            assert_eq!(outcome.targets_created, 0, "{scope:?}");
+            if scope == ImportScope::Lights {
+                assert_eq!(outcome.skipped_out_of_scope, 1);
+                assert_eq!(outcome.calibration.imported, 0);
+            } else {
+                assert_eq!(outcome.calibration.imported, 1);
+                assert_eq!(outcome.calibration.flat, 1);
+            }
+            for table in ["exposureplan", "acquiredimage"] {
+                let count: i64 = conn
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                        row.get(0)
+                    })
+                    .unwrap();
+                assert_eq!(count, 0, "{scope:?}: {table}");
+            }
+            let templates: Vec<(String, i64, i64, f64, bool, i64)> = conn
+                .prepare(
+                    "SELECT name, gain, offset, defaultexposure, moonavoidanceenabled,
+                            ditherevery FROM exposuretemplate",
+                )
+                .unwrap()
+                .query_map([], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            assert_eq!(templates, [("BLong".into(), -1, -1, 300.0, true, 3)]);
+        }
+    }
+
+    #[test]
     fn calibration_dry_run_leaves_no_sibling_tables() {
         let mut conn = fresh_conn();
         let mut bias = light("M31", "Ha", 1_000);
