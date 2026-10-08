@@ -326,6 +326,7 @@ fn frames(
     let mut solutions = Vec::new();
     let mut frames = Vec::new();
     let mut director = Vec::new();
+    let mut fingerprints = BTreeSet::new();
     for (guid, (image, target, target_guid)) in rows {
         if image.grading_status != 1 {
             return Err(held());
@@ -349,6 +350,9 @@ fn frames(
         let fingerprint = collaboration::digest(
             &serde_json::to_vec(&analysis.source_fingerprint).map_err(|_| held())?,
         );
+        if !fingerprints.insert(fingerprint.clone()) {
+            return Err(held());
+        }
         let frame_header = crate::image_io::read_frame_header(&path, &path).map_err(|_| held())?;
         let headers =
             crate::astrometry_headers::FitsAstrometryHeaders::from_headers(&frame_header.cards);
@@ -760,6 +764,25 @@ mod tests {
         .unwrap();
         conn.execute("INSERT INTO acquiredimage SELECT 2,guid,gradingStatus,filtername,metadata,acquireddate,targetId,projectId,profileId FROM acquiredimage WHERE Id=1", []).unwrap();
         assert!(frames(&catalog, &import, &selection).is_err());
+        let duplicate_guid = Uuid::new_v4();
+        conn.execute(
+            "UPDATE acquiredimage SET guid=?1 WHERE Id=2",
+            [duplicate_guid.to_string()],
+        )
+        .unwrap();
+        let mut duplicate_analysis = analysis.clone();
+        duplicate_analysis.image_id = 2;
+        crate::astrometry::persist_pixel_analysis(&catalog.cache_dir_path, &duplicate_analysis)
+            .unwrap();
+        assert!(frames(
+            &catalog,
+            &import,
+            &Selection {
+                image_guids: vec![guid, duplicate_guid],
+                ..selection.clone()
+            }
+        )
+        .is_err());
         conn.execute("DELETE FROM acquiredimage WHERE Id=2", [])
             .unwrap();
         std::fs::write(&path, b"replaced image").unwrap();
