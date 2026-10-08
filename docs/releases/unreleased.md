@@ -1,5 +1,15 @@
 # Unreleased
 
+- Seiza 0.23 builds calibration masters on every core and runs stacking,
+  background models and deconvolution faster, with the same output. A master
+  dark that records no sensor temperature, such as one from PixInsight's WBPP,
+  now calibrates cooled lights; before, the stack ran uncalibrated. Satellite
+  tracks are now predicted with the WGS72 constants their orbital elements
+  were fitted with, which moves a track by up to tens of arcseconds, and the
+  next quality scan recomputes each image's prediction. FITS header values
+  written without a space after `=` read correctly. Existing stacks and
+  masters rebuild once, as after every Seiza stacking upgrade.
+
 - Pull collaboration work once per rig-local observing night, including after
   server restarts. Optionally submit accepted images and replay queued reports
   automatically, independently of nightly pulls and live activity sharing.

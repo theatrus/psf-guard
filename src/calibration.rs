@@ -7515,6 +7515,12 @@ mod tests {
         assert!((sample - 0.02 * 65535.0).abs() < 0.5, "got {sample}");
         copy.validate_master_kind("DARK").unwrap();
 
+        // Seiza holds the loaded copy to the same rule: the light records
+        // CCD-TEMP and the master does not, which is no disagreement. Before
+        // seiza-stacking 0.25 this refused the light, so the stack ran raw.
+        let light_frame = crate::image_io::open_linear_frame(&light_path).unwrap();
+        masters.validate_light_frame(&light_frame).unwrap();
+
         // Its provenance is recorded like any master, pointing at the file.
         let recorded: (i64, String) = conn
             .query_row(
