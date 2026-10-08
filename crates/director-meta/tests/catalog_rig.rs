@@ -214,7 +214,7 @@ fn schema_four_upgrade_creates_no_bindings_and_failure_rolls_back() {
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        27
+        28
     );
     let backup = dir.path().join("backup.sqlite");
     store.backup(&backup).unwrap();

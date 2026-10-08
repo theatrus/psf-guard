@@ -115,8 +115,12 @@ async fn tonight_resolves_site_context_and_background_activation_is_scoped_idemp
     commissioned(&state, rig).await;
     let reads = Arc::new(AtomicUsize::new(0));
     let failing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let lock_on_fetch = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let locked = Arc::new(Mutex::new(None::<rusqlite::Connection>));
+    let lock_path = dir.path().join("rig.sqlite");
     let shared = Arc::new(Mutex::new(wire()));
     let (r, f, w) = (reads.clone(), failing.clone(), shared.clone());
+    let (lock_next, lock_holder) = (lock_on_fetch.clone(), locked.clone());
     let (endpoint, remote) = mock(
         Router::new()
             .route(
@@ -153,10 +157,17 @@ async fn tonight_resolves_site_context_and_background_activation_is_scoped_idemp
                 "/api/v1/agent/task",
                 get(move |Query(query): Query<HashMap<String, String>>| {
                     let (r, f, w) = (r.clone(), f.clone(), w.clone());
+                    let (lock_next, lock_holder, lock_path) =
+                        (lock_next.clone(), lock_holder.clone(), lock_path.clone());
                     async move {
                         r.fetch_add(1, Ordering::SeqCst);
                         if f.load(Ordering::SeqCst) {
                             return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                        }
+                        if lock_next.swap(false, Ordering::SeqCst) {
+                            let connection = rusqlite::Connection::open(lock_path).unwrap();
+                            connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+                            *lock_holder.lock().unwrap() = Some(connection);
                         }
                         for key in ["moon", "moonUp"] {
                             assert!((0.0..=1.0).contains(&query[key].parse::<f64>().unwrap()));
@@ -345,6 +356,7 @@ async fn tonight_resolves_site_context_and_background_activation_is_scoped_idemp
     assert_eq!(scalar("SELECT COUNT(*) FROM exposureplan"), 0);
     db.execute("DELETE FROM exposuretemplate WHERE name='Ambiguous'", [])
         .unwrap();
+    lock_on_fetch.store(true, Ordering::SeqCst);
     assert_eq!(
         call(
             &app,
@@ -355,8 +367,31 @@ async fn tonight_resolves_site_context_and_background_activation_is_scoped_idemp
         )
         .await
         .0,
-        StatusCode::OK
+        StatusCode::SERVICE_UNAVAILABLE
     );
+    locked
+        .lock()
+        .unwrap()
+        .take()
+        .unwrap()
+        .execute_batch("ROLLBACK")
+        .unwrap();
+    let after_fetch = reads.load(Ordering::SeqCst);
+    // Lose the process-local timer and make the remote unavailable. Local
+    // activation must resume the durable deal without fetching it again.
+    state
+        .director
+        .as_ref()
+        .unwrap()
+        .collaboration
+        .background
+        .lock()
+        .unwrap()
+        .clear();
+    failing.store(true, Ordering::SeqCst);
+    super::super::background::sweep(&state).await.unwrap();
+    assert_eq!(reads.load(Ordering::SeqCst), after_fetch);
+    failing.store(false, Ordering::SeqCst);
     let (_, status) = call(
         &app,
         "POST",
@@ -435,6 +470,38 @@ async fn tonight_resolves_site_context_and_background_activation_is_scoped_idemp
     .await;
     assert_eq!(status, StatusCode::OK, "{repeat}");
     assert_eq!(repeat["data"]["status"]["result"]["activated"], 0);
+    assert_eq!(scalar("SELECT MIN(desired) FROM exposureplan"), 11);
+    // A rig commit may survive a failed metadata commit. Retrying must repair
+    // the central record without replenishing this assignment's goal.
+    let meta = rusqlite::Connection::open(dir.path().join("meta.sqlite")).unwrap();
+    meta.execute(
+        "DELETE FROM activation WHERE project_id=?1",
+        [project.to_string()],
+    )
+    .unwrap();
+    let (status, repaired) = call(
+        &app,
+        "POST",
+        &route,
+        json!({"operation":"background_run"}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{repaired}");
+    assert_eq!(
+        repaired["data"]["status"]["result"]["activated"], 1,
+        "{repaired}"
+    );
+    assert_eq!(
+        meta.query_row(
+            "SELECT COUNT(*) FROM activation WHERE project_id=?1",
+            [project.to_string()],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(scalar("SELECT COUNT(*) FROM exposureplan"), 6);
     assert_eq!(scalar("SELECT MIN(desired) FROM exposureplan"), 11);
     failing.store(true, Ordering::SeqCst);
     assert_eq!(

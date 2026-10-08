@@ -15,6 +15,17 @@ function setup(canWrite = true) {
   return client;
 }
 describe('Automatic collaboration work', () => {
+  it('keeps remote rejection reasons visible when the latest pass delivered nothing', async () => {
+    const data = { ...initial, policy: { enabled: false, catalog_id: 'catalog', project_ids: [], interval_minutes: 15, activate: false, automatic_reports: true }, status: {
+      ...initial.status, reports: { queued: 0, delivered: 0, accepted: 0, rejected: 0, held: 0 },
+      rejected_reports: [{ id: 'report', night: '2026-10-07', panel: 2, filter: 'H', reasons: ['Quality evidence incomplete'], summary: null }],
+    } };
+    server.use(http.post('/api/director/v1/collaboration/connection/work', () => HttpResponse.json({ success: true, data })));
+    setup();
+    await userEvent.click(screen.getByText('Automatic work requests'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('2026-10-07, panel 2, H: Quality evidence incomplete');
+    expect(screen.getByText(/0 accepted, 0 rejected/)).toBeVisible();
+  });
   it('can submit reports without enabling nightly intake or allowing new projects', async () => {
     const requests: Record<string, unknown>[] = [];
     server.use(http.post('/api/director/v1/collaboration/connection/work', async ({ request }) => {

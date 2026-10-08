@@ -1,5 +1,9 @@
 # Unreleased
 
+- Retry saved collaboration work after temporary database failures without
+  another nightly pull. Prepare contribution evidence in bounded batches and
+  show remote acceptance, rejection and persistent rejection reasons.
+
 - Pull collaboration work once per rig-local observing night, including after
   server restarts. Optionally submit accepted images and replay queued reports
   automatically, independently of nightly pulls and live activity sharing.

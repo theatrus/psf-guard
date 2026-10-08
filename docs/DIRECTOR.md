@@ -11,6 +11,13 @@ runtime preview and PSF Guard Sync remain separate.
 
 ## Collaboration Sign-In
 
+PSF Guard owns the collaboration loop. Director receives ordinary rig plans and
+reports execution; PSF Guard Sync transports database changes and images. Neither
+plugin needs a direct Starfront connection. The independent
+[Starfront TargetScheduler Collab plugin](https://github.com/theatrus/starfront-targetscheduler-collab)
+provides the outer loop for Target Scheduler users without PSF Guard. Use one
+collaboration host for each remote agent to avoid duplicate assignments or reports.
+
 Open **Settings**, **Rigs**, then **Setup** for a rig. The selected rig's header
 stays above its setup. **Optics**, **Site**, **Limits and delivery**, and
 **Collaboration** use a section rail on desktop and a compact strip on narrow
@@ -45,7 +52,9 @@ In **Automation**, choose explicitly allowed joined or imported projects, then
 enable **Pull tonight automatically**. The database follows the rig; there is
 no database picker. Work is pulled once per rig-local observing night, not on a
 15-minute timer. A durable checkpoint survives server restarts. Failed requests
-back off and retry. **Refresh now** explicitly reruns the saved automation,
+back off and retry. A database lock retries the saved assignment locally rather
+than fetching it again or skipping the night. **Refresh now** explicitly reruns
+the saved automation,
 including reports when enabled. It never joins projects for you.
 **Activate in rig database** also applies safe assignments to that one database.
 For a new untouched draft, Director uses a unique matching filter/binning
@@ -86,6 +95,8 @@ capture night, revision, panel and filter, and applies the same evidence checks
 as manual review. Missing files wait for arrival. Changed or incomplete cohorts
 remain held; automatic reporting never invents missing measurements or changes
 grades. Existing reports are not withdrawn or rewritten automatically.
+Status separates delivery from acceptance. Rejected contributions and the
+server's reasons stay visible across later idle passes and server restarts.
 
 In **Reports**, the database is selected from the rig automatically. Select an
 imported visit, its remote panel, and accepted images. The open image list refreshes
