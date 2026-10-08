@@ -87,6 +87,10 @@ impl FrameMeta {
     /// A missing IMAGETYP is treated as a light: plenty of processed archives
     /// strip it, and lights are what people point the importer at.
     pub fn is_light(&self) -> bool {
+        // "TWILIGHT FLAT" contains "LIGHT", but is still a calibration frame.
+        if crate::calibration::kind_from_meta(self).is_some() {
+            return false;
+        }
         match &self.image_type {
             None => true,
             Some(t) => t.contains("LIGHT"),
@@ -241,7 +245,16 @@ mod tests {
         assert!(meta.is_light());
         meta.image_type = Some("LIGHT".into());
         assert!(meta.is_light());
-        for cal in ["DARK", "FLAT", "BIAS", "DARK FRAME"] {
+        for cal in [
+            "DARK",
+            "FLAT",
+            "BIAS",
+            "DARK FRAME",
+            "TWILIGHT FLAT",
+            "TWILIGHT FLAT FRAME",
+            "MASTER TWILIGHT FLAT",
+            "TWILIGHT DARK FLAT",
+        ] {
             meta.image_type = Some(cal.into());
             assert!(!meta.is_light(), "{cal} must not import");
         }
@@ -269,6 +282,20 @@ mod tests {
         let mut contents = header;
         contents.extend(vec![0_u8; 2880]);
         std::fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn twilight_flat_header_is_calibration_not_light() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("sky-flat.fits");
+        write_fits(&path, &["IMAGETYP= 'Twilight Flat'"]);
+        let meta = read_frame_meta(&path);
+        assert!(meta.readable);
+        assert_eq!(
+            crate::calibration::kind_from_meta(&meta),
+            Some(crate::calibration::CalibrationKind::Flat)
+        );
+        assert!(!meta.is_light());
     }
 
     #[test]

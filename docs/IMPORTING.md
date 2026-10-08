@@ -93,6 +93,11 @@ Bias, dark, dark-flat, and flat frames go into PSF Guard-owned
 `acquiredimage` rows or projects. Settings shows the frame count for each
 detected rig. The raw files remain in place.
 
+Calibration types take precedence over light-frame matching. In particular,
+`IMAGETYP=TWILIGHT FLAT` is a flat, not a light despite the word "twilight".
+Missing image-type headers still default to lights; check those headers before
+importing a mixed archive.
+
 The grouping rules stay conservative:
 
 - FITS `OBJECT` names define targets. Frames from different telescope, camera,
