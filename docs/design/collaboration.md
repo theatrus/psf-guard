@@ -219,6 +219,13 @@ it does not accept remote bearer tokens or caller-provided scientific evidence.
 
 ### Tonight and automatic adoption
 
+Rig setup uses the existing workspace tab pattern rather than one long form.
+Collaboration pairing is a resumable Server, Sign in, Capture wizard. Each
+server has Tonight, Automation, Capture, Reports and Connection sections;
+switching sections or servers preserves unsaved capture edits. Hidden report
+and automation sections do not poll. Pairing and finishing capture setup never
+enable background work, activation or activity sharing by themselves.
+
 The manual and background paths use the same `interop::workflow::Night`
 calculation: local mean-solar noon to noon, astronomical darkness below -18
 degrees, and planning-grade Moon illumination and fraction of dark hours above

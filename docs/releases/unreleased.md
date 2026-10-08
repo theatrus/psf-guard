@@ -1,5 +1,9 @@
 # Unreleased
 
+- Set up rigs in focused tabs and pair collaboration servers through a
+  three-step wizard. Tonight's work, automation, capture settings and reports
+  now have separate views instead of one long form.
+
 - Pull tonight's collaboration work using the rig's site and calculated Moon
   context, with a date-only manual override. Optionally refresh allowed projects
   in the background and activate safe assignments into the selected rig database;

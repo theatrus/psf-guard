@@ -4,7 +4,7 @@ import { RefreshCw, Save, Undo2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import type { CollaborationBackgroundInput, CollaborationBackgroundPolicy, CollaborationConnection, RemoteProject } from '../../api/collaborationTypes';
 
-export default function CollaborationBackground({ connection, canWrite, refresh, joinedProjects = [] }: { connection: CollaborationConnection; canWrite: boolean; refresh: () => void; joinedProjects?: RemoteProject[] }) {
+export default function CollaborationBackground({ connection, canWrite, refresh, joinedProjects = [], embedded = false, active = true }: { connection: CollaborationConnection; canWrite: boolean; refresh: () => void; joinedProjects?: RemoteProject[]; embedded?: boolean; active?: boolean }) {
   const [open, setOpen] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [enabled, setEnabled] = useState(false);
@@ -18,8 +18,8 @@ export default function CollaborationBackground({ connection, canWrite, refresh,
   const query = useQuery({
     queryKey: key,
     queryFn: () => apiClient.collaborationBackground(connection.binding.id, { operation: 'background_status' }),
-    enabled: open,
-    refetchInterval: open ? 15_000 : false,
+    enabled: active && (embedded || open),
+    refetchInterval: active && (embedded || open) ? 15_000 : false,
   });
   useEffect(() => {
     if (!query.data || dirty) return;
@@ -48,9 +48,7 @@ export default function CollaborationBackground({ connection, canWrite, refresh,
   joinedProjects.filter(p => p.joined).forEach(p => choices.set(p.project_id, p.name));
   projects.forEach(id => { if (!choices.has(id)) choices.set(id, id); });
   const time = (ms: number | null) => ms === null ? 'Not yet' : new Date(ms).toLocaleString();
-  return <details className="collaboration-background" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
-    <summary>Automatic work requests</summary>
-    {open && <>
+  const content = <>
     {query.isError && <p role="alert">{query.error.message}</p>}
     <form className="rig-profile-form" onSubmit={event => {
       event.preventDefault();
@@ -86,6 +84,7 @@ export default function CollaborationBackground({ connection, canWrite, refresh,
     </div>}
     {status?.last_error && <p role="alert">{status.last_error}. Existing plans retained.</p>}
     {!!status?.result?.held.length && <ul>{status.result.held.map((reason, index) => <li key={index}>{reason}</li>)}</ul>}
-    </>}
-  </details>;
+    </>;
+  return embedded ? <section className="collaboration-background" aria-label="Automatic work requests">{content}</section>
+    : <details className="collaboration-background" open={open} onToggle={event => setOpen(event.currentTarget.open)}><summary>Automatic work requests</summary>{open && content}</details>;
 }

@@ -34,7 +34,7 @@ test('pull tonight, review and activate allowed work in the background', async (
   const address = remote.address();
   if (!address || typeof address === 'string') throw new Error('No local fixture address');
   const post = async (route: string, data: unknown) => {
-    const response = await request.post(`/api${route}`, { data });
+    const response = await request.post(`/api${route}`, { data, timeout: 5000 });
     expect(response.ok(), await response.text()).toBe(true);
     return (await response.json()).data;
   };
@@ -54,17 +54,38 @@ test('pull tonight, review and activate allowed work in the background', async (
       horizon: null, sky_quality: null, limits: { value: profile.limits.value, source: { kind: 'manual' } }, peer_id: null,
     } });
     expect(saved.ok(), await saved.text()).toBe(true);
-    const candidate = randomUUID();
-    await post(`/director/v1/rigs/${rig}/collaboration`, { id: candidate, server_url: `http://127.0.0.1:${address.port}/`, name: 'Local test only', allow_loopback_http: true });
-    connection = candidate;
-    await post(`/director/v1/collaboration/${connection}/pair`, { code: 'LOCAL' });
-    const work = `/director/v1/collaboration/${connection}/work`;
-    await post(work, { operation: 'configure', settings: { binning: 1, colour: false, hours_per_night: 6, share_status: false, filters: { OIII: { exposure_seconds: 300, bandpass_nm: 7 } } } });
     await page.goto('/#/sky');
     await page.getByTitle('Settings', { exact: true }).click();
     await page.getByRole('tab', { name: 'Rigs', exact: true }).click();
     await page.getByRole('button', { name: 'Setup Collaboration test rig', exact: true }).click();
+    await page.getByRole('tab', { name: 'Collaboration', exact: true }).click();
     const panel = page.getByRole('region', { name: 'Collaboration', exact: true });
+    await panel.getByRole('button', { name: 'Connect server' }).click();
+    const wizard = page.getByRole('dialog', { name: 'Connect collaboration' });
+    await wizard.getByLabel('Collaboration server').fill(`http://127.0.0.1:${address.port}/`);
+    await wizard.getByText('Advanced', { exact: true }).click();
+    await wizard.getByLabel('Allow loopback HTTP for isolated testing').check();
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.screenshot({ path: testInfo.outputPath(`pairing-server-${width}.png`) });
+      expect(await wizard.evaluate(e => e.scrollWidth <= e.clientWidth)).toBe(true);
+    }
+    const creating = page.waitForResponse(response => response.url().endsWith(`/rigs/${rig}/collaboration`) && response.request().method() === 'POST');
+    await wizard.getByRole('button', { name: 'Continue', exact: true }).click();
+    connection = (await (await creating).json()).data.binding.id;
+    await wizard.getByRole('button', { name: 'Connect', exact: true }).click();
+    await wizard.getByLabel('Pairing code').fill('LOCAL');
+    await wizard.getByRole('button', { name: 'Pair', exact: true }).click();
+    await wizard.getByRole('button', { name: 'Add filter' }).click();
+    await wizard.getByLabel('Filter 1', { exact: true }).fill('OIII');
+    await wizard.getByLabel('Bandpass 1', { exact: true }).fill('7');
+    await page.screenshot({ path: testInfo.outputPath('pairing-capture-390.png') });
+    expect(await wizard.evaluate(e => e.scrollWidth <= e.clientWidth)).toBe(true);
+    await wizard.getByRole('button', { name: 'Finish setup' }).click();
+    await expect(wizard).toHaveCount(0);
+    await panel.getByRole('tab', { name: 'Capture', exact: true }).click();
+    await expect(panel.getByLabel('Filter 1', { exact: true })).toHaveValue('OIII');
+    await panel.getByRole('tab', { name: 'Tonight' }).click();
     await expect(panel.getByRole('button', { name: "Pull tonight's work" })).toBeEnabled();
     const pull = page.waitForResponse(response => response.url().endsWith(`${connection}/work`) && response.request().postDataJSON().operation === 'tonight');
     await panel.getByRole('button', { name: "Pull tonight's work" }).click();
@@ -76,7 +97,7 @@ test('pull tonight, review and activate allowed work in the background', async (
     await panel.getByRole('button', { name: 'Import draft', exact: true }).click();
     await expect(panel).toContainText('Imported as an inactive project draft');
     expect(database.prepare('SELECT COUNT(*) AS count FROM exposureplan').get()).toEqual({ count: 0 });
-    await panel.getByText('Automatic work requests', { exact: true }).click();
+    await panel.getByRole('tab', { name: 'Automation' }).click();
     await panel.getByLabel('Pull tonight automatically').check();
     await panel.getByLabel('M31 halo in narrowband', { exact: true }).check();
     await panel.getByLabel('Activate in rig database').check();
@@ -87,23 +108,24 @@ test('pull tonight, review and activate allowed work in the background', async (
     expect(database.prepare('SELECT COUNT(*) AS count, MIN(desired) AS desired FROM exposureplan').get()).toEqual({ count: 6, desired: 11 });
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 1000 });
-      await panel.getByText('Automatic work requests', { exact: true }).scrollIntoViewIfNeeded();
+      await panel.getByRole('tab', { name: 'Automation' }).scrollIntoViewIfNeeded();
       await page.screenshot({ path: testInfo.outputPath(`collaboration-${width}.png`), fullPage: true });
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     }
   } finally {
+    testInfo.setTimeout(testInfo.timeout + 15_000);
     try {
       if (connection) {
         const work = `/director/v1/collaboration/${connection}/work`;
         const current = await post(work, { operation: 'background_status' });
         await post(work, { operation: 'background_configure', expected: current.policy, policy: null });
       }
-      await request.delete(`/api/databases/${slug}`);
+      await request.delete(`/api/databases/${slug}`, { timeout: 5000 });
     } finally {
       remote.closeAllConnections();
       await new Promise<void>((resolve, reject) => remote.close(error => error ? reject(error) : resolve()));
       database.close();
-      if (path.dirname(dir) === run && path.basename(dir).startsWith('tonight-')) fs.rmSync(dir, { recursive: true, force: true });
+      if (path.dirname(dir) === run && path.basename(dir).startsWith('tonight-')) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   }
 });

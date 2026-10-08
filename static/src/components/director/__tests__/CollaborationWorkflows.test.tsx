@@ -36,7 +36,7 @@ describe('Collaboration work transfer', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Browse projects' }));
       await userEvent.click(await screen.findByRole('button', { name: 'Join' }));
       expect(await screen.findByRole('button', { name: 'Joined' })).toBeDisabled();
-      await userEvent.click(screen.getByText('Automatic work requests'));
+      await userEvent.click(screen.getByRole('tab', { name: 'Automation' }));
       expect(await screen.findByLabelText('M31')).not.toBeChecked();
       expect(requests.filter(r => r.operation === 'browse')).toHaveLength(1);
       expect(requests.find(r => r.operation === 'join')).toEqual({ operation: 'join', project: '000000000002' });
@@ -109,10 +109,10 @@ describe('Collaboration work transfer', () => {
       return HttpResponse.json({ success: true, data });
     }));
     setup();
-    await userEvent.click(screen.getByRole('button', { name: 'Contribution reports' }));
+    await userEvent.click(screen.getByRole('tab', { name: 'Reports' }));
     await screen.findByRole('option', { name: 'M31 (2026-10-05)' });
     await userEvent.selectOptions(screen.getByLabelText('Imported visit'), 'import');
-    await userEvent.selectOptions(screen.getByLabelText('Rig database'), 'rig-db');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Rig database' }), 'rig-db');
     await userEvent.selectOptions(screen.getByLabelText('Remote panel'), '0');
     await userEvent.click(await screen.findByLabelText('Select saved.fits'));
     expect(screen.queryByRole('button', { name: 'Queue finalized contribution' })).not.toBeInTheDocument();
@@ -137,10 +137,10 @@ describe('Collaboration work transfer', () => {
       return HttpResponse.json({ success: true, data });
     }));
     setup();
-    await userEvent.click(screen.getByRole('button', { name: 'Contribution reports' }));
+    await userEvent.click(screen.getByRole('tab', { name: 'Reports' }));
     await screen.findByRole('option', { name: 'M31 (2026-10-05)' });
     await userEvent.selectOptions(screen.getByLabelText('Imported visit'), 'import');
-    await userEvent.selectOptions(screen.getByLabelText('Rig database'), 'rig-db');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Rig database' }), 'rig-db');
     await screen.findByRole('option', { name: '7' });
     await userEvent.selectOptions(screen.getByLabelText('Remote panel'), '7');
     await userEvent.click(await screen.findByLabelText('Select old-panel.fits'));
@@ -160,10 +160,10 @@ describe('Collaboration work transfer', () => {
       return HttpResponse.json({ success: true, data });
     }));
     const client = setup();
-    await userEvent.click(screen.getByRole('button', { name: 'Contribution reports' }));
+    await userEvent.click(screen.getByRole('tab', { name: 'Reports' }));
     await screen.findByRole('option', { name: 'M31 (2026-10-05)' });
     await userEvent.selectOptions(screen.getByLabelText('Imported visit'), 'import');
-    await userEvent.selectOptions(screen.getByLabelText('Rig database'), 'rig-db');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Rig database' }), 'rig-db');
     await userEvent.selectOptions(screen.getByLabelText('Remote panel'), '0');
     await userEvent.click(await screen.findByLabelText('Select first.fits'));
     await userEvent.click(screen.getByRole('button', { name: 'Review 1 images' }));

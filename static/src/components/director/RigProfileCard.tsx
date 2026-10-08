@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useId, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { Check, Download, RefreshCw } from 'lucide-react';
@@ -7,11 +7,16 @@ import { useAccess } from '../../auth/access';
 import type { DirectorRigProfileView, DirectorRigSite } from '../../api/directorTypes';
 import HorizonEditor from './HorizonEditor';
 import CollaborationConnections from './CollaborationConnections';
+import WorkspaceTabs from './WorkspaceTabs';
+import { workspacePanel } from './workspacePanel';
 import { applyDefaults, describeSource, editFromForm, fieldOfView, formFromProfile, formatFieldOfView, opticsFromForm, type RigProfileForm } from './rigProfileForm';
 
 const message = (error: unknown) => isAxiosError(error)
   ? error.response?.data?.error || error.message
   : error instanceof Error ? error.message : 'Rig profile request failed';
+
+const TABS = [{ id: 'optics', label: 'Optics' }, { id: 'site', label: 'Site' }, { id: 'limits', label: 'Limits and delivery' }, { id: 'collaboration', label: 'Collaboration' }] as const;
+type Tab = (typeof TABS)[number]['id'];
 
 function Field({ id, label, value, onChange, disabled, unit, step = 'any' }: {
   id: string; label: string; value: string; onChange: (value: string) => void; disabled: boolean; unit?: string; step?: string;
@@ -24,6 +29,9 @@ function Field({ id, label, value, onChange, disabled, unit, step = 'any' }: {
 
 /** Optics, site and limits for the rig behind one database. */
 export default function RigProfileCard({ slug }: { slug: string }) {
+  const id = useId();
+  const [tab, setTab] = useState<Tab>('optics');
+  const [collaborationVisited, setCollaborationVisited] = useState(false);
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const queryKey = ['directorRigProfile', slug];
@@ -94,12 +102,13 @@ export default function RigProfileCard({ slug }: { slug: string }) {
     <div className="director-toolbar"><h3>Rig profile</h3>
       <button type="button" aria-label="Reload rig profile" title="Reload rig profile" disabled={loaded.isFetching || save.isPending} onClick={reload}><RefreshCw size={16} /></button>
     </div>
-    <p className="director-muted">What this rig sees and where it stands. The N.I.N.A. plugin fills these in when it reports; until then, take them from frame headers or type them.</p>
     {loaded.isPending && <p role="status">Loading rig profile...</p>}
     {loaded.isError && <p className="director-error" role="alert">{message(loaded.error)}</p>}
     {notice && <p role="status">{notice}</p>}
     {stale && <p className="director-error" role="alert">This rig changed since you loaded it. <button type="button" onClick={reload}>Reload</button></p>}
-    {data && form && <form onSubmit={submit} className="rig-profile-form">
+    {data && form && <WorkspaceTabs id={id} label="Rig setup sections" tabs={TABS} value={tab} onChange={next => { setTab(next); if (next === 'collaboration') setCollaborationVisited(true); }} />}
+    {data && form && <form onSubmit={submit} className="rig-profile-form" hidden={tab === 'collaboration'}>
+      <div {...workspacePanel(id, 'optics', tab)}>
       <fieldset disabled={disabled}>
         <legend>Optics</legend>
         <p className="director-muted rig-profile-source">{describeSource(form.opticsSource ?? data.profile.optics?.source, data.profile.optics?.reported_at_ms)}
@@ -125,6 +134,8 @@ export default function RigProfileCard({ slug }: { slug: string }) {
         </div>
         <p className="director-muted" data-testid="rig-profile-fov">{preview ? `Field ${formatFieldOfView(preview)}` : 'Field of view appears once the sensor, pixel size and focal length are set.'}</p>
       </fieldset>
+      </div>
+      <div {...workspacePanel(id, 'site', tab)}>
       <fieldset disabled={disabled}>
         <legend>Site</legend>
         <label className="rig-profile-field" htmlFor={`${slug}-planning-site`}><span>Planning site</span>
@@ -155,6 +166,8 @@ export default function RigProfileCard({ slug }: { slug: string }) {
             : placed?.horizon_from === 'site' ? `none of its own, so ${placed.site?.name ?? 'the site'}'s applies` : 'none of its own'}
           onChange={horizon => update({ horizon: horizon ? { value: horizon, source: { kind: 'manual' } } : null })} />
       </fieldset>
+      </div>
+      <div {...workspacePanel(id, 'limits', tab)}>
       <fieldset disabled={disabled}>
         <legend>Limits</legend>
         <div className="rig-profile-grid">
@@ -180,11 +193,12 @@ export default function RigProfileCard({ slug }: { slug: string }) {
         {peers.data?.length === 0 && <p className="director-muted">No peer registered yet; add one under Settings, Remote PSF Guard.</p>}
       </fieldset>
       <p className="director-muted">Camera modes and filters: {data.profile.configuration ? describeSource(data.profile.configuration.source, data.profile.configuration.reported_at_ms) : 'not reported yet; the N.I.N.A. plugin supplies them.'}</p>
+      </div>
       {(problem || save.isError) && !stale && <p className="director-error" role="alert">{problem || message(save.error)}</p>}
       {canWrite && <div className="director-actions"><button type="submit" disabled={disabled}><Check size={16} />{save.isPending ? 'Saving...' : 'Save rig profile'}</button></div>}
       {!canWrite && <p className="director-muted">Read only</p>}
     </form>}
-    {data && <CollaborationConnections rig={data.rig.id} name={data.rig.name} />}
+    <div {...workspacePanel(id, 'collaboration', tab)}>{data && collaborationVisited && <CollaborationConnections rig={data.rig.id} name={data.rig.name} active={tab === 'collaboration'} />}</div>
   </section>;
 }
 

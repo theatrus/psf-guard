@@ -8,6 +8,7 @@ interface DialogProps {
   children: ReactNode;
   footer?: ReactNode;
   className?: string;
+  backdropClassName?: string;
 }
 
 const FOCUSABLE = [
@@ -26,6 +27,7 @@ export default function Dialog({
   children,
   footer,
   className = '',
+  backdropClassName = '',
 }: DialogProps) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -82,7 +84,7 @@ export default function Dialog({
 
   return createPortal(
     <div
-      className="dialog-backdrop"
+      className={`dialog-backdrop ${backdropClassName}`.trim()}
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
