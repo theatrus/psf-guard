@@ -6,6 +6,13 @@ import { installAstrometryFixture } from './fixtures/astrometry';
 import { ensureAllFixtures } from './fixtures/loader';
 import { sweepAbandonedRunDirectories } from './tmp-dirs';
 
+/**
+ * The main server's Director meta store and its `-wal` and `-shm` files. The
+ * name follows `default_meta_path` in `src/server/director.rs`: the registry's
+ * stem plus `.director-meta.sqlite`.
+ */
+const DIRECTOR_META_FILE = 'registry.director-meta.sqlite';
+
 const FITS_CARD_BYTES = 80;
 const FITS_BLOCK_BYTES = 2880;
 
@@ -68,10 +75,11 @@ function installEmbeddedWcs(filePath: string): void {
 }
 
 /**
- * Wipe and recreate the per-PID tmp directory used by the e2e suite. Inside
- * it we drop a fresh SQLite fixture file mimicking the N.I.N.A. scheduler
- * schema (matching `tests/integration_sequence_analysis.rs::create_test_schema`)
- * pre-populated with two projects:
+ * Clear the per-PID tmp directory used by the e2e suite, all but the main
+ * server's Director meta store. Inside it we drop a fresh SQLite fixture file
+ * mimicking the N.I.N.A. scheduler schema (matching
+ * `tests/integration_sequence_analysis.rs::create_test_schema`) pre-populated
+ * with two projects:
  *
  *   - "Project Alpha" / target "Alpha M44" → 3 images (the B-filter
  *     sequence 0028/0029/0030, all on the same night).
@@ -100,8 +108,17 @@ export default async function globalSetup() {
     );
   }
 
-  fs.rmSync(tmpBase, { recursive: true, force: true });
+  // `webServer` starts before this setup, and the main server has already
+  // opened its Director meta store beside `registry.json`. Deleting the store
+  // under the running server broke it: SQLite stats the database path when it
+  // creates a WAL file, so the first write failed with SQLITE_IOERR_FSTAT and
+  // the Overview showed "could not be bound to a rig (Director meta database
+  // operation failed)". Clear everything else.
   fs.mkdirSync(tmpBase, { recursive: true });
+  for (const entry of fs.readdirSync(tmpBase)) {
+    if (entry.startsWith(DIRECTOR_META_FILE)) continue;
+    fs.rmSync(path.join(tmpBase, entry), { recursive: true, force: true });
+  }
   fs.mkdirSync(path.join(tmpBase, 'cache'), { recursive: true });
   const imagesDir = path.join(tmpBase, 'images');
   fs.mkdirSync(imagesDir, { recursive: true });
