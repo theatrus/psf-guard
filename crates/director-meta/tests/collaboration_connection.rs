@@ -1,5 +1,5 @@
 use psf_guard_director_meta::{
-    collaboration_connection::{ConnectionBinding, ConnectionState},
+    collaboration_connection::{BackgroundPolicy, ConnectionBinding, ConnectionState},
     Error, MetaStore, Uuid,
 };
 
@@ -19,6 +19,7 @@ fn migration_identity_and_compare_exchange_preserve_original_agent() {
         agent_id: None,
         state: ConnectionState::New,
         settings: None,
+        background: None,
     };
     store.create_collaboration_connection(&b).unwrap();
     store.create_collaboration_connection(&b).unwrap();
@@ -78,6 +79,7 @@ fn reviewed_settings_survive_reopen_without_changing_agent() {
         agent_id: None,
         state: ConnectionState::New,
         settings: None,
+        background: None,
     };
     store.create_collaboration_connection(&binding).unwrap();
     let mut configured = binding.clone();
@@ -95,15 +97,70 @@ fn reviewed_settings_survive_reopen_without_changing_agent() {
         )]
         .into(),
     });
+    configured.background = Some(BackgroundPolicy {
+        enabled: true,
+        catalog_id: Uuid::new_v4(),
+        project_ids: vec!["000000000002".into()],
+        interval_minutes: 15,
+        activate: true,
+    });
     store
         .update_collaboration_connection(&binding, &configured)
         .unwrap();
+    assert!(matches!(
+        store.update_collaboration_connection(&binding, &configured),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(
+        store.collaboration_connection_ids().unwrap(),
+        vec![binding.id]
+    );
     drop(store);
     let store = MetaStore::open(&path).unwrap();
     assert_eq!(
         store.collaboration_connection(binding.id).unwrap(),
         Some(configured)
     );
+}
+
+#[test]
+fn background_policy_requires_bounded_explicit_consent() {
+    let policy = BackgroundPolicy {
+        enabled: true,
+        catalog_id: Uuid::new_v4(),
+        project_ids: vec!["000000000002".into()],
+        interval_minutes: 15,
+        activate: true,
+    };
+    policy.validate().unwrap();
+    for invalid in [
+        BackgroundPolicy {
+            catalog_id: Uuid::nil(),
+            ..policy.clone()
+        },
+        BackgroundPolicy {
+            project_ids: vec![],
+            ..policy.clone()
+        },
+        BackgroundPolicy {
+            project_ids: vec!["000000000002".into(); 2],
+            ..policy.clone()
+        },
+        BackgroundPolicy {
+            project_ids: vec!["bad".into()],
+            ..policy.clone()
+        },
+        BackgroundPolicy {
+            interval_minutes: 4,
+            ..policy.clone()
+        },
+        BackgroundPolicy {
+            interval_minutes: 1441,
+            ..policy.clone()
+        },
+    ] {
+        assert!(invalid.validate().is_err());
+    }
 }
 
 #[test]
@@ -122,6 +179,7 @@ fn indexed_identity_must_match_payload_and_capacity_retries_remain_idempotent() 
         agent_id: None,
         state: ConnectionState::New,
         settings: None,
+        background: None,
     };
     store.create_collaboration_connection(&first).unwrap();
     for _ in 1..256 {

@@ -5,7 +5,7 @@ use psf_guard_director_interop::{
     workflow::{self, Night, Settings},
 };
 mod evidence;
-fn now_ms() -> Result<u64, Failure> {
+pub(super) fn now_ms() -> Result<u64, Failure> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()
@@ -16,6 +16,12 @@ fn now_ms() -> Result<u64, Failure> {
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum Input {
+    BackgroundStatus {},
+    BackgroundConfigure {
+        expected: Option<psf_guard_director_meta::collaboration_connection::BackgroundPolicy>,
+        policy: Option<psf_guard_director_meta::collaboration_connection::BackgroundPolicy>,
+    },
+    BackgroundRun {},
     ReportInputs {},
     ReportCandidates {
         import_id: Uuid,
@@ -29,10 +35,16 @@ enum Input {
     Browse {},
     Join {
         project: String,
-        night: Night,
+        #[serde(default)]
+        night: Option<Night>,
+        #[serde(default)]
+        observing_date: Option<String>,
     },
     Tonight {
-        night: Night,
+        #[serde(default)]
+        night: Option<Night>,
+        #[serde(default)]
+        observing_date: Option<String>,
     },
     Preview {
         task: String,
@@ -112,6 +124,9 @@ async fn action(
         let service = writable(&state)?;
         // Finish acknowledged imports/report receipts even if the browser leaves.
         tokio::spawn(async move {
+            if matches!(input, Input::BackgroundStatus {}) {
+                return execute(&state, service, id, input).await;
+            }
             let _gate = service.collaboration.gate.lock().await;
             execute(&state, service.clone(), id, input).await
         })
@@ -130,13 +145,21 @@ async fn action(
     }
 }
 async fn execute(
-    state: &AppState,
+    state: &Arc<AppState>,
     service: Arc<Service>,
     id: Uuid,
     input: Input,
 ) -> Result<Value, Failure> {
     let b = binding(service.clone(), id).await?;
     match &input {
+        Input::BackgroundStatus {} => return background::status(state, service, &b).await,
+        Input::BackgroundConfigure { expected, policy } => {
+            return background::configure(state, service, b, expected.clone(), policy.clone()).await
+        }
+        Input::BackgroundRun {} => {
+            background::run(state, service.clone(), b.clone()).await?;
+            return background::status(state, service, &b).await;
+        }
         Input::ReportInputs {} => return evidence::inputs(state, service, &b).await,
         Input::ReportCandidates {
             import_id,
@@ -194,13 +217,69 @@ async fn execute(
         ))?;
     let remote = Remote::new(&b)?;
     let source = b.source().map_err(Error::from)?;
+    let input = match input {
+        Input::Tonight {
+            night,
+            observing_date,
+        } => Input::Tonight {
+            night: Some(resolve_night(service.clone(), b.rig_id, night, observing_date).await?),
+            observing_date: None,
+        },
+        Input::Join {
+            project,
+            night,
+            observing_date,
+        } => Input::Join {
+            project,
+            night: Some(resolve_night(service.clone(), b.rig_id, night, observing_date).await?),
+            observing_date: None,
+        },
+        other => other,
+    };
     let result = connected(service.clone(), &b, &source, &remote, &token, input).await;
     if matches!(&result, Err(Failure(StatusCode::UNAUTHORIZED, _))) {
         change(service, b, ConnectionState::Rejected, None).await?;
     }
     result
 }
-async fn hello(
+
+pub(super) async fn resolve_night(
+    service: Arc<Service>,
+    rig: Uuid,
+    explicit: Option<Night>,
+    date: Option<String>,
+) -> Result<Night, Failure> {
+    if let Some(night) = explicit {
+        if date.is_some() {
+            return Err(invalid());
+        }
+        night.validate().map_err(|_| invalid())?;
+        return Ok(night);
+    }
+    let site = service
+        .query(move |s| {
+            let profile = s.rig_profile(rig)?;
+            Ok(s.rig_site(rig, profile.as_ref())?.location)
+        })
+        .await?
+        .ok_or(Failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Set this rig's observing site before pulling tonight's work",
+        ))?;
+    let now = now_ms()?;
+    blocking(move || match date {
+        Some(date) => Night::for_date(site, &date),
+        None => Night::for_site(site, now),
+    })
+    .await?
+    .map_err(|_| {
+        Failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "No astronomical observing night is available for this rig's site and date",
+        )
+    })
+}
+pub(super) async fn hello(
     service: Arc<Service>,
     b: &ConnectionBinding,
     remote: &Remote,
@@ -259,7 +338,11 @@ fn current_presence(status: &psf_guard_director_meta::inbox::RigStatus, now: u64
     .ok()
     .flatten()
 }
-async fn tonight(remote: &Remote, token: &str, night: &Night) -> Result<Vec<u8>, Failure> {
+pub(super) async fn tonight(
+    remote: &Remote,
+    token: &str,
+    night: &Night,
+) -> Result<Vec<u8>, Failure> {
     let query = night.query().map_err(|_| invalid())?;
     // A named observing night is mandatory, never the server's rolling fallback.
     remote
@@ -275,7 +358,10 @@ async fn connected(
     input: Input,
 ) -> Result<Value, Failure> {
     match input {
-        Input::Configure { .. }
+        Input::BackgroundStatus {}
+        | Input::BackgroundConfigure { .. }
+        | Input::BackgroundRun {}
+        | Input::Configure { .. }
         | Input::PreviewReport { .. }
         | Input::QueueReport { .. }
         | Input::ReportInputs {}
@@ -287,10 +373,11 @@ async fn connected(
                 astrocollab::decode_projects(&bytes, source).map_err(|_| invalid())?
             ))
         }
-        Input::Join { project, night } => {
+        Input::Join { project, night, .. } => {
             if !workflow::valid_remote_id(&project) {
                 return Err(invalid());
             }
+            let night = night.ok_or_else(invalid)?;
             night.validate().map_err(|_| invalid())?;
             hello(service, b, remote, token).await?;
             let body = night
@@ -301,22 +388,27 @@ async fn connected(
             remote
                 .post(&format!("agent/projects/{project}/join"), Some(token), body)
                 .await?;
-            Ok(json!(astrocollab::decode_tonight(
+            let mut result = json!(astrocollab::decode_tonight(
                 &tonight(remote, token, &night).await?,
                 source,
                 &night.night
             )
-            .map_err(|_| invalid())?))
+            .map_err(|_| invalid())?);
+            result["night"] = json!(night);
+            Ok(result)
         }
-        Input::Tonight { night } => {
+        Input::Tonight { night, .. } => {
+            let night = night.ok_or_else(invalid)?;
             night.validate().map_err(|_| invalid())?;
             hello(service, b, remote, token).await?;
-            Ok(json!(astrocollab::decode_tonight(
+            let mut result = json!(astrocollab::decode_tonight(
                 &tonight(remote, token, &night).await?,
                 source,
                 &night.night
             )
-            .map_err(|_| invalid())?))
+            .map_err(|_| invalid())?);
+            result["night"] = json!(night);
+            Ok(result)
         }
         Input::Preview { task, night }
         | Input::Apply {

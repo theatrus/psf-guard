@@ -93,6 +93,78 @@ pub struct Night {
     pub moon_up: f64,
 }
 impl Night {
+    /// A manual date override still derives lunar context from the rig's site.
+    pub fn for_date(
+        site: psf_guard_director_core::visibility::Site,
+        date: &str,
+    ) -> Result<Self, Error> {
+        site.validate().map_err(|_| Error::InvalidNight)?;
+        let parsed =
+            NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| Error::InvalidNight)?;
+        if parsed.format("%Y-%m-%d").to_string() != date {
+            return Err(Error::InvalidNight);
+        }
+        let local_evening = parsed
+            .and_hms_opt(18, 0, 0)
+            .ok_or(Error::InvalidNight)?
+            .and_utc()
+            .timestamp_millis();
+        let offset = (site.longitude_degrees / 15.0 * 3_600_000.0).round() as i64;
+        Self::for_site(
+            site,
+            u64::try_from(
+                local_evening
+                    .checked_sub(offset)
+                    .ok_or(Error::InvalidNight)?,
+            )
+            .map_err(|_| Error::InvalidNight)?,
+        )
+    }
+    /// The rig's noon-to-noon observing night, not the coordinator's timezone.
+    pub fn for_site(
+        site: psf_guard_director_core::visibility::Site,
+        now_ms: u64,
+    ) -> Result<Self, Error> {
+        use psf_guard_director_core::{
+            night::{night_preview, NightRequest},
+            visibility::{AltitudeLimits, Horizon},
+            windows::MeridianExclusion,
+        };
+        let summary = night_preview(&NightRequest {
+            site,
+            horizon: Horizon::FixedMinimum {},
+            limits: AltitudeLimits {
+                rig_minimum_degrees: 0.0,
+                project_minimum_degrees: 0.0,
+                horizon_offset_degrees: 0.0,
+                rig_maximum_degrees: 90.0,
+                project_maximum_degrees: 90.0,
+            },
+            targets: vec![],
+            start_ms: now_ms,
+            nights: 1,
+            step_ms: 300_000,
+            dark_below_degrees: -18.0,
+            meridian_exclusion: MeridianExclusion {
+                before_ms: 0,
+                after_ms: 0,
+            },
+            meridian_window_ms: 0,
+        })
+        .map_err(|_| Error::InvalidNight)?
+        .pop()
+        .ok_or(Error::InvalidNight)?;
+        if summary.dark_hours <= 0.0 {
+            return Err(Error::InvalidNight);
+        }
+        let night = Self {
+            night: summary.date,
+            moon: summary.moon_illumination,
+            moon_up: (summary.moon_hours_up_in_dark / summary.dark_hours).clamp(0.0, 1.0),
+        };
+        night.validate()?;
+        Ok(night)
+    }
     pub fn validate(&self) -> Result<(), Error> {
         let date =
             NaiveDate::parse_from_str(&self.night, "%Y-%m-%d").map_err(|_| Error::InvalidNight)?;
@@ -142,6 +214,47 @@ fn finite(v: f64, min: f64, max: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn automatic_night_uses_the_rigs_local_noon_and_computes_lunar_context() {
+        use psf_guard_director_core::visibility::Site;
+        let west = Site {
+            latitude_degrees: 35.0,
+            longitude_degrees: -105.0,
+            elevation_meters: 2000.0,
+        };
+        let utc = chrono::DateTime::parse_from_rfc3339("2026-10-08T03:00:00Z")
+            .unwrap()
+            .timestamp_millis() as u64;
+        let automatic = Night::for_site(west, utc).unwrap();
+        assert_eq!(automatic.night, "2026-10-07");
+        assert!((0.0..=1.0).contains(&automatic.moon));
+        assert!((0.0..=1.0).contains(&automatic.moon_up));
+        let manual = Night::for_date(west, "2026-10-07").unwrap();
+        assert_eq!(automatic.query().unwrap(), manual.query().unwrap());
+        let east = Site {
+            longitude_degrees: 150.0,
+            latitude_degrees: -30.0,
+            ..west
+        };
+        let utc = chrono::DateTime::parse_from_rfc3339("2026-10-07T11:00:00Z")
+            .unwrap()
+            .timestamp_millis() as u64;
+        assert_eq!(Night::for_site(east, utc).unwrap().night, "2026-10-07");
+        let morning = chrono::DateTime::parse_from_rfc3339("2026-10-08T15:00:00Z")
+            .unwrap()
+            .timestamp_millis() as u64;
+        assert_eq!(Night::for_site(west, morning).unwrap().night, "2026-10-07");
+        assert!(Night::for_date(west, "2026-1-2").is_err());
+        assert!(Night::for_date(west, "2026-02-30").is_err());
+        assert!(Night::for_date(
+            Site {
+                latitude_degrees: 89.0,
+                ..west
+            },
+            "2026-06-21"
+        )
+        .is_err());
+    }
     #[test]
     fn refuses_ambiguous_filters_paths_and_unnamed_nights() {
         let mut settings = Settings {

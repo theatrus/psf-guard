@@ -186,6 +186,7 @@ mod tests {
             agent_id: Some("000000000001".into()),
             state: psf_guard_director_meta::collaboration_connection::ConnectionState::Registered,
             settings: None,
+            background: None,
         }
     }
     #[test]

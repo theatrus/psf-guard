@@ -30,7 +30,7 @@ test('rig setup reviews remote work and saved contributions before importing or 
     operations.push(input);
     let data: unknown = {};
     switch (input.operation) {
-      case 'tonight': data = { shares: [share] }; break;
+      case 'tonight': data = { night: { night: '2026-10-05', moon: 0.12, moon_up: 0.3 }, shares: [share] }; break;
       case 'preview': data = { preview: { review_digest: 'work-digest', acquisition_enabled: false }, plan: { project_id: randomUUID(), share } }; break;
       case 'report_inputs': data = { imports: [{ id: 'import', name: share.name, night: '2026-10-05', panels: [0] }], catalogs: [{ id: slug, name: 'Collaboration rig' }] }; break;
       case 'report_candidates': data = { images: [{ guid: 'image-guid', file: 'M31-Ha-001.fits', filter: 'Ha', target: 'M31', captured_at: 1791171000 }] }; break;
@@ -50,11 +50,9 @@ test('rig setup reviews remote work and saved contributions before importing or 
     await settings.getByRole('tab', { name: 'Rigs' }).click();
     await settings.getByRole('button', { name: 'Setup Collaboration rig' }).click();
     const collaboration = settings.getByRole('region', { name: 'Collaboration', exact: true });
-    await expect(collaboration.getByRole('button', { name: 'Pull nightly work' })).toBeDisabled();
-    await collaboration.getByLabel('Night', { exact: true }).fill('2026-10-05');
-    await collaboration.getByLabel('Moon illumination (%)').fill('12');
-    await collaboration.getByLabel('Moon above horizon (%)').fill('30');
-    await collaboration.getByRole('button', { name: 'Pull nightly work' }).click();
+    await expect(collaboration.getByRole('button', { name: "Pull tonight's work" })).toBeEnabled();
+    await collaboration.getByRole('button', { name: "Pull tonight's work" }).click();
+    expect(operations.find(o => o.operation === 'tonight')).toEqual({ operation: 'tonight' });
     await collaboration.getByRole('button', { name: 'Review import' }).click();
     await expect(collaboration.getByRole('region', { name: 'Review collaboration import' })).toContainText('12');
     expect(operations.some(o => o.operation === 'apply')).toBe(false);

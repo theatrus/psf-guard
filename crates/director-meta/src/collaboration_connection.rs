@@ -14,6 +14,43 @@ pub struct ConnectionBinding {
     pub state: ConnectionState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<psf_guard_director_interop::workflow::Settings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<BackgroundPolicy>,
+}
+
+/// Explicit permission to refresh these projects on this rig's catalog.
+/// It never enrolls an agent, joins a remote project or starts equipment.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BackgroundPolicy {
+    pub enabled: bool,
+    pub catalog_id: Uuid,
+    pub project_ids: Vec<String>,
+    pub interval_minutes: u16,
+    pub activate: bool,
+}
+
+impl BackgroundPolicy {
+    pub fn validate(&self) -> Result<(), Error> {
+        valid_id(self.catalog_id)?;
+        if !(5..=1440).contains(&self.interval_minutes)
+            || self.project_ids.is_empty()
+            || self.project_ids.len() > 32
+            || self
+                .project_ids
+                .iter()
+                .any(|id| !psf_guard_director_interop::workflow::valid_remote_id(id))
+            || self
+                .project_ids
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != self.project_ids.len()
+        {
+            return Err(Error::InvalidInput);
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -51,6 +88,9 @@ impl ConnectionBinding {
         .map_err(|_| Error::InvalidInput)
     }
     fn validate(&self) -> Result<(), Error> {
+        if let Some(background) = &self.background {
+            background.validate()?;
+        }
         if let Some(settings) = &self.settings {
             settings.validate().map_err(|_| Error::InvalidInput)?;
         }
@@ -75,6 +115,49 @@ impl ConnectionBinding {
     }
 }
 impl MetaStore {
+    pub fn collaboration_connection_projects(
+        &self,
+        id: Uuid,
+    ) -> Result<Vec<(String, String, Uuid)>, Error> {
+        let binding = self.collaboration_connection(id)?.ok_or(Error::NotFound)?;
+        let mut statement = self.connection.prepare("SELECT DISTINCT p.remote_project_id,g.name,g.id FROM collaboration_project p
+            JOIN global_project g ON g.id=p.project_id JOIN collaboration_import i ON i.project_id=p.project_id
+            WHERE i.base_url=?1 AND i.agent_id=?2 AND i.rig_id=?3 ORDER BY g.name,g.id LIMIT 257")?;
+        let rows = statement
+            .query_map(
+                params![
+                    binding.base_url,
+                    binding.agent_id,
+                    binding.rig_id.to_string()
+                ],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        if rows.len() > 256 {
+            return Err(Error::InvalidInput);
+        }
+        rows.into_iter()
+            .map(|(id, name, project)| Ok((id, name, parse_id(&project)?)))
+            .collect()
+    }
+    pub fn collaboration_connection_ids(&self) -> Result<Vec<Uuid>, Error> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT id FROM collaboration_connection ORDER BY id LIMIT 257")?;
+        let ids = statement
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        if ids.len() > 256 {
+            return Err(Error::CorruptDatabase);
+        }
+        ids.iter().map(|id| parse_id(id)).collect()
+    }
     pub fn collaboration_imports_for_connection(
         &self,
         id: Uuid,

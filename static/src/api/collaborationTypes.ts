@@ -7,6 +7,7 @@ export interface CollaborationBinding {
   allow_loopback_http: boolean;
   state: 'new' | 'outcome_unknown' | 'registered' | 'rejected' | 'disabled';
   settings?: CollaborationSettings;
+  background?: CollaborationBackgroundPolicy;
 }
 export interface CollaborationConnection {
   binding: CollaborationBinding;
@@ -31,6 +32,7 @@ export interface CollaborationNight { night: string; moon: number; moon_up: numb
 export interface RemoteProject { project_id: string; name: string; joined: boolean; compatible: boolean | null }
 export interface RemoteShare { task_id: string; name: string | null; version: number; review_reasons: string[]; demands: { panel_index: number; filter: string; exposure_ms: number; requested_frames: number }[] }
 export interface CollaborationWork {
+  night?: CollaborationNight;
   projects?: RemoteProject[];
   shares?: RemoteShare[];
   preview?: { review_digest: string; action: string; acquisition_enabled: boolean };
@@ -58,7 +60,32 @@ export type CollaborationWorkInput =
   | { operation: 'queue_report'; selection: ContributionSelection; review_digest: string }
   | { operation: 'configure'; settings: CollaborationSettings }
   | { operation: 'browse' | 'checkin' }
-  | { operation: 'tonight'; night: CollaborationNight }
-  | { operation: 'join'; project: string; night: CollaborationNight }
+  | { operation: 'tonight'; night?: CollaborationNight; observing_date?: string }
+  | { operation: 'join'; project: string; night?: CollaborationNight; observing_date?: string }
   | { operation: 'preview'; task: string; night: CollaborationNight }
   | { operation: 'apply'; task: string; night: CollaborationNight; review_digest: string };
+
+export interface CollaborationBackgroundPolicy {
+  enabled: boolean;
+  catalog_id: string;
+  project_ids: string[];
+  interval_minutes: number;
+  activate: boolean;
+}
+export interface CollaborationBackgroundReply {
+  connection_status?: CollaborationConnection['status'];
+  policy: CollaborationBackgroundPolicy | null;
+  status: {
+    running: boolean;
+    last_started_ms: number | null;
+    last_success_ms: number | null;
+    next_run_ms: number | null;
+    last_error: string | null;
+    result: { night: string; imported: number; unchanged: number; activated: number; held: string[] } | null;
+  };
+  catalogs: { id: string; slug: string; name: string }[];
+  projects: { id: string; name: string; project_id?: string }[];
+}
+export type CollaborationBackgroundInput =
+  | { operation: 'background_status' | 'background_run' }
+  | { operation: 'background_configure'; expected: CollaborationBackgroundPolicy | null; policy: CollaborationBackgroundPolicy | null };

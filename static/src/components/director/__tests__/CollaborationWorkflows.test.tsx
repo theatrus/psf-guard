@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -19,6 +19,31 @@ function setup() {
   return client;
 }
 describe('Collaboration work transfer', () => {
+  it('makes a newly joined project immediately available to automation without another browse', async () => {
+    const requests: Record<string, unknown>[] = [];
+    server.use(http.post('/api/director/v1/collaboration/connection/work', async ({ request }) => {
+      const body = await request.json() as Record<string, unknown>; requests.push(body);
+      const data = body.operation === 'browse'
+        ? { projects: [{ project_id: '000000000002', name: 'M31', joined: false, compatible: true }] }
+        : body.operation === 'background_status'
+          ? { policy: null, catalogs: [], projects: [], status: { running: false, last_started_ms: null, last_success_ms: null, next_run_ms: null, last_error: null, result: null } }
+          : { night: { night: '2026-10-05', moon: 0.12, moon_up: 0.3 }, shares: [share] };
+      return HttpResponse.json({ success: true, data });
+    }));
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    try {
+      setup();
+      await userEvent.click(screen.getByRole('button', { name: 'Browse projects' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Join' }));
+      expect(await screen.findByRole('button', { name: 'Joined' })).toBeDisabled();
+      await userEvent.click(screen.getByText('Automatic work requests'));
+      expect(await screen.findByLabelText('M31')).not.toBeChecked();
+      expect(requests.filter(r => r.operation === 'browse')).toHaveLength(1);
+      expect(requests.find(r => r.operation === 'join')).toEqual({ operation: 'join', project: '000000000002' });
+    } finally {
+      confirm.mockRestore();
+    }
+  });
   it('explains that failed check-ins retain queued contributions and permits retry', async () => {
     server.use(http.post('/api/director/v1/collaboration/connection/work', () =>
       HttpResponse.json({ error: 'Collaboration server returned an unsuccessful response' }, { status: 502 })));
@@ -27,26 +52,43 @@ describe('Collaboration work transfer', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Check-in failed; queued reports retained. Collaboration server returned an unsuccessful response');
     expect(screen.getByRole('button', { name: 'Check in' })).toBeEnabled();
   });
-  it('requires explicit observing-night context and a preview before applying', async () => {
+  it('pulls tonight without manual context and freezes the resolved night through review and apply', async () => {
     const requests: Record<string, unknown>[] = [];
     server.use(http.post('/api/director/v1/collaboration/connection/work', async ({ request }) => {
       const body = await request.json() as Record<string, unknown>; requests.push(body);
-      const data = body.operation === 'tonight' ? { shares: [share] } : body.operation === 'preview'
+      const data = body.operation === 'tonight' ? { night: { night: '2026-10-05', moon: 0.12, moon_up: 0.3 }, shares: [share] } : body.operation === 'preview'
         ? { preview: { review_digest: 'review-current', action: 'create', acquisition_enabled: false }, plan: { project_id: 'project', night: '2026-10-05', share } }
         : {};
       return HttpResponse.json({ success: true, data });
     }));
     setup();
-    expect(screen.getByRole('button', { name: 'Pull nightly work' })).toBeDisabled();
-    await userEvent.type(screen.getByLabelText('Night'), '2026-10-05');
-    await userEvent.type(screen.getByLabelText('Moon illumination (%)'), '12');
-    await userEvent.type(screen.getByLabelText('Moon above horizon (%)'), '30');
-    await userEvent.click(screen.getByRole('button', { name: 'Pull nightly work' }));
+    expect(screen.getByRole('button', { name: "Pull tonight's work" })).toBeEnabled();
+    await userEvent.click(screen.getByRole('button', { name: "Pull tonight's work" }));
+    await waitFor(() => expect(requests[0]).toEqual({ operation: 'tonight' }));
     expect(screen.queryByRole('button', { name: 'Import draft' })).not.toBeInTheDocument();
     await userEvent.click(await screen.findByRole('button', { name: 'Review import' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Import draft' }));
     await waitFor(() => expect(requests.at(-1)).toEqual({ operation: 'apply', task: share.task_id, night: { night: '2026-10-05', moon: 0.12, moon_up: 0.3 }, review_digest: 'review-current' }));
-    expect(await screen.findByRole('status')).toHaveTextContent('Imported as an inactive project draft');
+    expect(await screen.findByText('Imported as an inactive project draft')).toBeVisible();
+  });
+  it('offers a date-only override and clears a stale import review when it changes', async () => {
+    const requests: Record<string, unknown>[] = [];
+    server.use(http.post('/api/director/v1/collaboration/connection/work', async ({ request }) => {
+      const body = await request.json() as Record<string, unknown>; requests.push(body);
+      return HttpResponse.json({ success: true, data: body.operation === 'tonight'
+        ? { night: { night: '2026-10-12', moon: 0.2, moon_up: 0.4 }, shares: [share] }
+        : { preview: { review_digest: 'review', action: 'create', acquisition_enabled: false }, plan: { project_id: 'project', night: '2026-10-12', share } } });
+    }));
+    setup();
+    await userEvent.click(screen.getByText('Night override'));
+    fireEvent.change(screen.getByLabelText('Observing date'), { target: { value: '2026-10-12' } });
+    await userEvent.click(screen.getByRole('button', { name: "Pull tonight's work" }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Review import' }));
+    await screen.findByRole('button', { name: 'Import draft' });
+    expect(requests[0]).toEqual({ operation: 'tonight', observing_date: '2026-10-12' });
+    fireEvent.change(screen.getByLabelText('Observing date'), { target: { value: '' } });
+    expect(screen.queryByRole('button', { name: 'Import draft' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Review import' })).not.toBeInTheDocument();
   });
   it('does not automatically retry a failed report delivery', async () => {
     let calls = 0;

@@ -1,5 +1,10 @@
 # Unreleased
 
+- Pull tonight's collaboration work using the rig's site and calculated Moon
+  context, with a date-only manual override. Optionally refresh allowed projects
+  in the background and activate safe assignments into the selected rig database;
+  errors and held work stay visible without discarding offline plans.
+
 - Keep twilight flats in the calibration library during folder imports and
   remote uploads. They no longer create light-image rows or exposure templates
   that could be synced back to Target Scheduler.

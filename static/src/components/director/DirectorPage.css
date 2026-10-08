@@ -161,6 +161,9 @@ button.workspace-pill { cursor: pointer; }
 .collaboration-workflows th, .collaboration-workflows td { padding: 0.35rem; border-bottom: 1px solid var(--color-border-tertiary); }
 .collaboration-workflows td input:not([type="checkbox"]) { width: 100%; }
 .collaboration-workflows select { max-width: 100%; min-width: 0; }
+.collaboration-background { margin: 1rem 0; }
+.collaboration-background summary { cursor: pointer; }
+.collaboration-project-choice { display: flex; align-items: baseline; gap: 0.4rem; margin: 0.35rem 0; overflow-wrap: anywhere; }
 .collaboration-image-list { max-height: 22rem; overflow: auto; margin: 0.75rem 0; }
 .collaboration-image-list table { min-width: 600px; }
 .collaboration-image-list th { white-space: nowrap; }

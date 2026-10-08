@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import { apiClient } from '../../api/client';
 import type { CollaborationConnection, CollaborationSettings, CollaborationWork, CollaborationWorkInput } from '../../api/collaborationTypes';
 import CollaborationReports from './CollaborationReports';
+import CollaborationBackground from './CollaborationBackground';
 
 export default function CollaborationWorkflows({ connection, canWrite, refresh }: { connection: CollaborationConnection; canWrite: boolean; refresh: () => void }) {
   const initial = connection.binding.settings;
@@ -14,8 +15,6 @@ export default function CollaborationWorkflows({ connection, canWrite, refresh }
   const [status, setStatus] = useState(initial?.share_status ?? false);
   const [filters, setFilters] = useState(() => Object.entries(initial?.filters ?? {}).map(([name, v]) => ({ name, seconds: v.exposure_seconds, bandpass: v.bandpass_nm?.toString() ?? '' })));
   const [night, setNight] = useState('');
-  const [moon, setMoon] = useState('');
-  const [moonUp, setMoonUp] = useState('');
   const [work, setWork] = useState<CollaborationWork | null>(null);
   const [preview, setPreview] = useState<{ result: CollaborationWork; input: { task: string; night: { night: string; moon: number; moon_up: number } } } | null>(null);
   const [notice, setNotice] = useState('');
@@ -28,12 +27,17 @@ export default function CollaborationWorkflows({ connection, canWrite, refresh }
       else if (input.operation === 'preview') setPreview({ result, input: { task: input.task, night: input.night } });
       else if (input.operation === 'apply') { setNotice('Imported as an inactive project draft'); refresh(); }
       else if (input.operation === 'checkin') setNotice(`${result.delivered ?? 0} reports delivered; ${result.accepted ?? 0} accepted; ${result.rejected ?? 0} rejected`);
-      else setWork(result);
+      else setWork(previous => {
+        const projects = result.projects ?? previous?.projects;
+        return { ...result, projects: input.operation === 'join'
+          ? projects?.map(project => project.project_id === input.project ? { ...project, joined: true } : project)
+          : projects };
+      });
     },
   });
   const busy = !canWrite || mutation.isPending;
-  const nightValid = /^\d{4}-\d{2}-\d{2}$/.test(night) && moon !== '' && moonUp !== '' && [Number(moon), Number(moonUp)].every(v => Number.isFinite(v) && v >= 0 && v <= 100);
-  const observingNight = { night, moon: Number(moon) / 100, moon_up: Number(moonUp) / 100 };
+  const nightValid = !night || /^\d{4}-\d{2}-\d{2}$/.test(night);
+  const nightOverride = night ? { observing_date: night } : {};
   const save = () => {
     const settings: CollaborationSettings = { binning, colour, hours_per_night: hours, share_status: status,
       filters: Object.fromEntries(filters.map(f => [f.name.trim(), { exposure_seconds: f.seconds, bandpass_nm: f.bandpass === '' ? null : Number(f.bandpass) }])) };
@@ -60,22 +64,22 @@ export default function CollaborationWorkflows({ connection, canWrite, refresh }
           <button type="submit" disabled={!filters.length || new Set(filters.map(f => f.name.trim())).size !== filters.length}><Save size={16} />Save profile</button></div>
       </fieldset>
     </form>
-    <fieldset disabled={busy}><legend>Observing night</legend><div className="rig-profile-grid">
-      <label className="rig-profile-field"><span>Night</span><input type="date" value={night} onChange={e => { setNight(e.target.value); setPreview(null); }} /></label>
-      <label className="rig-profile-field"><span>Moon illumination (%)</span><input type="number" min="0" max="100" step="0.1" value={moon} onChange={e => { setMoon(e.target.value); setPreview(null); }} /></label>
-      <label className="rig-profile-field"><span>Moon above horizon (%)</span><input type="number" min="0" max="100" step="0.1" value={moonUp} onChange={e => { setMoonUp(e.target.value); setPreview(null); }} /></label>
-    </div><div className="director-actions">
+    <fieldset disabled={busy}><legend>Work requests</legend>
+    <details><summary>Night override</summary>
+      <label className="rig-profile-field"><span>Observing date</span><input type="date" value={night} onChange={e => { setNight(e.target.value); setPreview(null); setWork(null); }} /></label>
+    </details><div className="director-actions">
       <button type="button" disabled={!initial} onClick={() => mutation.mutate({ operation: 'browse' })}><RefreshCw size={16} />Browse projects</button>
-      <button type="button" disabled={!initial || !nightValid} onClick={() => mutation.mutate({ operation: 'tonight', night: observingNight })}><Download size={16} />Pull nightly work</button>
+      <button type="button" disabled={!initial || !nightValid} onClick={() => mutation.mutate({ operation: 'tonight', ...nightOverride })}><Download size={16} />Pull tonight's work</button>
       <button type="button" disabled={!initial} onClick={() => mutation.mutate({ operation: 'checkin' })}><Upload size={16} />Check in</button>
     </div></fieldset>
     {mutation.isPending && <p role="status">Contacting collaboration server...</p>}
     {mutation.isError && <p role="alert">{mutation.variables?.operation === 'checkin' && 'Check-in failed; queued reports retained. '}{mutation.error.message}</p>}
     {notice && <p role="status">{notice}</p>}
-    {work?.projects && <table><thead><tr><th>Project</th><th>Compatibility</th><th /></tr></thead><tbody>{work.projects.map(p => <tr key={p.project_id}><td>{p.name}</td><td>{p.compatible === null ? 'Unknown' : p.compatible ? 'Compatible' : 'Incompatible'}</td><td><button type="button" disabled={busy || !nightValid || p.joined || p.compatible === false} onClick={() => { if (window.confirm(`Join ${p.name} with this rig?`)) mutation.mutate({ operation: 'join', project: p.project_id, night: observingNight }); }}><Link2 size={16} />{p.joined ? 'Joined' : 'Join'}</button></td></tr>)}</tbody></table>}
+    {work?.night && <p role="status">Observing night: {work.night.night}</p>}
+    {work?.projects && <table><thead><tr><th>Project</th><th>Compatibility</th><th /></tr></thead><tbody>{work.projects.map(p => <tr key={p.project_id}><td>{p.name}</td><td>{p.compatible === null ? 'Unknown' : p.compatible ? 'Compatible' : 'Incompatible'}</td><td><button type="button" disabled={busy || !nightValid || p.joined || p.compatible === false} onClick={() => { if (window.confirm(`Join ${p.name} with this rig?`)) mutation.mutate({ operation: 'join', project: p.project_id, ...nightOverride }); }}><Link2 size={16} />{p.joined ? 'Joined' : 'Join'}</button></td></tr>)}</tbody></table>}
     {work?.shares?.map(share => <div key={share.task_id}><h4>{share.name ?? share.task_id}</h4>
       <p>{share.demands.length} panel/filter visits; geometry version {share.version}</p>
-      {share.review_reasons.length > 0 ? <p role="alert">Needs review: {share.review_reasons.join(', ')}</p> : <button type="button" disabled={busy || !nightValid} onClick={() => mutation.mutate({ operation: 'preview', task: share.task_id, night: observingNight })}><Download size={16} />Review import</button>}
+      {share.review_reasons.length > 0 ? <p role="alert">Needs review: {share.review_reasons.join(', ')}</p> : <button type="button" disabled={busy || !work.night} onClick={() => { if (work.night) mutation.mutate({ operation: 'preview', task: share.task_id, night: work.night }); }}><Download size={16} />Review import</button>}
     </div>)}
     {preview?.result.preview && <section aria-label="Review collaboration import"><h4>Review import</h4>
       <p>{preview.result.plan?.share.name ?? preview.input.task}: {preview.result.plan?.share.demands.length} visits for {preview.input.night.night}</p>
@@ -83,6 +87,7 @@ export default function CollaborationWorkflows({ connection, canWrite, refresh }
       <button type="button" disabled={busy} onClick={() => mutation.mutate({ ...preview.input, operation: 'apply', review_digest: preview.result.preview!.review_digest })}><Save size={16} />Import draft</button>
       {preview.result.plan && <Link to={`/plan?plan=${encodeURIComponent(preview.result.plan.project_id)}`}>Project plan</Link>}
     </section>}
+    <CollaborationBackground connection={connection} canWrite={canWrite} refresh={refresh} joinedProjects={work?.projects} />
     <CollaborationReports connection={connection.binding.id} canWrite={canWrite} />
   </div>;
 }
