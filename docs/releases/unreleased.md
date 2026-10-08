@@ -1,5 +1,10 @@
 # Unreleased
 
+- Pull collaboration work once per rig-local observing night, including after
+  server restarts. Optionally submit accepted images and replay queued reports
+  automatically, independently of nightly pulls and live activity sharing.
+  Automation and manual reports now use the rig's database without a picker.
+
 - Distinguish the selected rig, its setup sections and its collaboration tabs
   with a clearer rig header, desktop section rail and compact subsection tabs.
 
@@ -24,8 +29,8 @@
   reports retain the actual saved integration rather than planned time.
 - See accepted collaboration images as their files arrive, without reloading
   rig setup. Review the measured contribution data before queueing a submission;
-  pending, rejected and missing files are not offered, and new frames are never
-  selected or submitted automatically.
+  pending, rejected and missing files are not offered. Manual selection remains
+  available when automatic contribution submission is off.
 - Keep what was changed in N.I.N.A. after an activation: the activation
   preview offers **Take Target Scheduler's values** for a rig, which writes
   that rig's frame counts, templates, exposure lengths and moved targets into

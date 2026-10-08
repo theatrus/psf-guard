@@ -4,7 +4,9 @@ use crate::astrometry::{wcs_from_response, AstrometrySolutionResponse};
 use crate::server::director::collaboration_activation::{associations, matching};
 use collaboration::{FrameEvidence, MeasuredFootprint, PreparedImport};
 use std::collections::{BTreeMap, BTreeSet};
+mod automatic;
 mod measurements;
+pub(in crate::server::director::collaboration_auth) use automatic::{automatic, AutomaticResult};
 
 struct CatalogFrames {
     frames: Vec<FrameEvidence>,
@@ -106,22 +108,19 @@ pub(super) async fn inputs(
     service: Arc<Service>,
     b: &ConnectionBinding,
 ) -> Result<Value, Failure> {
-    let catalogs = state
-        .databases
-        .read()
-        .map_err(|_| invalid())?
-        .values()
-        .cloned()
+    let catalogs = background::catalogs(state, service.clone(), b.rig_id).await?;
+    if catalogs.len() != 1 {
+        return Err(Failure(
+            StatusCode::CONFLICT,
+            "This rig must have exactly one available database before preparing reports",
+        ));
+    }
+    let catalogs = catalogs
+        .into_iter()
+        .map(|(_, c)| json!({"id":c.id,"name":c.name}))
         .collect::<Vec<_>>();
-    let instance = service.instance_id;
-    let identified = blocking(move || identified_catalogs(&catalogs, instance)).await?;
     let id = b.id;
-    let rig = b.rig_id;
     service.query(move|s|{
-        let mut catalogs=Vec::new();
-        for (id,(_,catalog)) in identified.by_id {
-            if s.catalog_rig(id)?.is_some_and(|r|r.rig.id==rig) {catalogs.push(json!({"id":catalog.id,"name":catalog.name}));}
-        }
         let imports=s.collaboration_imports_for_connection(id)?.into_iter().map(|i|json!({"id":i.plan.import_id(),"name":i.plan.share().name,"night":i.plan.night(),"panels":i.plan.share().panel_order})).collect::<Vec<_>>();
         Ok(json!({"catalogs":catalogs,"imports":imports}))
     }).await.map_err(Into::into)

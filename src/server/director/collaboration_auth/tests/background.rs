@@ -376,6 +376,20 @@ async fn tonight_resolves_site_context_and_background_activation_is_scoped_idemp
     );
     assert_eq!(scalar("SELECT COUNT(*) FROM exposureplan"), 6);
     assert_eq!(scalar("SELECT MIN(desired) FROM exposureplan"), 11);
+    // Simulate losing process-local timers (including a restart). The durable
+    // checkpoint still prevents another nightly task fetch after 15 minutes.
+    let before_restart = reads.load(Ordering::SeqCst);
+    state
+        .director
+        .as_ref()
+        .unwrap()
+        .collaboration
+        .background
+        .lock()
+        .unwrap()
+        .clear();
+    super::super::background::sweep(&state).await.unwrap();
+    assert_eq!(reads.load(Ordering::SeqCst), before_restart);
     let b = binding(state.director.clone().unwrap(), id).await.unwrap();
     let credential = registry(&state).unwrap();
     credentials::write(&credential, &b, None).unwrap();

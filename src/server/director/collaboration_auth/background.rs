@@ -10,6 +10,7 @@ pub(super) struct Record {
     due: Instant,
     status: Status,
     failures: u32,
+    reports_due: Instant,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -20,6 +21,8 @@ pub(super) struct Status {
     next_run_ms: Option<u64>,
     last_error: Option<&'static str>,
     result: Option<PullResult>,
+    reports: Option<workflows::evidence::AutomaticResult>,
+    report_error: Option<&'static str>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -75,7 +78,11 @@ pub(super) async fn sweep(state: &Arc<AppState>) -> Result<(), Failure> {
                 continue;
             }
         };
-        let Some(policy) = b.background.as_ref().filter(|p| p.enabled) else {
+        let Some(policy) = b
+            .background
+            .as_ref()
+            .filter(|p| p.enabled || p.automatic_reports)
+        else {
             continue;
         };
         if b.state != ConnectionState::Registered {
@@ -88,14 +95,71 @@ pub(super) async fn sweep(state: &Arc<AppState>) -> Result<(), Failure> {
             .map_err(|_| invalid())?
             .get(&id)
             .is_none_or(|r| r.policy != *policy || Instant::now() >= r.due);
-        if due && let Err(error) = run(state, service.clone(), b).await {
+        if policy.enabled
+            && due
+            && let Err(error) = run(state, service.clone(), b.clone(), false).await
+        {
             tracing::warn!(connection_id=%id, reason=error.1, "Collaboration request refresh held; existing plans retained");
+            if error.0 == StatusCode::UNAUTHORIZED {
+                continue;
+            }
+        }
+        if policy.automatic_reports {
+            let report_due = service
+                .collaboration
+                .background
+                .lock()
+                .map_err(|_| invalid())?
+                .get(&id)
+                .is_none_or(|r| Instant::now() >= r.reports_due);
+            if report_due && let Err(error) = run_reports(state, service.clone(), &b).await {
+                tracing::warn!(connection_id=%id, reason=error.1, "Automatic collaboration reports held; outbox retained");
+            }
         }
     }
     Ok(())
 }
 
-async fn catalogs(
+pub(super) async fn run_reports(
+    state: &Arc<AppState>,
+    service: Arc<Service>,
+    b: &ConnectionBinding,
+) -> Result<(), Failure> {
+    if b.state != ConnectionState::Registered {
+        return Err(Failure(
+            StatusCode::CONFLICT,
+            "Reconnect before submitting reports",
+        ));
+    }
+    let policy = b
+        .background
+        .as_ref()
+        .filter(|p| p.automatic_reports)
+        .ok_or_else(invalid)?;
+    let outcome = workflows::evidence::automatic(state, service.clone(), b).await;
+    let mut records = service
+        .collaboration
+        .background
+        .lock()
+        .map_err(|_| invalid())?;
+    let r = records
+        .entry(b.id)
+        .or_insert_with(|| Record::new(policy.clone()));
+    r.reports_due = Instant::now() + Duration::from_secs(300);
+    match outcome {
+        Ok(result) => {
+            r.status.reports = Some(result);
+            r.status.report_error = None;
+            Ok(())
+        }
+        Err(error) => {
+            r.status.report_error = Some(error.1);
+            Err(error)
+        }
+    }
+}
+
+pub(super) async fn catalogs(
     state: &AppState,
     service: Arc<Service>,
     rig: Uuid,
@@ -167,7 +231,7 @@ pub(super) async fn configure(
     }
     if let Some(p) = &policy {
         p.validate().map_err(|_| invalid())?;
-        if p.enabled {
+        if p.enabled || p.automatic_reports {
             if b.state != ConnectionState::Registered || b.settings.is_none() {
                 return Err(Failure(
                     StatusCode::CONFLICT,
@@ -241,6 +305,12 @@ async fn resolve(
     Failure,
 > {
     let catalogs = catalogs(state, service.clone(), b.rig_id).await?;
+    if catalogs.len() != 1 {
+        return Err(Failure(
+            StatusCode::CONFLICT,
+            "This rig must have exactly one available database for automation",
+        ));
+    }
     let catalog = catalogs
         .into_iter()
         .find(|(id, _)| id.id == policy.catalog_id)
@@ -267,6 +337,7 @@ pub(super) async fn run(
     state: &Arc<AppState>,
     service: Arc<Service>,
     b: ConnectionBinding,
+    force: bool,
 ) -> Result<PullResult, Failure> {
     if b.state != ConnectionState::Registered {
         return Err(Failure(
@@ -285,12 +356,9 @@ pub(super) async fn run(
             .background
             .lock()
             .map_err(|_| invalid())?;
-        let r = records.entry(b.id).or_insert(Record {
-            policy: policy.clone(),
-            due: Instant::now(),
-            status: Status::default(),
-            failures: 0,
-        });
+        let r = records
+            .entry(b.id)
+            .or_insert_with(|| Record::new(policy.clone()));
         if r.policy != policy {
             r.policy = policy.clone();
             r.failures = 0;
@@ -298,7 +366,37 @@ pub(super) async fn run(
         r.status.running = true;
         r.status.last_started_ms = Some(now);
     }
-    let mut result = pull(state, service.clone(), &b, &policy, now).await;
+    let mut result = async {
+        let (site, _) = resolve(state, service.clone(), &b, &policy).await?;
+        let night = workflows::resolve_night(service.clone(), b.rig_id, None, None).await?;
+        let id = b.id;
+        let completed = service
+            .clone()
+            .query(move |s| s.collaboration_nightly_run(id))
+            .await?;
+        if !force
+            && completed
+                .as_ref()
+                .is_some_and(|(date, _)| date == &night.night)
+        {
+            return Ok((
+                PullResult {
+                    night: night.night,
+                    ..Default::default()
+                },
+                next_night_seconds(site, now),
+                completed.map(|(_, at)| at).unwrap_or(now),
+            ));
+        }
+        let pulled = pull(state, service.clone(), &b, &policy, now).await?;
+        let date = pulled.night.clone();
+        service
+            .clone()
+            .run(move |s| s.complete_collaboration_night(id, &date, now))
+            .await?;
+        Ok::<_, Failure>((pulled, next_night_seconds(site, now), now))
+    }
+    .await;
     if matches!(&result, Err(Failure(StatusCode::UNAUTHORIZED, _)))
         && let Err(error) =
             change(service.clone(), b.clone(), ConnectionState::Rejected, None).await
@@ -311,9 +409,9 @@ pub(super) async fn run(
     {
         r.status.running = false;
         match &result {
-            Ok(value) => {
+            Ok((value, _, at)) => {
                 r.failures = 0;
-                r.status.last_success_ms = Some(finished);
+                r.status.last_success_ms = Some(*at);
                 r.status.last_error = None;
                 r.status.result = Some(value.clone());
             }
@@ -322,11 +420,37 @@ pub(super) async fn run(
                 r.status.last_error = Some(error.1);
             }
         }
-        let delay = retry_seconds(&policy, r.failures);
+        let delay = result
+            .as_ref()
+            .map(|(_, delay, _)| {
+                delay
+                    .saturating_sub(finished.saturating_sub(now) / 1000)
+                    .max(1)
+            })
+            .unwrap_or_else(|_| retry_seconds(&policy, r.failures));
         r.due = Instant::now() + Duration::from_secs(delay);
         r.status.next_run_ms = Some(finished.saturating_add(delay * 1000));
     }
-    result
+    result.map(|(value, _, _)| value)
+}
+
+impl Record {
+    fn new(policy: BackgroundPolicy) -> Self {
+        Self {
+            policy,
+            due: Instant::now(),
+            reports_due: Instant::now(),
+            status: Status::default(),
+            failures: 0,
+        }
+    }
+}
+
+fn next_night_seconds(site: psf_guard_director_core::visibility::Site, now: u64) -> u64 {
+    let offset = (site.longitude_degrees / 15.0 * 3_600_000.0).round() as i64;
+    let local = now as i64 + offset;
+    let next = (local - 43_200_000).div_euclid(86_400_000) * 86_400_000 + 129_600_000;
+    ((next - local) as u64).div_ceil(1000).max(1)
 }
 
 fn retry_seconds(policy: &BackgroundPolicy, failures: u32) -> u64 {
@@ -544,6 +668,19 @@ async fn seed_recipes(
 mod tests {
     use super::*;
     #[test]
+    fn successful_pulls_wait_until_the_next_rig_local_noon() {
+        let site = psf_guard_director_core::visibility::Site {
+            latitude_degrees: 35.0,
+            longitude_degrees: -105.0,
+            elevation_meters: 2000.0,
+        };
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-08T03:00:00Z")
+            .unwrap()
+            .timestamp_millis() as u64;
+        assert_eq!(next_night_seconds(site, now), 16 * 3600);
+        assert_eq!(next_night_seconds(site, now + 16 * 3_600_000), 24 * 3600);
+    }
+    #[test]
     fn retries_back_off_and_remain_bounded() {
         let p = BackgroundPolicy {
             enabled: true,
@@ -551,6 +688,7 @@ mod tests {
             project_ids: vec!["000000000002".into()],
             interval_minutes: 5,
             activate: false,
+            automatic_reports: false,
         };
         assert_eq!(retry_seconds(&p, 0), 300);
         assert_eq!(retry_seconds(&p, 1), 600);

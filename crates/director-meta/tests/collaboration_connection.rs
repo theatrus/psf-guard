@@ -103,9 +103,13 @@ fn reviewed_settings_survive_reopen_without_changing_agent() {
         project_ids: vec!["000000000002".into()],
         interval_minutes: 15,
         activate: true,
+        automatic_reports: false,
     });
     store
         .update_collaboration_connection(&binding, &configured)
+        .unwrap();
+    store
+        .complete_collaboration_night(binding.id, "2026-10-07", 2000)
         .unwrap();
     assert!(matches!(
         store.update_collaboration_connection(&binding, &configured),
@@ -116,11 +120,21 @@ fn reviewed_settings_survive_reopen_without_changing_agent() {
         vec![binding.id]
     );
     drop(store);
-    let store = MetaStore::open(&path).unwrap();
+    let mut store = MetaStore::open(&path).unwrap();
+    assert_eq!(
+        store.collaboration_nightly_run(binding.id).unwrap(),
+        Some(("2026-10-07".into(), 2000))
+    );
     assert_eq!(
         store.collaboration_connection(binding.id).unwrap(),
-        Some(configured)
+        Some(configured.clone())
     );
+    let mut revised = configured.clone();
+    revised.background.as_mut().unwrap().automatic_reports = true;
+    store
+        .update_collaboration_connection(&configured, &revised)
+        .unwrap();
+    assert_eq!(store.collaboration_nightly_run(binding.id).unwrap(), None);
 }
 
 #[test]
@@ -131,8 +145,24 @@ fn background_policy_requires_bounded_explicit_consent() {
         project_ids: vec!["000000000002".into()],
         interval_minutes: 15,
         activate: true,
+        automatic_reports: false,
     };
     policy.validate().unwrap();
+    let legacy = serde_json::to_value(&policy).unwrap();
+    assert!(legacy.get("automatic_reports").is_none());
+    assert!(
+        !serde_json::from_value::<BackgroundPolicy>(legacy)
+            .unwrap()
+            .automatic_reports
+    );
+    BackgroundPolicy {
+        enabled: false,
+        project_ids: vec![],
+        automatic_reports: true,
+        ..policy.clone()
+    }
+    .validate()
+    .unwrap();
     for invalid in [
         BackgroundPolicy {
             catalog_id: Uuid::nil(),

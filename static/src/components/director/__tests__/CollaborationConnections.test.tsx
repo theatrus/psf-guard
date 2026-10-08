@@ -135,7 +135,7 @@ describe('CollaborationConnections', () => {
     await screen.findByText('Automatic refresh paused');
     await userEvent.click(screen.getByLabelText('Pull tonight automatically'));
     await userEvent.click(screen.getByRole('button', { name: 'Save automation' }));
-    await waitFor(() => expect(saved).toEqual({ operation: 'background_configure', expected: connection.binding.background, policy: { ...connection.binding.background, enabled: false } }));
+    await waitFor(() => expect(saved).toEqual({ operation: 'background_configure', expected: connection.binding.background, policy: { ...connection.binding.background, enabled: false, automatic_reports: false } }));
     expect(screen.queryByRole('button', { name: "Pull tonight's work" })).not.toBeInTheDocument();
   });
   it('enables pairing after discovery and clears the submitted code', async () => {

@@ -4,13 +4,47 @@ use psf_guard_director_interop::{
     collaboration,
     workflow::{self, Night, Settings},
 };
-mod evidence;
+pub(super) mod evidence;
 pub(super) fn now_ms() -> Result<u64, Failure> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()
         .and_then(|d| u64::try_from(d.as_millis()).ok())
         .ok_or_else(invalid)
+}
+
+pub(super) async fn checkin(
+    state: &Arc<AppState>,
+    service: Arc<Service>,
+    id: Uuid,
+) -> Result<Value, Failure> {
+    let b = binding(service.clone(), id).await?;
+    if b.state != ConnectionState::Registered {
+        return Err(conflict());
+    }
+    let path = registry(state)?;
+    let copy = b.clone();
+    let token = file(move || credentials::read(&path, &copy))
+        .await?
+        .ok_or(Failure(
+            StatusCode::CONFLICT,
+            "Credential missing; original work and reports retained",
+        ))?;
+    let remote = Remote::new(&b)?;
+    let source = b.source().map_err(Error::from)?;
+    let result = connected(
+        service.clone(),
+        &b,
+        &source,
+        &remote,
+        &token,
+        Input::Checkin {},
+    )
+    .await;
+    if matches!(&result, Err(Failure(StatusCode::UNAUTHORIZED, _))) {
+        change(service, b, ConnectionState::Rejected, None).await?;
+    }
+    result
 }
 
 #[derive(Deserialize)]
@@ -157,7 +191,16 @@ async fn execute(
             return background::configure(state, service, b, expected.clone(), policy.clone()).await
         }
         Input::BackgroundRun {} => {
-            background::run(state, service.clone(), b.clone()).await?;
+            let policy = b.background.as_ref().ok_or_else(invalid)?;
+            if policy.enabled {
+                background::run(state, service.clone(), b.clone(), true).await?;
+            }
+            if policy.automatic_reports {
+                background::run_reports(state, service.clone(), &b).await?;
+            }
+            if !policy.enabled && !policy.automatic_reports {
+                return Err(invalid());
+            }
             return background::status(state, service, &b).await;
         }
         Input::ReportInputs {} => return evidence::inputs(state, service, &b).await,

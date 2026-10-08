@@ -606,6 +606,20 @@ impl MetaStore {
         read_report(&self.connection, id)
     }
 
+    pub fn latest_collaboration_report(
+        &self,
+        import: Uuid,
+        panel: u32,
+        filter: &str,
+        night: &str,
+    ) -> Result<Option<QueuedReport>, Error> {
+        let id: Option<String> = self.connection.query_row(
+            "SELECT id FROM collaboration_outbox WHERE import_id=?1 AND panel=?2 AND filter=?3 AND json_extract(payload,'$.night')=?4 ORDER BY integration_ms DESC LIMIT 1",
+            params![import.to_string(), panel, filter, night], |r| r.get(0)).optional()?;
+        id.map(|id| read_report(&self.connection, parse_id(&id)?)?.ok_or(Error::CorruptDatabase))
+            .transpose()
+    }
+
     /// One oldest unacknowledged snapshot per report key. New frames queued
     /// while a batch is in flight are not part of its acknowledgement.
     pub fn pending_collaboration_reports(

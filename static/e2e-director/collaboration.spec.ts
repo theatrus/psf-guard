@@ -63,7 +63,7 @@ test('rig setup reviews remote work and saved contributions before importing or 
 
     await collaboration.getByRole('tab', { name: 'Reports' }).click();
     await collaboration.getByLabel('Imported visit').selectOption({ label: 'M31 collaboration (2026-10-05)' });
-    await collaboration.getByRole('combobox', { name: 'Rig database', exact: true }).selectOption(slug);
+    await expect(collaboration.getByRole('combobox', { name: 'Rig database', exact: true })).toHaveCount(0);
     await collaboration.getByLabel('Remote panel').selectOption('0');
     await collaboration.getByLabel('Select M31-Ha-001.fits').check();
     await collaboration.getByRole('button', { name: 'Review 1 images' }).click();
