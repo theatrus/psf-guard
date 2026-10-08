@@ -1,5 +1,8 @@
 # Unreleased
 
+- Distinguish the selected rig, its setup sections and its collaboration tabs
+  with a clearer rig header, desktop section rail and compact subsection tabs.
+
 - Set up rigs in focused tabs and pair collaboration servers through a
   three-step wizard. Tonight's work, automation, capture settings and reports
   now have separate views instead of one long form.

@@ -62,6 +62,31 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     await settings.getByRole('button', { name: 'Setup C925 data' }).click();
     await expect(settings.getByRole('region', { name: 'Rig profile' })).toBeVisible();
     await expect(settings.getByRole('button', { name: 'Save rig profile' })).toBeVisible();
+    const activeRig = settings.locator('.director-rig.is-open');
+    await expect(activeRig).toHaveCount(1);
+    await expect(activeRig.getByRole('heading', { name: 'C925 data', exact: true })).toBeVisible();
+    const setupButton = activeRig.getByRole('button', { name: 'Setup C925 data' });
+    expect(await setupButton.getAttribute('aria-controls')).toBe(await activeRig.locator(':scope > div[id]').getAttribute('id'));
+    // A section rail distinguishes rig setup from Settings and collaboration tabs.
+    for (const width of [1440, 900, 390, 320]) {
+      await page.setViewportSize({ width, height: 1000 });
+      const nav = activeRig.getByRole('tablist', { name: 'Rig setup sections' });
+      await expect(nav).toHaveAttribute('aria-orientation', width >= 800 ? 'vertical' : 'horizontal');
+      const railBox = await nav.boundingBox();
+      const contentBox = await activeRig.locator('.rig-setup-content').boundingBox();
+      expect(railBox).not.toBeNull(); expect(contentBox).not.toBeNull();
+      if (width >= 800) expect(contentBox!.x).toBeGreaterThanOrEqual(railBox!.x + railBox!.width - 1);
+      else expect(contentBox!.y).toBeGreaterThanOrEqual(railBox!.y + railBox!.height - 1);
+      expect(await activeRig.evaluate(e => e.scrollWidth <= e.clientWidth)).toBe(true);
+      expect((await activeRig.getByRole('combobox', { name: 'Camera angle', exact: true }).boundingBox())!.width).toBeGreaterThanOrEqual(140);
+      await settings.locator('.modal-body').evaluate(e => { e.scrollTop = 0; });
+      await page.screenshot({ path: testInfo.outputPath(`rig-setup-hierarchy-${width}.png`) });
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await settings.getByRole('button', { name: 'Setup Redcat data' }).click();
+    await expect(settings.locator('.director-rig.is-open')).toHaveCount(1);
+    await expect(settings.locator('.director-rig.is-open').getByRole('heading', { name: 'Redcat data', exact: true })).toBeVisible();
+    await expect(settings.getByRole('button', { name: 'Setup C925 data' })).toHaveAttribute('aria-expanded', 'false');
     await settings.getByRole('button', { name: '×' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
 

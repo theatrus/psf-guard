@@ -35,8 +35,32 @@
   .director-cell-label { display: block; margin-bottom: 4px; font-size: 12px; color: var(--color-text-secondary); }
 }
 
-/* Rig profile: three short fieldsets, each a wrapping grid of labeled numbers. */
-.rig-profile { margin-bottom: 1rem; }
+/* Rig identity, setup sections and collaboration tabs have distinct levels. */
+.director-rig-list > .director-rig { margin-bottom: 16px; border-top: 1px solid var(--color-border-secondary); border-bottom: 1px solid var(--color-border-secondary); }
+.director-rig > .director-record { padding: 16px; }
+.director-rig.is-open > .director-record { background: var(--color-bg-tertiary); box-shadow: inset 4px 0 var(--color-primary); }
+@media (min-width: 800px) { .director-rig.is-open > .director-record { position: sticky; top: 0; z-index: 2; } }
+.director-rig-title { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 18px; line-height: 1.4; overflow-wrap: anywhere; }
+.director-rig-title svg { flex: none; color: var(--color-text-secondary); }
+.director-rig.is-open .director-rig-title svg { color: var(--color-primary); }
+.rig-profile { margin: 0 0 16px; }
+.rig-profile > .rig-profile-heading { margin: 0; padding: 10px 16px; border-bottom: 1px solid var(--color-border-secondary); }
+.rig-profile-heading h4 { margin: 0; font-size: 14px; color: var(--color-text-secondary); }
+.rig-setup-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr); }
+.rig-setup-content { min-width: 0; padding: 16px; }
+.rig-setup-content > .workspace-panel, .rig-setup-content > form > .workspace-panel { padding-top: 0; }
+.rig-setup-nav.workspace-tabs { flex-direction: column; align-items: stretch; gap: 4px; padding: 12px 8px; border-bottom: 0; border-right: 1px solid var(--color-border-secondary); background: var(--color-bg-secondary); overflow: visible; }
+.director-page .rig-setup-nav.workspace-tabs button.workspace-tab { justify-content: flex-start; gap: 8px; min-height: 42px; padding: 9px 10px; border: 0; border-left: 3px solid transparent; border-radius: 4px; background: none; text-align: left; white-space: normal; font-size: 14px; font-weight: 500; }
+.director-page .rig-setup-nav.workspace-tabs button.workspace-tab svg { flex: none; }
+.director-page .rig-setup-nav.workspace-tabs button.workspace-tab.active { border-left-color: var(--color-primary); background: var(--color-bg-tertiary); color: var(--color-text-primary); font-weight: 600; }
+.director-page .rig-setup-nav.workspace-tabs button.workspace-tab:hover:not(.active) { background: var(--color-bg-tertiary); }
+.director-rigs + .director-sites { margin-top: 32px; padding-top: 8px; border-top: 2px solid var(--color-border-secondary); }
+@media (max-width: 799px) {
+  .rig-setup-layout { grid-template-columns: minmax(0, 1fr); }
+  .rig-setup-nav.workspace-tabs { flex-direction: row; overflow-x: auto; padding: 8px; border-right: 0; border-bottom: 1px solid var(--color-border-secondary); }
+  .director-page .rig-setup-nav.workspace-tabs button.workspace-tab { white-space: nowrap; }
+  .rig-setup-content { padding: 12px; }
+}
 .rig-profile-form fieldset { border: 1px solid var(--border-color, #444); border-radius: 6px; padding: 0.5rem 0.75rem 0.75rem; margin: 0 0 0.75rem; min-width: 0; }
 .rig-profile-form legend { padding: 0 0.35rem; font-weight: 600; }
 .rig-profile-source { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; align-items: center; margin: 0 0 0.5rem; }
@@ -46,7 +70,17 @@
 .rig-profile-input { display: flex; align-items: center; gap: 0.35rem; min-width: 0; }
 .rig-profile-input input, .rig-profile-input select { flex: 1 1 5rem; min-width: 0; width: 100%; box-sizing: border-box; background: var(--color-bg-secondary); color: var(--color-text-primary); border: 1px solid var(--color-border-tertiary); border-radius: 4px; padding: 7px 9px; font: inherit; }
 .rig-profile-input small { white-space: nowrap; opacity: 0.7; }
+.rig-profile-rotation { grid-column: 1 / -1; max-width: 28rem; }
+.rig-profile-rotation select { flex: 2 1 10rem; }
+.rig-profile-rotation input { flex: 1 1 4rem; }
 .rig-profile-source .link-button { display: inline-flex; align-items: center; gap: 0.25rem; background: none; border: none; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; }
+@media (max-width: 600px) {
+  .tauri-settings #settings-panel-rigs { padding: 16px; }
+  .director-rig > .director-record { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
+  .director-rig > .director-record > .director-record-name { grid-column: 1 / -1; }
+  .director-rig > .director-record > a { grid-column: 1; grid-row: 2; }
+  .director-rig > .director-record > button { grid-column: 2; grid-row: 2; }
+}
 
 .director-section-heading { margin: 28px 0 0; font-size: 18px; }
 
@@ -177,6 +211,9 @@ button.workspace-pill { cursor: pointer; }
 .collaboration-server-row .workspace-pill { white-space: normal; overflow-wrap: anywhere; }
 .collaboration-connections > .director-toolbar { margin-top: 0; }
 .collaboration-checkin { justify-content: flex-end; }
+.collaboration-workflows > .workspace-tabs { gap: 2px; }
+.director-page .collaboration-workflows > .workspace-tabs button.workspace-tab { padding: 6px 10px; min-height: 34px; border-radius: 0; border-bottom-width: 2px; font-size: 13px; }
+.director-page .collaboration-workflows > .workspace-tabs button.workspace-tab.active { background: none; }
 .collaboration-workflows .workspace-panel > fieldset { margin-top: 0; }
 .collaboration-options { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 12px 0; }
 .collaboration-filter-list { margin: 12px 0; }

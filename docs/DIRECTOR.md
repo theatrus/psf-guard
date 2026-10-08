@@ -11,8 +11,10 @@ runtime preview and PSF Guard Sync remain separate.
 
 ## Collaboration Sign-In
 
-Open **Settings**, **Rigs**, then **Setup** for a rig. Setup has **Optics**,
-**Site**, **Limits and delivery**, and **Collaboration** tabs. Changes stay in
+Open **Settings**, **Rigs**, then **Setup** for a rig. The selected rig's header
+stays above its setup. **Optics**, **Site**, **Limits and delivery**, and
+**Collaboration** use a section rail on desktop and a compact strip on narrow
+screens, separate from the smaller collaboration tabs. Changes stay in
 the form when you switch tabs; choose **Save rig profile** to save them.
 
 In **Collaboration**, choose **Connect server**. The setup wizard has three

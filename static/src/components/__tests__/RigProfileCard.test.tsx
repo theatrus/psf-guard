@@ -1,8 +1,8 @@
 import { type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import { AccessContext, useAccess } from '../../auth/access';
 import RigProfileCard from '../director/RigProfileCard';
@@ -64,6 +64,33 @@ function mount(canWrite = true) {
 }
 
 describe('Rig profile card', () => {
+  it('uses vertical keyboard navigation on the setup rail and horizontal navigation on narrow screens', async () => {
+    let wide = true;
+    let onChange = () => {};
+    const remove = vi.fn();
+    vi.stubGlobal('matchMedia', vi.fn(() => ({
+      get matches() { return wide; },
+      addEventListener: (_event: string, listener: () => void) => { onChange = listener; },
+      removeEventListener: remove,
+    })));
+    let unmount = () => {};
+    try {
+      fixture(); ({ unmount } = mount());
+      const opticsTab = await screen.findByRole('tab', { name: 'Optics' });
+      const nav = screen.getByRole('tablist', { name: 'Rig setup sections' });
+      expect(nav).toHaveAttribute('aria-orientation', 'vertical');
+      opticsTab.focus();
+      fireEvent.keyDown(opticsTab, { key: 'ArrowDown' });
+      expect(screen.getByRole('tab', { name: 'Site' })).toHaveFocus();
+      wide = false;
+      act(() => onChange());
+      expect(nav).toHaveAttribute('aria-orientation', 'horizontal');
+      fireEvent.keyDown(screen.getByRole('tab', { name: 'Site' }), { key: 'ArrowRight' });
+      expect(screen.getByRole('tab', { name: 'Limits and delivery' })).toHaveFocus();
+    } finally { unmount(); vi.unstubAllGlobals(); }
+    expect(remove).toHaveBeenCalledWith('change', onChange);
+  });
+
   it('keeps edits across focused tabs and supports keyboard navigation', async () => {
     fixture(); mount();
     const opticsTab = await screen.findByRole('tab', { name: 'Optics' });
