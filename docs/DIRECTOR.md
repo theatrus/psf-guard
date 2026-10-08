@@ -11,16 +11,26 @@ runtime preview and PSF Guard Sync remain separate.
 
 ## Collaboration Sign-In
 
-Open **Settings**, **Rigs**, then **Setup** for a rig. Under **Collaboration**,
-add the server's HTTPS URL and remote rig name, then choose **Connect**. PSF Guard
-offers browser sign-in or a pairing code according to the server's capabilities.
+Open **Settings**, **Rigs**, then **Setup** for a rig. Setup has **Optics**,
+**Site**, **Limits and delivery**, and **Collaboration** tabs. Changes stay in
+the form when you switch tabs; choose **Save rig profile** to save them.
+
+In **Collaboration**, choose **Connect server**. The setup wizard has three
+steps: **Server**, **Sign in**, and **Capture**. Enter the server's HTTPS URL
+and remote rig name, then continue. PSF Guard offers browser sign-in or a pairing
+code according to the server's capabilities.
 For browser sign-in, open its approval page, approve there, then choose
 **Check sign-in**. Registration does not join a project or enable acquisition;
-then configure the filters, exposure lengths, binning and colour mode used by
-this rig. Optics come from the rig's commissioned setup, not a second telescope
-profile.
+configure this rig's filters, exposure lengths, binning and colour mode, then
+choose **Finish setup**. You can close the wizard and resume with
+**Continue setup** without enrolling a second agent. Optics come from the rig's
+commissioned setup, not a second telescope profile.
 
-Choose **Browse projects** to see compatible projects, then **Join** a project
+Select a connected server to open its **Tonight**, **Automation**, **Capture**,
+**Reports**, or **Connection** tab. Switching tabs or servers keeps capture
+edits. Pairing leaves background work, activation and activity sharing off.
+
+In **Tonight**, choose **Browse projects** to see compatible projects, then **Join** a project
 or **Pull tonight's work**. Both use the rig's saved site to calculate its
 noon-to-noon observing night and Moon context. **Night override** accepts a
 different date without asking for Moon values. Set the observing site in rig
@@ -29,7 +39,7 @@ to a remote share; it does not start a sequence. **Review import** shows the
 panel/filter visits. **Import draft** creates an ordinary inactive project
 draft. Apply refetches the remote work and refuses a changed review.
 
-Under **Automatic work requests**, select the rig database and explicitly
+In **Automation**, select the rig database and explicitly
 allowed joined or imported projects, then enable **Pull tonight automatically**.
 The saved policy runs without an open browser, every 15 minutes by default.
 **Refresh now** runs that same loop manually. It never joins projects for you.
@@ -63,7 +73,7 @@ its quota. Activating reviewed newer work supersedes the old assignment, reuses
 unchanged targets, and preserves captures and grades. Its new goal starts above
 the accepted count when grading is enabled, or acquired count otherwise.
 
-Under **Contribution reports**, select an imported visit, a database belonging
+In **Reports**, select an imported visit, a database belonging
 to this rig, its remote panel, and accepted images. The open image list refreshes
 every 30 seconds and after catalog imports. Missing files appear only after they
 arrive in a configured image folder. Newly arrived frames are not selected or

@@ -131,11 +131,12 @@ test(`${executor}: arriving M31 files review measured data and replay a queued s
     const settings = page.locator('.tauri-settings');
     await settings.getByRole('tab', { name: 'Rigs' }).click();
     await settings.getByRole('button', { name: 'Setup Arrival rig' }).click();
+    await settings.getByRole('tab', { name: 'Collaboration', exact: true }).click();
     const collaboration = settings.getByRole('region', { name: 'Collaboration', exact: true });
-    await collaboration.getByRole('button', { name: 'Contribution reports' }).click();
+    await collaboration.getByRole('tab', { name: 'Reports' }).click();
     await collaboration.getByLabel('Imported visit').selectOption({ label: 'M31 halo in narrowband (2026-10-05)' });
     await collaboration.getByLabel('Observing night', { exact: true }).fill(observingNight);
-    await collaboration.getByLabel('Rig database').selectOption(slug);
+    await collaboration.getByRole('combobox', { name: 'Rig database', exact: true }).selectOption(slug);
     await collaboration.getByLabel('Remote panel').selectOption('0');
     await expect(collaboration).toContainText('0 accepted images');
     save(1);

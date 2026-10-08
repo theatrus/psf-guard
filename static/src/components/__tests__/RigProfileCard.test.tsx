@@ -12,7 +12,12 @@ import { editFromForm, formFromProfile } from '../director/rigProfileForm';
 const ok = (data: unknown) => ({ success: true, data, error: null });
 const rig = { id: '22222222-2222-4222-8222-222222222222', name: 'RedCat', revision: 1 };
 beforeEach(() => {
-  server.use(http.get(`/api/director/v1/rigs/${rig.id}/collaboration`, () => HttpResponse.json(ok([]))));
+  server.use(
+    http.get(`/api/director/v1/rigs/${rig.id}/collaboration`, () => HttpResponse.json(ok([]))),
+    http.get('/api/director/v1/preferences', () => HttpResponse.json(ok({ global_id: 'g', presets: {}, sites: [] }))),
+    http.get(`/api/director/v1/preferences/rig/${rig.id}`, () => HttpResponse.json(ok({ scope: 'rig', scope_id: rig.id, revision: 0, overrides: { weights: {} }, enabled: null, site_id: null }))),
+    http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([]))),
+  );
 });
 const optics = { sensor_width_px: 6248, sensor_height_px: 4176, pixel_size_um: 3.76, focal_length_mm: 250, aperture_mm: 51, rotation: { mode: 'manual' as const, angle_degrees: 0 } };
 const site = { latitude_degrees: 34.2, longitude_degrees: -118.3, elevation_meters: 400 };
@@ -59,6 +64,23 @@ function mount(canWrite = true) {
 }
 
 describe('Rig profile card', () => {
+  it('keeps edits across focused tabs and supports keyboard navigation', async () => {
+    fixture(); mount();
+    const opticsTab = await screen.findByRole('tab', { name: 'Optics' });
+    fireEvent.change(screen.getByLabelText('Focal length'), { target: { value: '310' } });
+    expect(screen.getByRole('tabpanel', { name: 'Optics' })).toBeVisible();
+    expect(screen.queryByRole('tabpanel', { name: 'Site' })).not.toBeInTheDocument();
+    opticsTab.focus();
+    fireEvent.keyDown(opticsTab, { key: 'ArrowRight' });
+    expect(screen.getByRole('tab', { name: 'Site' })).toHaveFocus();
+    expect(screen.getByRole('tabpanel', { name: 'Site' })).toBeVisible();
+    fireEvent.click(opticsTab);
+    expect(screen.getByLabelText('Focal length')).toHaveValue(310);
+    fireEvent.keyDown(opticsTab, { key: 'End' });
+    expect(screen.getByRole('tab', { name: 'Collaboration' })).toHaveFocus();
+    expect(await screen.findByRole('button', { name: 'Connect server' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Save rig profile' })).not.toBeInTheDocument();
+  });
   it('fills optics and site from frame headers, previews the field, and saves with the read revision', async () => {
     const { saves } = fixture(); mount();
     expect(await screen.findAllByText('Not set', { selector: '.rig-profile-source' })).toHaveLength(2);
@@ -66,9 +88,11 @@ describe('Rig profile card', () => {
     expect(screen.getByLabelText('Sensor width')).toHaveValue(6248);
     expect(screen.getByTestId('rig-profile-fov')).toHaveTextContent('Field 5.38° × 3.60°, 3.10″ per pixel, f/4.9');
     expect(screen.getAllByText(/^From frame headers of newest\.fits/)[0]).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Site' }));
     fireEvent.click(screen.getByRole('button', { name: 'Use frame headers' }));
     expect(screen.getByLabelText('Latitude')).toHaveValue(34.2);
     fireEvent.change(screen.getByLabelText('Bortle class'), { target: { value: '6' } });
+    fireEvent.click(screen.getByRole('tab', { name: 'Limits and delivery' }));
     fireEvent.change(screen.getByLabelText('Stop before meridian'), { target: { value: '10' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
     expect(await screen.findByText('Saved rig profile revision 1.')).toBeInTheDocument();
@@ -79,6 +103,7 @@ describe('Rig profile card', () => {
     expect(saves[0].sky_quality?.value).toEqual({ bortle_class: 6, sqm_mag_per_arcsec2: null });
     expect(saves[0].limits.value.meridian_exclusion).toEqual({ before_ms: 600000, after_ms: 0 });
     // A hand edit after a header fill changes the source, and the next save uses the new revision.
+    fireEvent.click(screen.getByRole('tab', { name: 'Optics' }));
     fireEvent.change(screen.getByLabelText('Focal length'), { target: { value: '260' } });
     expect(screen.getAllByText(/^Set by hand/)[0]).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
@@ -102,6 +127,7 @@ describe('Rig profile card', () => {
 
   it('names a registered peer the plans push to, and keeps an unregistered one visible', async () => {
     const { saves } = fixture(); mount();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Limits and delivery' }));
     const select = await screen.findByLabelText('Plans push to');
     await waitFor(() => expect(screen.getByRole('option', { name: 'Observatory' })).toBeInTheDocument());
     expect(select).toHaveValue('');
@@ -165,6 +191,7 @@ describe('Rig profile card', () => {
     );
     mount();
     expect(await screen.findByTestId('rig-site-origin')).toHaveTextContent('Planning uses no location yet and a flat horizon at the minimum altitude.');
+    fireEvent.click(await screen.findByRole('tab', { name: 'Site' }));
     fireEvent.change(await screen.findByLabelText('Planning site'), { target: { value: backyard.id } });
 
     fireEvent.change(screen.getByLabelText('Rig horizon file text'), { target: { value: 'north 5' } });
@@ -199,6 +226,7 @@ describe('Rig profile card', () => {
       }),
     );
     mount();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Site' }));
     fireEvent.change(await screen.findByLabelText('Planning site'), { target: { value: backyard.id } });
     fireEvent.change(screen.getByLabelText('Bortle class'), { target: { value: '5' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));

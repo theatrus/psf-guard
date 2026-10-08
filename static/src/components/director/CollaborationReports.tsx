@@ -4,9 +4,10 @@ import { Check, RefreshCw, Upload } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import type { CollaborationWork, CollaborationWorkInput, ContributionSelection } from '../../api/collaborationTypes';
 
-export default function CollaborationReports({ connection, canWrite }: { connection: string; canWrite: boolean }) {
+export default function CollaborationReports({ connection, canWrite, embedded = false, active = true }: { connection: string; canWrite: boolean; embedded?: boolean; active?: boolean }) {
   const [expanded, setExpanded] = useState(false);
-  const inputs = useQuery({ queryKey: ['collaborationReportInputs', connection], enabled: expanded && canWrite, retry: false, queryFn: () => apiClient.collaborationWork(connection, { operation: 'report_inputs' }) });
+  const show = embedded || expanded;
+  const inputs = useQuery({ queryKey: ['collaborationReportInputs', connection], enabled: active && show && canWrite, retry: false, queryFn: () => apiClient.collaborationWork(connection, { operation: 'report_inputs' }) });
   const [importId, setImport] = useState('');
   const [catalog, setCatalog] = useState('');
   const [panel, setPanel] = useState('');
@@ -17,7 +18,7 @@ export default function CollaborationReports({ connection, canWrite }: { connect
   const [selected, setSelected] = useState<string[]>([]);
   const [preview, setPreview] = useState<{ result: CollaborationWork; selection: ContributionSelection } | null>(null);
   const [notice, setNotice] = useState('');
-  const candidates = useQuery({ queryKey: ['db', catalog, 'collaborationReportCandidates', connection, importId, observingNight], enabled: expanded && canWrite && !!importId && !!catalog && !!observingNight, retry: false, refetchInterval: 30_000,
+  const candidates = useQuery({ queryKey: ['db', catalog, 'collaborationReportCandidates', connection, importId, observingNight], enabled: active && show && canWrite && !!importId && !!catalog && !!observingNight, retry: false, refetchInterval: 30_000,
     queryFn: () => apiClient.collaborationWork(connection, { operation: 'report_candidates', import_id: importId, catalog, observing_night: observingNight }) });
   const operation = useMutation({ retry: false, mutationFn: (input: CollaborationWorkInput) => apiClient.collaborationWork(connection, input),
     onMutate: () => { setPreview(null); setNotice(''); },
@@ -38,8 +39,8 @@ export default function CollaborationReports({ connection, canWrite }: { connect
   const reviewed = !candidates.isError && preview?.selection.image_guids.every(guid => images.some(image => image.guid === guid)) ? preview : null;
   const measured = (value: number | null | undefined, unit: string) => value == null ? 'Unknown' : `${value.toFixed(2)} ${unit}`;
   return <section className="collaboration-reports" aria-label="Contribution reports">
-    <div className="director-actions"><button type="button" disabled={!canWrite} onClick={() => setExpanded(v => !v)}><Upload size={16} />Contribution reports</button></div>
-    {expanded && <>
+    {!embedded && <div className="director-actions"><button type="button" disabled={!canWrite} onClick={() => setExpanded(v => !v)}><Upload size={16} />Contribution reports</button></div>}
+    {show && <>
       <fieldset disabled={busy}><legend>Saved images</legend><div className="rig-profile-grid">
         <label className="rig-profile-field"><span>Imported visit</span><select value={importId} onChange={e => { setImport(e.target.value); setPanel(''); setRevision(''); setObservingNight(inputs.data?.imports?.find(i => i.id === e.target.value)?.night ?? ''); reset(); }}><option value="">Select visit</option>{inputs.data?.imports?.map(i => <option key={i.id} value={i.id}>{i.name ?? i.id} ({i.night})</option>)}</select></label>
         <label className="rig-profile-field"><span>Observing night</span><input type="date" required value={observingNight} onChange={e => { setObservingNight(e.target.value); setRevision(''); reset(); }} /></label>

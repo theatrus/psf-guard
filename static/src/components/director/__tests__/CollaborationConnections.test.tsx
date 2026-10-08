@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
@@ -14,13 +14,112 @@ const ok = (data: unknown) => HttpResponse.json({ success: true, data });
 function initial(): CollaborationConnection {
   return { binding: { id, rig_id: rig, base_url: 'https://collaboration.example/', name: 'Rig', agent_id: null, allow_loopback_http: false, state: 'new' }, status: 'not_connected' };
 }
-function setup(connection: CollaborationConnection, canWrite = true) {
-  server.use(http.get(`/api/director/v1/rigs/${rig}/collaboration`, () => ok([connection])));
+function setup(connection: CollaborationConnection | CollaborationConnection[], canWrite = true) {
+  const rows = Array.isArray(connection) ? connection : [connection];
+  server.use(http.get(`/api/director/v1/rigs/${rig}/collaboration`, () => ok(rows)));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } });
   render(<QueryClientProvider client={client}><AccessContext.Provider value={{ canWrite, canCompute: canWrite, logout: async () => undefined, status: { authentication_required: true, authenticated: true, role: canWrite ? 'read_write' : 'read_only', can_compute: canWrite } }}><CollaborationConnections rig={rig} name="Rig" /></AccessContext.Provider></QueryClientProvider>);
   return client;
 }
 describe('CollaborationConnections', () => {
+  it('keeps capture edits when changing sections and servers', async () => {
+    const first = initial();
+    first.status = 'registered'; first.binding.state = 'registered'; first.binding.agent_id = '000000000001';
+    first.binding.settings = { binning: 1, colour: false, hours_per_night: 6, share_status: false, filters: { Ha: { exposure_seconds: 300, bandpass_nm: 7 } } };
+    const second = structuredClone(first);
+    second.binding.id = '00000000-0000-4000-8000-000000000003'; second.binding.name = 'Second rig';
+    setup([first, second]);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Capture' }));
+    const capture = () => within(screen.getByRole('tabpanel', { name: 'Capture' }));
+    await userEvent.clear(capture().getByLabelText('Exposure 1'));
+    await userEvent.type(capture().getByLabelText('Exposure 1'), '600');
+    await userEvent.click(screen.getByRole('tab', { name: 'Connection' }));
+    await userEvent.click(screen.getByRole('button', { name: /Second rig/ }));
+    await userEvent.click(screen.getByRole('tab', { name: 'Capture' }));
+    expect(capture().getByLabelText('Exposure 1')).toHaveValue(300);
+    await userEvent.click(within(screen.getByRole('list', { name: 'Collaboration servers' })).getAllByRole('button')[0]);
+    await userEvent.click(screen.getByRole('tab', { name: 'Capture' }));
+    expect(capture().getByLabelText('Exposure 1')).toHaveValue(600);
+  });
+
+  it('refreshes an already mounted capture form after finishing setup', async () => {
+    const connection = initial();
+    connection.status = 'registered'; connection.binding.state = 'registered'; connection.binding.agent_id = '000000000001';
+    server.use(http.post(`/api/director/v1/collaboration/${id}/work`, async ({ request }) => {
+      const input = await request.json() as { operation: string; settings: NonNullable<CollaborationConnection['binding']['settings']> };
+      expect(input.operation).toBe('configure'); connection.binding.settings = input.settings;
+      return ok({ binding: connection.binding });
+    }));
+    setup(connection);
+    await screen.findByRole('button', { name: 'Add filter' });
+    await userEvent.click(screen.getByRole('tab', { name: 'Connection' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Continue setup' }));
+    const wizard = within(screen.getByRole('dialog'));
+    await userEvent.click(wizard.getByRole('button', { name: 'Add filter' }));
+    await userEvent.type(wizard.getByLabelText('Filter 1'), 'OIII');
+    await userEvent.click(wizard.getByRole('button', { name: 'Finish setup' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole('tab', { name: 'Capture' }));
+    expect(screen.getByLabelText('Filter 1')).toHaveValue('OIII');
+  });
+
+  it('walks server, authorization and capture setup, retaining the agent and edits after a failed save', async () => {
+    const rows: CollaborationConnection[] = [];
+    let creates = 0, saves = 0;
+    server.use(
+      http.post(`/api/director/v1/rigs/${rig}/collaboration`, async ({ request }) => {
+        creates++;
+        const input = await request.json() as { id: string; server_url: string; name: string };
+        const connection = initial(); connection.binding.id = input.id; connection.binding.base_url = input.server_url; connection.binding.name = input.name;
+        rows.push(connection); return ok(connection);
+      }),
+      http.post('/api/director/v1/collaboration/:id/discover', () => ok({ pairing: true, signin: false })),
+      http.post('/api/director/v1/collaboration/:id/pair', () => {
+        rows[0].status = 'registered'; rows[0].binding.state = 'registered'; rows[0].binding.agent_id = '000000000001'; return ok(rows[0]);
+      }),
+      http.post('/api/director/v1/collaboration/:id/work', async ({ request }) => {
+        const input = await request.json() as { operation: string; settings: NonNullable<CollaborationConnection['binding']['settings']> };
+        expect(input.operation).toBe('configure');
+        if (++saves === 1) return HttpResponse.json({ error: 'Storage unavailable' }, { status: 503 });
+        rows[0].binding.settings = input.settings; return ok({ binding: rows[0].binding });
+      }),
+    );
+    setup(rows);
+    await userEvent.click(screen.getByRole('button', { name: 'Connect server' }));
+    const wizard = within(screen.getByRole('dialog', { name: 'Connect collaboration' }));
+    expect(creates).toBe(0);
+    await userEvent.type(wizard.getByLabelText('Collaboration server'), 'https://collab.example/');
+    await userEvent.click(wizard.getByRole('button', { name: 'Continue' }));
+    await userEvent.click(await wizard.findByRole('button', { name: 'Connect' }));
+    await userEvent.type(await wizard.findByLabelText('Pairing code'), 'PAIR-ONCE');
+    await userEvent.click(wizard.getByRole('button', { name: 'Pair' }));
+    expect(await wizard.findByRole('button', { name: 'Finish setup' })).toBeDisabled();
+    await userEvent.click(wizard.getByRole('button', { name: 'Add filter' }));
+    await userEvent.type(wizard.getByLabelText('Filter 1'), 'Ha');
+    expect(wizard.getByLabelText('Share current activity')).not.toBeChecked();
+    await userEvent.click(wizard.getByRole('button', { name: 'Finish setup' }));
+    expect(await wizard.findByRole('alert')).toHaveTextContent('Storage unavailable');
+    expect(wizard.getByLabelText('Filter 1')).toHaveValue('Ha');
+    await userEvent.click(wizard.getByRole('button', { name: 'Finish setup' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole('tab', { name: 'Capture' }));
+    expect(screen.getByLabelText('Filter 1')).toHaveValue('Ha');
+    expect(creates).toBe(1); expect(saves).toBe(2);
+    expect(rows[0].binding.background).toBeUndefined();
+  });
+
+  it('closes and resumes an unpaired binding without retaining an unsubmitted code', async () => {
+    server.use(http.post(`/api/director/v1/collaboration/${id}/discover`, () => ok({ pairing: true, signin: false })));
+    setup(initial());
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue setup' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await userEvent.type(await screen.findByLabelText('Pairing code'), 'UNSUBMITTED');
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Continue setup' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    expect(await screen.findByLabelText('Pairing code')).toHaveValue('');
+    expect(screen.queryByDisplayValue('UNSUBMITTED')).not.toBeInTheDocument();
+  });
   it('keeps automation controls available after credential loss', async () => {
     const connection = initial();
     connection.status = 'credential_missing'; connection.binding.agent_id = '000000000001'; connection.binding.state = 'registered';
@@ -32,7 +131,7 @@ describe('CollaborationConnections', () => {
       return ok({ policy: input.policy ?? connection.binding.background, catalogs: [], projects: [], status: { running: false, last_started_ms: null, last_success_ms: null, next_run_ms: null, last_error: null, result: null } });
     }));
     setup(connection);
-    await userEvent.click(await screen.findByText('Automatic work requests'));
+    await userEvent.click(await screen.findByRole('tab', { name: 'Automation' }));
     await screen.findByText('Automatic refresh paused');
     await userEvent.click(screen.getByLabelText('Pull tonight automatically'));
     await userEvent.click(screen.getByRole('button', { name: 'Save automation' }));
@@ -46,6 +145,7 @@ describe('CollaborationConnections', () => {
         requests.push(await request.json()); connection.binding.agent_id = '000000000001'; connection.binding.state = 'registered'; connection.status = 'registered'; return ok(connection);
       }));
     setup(connection);
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue setup' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Connect' }));
     const input = await screen.findByLabelText('Pairing code');
     expect(screen.getByRole('button', { name: 'Pair' })).toBeDisabled();
@@ -53,7 +153,7 @@ describe('CollaborationConnections', () => {
     expect(screen.getByRole('button', { name: 'Pair' })).toBeEnabled();
     await userEvent.click(screen.getByRole('button', { name: 'Pair' }));
     await waitFor(() => expect(requests).toEqual([{ code: 'PAIR-ONCE' }]));
-    expect(await screen.findByText('Registered (000000000001)')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Finish setup' })).toBeDisabled();
     expect(screen.queryByDisplayValue('PAIR-ONCE')).not.toBeInTheDocument();
   });
   it('retains browser approval controls after a polling rate limit', async () => {
@@ -61,6 +161,7 @@ describe('CollaborationConnections', () => {
       http.post(`/api/director/v1/collaboration/${id}/signin`, () => ok({ status: 'awaiting_browser', url: 'https://collaboration.example/auth/start?code=TEMP', expires_in: 300 })),
       http.post(`/api/director/v1/collaboration/${id}/poll`, () => HttpResponse.json({ error: 'Wait before checking again' }, { status: 429 })));
     setup(initial());
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue setup' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Connect' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Browser sign-in' }));
     expect(await screen.findByRole('link', { name: 'Open sign-in' })).toHaveAttribute('rel', 'noopener noreferrer');
@@ -72,12 +173,13 @@ describe('CollaborationConnections', () => {
   it('restores pending controls on reload and does not offer repair as a new agent', async () => {
     const pending = initial(); pending.status = 'awaiting_browser';
     const client = setup(pending);
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue setup' }));
     expect(await screen.findByRole('button', { name: 'Check sign-in' })).toBeEnabled();
     pending.binding.agent_id = '000000000001'; pending.binding.state = 'registered'; pending.status = 'credential_missing';
     await client.invalidateQueries({ queryKey: ['collaborationConnections', rig] });
-    expect(await screen.findByText(/Credential missing/)).toBeInTheDocument();
+    expect(await within(screen.getByRole('dialog')).findByText('Credential missing')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Pair' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Add connection' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Connect server' })).toBeInTheDocument();
   });
   it('allows a new browser sign-in when approval expires', async () => {
     const connection = initial();
@@ -85,6 +187,7 @@ describe('CollaborationConnections', () => {
       http.post(`/api/director/v1/collaboration/${id}/signin`, () => ok({ status: 'awaiting_browser', url: 'https://collaboration.example/auth/start?code=TEMP', expires_in: 300 })),
       http.post(`/api/director/v1/collaboration/${id}/poll`, () => HttpResponse.json({ error: 'Sign-in expired' }, { status: 409 })));
     setup(connection);
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue setup' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Connect' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Browser sign-in' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Check sign-in' }));
@@ -94,8 +197,7 @@ describe('CollaborationConnections', () => {
   });
   it('does not expose write controls to a read-only user', async () => {
     setup(initial(), false);
-    expect(await screen.findByText('Not connected')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
-    expect(screen.queryByRole('button', { name: 'Add connection' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Continue setup' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Connect server' })).not.toBeInTheDocument();
   });
 });

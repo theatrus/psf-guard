@@ -49,6 +49,7 @@ test('rig setup reviews remote work and saved contributions before importing or 
     const settings = page.locator('.tauri-settings');
     await settings.getByRole('tab', { name: 'Rigs' }).click();
     await settings.getByRole('button', { name: 'Setup Collaboration rig' }).click();
+    await settings.getByRole('tab', { name: 'Collaboration', exact: true }).click();
     const collaboration = settings.getByRole('region', { name: 'Collaboration', exact: true });
     await expect(collaboration.getByRole('button', { name: "Pull tonight's work" })).toBeEnabled();
     await collaboration.getByRole('button', { name: "Pull tonight's work" }).click();
@@ -60,16 +61,16 @@ test('rig setup reviews remote work and saved contributions before importing or 
     await expect(collaboration).toContainText('Imported as an inactive project draft');
     expect(operations.find(o => o.operation === 'apply')).toMatchObject({ task: share.task_id, review_digest: 'work-digest' });
 
-    await collaboration.getByRole('button', { name: 'Contribution reports' }).click();
+    await collaboration.getByRole('tab', { name: 'Reports' }).click();
     await collaboration.getByLabel('Imported visit').selectOption({ label: 'M31 collaboration (2026-10-05)' });
-    await collaboration.getByLabel('Rig database').selectOption(slug);
+    await collaboration.getByRole('combobox', { name: 'Rig database', exact: true }).selectOption(slug);
     await collaboration.getByLabel('Remote panel').selectOption('0');
     await collaboration.getByLabel('Select M31-Ha-001.fits').check();
     await collaboration.getByRole('button', { name: 'Review 1 images' }).click();
     await expect(collaboration).toContainText('Measured shared coverage: 1.000 x 1.000 degrees');
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 1000 });
-      await collaboration.getByRole('button', { name: 'Contribution reports' }).scrollIntoViewIfNeeded();
+      await collaboration.getByRole('tab', { name: 'Reports' }).scrollIntoViewIfNeeded();
       expect(await collaboration.evaluate(e => e.scrollWidth <= e.clientWidth)).toBeTruthy();
       await page.screenshot({ path: testInfo.outputPath(`collaboration-${width}.png`) });
     }
