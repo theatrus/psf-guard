@@ -91,7 +91,31 @@ impl AstrometryConfig {
         self.resolve_required(&self.star_identifiers, seiza::data_paths::star_identifiers)
     }
 
+    /// The blind index to solve with. With no `blind_index` configured and
+    /// `SEIZA_BLIND_INDEX` unset, the index beside the resolved star catalog
+    /// comes first: a catalog and its index ship together, and an index found
+    /// elsewhere may belong to another catalog. Otherwise, or when none sits
+    /// beside it, the index resolves from `blind_index` or `data_dir`.
     pub fn blind_index_path(&self) -> AstrometryResourcePath {
+        let pinned = std::env::var_os("SEIZA_BLIND_INDEX").is_some_and(|value| !value.is_empty());
+        self.resolve_blind_index(pinned)
+    }
+
+    fn resolve_blind_index(&self, environment_pinned: bool) -> AstrometryResourcePath {
+        let configured = self
+            .blind_index
+            .as_deref()
+            .is_some_and(|path| !path.is_empty());
+        // Given a directory, Seiza looks for `blind-gaia16.idx` and then any
+        // `.idx`, the lookup its own `blind_index_beside` makes.
+        if !configured
+            && !environment_pinned
+            && let Ok(Some(stars)) = self.stars_path()
+            && let Some(directory) = stars.parent()
+            && let Ok(Some(beside)) = seiza::data_paths::blind_index(Some(directory))
+        {
+            return Ok(Some(beside));
+        }
         let input = self.resolver_input(&self.blind_index);
         seiza::data_paths::blind_index(input.as_deref())
     }
@@ -2631,6 +2655,68 @@ mod tests {
         assert_eq!(
             satellites.satellite_elements_path().unwrap(),
             directory.path().join("active.json")
+        );
+    }
+
+    /// A `data_dir` bundle with its own index, and a star catalog kept in a
+    /// folder of its own, as `stars` names it.
+    fn separate_star_catalog(index_beside: bool) -> (tempfile::TempDir, AstrometryConfig) {
+        let root = tempfile::tempdir().unwrap();
+        let bundle = root.path().join("bundle");
+        let catalog = root.path().join("catalog");
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::create_dir_all(&catalog).unwrap();
+        std::fs::write(bundle.join("stars-gaia.bin"), b"gaia").unwrap();
+        std::fs::write(bundle.join("blind-gaia16.idx"), b"bundle index").unwrap();
+        std::fs::write(bundle.join("custom.idx"), b"configured index").unwrap();
+        std::fs::write(catalog.join("stars-deep-gaia17.bin"), b"deep").unwrap();
+        if index_beside {
+            std::fs::write(catalog.join("blind-gaia16.idx"), b"catalog index").unwrap();
+        }
+        let config = AstrometryConfig {
+            data_dir: Some(bundle.to_string_lossy().into_owned()),
+            stars: Some(
+                catalog
+                    .join("stars-deep-gaia17.bin")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            ..Default::default()
+        };
+        (root, config)
+    }
+
+    #[test]
+    fn blind_index_beside_an_explicit_star_catalog_comes_first() {
+        let (root, config) = separate_star_catalog(true);
+        assert_eq!(
+            config.resolve_blind_index(false).unwrap().unwrap(),
+            root.path().join("catalog").join("blind-gaia16.idx"),
+            "the catalog's own index, not the one in data_dir"
+        );
+        assert_eq!(
+            config.resolve_blind_index(true).unwrap().unwrap(),
+            root.path().join("bundle").join("blind-gaia16.idx"),
+            "SEIZA_BLIND_INDEX pins the index, so resolution stays as before"
+        );
+    }
+
+    #[test]
+    fn configured_blind_index_wins_over_the_one_beside_the_catalog() {
+        let (root, mut config) = separate_star_catalog(true);
+        config.blind_index = Some("custom.idx".to_string());
+        assert_eq!(
+            config.resolve_blind_index(false).unwrap().unwrap(),
+            root.path().join("bundle").join("custom.idx")
+        );
+    }
+
+    #[test]
+    fn blind_index_falls_back_to_data_dir_when_none_sits_beside_the_catalog() {
+        let (root, config) = separate_star_catalog(false);
+        assert_eq!(
+            config.resolve_blind_index(false).unwrap().unwrap(),
+            root.path().join("bundle").join("blind-gaia16.idx")
         );
     }
 

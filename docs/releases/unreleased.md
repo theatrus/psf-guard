@@ -1,5 +1,22 @@
 # Unreleased
 
+- Seiza 0.23.1 builds calibration masters on every core and runs stacking,
+  debayering, display stretches, background models and deconvolution faster,
+  so stacks and image previews come sooner with the same output. A master dark
+  that records no sensor temperature, such as one from PixInsight's WBPP, now
+  calibrates cooled lights; before, the stack ran uncalibrated. Satellite
+  tracks are now predicted with the WGS72 constants their orbital elements
+  were fitted with, which moves a track by up to tens of arcseconds, and the
+  next quality scan recomputes each image's prediction. FITS header values
+  written without a space after `=` read correctly. Existing stacks and
+  masters rebuild once, as after every Seiza stacking upgrade.
+
+- Blind solves use the blind index beside the star catalog. A catalog kept in
+  a folder of its own, named by the `stars` setting or `SEIZA_STAR_DATA`, used
+  to take its index from `data_dir` or Seiza's default folders. That index
+  could belong to another catalog, and when there was none, blind solving was
+  off. A `blind_index` setting or `SEIZA_BLIND_INDEX` still chooses the index.
+
 - Retry saved collaboration work after temporary database failures without
   another nightly pull. Prepare contribution evidence in bounded batches and
   show remote acceptance, rejection and persistent rejection reasons.

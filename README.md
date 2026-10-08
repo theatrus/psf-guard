@@ -512,7 +512,7 @@ toggles the overlay instead of solving again.
 
 ### Install the Seiza catalogs
 
-PSF Guard embeds Seiza 0.12.0's solver but does not bundle its multi-gigabyte
+PSF Guard embeds Seiza 0.23.1's solver but does not bundle its multi-gigabyte
 catalog data. The desktop app can install and update these files from
 **Settings → Seiza Catalogs**. The same controls appear in a browser when the
 server starts with `--allow-database-management`. The **Catalogs** tab in
@@ -524,7 +524,7 @@ reloads, and can validate every installed file. Catalog packages are additive;
 
 For a manual or headless install, get the `seiza` CLI from the
 [Seiza releases](https://github.com/theatrus/seiza/releases) or with
-`cargo install seiza-cli --version 0.12.0`, then download a bundle once:
+`cargo install seiza-cli --version 0.23.1`, then download a bundle once:
 
 ```bash
 # Recommended: choose a bundle interactively and install it in Seiza's
@@ -573,7 +573,7 @@ their roles are distinct:
 |------|---------|
 | `objects.bin` | Coordinate-only object association plus solved labels and catalog outlines |
 | `stars-lite-tycho2.bin`, `stars-gaia.bin`, or `stars-deep-gaia17.bin` | Hinted plate solving; Seiza selects the deepest installed catalog |
-| `blind-gaia16.idx` | Blind fallback when the pointing hint is absent or stale |
+| `blind-gaia16.idx` | Blind fallback when the pointing hint is absent or stale. PSF Guard uses the index beside the star catalog first, unless the `astrometry.blind_index` setting or `SEIZA_BLIND_INDEX` names one |
 
 Check what the running process discovered before troubleshooting an image:
 
