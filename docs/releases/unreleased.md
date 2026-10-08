@@ -10,6 +10,12 @@
   written without a space after `=` read correctly. Existing stacks and
   masters rebuild once, as after every Seiza stacking upgrade.
 
+- Blind solves use the blind index beside the star catalog. A catalog kept in
+  a folder of its own, named by the `stars` setting or `SEIZA_STAR_DATA`, used
+  to take its index from `data_dir` or Seiza's default folders. That index
+  could belong to another catalog, and when there was none, blind solving was
+  off. A `blind_index` setting or `SEIZA_BLIND_INDEX` still chooses the index.
+
 - Pull collaboration work once per rig-local observing night, including after
   server restarts. Optionally submit accepted images and replay queued reports
   automatically, independently of nightly pulls and live activity sharing.
