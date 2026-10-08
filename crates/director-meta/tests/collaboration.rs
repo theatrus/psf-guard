@@ -452,6 +452,10 @@ fn acknowledgement_clears_only_the_sent_snapshot_and_preserves_the_first_remote_
         .unwrap();
     assert!(!ack[0].recorded.as_ref().unwrap().accepted);
     assert_eq!(
+        s.rejected_collaboration_reports(&source()).unwrap()[0].id,
+        a.id
+    );
+    assert_eq!(
         s.pending_collaboration_reports(&source(), 200).unwrap()[0].id,
         b.id
     );
@@ -483,6 +487,17 @@ fn acknowledgement_clears_only_the_sent_snapshot_and_preserves_the_first_remote_
             .len(),
         0
     );
+    s.acknowledge_collaboration_reports(
+        &source(),
+        &[b.id],
+        &serde_json::to_vec(&json!({"recorded":[reply(2,true)]})).unwrap(),
+        5000,
+    )
+    .unwrap();
+    assert!(s
+        .rejected_collaboration_reports(&source())
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -638,7 +653,7 @@ fn schema_twenty_two_migrates_without_changing_existing_identity_and_bad_migrati
             assert_eq!(
                 conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                     .unwrap(),
-                27
+                28
             );
         }
     }

@@ -4,10 +4,9 @@ Status: shared reader, authentication, reviewed import, managed-host hello/join,
 nightly work retrieval, catalog-evidence review, durable contribution delivery
 and fresh activity forwarding implemented. Reviewed assignments can use existing
 Activation to write ordinary Target Scheduler rows, with GUID-based capture
-association and actual-observing-night credit. The NINA adapter has separate
-standalone pairing and browser sign-in. Neither remote registration nor import
-grants acquisition. Plugin-only admission and reporting-owner handoff remain
-planned.
+association and actual-observing-night credit. Neither remote registration nor
+import grants acquisition. Direct Starfront intake is not a requirement of
+Director or PSF Guard Sync. Reporting-owner handoff remains planned.
 Last reviewed: 2026-10-07.
 
 ## Sources and scope
@@ -36,32 +35,43 @@ AstroCollab publishes an MIT license. This Starfront checkout has no license
 file and GitHub reports no license: use it to inspect interoperability, not to
 copy its implementation into the core without permission.
 
-## Two modes, one executor
+## Integration ownership
 
-The diagram describes the complete target architecture. Managed PSF Guard
-transfer and standalone NINA authentication are implemented; plugin-only work
-import, local admission and reporting-owner handoff are not implemented yet.
+There are two independent collaboration hosts. Use one for each remote agent:
+
+- **PSF Guard** owns collaboration authentication, nightly intake, local adoption,
+  measured contribution review and its durable report outbox. Director consumes
+  ordinary rig allocations and reports execution telemetry. PSF Guard Sync
+  transports catalog rows and images. Neither plugin needs a Starfront client.
+- **[Starfront TargetScheduler Collab](https://github.com/theatrus/starfront-targetscheduler-collab)**
+  owns the outer loop when PSF Guard is absent. It pairs directly, publishes
+  presence, adopts assignments into Target Scheduler and reports their frames.
+  Target Scheduler remains its acquisition scheduler. This is a separate plugin,
+  not a Director adapter or a Sync mode.
 
 ```mermaid
 flowchart TD
-    A[AstroCollab / Starfront server] --> B[Shared Rust protocol adapter]
-    B --> C[Plugin-only: sidecar local store and reviewed local policy]
-    B --> D[PSF Guard: import preview and existing project workspace]
+    A[AstroCollab / Starfront server] --> B[PSF Guard collaboration host]
+    A --> C[Standalone Starfront TargetScheduler Collab]
+    C --> T[Target Scheduler acquisition]
+    B --> D[Existing project workspace]
     D --> E[Existing rig database and bounded Director allocations]
-    C --> F[Shared planning, preparation and execution ledger]
-    E --> F
+    E --> F[Shared planning, preparation and execution ledger]
     F --> G[NINA Session container, native actions and trigger hooks]
     G --> H[Saved capture and quality evidence]
     H --> I[Single report owner and durable outbox]
     I --> A
 ```
 
-**Plugin-only:** the NINA plugin pairs directly with a collaboration server.
-The bundled Rust sidecar stores adopted projects, nightly demand, local policy,
-execution evidence and queued reports. No PSF Guard server, rig catalog or Target
-Scheduler installation is required. The operator supplies a complete local
-equipment/exposure setup and chooses which projects may run automatically.
-The existing NINA executor and its hooks stay unchanged in purpose.
+The standalone host was reviewed at
+[`163c5cd`](https://github.com/theatrus/starfront-targetscheduler-collab/tree/163c5cddaecaab830d6183dd101d9bc4608b4dfd).
+Its useful references are `Activation.cs` for stable TS rows and nightly goals,
+`Reports.cs` for capture-night cohorts and durable verdicts, and
+`tools/InteropCheck` for isolated server validation. Reuse the public protocol
+and identity rules, not its planned-cell footprint as pixel evidence. Its
+reporting contract permits TS-derived estimates; PSF Guard retains its stricter
+saved-file, measured-exposure and fresh-solve checks. Importing its TS data must
+preserve original GUIDs and source provenance; it does not grant report ownership.
 
 **Import into PSF Guard:** PSF Guard browses and imports a remote project into
 the existing Library/project workspace, with downstream work in the selected
@@ -70,23 +80,25 @@ catalog review, grading, calibration evidence, coverage and report submission.
 Import must preview changes before Apply; later automatic refresh must stay
 within the explicitly reviewed policy.
 
-These are workload-source and reporting choices, not separate schedulers.
 One collaboration agent represents one commissioned rig/equipment setup. In
 PSF Guard mode it binds to the existing project database's rig identity; it
 does not create a second catalog hierarchy. Sites remain location, horizon,
 time and weather inputs. A shared remote project can map to one combined
 project with different downstream framing and recipes on each rig.
 
-Choose **one report owner** per server/agent/share: sidecar or PSF Guard.
+Choose **one report owner** per server/agent/share: standalone host or PSF Guard.
 Switching mode requires explicit identity, provenance and outbox handoff, not
-two independent reporters using the same telescope token. Later importing
-plugin-only captures preserves their original capture IDs and associations.
+two independent reporters using the same telescope token. Do not automatically
+claim or rewrite the standalone plugin's `starfront_collab_*` tables. A future
+handoff must reconcile assignments, already submitted totals, verdicts and
+pending reports before enabling the new owner. This supersedes the earlier plan
+to add direct Starfront work admission to Director's sidecar.
 
 ## Authentication and credential ownership
 
-Status: PSF Guard setup, config-file credentials, standalone NINA authentication
-and recovery states implemented. Reporting-owner credential handoff remains
-planned. Keep three authorities separate:
+Status: PSF Guard setup, config-file credentials and recovery states implemented.
+The standalone plugin owns its separate NINA authentication. Reporting-owner
+credential handoff remains planned. Keep three authorities separate:
 
 - Local PSF Guard login and Director pairing control access to this installation.
 - A temporary collaboration person token enrolls or lists remote rigs. Keep it
@@ -98,9 +110,9 @@ planned. Keep three authorities separate:
 
 In PSF Guard mode, the backend owns the agent credential and reporting queue.
 NINA uses its existing Director pairing and never receives that credential.
-In plugin-only mode, the managed NINA host owns collaboration HTTP and stores
-the credential in a separate Windows Credential Manager entry. The Rust core
-and sidecar receive bounded non-secret payloads, never tokens or pairing codes.
+In the standalone plugin, the managed NINA host owns collaboration HTTP and stores
+the credential in a separate Windows Credential Manager entry. Director and Sync
+never receive Starfront tokens or pairing codes.
 Do not reuse Director's token format or either plugin's existing credential.
 
 ### PSF Guard config file
@@ -239,8 +251,11 @@ Background refresh is off by default. One server loop checks due policies every
 are bounded and serialized, with exponential retry up to one day. Credentials
 are reread from the existing config file. A rejected credential pauses that
 binding; missing credentials, unavailable storage and network failures preserve
-existing work. A successful pull runs once per rig-local noon-to-noon observing
-night. Schema 27 persists its checkpoint across restarts. Explicit Refresh now
+existing work. A successful fetch runs once per rig-local noon-to-noon observing
+night. Schema 28 atomically persists its checkpoint and pending response before
+local application. Database locks and temporary storage failures retry that
+saved response, including after restart, without fetching the deal again.
+Configuration ambiguity remains held for operator review. Explicit Refresh now
 or a changed policy can rerun intake. Policy survives restart; detailed run
 status and retry backoff are process-local.
 
@@ -266,7 +281,15 @@ missing evidence, mixed cohorts and incompatible extensions remain held.
 Each import pass is bounded to 65,536 attributable catalog rows, 256 cohorts
 and 4,096 images per cohort. Pre-activation history does not consume that bound;
 oversized sets are held rather than truncated into partial scientific reports.
-Queued immutable reports survive outages and replay without a browser. Equal
+GUID evidence lookup reads the catalog once per review, not once per image.
+One background batch reviews at most eight cohorts and scans at most 32 imports;
+it yields between units after 15 seconds and resumes on a later 30-second sweep.
+One evidence unit may exceed that soft time budget. A restart safely restarts
+the scan because queueing is idempotent. Queued immutable reports survive
+outages and replay without a browser. Delivery, acceptance and rejection are
+separate counts. Current rejected aggregates and their reasons remain visible
+from the durable receipts even after an idle pass or restart; a newer accepted
+aggregate clears the superseded warning. Equal
 or lower-total corrections and withdrawals still require manual review.
 
 The loop never enrolls or joins projects or starts hardware. It never treats a
@@ -387,8 +410,8 @@ Sync, and returning image target GUIDs identify their source. Same-source Apply
 does not replenish the goal. Reviewed replacement closes the old association,
 adds requested frames above accepted/acquired progress, and reuses unchanged sky
 targets. Old source revisions remain available for delayed grading and reporting.
-Cutovers use TS capture timestamp precision (seconds). Automatic remote refresh,
-explicit remote revocation and plugin-only admission remain separate follow-ups.
+Cutovers use TS capture timestamp precision (seconds). Scoped automatic remote-peer
+delivery, explicit remote revocation and report-owner handoff remain follow-ups.
 
 `finalize_contribution` builds a report from host-verified, saved, accepted and
 finalized frames. It binds capture/image GUID pairs to an import revision,
@@ -450,7 +473,7 @@ actual RA in hours, optional names/position for privacy, and no offline replay.
 Fresh opted-in Director activity is forwarded by the managed host. Offline
 activity is not replayed as current presence; scientific reports are replayed.
 
-Still missing: plugin-only work IPC/admission, reporting-owner handoff and
+Still missing: reporting-owner handoff and
 lossless mixed-revision aggregates. Managed-host hello/join, import, catalog
 evidence, common footprint, report transport and durable replay are implemented.
 
@@ -458,13 +481,10 @@ evidence, common footprint, report transport and durable replay are implemented.
 
 Keep the pure planning core free of HTTP, credentials, catalog SQL and NINA
 types. The small shared Rust adapter owns tolerant public-wire decoding and
-normalization, usable by the server and bundled sidecar. Keep transport and
-persistence in their hosts. C# presents settings and executes supported NINA
-operations; it must not implement a second AstroCollab-to-plan mapper.
-In NINA, authenticated HTTP stays in the managed transport/credential-store
-host; only bounded non-secret payloads enter Rust IPC. PSF Guard supplies its
-own transport and secret-store integration. Sharing mapping code does not
-require sending tokens to the sidecar.
+normalization for PSF Guard. Keep transport and persistence in the collaboration
+host. Director's C# adapter executes ordinary NINA operations; its Rust sidecar
+does not need Starfront tokens or a second AstroCollab-to-plan mapper. The
+independent standalone plugin uses its own TS mapper and credential store.
 
 The proposed shared inputs are **work provenance**, **observation demand**,
 **reviewed local policy**, and **contribution evidence**. They translate into
@@ -483,14 +503,9 @@ Current gaps are explicit:
   not express a collaborative depth map or prove that integration from unlike
   rigs is interchangeable. Retain remote depth separately and derive only a
   bounded per-rig nightly visit; do not claim the global goal is locally complete.
-- Plugin acquisition currently requires PSF Guard pairing and a coordinator
-  allocation/start acknowledgement. Plugin-only needs a distinct local issuer,
-  not a fabricated coordinator response or a bypass of admission checks.
-- Local issuance must bind the profile, equipment fingerprint, adopted source
-  revision, permitted sky region, recipes and reviewed local execution bounds.
-  Do not infer an acquisition deadline from the remote assignment's night. The
-  ledger, exclusive local owner and fresh dispatch checks apply to both issuers.
-  PSF Guard's server-issued path retains its existing one-shot launch contract.
+- Director acquisition requires PSF Guard pairing and a coordinator
+  allocation/start acknowledgement. Collaboration intake does not bypass this
+  contract. The standalone plugin leaves hardware execution to Target Scheduler.
 - Shared report aggregation needs per-frame provenance, evidence completeness
   and immutable outbox snapshots; the capture ledger alone is not a calibration
   or grading catalog. Hosts supply that evidence without moving image algorithms
@@ -546,7 +561,7 @@ the report. If required evidence is unavailable, defer the report or preserve
 the explicit unknown; do not fill in the planned value.
 
 Raw NINA frames are not calibrated merely because compatible masters exist.
-Plugin-only mode can serve projects accepting uncalibrated data; projects
+The standalone host can serve projects accepting uncalibrated data; projects
 requiring calibration need verified feedback from an external processor or
 later PSF Guard import/processing. That feedback must bind the original frames,
 recipe and masters. No calibration engine is added to the NINA adapter.
@@ -604,9 +619,9 @@ defined in [Authentication and credential ownership](#authentication-and-credent
 
 This is an additive backlog, not a replacement for unfinished local Director
 commissioning or unattended-night validation. Shared import/report primitives
-and managed PSF Guard browse/import/report workflows are implemented. Direct
-NINA authentication is separate from PSF Guard pairing; plugin-only acquisition
-still needs its local issuer, store and reviewed admission policy.
+and managed PSF Guard browse/import/report workflows are implemented. Standalone
+collaboration is a separate plugin; Director and Sync do not acquire a direct
+Starfront dependency.
 
 1. **Shared read-only adapter (reader implemented).** The pinned reader and
    checked-in examples cover health, profiles, projects, requirements and nightly
@@ -623,12 +638,12 @@ still needs its local issuer, store and reviewed admission policy.
    TS activation and GUID-based capture association are implemented. Managed
    Tonight pulls and opt-in background refresh/activation are implemented with
    a stable rig/catalog binding and explicit project allowlist. Remaining:
-   plugin-only work intake, scoped automatic remote-peer delivery and safe
+   scoped automatic remote-peer delivery and safe
    automatic recipe expansion when a later assignment introduces a new filter.
-3. **Plugin-only admission.** Add complete local setup, workload-source choice,
-   local issuer/store and versioned IPC. Reuse the Session and ledger; prove
-   offline bounded execution, restart/replay refusal, safety/roof interruptions,
-   night rollover, same-rig ownership conflicts and local priority preservation.
+3. **Standalone interoperability.** Keep the independent TS plugin usable without
+   PSF Guard. Define explicit provenance and report-owner handoff before importing
+   its collaboration records for reporting. Do not add direct Starfront intake
+   to Director or Sync. Test owner conflicts, delayed captures and night rollover.
 4. **Reports and handoff (outbox implemented).** Finalized evidence contracts,
    calibration gating, separate remote verdicts and immutable queue/replay have
    tests for partial replies, new frames in flight, retile collisions and

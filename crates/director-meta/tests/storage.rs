@@ -3,6 +3,21 @@ use rusqlite::Connection;
 use tempfile::TempDir;
 
 #[test]
+fn schema_27_upgrade_adds_pending_deals_and_report_index() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let instance = MetaStore::create(&path).unwrap().instance_id();
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch("DROP TABLE collaboration_nightly_pending; DROP INDEX collaboration_outbox_cohort; PRAGMA user_version=27;")
+        .unwrap();
+    assert_eq!(MetaStore::open(&path).unwrap().instance_id(), instance);
+    conn.prepare("SELECT connection_id,night,payload FROM collaboration_nightly_pending")
+        .unwrap();
+    assert!(conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='collaboration_outbox_cohort')", [], |r| r.get::<_, bool>(0)).unwrap());
+    MetaStore::open_reader(&path).unwrap();
+}
+
+#[test]
 fn schema_26_upgrade_adds_durable_nightly_checkpoints() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("meta.sqlite");
@@ -50,7 +65,7 @@ fn future_schema_and_corrupt_instance_are_refused() {
     let path = dir.path().join("meta.sqlite");
     drop(MetaStore::create(&path).unwrap());
     let conn = Connection::open(&path).unwrap();
-    conn.pragma_update(None, "user_version", 28).unwrap();
+    conn.pragma_update(None, "user_version", 29).unwrap();
     assert!(matches!(
         MetaStore::open(&path),
         Err(Error::UnsupportedSchema)
@@ -58,9 +73,9 @@ fn future_schema_and_corrupt_instance_are_refused() {
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        28
+        29
     );
-    conn.pragma_update(None, "user_version", 27).unwrap();
+    conn.pragma_update(None, "user_version", 28).unwrap();
     conn.execute("UPDATE meta SET instance_id=?1", [Uuid::nil().to_string()])
         .unwrap();
     assert!(matches!(
@@ -195,7 +210,7 @@ fn schema_eleven_upgrade_adds_contacts_without_recreating_client_tables() {
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        27
+        28
     );
     conn.prepare("SELECT rig_id,kind,at_ms,detail FROM rig_contact")
         .unwrap();

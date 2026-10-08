@@ -2,18 +2,34 @@
 //! as manual reporting. Only activation provenance grants frame attribution.
 use super::*;
 
+#[derive(Clone)]
+pub(in crate::server::director::collaboration_auth) struct AutomaticCursor {
+    import_id: Uuid,
+    cohort: usize,
+}
+
 #[derive(Clone, Default, Serialize)]
 pub(in crate::server::director::collaboration_auth) struct AutomaticResult {
     queued: usize,
     delivered: usize,
+    accepted: usize,
+    rejected: usize,
     held: usize,
+    deferred: bool,
+}
+
+pub(in crate::server::director::collaboration_auth) struct AutomaticBatch {
+    pub result: AutomaticResult,
+    pub next: Option<AutomaticCursor>,
+    pub delivery_error: Option<Failure>,
 }
 
 pub(in crate::server::director::collaboration_auth) async fn automatic(
     state: &Arc<AppState>,
     service: Arc<Service>,
     b: &ConnectionBinding,
-) -> Result<AutomaticResult, Failure> {
+    cursor: Option<AutomaticCursor>,
+) -> Result<AutomaticBatch, Failure> {
     let catalogs = background::catalogs(state, service.clone(), b.rig_id).await?;
     let [(identity, catalog)] = catalogs.as_slice() else {
         return Err(Failure(
@@ -46,10 +62,29 @@ pub(in crate::server::director::collaboration_auth) async fn automatic(
         })
         .await?;
     let mut result = AutomaticResult::default();
-    for import in imports {
+    let start = cursor
+        .as_ref()
+        .and_then(|c| {
+            imports
+                .iter()
+                .position(|i| i.plan.import_id() == c.import_id)
+        })
+        .unwrap_or(0);
+    let started = Instant::now();
+    let mut reviewed = 0;
+    let mut examined = 0;
+    let mut next = None;
+    'imports: for (scanned, import) in imports.into_iter().skip(start).enumerate() {
+        let import_id = import.plan.import_id();
+        if scanned >= 32 || (scanned > 0 && started.elapsed() >= Duration::from_secs(15)) {
+            next = Some(AutomaticCursor {
+                import_id,
+                cohort: 0,
+            });
+            break;
+        }
         let catalog = catalog.clone();
-        let selections =
-            blocking(move || selections(&catalog, import.plan.import_id(), longitude)).await?;
+        let selections = blocking(move || selections(&catalog, import_id, longitude)).await?;
         let selections = match selections {
             Ok(selections) => selections,
             Err(_) => {
@@ -57,7 +92,18 @@ pub(in crate::server::director::collaboration_auth) async fn automatic(
                 continue;
             }
         };
-        for (filter, selection) in selections {
+        let skip = cursor
+            .as_ref()
+            .filter(|c| c.import_id == import_id)
+            .map_or(0, |c| c.cohort);
+        // Leave time for interactive setup. Resume bounded batches on the next
+        // sweep; immutable outbox snapshots make restarting a pass harmless.
+        for (cohort, (filter, selection)) in selections.into_iter().enumerate().skip(skip) {
+            if reviewed >= 8 || (examined > 0 && started.elapsed() >= Duration::from_secs(15)) {
+                next = Some(AutomaticCursor { import_id, cohort });
+                break 'imports;
+            }
+            examined += 1;
             let (import, panel, night) = (
                 selection.import_id,
                 selection.panel,
@@ -75,8 +121,9 @@ pub(in crate::server::director::collaboration_auth) async fn automatic(
             }
             // Re-read before queueing: a grade, file or solve may have changed
             // while review was running. Never accept caller-supplied evidence.
-            let reviewed = review(state, service.clone(), b, selection.clone(), None).await;
-            let queued = match reviewed {
+            reviewed += 1;
+            let evidence = review(state, service.clone(), b, selection.clone(), None).await;
+            let queued = match evidence {
                 Ok(value) => {
                     review(
                         state,
@@ -100,11 +147,23 @@ pub(in crate::server::director::collaboration_auth) async fn automatic(
             }
         }
     }
-    let delivery = workflows::checkin(state, service, b.id).await?;
-    result.delivered = delivery["delivered"].as_u64().unwrap_or(0) as usize;
-    tracing::info!(connection_id=%b.id, queued=result.queued, delivered=result.delivered, held=result.held,
+    result.deferred = next.is_some();
+    let delivery_error = match workflows::checkin(state, service, b.id).await {
+        Ok(delivery) => {
+            result.delivered = delivery["delivered"].as_u64().unwrap_or(0) as usize;
+            result.accepted = delivery["accepted"].as_u64().unwrap_or(0) as usize;
+            result.rejected = delivery["rejected"].as_u64().unwrap_or(0) as usize;
+            None
+        }
+        Err(error) => Some(error),
+    };
+    tracing::info!(connection_id=%b.id, queued=result.queued, delivered=result.delivered, accepted=result.accepted, rejected=result.rejected, held=result.held,
         "Automatic collaboration report pass completed");
-    Ok(result)
+    Ok(AutomaticBatch {
+        result,
+        next,
+        delivery_error,
+    })
 }
 
 fn observing_date(timestamp: i64, longitude: f64) -> Result<String, Failure> {

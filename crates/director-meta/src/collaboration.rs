@@ -44,7 +44,16 @@ pub(crate) fn create_tables(conn: &Connection) -> Result<(), Error> {
             import_id TEXT NOT NULL REFERENCES collaboration_import(id), panel INTEGER NOT NULL,
             filter TEXT NOT NULL);"
     )?;
+    create_report_index(conn)?;
     validate_tables(conn)
+}
+
+pub(crate) fn create_report_index(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS collaboration_outbox_cohort
+        ON collaboration_outbox(import_id,panel,filter,integration_ms,acknowledged_at_ms);",
+    )?;
+    Ok(())
 }
 
 pub(crate) fn validate_tables(conn: &Connection) -> Result<(), Error> {
@@ -618,6 +627,30 @@ impl MetaStore {
             params![import.to_string(), panel, filter, night], |r| r.get(0)).optional()?;
         id.map(|id| read_report(&self.connection, parse_id(&id)?)?.ok_or(Error::CorruptDatabase))
             .transpose()
+    }
+
+    /// Current rejected aggregates remain visible after delivery and restart.
+    pub fn rejected_collaboration_reports(
+        &self,
+        source: &Source,
+    ) -> Result<Vec<QueuedReport>, Error> {
+        let mut statement = self.connection.prepare("SELECT o.id FROM collaboration_outbox o
+            JOIN collaboration_import i ON i.id=o.import_id
+            WHERE i.base_url=?1 AND i.agent_id=?2 AND o.acknowledged_at_ms IS NOT NULL
+                AND json_extract(o.recorded,'$.accepted')=0
+                AND NOT EXISTS(SELECT 1 FROM collaboration_outbox newer WHERE newer.import_id=o.import_id
+                    AND newer.panel=o.panel AND newer.filter=o.filter
+                    AND json_extract(newer.payload,'$.night')=json_extract(o.payload,'$.night')
+                    AND newer.integration_ms>o.integration_ms AND newer.acknowledged_at_ms IS NOT NULL)
+            ORDER BY o.acknowledged_at_ms DESC,o.id LIMIT 32")?;
+        let ids = statement
+            .query_map(params![source.base_url(), source.agent_id()], |r| {
+                r.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        ids.into_iter()
+            .map(|id| read_report(&self.connection, parse_id(&id)?)?.ok_or(Error::CorruptDatabase))
+            .collect()
     }
 
     /// One oldest unacknowledged snapshot per report key. New frames queued

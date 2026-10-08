@@ -301,12 +301,28 @@ pub(super) async fn background_apply(
     let service = writable(&state)?;
     let catalogs = state.all_databases();
     let instance = service.instance_id;
-    let current = service
-        .with_reader(move |store| collaboration_activation::current(store, id, instance, &catalogs))
+    let import_id = visit.import_id;
+    let (current, recorded) = service
+        .with_reader(move |store| {
+            let current = collaboration_activation::current(store, id, instance, &catalogs)?;
+            let imported = store
+                .collaboration_import(import_id)?
+                .ok_or(Error::Missing)?;
+            let recorded = store.activation(id)?.is_some_and(|a| {
+                a.applied_at_ms >= imported.imported_at_ms
+                    && a.rigs
+                        .iter()
+                        .any(|r| r.rig_id == rig && r.catalog_id == catalog)
+            });
+            Ok::<_, ActivationError>((current, recorded))
+        })
         .await?;
-    if current
-        .iter()
-        .any(|v| v.import_id == visit.import_id && v.source_digest == visit.source_digest)
+    // Rig commits and the metadata record are separate. A retry must repair a
+    // missing record before it considers an already-written assignment complete.
+    if recorded
+        && current
+            .iter()
+            .any(|v| v.import_id == visit.import_id && v.source_digest == visit.source_digest)
     {
         return Ok(false);
     }
@@ -631,6 +647,10 @@ async fn execute_guarded(
             let mut connection = match open_rig_for(&catalog.context.database_path, on_copy) {
                 Ok(connection) => connection,
                 Err(reason) => {
+                    if guard.is_some() {
+                        tracing::warn!(%reason, "Automatic activation could not open its rig database");
+                        return Err(Error::Internal.into());
+                    }
                     warnings.push(reason);
                     reports.push(RigReport {
                         rig,
@@ -646,10 +666,18 @@ async fn execute_guarded(
                     continue;
                 }
             };
+            if guard.is_some() {
+                // A background pass yields quickly to NINA and retries its saved deal.
+                connection.busy_timeout(std::time::Duration::from_secs(2))?;
+            }
             let outcome = {
                 let tx = match begin_rig(&mut connection) {
                     Ok(tx) => tx,
                     Err(reason) => {
+                        if guard.is_some() {
+                            tracing::warn!(%reason, "Automatic activation could not lock its rig database");
+                            return Err(Error::Busy.into());
+                        }
                         warnings.push(reason);
                         reports.push(RigReport {
                             rig,
@@ -938,6 +966,9 @@ async fn execute_guarded(
                 if let Err(error) = connection.execute_batch("COMMIT") {
                     tracing::error!(%error, rig = %rig_id, "Director activation commit failed");
                     let _ = connection.execute_batch("ROLLBACK");
+                    if guard.is_some() {
+                        return Err(error.into());
+                    }
                     if let Some(report) = reports.iter_mut().find(|r| r.rig.id == rig_id) {
                         report.warnings.push(format!("Nothing was written to this database: its commit failed ({error})."));
                     }
@@ -995,6 +1026,9 @@ async fn execute_guarded(
             .with_writer(move |store| {
                 let recorded = store.record_activation(&record).map_err(|error| {
                     tracing::error!(error = ?error, "Applied activation could not be recorded");
+                    if guard.is_some() {
+                        return ActivationError::from(error);
+                    }
                     ActivationError::NotReady(
                         "The rig databases were written but the activation could not be recorded; activate again.",
                     )

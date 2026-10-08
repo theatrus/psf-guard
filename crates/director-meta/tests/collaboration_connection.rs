@@ -108,8 +108,32 @@ fn reviewed_settings_survive_reopen_without_changing_agent() {
     store
         .update_collaboration_connection(&binding, &configured)
         .unwrap();
+    // A fetched deal is retained until local adoption finishes, including restart.
+    let mut registered = configured.clone();
+    registered.agent_id = Some("000000000001".into());
+    registered.state = ConnectionState::Registered;
     store
-        .complete_collaboration_night(binding.id, "2026-10-07", 2000)
+        .update_collaboration_connection(&configured, &registered)
+        .unwrap();
+    configured = registered;
+    let mut wire: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../director-interop/tests/fixtures/starfront-tonight.json"
+    ))
+    .unwrap();
+    wire.as_object_mut().unwrap().remove("task");
+    let night = wire["tasks"][0]["assignedNight"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let bytes = serde_json::to_vec(&wire).unwrap();
+    store
+        .stage_collaboration_night(binding.id, &night, 2000, &bytes)
+        .unwrap();
+    assert!(store
+        .stage_collaboration_night(binding.id, &night, 3000, b"{}")
+        .is_err());
+    store
+        .finish_collaboration_night(binding.id, "1999-01-01")
         .unwrap();
     assert!(matches!(
         store.update_collaboration_connection(&binding, &configured),
@@ -123,7 +147,13 @@ fn reviewed_settings_survive_reopen_without_changing_agent() {
     let mut store = MetaStore::open(&path).unwrap();
     assert_eq!(
         store.collaboration_nightly_run(binding.id).unwrap(),
-        Some(("2026-10-07".into(), 2000))
+        Some((night.clone(), 2000))
+    );
+    assert_eq!(
+        store
+            .pending_collaboration_night(binding.id, &night)
+            .unwrap(),
+        Some(bytes)
     );
     assert_eq!(
         store.collaboration_connection(binding.id).unwrap(),
@@ -135,6 +165,12 @@ fn reviewed_settings_survive_reopen_without_changing_agent() {
         .update_collaboration_connection(&configured, &revised)
         .unwrap();
     assert_eq!(store.collaboration_nightly_run(binding.id).unwrap(), None);
+    assert_eq!(
+        store
+            .pending_collaboration_night(binding.id, &night)
+            .unwrap(),
+        None
+    );
 }
 
 #[test]

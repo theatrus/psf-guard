@@ -76,7 +76,73 @@ pub(crate) fn validate_automation_table(conn: &Connection) -> Result<(), Error> 
     Ok(())
 }
 
+pub(crate) fn create_pending_night_table(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS collaboration_nightly_pending(
+        connection_id TEXT PRIMARY KEY NOT NULL REFERENCES collaboration_connection(id),
+        night TEXT NOT NULL, payload BLOB NOT NULL);",
+    )?;
+    validate_pending_night_table(conn)
+}
+
+pub(crate) fn validate_pending_night_table(conn: &Connection) -> Result<(), Error> {
+    conn.prepare("SELECT connection_id,night,payload FROM collaboration_nightly_pending LIMIT 0")
+        .map_err(|_| Error::CorruptDatabase)?;
+    Ok(())
+}
+
 impl MetaStore {
+    pub fn pending_collaboration_night(
+        &self,
+        id: Uuid,
+        night: &str,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        self.connection.query_row(
+            "SELECT substr(payload,1,?3) FROM collaboration_nightly_pending WHERE connection_id=?1 AND night=?2",
+            params![id.to_string(), night, (psf_guard_director_interop::astrocollab::MAX_BODY_BYTES + 1) as i64],
+            |r| r.get::<_, Vec<u8>>(0),
+        ).optional()?.map(|bytes| {
+            if bytes.len() > psf_guard_director_interop::astrocollab::MAX_BODY_BYTES {
+                return Err(Error::CorruptDatabase);
+            }
+            Ok(bytes)
+        }).transpose()
+    }
+
+    /// Record the fetched deal and pending local application in one commit.
+    pub fn stage_collaboration_night(
+        &mut self,
+        id: Uuid,
+        night: &str,
+        now: u64,
+        bytes: &[u8],
+    ) -> Result<(), Error> {
+        let binding = self.collaboration_connection(id)?.ok_or(Error::NotFound)?;
+        psf_guard_director_interop::astrocollab::decode_tonight(bytes, &binding.source()?, night)
+            .map_err(|_| Error::InvalidInput)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO collaboration_nightly_pending VALUES(?1,?2,?3)
+            ON CONFLICT(connection_id) DO UPDATE SET night=excluded.night,payload=excluded.payload",
+            params![id.to_string(), night, bytes],
+        )?;
+        tx.execute("INSERT INTO collaboration_nightly_run VALUES(?1,?2,?3)
+            ON CONFLICT(connection_id) DO UPDATE SET night=excluded.night,completed_at_ms=excluded.completed_at_ms",
+            params![id.to_string(), night, i64::try_from(now).map_err(|_| Error::InvalidInput)?])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn finish_collaboration_night(&mut self, id: Uuid, night: &str) -> Result<(), Error> {
+        self.connection.execute(
+            "DELETE FROM collaboration_nightly_pending WHERE connection_id=?1 AND night=?2",
+            params![id.to_string(), night],
+        )?;
+        Ok(())
+    }
+
     pub fn collaboration_nightly_run(&self, id: Uuid) -> Result<Option<(String, u64)>, Error> {
         self.connection.query_row("SELECT night,completed_at_ms FROM collaboration_nightly_run WHERE connection_id=?1",
             [id.to_string()], |r| Ok((r.get(0)?, r.get::<_, i64>(1)?))).optional()?
@@ -341,6 +407,10 @@ impl MetaStore {
         if old.background != new.background {
             tx.execute(
                 "DELETE FROM collaboration_nightly_run WHERE connection_id=?1",
+                [old.id.to_string()],
+            )?;
+            tx.execute(
+                "DELETE FROM collaboration_nightly_pending WHERE connection_id=?1",
                 [old.id.to_string()],
             )?;
         }

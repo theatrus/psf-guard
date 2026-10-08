@@ -11,6 +11,7 @@ pub(super) struct Record {
     status: Status,
     failures: u32,
     reports_due: Instant,
+    reports_cursor: Option<workflows::evidence::AutomaticCursor>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -23,6 +24,17 @@ pub(super) struct Status {
     result: Option<PullResult>,
     reports: Option<workflows::evidence::AutomaticResult>,
     report_error: Option<&'static str>,
+    rejected_reports: Vec<RejectedReport>,
+}
+
+#[derive(Clone, Serialize)]
+struct RejectedReport {
+    id: Uuid,
+    night: String,
+    panel: u32,
+    filter: String,
+    reasons: Vec<String>,
+    summary: Option<String>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -136,7 +148,14 @@ pub(super) async fn run_reports(
         .as_ref()
         .filter(|p| p.automatic_reports)
         .ok_or_else(invalid)?;
-    let outcome = workflows::evidence::automatic(state, service.clone(), b).await;
+    let cursor = service
+        .collaboration
+        .background
+        .lock()
+        .map_err(|_| invalid())?
+        .get(&b.id)
+        .and_then(|r| r.reports_cursor.clone());
+    let outcome = workflows::evidence::automatic(state, service.clone(), b, cursor).await;
     let mut records = service
         .collaboration
         .background
@@ -147,10 +166,16 @@ pub(super) async fn run_reports(
         .or_insert_with(|| Record::new(policy.clone()));
     r.reports_due = Instant::now() + Duration::from_secs(300);
     match outcome {
-        Ok(result) => {
-            r.status.reports = Some(result);
-            r.status.report_error = None;
-            Ok(())
+        Ok(batch) => {
+            if batch.next.is_some() {
+                r.reports_due = Instant::now() + Duration::from_secs(30);
+            }
+            // Delivery can fail after evidence was queued. Keep scanning later
+            // imports offline instead of repeatedly starting at the first batch.
+            r.reports_cursor = batch.next;
+            r.status.reports = Some(batch.result);
+            r.status.report_error = batch.delivery_error.as_ref().map(|error| error.1);
+            batch.delivery_error.map_or(Ok(()), Err)
         }
         Err(error) => {
             r.status.report_error = Some(error.1);
@@ -202,7 +227,7 @@ pub(super) async fn status(
         .into_iter()
         .map(|(id, name, project)| json!({"id":id,"name":name,"project_id":project}))
         .collect::<Vec<_>>();
-    let status = service
+    let mut status = service
         .collaboration
         .background
         .lock()
@@ -210,6 +235,27 @@ pub(super) async fn status(
         .get(&id)
         .map(|r| r.status.clone())
         .unwrap_or_default();
+    if let Ok(source) = b.source() {
+        status.rejected_reports = service
+            .clone()
+            .query(move |s| {
+                Ok(s.rejected_collaboration_reports(&source)?
+                    .into_iter()
+                    .filter_map(|report| {
+                        let recorded = report.recorded?;
+                        Some(RejectedReport {
+                            id: report.id,
+                            night: report.payload["night"].as_str()?.to_owned(),
+                            panel: report.panel_index,
+                            filter: report.filter,
+                            reasons: recorded.verdict.reasons,
+                            summary: recorded.verdict.summary,
+                        })
+                    })
+                    .collect())
+            })
+            .await?;
+    }
     let connection = view(registry(state)?, b.clone()).await?;
     Ok(
         json!({"policy":b.background,"status":status,"catalogs":catalogs,"projects":projects,"connection_status":connection["status"]}),
@@ -367,14 +413,21 @@ pub(super) async fn run(
         r.status.last_started_ms = Some(now);
     }
     let mut result = async {
-        let (site, _) = resolve(state, service.clone(), &b, &policy).await?;
+        let (site, catalog) = resolve(state, service.clone(), &b, &policy).await?;
         let night = workflows::resolve_night(service.clone(), b.rig_id, None, None).await?;
         let id = b.id;
-        let completed = service
+        let date = night.night.clone();
+        let (completed, pending) = service
             .clone()
-            .query(move |s| s.collaboration_nightly_run(id))
+            .query(move |s| {
+                Ok((
+                    s.collaboration_nightly_run(id)?,
+                    s.pending_collaboration_night(id, &date)?,
+                ))
+            })
             .await?;
         if !force
+            && pending.is_none()
             && completed
                 .as_ref()
                 .is_some_and(|(date, _)| date == &night.night)
@@ -388,11 +441,34 @@ pub(super) async fn run(
                 completed.map(|(_, at)| at).unwrap_or(now),
             ));
         }
-        let pulled = pull(state, service.clone(), &b, &policy, now).await?;
+        let bytes = if let Some(bytes) = pending.filter(|_| !force) {
+            bytes
+        } else {
+            let path = registry(state)?;
+            let copy = b.clone();
+            let token = file(move || credentials::read(&path, &copy))
+                .await?
+                .ok_or(Failure(
+                    StatusCode::CONFLICT,
+                    "Credential missing; existing plans retained",
+                ))?;
+            let remote = Remote::new(&b)?;
+            workflows::hello(service.clone(), &b, &remote, &token).await?;
+            let bytes = workflows::tonight(&remote, &token, &night).await?;
+            astrocollab::decode_tonight(&bytes, &b.source().map_err(Error::from)?, &night.night)
+                .map_err(|_| invalid())?;
+            let (date, snapshot) = (night.night.clone(), bytes.clone());
+            service
+                .clone()
+                .run(move |s| s.stage_collaboration_night(id, &date, now, &snapshot))
+                .await?;
+            bytes
+        };
+        let pulled = apply_night(state, service.clone(), &b, catalog, &night, &bytes, now).await?;
         let date = pulled.night.clone();
         service
             .clone()
-            .run(move |s| s.complete_collaboration_night(id, &date, now))
+            .run(move |s| s.finish_collaboration_night(id, &date))
             .await?;
         Ok::<_, Failure>((pulled, next_night_seconds(site, now), now))
     }
@@ -440,6 +516,7 @@ impl Record {
             policy,
             due: Instant::now(),
             reports_due: Instant::now(),
+            reports_cursor: None,
             status: Status::default(),
             failures: 0,
         }
@@ -457,35 +534,18 @@ fn retry_seconds(policy: &BackgroundPolicy, failures: u32) -> u64 {
     (u64::from(policy.interval_minutes) * 60 * (1u64 << failures.min(6))).min(86400)
 }
 
-async fn pull(
+async fn apply_night(
     state: &Arc<AppState>,
     service: Arc<Service>,
     b: &ConnectionBinding,
-    policy: &BackgroundPolicy,
+    catalog: Arc<DatabaseContext>,
+    night: &psf_guard_director_interop::workflow::Night,
+    bytes: &[u8],
     now: u64,
 ) -> Result<PullResult, Failure> {
-    let (site, catalog) = resolve(state, service.clone(), b, policy).await?;
-    let night = blocking(move || psf_guard_director_interop::workflow::Night::for_site(site, now))
-        .await?
-        .map_err(|_| {
-            Failure(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "No astronomical observing night is available for this rig's site",
-            )
-        })?;
-    let path = registry(state)?;
-    let copy = b.clone();
-    let token = file(move || credentials::read(&path, &copy))
-        .await?
-        .ok_or(Failure(
-            StatusCode::CONFLICT,
-            "Credential missing; existing plans retained",
-        ))?;
-    let remote = Remote::new(b)?;
+    let policy = b.background.as_ref().ok_or_else(invalid)?;
     let source = b.source().map_err(Error::from)?;
-    workflows::hello(service.clone(), b, &remote, &token).await?;
-    let bytes = workflows::tonight(&remote, &token, &night).await?;
-    let work = astrocollab::decode_tonight(&bytes, &source, &night.night).map_err(|_| invalid())?;
+    let work = astrocollab::decode_tonight(bytes, &source, &night.night).map_err(|_| invalid())?;
     let mut result = PullResult {
         night: night.night.clone(),
         ..Default::default()
@@ -496,7 +556,7 @@ async fn pull(
         .filter(|s| policy.project_ids.contains(&s.project_id))
     {
         let plan = match psf_guard_director_interop::collaboration::prepare_import(
-            &bytes,
+            bytes,
             &source,
             &night.night,
             &share.task_id,
@@ -522,6 +582,7 @@ async fn pull(
         match imported {
             Ok(ImportAction::Unchanged) => result.unchanged += 1,
             Ok(_) => result.imported += 1,
+            Err(error @ (Error::Busy | Error::Internal)) => return Err(error.into()),
             Err(_) => {
                 result
                     .held
@@ -530,10 +591,11 @@ async fn pull(
             }
         }
         if policy.activate {
-            if seed_recipes(service.clone(), b, &plan, catalog.clone(), now)
-                .await
-                .is_err()
+            if let Err(error) = seed_recipes(service.clone(), b, &plan, catalog.clone(), now).await
             {
+                if error.0.is_server_error() {
+                    return Err(error);
+                }
                 result.held.push(format!(
                     "{}: choose unambiguous rig recipes in Planning",
                     share.task_id
@@ -555,6 +617,9 @@ async fn pull(
             {
                 Ok(true) => result.activated += 1,
                 Ok(false) => {}
+                Err(activation::ActivationError::Api(error @ (Error::Busy | Error::Internal))) => {
+                    return Err(error.into())
+                }
                 Err(activation::ActivationError::NotReady(message)) => {
                     result.held.push(format!("{}: {message}", share.task_id))
                 }
