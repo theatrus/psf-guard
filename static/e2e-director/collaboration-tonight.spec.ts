@@ -109,6 +109,13 @@ test('pull tonight, review and activate allowed work in the background', async (
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 1000 });
       await panel.getByRole('tab', { name: 'Automation' }).scrollIntoViewIfNeeded();
+      const options = await panel.locator('.collaboration-automation-option').evaluateAll(elements => elements.map(element => {
+        const { top, bottom } = element.getBoundingClientRect();
+        return { top, bottom };
+      }));
+      expect(options).toHaveLength(3);
+      expect(options[1].top).toBeGreaterThanOrEqual(options[0].bottom);
+      expect(options[2].top).toBeGreaterThanOrEqual(options[1].bottom);
       await page.screenshot({ path: testInfo.outputPath(`collaboration-${width}.png`), fullPage: true });
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     }

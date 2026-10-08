@@ -55,13 +55,13 @@ export default function CollaborationBackground({ connection, canWrite, refresh,
     }}>
       <fieldset disabled={busy}><legend>Nightly automation</legend>
         <p>Rig database: {catalog?.name ?? 'Unavailable or ambiguous'}</p>
-        <label><input type="checkbox" checked={enabled} onChange={e => change(() => setEnabled(e.target.checked))} />Pull tonight automatically</label>
+        <label className="collaboration-automation-option"><input type="checkbox" checked={enabled} onChange={e => change(() => setEnabled(e.target.checked))} />Pull tonight automatically</label>
         <fieldset><legend>Allowed projects</legend>
           {[...choices].map(([id, name]) => <label className="collaboration-project-choice" key={id}><input type="checkbox" checked={projects.includes(id)} onChange={e => change(() => setProjects(all => e.target.checked ? [...all, id] : all.filter(p => p !== id)))} />{name}</label>)}
           {choices.size === 0 && <p>No joined or imported projects</p>}
         </fieldset>
-        <label><input type="checkbox" checked={activate} onChange={e => change(() => setActivate(e.target.checked))} />Activate in rig database</label>
-        <label><input type="checkbox" checked={reports} onChange={e => change(() => setReports(e.target.checked))} />Submit contribution reports automatically</label>
+        <label className="collaboration-automation-option"><input type="checkbox" checked={activate} onChange={e => change(() => setActivate(e.target.checked))} />Activate in rig database</label>
+        <label className="collaboration-automation-option"><input type="checkbox" checked={reports} onChange={e => change(() => setReports(e.target.checked))} />Submit contribution reports automatically</label>
         <div className="director-actions">
           <button type="submit" disabled={!dirty || ((enabled || reports) && !valid)}><Save size={16} />Save automation</button>
           <button type="button" title="Discard edits" aria-label="Discard automation edits" disabled={!dirty} onClick={() => setDirty(false)}><Undo2 size={16} /></button>
