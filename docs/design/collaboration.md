@@ -214,8 +214,8 @@ it does not accept remote bearer tokens or caller-provided scientific evidence.
 | `preview_report`, `queue_report` | Review `selection: {import_id, catalog, panel, image_guids, source_digest?, observing_night?}` using catalog and fresh pixel evidence. Queue requires its unchanged `review_digest`. |
 | `checkin` | Send fresh opted-in presence and replay pending immutable reports. Persist receipts only after validating the complete positional reply. |
 | `background_status` | Return the saved non-secret policy, rig-bound catalog identities, imported projects and current process's run status. It remains readable during a network operation. |
-| `background_configure` | Compare-and-set `expected` and `policy`. A policy names one stable `catalog_id`, explicit `project_ids`, `enabled`, `interval_minutes` (5-1440) and `activate`. Only already joined or imported projects are allowed. |
-| `background_run` | Run the enabled policy now, retaining the same import and activation checks as the automatic loop. Return updated status. |
+| `background_configure` | Compare-and-set `expected` and `policy`. A policy binds the rig's sole stable `catalog_id`, explicit `project_ids`, nightly `enabled`, `activate`, and separate `automatic_reports` consent. The legacy `interval_minutes` (5-1440) is retained only for retry backoff, not successful nightly scheduling. Only already joined or imported projects are allowed for intake. |
+| `background_run` | Explicitly rerun enabled nightly intake and/or automatic reports now, retaining the same evidence, import and activation checks as the automatic loop. Return updated status. |
 
 ### Tonight and automatic adoption
 
@@ -239,7 +239,10 @@ Background refresh is off by default. One server loop checks due policies every
 are bounded and serialized, with exponential retry up to one day. Credentials
 are reread from the existing config file. A rejected credential pauses that
 binding; missing credentials, unavailable storage and network failures preserve
-existing work. Policy survives restart; run status and backoff are process-local.
+existing work. A successful pull runs once per rig-local noon-to-noon observing
+night. Schema 27 persists its checkpoint across restarts. Explicit Refresh now
+or a changed policy can rerun intake. Policy survives restart; detailed run
+status and retry backoff are process-local.
 
 Only accepted, representable shares for the explicit project allowlist enter the
 normal compare-and-set import path. Optional activation previews a planning copy
@@ -253,9 +256,21 @@ existing assignment provenance prevents duplicate activation or quota refills.
 Automatic activation writes only the selected local database: it does not use
 the full-catalog remote-peer push, which could publish unrelated projects.
 
-The loop never enrolls or joins projects, starts hardware, selects scientific
-frames, or submits unreviewed contributions. It never treats a missing remote
-assignment as cancellation. Manual browse, join, review/import, activation and
+Separate `automatic_reports` consent runs a five-minute evidence/queue/delivery
+pass independently of nightly intake and activity sharing. It selects accepted,
+saved frames only through activated target GUID/cutover provenance in the rig's
+sole database. It groups actual rig-local capture nights, source revisions,
+panels and filters, then uses the same fresh-pixel review twice before queueing.
+Unchanged image cohorts skip re-queueing. Missing files can arrive later;
+missing evidence, mixed cohorts and incompatible extensions remain held.
+Each import pass is bounded to 65,536 attributable catalog rows, 256 cohorts
+and 4,096 images per cohort. Pre-activation history does not consume that bound;
+oversized sets are held rather than truncated into partial scientific reports.
+Queued immutable reports survive outages and replay without a browser. Equal
+or lower-total corrections and withdrawals still require manual review.
+
+The loop never enrolls or joins projects or starts hardware. It never treats a
+missing remote assignment as cancellation. Manual browse, join, review/import, activation and
 check-in remain available independently of this policy.
 
 Accepted live rig telemetry also schedules background check-in at most once a
@@ -413,7 +428,8 @@ colour/bandpass cohort with a verified common footprint. The managed host
 computes conservative shared coverage from the fresh pixel solutions before
 aggregation. Mixed revisions still need a lossless provenance merge before
 combining captures. Disjoint coverage and mixed revisions are never averaged
-or replaced with planned pointing. These limits prevent unattended reporting.
+or replaced with planned pointing. Automatic reporting holds these cohorts for
+review.
 Exposure matching allows only measured shutter jitter around the assigned
 recipe: 0.1%, with a 10 ms floor and one-second cap. Integration sums the saved
 durations; the reported sub length is their mean, not the assigned duration.

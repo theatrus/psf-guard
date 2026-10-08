@@ -3,6 +3,21 @@ use rusqlite::Connection;
 use tempfile::TempDir;
 
 #[test]
+fn schema_26_upgrade_adds_durable_nightly_checkpoints() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let instance = MetaStore::create(&path).unwrap().instance_id();
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch("DROP TABLE collaboration_nightly_run; PRAGMA user_version=26;")
+        .unwrap();
+    let store = MetaStore::open(&path).unwrap();
+    assert_eq!(store.instance_id(), instance);
+    conn.prepare("SELECT connection_id,night,completed_at_ms FROM collaboration_nightly_run")
+        .unwrap();
+    MetaStore::open_reader(&path).unwrap();
+}
+
+#[test]
 fn ts_and_empty_databases_are_not_adopted_or_changed() {
     let dir = TempDir::new().unwrap();
     for sql in [
@@ -35,7 +50,7 @@ fn future_schema_and_corrupt_instance_are_refused() {
     let path = dir.path().join("meta.sqlite");
     drop(MetaStore::create(&path).unwrap());
     let conn = Connection::open(&path).unwrap();
-    conn.pragma_update(None, "user_version", 27).unwrap();
+    conn.pragma_update(None, "user_version", 28).unwrap();
     assert!(matches!(
         MetaStore::open(&path),
         Err(Error::UnsupportedSchema)
@@ -43,9 +58,9 @@ fn future_schema_and_corrupt_instance_are_refused() {
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        27
+        28
     );
-    conn.pragma_update(None, "user_version", 26).unwrap();
+    conn.pragma_update(None, "user_version", 27).unwrap();
     conn.execute("UPDATE meta SET instance_id=?1", [Uuid::nil().to_string()])
         .unwrap();
     assert!(matches!(
@@ -180,7 +195,7 @@ fn schema_eleven_upgrade_adds_contacts_without_recreating_client_tables() {
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        26
+        27
     );
     conn.prepare("SELECT rig_id,kind,at_ms,detail FROM rig_contact")
         .unwrap();

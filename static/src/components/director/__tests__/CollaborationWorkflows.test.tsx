@@ -112,7 +112,7 @@ describe('Collaboration work transfer', () => {
     await userEvent.click(screen.getByRole('tab', { name: 'Reports' }));
     await screen.findByRole('option', { name: 'M31 (2026-10-05)' });
     await userEvent.selectOptions(screen.getByLabelText('Imported visit'), 'import');
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Rig database' }), 'rig-db');
+    expect(screen.queryByRole('combobox', { name: 'Rig database' })).not.toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText('Remote panel'), '0');
     await userEvent.click(await screen.findByLabelText('Select saved.fits'));
     expect(screen.queryByRole('button', { name: 'Queue finalized contribution' })).not.toBeInTheDocument();
@@ -140,7 +140,7 @@ describe('Collaboration work transfer', () => {
     await userEvent.click(screen.getByRole('tab', { name: 'Reports' }));
     await screen.findByRole('option', { name: 'M31 (2026-10-05)' });
     await userEvent.selectOptions(screen.getByLabelText('Imported visit'), 'import');
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Rig database' }), 'rig-db');
+    expect(screen.queryByRole('combobox', { name: 'Rig database' })).not.toBeInTheDocument();
     await screen.findByRole('option', { name: '7' });
     await userEvent.selectOptions(screen.getByLabelText('Remote panel'), '7');
     await userEvent.click(await screen.findByLabelText('Select old-panel.fits'));
@@ -163,7 +163,7 @@ describe('Collaboration work transfer', () => {
     await userEvent.click(screen.getByRole('tab', { name: 'Reports' }));
     await screen.findByRole('option', { name: 'M31 (2026-10-05)' });
     await userEvent.selectOptions(screen.getByLabelText('Imported visit'), 'import');
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Rig database' }), 'rig-db');
+    expect(screen.queryByRole('combobox', { name: 'Rig database' })).not.toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText('Remote panel'), '0');
     await userEvent.click(await screen.findByLabelText('Select first.fits'));
     await userEvent.click(screen.getByRole('button', { name: 'Review 1 images' }));

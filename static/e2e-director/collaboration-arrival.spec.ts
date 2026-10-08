@@ -14,7 +14,7 @@ async function api(request: APIRequestContext, method: string, url: string, data
 
 for (const executor of ['Target Scheduler', 'Director']) {
 test(`${executor}: arriving M31 files review measured data and replay a queued submission`, async ({ page, request }, testInfo) => {
-  test.setTimeout(90_000);
+  test.setTimeout(120_000);
   const run = process.env.PSF_GUARD_DIRECTOR_E2E_TMP!;
   const root = mkdtempSync(path.join(run, 'contribution-arrival-'));
   const empty = path.join(root, 'empty');
@@ -39,6 +39,7 @@ test(`${executor}: arriving M31 files review measured data and replay a queued s
   const received: { contributions: Record<string, unknown>[] }[] = [];
   const unauthorized: string[] = [];
   let failDelivery = true;
+  let taskReads = 0;
   const remote = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(Buffer.from(chunk));
@@ -48,7 +49,7 @@ test(`${executor}: arriving M31 files review measured data and replay a queued s
     if (req.url === '/api/v1/health') res.end(JSON.stringify({ ok: true, protocol: 1, version: 'local test', time: Date.now() / 1000, features: ['pairing'] }));
     else if (req.url === '/api/v1/pair') res.end(JSON.stringify({ agent: { id: '000000000001' }, token: 'local-test-agent-token' }));
     else if (req.url === '/api/v1/agent/hello') res.end(JSON.stringify({ agent: '000000000001', protocol: 1, serverTime: Date.now() / 1000 }));
-    else if (req.url?.startsWith('/api/v1/agent/task')) res.end(JSON.stringify(wire));
+    else if (req.url?.startsWith('/api/v1/agent/task')) { taskReads++; res.end(JSON.stringify(wire)); }
     else if (req.url === '/api/v1/agent/report') {
       received.push(body);
       if (failDelivery) { res.statusCode = 503; res.end(JSON.stringify({ detail: 'Offline test' })); }
@@ -61,6 +62,7 @@ test(`${executor}: arriving M31 files review measured data and replay a queued s
   const remoteUrl = `http://127.0.0.1:${address.port}/`;
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
+  let connectionRoute: string | undefined;
   try {
     await api(request, 'POST', '/api/databases', { name: 'Arrival rig', slug, db_path: path.join(root, 'catalog.sqlite'), image_dirs: [empty, incoming] });
     await api(request, 'GET', '/api/director/v1/plans');
@@ -69,11 +71,12 @@ test(`${executor}: arriving M31 files review measured data and replay a queued s
     await api(request, 'PUT', `/api/director/v1/catalogs/${slug}/rig/profile`, {
       expected_revision: profile.profile.revision,
       optics: { source: { kind: 'manual' }, value: { sensor_width_px: 6248, sensor_height_px: 4176, pixel_size_um: 3.76, focal_length_mm: 530, aperture_mm: null, rotation: { mode: 'rotator' } } },
-      site: null, horizon: null, sky_quality: null,
+      site: { source: { kind: 'manual' }, value: { latitude_degrees: 35, longitude_degrees: -120, elevation_meters: 1000 } }, horizon: null, sky_quality: null,
       limits: { source: { kind: 'manual' }, value: { minimum_altitude_degrees: 25, maximum_altitude_degrees: 88, meridian_exclusion: { before_ms: 600000, after_ms: 0 } } },
     });
     const connection = randomUUID();
     const route = `/api/director/v1/collaboration/${connection}`;
+    connectionRoute = route;
     await api(request, 'POST', `/api/director/v1/rigs/${rig}/collaboration`, { id: connection, server_url: remoteUrl, name: 'LOCAL TEST ONLY', allow_loopback_http: true });
     await api(request, 'POST', `${route}/discover`, {});
     await api(request, 'POST', `${route}/pair`, { code: 'LOCAL-TEST' });
@@ -94,7 +97,7 @@ test(`${executor}: arriving M31 files review measured data and replay a queued s
     const assigned = db.prepare('SELECT e.Id AS exposure_id,e.guid AS goal,t.Id AS target_id,t.projectId AS project_id,t.name FROM exposureplan e JOIN target t ON t.Id=e.targetId JOIN psf_guard_collaboration_plan c ON c.exposureplan_guid=e.guid WHERE c.import_id=?').get(imported.plan.import_id) as { exposure_id: number; goal: string; target_id: number; project_id: number; name: string };
 
     const acquired = Math.floor(Date.now() / 1000) + 1;
-    const observingNight = new Date(acquired * 1000).toISOString().slice(0, 10);
+    const observingNight = new Date((acquired - 20 * 3600) * 1000).toISOString().slice(0, 10);
     const guids = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
     const captures = guids.map(() => randomUUID());
     const exposure = executor === 'Director' ? 300.007 : 300;
@@ -136,7 +139,7 @@ test(`${executor}: arriving M31 files review measured data and replay a queued s
     await collaboration.getByRole('tab', { name: 'Reports' }).click();
     await collaboration.getByLabel('Imported visit').selectOption({ label: 'M31 halo in narrowband (2026-10-05)' });
     await collaboration.getByLabel('Observing night', { exact: true }).fill(observingNight);
-    await collaboration.getByRole('combobox', { name: 'Rig database', exact: true }).selectOption(slug);
+    await expect(collaboration.getByRole('combobox', { name: 'Rig database', exact: true })).toHaveCount(0);
     await collaboration.getByLabel('Remote panel').selectOption('0');
     await expect(collaboration).toContainText('0 accepted images');
     save(1);
@@ -195,17 +198,54 @@ test(`${executor}: arriving M31 files review measured data and replay a queued s
     await collaboration.getByRole('button', { name: 'Check in', exact: true }).click();
     await expect(collaboration).toContainText('1 reports delivered; 1 accepted; 0 rejected');
     expect(received).toHaveLength(2);
+    // Grade a saved frame later. Automatic reporting extends the same capture
+    // night's aggregate and replays the exact immutable body after an outage.
+    await collaboration.getByRole('button', { name: 'Check in', exact: true }).click();
+    await expect(collaboration).toContainText('0 reports delivered; 0 accepted; 0 rejected');
+    expect(received).toHaveLength(2);
+    db.prepare('UPDATE acquiredimage SET gradingStatus=1 WHERE Id=2').run();
+    const mapping = await api(request, 'GET', `/api/director/v1/catalogs/${slug}/mappings`);
+    if (executor === 'Director') {
+      const identity = await api(request, 'GET', '/api/director/v1/status');
+      const ledger = randomUUID();
+      const events = ['reserved', 'saved'].map((state, step) => ({
+        schema_version: 1, ledger_id: ledger, sequence: step + 1, rig_id: rig,
+        attempt: { capture_id: captures[1], goal_id: assigned.goal, reserved_at_ms: (acquired + 600) * 1000,
+          evidence: state === 'reserved' ? { state } : { state, image_id: captures[1], elapsed_ms: 301000 } },
+      }));
+      await api(request, 'POST', `/api/director/v1/rigs/${rig}/checkin`, { coordinator_instance_id: identity.instance_id, catalog_id: mapping.catalog_identity.id, ledger_id: ledger, events });
+    }
+    failDelivery = true;
+    const readsBeforeReporting = taskReads;
+    const policy = { enabled: false, catalog_id: mapping.catalog_identity.id, project_ids: [], interval_minutes: 15, activate: false, automatic_reports: true };
+    await work({ operation: 'background_configure', expected: null, policy });
+    await page.close();
+    await expect.poll(() => received.length, { timeout: 40_000 }).toBeGreaterThan(2);
+    expect(received.at(-1)?.contributions[0]).toMatchObject({ night: observingNight, frames: 3 });
+    expect(received.at(-1)?.contributions[0].seconds).toBeCloseTo(exposure * 3, 6);
+    const attempted = received.at(-1);
+    failDelivery = false;
+    const resumed = await work({ operation: 'background_run' });
+    expect(resumed.status.reports.delivered).toBe(1);
+    expect(received.at(-1)).toEqual(attempted);
+    const deliveredCount = received.length;
+    const repeated = await work({ operation: 'background_run' });
+    expect(repeated.status.reports).toMatchObject({ queued: 0, delivered: 0, held: 0 });
+    expect(received).toHaveLength(deliveredCount);
+    expect(taskReads).toBe(readsBeforeReporting);
+    await work({ operation: 'background_configure', expected: policy, policy: null });
     expect(received[1]).toEqual(received[0]);
     expect(received[1].contributions[0]).toMatchObject({ project: '000000000002', task: '000000000004', night: observingNight, panel: '0', filterName: 'H', frames: 2, seconds: exposure * 2, exposure, focalLength: 530, hfr: 2.7, guideRms: executor === 'Director' ? 0.5 : null, calibrated: false, colour: false, bandpass: 7 });
     expect(received[1].contributions[0].moonIllumination).toBeGreaterThanOrEqual(0);
     expect(received[1].contributions[0].moonSeparation).toBeGreaterThanOrEqual(0);
     await testInfo.attach('local-M31-contribution.json', { body: JSON.stringify(received[1], null, 2), contentType: 'application/json' });
-    await collaboration.getByRole('button', { name: 'Check in', exact: true }).click();
-    await expect(collaboration).toContainText('0 reports delivered; 0 accepted; 0 rejected');
-    expect(received).toHaveLength(2);
     expect(unauthorized).toEqual([]);
     expect(errors).toEqual([]);
   } finally {
+    if (connectionRoute) {
+      const current = await api(request, 'POST', `${connectionRoute}/work`, { operation: 'background_status' });
+      if (current.policy) await api(request, 'POST', `${connectionRoute}/work`, { operation: 'background_configure', expected: current.policy, policy: null });
+    }
     db.close();
     await request.delete(`/api/databases/${slug}`);
     remote.closeAllConnections();

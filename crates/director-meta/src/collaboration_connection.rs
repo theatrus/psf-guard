@@ -28,13 +28,19 @@ pub struct BackgroundPolicy {
     pub project_ids: Vec<String>,
     pub interval_minutes: u16,
     pub activate: bool,
+    #[serde(default, skip_serializing_if = "reports_disabled")]
+    pub automatic_reports: bool,
+}
+
+fn reports_disabled(value: &bool) -> bool {
+    !value
 }
 
 impl BackgroundPolicy {
     pub fn validate(&self) -> Result<(), Error> {
         valid_id(self.catalog_id)?;
         if !(5..=1440).contains(&self.interval_minutes)
-            || self.project_ids.is_empty()
+            || (self.enabled && self.project_ids.is_empty())
             || self.project_ids.len() > 32
             || self
                 .project_ids
@@ -49,6 +55,45 @@ impl BackgroundPolicy {
         {
             return Err(Error::InvalidInput);
         }
+        Ok(())
+    }
+}
+
+pub(crate) fn create_automation_table(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS collaboration_nightly_run(
+        connection_id TEXT PRIMARY KEY NOT NULL REFERENCES collaboration_connection(id),
+        night TEXT NOT NULL, completed_at_ms INTEGER NOT NULL);",
+    )?;
+    validate_automation_table(conn)
+}
+
+pub(crate) fn validate_automation_table(conn: &Connection) -> Result<(), Error> {
+    conn.prepare(
+        "SELECT connection_id,night,completed_at_ms FROM collaboration_nightly_run LIMIT 0",
+    )
+    .map_err(|_| Error::CorruptDatabase)?;
+    Ok(())
+}
+
+impl MetaStore {
+    pub fn collaboration_nightly_run(&self, id: Uuid) -> Result<Option<(String, u64)>, Error> {
+        self.connection.query_row("SELECT night,completed_at_ms FROM collaboration_nightly_run WHERE connection_id=?1",
+            [id.to_string()], |r| Ok((r.get(0)?, r.get::<_, i64>(1)?))).optional()?
+            .map(|(night, at)| Ok((night, u64::try_from(at).map_err(|_| Error::CorruptDatabase)?))).transpose()
+    }
+
+    pub fn complete_collaboration_night(
+        &mut self,
+        id: Uuid,
+        night: &str,
+        now: u64,
+    ) -> Result<(), Error> {
+        psf_guard_director_interop::astrocollab::validate_night(night)
+            .map_err(|_| Error::InvalidInput)?;
+        self.connection.execute("INSERT INTO collaboration_nightly_run VALUES(?1,?2,?3)
+            ON CONFLICT(connection_id) DO UPDATE SET night=excluded.night,completed_at_ms=excluded.completed_at_ms",
+            params![id.to_string(), night, i64::try_from(now).map_err(|_| Error::InvalidInput)?])?;
         Ok(())
     }
 }
@@ -292,6 +337,12 @@ impl MetaStore {
         )?;
         if changed != 1 {
             return Err(Error::Conflict);
+        }
+        if old.background != new.background {
+            tx.execute(
+                "DELETE FROM collaboration_nightly_run WHERE connection_id=?1",
+                [old.id.to_string()],
+            )?;
         }
         if let Some(agent) = &new.agent_id {
             let foreign: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM collaboration_import WHERE base_url=?1 AND agent_id=?2 AND rig_id!=?3)",

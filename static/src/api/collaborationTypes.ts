@@ -71,6 +71,7 @@ export interface CollaborationBackgroundPolicy {
   project_ids: string[];
   interval_minutes: number;
   activate: boolean;
+  automatic_reports?: boolean;
 }
 export interface CollaborationBackgroundReply {
   connection_status?: CollaborationConnection['status'];
@@ -82,6 +83,8 @@ export interface CollaborationBackgroundReply {
     next_run_ms: number | null;
     last_error: string | null;
     result: { night: string; imported: number; unchanged: number; activated: number; held: string[] } | null;
+    reports?: { queued: number; delivered: number; held: number } | null;
+    report_error?: string | null;
   };
   catalogs: { id: string; slug: string; name: string }[];
   projects: { id: string; name: string; project_id?: string }[];

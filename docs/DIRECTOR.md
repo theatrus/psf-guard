@@ -41,10 +41,12 @@ to a remote share; it does not start a sequence. **Review import** shows the
 panel/filter visits. **Import draft** creates an ordinary inactive project
 draft. Apply refetches the remote work and refuses a changed review.
 
-In **Automation**, select the rig database and explicitly
-allowed joined or imported projects, then enable **Pull tonight automatically**.
-The saved policy runs without an open browser, every 15 minutes by default.
-**Refresh now** runs that same loop manually. It never joins projects for you.
+In **Automation**, choose explicitly allowed joined or imported projects, then
+enable **Pull tonight automatically**. The database follows the rig; there is
+no database picker. Work is pulled once per rig-local observing night, not on a
+15-minute timer. A durable checkpoint survives server restarts. Failed requests
+back off and retry. **Refresh now** explicitly reruns the saved automation,
+including reports when enabled. It never joins projects for you.
 **Activate in rig database** also applies safe assignments to that one database.
 For a new untouched draft, Director uses a unique matching filter/binning
 template, preferring the assigned exposure when several templates match. It
@@ -58,7 +60,7 @@ scope. Use normal database sync for a separate telescope-side copy. Existing
 plans remain available during outages or when a response omits an assignment.
 The setup shows last success, next refresh, errors and held assignments. Failures
 back off; reconnect after a rejected credential. A server restart restores the
-saved policy and retries, but resets the displayed run history.
+saved policy and nightly checkpoint; detailed run counts are process-local.
 
 Open that project's plan workspace, add one enabled rig recipe for each assigned
 filter at its assigned exposure length, then select the rig's assignment under
@@ -75,11 +77,21 @@ its quota. Activating reviewed newer work supersedes the old assignment, reuses
 unchanged targets, and preserves captures and grades. Its new goal starts above
 the accepted count when grading is enabled, or acquired count otherwise.
 
-In **Reports**, select an imported visit, a database belonging
-to this rig, its remote panel, and accepted images. The open image list refreshes
+Enable **Submit contribution reports automatically** to queue and deliver eligible
+contributions without an open browser. This separate opt-in checks for ready
+images every five minutes and replays the durable outbox after outages, without
+pulling tonight's work again or sharing live activity. It only uses activated
+assignment provenance in the rig's database, groups frames by actual rig-local
+capture night, revision, panel and filter, and applies the same evidence checks
+as manual review. Missing files wait for arrival. Changed or incomplete cohorts
+remain held; automatic reporting never invents missing measurements or changes
+grades. Existing reports are not withdrawn or rewritten automatically.
+
+In **Reports**, the database is selected from the rig automatically. Select an
+imported visit, its remote panel, and accepted images. The open image list refreshes
 every 30 seconds and after catalog imports. Missing files appear only after they
 arrive in a configured image folder. Newly arrived frames are not selected or
-submitted automatically. **Review images** checks
+submitted by the manual view. **Review images** checks
 GUIDs, saved files, exposures, fresh pixel solves and shared measured coverage.
 Set **Observing night** to the night the selected images were captured, even if
 the assignment was issued earlier. Candidates include a time-zone margin, so

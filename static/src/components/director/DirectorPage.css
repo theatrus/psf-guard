@@ -196,6 +196,8 @@ button.workspace-pill { cursor: pointer; }
 .collaboration-workflows select { max-width: 100%; min-width: 0; }
 .collaboration-background { margin: 0 0 1rem; }
 .collaboration-background summary { cursor: pointer; }
+.collaboration-automation-option { display: flex; align-items: baseline; gap: 0.4rem; margin: 0.75rem 0; overflow-wrap: anywhere; }
+.collaboration-automation-option input { flex: none; }
 .collaboration-project-choice { display: flex; align-items: baseline; gap: 0.4rem; margin: 0.35rem 0; overflow-wrap: anywhere; }
 .collaboration-image-list { max-height: 22rem; overflow: auto; margin: 0.75rem 0; }
 .collaboration-image-list table { min-width: 600px; }
