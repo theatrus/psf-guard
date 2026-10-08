@@ -342,7 +342,7 @@ fn schema_two_upgrade_preserves_identity_and_configurations_with_transactional_f
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        27
+        28
     );
 }
 

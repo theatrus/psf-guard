@@ -39,6 +39,7 @@ test(`${executor}: arriving M31 files review measured data and replay a queued s
   const received: { contributions: Record<string, unknown>[] }[] = [];
   const unauthorized: string[] = [];
   let failDelivery = true;
+  let rejectDelivery = false;
   let taskReads = 0;
   const remote = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
@@ -53,7 +54,7 @@ test(`${executor}: arriving M31 files review measured data and replay a queued s
     else if (req.url === '/api/v1/agent/report') {
       received.push(body);
       if (failDelivery) { res.statusCode = 503; res.end(JSON.stringify({ detail: 'Offline test' })); }
-      else res.end(JSON.stringify({ recorded: body.contributions.map(() => ({ id: '000000000010', accepted: true, duplicate: false, verdict: { accepted: true, reasons: [], unverified: [] } })) }));
+      else res.end(JSON.stringify({ recorded: body.contributions.map(() => ({ id: '000000000010', accepted: !rejectDelivery, duplicate: false, verdict: { accepted: !rejectDelivery, reasons: rejectDelivery ? ['Quality evidence incomplete'] : [], unverified: [] } })) }));
     } else { res.statusCode = 404; res.end('{}'); }
   });
   await new Promise<void>(resolve => remote.listen(0, '127.0.0.1', resolve));
@@ -221,18 +222,41 @@ test(`${executor}: arriving M31 files review measured data and replay a queued s
     await work({ operation: 'background_configure', expected: null, policy });
     await page.close();
     await expect.poll(() => received.length, { timeout: 40_000 }).toBeGreaterThan(2);
+    await expect.poll(async () => (await work({ operation: 'background_status' })).status.report_error).not.toBeNull();
+    const offlineStatus = await work({ operation: 'background_status' });
+    expect(offlineStatus.status.reports).toMatchObject({ queued: 1, delivered: 0 });
     expect(received.at(-1)?.contributions[0]).toMatchObject({ night: observingNight, frames: 3 });
     expect(received.at(-1)?.contributions[0].seconds).toBeCloseTo(exposure * 3, 6);
     const attempted = received.at(-1);
     failDelivery = false;
+    rejectDelivery = true;
     const resumed = await work({ operation: 'background_run' });
-    expect(resumed.status.reports.delivered).toBe(1);
+    expect(resumed.status.reports).toMatchObject({ delivered: 1, accepted: 0, rejected: 1 });
+    expect(resumed.status.rejected_reports[0]).toMatchObject({ night: observingNight, reasons: ['Quality evidence incomplete'] });
     expect(received.at(-1)).toEqual(attempted);
     const deliveredCount = received.length;
     const repeated = await work({ operation: 'background_run' });
     expect(repeated.status.reports).toMatchObject({ queued: 0, delivered: 0, held: 0 });
+    expect(repeated.status.rejected_reports).toHaveLength(1);
     expect(received).toHaveLength(deliveredCount);
     expect(taskReads).toBe(readsBeforeReporting);
+    const reopened = await page.context().newPage();
+    await reopened.goto('/#/sky');
+    await reopened.getByRole('button', { name: 'Settings', exact: true }).click();
+    const reopenedSettings = reopened.locator('.tauri-settings');
+    await reopenedSettings.getByRole('tab', { name: 'Rigs' }).click();
+    await reopenedSettings.getByRole('button', { name: 'Setup Arrival rig' }).click();
+    await reopenedSettings.getByRole('tab', { name: 'Collaboration', exact: true }).click();
+    await reopenedSettings.getByRole('tab', { name: 'Automation' }).click();
+    const rejection = reopenedSettings.getByRole('region', { name: 'Rejected contributions' });
+    await expect(rejection).toContainText('Quality evidence incomplete');
+    for (const width of [1440, 390]) {
+      await reopened.setViewportSize({ width, height: 1000 });
+      await rejection.scrollIntoViewIfNeeded();
+      expect(await reopenedSettings.evaluate(e => e.scrollWidth <= e.clientWidth)).toBeTruthy();
+      await reopened.screenshot({ path: testInfo.outputPath(`rejected-contribution-${width}.png`) });
+    }
+    await reopened.close();
     await work({ operation: 'background_configure', expected: policy, policy: null });
     expect(received[1]).toEqual(received[0]);
     expect(received[1].contributions[0]).toMatchObject({ project: '000000000002', task: '000000000004', night: observingNight, panel: '0', filterName: 'H', frames: 2, seconds: exposure * 2, exposure, focalLength: 530, hfr: 2.7, guideRms: executor === 'Director' ? 0.5 : null, calibrated: false, colour: false, bandpass: 7 });

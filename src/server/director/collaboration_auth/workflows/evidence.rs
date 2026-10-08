@@ -6,7 +6,9 @@ use collaboration::{FrameEvidence, MeasuredFootprint, PreparedImport};
 use std::collections::{BTreeMap, BTreeSet};
 mod automatic;
 mod measurements;
-pub(in crate::server::director::collaboration_auth) use automatic::{automatic, AutomaticResult};
+pub(in crate::server::director::collaboration_auth) use automatic::{
+    automatic, AutomaticCursor, AutomaticResult,
+};
 
 struct CatalogFrames {
     frames: Vec<FrameEvidence>,
@@ -301,27 +303,8 @@ fn frames(
     .map_err(|_| held())?;
     conn.busy_timeout(Duration::from_secs(2))
         .map_err(|_| held())?;
-    let mut rows = Vec::new();
     let links = associations(&conn, import.import_id()).map_err(|_| held())?;
-    let mut guids = selection.image_guids.clone();
-    guids.sort();
-    for guid in &guids {
-        let mut statement=conn.prepare(&format!("{IMAGE_SELECT} LEFT JOIN target t ON t.Id=ai.targetId WHERE ai.guid=?1 COLLATE NOCASE LIMIT 2")).map_err(|_|held())?;
-        let mut matches = statement
-            .query_map([guid.to_string()], |r| {
-                Ok((
-                    image_row(r)?,
-                    r.get::<_, Option<String>>(9)?.unwrap_or_default(),
-                    r.get::<_, Option<String>>(10)?,
-                ))
-            })
-            .map_err(|_| held())?;
-        let row = matches.next().ok_or_else(held)?.map_err(|_| held())?;
-        if matches.next().is_some() {
-            return Err(held());
-        }
-        rows.push((*guid, row));
-    }
+    let rows = selected_rows(&conn, &selection.image_guids)?;
     drop(conn);
     let mut solutions = Vec::new();
     let mut frames = Vec::new();
@@ -485,6 +468,55 @@ fn frames(
     frames.sort_by_key(|f| f.image_guid);
     Ok(CatalogFrames { frames, director })
 }
+
+type SelectedRow = (Uuid, (crate::models::AcquiredImage, String, Option<String>));
+
+fn selected_rows(conn: &rusqlite::Connection, guids: &[Uuid]) -> Result<Vec<SelectedRow>, Failure> {
+    let selected = guids.iter().copied().collect::<BTreeSet<_>>();
+    if selected.len() != guids.len()
+        || selected.is_empty()
+        || selected.len() > collaboration::MAX_REPORT_FRAMES
+    {
+        return Err(invalid());
+    }
+    let encoded = serde_json::to_string(&selected).map_err(|_| invalid())?;
+    // TS has no GUID index. Read the table once rather than once per frame.
+    let mut statement = conn
+        .prepare(&format!(
+            "{IMAGE_SELECT} LEFT JOIN target t ON t.Id=ai.targetId
+        WHERE ai.guid COLLATE NOCASE IN (SELECT value FROM json_each(?1)) LIMIT ?2"
+        ))
+        .map_err(|_| held())?;
+    let rows = statement
+        .query_map(
+            rusqlite::params![encoded, (selected.len() + 1) as i64],
+            |r| {
+                Ok((
+                    image_row(r)?,
+                    r.get::<_, Option<String>>(9)?.unwrap_or_default(),
+                    r.get::<_, Option<String>>(10)?,
+                ))
+            },
+        )
+        .map_err(|_| held())?;
+    let mut found = BTreeMap::new();
+    for row in rows {
+        let row = row.map_err(|_| held())?;
+        let guid = row
+            .0
+            .guid
+            .as_deref()
+            .and_then(|g| Uuid::parse_str(g).ok())
+            .ok_or_else(held)?;
+        if !selected.contains(&guid) || found.insert(guid, row).is_some() {
+            return Err(held());
+        }
+    }
+    if found.len() != selected.len() {
+        return Err(held());
+    }
+    Ok(found.into_iter().collect())
+}
 fn frame_is_colour(header: &crate::image_io::FrameHeader) -> bool {
     header
         .cards
@@ -559,6 +591,45 @@ fn common_footprint(solutions: &[AstrometrySolutionResponse]) -> Option<Measured
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batched_guid_lookup_handles_large_unindexed_catalogs_and_duplicate_identity() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE acquiredimage(Id INTEGER PRIMARY KEY,guid TEXT,gradingStatus INTEGER,filtername TEXT,metadata TEXT,acquireddate INTEGER,targetId INTEGER DEFAULT 1,projectId INTEGER DEFAULT 1,profileId TEXT);
+            CREATE TABLE target(Id INTEGER PRIMARY KEY,guid TEXT,name TEXT);").unwrap();
+        let mut selected = Vec::new();
+        let tx = conn.transaction().unwrap();
+        {
+            let mut insert = tx
+                .prepare("INSERT INTO acquiredimage(Id,guid) VALUES(?1,?2)")
+                .unwrap();
+            for id in 0..10_000 {
+                let guid = Uuid::new_v4();
+                insert
+                    .execute(rusqlite::params![id, guid.to_string().to_uppercase()])
+                    .unwrap();
+                if id >= 5904 {
+                    selected.push(guid);
+                }
+            }
+        }
+        tx.commit().unwrap();
+        // Fill the required fields without inventing FITS evidence. This test
+        // exercises the row lookup only, not scientific contribution review.
+        conn.execute(
+            "UPDATE acquiredimage SET gradingStatus=1,filtername='Ha',metadata='{}'",
+            [],
+        )
+        .unwrap();
+        let rows = selected_rows(&conn, &selected).unwrap();
+        assert_eq!(rows.len(), collaboration::MAX_REPORT_FRAMES);
+        assert!(rows.windows(2).all(|pair| pair[0].0 < pair[1].0));
+        conn.execute("INSERT INTO acquiredimage(Id,guid,gradingStatus,filtername,metadata) VALUES(10001,?1,1,'Ha','{}')", [selected[0].to_string()]).unwrap();
+        assert!(selected_rows(&conn, &selected).is_err());
+        conn.execute("DELETE FROM acquiredimage WHERE Id>=5904", [])
+            .unwrap();
+        assert!(selected_rows(&conn, &selected).is_err());
+    }
     #[test]
     fn director_receipt_requires_exact_identity_without_treating_trigger_time_as_capture_time() {
         use psf_guard_director_meta::inbox::Receipt;

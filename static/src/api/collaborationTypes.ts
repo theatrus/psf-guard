@@ -83,8 +83,9 @@ export interface CollaborationBackgroundReply {
     next_run_ms: number | null;
     last_error: string | null;
     result: { night: string; imported: number; unchanged: number; activated: number; held: string[] } | null;
-    reports?: { queued: number; delivered: number; held: number } | null;
+    reports?: { queued: number; delivered: number; held: number; accepted?: number; rejected?: number; deferred?: boolean } | null;
     report_error?: string | null;
+    rejected_reports?: { id: string; night: string; panel: number; filter: string; reasons: string[]; summary: string | null }[];
   };
   catalogs: { id: string; slug: string; name: string }[];
   projects: { id: string; name: string; project_id?: string }[];

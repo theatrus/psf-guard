@@ -75,10 +75,14 @@ export default function CollaborationBackground({ connection, canWrite, refresh,
       <p>{status.running ? 'Pulling tonight\'s work...' : saved?.enabled ? connected ? 'Automatic refresh enabled' : 'Automatic refresh paused' : 'Automatic refresh off'}</p>
       <p>Last success: {time(status.last_success_ms)}. Next refresh: {saved?.enabled ? connected ? time(status.next_run_ms) : 'Paused' : 'Off'}.</p>
       {status.result && <p>{status.result.night}: {status.result.imported} imported, {status.result.unchanged} unchanged, {status.result.activated} activated</p>}
-      {saved?.automatic_reports && <p>Automatic reports: {!connected ? 'Paused' : status.reports ? `${status.reports.queued} queued, ${status.reports.delivered} delivered, ${status.reports.held} held` : 'Awaiting first pass'}</p>}
+      {saved?.automatic_reports && <p>Automatic reports: {!connected ? 'Paused' : status.reports ? `${status.reports.queued} queued, ${status.reports.delivered} delivered, ${status.reports.accepted ?? 0} accepted, ${status.reports.rejected ?? 0} rejected, ${status.reports.held} held` : 'Awaiting first pass'}</p>}
+      {saved?.automatic_reports && status.reports?.deferred && <p>More contribution evidence pending; continuing next batch.</p>}
     </div>}
     {status?.last_error && <p role="alert">{status.last_error}. Existing plans retained.</p>}
     {status?.report_error && <p role="alert">{status.report_error}. Queued reports retained.</p>}
+    {!!status?.rejected_reports?.length && <section aria-label="Rejected contributions"><h4>Rejected contributions</h4><ul>
+      {status.rejected_reports.map(report => <li key={report.id} role="alert">{report.night}, panel {report.panel}, {report.filter}: {report.reasons.length ? report.reasons.join('; ') : report.summary ?? 'Rejected by collaboration server; review contribution evidence'}</li>)}
+    </ul></section>}
     {!!status?.result?.held.length && <ul>{status.result.held.map((reason, index) => <li key={index}>{reason}</li>)}</ul>}
     </>;
   return embedded ? <section className="collaboration-background" aria-label="Automatic work requests">{content}</section>
