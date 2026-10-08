@@ -19,6 +19,7 @@ use std::{
     path::PathBuf,
     time::{Duration, Instant},
 };
+pub(super) mod background;
 mod credentials;
 #[cfg(test)]
 mod tests;
@@ -29,6 +30,7 @@ pub(super) struct SessionState {
     gate: tokio::sync::Mutex<()>,
     pending: Mutex<HashMap<Uuid, Pending>>,
     last_delivery: Mutex<HashMap<Uuid, Instant>>,
+    background: Mutex<HashMap<Uuid, background::Record>>,
 }
 pub(super) fn forward_status(state: Arc<AppState>, rig: Uuid) {
     workflows::forward_status(state, rig);
@@ -268,6 +270,7 @@ async fn create(
         agent_id: None,
         state: ConnectionState::New,
         settings: None,
+        background: None,
     };
     let p = registry(&state)?;
     let path = p.clone();

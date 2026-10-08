@@ -152,6 +152,10 @@ pub struct Service {
     collaboration: collaboration_auth::SessionState,
 }
 
+pub(crate) fn spawn_collaboration(state: Arc<AppState>) {
+    collaboration_auth::background::spawn(state);
+}
+
 impl Service {
     /// Call during startup, never with a client-supplied filesystem path.
     pub(crate) fn configured(path: Option<&FilePath>) -> anyhow::Result<Option<Arc<Self>>> {

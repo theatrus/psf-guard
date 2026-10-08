@@ -2941,6 +2941,14 @@ not proof that acquisition failed or that an image passes quality requirements.
 
 ## Federation and collaboration
 
+PSF Guard now has an opt-in, rig/catalog-bound collaboration request loop and
+one-click manual Tonight flow. Both use the shared core's site-based observing
+night and Moon calculation. The loop can import and locally activate explicitly
+allowed projects without an open browser; it preserves offline work and never
+starts NINA or joins projects. Remote peer delivery still uses normal database
+sync. Policy, activation boundaries and API fields are recorded in
+[the collaboration contract](collaboration.md#tonight-and-automatic-adoption).
+
 The [AstroCollab and Starfront interoperability record](collaboration.md) maps
 AstroCollab 0.2.0-draft.1 (wire protocol 1) to two proposed clients: a plugin-only
 local workload source, and import into PSF Guard's existing project workspace

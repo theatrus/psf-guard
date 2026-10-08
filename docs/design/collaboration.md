@@ -206,13 +206,50 @@ it does not accept remote bearer tokens or caller-provided scientific evidence.
 | --- | --- |
 | `configure` | Save non-secret `settings`: binning, colour, hours per night, filter exposure/bandpass map and opt-in activity sharing. Optics come from the commissioned rig profile. |
 | `browse` | Send hello, then return the authenticated project list and compatibility. |
-| `join` | Join one remote project with explicit `night` context, then retrieve authenticated nightly work. |
-| `tonight` | Retrieve work for `night: {night, moon, moon_up}`; date and both fractions are required. |
+| `join` | Join one remote project, then retrieve work for the rig's current observing night. Optional `observing_date` selects another date. |
+| `tonight` | No extra input is required. Derive the named night and lunar context from the rig's site through the shared core. Accept optional `observing_date`, or legacy `night: {night, moon, moon_up}` (not both). Return the resolved `night` with shares. |
 | `preview`, `apply` | Refetch the selected `task` for that night. Apply requires the current `review_digest`; changed work conflicts. Imports stay inactive. |
 | `report_inputs` | List this binding's imported visits and databases bound to its rig. |
 | `report_candidates` | List accepted saved-image GUIDs for an `import_id`, `catalog` and optional actual `observing_night` (defaults to the original night). Activated work is scoped by target GUID and assignment lifetime. No grades or files are changed. |
 | `preview_report`, `queue_report` | Review `selection: {import_id, catalog, panel, image_guids, source_digest?, observing_night?}` using catalog and fresh pixel evidence. Queue requires its unchanged `review_digest`. |
 | `checkin` | Send fresh opted-in presence and replay pending immutable reports. Persist receipts only after validating the complete positional reply. |
+| `background_status` | Return the saved non-secret policy, rig-bound catalog identities, imported projects and current process's run status. It remains readable during a network operation. |
+| `background_configure` | Compare-and-set `expected` and `policy`. A policy names one stable `catalog_id`, explicit `project_ids`, `enabled`, `interval_minutes` (5-1440) and `activate`. Only already joined or imported projects are allowed. |
+| `background_run` | Run the enabled policy now, retaining the same import and activation checks as the automatic loop. Return updated status. |
+
+### Tonight and automatic adoption
+
+The manual and background paths use the same `interop::workflow::Night`
+calculation: local mean-solar noon to noon, astronomical darkness below -18
+degrees, and planning-grade Moon illumination and fraction of dark hours above
+the horizon. Without astronomical darkness, the request is held rather than
+assigned a guessed observing night.
+Manual review and Apply keep the full returned night fixed even if midnight
+passes. A date-only override uses the same lunar calculation.
+
+Background refresh is off by default. One server loop checks due policies every
+30 seconds; an interactive collaboration operation takes precedence. Requests
+are bounded and serialized, with exponential retry up to one day. Credentials
+are reread from the existing config file. A rejected credential pauses that
+binding; missing credentials, unavailable storage and network failures preserve
+existing work. Policy survives restart; run status and backoff are process-local.
+
+Only accepted, representable shares for the explicit project allowlist enter the
+normal compare-and-set import path. Optional activation previews a planning copy
+and applies its digest to exactly the selected rig/catalog. A pristine draft can
+take unique local template recipes matching filter/binning, preferring the
+assigned exposure. Saved exposure defaults must agree with the assignment;
+template camera and Moon settings are retained. Ambiguity needs manual Planning;
+saved recipes are never reconstructed, and shared multi-rig changes require
+manual Activation. The
+existing assignment provenance prevents duplicate activation or quota refills.
+Automatic activation writes only the selected local database: it does not use
+the full-catalog remote-peer push, which could publish unrelated projects.
+
+The loop never enrolls or joins projects, starts hardware, selects scientific
+frames, or submits unreviewed contributions. It never treats a missing remote
+assignment as cancellation. Manual browse, join, review/import, activation and
+check-in remain available independently of this policy.
 
 Accepted live rig telemetry also schedules background check-in at most once a
 minute when activity sharing is enabled. Network failure never blocks the local
@@ -560,8 +597,11 @@ still needs its local issuer, store and reviewed admission policy.
    setup. Hello/join, UI preview/Apply, and standalone plugin credentials are
    implemented. Commissioned optics and explicit filters describe the remote
    rig; the server's compatibility decision is displayed. Reviewed downstream
-   TS activation and GUID-based capture association are implemented. Remaining:
-   plugin-only work intake and automatic managed refresh policy.
+   TS activation and GUID-based capture association are implemented. Managed
+   Tonight pulls and opt-in background refresh/activation are implemented with
+   a stable rig/catalog binding and explicit project allowlist. Remaining:
+   plugin-only work intake, scoped automatic remote-peer delivery and safe
+   automatic recipe expansion when a later assignment introduces a new filter.
 3. **Plugin-only admission.** Add complete local setup, workload-source choice,
    local issuer/store and versioned IPC. Reuse the Session and ledger; prove
    offline bounded execution, restart/replay refusal, safety/roof interruptions,

@@ -387,6 +387,7 @@ async fn run_server_internal(
 
     // Databases that asked for it import new frames on open and on schedule.
     crate::server::autoimport::spawn(Arc::clone(&state));
+    crate::server::director::spawn_collaboration(Arc::clone(&state));
 
     // Build PSF Guard's query indexes on each configured catalog, once, off
     // the request path and before cache refreshes start long-lived reads.

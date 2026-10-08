@@ -75,6 +75,7 @@ fn connection_and_import_cannot_bind_one_agent_to_different_rigs() {
         agent_id: None,
         state: ConnectionState::New,
         settings: None,
+        background: None,
     };
     s.create_collaboration_connection(&binding).unwrap();
     let mut registered = binding.clone();

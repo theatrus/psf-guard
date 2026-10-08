@@ -286,6 +286,70 @@ async fn execute(
     on_copy: bool,
     visits: Vec<collaboration_activation::Visit>,
 ) -> Result<Json<ApiResponse<Report>>, ActivationError> {
+    execute_guarded(state, id, expected, on_copy, visits, None).await
+}
+
+/// Background consent is limited to one rig/catalog. Never apply another
+/// rig's edits through a project shared with that rig.
+pub(super) async fn background_apply(
+    state: Arc<AppState>,
+    id: Uuid,
+    rig: Uuid,
+    catalog: Uuid,
+    visit: collaboration_activation::Visit,
+) -> Result<bool, ActivationError> {
+    let service = writable(&state)?;
+    let catalogs = state.all_databases();
+    let instance = service.instance_id;
+    let current = service
+        .with_reader(move |store| collaboration_activation::current(store, id, instance, &catalogs))
+        .await?;
+    if current
+        .iter()
+        .any(|v| v.import_id == visit.import_id && v.source_digest == visit.source_digest)
+    {
+        return Ok(false);
+    }
+    let Json(preview) = execute_guarded(
+        state.clone(),
+        id,
+        None,
+        true,
+        vec![visit.clone()],
+        Some((rig, catalog)),
+    )
+    .await?;
+    let preview = preview.data.ok_or(Error::Internal)?;
+    let Json(applied) = execute_guarded(
+        state,
+        id,
+        Some(preview.preview_digest),
+        false,
+        vec![visit],
+        Some((rig, catalog)),
+    )
+    .await?;
+    let applied = applied.data.ok_or(Error::Internal)?;
+    if applied.rigs.len() == 1
+        && applied.rigs[0].applied
+        && applied.rigs[0].push.as_ref().is_none_or(|p| p.applied)
+    {
+        Ok(true)
+    } else {
+        Err(ActivationError::NotReady(
+            "Activation could not reach this rig; review Activation and retry.",
+        ))
+    }
+}
+
+async fn execute_guarded(
+    state: Arc<AppState>,
+    id: Uuid,
+    expected: Option<String>,
+    on_copy: bool,
+    visits: Vec<collaboration_activation::Visit>,
+    guard: Option<(Uuid, Uuid)>,
+) -> Result<Json<ApiResponse<Report>>, ActivationError> {
     // A preview only reads; applying writes every participating rig database.
     let service = if expected.is_some() {
         writable(&state)?
@@ -365,6 +429,13 @@ async fn execute(
         // The last activation: which rigs had rows, and which projects it
         // set Inactive when their rig was turned off.
         let previous = store.activation(id)?;
+        if let Some((rig, _)) = guard
+            && (by_rig.len() != 1 || !by_rig.contains_key(&rig)
+                || plan.contributions.iter().any(|c| c.rig_id != rig)
+                || previous.as_ref().is_some_and(|a| a.rigs.iter().any(|r| r.rig_id != rig) || a.inactive_rigs.iter().any(|r| r.rig_id != rig)))
+        {
+            return Err(ActivationError::NotReady("Configure this rig's recipes in Planning; shared multi-rig plans require manual Activation."));
+        }
         // Contributions turned off on a rig that stays on: their rows are
         // turned off. A rig with all of them off has its project set
         // Inactive instead.
@@ -450,6 +521,11 @@ async fn execute(
             }
         }
         let now = now_ms();
+        if let Some((rig, catalog)) = guard
+            && rig_catalogs.get(&rig).is_none_or(|c| c.identity.id != catalog)
+        {
+            return Err(ActivationError::NotReady("The approved rig database changed; review background settings."));
+        }
         let mut reports = Vec::new();
         let mut pending: Vec<(Uuid, Connection, Option<ActivatedRig>, bool)> = Vec::new();
         for (rig_id, contributions) in &by_rig {
@@ -545,7 +621,11 @@ async fn execute(
             }
             // A rig on another PSF Guard: its rows land here first, then go
             // to the peer by Sync once Apply has committed them.
-            let push = planned_push(profile.as_ref(), &known_peers, &mut warnings);
+            let push = if guard.is_none() {
+                planned_push(profile.as_ref(), &known_peers, &mut warnings)
+            } else {
+                None
+            };
             // A preview performs the same writes and rolls them back, so the
             // connection is read-write either way; nothing lands without Apply.
             let mut connection = match open_rig_for(&catalog.context.database_path, on_copy) {
@@ -703,7 +783,11 @@ async fn execute(
             };
             let profile = store.rig_profile(*rig_id)?;
             let mut warnings = Vec::new();
-            let push = planned_push(profile.as_ref(), &known_peers, &mut warnings);
+            let push = if guard.is_none() {
+                planned_push(profile.as_ref(), &known_peers, &mut warnings)
+            } else {
+                None
+            };
             // A database that cannot be opened or locked now keeps what the
             // last activation knew, so a later one can finish the job.
             let mut connection = match open_rig_for(&catalog.context.database_path, on_copy) {

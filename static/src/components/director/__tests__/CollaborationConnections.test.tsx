@@ -21,6 +21,24 @@ function setup(connection: CollaborationConnection, canWrite = true) {
   return client;
 }
 describe('CollaborationConnections', () => {
+  it('keeps automation controls available after credential loss', async () => {
+    const connection = initial();
+    connection.status = 'credential_missing'; connection.binding.agent_id = '000000000001'; connection.binding.state = 'registered';
+    connection.binding.background = { enabled: true, catalog_id: rig, project_ids: ['000000000002'], interval_minutes: 15, activate: true };
+    let saved: unknown;
+    server.use(http.post(`/api/director/v1/collaboration/${id}/work`, async ({ request }) => {
+      const input = await request.json() as { operation: string; policy?: unknown };
+      if (input.operation === 'background_configure') saved = input;
+      return ok({ policy: input.policy ?? connection.binding.background, catalogs: [], projects: [], status: { running: false, last_started_ms: null, last_success_ms: null, next_run_ms: null, last_error: null, result: null } });
+    }));
+    setup(connection);
+    await userEvent.click(await screen.findByText('Automatic work requests'));
+    await screen.findByText('Automatic refresh paused');
+    await userEvent.click(screen.getByLabelText('Pull tonight automatically'));
+    await userEvent.click(screen.getByRole('button', { name: 'Save automation' }));
+    await waitFor(() => expect(saved).toEqual({ operation: 'background_configure', expected: connection.binding.background, policy: { ...connection.binding.background, enabled: false } }));
+    expect(screen.queryByRole('button', { name: "Pull tonight's work" })).not.toBeInTheDocument();
+  });
   it('enables pairing after discovery and clears the submitted code', async () => {
     const connection = initial(); const requests: unknown[] = [];
     server.use(http.post(`/api/director/v1/collaboration/${id}/discover`, () => ok({ pairing: true, signin: false })),

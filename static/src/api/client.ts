@@ -1,6 +1,6 @@
 import axios from 'axios';
 import type { AxiosInstance } from 'axios';
-import type { CollaborationAction, CollaborationConnection, CollaborationReply, CollaborationWork, CollaborationWorkInput } from './collaborationTypes';
+import type { CollaborationAction, CollaborationConnection, CollaborationReply, CollaborationWork, CollaborationWorkInput, CollaborationBackgroundInput, CollaborationBackgroundReply } from './collaborationTypes';
 import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorFeasibility, DirectorMosaicPreview, DirectorResolvedName,
@@ -318,6 +318,12 @@ export const apiClient = {
     const api = await getApi();
     const result = await api.post<ApiResponse<CollaborationWork>>(`/director/v1/collaboration/${encodeURIComponent(id)}/work`, input);
     if (!result.data.data) throw new Error(result.data.error || 'Collaboration request failed');
+    return result.data.data;
+  },
+  collaborationBackground: async (id: string, input: CollaborationBackgroundInput): Promise<CollaborationBackgroundReply> => {
+    const api = await getApi();
+    const result = await api.post<ApiResponse<CollaborationBackgroundReply>>(`/director/v1/collaboration/${encodeURIComponent(id)}/work`, input);
+    if (!result.data.data) throw new Error(result.data.error || 'Background refresh request failed');
     return result.data.data;
   },
   createCollaborationConnection: async (rig: string, input: { id: string; server_url: string; name: string; allow_loopback_http: boolean }): Promise<CollaborationConnection> => {

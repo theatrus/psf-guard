@@ -20,12 +20,33 @@ then configure the filters, exposure lengths, binning and colour mode used by
 this rig. Optics come from the rig's commissioned setup, not a second telescope
 profile.
 
-Choose **Browse projects** to see compatible projects. Enter the observing
-night, Moon illumination and fraction of dark hours with the Moon above the
-horizon, then **Join** a project or **Pull nightly work**. Joining gives consent
+Choose **Browse projects** to see compatible projects, then **Join** a project
+or **Pull tonight's work**. Both use the rig's saved site to calculate its
+noon-to-noon observing night and Moon context. **Night override** accepts a
+different date without asking for Moon values. Set the observing site in rig
+setup first. Joining gives consent
 to a remote share; it does not start a sequence. **Review import** shows the
 panel/filter visits. **Import draft** creates an ordinary inactive project
 draft. Apply refetches the remote work and refuses a changed review.
+
+Under **Automatic work requests**, select the rig database and explicitly
+allowed joined or imported projects, then enable **Pull tonight automatically**.
+The saved policy runs without an open browser, every 15 minutes by default.
+**Refresh now** runs that same loop manually. It never joins projects for you.
+**Activate in rig database** also applies safe assignments to that one database.
+For a new untouched draft, Director uses a unique matching filter/binning
+template, preferring the assigned exposure when several templates match. It
+preserves the template's gain, offset and Moon policy. Ambiguous recipes need
+review in Planning; edited or disabled recipes are never reconstructed. A new
+assigned filter without a saved plan recipe also waits for Planning.
+
+Automatic activation does not start NINA or push the entire database to a remote
+peer. It also cannot expand a Director client's separately approved workload
+scope. Use normal database sync for a separate telescope-side copy. Existing
+plans remain available during outages or when a response omits an assignment.
+The setup shows last success, next refresh, errors and held assignments. Failures
+back off; reconnect after a rejected credential. A server restart restores the
+saved policy and retries, but resets the displayed run history.
 
 Open that project's plan workspace, add one enabled rig recipe for each assigned
 filter at its assigned exposure length, then select the rig's assignment under
