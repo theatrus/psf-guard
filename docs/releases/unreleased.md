@@ -1,5 +1,9 @@
 # Unreleased
 
+- Filter the image grid by several filters or quality flags at once: Filter
+  and Flag open a list of boxes, so Ha and OIII together, or frames with any
+  of two flags, are a few clicks. Links with one value keep working.
+
 - Seiza 0.23.1 builds calibration masters on every core and runs stacking,
   debayering, display stretches, background models and deconvolution faster,
   so stacks and image previews come sooner with the same output. A master dark

@@ -15,14 +15,17 @@ describe('flagFilter', () => {
     expect(parseFlagFilter(null)).toBe('all');
     expect(parseFlagFilter(' All ')).toBe('all');
     expect(parseFlagFilter('Rotation_Skew')).toBe('rotation_skew');
-    expect(matchesFlagFilter('all', undefined)).toBe(true);
-    expect(matchesFlagFilter('', result([]))).toBe(true);
+    expect(matchesFlagFilter([], undefined)).toBe(true);
+    expect(matchesFlagFilter([], result([]))).toBe(true);
   });
 
-  it('keeps only images whose quality result carries the flag', () => {
-    expect(matchesFlagFilter('rotation_skew', result(['rotation_skew', 'off_target']))).toBe(true);
-    expect(matchesFlagFilter('rotation_skew', result(['off_target']))).toBe(false);
-    expect(matchesFlagFilter('rotation_skew', undefined)).toBe(false);
+  it('keeps only images whose quality result carries any chosen flag', () => {
+    expect(matchesFlagFilter(['rotation_skew'], result(['rotation_skew', 'off_target']))).toBe(true);
+    expect(matchesFlagFilter(['rotation_skew'], result(['off_target']))).toBe(false);
+    expect(matchesFlagFilter(['rotation_skew'], undefined)).toBe(false);
+    expect(matchesFlagFilter(['soft_stars', 'off_target'], result(['off_target']))).toBe(true);
+    expect(matchesFlagFilter(['soft_stars', 'Rotation_Skew'], result(['rotation_skew']))).toBe(true);
+    expect(matchesFlagFilter(['soft_stars', 'clouds'], result(['off_target']))).toBe(false);
   });
 
   it('lists the flags present, labelled the way the badges are', () => {

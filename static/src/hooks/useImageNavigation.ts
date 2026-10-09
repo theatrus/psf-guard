@@ -36,8 +36,8 @@ export function useImageNavigation(currentImageId?: number) {
     dbId,
     projectId,
     targetId,
-    filters.filterName === 'all' ? undefined : filters.filterName,
-    filters.flag !== 'all',
+    filters.filterNames.length === 1 ? filters.filterNames[0] : undefined,
+    filters.flags.length > 0,
   );
 
   // Fetch all images for navigation context
@@ -61,7 +61,7 @@ export function useImageNavigation(currentImageId?: number) {
       }
       
       // Filter name filter
-      if (filters.filterName !== 'all' && image.filter_name !== filters.filterName) {
+      if (filters.filterNames.length > 0 && !filters.filterNames.includes(image.filter_name ?? '')) {
         return false;
       }
       
@@ -87,8 +87,8 @@ export function useImageNavigation(currentImageId?: number) {
 
       // Quality flag filter, once the analysis is in; until then, or if it
       // failed, navigation walks the unfiltered set rather than none.
-      if (filters.flag !== 'all' && !quality.isLoading && !quality.error
-        && !matchesFlagFilter(filters.flag, quality.qualityByImage.get(image.id))) {
+      if (filters.flags.length > 0 && !quality.isLoading && !quality.error
+        && !matchesFlagFilter(filters.flags, quality.qualityByImage.get(image.id))) {
         return false;
       }
       

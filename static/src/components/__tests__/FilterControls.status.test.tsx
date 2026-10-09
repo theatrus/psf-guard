@@ -8,7 +8,7 @@ const mount = (status: string) => {
     <FilterControls
       onFilterChange={onFilterChange}
       availableFilters={['Ha']}
-      currentFilters={{ status, filterName: 'all', dateRange: { start: null, end: null }, searchTerm: '' }}
+      currentFilters={{ status, filterNames: [], dateRange: { start: null, end: null }, searchTerm: '' }}
     />
   );
   return onFilterChange;
