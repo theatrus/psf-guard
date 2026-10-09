@@ -957,7 +957,7 @@ host = "0.0.0.0"
 # Interactive jobs (occlusion scans, on-demand previews, stack builds you
 # start) get scan_worker_ratio; background work (pre-generation, automatic
 # stack refreshes) gets background_worker_ratio, and pre-generation pauses
-# while an interactive job runs. Settings → Stacking → Processor use can
+# while an interactive job runs. Settings → Performance → Processor use can
 # override both without a restart.
 #scan_worker_ratio = 0.5
 #background_worker_ratio = 0.25

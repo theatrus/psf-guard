@@ -64,7 +64,7 @@ abstain; it does not turn missing evidence into a clean-frame claim.
 
 ## Orbital-element cache
 
-The explicit **Show tracks** action and server **Analyze Quality** action choose
+The explicit **Identify satellite tracks** action and server **Analyze Quality** action choose
 the orbital source from the exposure time through
 `seiza-satellites::OrbitalCatalogSource`; PSF Guard does not own a parallel age
 cutoff or provider list. Recent images use CelesTrak's active-satellite
@@ -102,11 +102,12 @@ Per-image results are written atomically to
 `<cache>/<db-slug>/satellites/<image-id>.json`. They carry the exact orbital
 payload SHA-256 and are accepted only when the FITS fingerprint, exact WCS,
 Seiza version, seiza-satellites version, and pixel-alignment version still
-match. A normal quality scan reuses that evidence. Shift-click **Analyze Quality**
-to recompute all cached quality evidence, including every satellite prediction,
-against the orbital snapshot the current cache now prefers. This forced scan is
-allowed to refresh or download orbital data when the Seiza resolver needs it.
-API clients can force only this part with `{"force_satellites":true}`.
+match. A normal quality scan reuses that evidence, and so does **Rescan All
+Quality** in Settings, which forces only the spatial and astrometry passes. To
+recompute satellite predictions against the orbital snapshot the current cache
+now prefers, start a quality scan over the API with `{"force_satellites":true}`,
+or with `{"force":true}` to recompute every cached quality result. A forced scan
+is allowed to refresh or download orbital data when the Seiza resolver needs it.
 
 ## Bright-trail risk and grading
 

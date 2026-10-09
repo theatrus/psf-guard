@@ -282,8 +282,10 @@
 - A disk limit: Settings → **Storage** → **Disk use** shows how full each volume
   the cache, stacks and masters sit on is and what each holds. Past **Most of
   the volume to use** (90% by default) PSF Guard deletes image previews from
-  that volume, least recently viewed first, then old stack checkpoints. Stacks
-  and calibration masters are never deleted. Stacks and masters can have limits
+  that volume, least recently viewed first, then stack checkpoints a day old or
+  more, then calibration masters unused for a week that their frames can build
+  again. Stacks, color previews and WBPP masters are never deleted. Stacks and
+  masters can have limits
   of their own, and a volume over its limit frees space only from what lives on
   it.
 
