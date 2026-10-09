@@ -979,6 +979,18 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                   <FolderInput size={14} aria-hidden="true" /> Move exposures
                 </button>
               )}
+              {/* The statistics open below the summary; their switch sits
+                  with the other tools. */}
+              <button
+                type="button"
+                className="toolbar-button compact stats-toggle"
+                aria-pressed={showStats}
+                aria-controls={showStats ? 'grid-stats-dashboard' : undefined}
+                title={showStats ? 'Hide image statistics' : 'Show image statistics'}
+                onClick={() => setShowStats(!showStats)}
+              >
+                <span aria-hidden="true">▥</span> Stats
+              </button>
             </div>
             
             <div className="stats-section">
@@ -994,18 +1006,6 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                     {qualityStatus.label}
                   </span>
                 </div>
-                {/* The statistics describe these images, so their switch sits
-                    with the count it expands on. */}
-                <button
-                  type="button"
-                  className="toolbar-button compact stats-toggle"
-                  aria-pressed={showStats}
-                  aria-controls={showStats ? 'grid-stats-dashboard' : undefined}
-                  title={showStats ? 'Hide image statistics' : 'Show image statistics'}
-                  onClick={() => setShowStats(!showStats)}
-                >
-                  <span aria-hidden="true">▥</span> Stats
-                </button>
               </div>
               <div
                 className={`selection-action-bar ${selectedImages.size > 1 ? 'active' : ''}`}

@@ -74,7 +74,7 @@ export default function MultiSelectMenu({
         aria-haspopup="true"
         aria-expanded={open}
         aria-labelledby={`${id}-label ${id}`}
-        title={title}
+        title={chosen.length > 0 ? chosen.map(labelOf).join(', ') : title}
         onClick={() => setOpen((value) => !value)}
       >
         <span className="multi-select-value">{listFilterLabel(chosen, labelOf)}</span>
