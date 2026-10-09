@@ -1,4 +1,4 @@
-import type { DirectorContribution, DirectorGoal, DirectorLibraryTemplate, DirectorMosaic, DirectorObjective, DirectorPlanDraft, DirectorRigProfileSummary, DirectorTemplate, DirectorTemplateChoice, DirectorFramingDraft} from '../../api/directorTypes';
+import type { DirectorContribution, DirectorGoal, DirectorLibraryTemplate, DirectorMoonPolicy, DirectorMosaic, DirectorObjective, DirectorPlanDraft, DirectorRigProfileSummary, DirectorTemplate, DirectorTemplateChoice, DirectorFramingDraft} from '../../api/directorTypes';
 
 export const PURPOSES: Array<{ id: string; name: string }> = [
   { id: 'faint_detail', name: 'Faint detail' },
@@ -41,6 +41,43 @@ export function libraryChoice(template: DirectorLibraryTemplate): DirectorTempla
 
 export function newLibraryContribution(objective: DirectorObjective, rig: DirectorRigProfileSummary, template: DirectorLibraryTemplate): DirectorContribution {
   return { id: newId(), objective_id: objective.id, rig_id: rig.rig.id, template: libraryChoice(template), exposure_seconds: template.default_exposure_seconds, panel_ids: [], enabled: true };
+}
+
+const sameMoon = (wanted: DirectorMoonPolicy | undefined, found: DirectorMoonPolicy | undefined) =>
+  !wanted || (!!found && wanted.enabled === found.enabled && wanted.separation_degrees === found.separation_degrees
+    && wanted.width_days === found.width_days && wanted.relax_degrees_per_degree === found.relax_degrees_per_degree
+    && wanted.relax_min_altitude_degrees === found.relax_min_altitude_degrees
+    && wanted.relax_max_altitude_degrees === found.relax_max_altitude_degrees && wanted.moon_down === found.moon_down);
+
+/** The rig's own template a library choice already names: the row
+ *  activation wrote under the library GUID, or one with the same filter,
+ *  camera settings and Moon rules. Activation picks that row rather than
+ *  writing the library's (`resolve_template`), so the library adds nothing
+ *  for this rig. */
+export function ownTwin(choice: DirectorTemplateChoice, templates: DirectorTemplate[]): DirectorTemplate | undefined {
+  const filter = (name: string) => name.trim().toLowerCase();
+  const unset = (value: number | null | undefined) => value === null || value === undefined || value < 0 ? -1 : value;
+  const bin = (value: number | null | undefined) => value === null || value === undefined || value < 1 ? 1 : value;
+  const fits = (template: DirectorTemplate) => filter(template.filter_name) === filter(choice.filter_name) && sameMoon(choice.moon, template.moon);
+  const guid = choice.template_guid?.toLowerCase();
+  return (guid ? templates.find(template => template.guid?.toLowerCase() === guid && fits(template)) : undefined)
+    ?? templates.find(template => fits(template) && unset(template.gain) === unset(choice.gain) && unset(template.offset) === unset(choice.offset)
+      && bin(template.bin) === bin(choice.bin) && unset(template.readout_mode) === unset(choice.readout_mode));
+}
+
+/** The plan with each library choice a rig's database already holds bound
+ *  to that row instead, keeping its exposure; the same object when nothing
+ *  changes. */
+export function bindOwnTemplates(plan: DirectorPlanDraft, templatesByRig: Record<string, DirectorTemplate[]>): DirectorPlanDraft {
+  let changed = false;
+  const contributions = plan.contributions.map(contribution => {
+    if (contribution.template.template_id !== null) return contribution;
+    const twin = ownTwin(contribution.template, templatesByRig[contribution.rig_id] ?? []);
+    if (!twin) return contribution;
+    changed = true;
+    return { ...contribution, template: choiceFrom(twin) };
+  });
+  return changed ? { ...plan, contributions } : plan;
 }
 
 /** What the template control shows for a contribution: the rig's own row
