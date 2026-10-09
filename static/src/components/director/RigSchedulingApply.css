@@ -1,0 +1,9 @@
+.rig-scheduling-apply { display: grid; gap: 8px; margin: 4px 0 16px; padding: 10px 12px; border: 1px solid var(--color-border-secondary); border-radius: 6px; }
+.rig-scheduling-apply .director-toolbar { margin: 0; }
+.rig-scheduling-apply h5 { margin: 0; font-size: 14px; }
+.rig-scheduling-apply p { margin: 0; }
+.rig-scheduling-projects { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.rig-scheduling-projects li { display: grid; gap: 2px; padding: 6px 10px; border: 0; border-radius: 6px; background: var(--color-bg-secondary); }
+.rig-scheduling-name { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.rig-scheduling-changes { color: var(--color-text-secondary); font-size: 13px; overflow-wrap: anywhere; }
+.rig-scheduling-apply .director-actions { margin: 0; }

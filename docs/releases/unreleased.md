@@ -1,5 +1,10 @@
 # Unreleased
 
+- Give a rig Target Scheduler scheduling limits in its Setup, under Limits
+  and delivery, and apply them to every project in its database, including
+  ones made in N.I.N.A. A list shows each project that differs and what will
+  change before you apply. A plan's own limits still win for its project.
+
 - A plan's exposures pick the rig's own template when its database already
   holds the library one, either because activation wrote it or because it
   has the same filter, camera settings and Moon rules. The template list no

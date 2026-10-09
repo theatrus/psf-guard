@@ -41,11 +41,11 @@ struct Change {
 /// A rig whose real database lives on another PSF Guard: the local copy is
 /// written like any other, then its planning rows travel by Sync.
 #[derive(Clone, Serialize)]
-struct Push {
+pub(super) struct Push {
     peer_id: String,
     peer_name: String,
     /// True once the peer applied the planning rows.
-    applied: bool,
+    pub(super) applied: bool,
     summary: BTreeMap<String, i64>,
     error: Option<String>,
 }
@@ -1076,7 +1076,7 @@ async fn execute_guarded(
 /// same writes and rolls them back), with the server's shared lock wait:
 /// N.I.N.A. and a directory refresh can hold the file for tens of seconds.
 /// A failure is the rig's, said in words, not the request's.
-fn open_rig(path: &str) -> Result<Connection, String> {
+pub(super) fn open_rig(path: &str) -> Result<Connection, String> {
     let connection = super::super::database_context::open_scheduler_connection_with_flags(
         FilePath::new(path),
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -1168,7 +1168,7 @@ fn planning_copy(path: &str) -> Result<Connection, String> {
 }
 
 /// Take the rig database's write lock for an activation.
-fn begin_rig(connection: &mut Connection) -> Result<rusqlite::Transaction<'_>, String> {
+pub(super) fn begin_rig(connection: &mut Connection) -> Result<rusqlite::Transaction<'_>, String> {
     connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| match error.sqlite_error_code() {
@@ -1181,7 +1181,7 @@ fn begin_rig(connection: &mut Connection) -> Result<rusqlite::Transaction<'_>, S
 
 /// The Sync peer a remote rig's rows go to after Apply, if its profile
 /// names one that is still registered.
-fn planned_push(
+pub(super) fn planned_push(
     profile: Option<&psf_guard_director_meta::profile::RigProfile>,
     known_peers: &[PeerEntry],
     warnings: &mut Vec<String>,
@@ -1201,7 +1201,11 @@ fn planned_push(
 /// Send a rig database's planning rows to the peer that holds the rig's real
 /// database: a Sync planning push, reviewed and applied on the peer. Captures
 /// and grades never travel this way.
-async fn push_planning(state: &AppState, context: &DatabaseContext, peer: &PeerEntry) -> Push {
+pub(super) async fn push_planning(
+    state: &AppState,
+    context: &DatabaseContext,
+    peer: &PeerEntry,
+) -> Push {
     let mut push = Push::planned(peer);
     // The same lock a local Sync apply takes, so a pull cannot rewrite the
     // rows while the bundle is being read.
@@ -2309,14 +2313,14 @@ fn project_row(tx: &Connection, guid: &str) -> rusqlite::Result<Option<(i64, Str
 
 /// One Target Scheduler scheduling limit: its plan field, its project
 /// column, how it reads in the report, and the resolved value.
-struct Limit {
-    field: &'static str,
-    column: &'static str,
-    label: &'static str,
-    value: f64,
+pub(super) struct Limit {
+    pub(super) field: &'static str,
+    pub(super) column: &'static str,
+    pub(super) label: &'static str,
+    pub(super) value: f64,
 }
 
-fn limits(values: &SchedulingValues) -> [Limit; 9] {
+pub(super) fn limits(values: &SchedulingValues) -> [Limit; 9] {
     let flag = |v: bool| if v { 1.0 } else { 0.0 };
     [
         Limit {
@@ -2377,7 +2381,7 @@ fn limits(values: &SchedulingValues) -> [Limit; 9] {
 }
 
 /// A limit's value as the activation report shows it.
-fn describe(field: &str, value: f64) -> String {
+pub(super) fn describe(field: &str, value: f64) -> String {
     let whole = value.round() as i64;
     match field {
         "minimum_time_minutes" => format!("{whole} min"),
