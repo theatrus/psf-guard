@@ -178,6 +178,36 @@ describe('Plan editor', () => {
     expect(sent.c1).toMatchObject({ exposure_seconds: 300, template: { template_guid: '00000000-0000-4000-8000-000000000001', name: 'Ha 300' } });
   });
 
+  it("shows each part's progress and status, and the rig's in a summary row on top", async () => {
+    const objectives = [
+      { id: 'o1', bandpass_id: 'h_alpha', purpose: 'faint_detail', goal: { kind: 'hours' as const, value: 2 }, priority: 1 },
+      { id: 'o2', bandpass_id: 'luminance', purpose: 'faint_detail', goal: { kind: 'hours' as const, value: 1 }, priority: 1 },
+    ];
+    const part = (id: string, objective: string, template: number, name: string, filter: string, enabled = true) =>
+      ({ id, objective_id: objective, rig_id: redcat.rig.id, template: { template_guid: null, template_id: template, name, filter_name: filter, gain: 100, offset: 30, bin: 1, readout_mode: null }, exposure_seconds: 300, panel_ids: [], enabled });
+    fixture({ project_id: 'project', revision: 1, updated_at_ms: 1, objectives, contributions: [part('c1', 'o1', 1, 'Ha 300', 'Ha'), part('c2', 'o2', 3, 'Lum', 'L')] }, null, []);
+    const frames = (desired: number, acquired: number, accepted: number, rejected: number) => ({ desired, acquired, accepted, rejected });
+    server.use(http.get('/api/director/v1/projects/project/plan/progress', () => HttpResponse.json(ok({ rigs: [{
+      rig_id: redcat.rig.id, project: { name: 'Heart Nebula', state: 1 }, note: null, other: frames(0, 0, 0, 0), total: frames(36, 30, 26, 2),
+      objectives: [{ objective_id: 'o1', frames: frames(24, 26, 24, 2), exposure_plans: 2 }, { objective_id: 'o2', frames: frames(12, 4, 2, 0), exposure_plans: 1 }],
+    }] }))));
+    mount();
+    const summary = await screen.findByTestId('summary-redcat');
+    await waitFor(() => expect(summary).toHaveTextContent('All objectives · Heart Nebula'));
+    expect(summary).toHaveTextContent('36 frames, 3.0 h');
+    expect(summary).toHaveTextContent('26 / 36');
+    expect(summary).toHaveTextContent('Active');
+    const rows = within(screen.getByRole('group', { name: 'RedCat 61' })).getAllByRole('row');
+    // Header, summary, then one row per objective.
+    expect(rows[2]).toHaveTextContent('24 / 24');
+    expect(rows[2]).toHaveTextContent('26 taken, 2 rejected');
+    expect(rows[2]).toHaveTextContent('Done');
+    expect(rows[3]).toHaveTextContent('2 / 12');
+    expect(rows[3]).toHaveTextContent('Active');
+    fireEvent.click(screen.getByRole('checkbox', { name: 'RedCat 61 shoots Luminance' }));
+    expect(rows[3]).toHaveTextContent('Off');
+  });
+
   it('lets the Rigs tab add and drop rigs, listing only the rigs that shoot the plan', async () => {
     fixture(null, null, []);
     const controls: MutableRefObject<PlanRigControls | null> = { current: null };

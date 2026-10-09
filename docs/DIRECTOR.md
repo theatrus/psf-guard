@@ -404,6 +404,14 @@ The **workspace** for one plan has a summary at the top and four tabs. It
 opens on **Framing**, which places the target, unless the address names
 another tab. **Exposures** holds the objectives and, for
 each rig shooting the plan, its template, exposure and frames per objective.
+Each row also shows the rig's progress, accepted frames against what its
+Target Scheduler exposure plans ask for, with the frames taken and rejected
+beneath, and a status: **Off**, **Not activated**, **Done**, or the project's
+state in Target Scheduler. The top row sums the rig: the plan's frames and
+hours, its progress over every objective, and its status. An exposure plan
+counts toward the objective its activation wrote it for; one taken in from
+Target Scheduler goes to the objective with its template, else the one with
+its filter's band. `GET /projects/{id}/plan/progress` returns the counts.
 **Rigs** lists each rig with its database's project and whether activation
 has reached it. **Add a rig** offers every rig with a new project, which
 activation creates in its database, and every project another plan holds in

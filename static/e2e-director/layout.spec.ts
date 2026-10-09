@@ -156,6 +156,10 @@ test('planning tabs lay out without overlaps or clipping', async ({ page, reques
     const saveBar = page.getByRole('region', { name: 'Unsaved changes' });
     // A plan with an objective and three rigs on, one framed separately.
     await tab('Exposures').click();
+    // The project's frames in Target Scheduler, on the rig's summary row.
+    const summary = page.getByRole('group', { name: 'RedCat data' }).locator('.plan-rig-summary');
+    await expect(summary).toContainText('1 / 40');
+    await expect(summary).toContainText('Active');
     await page.getByRole('button', { name: 'Add objective' }).click();
     await saveBar.getByRole('button', { name: 'Save changes' }).click();
     await expect(saveBar).toContainText('All changes saved');

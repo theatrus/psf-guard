@@ -1026,3 +1026,8 @@
   The bar now lists what changed in each section, and calls a section
   unsaved only when it can say what changed: showing the same rigs in a new
   order is no longer an edit.
+
+- A plan's Exposures tab shows each rig's progress and status per objective:
+  accepted frames against what Target Scheduler asks for, with taken and
+  rejected counts, and whether the part is done, active, off or not yet
+  activated. A row at the top sums each rig.

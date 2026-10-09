@@ -1,4 +1,4 @@
-import type { DirectorContribution, DirectorGoal, DirectorLibraryTemplate, DirectorMoonPolicy, DirectorMosaic, DirectorObjective, DirectorPlanDraft, DirectorRigProfileSummary, DirectorTemplate, DirectorTemplateChoice, DirectorFramingDraft} from '../../api/directorTypes';
+import type { DirectorContribution, DirectorObjectiveProgress, DirectorRigProgress, DirectorGoal, DirectorLibraryTemplate, DirectorMoonPolicy, DirectorMosaic, DirectorObjective, DirectorPlanDraft, DirectorRigProfileSummary, DirectorTemplate, DirectorTemplateChoice, DirectorFramingDraft} from '../../api/directorTypes';
 
 export const PURPOSES: Array<{ id: string; name: string }> = [
   { id: 'faint_detail', name: 'Faint detail' },
@@ -271,4 +271,27 @@ export function coverageGaps(plan: DirectorPlanDraft, panels: string[], ownFrame
 /** Frames a rig owes across its panels, for the per-rig total. */
 export function panelFactor(contribution: DirectorContribution, panels: string[]): number {
   return contribution.panel_ids.length === 0 ? Math.max(1, panels.length) : contribution.panel_ids.filter(id => panels.includes(id)).length;
+}
+
+/** Target Scheduler's project states, by number. */
+export const PROJECT_STATES = ['Draft', 'Active', 'Inactive', 'Closed'];
+
+const projectState = (rig: DirectorRigProgress) => rig.project ? PROJECT_STATES[rig.project.state] ?? `State ${rig.project.state}` : 'Not activated';
+const finished = (frames: { desired: number; accepted: number }) => frames.desired > 0 && frames.accepted >= frames.desired;
+
+/** Where one rig's part of an objective stands: switched off, not yet in
+ *  Target Scheduler, done, or its project's state. */
+export function partStatus(contribution: DirectorContribution | null, rig: DirectorRigProgress | undefined, objective: DirectorObjectiveProgress | undefined): string {
+  if (!contribution || !rig) return '';
+  if (!contribution.enabled) return 'Off';
+  if (!rig.project || !objective || objective.exposure_plans === 0) return 'Not activated';
+  return finished(objective.frames) ? 'Done' : projectState(rig);
+}
+
+/** Where a rig stands on the whole plan. */
+export function rigStatus(rig: DirectorRigProgress | undefined): string {
+  if (!rig) return '';
+  if (!rig.project) return 'Not activated';
+  const parts = rig.objectives.filter(objective => objective.exposure_plans > 0);
+  return parts.length > 0 && parts.every(objective => finished(objective.frames)) ? 'Done' : projectState(rig);
 }

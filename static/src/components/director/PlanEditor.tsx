@@ -7,8 +7,8 @@ import { Check, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import NumberInput from '../NumberInput';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
-import type { DirectorContribution, DirectorGoal, DirectorObjective, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplate } from '../../api/directorTypes';
-import { PURPOSES, bandpassKind, bandpassOptions, bindOwnTemplates, convertGoal, coverageGaps, goalFor, speedAdjustedHours, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, libraryChoice, libraryFor, newContribution, newLibraryContribution, newObjective, onePartEach, ownTwin, panelIds, panelsByRig, planProblem, rigPanels, rigTotals, samePlan, shootingRigs, templateValue, templatesFor } from './planModel';
+import type { DirectorContribution, DirectorFrameCounts, DirectorGoal, DirectorObjective, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplate } from '../../api/directorTypes';
+import { PURPOSES, bandpassKind, bandpassOptions, bindOwnTemplates, convertGoal, coverageGaps, goalFor, speedAdjustedHours, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, libraryChoice, libraryFor, newContribution, newLibraryContribution, newObjective, onePartEach, ownTwin, panelIds, partStatus, panelsByRig, planProblem, rigPanels, rigStatus, rigTotals, samePlan, shootingRigs, templateValue, templatesFor } from './planModel';
 import './PlanEditor.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Plan request failed';
@@ -154,6 +154,8 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
   const libraryQuery = useQuery({ queryKey: ['directorTemplateLibrary'], queryFn: apiClient.getDirectorTemplateLibrary, retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false });
   const library = useMemo(() => libraryQuery.data ?? [], [libraryQuery.data]);
   const options = useMemo(() => bandpassOptions(templatesByRig, library), [templatesByRig, library]);
+  // Frames each rig's Target Scheduler project holds, per objective.
+  const progress = useQuery({ queryKey: ['directorPlanProgress', projectId], queryFn: () => apiClient.getDirectorPlanProgress(projectId), retry: retryWhenBusy, retryDelay: 1200, staleTime: 30_000 });
   const update = (change: (current: DirectorPlanDraft) => DirectorPlanDraft) => setPlan(current => current ? change(current) : current);
   const number = (value: string, fallback: number) => { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : fallback; };
 
@@ -265,6 +267,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
     const templateWarnings = templateQueries[index]?.data?.warnings ?? [];
     const on = participating(rig);
     const total = totals.find(t => t.rigId === rig.rig.id);
+    const done = progress.data?.rigs.find(entry => entry.rig_id === rig.rig.id);
     const extras = rigExtras?.(rig) ?? {};
     return <div key={rig.rig.id} className="plan-rig" role="group" aria-label={rig.catalog_name}>
       <fieldset className="plan-rig-plan" disabled={!canWrite || stale}>
@@ -272,7 +275,6 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
         <strong>{rig.catalog_name}</strong>
         {extras.place && <span className="plan-rig-place">{extras.place}</span>}
         <small>{rig.field_of_view ? `${rig.field_of_view.pixel_scale_arcsec.toFixed(2)}″/px${rig.field_of_view.focal_ratio ? `, f/${rig.field_of_view.focal_ratio.toFixed(1)}` : ''}, ` : ''}{loadingTemplates ? 'loading templates' : `${templates.length} template${templates.length === 1 ? '' : 's'}`}</small>
-        {total && <span className="plan-rig-total">{total.frames} frames, {formatHours(total.hours)}</span>}
         {on && !shooting.includes(rig.rig.id) && <span className="director-muted">not shooting</span>}
       </label>
       {templateWarnings.length > 0 && <p className="director-muted" role="note" aria-label={`${rig.catalog_name} templates left out`}>{templateWarnings.join(' ')}</p>}
@@ -285,7 +287,14 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
           {owned.length === 0 && <span className="director-error">No panel chosen; this rig shoots nothing.</span>}
         </div>;
       })()}
-      {on && <table className="plan-contributions"><thead><tr><th>Objective</th><th>Template</th><th>Exposure</th><th>Goal</th><th>Frames</th><th>On</th></tr></thead><tbody>
+      {on && <table className="plan-contributions"><thead><tr><th>Objective</th><th>Template</th><th>Exposure</th><th>Goal</th><th>Frames</th><th>Progress</th><th>Status</th><th>On</th></tr></thead><tbody>
+        <tr className="plan-rig-summary" data-testid={`summary-${rig.catalog_slug}`}>
+          <td colSpan={3}><strong>All objectives</strong>{done?.project && <small className="director-muted"> · {done.project.name}</small>}{done?.note && <><br /><small className="director-muted">{done.note}</small></>}</td>
+          <td colSpan={2}>{total && <span className="plan-rig-total">{total.frames} frames, {formatHours(total.hours)}</span>}</td>
+          <td>{done?.project && <FramesProgress frames={done.total} label={`${rig.catalog_name} in all`} />}</td>
+          <td>{rigStatus(done)}</td>
+          <td />
+        </tr>
         {plan.objectives.map(objective => {
           const contribution = plan.contributions.find(c => c.rig_id === rig.rig.id && c.objective_id === objective.id) ?? null;
           const matching = templatesFor(objective.bandpass_id, templates);
@@ -294,6 +303,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
           const frames = contribution ? framesFor(goal, contribution.exposure_seconds) : null;
           const suggested = contribution && !contribution.goal ? speedAdjustedHours(objective.goal, rig.field_of_view?.focal_ratio) : null;
           const setGoal = (next: DirectorGoal | null) => setContribution(rig, objective, current => current ? { ...current, goal: next } : current);
+          const part = done?.objectives.find(entry => entry.objective_id === objective.id);
           return <tr key={objective.id}>
             <td>{label}<br /><small className="director-muted">{PURPOSES.find(p => p.id === objective.purpose)?.name ?? objective.purpose}</small></td>
             <td>{(() => {
@@ -330,6 +340,8 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
                   {canWrite && suggested !== null && <> <button type="button" className="link-button" title={`At f/${rig.field_of_view!.focal_ratio!.toFixed(1)}, about ${suggested} h reaches f/5's depth`} onClick={() => setGoal({ kind: 'hours', value: suggested })}>f/{rig.field_of_view!.focal_ratio!.toFixed(1)}: {suggested} h</button></>}
                 </span>)}</td>
             <td>{contribution && frames !== null && <span data-testid={`frames-${rig.catalog_slug}-${objective.bandpass_id}`}>{frames}{panels.length > 1 && <small className="director-muted"> per panel</small>}<br /><small className="director-muted">{formatHours(hoursFor(frames, contribution.exposure_seconds))}{panels.length > 1 ? ' each' : ''}</small></span>}</td>
+            <td>{contribution && part && part.exposure_plans > 0 && <FramesProgress frames={part.frames} label={`${rig.catalog_name} ${label}`} />}</td>
+            <td>{partStatus(contribution, done, part)}</td>
             <td>{contribution && <input type="checkbox" aria-label={`${rig.catalog_name} shoots ${label}`} checked={contribution.enabled} onChange={event => setContribution(rig, objective, current => current ? { ...current, enabled: event.target.checked } : current)} />}</td>
           </tr>;
         })}
@@ -397,4 +409,15 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
         {!canWrite && <span className="director-muted">Read only</span>}
       </div>
   </section>;
+}
+
+/** Accepted frames against what Target Scheduler asks for, with a bar, and
+ *  what was taken and rejected beneath. */
+function FramesProgress({ frames, label }: { frames: DirectorFrameCounts; label: string }) {
+  const share = frames.desired > 0 ? Math.min(1, frames.accepted / frames.desired) : 0;
+  return <span className="plan-progress" title={`${label}: ${frames.accepted} of ${frames.desired} frames accepted`}>
+    <span className="plan-progress-bar" aria-hidden="true"><span style={{ width: `${Math.round(share * 100)}%` }} /></span>
+    <span>{frames.accepted} / {frames.desired}</span>
+    <small className="director-muted">{frames.acquired} taken{frames.rejected > 0 ? `, ${frames.rejected} rejected` : ''}</small>
+  </span>;
 }
