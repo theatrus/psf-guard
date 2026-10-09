@@ -6,6 +6,12 @@
   Previews you look at, plate solves, star lists and PSF views together stay
   within the share for work you wait on.
 
+- Seiza 0.24.0 opens more FITS files: images kept in an extension or
+  tile-compressed (fpack), signed 16-bit images, whose negative values used
+  to read as zero, and 64-bit integer images. Blank pixels read as missing,
+  and `HIERARCH` header keywords are kept. Frames from N.I.N.A. read as
+  before, so cached plate solves stay valid.
+
 - Seiza 0.23.1 builds calibration masters on every core and runs stacking,
   debayering, display stretches, background models and deconvolution faster,
   so stacks and image previews come sooner with the same output. A master dark

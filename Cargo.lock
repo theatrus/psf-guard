@@ -5250,9 +5250,9 @@ dependencies = [
 
 [[package]]
 name = "seiza"
-version = "0.23.1"
+version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c08760a49ff2c34ca83be524db17fb2fa55f84a039f892d60f18a9ad17326db"
+checksum = "04289fea6aa7b5e2c748fee719c87cd8776b270befd47af75f0918058468d489"
 dependencies = [
  "chrono",
  "directories",
@@ -5329,10 +5329,11 @@ dependencies = [
 
 [[package]]
 name = "seiza-fits"
-version = "0.2.7"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8908077871cd5b858d42c3b35cb3d477f3855bbc84a5d4901145919c4745cd35"
+checksum = "e72e827760bf8b050fbd161d697c285a22df0aa93398fdc578a021892ba06c1f"
 dependencies = [
+ "flate2",
  "multiversion",
  "rayon",
  "seiza-stretch",
@@ -5350,9 +5351,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-satellites"
-version = "0.12.0"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e8b9ee8ee68b49048c554839e464ec17350850fcffc11997c031f3830247fb6"
+checksum = "c751654db9bdc55f36679d63edac35002f7a2419f92376181420546f6e0ddfa7"
 dependencies = [
  "directories",
  "fs2",
@@ -5369,9 +5370,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-stacking"
-version = "0.25.1"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac95f4f93e30fcdb2f054408c3ba9a882d027ae862403fbad713901dd35cd9af"
+checksum = "37ac1f230b8d3f581bd9efb92b9cc50b42b90e82b5c494cae131aed31f28f0fb"
 dependencies = [
  "multiversion",
  "postcard",
@@ -5423,9 +5424,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-xisf"
-version = "0.3.2"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16320ec2b402695c06c893309c07643c11779f9b10f76ce1b0879e9472211106"
+checksum = "035e6f264aba23ca99eb0c32046393b8811f82b2dbf00eedf1c3d65b6ef2cc40"
 dependencies = [
  "flate2",
  "lz4_flex",

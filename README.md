@@ -512,7 +512,7 @@ toggles the overlay instead of solving again.
 
 ### Install the Seiza catalogs
 
-PSF Guard embeds Seiza 0.23.1's solver but does not bundle its multi-gigabyte
+PSF Guard embeds Seiza 0.24.0's solver but does not bundle its multi-gigabyte
 catalog data. The desktop app can install and update these files from
 **Settings → Seiza Catalogs**. The same controls appear in a browser when the
 server starts with `--allow-database-management`. The **Catalogs** tab in
@@ -524,7 +524,7 @@ reloads, and can validate every installed file. Catalog packages are additive;
 
 For a manual or headless install, get the `seiza` CLI from the
 [Seiza releases](https://github.com/theatrus/seiza/releases) or with
-`cargo install seiza-cli --version 0.23.1`, then download a bundle once:
+`cargo install seiza-cli --version 0.24.0`, then download a bundle once:
 
 ```bash
 # Recommended: choose a bundle interactively and install it in Seiza's
