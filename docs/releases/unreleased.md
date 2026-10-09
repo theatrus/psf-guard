@@ -1,5 +1,10 @@
 # Unreleased
 
+- A plan's exposures pick the rig's own template when its database already
+  holds the library one, either because activation wrote it or because it
+  has the same filter, camera settings and Moon rules. The template list no
+  longer offers that library copy as one to write.
+
 - The image grid's toolbar holds still: a long filter or flag choice no
   longer pushes controls onto a new line, every button and box shares one
   height and style, and Stats sits with the other tools.
