@@ -10,6 +10,18 @@
   has the same filter, camera settings and Moon rules. The template list no
   longer offers that library copy as one to write.
 
+- Keep preview pre-generation, quality scans and stack builds inside their
+  share of the processor. Since Seiza 0.23.1, one background preview could
+  keep every core busy; each job now runs Seiza on the workers it was given.
+  Previews you look at, plate solves, star lists and PSF views still use every
+  core.
+
+- Seiza 0.24.0 opens more FITS files: images kept in an extension or
+  tile-compressed (fpack), signed 16-bit images, whose negative values used
+  to read as zero, and 64-bit integer images. Blank pixels read as missing,
+  and `HIERARCH` header keywords are kept. Frames from N.I.N.A. read as
+  before, so cached plate solves stay valid.
+
 - The image grid's toolbar holds still: a long filter or flag choice no
   longer pushes controls onto a new line, every button and box shares one
   height and style, and Stats sits with the other tools.

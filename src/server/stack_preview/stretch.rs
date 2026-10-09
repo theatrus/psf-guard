@@ -15,7 +15,6 @@ use axum::{
     response::Response,
     Json,
 };
-use rayon::ThreadPoolBuilder;
 use seiza_deconvolution::{
     deconvolve_masked, ChannelDiagnostics, DeconvolutionConfig, ALGORITHM_VERSION,
 };
@@ -1127,10 +1126,7 @@ fn render_fits_variant(
         Some(frame.image.pixel_count()),
     );
     let lease = state.lease_workers(crate::concurrency::Priority::Interactive, budget.workers);
-    let pool = ThreadPoolBuilder::new()
-        .num_threads(lease.workers)
-        .thread_name(|index| format!("stack-stretch-{index}"))
-        .build()
+    let pool = crate::concurrency::ComputePool::take("stack-stretch", lease.workers)
         .map_err(|error| error.to_string())?;
     tracing::info!(
         "Stack stretch {stretch_id}: {} worker(s) — {}; {}",
@@ -1146,12 +1142,15 @@ fn render_fits_variant(
         .filter(|value| value.eq_ignore_ascii_case("DISPLAY"))
         .map(|_| StackStretchSourceTransfer::DisplayReferred)
         .unwrap_or(StackStretchSourceTransfer::Linear);
-    let source_analysis = StretchAnalysis::analyze(
-        &frame.image.data,
-        frame.image.channels,
-        config.max_analysis_samples,
-    )
-    .map_err(|error| error.to_string())?;
+    let source_analysis = pool
+        .install(|| {
+            StretchAnalysis::analyze(
+                &frame.image.data,
+                frame.image.channels,
+                config.max_analysis_samples,
+            )
+        })
+        .map_err(|error| error.to_string())?;
     if (deconvolution_request.is_some() || rc_astro_request.is_some())
         && source_transfer == StackStretchSourceTransfer::DisplayReferred
     {
@@ -1225,15 +1224,19 @@ fn render_fits_variant(
     if let (Some(rc_astro_config), Some(chain_ids), Some(schemas)) =
         (rc_astro_request, rc_astro_chain, rc_astro_schemas.as_ref())
     {
-        rc_astro_outcome = Some(super::rc_astro::apply_rc_astro(
-            stack_root,
-            chain_ids,
-            &rc_astro_config,
-            schemas,
-            linear,
-            &frame.headers,
-            &mut |stage, fraction| report_progress(stretch_id, stage, fraction),
-        )?);
+        // The tools are programs of their own and choose their own
+        // threads; the analysis after them runs in this job's pool.
+        rc_astro_outcome = Some(pool.install(|| {
+            super::rc_astro::apply_rc_astro(
+                stack_root,
+                chain_ids,
+                &rc_astro_config,
+                schemas,
+                linear,
+                &frame.headers,
+                &mut |stage, fraction| report_progress(stretch_id, stage, fraction),
+            )
+        })?);
     }
     let linear = rc_astro_outcome
         .as_ref()

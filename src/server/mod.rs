@@ -1165,6 +1165,18 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
                 budget.workers.min(images.len()),
             );
             let concurrency = lease.workers;
+            // The images' Seiza work runs on the leased workers' threads,
+            // not on every core.
+            let pool = match crate::concurrency::ComputePool::take("pregeneration", concurrency) {
+                Ok(pool) => Arc::new(pool),
+                Err(error) => {
+                    tracing::warn!(
+                        "Pre-generation pool for db={} could not be built: {error}",
+                        ctx.id
+                    );
+                    continue;
+                }
+            };
 
             tracing::info!(
                 "🎯 Pre-generating up to {} images (db={}) with {} background worker(s) — {}; {}",
@@ -1202,9 +1214,11 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
                 };
                 let state = Arc::clone(&state);
                 let ctx = Arc::clone(&ctx);
+                let pool = Arc::clone(&pool);
                 join_set.spawn(async move {
                     let _permit = permit;
-                    pregenerate_one_image(&state, &ctx, image_id, &file_only, &target_name).await
+                    pregenerate_one_image(&state, &ctx, &pool, image_id, &file_only, &target_name)
+                        .await
                 });
                 dispatched += 1;
             }
@@ -1263,6 +1277,7 @@ fn probe_pregen_frame_pixels(
 async fn pregenerate_one_image(
     state: &Arc<AppState>,
     ctx: &Arc<crate::server::database_context::DatabaseContext>,
+    pool: &Arc<crate::concurrency::ComputePool>,
     image_id: i32,
     file_only: &str,
     target_name: &str,
@@ -1285,19 +1300,30 @@ async fn pregenerate_one_image(
     };
 
     if state.pregeneration_config.screen_enabled {
-        let r = pregenerate_preview(state, ctx, image_id, file_only, target_name, "screen").await;
+        let r =
+            pregenerate_preview(state, ctx, pool, image_id, file_only, target_name, "screen").await;
         tally(r, "screen preview");
     }
     if state.pregeneration_config.large_enabled {
-        let r = pregenerate_preview(state, ctx, image_id, file_only, target_name, "large").await;
+        let r =
+            pregenerate_preview(state, ctx, pool, image_id, file_only, target_name, "large").await;
         tally(r, "large preview");
     }
     if state.pregeneration_config.original_enabled {
-        let r = pregenerate_preview(state, ctx, image_id, file_only, target_name, "original").await;
+        let r = pregenerate_preview(
+            state,
+            ctx,
+            pool,
+            image_id,
+            file_only,
+            target_name,
+            "original",
+        )
+        .await;
         tally(r, "original preview");
     }
     if state.pregeneration_config.annotated_enabled {
-        let r = pregenerate_annotated(state, ctx, image_id, file_only, target_name).await;
+        let r = pregenerate_annotated(state, ctx, pool, image_id, file_only, target_name).await;
         tally(r, "annotated image");
     }
 
@@ -1399,6 +1425,7 @@ pub(crate) const PREGENERATE_SHADOW: f64 = -2.8;
 async fn pregenerate_preview(
     state: &Arc<AppState>,
     ctx: &Arc<crate::server::database_context::DatabaseContext>,
+    pool: &Arc<crate::concurrency::ComputePool>,
     image_id: i32,
     file_only: &str,
     target_name: &str,
@@ -1507,7 +1534,11 @@ async fn pregenerate_preview(
         },
         encoding: state.preview_encoding(),
     };
-    tokio::task::spawn_blocking(move || crate::server::preview_queue::generate(&job)).await??;
+    let pool = Arc::clone(pool);
+    tokio::task::spawn_blocking(move || {
+        pool.install(|| crate::server::preview_queue::generate(&job))
+    })
+    .await??;
 
     tracing::trace!("✅ Generated {} preview for image {}", size, image_id);
     Ok(true) // Successfully generated
@@ -1516,6 +1547,7 @@ async fn pregenerate_preview(
 async fn pregenerate_annotated(
     state: &Arc<AppState>,
     ctx: &Arc<crate::server::database_context::DatabaseContext>,
+    pool: &Arc<crate::concurrency::ComputePool>,
     image_id: i32,
     file_only: &str,
     target_name: &str,
@@ -1606,7 +1638,11 @@ async fn pregenerate_annotated(
         },
         encoding: state.preview_encoding(),
     };
-    tokio::task::spawn_blocking(move || crate::server::preview_queue::generate(&job)).await??;
+    let pool = Arc::clone(pool);
+    tokio::task::spawn_blocking(move || {
+        pool.install(|| crate::server::preview_queue::generate(&job))
+    })
+    .await??;
 
     tracing::trace!("✅ Generated annotated image for image {}", image_id);
     Ok(true) // Successfully generated
@@ -1796,10 +1832,12 @@ mod pregeneration_tests {
             format: PreviewFormat::Jpeg,
             ..PreviewEncoding::default()
         };
+        let pool = Arc::new(crate::concurrency::ComputePool::take("pregeneration", 1).unwrap());
 
-        let generated = pregenerate_preview(&state, &ctx, 1, "frame.fits", "Target", "screen")
-            .await
-            .unwrap();
+        let generated =
+            pregenerate_preview(&state, &ctx, &pool, 1, "frame.fits", "Target", "screen")
+                .await
+                .unwrap();
         assert!(generated);
         let names = std::fs::read_dir(ctx.cache_dir_path.join("previews"))
             .unwrap()
@@ -1809,9 +1847,10 @@ mod pregeneration_tests {
         assert!(names[0].ends_with(".jpg"), "{names:?}");
 
         // The second pass finds it rather than rendering again.
-        let generated = pregenerate_preview(&state, &ctx, 1, "frame.fits", "Target", "screen")
-            .await
-            .unwrap();
+        let generated =
+            pregenerate_preview(&state, &ctx, &pool, 1, "frame.fits", "Target", "screen")
+                .await
+                .unwrap();
         assert!(!generated);
     }
 }

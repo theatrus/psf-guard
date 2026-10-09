@@ -18,7 +18,6 @@ use axum::{
     response::Response,
     Json,
 };
-use rayon::ThreadPoolBuilder;
 use seiza_background::{
     BackgroundConfig, BackgroundFit, CorrectionMode, FittedModel, ModelConfig, ProtectedRegion,
 };
@@ -2041,10 +2040,7 @@ fn compose_color(
     let priority = super::job_priority(state.stack_previews.is_automatic(&job.job_id));
     let budget = crate::concurrency::plan_workers(None, &policy, priority, Some(pixels));
     let lease = state.lease_workers(priority, budget.workers);
-    let pool = ThreadPoolBuilder::new()
-        .num_threads(lease.workers)
-        .thread_name(|index| format!("stack-color-{index}"))
-        .build()
+    let pool = crate::concurrency::ComputePool::take("stack-color", lease.workers)
         .map_err(|error| error.to_string())?;
     tracing::info!(
         "Stack color {}: {} worker(s) — {}; {}",

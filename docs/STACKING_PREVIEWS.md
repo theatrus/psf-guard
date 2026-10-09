@@ -725,6 +725,14 @@ and gives it back when it ends. It never waits for workers: one that starts
 while the budget is spent runs on one. Work you wait on also pauses
 background work, as before.
 
+The limit covers Seiza's own threads too. Seiza splits debayering,
+stretching, star detection and stacking across the threads of the pool it
+runs in, so each job runs it in a pool of the workers it took, and a
+background preview no longer spreads over every core. Previews you look at
+and requests such as a plate solve, a star list or a PSF view still use every
+core, since background work pauses while they run. RC-Astro's tools are
+programs of their own and choose their own threads.
+
 A share chosen here is kept in the registry and wins over the config file;
 **Use the default** goes back to the file's value. A change applies to work
 that starts after it. Memory can lower the count further: a pool never holds
