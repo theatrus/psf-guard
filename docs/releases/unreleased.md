@@ -1,5 +1,10 @@
 # Unreleased
 
+- The framing view's stack layer also shows plans taken in from Target
+  Scheduler that were never activated. Turn it on or off from the sky's layer
+  buttons, and pick which stack each panel shows: the best one, a colour
+  composition, or one filter. Both choices are kept in this browser.
+
 - The Sequence view's Scoring panel draws over the page with its own
   background and border, and its limit boxes fit inside it. A few other
   borders and text colours that named missing theme colours show again.

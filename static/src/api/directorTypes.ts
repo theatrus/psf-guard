@@ -385,12 +385,15 @@ export interface DirectorMosaicPanel {
   rig: DirectorIdentity;
   catalog_slug: string | null;
   catalog_name: string;
-  target_guid: string;
+  target_guid: string | null;
   target_id: number | null;
   target_name: string | null;
   progress: { desired: number; acquired: number; accepted: number } | null;
   status: 'ready' | 'unsolved' | 'no_stack' | 'missing_target' | 'missing_catalog';
+  /** The stack drawn by default: the first of `stacks`. */
   preview: SkyPreview | null;
+  /** Every finished stack of the panel's target, best first. */
+  stacks: SkyPreview[];
 }
 export interface DirectorMosaicPreview {
   project: DirectorIdentity;

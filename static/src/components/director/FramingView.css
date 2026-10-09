@@ -85,6 +85,8 @@
 .framing-turns button { padding: 4px 8px; min-height: 28px; }
 .framing-stack { opacity: 0.92; }
 .framing-stacks { margin: 8px 0 0; font-size: 13px; }
+.framing-stacks-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.framing-stacks-pick select { min-width: 0; max-width: 100%; }
 .framing-stacks ul { margin: 4px 0 0; padding-left: 18px; color: var(--color-text-secondary); }
 .framing-stacks li { margin: 2px 0; }
 .framing-stage-surveys { position: absolute; left: 10px; bottom: 8px; display: flex; flex-direction: column-reverse; align-items: flex-start; gap: 4px; max-width: 70%; }

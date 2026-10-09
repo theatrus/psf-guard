@@ -107,6 +107,11 @@ pub struct SkyPreview {
     pub kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub filter: Option<String>,
+    /// Which stack this is, the same across rebuilds: `color:<composition>`
+    /// or `mono:<filter>`.
+    pub key: String,
+    /// The composition (`RGB`, `SHO`) or the filter, as the picker names it.
+    pub label: String,
     /// A TAN solution for that grid, composed from the reference frame's
     /// plate solution and the stack's orientation, when the cache has one.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -599,11 +604,24 @@ fn footprints_for(
 /// The stack preview to draw for each target: the newest finished colour
 /// stack when there is one, else the mono stack with the most integration.
 pub(crate) fn previews_for(context: &DatabaseContext) -> HashMap<i32, SkyPreview> {
+    stacks_for(context)
+        .into_iter()
+        .filter_map(|(target, stacks)| stacks.into_iter().next().map(|best| (target, best)))
+        .collect()
+}
+
+/// Each target's stacks with the rank they are ordered by.
+type Ranked<R> = HashMap<i32, Vec<(R, SkyPreview)>>;
+
+/// Every finished stack of each target that can be drawn: one per colour
+/// composition and one per filter, best first. A current colour stack
+/// comes before an outdated one, the newest first; then mono stacks, the
+/// most integration first.
+pub(crate) fn stacks_for(context: &DatabaseContext) -> HashMap<i32, Vec<SkyPreview>> {
     use super::stack_preview::{
         color::{LatestStackColorPreviews, StackColorKind, StackColorRole},
         LatestStackPreviews, StackGroupState, StackGroupStatus, StackJobState,
     };
-    let mut previews: HashMap<i32, SkyPreview> = HashMap::new();
     let mut solutions: HashMap<i32, Option<crate::astrometry::AstrometrySolutionResponse>> =
         HashMap::new();
     let mut solution_for = |image_id: i32| {
@@ -624,7 +642,8 @@ pub(crate) fn previews_for(context: &DatabaseContext) -> HashMap<i32, SkyPreview
             .flat_map(|index| index.groups.into_iter().map(|latest| latest.group))
             .collect();
 
-    let mut colour_ranked: HashMap<i32, (bool, i64)> = HashMap::new();
+    // Per target and composition, the best colour stack and its rank.
+    let mut colour: HashMap<(i32, String), ((bool, i64), SkyPreview)> = HashMap::new();
     for index in super::stack_preview::read_latest_indices::<LatestStackColorPreviews>(
         &stack_folder(&context.stack_root, stack_kind::COLOR),
     ) {
@@ -634,10 +653,15 @@ pub(crate) fn previews_for(context: &DatabaseContext) -> HashMap<i32, SkyPreview
             }
             // A current stack beats an outdated one; among equals, the newest.
             let rank = (!job.outdated, job.created_unix_seconds);
-            if colour_ranked
-                .get(&job.target_id)
-                .is_some_and(|best| *best >= rank)
-            {
+            let label = match job.kind {
+                StackColorKind::Rgb => "RGB",
+                StackColorKind::Lrgb => "LRGB",
+                StackColorKind::Narrowband => {
+                    job.palette.map_or("Narrowband", |palette| palette.label())
+                }
+            };
+            let slot = (job.target_id, label.to_string());
+            if colour.get(&slot).is_some_and(|(best, _)| *best >= rank) {
                 continue;
             }
             let reference_role = match job.kind {
@@ -706,55 +730,90 @@ pub(crate) fn previews_for(context: &DatabaseContext) -> HashMap<i32, SkyPreview
                 ),
                 None => (grid_width, grid_height, wcs),
             };
-            colour_ranked.insert(job.target_id, rank);
-            previews.insert(
-                job.target_id,
-                SkyPreview {
-                    url: job.preview_url.clone(),
-                    width,
-                    height,
-                    kind: "color",
-                    filter: None,
-                    wcs,
-                },
+            colour.insert(
+                slot,
+                (
+                    rank,
+                    SkyPreview {
+                        url: job.preview_url.clone(),
+                        width,
+                        height,
+                        kind: "color",
+                        filter: None,
+                        key: format!("color:{label}"),
+                        label: label.to_string(),
+                        wcs,
+                    },
+                ),
             );
         }
     }
 
-    let mut mono_ranked: HashMap<i32, f64> = HashMap::new();
+    // Per target and filter, the ready mono stack with the most integration.
+    let mut mono_best: HashMap<(i32, String), (f64, SkyPreview)> = HashMap::new();
     for group in &mono {
-        if colour_ranked.contains_key(&group.target_id) {
-            continue;
-        }
         let Some(url) = group.preview_url.clone() else {
             continue;
         };
         if group.state != StackGroupState::Ready {
             continue;
         }
-        if mono_ranked
-            .get(&group.target_id)
-            .is_some_and(|best| *best >= group.total_exposure_seconds)
+        let slot = (group.target_id, group.filter_name.clone());
+        if mono_best
+            .get(&slot)
+            .is_some_and(|(best, _)| *best >= group.total_exposure_seconds)
         {
             continue;
         }
         let solution = grid_solution(&group.frames, group.reference_image_id, &mut solution_for);
         let (width, height, wcs) =
             preview_geometry(group.sky_orientation.as_ref(), solution.as_ref());
-        mono_ranked.insert(group.target_id, group.total_exposure_seconds);
-        previews.insert(
-            group.target_id,
-            SkyPreview {
-                url,
-                width,
-                height,
-                kind: "mono",
-                filter: Some(group.filter_name.clone()),
-                wcs,
-            },
+        mono_best.insert(
+            slot,
+            (
+                group.total_exposure_seconds,
+                SkyPreview {
+                    url,
+                    width,
+                    height,
+                    kind: "mono",
+                    filter: Some(group.filter_name.clone()),
+                    key: format!("mono:{}", group.filter_name),
+                    label: group.filter_name.clone(),
+                    wcs,
+                },
+            ),
         );
     }
-    previews
+
+    let mut ranked_colour: Ranked<(bool, i64)> = HashMap::new();
+    for ((target, _), entry) in colour {
+        ranked_colour.entry(target).or_default().push(entry);
+    }
+    let mut ranked_mono: Ranked<f64> = HashMap::new();
+    for ((target, _), entry) in mono_best {
+        ranked_mono.entry(target).or_default().push(entry);
+    }
+    let targets: HashSet<i32> = ranked_colour
+        .keys()
+        .chain(ranked_mono.keys())
+        .copied()
+        .collect();
+    targets
+        .into_iter()
+        .map(|target| {
+            let mut colour = ranked_colour.remove(&target).unwrap_or_default();
+            colour.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.key.cmp(&b.1.key)));
+            let mut mono = ranked_mono.remove(&target).unwrap_or_default();
+            mono.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.key.cmp(&b.1.key)));
+            let stacks = colour
+                .into_iter()
+                .map(|(_, preview)| preview)
+                .chain(mono.into_iter().map(|(_, preview)| preview))
+                .collect();
+            (target, stacks)
+        })
+        .collect()
 }
 
 /// A plate solution on a stack's reference grid: the reference frame's own

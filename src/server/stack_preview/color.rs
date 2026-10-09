@@ -229,7 +229,7 @@ impl StackNarrowbandPalette {
         self.seiza().requires_sii()
     }
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         self.seiza().name()
     }
 }
