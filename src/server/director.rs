@@ -41,6 +41,7 @@ mod plan;
 mod plans;
 mod program;
 mod rig_profile;
+mod rig_scheduling;
 mod site_profile;
 mod sky_image;
 mod sky_objects;
@@ -619,6 +620,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .merge(configuration_api::routes())
         .merge(site_profile::routes())
         .merge(preferences::routes())
+        .merge(rig_scheduling::routes())
         .merge(templates::routes())
         .layer(DefaultBodyLimit::max(4096))
 }

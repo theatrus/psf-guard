@@ -333,6 +333,31 @@ export interface DirectorTakenValues {
   /** What stayed as planned, and why. */
   left: string[];
 }
+/** One Target Scheduler project whose scheduling limits differ from what
+ *  its rig resolves to, and what Apply changes. */
+export interface DirectorRigSchedulingProject {
+  name: string;
+  /** Target Scheduler's state: 0 draft, 1 active, 2 inactive, 3 closed. */
+  state: number;
+  /** The plan that sets some of this project's limits itself. */
+  plan: DirectorIdentity | null;
+  changes: Array<{ label: string; was: string; now: string }>;
+}
+/** A rig's scheduling limits against every project in its database. */
+export interface DirectorRigScheduling {
+  rig: DirectorIdentity;
+  catalog_slug: string;
+  catalog_name: string;
+  projects: DirectorRigSchedulingProject[];
+  /** Projects that already have every limit. */
+  matching: number;
+  /** Limits no scope sets, which no project is given. */
+  unset: string[];
+  digest: string;
+  applied: boolean;
+  push: { peer_id: string; peer_name: string; applied: boolean; error: string | null } | null;
+  warnings: string[];
+}
 export interface DirectorActivationReport {
   project: DirectorIdentity;
   framing_revision: number;

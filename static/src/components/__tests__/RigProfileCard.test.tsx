@@ -17,7 +17,12 @@ beforeEach(() => {
     http.get('/api/director/v1/preferences', () => HttpResponse.json(ok({ global_id: 'g', presets: {}, sites: [] }))),
     http.get(`/api/director/v1/preferences/rig/${rig.id}`, () => HttpResponse.json(ok({ scope: 'rig', scope_id: rig.id, revision: 0, overrides: { weights: {} }, enabled: null, site_id: null }))),
     http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([]))),
+    http.get('/api/director/v1/preferences/global/g', () => HttpResponse.json(ok({ scope: 'global', scope_id: 'g', revision: 1, overrides: { weights: {} }, enabled: null, site_id: null, scheduling: {} }))),
+    http.get(`/api/director/v1/rigs/${rig.id}/scheduling`, () => HttpResponse.json(ok(compared([])))),
   );
+});
+const compared = (projects: Array<{ name: string; state: number; plan: { id: string; name: string; revision: number } | null; changes: Array<{ label: string; was: string; now: string }> }>) => ({
+  rig, catalog_slug: 'catalog', catalog_name: 'RedCat 61', projects, matching: 1, unset: ['horizon offset'], digest: projects.length ? 'a'.repeat(64) : 'b'.repeat(64), applied: false, push: null, warnings: [],
 });
 const optics = { sensor_width_px: 6248, sensor_height_px: 4176, pixel_size_um: 3.76, focal_length_mm: 250, aperture_mm: 51, rotation: { mode: 'manual' as const, angle_degrees: 0 } };
 const site = { latitude_degrees: 34.2, longitude_degrees: -118.3, elevation_meters: 400 };
@@ -257,12 +262,64 @@ describe('Rig profile card', () => {
     fireEvent.change(await screen.findByLabelText('Planning site'), { target: { value: backyard.id } });
     fireEvent.change(screen.getByLabelText('Bortle class'), { target: { value: '5' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Profile saved, planning site not: metadata is busy');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Profile saved, site and limits not: metadata is busy');
     fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
     expect(await screen.findByText('Saved rig profile revision 2.')).toBeInTheDocument();
     // The second Save names the revision the first one wrote.
     expect(saves.map(save => save.expected_revision)).toEqual([0, 1]);
     expect(settingsCalls).toBe(2);
+  });
+
+  it("sets the rig's Target Scheduler limits over every plan's, and applies them to its projects once saved", async () => {
+    fixture();
+    const settingsSaves: Array<{ scheduling?: Record<string, unknown>; revision: number }> = [];
+    let rigSettings = { scope: 'rig', scope_id: rig.id, revision: 0, overrides: { weights: {} }, enabled: null, site_id: null as string | null, scheduling: {} as Record<string, unknown> };
+    const applies: unknown[] = [];
+    let applied = false;
+    server.use(
+      http.get('/api/director/v1/preferences/global/g', () => HttpResponse.json(ok({ scope: 'global', scope_id: 'g', revision: 1, overrides: { weights: {} }, enabled: null, site_id: null, scheduling: { minimum_altitude_degrees: 25 } }))),
+      http.get(`/api/director/v1/preferences/rig/${rig.id}`, () => HttpResponse.json(ok(rigSettings))),
+      http.put(`/api/director/v1/preferences/rig/${rig.id}`, async ({ request }) => {
+        const body = await request.json() as typeof rigSettings;
+        settingsSaves.push(body);
+        rigSettings = { ...body, revision: body.revision + 1 };
+        return HttpResponse.json(ok(rigSettings));
+      }),
+      http.get(`/api/director/v1/rigs/${rig.id}/scheduling`, () => HttpResponse.json(ok(compared(applied ? [] : [
+        { name: 'Hand made', state: 1, plan: null, changes: [{ label: 'minimum altitude', was: '0°', now: '25°' }] },
+        { name: 'Heart Nebula', state: 2, plan: { id: 'p', name: 'Heart', revision: 1 }, changes: [{ label: 'meridian window', was: 'off', now: '20 min' }] },
+      ])))),
+      http.post(`/api/director/v1/rigs/${rig.id}/scheduling/apply`, async ({ request }) => {
+        applies.push(await request.json());
+        applied = true;
+        return HttpResponse.json(ok({ ...compared([]), applied: true }));
+      }),
+    );
+    mount();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Limits and delivery' }));
+    const fields = await screen.findByRole('group', { name: 'Rig Target Scheduler limits' });
+    // Empty, the rig follows every plan's limit and says so.
+    await waitFor(() => expect(within(fields).getByRole('spinbutton', { name: 'Minimum altitude' })).toHaveAttribute('placeholder', '25°'));
+    const projects = screen.getByRole('region', { name: 'Target Scheduler projects' });
+    expect(await within(projects).findByTestId('rig-scheduling-summary')).toHaveTextContent('2 of 3 projects in RedCat 61 differ.');
+    expect(within(projects).getByText('meridian window off → 20 min')).toBeInTheDocument();
+    expect(within(projects).getByText(/Heart's own limits/)).toBeInTheDocument();
+    expect(within(projects).getByText('Inactive')).toBeInTheDocument();
+    expect(within(projects).getByText('Not set, so each project keeps its own: horizon offset.')).toBeInTheDocument();
+
+    // An edit waits for Save before anything is applied.
+    fireEvent.change(within(fields).getByRole('spinbutton', { name: 'Meridian window' }), { target: { value: '20' } });
+    const apply = within(projects).getByRole('button', { name: 'Apply to 2 projects' });
+    expect(apply).toBeDisabled();
+    expect(within(projects).getByText('Save the rig profile first')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
+    await waitFor(() => expect(settingsSaves).toHaveLength(1));
+    expect(settingsSaves[0].scheduling).toEqual({ meridian_window_minutes: 20 });
+    await waitFor(() => expect(within(projects).getByRole('button', { name: 'Apply to 2 projects' })).toBeEnabled());
+    fireEvent.click(within(projects).getByRole('button', { name: 'Apply to 2 projects' }));
+    expect(await within(projects).findByText('Wrote the limits into 2 projects.')).toBeInTheDocument();
+    expect(applies).toEqual([{ digest: 'a'.repeat(64) }]);
+    await waitFor(() => expect(within(projects).getByTestId('rig-scheduling-summary')).toHaveTextContent('The one project in RedCat 61 has these limits.'));
   });
 
   it('offers a Reload after a lost race', async () => {

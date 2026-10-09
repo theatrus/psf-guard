@@ -95,12 +95,9 @@ describe('project priority controls', () => {
     await screen.findByText('Project priority saved.');
     expect(saved[0].scheduling).toEqual({ minimum_altitude_degrees: 25, dither_every: 3 });
 
-    // A rig inherits every plan's default and says so.
+    // A rig's limits are set in its setup, where Apply writes them.
     fireEvent.change(screen.getByLabelText('Priority scope'), { target: { value: 'rig' } });
-    const rigDefaults = await screen.findByRole('group', { name: 'rig scheduling defaults' });
-    const altitude = within(rigDefaults).getByRole('spinbutton', { name: 'Minimum altitude' });
-    expect(altitude).toHaveValue(null);
-    expect(altitude).toHaveAttribute('placeholder', '25°');
-    expect(within(rigDefaults).getAllByText('25° · from every plan')).toHaveLength(1);
+    expect(await screen.findByText("This rig's Target Scheduler limits are in its Setup, under Limits and delivery.")).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'rig scheduling defaults' })).not.toBeInTheDocument();
   });
 });
