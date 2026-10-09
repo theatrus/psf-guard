@@ -206,8 +206,10 @@ longer exposes per-project importance, weights, presets or switching scores.
 A plan carries Target Scheduler's per-project scheduling limits: minimum time,
 minimum and maximum altitude, custom horizon and its offset, meridian window,
 filter switch frequency, dither interval and smart exposure order. Set the defaults once on
-a plan's **Priority and defaults** tab, for every plan, a site or a rig (pick
-the scope at the top); set one plan's own on its **Rigs** tab under
+a plan's **Priority and defaults** tab, for every plan or a site (pick the
+scope at the top). A rig's own are in its **Setup**, under **Limits and
+delivery**, beside the planning limits Director plans with. Set one plan's own
+on its **Rigs** tab under
 **Scheduling limits for every rig**, where a table shows what each rig gets and where each
 value comes from. An empty field inherits and says from where. Both save from
 the page's save bar. Over the API they are the `scheduling` key of
@@ -226,6 +228,24 @@ no scope plans is left alone. The preview lists each change as
 `<project> · scheduling limits`, for example
 `minimum altitude 10° → 30°`. Columns an older Target Scheduler schema lacks
 are skipped.
+
+### A rig's limits for every project
+
+A rig's limits also reach the projects no plan holds, such as ones made in
+N.I.N.A. Below the fields, **Target Scheduler projects** compares the saved
+limits with every project in the rig's database, closed ones included, and
+lists each one that differs with what would change. **Apply** writes them.
+Each project takes what an activation would write: a plan's own limits for the
+project it holds, a collaboration assignment's altitude floor, and the rig's
+for the rest. The rig's value replaces one changed by hand in Target
+Scheduler; a limit no scope sets stays as each project has it, and the list
+names those. Apply is refused when a project or the limits changed since the
+list was read, and nothing is written; the list then reloads. A rig whose
+database lives on a Sync peer sends the rows there afterwards, as activation
+does. Nothing applies by itself: a project made later waits for the next
+Apply. Over the API, `GET /rigs/{rig}/scheduling` returns the comparison and
+its `digest`, and `POST /rigs/{rig}/scheduling/apply` with that `digest`
+writes it. Apply needs the server's database-management permission.
 
 ## Exposure Moon Rules
 

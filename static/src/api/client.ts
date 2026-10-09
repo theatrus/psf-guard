@@ -5,7 +5,7 @@ import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorFeasibility, DirectorMosaicPreview, DirectorResolvedName,
   DirectorSkyMarks,
-  DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate, DirectorAttached, DirectorTakenValues } from './directorTypes';
+  DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate, DirectorAttached, DirectorTakenValues, DirectorRigScheduling } from './directorTypes';
 import type { GuidFillReport, GuidReport,
   ProjectMosaic,
   ProjectProcessingSettings,
@@ -575,6 +575,22 @@ export const apiClient = {
     const api = await getApi();
     const { data } = await api.post<ApiResponse<DirectorTakenValues>>(`/director/v1/projects/${encodeURIComponent(projectId)}/plan/take-target-scheduler`, { rig_id: rigId, plan_revision: planRevision, framing_revision: framingRevision });
     if (!data.data) throw new Error(data.error || "Failed to take Target Scheduler's values");
+    return data.data;
+  },
+
+  /** A rig's scheduling limits against every project in its database: read only. */
+  getRigScheduling: async (rigId: string): Promise<DirectorRigScheduling> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorRigScheduling>>(`/director/v1/rigs/${encodeURIComponent(rigId)}/scheduling`);
+    if (!data.data) throw new Error(data.error || 'Failed to compare the rig limits');
+    return data.data;
+  },
+
+  /** Write the reviewed limits; refused with 409 when anything changed since. */
+  applyRigScheduling: async (rigId: string, digest: string): Promise<DirectorRigScheduling> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<DirectorRigScheduling>>(`/director/v1/rigs/${encodeURIComponent(rigId)}/scheduling/apply`, { digest });
+    if (!data.data) throw new Error(data.error || 'Failed to apply the rig limits');
     return data.data;
   },
 

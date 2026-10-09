@@ -5,8 +5,12 @@ import { Camera, Check, Download, Link2, MapPin, RefreshCw, SlidersHorizontal } 
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorRigProfileView, DirectorRigSite } from '../../api/directorTypes';
+import type { SchedulingOverrides } from '../../api/directorPreferences';
 import HorizonEditor from './HorizonEditor';
 import CollaborationConnections from './CollaborationConnections';
+import RigSchedulingApply from './RigSchedulingApply';
+import SchedulingFields from './SchedulingFields';
+import { compactOverrides, inheritedLimits } from './schedulingModel';
 import WorkspaceTabs from './WorkspaceTabs';
 import { workspacePanel } from './workspacePanel';
 import { applyDefaults, describeSource, editFromForm, fieldOfView, formFromProfile, formatFieldOfView, opticsFromForm, type RigProfileForm } from './rigProfileForm';
@@ -56,10 +60,20 @@ export default function RigProfileCard({ slug }: { slug: string }) {
   const placed = summaries.data?.find(entry => entry.catalog_slug === slug)?.site;
   const [form, setForm] = useState<RigProfileForm | null>(null);
   const [siteId, setSiteId] = useState<string | null>(null);
+  // The rig's Target Scheduler limits, saved with its observing settings.
+  const [scheduling, setScheduling] = useState<SchedulingOverrides>({});
   const [problem, setProblem] = useState('');
   const [notice, setNotice] = useState('');
   useEffect(() => { if (loaded.data) setForm(formFromProfile(loaded.data.profile)); }, [loaded.data]);
-  useEffect(() => { if (rigSettings.data) setSiteId(rigSettings.data.site_id); }, [rigSettings.data]);
+  useEffect(() => { if (rigSettings.data) { setSiteId(rigSettings.data.site_id); setScheduling(rigSettings.data.scheduling ?? {}); } }, [rigSettings.data]);
+  const schedulingChanged = !!rigSettings.data && JSON.stringify(compactOverrides(scheduling)) !== JSON.stringify(compactOverrides(rigSettings.data.scheduling ?? {}));
+  // What the rig inherits: every plan's limits, then its site's.
+  const globalSettings = useQuery({ queryKey: ['observingSettings', 'global', sites.data?.global_id], queryFn: () => apiClient.getObservingSettings('global', sites.data!.global_id), enabled: !!sites.data, refetchOnWindowFocus: false });
+  const siteSettings = useQuery({ queryKey: ['observingSettings', 'site', siteId], queryFn: () => apiClient.getObservingSettings('site', siteId!), enabled: !!siteId, refetchOnWindowFocus: false });
+  const parentLimits = inheritedLimits([
+    { overrides: globalSettings.data?.scheduling, from: 'from every plan' },
+    siteId ? { overrides: siteSettings.data?.scheduling, from: 'from the site' } : null,
+  ]);
   const save = useMutation({
     retry: false,
     mutationFn: async (view: DirectorRigProfileView) => {
@@ -71,21 +85,22 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       // naming this revision rather than conflicting with itself. Keep the
       // header defaults from the last load; a save does not reread frames.
       client.setQueryData<DirectorRigProfileView>(queryKey, current => current ? { ...saved, defaults: current.defaults } : saved);
-      // The planning site lives with the rig's observing settings.
-      if (rigSettings.data && siteId !== rigSettings.data.site_id) {
+      // The planning site and the Target Scheduler limits live with the
+      // rig's observing settings.
+      if (rigSettings.data && (siteId !== rigSettings.data.site_id || schedulingChanged)) {
         try {
-          const settings = await apiClient.saveObservingSettings({ ...rigSettings.data, site_id: siteId });
+          const settings = await apiClient.saveObservingSettings({ ...rigSettings.data, site_id: siteId, scheduling: compactOverrides(scheduling) });
           client.setQueryData(['observingSettings', 'rig', settings.scope_id], settings);
           void client.invalidateQueries({ queryKey: ['observingEffective'] });
         } catch (error) {
-          throw new Error(`Profile saved, planning site not: ${message(error)}`, { cause: error });
+          throw new Error(`Profile saved, site and limits not: ${message(error)}`, { cause: error });
         }
       }
       return saved;
     },
     onSuccess: saved => setNotice(`Saved rig profile revision ${saved.profile.revision}.`),
     // Either step may have changed what planning reads for the rig.
-    onSettled: () => void client.invalidateQueries({ queryKey: ['directorRigProfiles'] }),
+    onSettled: () => { void client.invalidateQueries({ queryKey: ['directorRigProfiles'] }); void client.invalidateQueries({ queryKey: ['rigScheduling'] }); },
   });
   // Derived from the error itself, so the conflict notice and the generic one
   // can never both render for the same failed save.
@@ -179,7 +194,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       </div>
       <div {...workspacePanel(id, 'limits', tab)}>
       <fieldset disabled={disabled}>
-        <legend>Limits</legend>
+        <legend>Planning limits</legend>
         <div className="rig-profile-grid">
           <Field id={`${slug}-min-alt`} label="Minimum altitude" unit="°" value={form.minAltitude} disabled={disabled} onChange={minAltitude => update({ minAltitude })} />
           <Field id={`${slug}-max-alt`} label="Maximum altitude" unit="°" value={form.maxAltitude} disabled={disabled} onChange={maxAltitude => update({ maxAltitude })} />
@@ -187,6 +202,13 @@ export default function RigProfileCard({ slug }: { slug: string }) {
           <Field id={`${slug}-meridian-after`} label="Resume after meridian" unit="min" value={form.meridianAfter} disabled={disabled} onChange={meridianAfter => update({ meridianAfter })} />
         </div>
       </fieldset>
+      <fieldset disabled={disabled} className="scheduling-defaults">
+        <legend>Target Scheduler limits</legend>
+        <p className="director-muted">Every project in this rig's database takes these on Apply. A plan's own limits win for its project; empty fields follow the site and every plan.</p>
+        <SchedulingFields label="Rig Target Scheduler limits" overrides={scheduling} onChange={next => setScheduling(compactOverrides(next))}
+          inherited={parentLimits.values} inheritedFrom={limit => parentLimits.from[limit]} disabled={disabled || !rigSettings.data} />
+      </fieldset>
+      {rigId && <RigSchedulingApply rigId={rigId} unsaved={schedulingChanged} />}
       <fieldset disabled={disabled}>
         <legend>Remote site</legend>
         <p className="director-muted">When this rig's real database lives on another PSF Guard, name that peer. Activation writes the plan into the copy here, then pushes the same rows there through Sync.</p>

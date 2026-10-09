@@ -13,6 +13,7 @@ mod plans;
 mod program;
 mod remote_push;
 mod rig_profile;
+mod rig_scheduling;
 
 const PREVIEW: &str = "/catalogs/catalog/adoption/preview";
 const APPLY: &str = "/catalogs/catalog/adoption/apply";
