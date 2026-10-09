@@ -3669,7 +3669,7 @@
 }
 
 .stack-preview-method button:hover {
-  color: var(--color-text);
+  color: var(--color-text-primary);
 }
 
 .stack-preview-calibration-mode {
@@ -4259,7 +4259,7 @@
 .stack-snr-live {
   padding: 0.55rem 0.9rem 0;
   border-bottom: 1px solid var(--color-bg-tertiary);
-  background: color-mix(in srgb, var(--color-accent) 4%, transparent);
+  background: color-mix(in srgb, var(--color-primary) 4%, transparent);
 }
 
 .stack-snr-live > strong {
@@ -4647,7 +4647,7 @@
 
 .stack-preview-resume-note {
   padding: 0.3rem 0.65rem;
-  color: var(--color-text-tertiary);
+  color: var(--color-text-hint);
   font-size: 0.68rem;
 }
 
@@ -4659,7 +4659,7 @@
 }
 
 .stack-color-crop > span {
-  color: var(--color-text-tertiary);
+  color: var(--color-text-hint);
   font-size: 0.62rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -4837,7 +4837,7 @@
 }
 
 .processing-setups-label {
-  color: var(--color-text-tertiary);
+  color: var(--color-text-hint);
   font-size: 0.62rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -5560,7 +5560,7 @@
   width: 100%;
   min-width: 0;
   padding: 0.35rem;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-secondary);
   border-radius: 4px;
   color: var(--color-text-primary);
   background: var(--color-bg-input);
@@ -6073,7 +6073,7 @@
   border-left: 4px solid var(--color-primary);
   font-size: 1rem;
   font-weight: 600;
-  color: var(--color-text);
+  color: var(--color-text-primary);
 }
 
 .filter-header {
@@ -7319,7 +7319,7 @@
   padding: 2rem;
   background:
     radial-gradient(circle at 50% 15%, color-mix(in srgb, var(--color-primary) 14%, transparent), transparent 34rem),
-    var(--color-bg);
+    var(--color-bg-primary);
 }
 
 .auth-loading {
@@ -7333,7 +7333,7 @@
   display: grid;
   gap: 1rem;
   padding: 2rem;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-secondary);
   border-radius: 1rem;
   background: var(--color-bg-elevated);
   box-shadow: 0 1.5rem 4rem rgb(0 0 0 / 30%);
@@ -7371,8 +7371,8 @@
   padding: 0.75rem 0.85rem;
   border: 1px solid color-mix(in srgb, var(--color-text-muted) 55%, transparent);
   border-radius: 0.5rem;
-  background: var(--color-bg);
-  color: var(--color-text);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
   font: inherit;
 }
 
@@ -7405,7 +7405,7 @@
 .access-badge {
   align-self: center;
   padding: 0.25rem 0.55rem;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-secondary);
   border-radius: 999px;
   font-size: 0.75rem;
   font-weight: 700;
@@ -7431,13 +7431,13 @@
   cursor: pointer;
   list-style: none;
   padding: 0.2rem 0.5rem;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-secondary);
   border-radius: 4px;
   user-select: none;
 }
 
 .scoring-penalty-control[open] summary {
-  color: var(--color-text);
+  color: var(--color-text-primary);
 }
 
 .scoring-penalty-panel {
@@ -7450,8 +7450,8 @@
   gap: 0.5rem;
   min-width: 230px;
   padding: 0.7rem;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-secondary);
   border-radius: 6px;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
 }
@@ -7471,7 +7471,7 @@
 
 .penalty-value {
   text-align: right;
-  color: var(--color-text);
+  color: var(--color-text-primary);
   font-variant-numeric: tabular-nums;
 }
 
@@ -7497,7 +7497,8 @@
 }
 
 .penalty-limit input[type="number"] {
-  width: 90px;
+  box-sizing: border-box;
+  width: 100%;
   padding: 0.15rem 0.3rem;
   font-size: 0.8rem;
 }
@@ -7512,7 +7513,7 @@
 .calibration-kind-master {
   margin-left: 0.35rem;
   background: rgba(255, 255, 255, 0.08);
-  color: var(--text-muted, #aab);
+  color: var(--color-text-muted);
   border: 1px dashed currentColor;
 }
 
@@ -7692,7 +7693,7 @@
   padding: 0.1rem 0.45rem;
   border-radius: 4px;
   background: var(--color-primary);
-  color: var(--color-bg);
+  color: var(--color-text-dark);
   font-size: 0.8rem;
   font-weight: 600;
   pointer-events: none;

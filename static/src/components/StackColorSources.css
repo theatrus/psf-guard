@@ -21,7 +21,7 @@
   border-radius: 4px;
   color: inherit;
   background: var(--bg-secondary, #222);
-  border: 1px solid var(--border-color, #444);
+  border: 1px solid var(--color-border-secondary);
 }
 
 .stack-preview-exposure {
@@ -44,14 +44,14 @@
 
 .stack-color-unavailable {
   padding: 0.4rem 0.75rem;
-  color: var(--text-secondary);
+  color: var(--color-text-secondary);
   font-size: 0.85rem;
 }
 
 .stack-color-custom {
   grid-column: 1 / -1;
   min-width: 0;
-  border-top: 1px solid var(--border-color);
+  border-top: 1px solid var(--color-border-secondary);
 }
 
 .stack-color-custom > summary {
@@ -61,5 +61,5 @@
 
 .stack-color-custom > summary small {
   margin-left: 0.75rem;
-  color: var(--text-secondary);
+  color: var(--color-text-secondary);
 }
