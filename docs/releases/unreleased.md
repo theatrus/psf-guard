@@ -1,5 +1,9 @@
 # Unreleased
 
+- The image grid's toolbar holds still: a long filter or flag choice no
+  longer pushes controls onto a new line, every button and box shares one
+  height and style, and Stats sits with the other tools.
+
 - Filter the image grid by several filters or quality flags at once: Filter
   and Flag open a list of boxes, so Ha and OIII together, or frames with any
   of two flags, are a few clicks. Links with one value keep working.

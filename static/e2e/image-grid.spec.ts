@@ -89,3 +89,23 @@ test('a settled grid runs no animations', async ({ page }) => {
       .map((animation) => (animation as CSSAnimation).animationName ?? 'transition')))
     .toEqual([]);
 });
+
+test('the toolbar keeps its shape: one height for every control, and a long choice moves nothing', async ({ page }) => {
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+  await expect(page.locator('.image-card')).toHaveCount(3, { timeout: 15_000 });
+  const bar = page.locator('.image-controls').first();
+  const shape = () => bar.evaluate((element) => ({
+    height: Math.round(element.getBoundingClientRect().height),
+    controls: [...element.querySelectorAll('button, select, input[type="text"]')]
+      .filter((control) => (control as HTMLElement).offsetParent && !control.closest('.selection-action-bar, .multi-select-menu'))
+      .map((control) => Math.round(control.getBoundingClientRect().height)),
+  }));
+  const plain = await shape();
+  expect(new Set(plain.controls)).toEqual(new Set([30]));
+  // Long filter and flag choices are cut short, not given room.
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1&filter=Ha,OIII,SII&flag=stray_light_gradient,satellite_trail`);
+  await expect(page.getByRole('button', { name: /^Flag:/ })).toContainText('Stray Light');
+  const chosen = await shape();
+  expect(chosen.height).toBe(plain.height);
+  expect(new Set(chosen.controls)).toEqual(new Set([30]));
+});
