@@ -8,7 +8,7 @@ import NumberInput from '../NumberInput';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorContribution, DirectorGoal, DirectorObjective, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplate } from '../../api/directorTypes';
-import { PURPOSES, bandpassKind, bandpassOptions, convertGoal, coverageGaps, goalFor, speedAdjustedHours, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, libraryChoice, libraryFor, newContribution, newLibraryContribution, newObjective, onePartEach, panelIds, panelsByRig, planProblem, rigPanels, rigTotals, samePlan, shootingRigs, templateValue, templatesFor } from './planModel';
+import { PURPOSES, bandpassKind, bandpassOptions, bindOwnTemplates, convertGoal, coverageGaps, goalFor, speedAdjustedHours, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, libraryChoice, libraryFor, newContribution, newLibraryContribution, newObjective, onePartEach, ownTwin, panelIds, panelsByRig, planProblem, rigPanels, rigTotals, samePlan, shootingRigs, templateValue, templatesFor } from './planModel';
 import './PlanEditor.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Plan request failed';
@@ -82,10 +82,19 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
   const [conflict, setConflict] = useState(false);
   const [notice, setNotice] = useState('');
   const [problem, setProblem] = useState('');
+  // A library choice the rig's database already holds shows and saves as
+  // that row. Activation would pick the row anyway, so the saved copy is
+  // bound the same way and nothing looks unsaved.
+  const ownTemplates = useRef(templatesByRig);
+  ownTemplates.current = templatesByRig;
   const take = useCallback((saved: DirectorPlanDraft) => {
-    const next = onePartEach(saved);
+    const next = bindOwnTemplates(onePartEach(saved), ownTemplates.current);
     setPlan(next); setBase(next); setKept(shootingRigs(next)); setConflict(false);
   }, []);
+  useEffect(() => {
+    setPlan(current => current && bindOwnTemplates(current, templatesByRig));
+    setBase(current => current && bindOwnTemplates(current, templatesByRig));
+  }, [templatesByRig]);
   const latest = useRef({ plan, base });
   latest.current = { plan, base };
   useEffect(() => {
@@ -288,7 +297,9 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
           return <tr key={objective.id}>
             <td>{label}<br /><small className="director-muted">{PURPOSES.find(p => p.id === objective.purpose)?.name ?? objective.purpose}</small></td>
             <td>{(() => {
-              const shared = libraryFor(objective.bandpass_id, library);
+              // A library template the database already holds is offered once, as the database's.
+              const listed = libraryFor(objective.bandpass_id, library);
+              const shared = listed.filter(t => !ownTwin(libraryChoice(t), matching));
               if (matching.length === 0 && shared.length === 0) return <span className="director-muted">No {label} template in this database or the library</span>;
               return <select aria-label={`${rig.catalog_name} template for ${label}`} value={templateValue(contribution, library)} onChange={event => {
                 const [kind, key] = event.target.value.split(':');
@@ -302,7 +313,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
                 <option value="">Skip on this rig</option>
                 {matching.length > 0 && <optgroup label="In this database">{matching.map(t => <option key={t.id} value={`db:${t.id}`}>{t.name} ({t.filter_name}{t.bin && t.bin > 1 ? `, ${t.bin}×${t.bin}` : ''})</option>)}</optgroup>}
                 {shared.length > 0 && <optgroup label="Library, written on activation">{shared.map(t => <option key={t.id} value={`lib:${t.id}`}>{t.name} ({t.filter_name}{t.bin && t.bin > 1 ? `, ${t.bin}×${t.bin}` : ''})</option>)}</optgroup>}
-                {contribution && templateValue(contribution, library).startsWith('lib:') && !shared.some(t => t.id === contribution.template.template_guid) && <option value={templateValue(contribution, library)}>{contribution.template.name} (library, since removed)</option>}
+                {contribution && templateValue(contribution, library).startsWith('lib:') && !listed.some(t => t.id === contribution.template.template_guid) && <option value={templateValue(contribution, library)}>{contribution.template.name} (library, since removed)</option>}
               </select>;
             })()}</td>
             <td>{contribution && <span className="plan-goal"><NumberInput aria-label={`${rig.catalog_name} exposure for ${label}`} min={1} step="any" value={contribution.exposure_seconds} onChange={event => setContribution(rig, objective, current => current ? { ...current, exposure_seconds: number(event.target.value, current.exposure_seconds) } : current)} /><small>s</small></span>}</td>

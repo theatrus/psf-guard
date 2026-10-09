@@ -389,7 +389,10 @@ has reached it. **Add a rig** offers every rig with a new project, which
 activation creates in its database, and every project another plan holds in
 a database this plan has none in. A rig joins with a template for each
 objective, from its database or the library; one with no template for any
-objective's band says so and stays out. **Drop from plan** switches a rig's
+objective's band says so and stays out. A library template the database
+already holds, written there by activation or with the same filter, camera
+settings and Moon rules, shows as the database's own and is not offered
+again. **Drop from plan** switches a rig's
 exposures off: activation then sets its Target Scheduler project inactive,
 and adding the rig back turns the same exposures on again. **Detach** gives
 a database's project a plan of its own. Once a rig's

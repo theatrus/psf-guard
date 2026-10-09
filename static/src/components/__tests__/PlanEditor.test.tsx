@@ -8,7 +8,7 @@ import { AccessContext, useAccess } from '../../auth/access';
 import PlanEditor, { type PlanRigControls, type RigChange } from '../director/PlanEditor';
 import { DraftProvider } from '../director/pageDrafts';
 import { usePageDrafts } from '../director/pageDraftsState';
-import type { DirectorPlanDraft } from '../../api/directorTypes';
+import type { DirectorLibraryTemplate, DirectorPlanDraft } from '../../api/directorTypes';
 import { convertGoal, framesFor, rigTotals } from '../director/planModel';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
@@ -20,7 +20,7 @@ const template = (id: number, name: string, filter: string, bandpass: string, ki
 
 const libraryHa = { id: '11111111-1111-4111-8111-111111111111', revision: 1, name: 'Ha 600 shared', filter_name: 'Ha', gain: 200, offset: 50, bin: 2, readout_mode: null, default_exposure_seconds: 600, updated_at_ms: 1, bandpass: { id: 'h_alpha', name: 'H-alpha', kind: 'narrowband' as const } };
 
-function fixture(existing: DirectorPlanDraft | null = null, mosaic: { rows: number; columns: number; overlap_percent: number } | null = null, library = [libraryHa], rigFramings: Array<{ rig_id: string; center?: { ra_degrees: number; dec_degrees: number } | null; position_angle_degrees: number | null; mosaic: { rows: number; columns: number; overlap_percent: number }; panel: { width_degrees: number; height_degrees: number } | null }> = []) {
+function fixture(existing: DirectorPlanDraft | null = null, mosaic: { rows: number; columns: number; overlap_percent: number } | null = null, library: DirectorLibraryTemplate[] = [libraryHa], rigFramings: Array<{ rig_id: string; center?: { ra_degrees: number; dec_degrees: number } | null; position_angle_degrees: number | null; mosaic: { rows: number; columns: number; overlap_percent: number }; panel: { width_degrees: number; height_degrees: number } | null }> = []) {
   const saves: DirectorPlanDraft[] = [];
   let plan = existing;
   server.use(
@@ -138,6 +138,44 @@ describe('Plan editor', () => {
     expect(redcatControl).toHaveValue('db:1');
     fireEvent.change(redcatControl, { target: { value: 'lib:11111111-1111-4111-8111-111111111111' } });
     expect(screen.getByLabelText('RedCat 61 template for H-alpha')).toHaveValue('lib:11111111-1111-4111-8111-111111111111');
+  });
+
+  it("offers a library template the rig's database already holds once, as the database's, and binds the plan to it", async () => {
+    // Copied in from RedCat's own Ha 300: the same settings under a new id.
+    const copied = { ...libraryHa, id: '22222222-2222-4222-8222-222222222222', name: 'Ha 300 copy', gain: 100, offset: 30, bin: 1, default_exposure_seconds: 300 };
+    // Written into RedCat by an earlier activation under the library's id;
+    // the row's gain was changed there since.
+    const written = { ...libraryHa, id: '00000000-0000-4000-8000-000000000003', name: 'Lum shared', filter_name: 'L', gain: 0, offset: 10, bin: 1, default_exposure_seconds: 60, bandpass: { id: 'luminance', name: 'Luminance', kind: 'broadband' as const } };
+    const objectives = [
+      { id: 'o1', bandpass_id: 'h_alpha', purpose: 'faint_detail', goal: { kind: 'hours' as const, value: 6 }, priority: 1 },
+      { id: 'o2', bandpass_id: 'luminance', purpose: 'faint_detail', goal: { kind: 'hours' as const, value: 2 }, priority: 1 },
+    ];
+    const stored: DirectorPlanDraft = { project_id: 'project', revision: 2, objectives, updated_at_ms: 1, contributions: [
+      { id: 'c1', objective_id: 'o1', rig_id: redcat.rig.id, template: { template_guid: copied.id, template_id: null, name: copied.name, filter_name: 'Ha', gain: 100, offset: 30, bin: 1, readout_mode: null }, exposure_seconds: 240, panel_ids: [], enabled: true },
+      { id: 'c2', objective_id: 'o2', rig_id: redcat.rig.id, template: { template_guid: written.id, template_id: null, name: written.name, filter_name: 'L', gain: 0, offset: 10, bin: 1, readout_mode: null }, exposure_seconds: 60, panel_ids: [], enabled: true },
+    ] };
+    const { saves } = fixture(stored, null, [libraryHa, copied, written]);
+    const drafts: MutableRefObject<Drafts | null> = { current: null };
+    mount(true, { drafts });
+    const ha = await screen.findByLabelText('RedCat 61 template for H-alpha');
+    await waitFor(() => expect(ha).toHaveValue('db:1'));
+    expect(within(ha).queryByRole('option', { name: /Ha 300 copy/ })).not.toBeInTheDocument();
+    // A library template with other settings is still on offer.
+    expect(within(ha).getByRole('option', { name: /Ha 600 shared/ })).toBeInTheDocument();
+    const lum = screen.getByLabelText('RedCat 61 template for Luminance');
+    expect(lum).toHaveValue('db:3');
+    expect(within(lum).queryByRole('group', { name: 'Library, written on activation' })).not.toBeInTheDocument();
+    // The rig keeps its exposure, and the binding alone is nothing to save.
+    expect(screen.getByLabelText('RedCat 61 exposure for H-alpha')).toHaveValue(240);
+    await waitFor(() => expect(drafts.current?.sections.map(section => section.id)).toEqual(['plan']));
+    expect(drafts.current!.unsaved).toHaveLength(0);
+    // The next save names the database's rows.
+    fireEvent.change(screen.getByLabelText('RedCat 61 exposure for H-alpha'), { target: { value: '300' } });
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(1));
+    expect(await drafts.current!.saveAll()).toBeNull();
+    const sent = Object.fromEntries(saves[0].contributions.map(c => [c.id, c]));
+    expect(sent.c2.template.template_id).toBe(3);
+    expect(sent.c1).toMatchObject({ exposure_seconds: 300, template: { template_guid: '00000000-0000-4000-8000-000000000001', name: 'Ha 300' } });
   });
 
   it('lets the Rigs tab add and drop rigs, listing only the rigs that shoot the plan', async () => {

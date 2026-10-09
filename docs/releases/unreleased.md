@@ -1,5 +1,10 @@
 # Unreleased
 
+- A plan's exposures pick the rig's own template when its database already
+  holds the library one, either because activation wrote it or because it
+  has the same filter, camera settings and Moon rules. The template list no
+  longer offers that library copy as one to write.
+
 - Keep preview pre-generation, quality scans and stack builds inside their
   share of the processor. Since Seiza 0.23.1, one background preview could
   keep every core busy; each job now runs Seiza on the workers it was given.
