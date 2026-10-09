@@ -7,18 +7,21 @@ import {
   type StatusFilter,
   type StatusWord,
 } from '../utils/statusFilter';
-import { ALL_FLAGS, flagFilterLabel, parseFlagFilter } from '../utils/flagFilter';
+import { flagFilterLabel } from '../utils/flagFilter';
+import MultiSelectMenu from './MultiSelectMenu';
 
 export interface FilterOptions {
   status: StatusFilter;
-  filterName: string | 'all';
+  /** Filters to keep; none keeps every filter. */
+  filterNames: string[];
   dateRange: {
     start: Date | null;
     end: Date | null;
   };
   searchTerm: string;
-  /** A quality issue category to keep, as the API spells it, or `all`. */
-  flag: string;
+  /** Quality issue categories to keep, as the API spells them; none keeps
+   *  every image. */
+  flags: string[];
 }
 
 interface FilterControlsProps {
@@ -28,13 +31,13 @@ interface FilterControlsProps {
   availableFlags?: string[];
   currentFilters: {
     status: string;
-    filterName: string;
+    filterNames: string[];
     dateRange: {
       start: string | null;
       end: string | null;
     };
     searchTerm: string;
-    flag?: string;
+    flags?: string[];
   };
 }
 
@@ -56,13 +59,13 @@ export default function FilterControls({
   // Convert URL state (strings) to component state (Date objects)
   const filters = useMemo(() => ({
     status: parseStatusFilter(currentFilters.status),
-    filterName: currentFilters.filterName,
+    filterNames: currentFilters.filterNames,
     dateRange: {
       start: currentFilters.dateRange.start ? new Date(currentFilters.dateRange.start) : null,
       end: currentFilters.dateRange.end ? new Date(currentFilters.dateRange.end) : null,
     },
     searchTerm: currentFilters.searchTerm,
-    flag: parseFlagFilter(currentFilters.flag),
+    flags: currentFilters.flags ?? [],
   }), [currentFilters]);
 
   const handleStatusChange = (status: StatusFilter) => {
@@ -79,9 +82,8 @@ export default function FilterControls({
     handleStatusChange(statusFilterOf(next));
   };
 
-  const handleFilterNameChange = (filterName: string) => {
-    const newFilters = { ...filters, filterName };
-    onFilterChange(newFilters);
+  const handleFilterNamesChange = (filterNames: string[]) => {
+    onFilterChange({ ...filters, filterNames });
   };
 
   const handleDateChange = (field: 'start' | 'end', value: string) => {
@@ -101,20 +103,20 @@ export default function FilterControls({
     onFilterChange(newFilters);
   };
 
-  const handleFlagChange = (flag: string) => {
-    onFilterChange({ ...filters, flag: parseFlagFilter(flag) });
+  const handleFlagsChange = (flags: string[]) => {
+    onFilterChange({ ...filters, flags });
   };
 
   const resetFilters = () => {
     const defaultFilters: FilterOptions = {
       status: 'all',
-      filterName: 'all',
+      filterNames: [],
       dateRange: {
         start: null,
         end: null,
       },
       searchTerm: '',
-      flag: ALL_FLAGS,
+      flags: [],
     };
     onFilterChange(defaultFilters);
     setShowDateFilters(false);
@@ -123,15 +125,16 @@ export default function FilterControls({
   const dateFilterCount = Number(filters.dateRange.start !== null)
     + Number(filters.dateRange.end !== null);
   const hasFilters = filters.status !== 'all'
-    || filters.filterName !== 'all'
+    || filters.filterNames.length > 0
     || dateFilterCount > 0
     || filters.searchTerm !== ''
-    || filters.flag !== ALL_FLAGS;
-  // A chosen flag stays offered even when the current scope has no image
-  // carrying it, so the select keeps showing what the URL asked for.
-  const flagOptions = filters.flag !== ALL_FLAGS && !availableFlags.includes(filters.flag)
-    ? [filters.flag, ...availableFlags]
-    : availableFlags;
+    || filters.flags.length > 0;
+  // A chosen filter or flag stays offered even when the current scope has
+  // no image carrying it, so the list keeps showing what the URL asked for.
+  const filterOptions = [...availableFilters, ...filters.filterNames.filter((name) => !availableFilters.includes(name))]
+    .map((name) => ({ value: name, label: name }));
+  const flagOptions = [...filters.flags.filter((flag) => !availableFlags.includes(flag)), ...availableFlags]
+    .map((flag) => ({ value: flag, label: flagFilterLabel(flag) }));
 
   return (
     <div className="filter-controls compact">
@@ -150,34 +153,23 @@ export default function FilterControls({
           ))}
         </div>
 
-        <div className="filter-input-group">
-          <label htmlFor="image-channel-filter">Filter:</label>
-          <select
-            id="image-channel-filter"
-            value={filters.filterName} 
-            onChange={(e) => handleFilterNameChange(e.target.value)}
-          >
-            <option value="all">All</option>
-            {availableFilters.map(filter => (
-              <option key={filter} value={filter}>{filter}</option>
-            ))}
-          </select>
-        </div>
+        <MultiSelectMenu
+          id="image-channel-filter"
+          label="Filter:"
+          options={filterOptions}
+          chosen={filters.filterNames}
+          onChange={handleFilterNamesChange}
+          everyIsAll
+        />
 
-        <div className="filter-input-group">
-          <label htmlFor="image-flag-filter">Flag:</label>
-          <select
-            id="image-flag-filter"
-            value={filters.flag}
-            onChange={(e) => handleFlagChange(e.target.value)}
-            title="Keep only images whose quality analysis raised this flag"
-          >
-            <option value={ALL_FLAGS}>All</option>
-            {flagOptions.map(flag => (
-              <option key={flag} value={flag}>{flagFilterLabel(flag)}</option>
-            ))}
-          </select>
-        </div>
+        <MultiSelectMenu
+          id="image-flag-filter"
+          label="Flag:"
+          options={flagOptions}
+          chosen={filters.flags}
+          onChange={handleFlagsChange}
+          title="Keep only images whose quality analysis raised any of these flags"
+        />
 
         <div className="filter-input-group search-filter">
           <label htmlFor="image-search-filter">Search:</label>

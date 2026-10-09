@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
@@ -7,7 +7,7 @@ import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
 import GroupedImageGrid from '../GroupedImageGrid';
 
-const image = (id: number, file: string) => ({
+const image = (id: number, file: string, filter = 'R') => ({
   id,
   project_id: 1,
   project_name: 'Test Project',
@@ -15,7 +15,7 @@ const image = (id: number, file: string) => ({
   target_id: 42,
   target_name: 'Sh2 86',
   acquired_date: 1_705_352_400 + id,
-  filter_name: 'R',
+  filter_name: filter,
   grading_status: 0,
   reject_reason: null,
   metadata: { FileName: file },
@@ -80,12 +80,41 @@ describe('GroupedImageGrid flag filter', () => {
       wrapper: wrapper('/grid?db=test&project=1&target=42&flag=rotation_skew'),
     });
     await waitFor(() => expect(screen.getByText(/1 of 2 images/)).toBeInTheDocument());
-    const select = screen.getByLabelText('Flag:') as HTMLSelectElement;
-    expect(select.value).toBe('rotation_skew');
-    expect(Array.from(select.options).map((option) => option.textContent)).toEqual([
+    const button = screen.getByRole('button', { name: /^Flag:/ });
+    expect(button).toHaveTextContent('Rotation Skew');
+    fireEvent.click(button);
+    const menu = screen.getByRole('group', { name: 'Flag' });
+    expect(within(menu).getAllByRole('checkbox').map((box) => box.closest('label')!.textContent)).toEqual([
       'All',
       'Rotation Skew',
     ]);
+    expect(within(menu).getByRole('checkbox', { name: 'Rotation Skew' })).toBeChecked();
+    // All clears the flag filter.
+    fireEvent.click(within(menu).getByRole('checkbox', { name: 'All' }));
+    await waitFor(() => expect(screen.getByText(/2 of 2 images/)).toBeInTheDocument());
+  });
+
+  it('keeps any of several filters, and names them in the summary', async () => {
+    server.use(
+      http.get('/api/db/:dbId/images', () =>
+        HttpResponse.json({ success: true, status: 'ready', error: null,
+          data: [image(7, 'r.fits', 'R'), image(8, 'g.fits', 'G'), image(9, 'b.fits', 'B')] })
+      ),
+      http.get('/api/db/:dbId/analysis/sequence', () => HttpResponse.json(analysis)),
+    );
+    render(<GroupedImageGrid />, {
+      wrapper: wrapper('/grid?db=test&project=1&target=42&filter=R,G'),
+    });
+    await waitFor(() => expect(screen.getByText(/2 of 3 images/)).toBeInTheDocument());
+    expect(document.querySelector('.grid-stats')).toHaveTextContent('R, G');
+    const button = screen.getByRole('button', { name: /^Filter:/ });
+    expect(button).toHaveTextContent('R, G');
+    fireEvent.click(button);
+    const menu = screen.getByRole('group', { name: 'Filter' });
+    // Every filter ticked is All again.
+    fireEvent.click(within(menu).getByRole('checkbox', { name: 'B' }));
+    await waitFor(() => expect(screen.getByText(/3 of 3 images/)).toBeInTheDocument());
+    expect(within(menu).getByRole('checkbox', { name: 'All' })).toBeChecked();
   });
 
   it('hides nothing while the analysis is loading or when it fails', async () => {

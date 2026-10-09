@@ -3217,6 +3217,75 @@
   margin: 0;
 }
 
+/* Filter and Flag keep any of several values: a button that says what is
+   kept, over a list of boxes. */
+.multi-select {
+  position: relative;
+}
+
+.multi-select > span {
+  color: var(--color-text-muted);
+  font-weight: 500;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.multi-select-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 12rem;
+  padding: 0.3rem 0.6rem;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-bg-quaternary);
+  border-radius: 3px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.multi-select-button:hover {
+  border-color: var(--color-bg-input);
+}
+
+.multi-select-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-select-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  display: grid;
+  gap: 0.3rem;
+  min-width: 10rem;
+  max-height: 18rem;
+  overflow-y: auto;
+  padding: 0.5rem 0.65rem;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-bg-quaternary);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.multi-select-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--color-text-secondary);
+  font-weight: 400;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.multi-select-choice input {
+  margin: 0;
+}
+
 .filter-input-group select,
 .filter-input-group input[type="date"],
 .filter-input-group input[type="text"] {
@@ -3368,8 +3437,9 @@
 
 @media (max-width: 768px) {
   /* The captions go on a phone; each status box keeps its own name. */
-  .filter-primary-row .filter-input-group label:not(.status-choice),
-  .filter-primary-row .status-filter > span {
+  .filter-primary-row .filter-input-group label:not(.status-choice):not(.multi-select-choice),
+  .filter-primary-row .status-filter > span,
+  .filter-primary-row .multi-select > span:first-child {
     position: absolute;
     width: 1px;
     height: 1px;
