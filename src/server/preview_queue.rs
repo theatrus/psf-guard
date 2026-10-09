@@ -11,9 +11,7 @@
 //! [`crate::concurrency::plan_workers`] at [`Priority::Interactive`] (memory-
 //! bounded via a frame probe), and every job holds an
 //! [`AppState::begin_interactive_job`] guard for its lifetime, so background
-//! pre-generation yields cores + memory to user-driven preview work. Seiza's
-//! parallel work inside a job runs in [`AppState::run_interactive`]'s pool,
-//! so previews together stay inside the interactive share of the cores.
+//! pre-generation yields cores + memory to user-driven preview work.
 //!
 //! Because readiness is now observed by a *different* request (via
 //! `Path::exists`), generation writes to a temp file and atomically renames,
@@ -294,13 +292,9 @@ impl AppState {
             let cache_path = job.cache_path.clone();
             let attempted_source = source_fingerprint(&job.fits_path);
             let worker_source = attempted_source.clone();
-            // Seiza's own threads come from the pool interactive work
-            // shares, not from every core.
-            let worker_state = Arc::clone(&state);
-            let outcome = tokio::task::spawn_blocking(move || {
-                worker_state.run_interactive(|| generate_with_fingerprint(&job, worker_source))
-            })
-            .await;
+            let outcome =
+                tokio::task::spawn_blocking(move || generate_with_fingerprint(&job, worker_source))
+                    .await;
 
             let mut inner = state.preview_queue.inner.lock().unwrap();
             inner.in_flight.remove(&cache_path);

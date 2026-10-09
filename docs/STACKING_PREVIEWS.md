@@ -729,9 +729,9 @@ The limit covers Seiza's own threads too. Seiza splits debayering,
 stretching, star detection and stacking across the threads of the pool it
 runs in, so each job runs it in a pool of the workers it took, and a
 background preview no longer spreads over every core. Previews you look at
-and requests such as a plate solve, a star list or a PSF view share one pool
-the size of the share for work you wait on; one running alone can use all of
-it. RC-Astro's tools are programs of their own and choose their own threads.
+and requests such as a plate solve, a star list or a PSF view still use every
+core, since background work pauses while they run. RC-Astro's tools are
+programs of their own and choose their own threads.
 
 A share chosen here is kept in the registry and wins over the config file;
 **Use the default** goes back to the file's value. A change applies to work

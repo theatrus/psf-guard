@@ -34,9 +34,10 @@
 //! detection and stacking) runs in the Rayon pool of the thread that calls
 //! it, and Rayon's global pool has a thread for every core. So a job runs its
 //! Seiza calls inside a pool of the workers it leased, from [`ComputePool`],
-//! and the job's work stays on that many threads. Interactive previews and
-//! one-off requests share one pool the size of the interactive budget (see
-//! `AppState::run_interactive`).
+//! and the job's work stays on that many threads. Previews a person is
+//! waiting for and one-off requests (plate solves, star lists, PSF views)
+//! still use every core: background work already pauses while they run, and
+//! a cap there only made them slower.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};

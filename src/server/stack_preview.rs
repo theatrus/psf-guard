@@ -2060,8 +2060,7 @@ pub async fn import_wbpp_stacks(
             let conn = conn.lock().map_err(|error| error.to_string())?;
             wbpp_stacks::run_target(&conn, project_id, target_id)?
         };
-        // The previews' stretches run in the pool interactive work shares.
-        state.run_interactive(|| wbpp_stacks::import_masters(&ctx, project_id, target, &output_dir))
+        wbpp_stacks::import_masters(&ctx, project_id, target, &output_dir)
     })
     .await
     .map_err(|error| AppError::InternalError(error.to_string()))?

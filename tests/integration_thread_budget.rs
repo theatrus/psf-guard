@@ -1,21 +1,21 @@
-//! A budgeted job's Seiza work stays on the threads the job was given.
+//! A budgeted background job's Seiza work stays on the threads the job was
+//! given.
 //!
 //! Seiza does its parallel work in the Rayon pool of the thread that calls
 //! it, and Rayon's global pool has a thread for every core. Each job here
 //! runs through the helper the server uses for it, and the global pool must
-//! never start: work that left the job's pool would start it. That can be
+//! never start: work that left the job's pool would start it. Previews a
+//! person waits for use every core on purpose, so they are not here. That can be
 //! checked once per process, and each file under `tests/` runs as a process
 //! of its own, so this is one test.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::sync::RwLock;
 
 use psf_guard::concurrency::ComputePool;
 use psf_guard::preview_format::PreviewEncoding;
-use psf_guard::server::preview_queue::{GenJob, GenKind, GenerationState};
+use psf_guard::server::preview_queue::{GenJob, GenKind};
 use psf_guard::server::spatial_scan::{ScanWorkItem, SpatialMetricsStore};
-use psf_guard::server::state::AppState;
 use seiza_fits::{F32ImageData, HeaderValue, WriteHeaderCard};
 
 const WIDTH: usize = 640;
@@ -71,27 +71,6 @@ fn preview(fits_path: &Path, cache_path: PathBuf, color: bool) -> GenJob {
     }
 }
 
-/// Wait for the preview queue to finish `job`, as the viewer's poll would.
-async fn generated(state: &AppState, job: &GenJob) {
-    let deadline = Instant::now() + Duration::from_secs(120);
-    loop {
-        let status = state
-            .preview_queue
-            .status_for_source(&job.cache_path, &job.fits_path);
-        match status.map(|status| status.state) {
-            Some(GenerationState::Ready) => return,
-            Some(GenerationState::Error) => panic!("{} failed", job.cache_path.display()),
-            _ => {}
-        }
-        assert!(
-            Instant::now() < deadline,
-            "{} timed out",
-            job.cache_path.display()
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn budgeted_jobs_keep_seiza_inside_their_pools() {
     let dir = tempfile::tempdir().unwrap();
@@ -99,31 +78,6 @@ async fn budgeted_jobs_keep_seiza_inside_their_pools() {
     let mosaic = dir.path().join("mosaic.fits");
     write_star_field(&mono, None);
     write_star_field(&mosaic, Some("RGGB"));
-    let state = Arc::new(AppState::new_for_test(
-        rusqlite::Connection::open_in_memory().unwrap(),
-    ));
-
-    // Interactive previews, through the queue: a stretch, a debayer and a
-    // star annotation.
-    let jobs = [
-        preview(&mono, dir.path().join("mono.png"), false),
-        preview(&mosaic, dir.path().join("mosaic.png"), true),
-        GenJob {
-            fits_path: mono.clone(),
-            cache_path: dir.path().join("annotated.png"),
-            kind: GenKind::Annotated {
-                max_stars: 40,
-                size: "screen".into(),
-            },
-            encoding: PreviewEncoding::default(),
-        },
-    ];
-    for job in &jobs {
-        state.enqueue_preview(job.clone());
-    }
-    for job in &jobs {
-        generated(&state, job).await;
-    }
 
     // Background pre-generation renders in a pool of its leased workers.
     let background = preview(&mosaic, dir.path().join("background.png"), true);
@@ -138,7 +92,7 @@ async fn budgeted_jobs_keep_seiza_inside_their_pools() {
     // A quality scan's spatial stage, which detects stars in each frame.
     let cache = dir.path().join("cache");
     std::fs::create_dir_all(&cache).unwrap();
-    let scanned = mono.clone();
+    let scanned = mono;
     let metrics = tokio::task::spawn_blocking(move || {
         let store = RwLock::new(SpatialMetricsStore::default());
         let item = ScanWorkItem {
@@ -155,26 +109,6 @@ async fn budgeted_jobs_keep_seiza_inside_their_pools() {
     .await
     .unwrap();
     assert_eq!(metrics, (1, 0));
-
-    // An on-demand request, in the pool interactive work shares.
-    let pools = Arc::clone(&state);
-    let stars = tokio::task::spawn_blocking(move || {
-        pools.run_interactive(|| {
-            let fits = psf_guard::image_analysis::FitsImage::from_file(&mono).unwrap();
-            let params = psf_guard::hocus_focus_star_detection::HocusFocusParams::default();
-            psf_guard::hocus_focus_star_detection::detect_stars_hocus_focus(
-                &fits.data,
-                fits.width,
-                fits.height,
-                &params,
-            )
-            .stars
-            .len()
-        })
-    })
-    .await
-    .unwrap();
-    assert!(stars > 0);
 
     rayon::ThreadPoolBuilder::new()
         .build_global()

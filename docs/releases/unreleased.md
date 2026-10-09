@@ -3,8 +3,8 @@
 - Keep preview pre-generation, quality scans and stack builds inside their
   share of the processor. Since Seiza 0.23.1, one background preview could
   keep every core busy; each job now runs Seiza on the workers it was given.
-  Previews you look at, plate solves, star lists and PSF views together stay
-  within the share for work you wait on.
+  Previews you look at, plate solves, star lists and PSF views still use every
+  core.
 
 - Seiza 0.24.0 opens more FITS files: images kept in an extension or
   tile-compressed (fpack), signed 16-bit images, whose negative values used
