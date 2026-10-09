@@ -3006,14 +3006,18 @@
 }
 
 /* Combined Controls Layout */
+/* The filters take a row of their own, so a long value never squeezes
+   them into a column; the view settings and the tools share the next row,
+   and the summary closes the bar. */
 .controls-row-combined {
   display: grid;
-  grid-template-columns: minmax(28rem, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
-    "filters view tools"
-    "summary summary summary";
+    "filters filters"
+    "view tools"
+    "summary summary";
   align-items: center;
-  gap: 0.35rem 0.75rem;
+  gap: 0.45rem 0.75rem;
   min-width: 0;
 }
 
@@ -3028,8 +3032,11 @@
 
 .toolbar-section {
   grid-area: tools;
+  align-self: start;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 
@@ -3068,6 +3075,67 @@
   color: var(--color-primary);
 }
 
+/* Every button, select and field in the image toolbar shares one height,
+   border, corner, fill and type size. */
+.image-controls {
+  --toolbar-control-height: 30px;
+}
+
+.image-controls .multi-select-button,
+.image-controls .reset-button.compact,
+.image-controls .toolbar-button.compact,
+.image-controls .undo-redo-toolbar.compact .undo-button,
+.image-controls .undo-redo-toolbar.compact .redo-button,
+.image-controls .grouping-control select,
+.image-controls .filter-input-group input[type="text"],
+.image-controls .filter-input-group input[type="date"] {
+  box-sizing: border-box;
+  height: var(--toolbar-control-height);
+  padding: 0 0.65rem;
+  border: 1px solid var(--color-bg-quaternary);
+  border-radius: 4px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  font-size: 0.8rem;
+  line-height: 1;
+  /* Colours fade; sizes never animate, so the bar does not wobble while
+     its styles settle. */
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s, opacity 0.2s;
+}
+
+.image-controls .multi-select-button,
+.image-controls .reset-button.compact,
+.image-controls .toolbar-button.compact,
+.image-controls .undo-redo-toolbar.compact .undo-button,
+.image-controls .undo-redo-toolbar.compact .redo-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
+.image-controls .undo-redo-toolbar.compact .undo-button,
+.image-controls .undo-redo-toolbar.compact .redo-button {
+  width: var(--toolbar-control-height);
+  padding: 0;
+}
+
+/* A choice never changes how wide Filter and Flag are; a long one is cut
+   short and shown whole on hover. */
+.image-controls .multi-select-button {
+  width: 9.5rem;
+  justify-content: space-between;
+}
+
+.image-controls .filter-input-group input[type="text"] {
+  width: 11rem;
+}
+
+.image-controls .selection-action-bar .action-button {
+  height: var(--toolbar-control-height);
+}
+
 /* Compact toolbar styles */
 .toolbar-button.compact {
   padding: 0.3rem 0.6rem;
@@ -3082,16 +3150,6 @@
 .compare-button.compact {
   padding: 0.3rem 0.6rem;
   font-size: 0.8rem;
-}
-
-@media (max-width: 1500px) {
-  .controls-row-combined {
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas:
-      "filters filters"
-      "view tools"
-      "summary summary";
-  }
 }
 
 @media (max-width: 768px) {
@@ -3214,6 +3272,75 @@
 }
 
 .status-filter .status-choice input {
+  margin: 0;
+}
+
+/* Filter and Flag keep any of several values: a button that says what is
+   kept, over a list of boxes. */
+.multi-select {
+  position: relative;
+}
+
+.multi-select > span {
+  color: var(--color-text-muted);
+  font-weight: 500;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.multi-select-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 12rem;
+  padding: 0.3rem 0.6rem;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-bg-quaternary);
+  border-radius: 3px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.multi-select-button:hover {
+  border-color: var(--color-bg-input);
+}
+
+.multi-select-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-select-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  display: grid;
+  gap: 0.3rem;
+  min-width: 10rem;
+  max-height: 18rem;
+  overflow-y: auto;
+  padding: 0.5rem 0.65rem;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-bg-quaternary);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.multi-select-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--color-text-secondary);
+  font-weight: 400;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.multi-select-choice input {
   margin: 0;
 }
 
@@ -3368,8 +3495,9 @@
 
 @media (max-width: 768px) {
   /* The captions go on a phone; each status box keeps its own name. */
-  .filter-primary-row .filter-input-group label:not(.status-choice),
-  .filter-primary-row .status-filter > span {
+  .filter-primary-row .filter-input-group label:not(.status-choice):not(.multi-select-choice),
+  .filter-primary-row .status-filter > span,
+  .filter-primary-row .multi-select > span:first-child {
     position: absolute;
     width: 1px;
     height: 1px;

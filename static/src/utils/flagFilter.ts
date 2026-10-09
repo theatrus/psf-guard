@@ -2,9 +2,9 @@ import type { ImageQualityResult } from '../api/types';
 import { formatCategory } from './issueCategory';
 
 /**
- * The Images tab's Flag filter: one quality issue category, or `all`. The
- * value is the category as the API spells it (`rotation_skew`), which is
- * also what the URL carries.
+ * The Images tab's Flag filter: quality issue categories to keep, none for
+ * all. Each is the category as the API spells it (`rotation_skew`), which
+ * is also what the URL carries.
  */
 export const ALL_FLAGS = 'all';
 
@@ -14,11 +14,11 @@ export function parseFlagFilter(raw: string | null | undefined): string {
 }
 
 /** An image passes when no flag is chosen, or when its quality result
- * carries that flag. An image with no quality result never carries one. */
-export function matchesFlagFilter(filter: string, quality: ImageQualityResult | undefined): boolean {
-  const parsed = parseFlagFilter(filter);
-  if (parsed === ALL_FLAGS) return true;
-  return (quality?.flags ?? []).includes(parsed);
+ * carries any chosen flag. An image with no quality result carries none. */
+export function matchesFlagFilter(flags: readonly string[], quality: ImageQualityResult | undefined): boolean {
+  if (flags.length === 0) return true;
+  const carried = quality?.flags ?? [];
+  return flags.some((flag) => carried.includes(parseFlagFilter(flag)));
 }
 
 /** Every flag any loaded quality result carries, sorted by label. */

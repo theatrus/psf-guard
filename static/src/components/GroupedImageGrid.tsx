@@ -164,11 +164,11 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const handleFilterChange = useCallback((filterOptions: FilterOptions) => {
     updateFilters({
       status: filterOptions.status === 'all' ? 'all' : String(filterOptions.status),
-      filterName: filterOptions.filterName,
+      filterNames: filterOptions.filterNames,
       dateStart: filterOptions.dateRange.start?.toISOString().split('T')[0] || '',
       dateEnd: filterOptions.dateRange.end?.toISOString().split('T')[0] || '',
       searchTerm: filterOptions.searchTerm,
-      flag: filterOptions.flag,
+      flags: filterOptions.flags,
     });
   }, [updateFilters]);
 
@@ -219,14 +219,17 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     && imagesToMove.length === selectedImages.size
     && imagesToMove.every(image => image.target_id === imagesToMove[0].target_id);
 
+  // One filter chosen narrows the server's reads to it; with several, all
+  // are read and narrowed here.
+  const onlyFilter = filters.filterNames.length === 1 ? filters.filterNames[0] : undefined;
   const quality = useScopedQuality(
     dbId,
     projectId,
     targetId,
-    filters.filterName === 'all' ? undefined : filters.filterName,
+    onlyFilter,
   );
 
-  const flagFilterActive = filters.flag !== 'all';
+  const flagFilterActive = filters.flags.length > 0;
   const flagFilterReady = !quality.isLoading && !quality.error;
 
   // Filter images based on current filters
@@ -237,8 +240,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
         return false;
       }
       
-      // Filter name filter
-      if (filters.filterName !== 'all' && image.filter_name !== filters.filterName) {
+      // Filter name filter: any of the chosen filters.
+      if (filters.filterNames.length > 0 && !filters.filterNames.includes(image.filter_name ?? '')) {
         return false;
       }
       
@@ -266,7 +269,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
       // not load, nothing is hidden: an empty grid would read as "no such
       // frames" rather than "not known yet".
       if (flagFilterActive && flagFilterReady
-        && !matchesFlagFilter(filters.flag, quality.qualityByImage.get(image.id))) {
+        && !matchesFlagFilter(filters.flags, quality.qualityByImage.get(image.id))) {
         return false;
       }
       
@@ -291,7 +294,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const spatialScan = useSpatialScan(
     dbId,
     targetId ?? undefined,
-    filters.filterName === 'all' ? undefined : filters.filterName,
+    onlyFilter,
   );
   let qualityStatus = {
     label: 'Quality: unscored',
@@ -657,11 +660,11 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   // selection on mount and when unrelated URL state changes.
   const selectionFilterKey = [
     filters.status,
-    filters.filterName,
+    filters.filterNames,
     filters.dateRange.start ?? '',
     filters.dateRange.end ?? '',
     filters.searchTerm,
-    filters.flag,
+    filters.flags,
   ].join('\u0000');
   const previousSelectionFilterKey = useRef(selectionFilterKey);
   useEffect(() => {
@@ -976,6 +979,18 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                   <FolderInput size={14} aria-hidden="true" /> Move exposures
                 </button>
               )}
+              {/* The statistics open below the summary; their switch sits
+                  with the other tools. */}
+              <button
+                type="button"
+                className="toolbar-button compact stats-toggle"
+                aria-pressed={showStats}
+                aria-controls={showStats ? 'grid-stats-dashboard' : undefined}
+                title={showStats ? 'Hide image statistics' : 'Show image statistics'}
+                onClick={() => setShowStats(!showStats)}
+              >
+                <span aria-hidden="true">▥</span> Stats
+              </button>
             </div>
             
             <div className="stats-section">
@@ -984,25 +999,13 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                   {mosaic && <>{mosaicLabel(mosaic)} • </>}
                   {filteredImages.length} of {allImages.length} images • {imageGroups.length} groups
                   {filters.status !== 'all' && ` • ${statusFilterLabel(filters.status)}`}
-                  {filters.filterName !== 'all' && ` • ${filters.filterName}`}
+                  {filters.filterNames.length > 0 && ` • ${filters.filterNames.join(', ')}`}
                   {filters.searchTerm && ` • "${filters.searchTerm}"`}
                   {' • '}
                   <span className="grid-quality-state" title={qualityStatus.title}>
                     {qualityStatus.label}
                   </span>
                 </div>
-                {/* The statistics describe these images, so their switch sits
-                    with the count it expands on. */}
-                <button
-                  type="button"
-                  className="toolbar-button compact stats-toggle"
-                  aria-pressed={showStats}
-                  aria-controls={showStats ? 'grid-stats-dashboard' : undefined}
-                  title={showStats ? 'Hide image statistics' : 'Show image statistics'}
-                  onClick={() => setShowStats(!showStats)}
-                >
-                  <span aria-hidden="true">▥</span> Stats
-                </button>
               </div>
               <div
                 className={`selection-action-bar ${selectedImages.size > 1 ? 'active' : ''}`}

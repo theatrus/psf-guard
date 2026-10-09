@@ -2,7 +2,7 @@ import { useLocation, useSearchParams } from 'react-router-dom';
 import { useCallback, useMemo, useRef } from 'react';
 import { type GroupingMode, DEFAULT_SINGLE_PROJECT_MODE } from '../types/grouping';
 import { parseStatusFilter } from '../utils/statusFilter';
-import { parseFlagFilter } from '../utils/flagFilter';
+import { listFilterOf } from '../utils/listFilter';
 
 /**
  * Hook for managing URL search parameters as state
@@ -202,32 +202,33 @@ export function useFilters() {
   
   const filters = useMemo(() => ({
     status: parseStatusFilter(getParam('status')),
-    filterName: getParam('filter') || 'all', 
+    // Filters and flags to keep; none keeps them all.
+    filterNames: listFilterOf(getParam('filter')),
     dateRange: {
       start: getParam('dateStart') || null,
       end: getParam('dateEnd') || null,
     },
     searchTerm: getParam('search') || '',
-    flag: parseFlagFilter(getParam('flag')),
+    flags: listFilterOf(getParam('flag'), (value) => value.toLowerCase()),
   }), [getParam]);
   
   const updateFilters = useCallback((updates: {
     status?: string;
-    filterName?: string;
+    filterNames?: string[];
     dateStart?: string;
     dateEnd?: string;
     searchTerm?: string;
-    flag?: string;
+    flags?: string[];
   }) => {
     updateParams({
       status: updates.status,
-      filter: updates.filterName,
+      filter: updates.filterNames,
       dateStart: updates.dateStart,
       dateEnd: updates.dateEnd, 
       search: updates.searchTerm,
       // updateParams drops the key for undefined, empty, or 'all', like
-      // the other filters: no flag chosen leaves the URL clean.
-      flag: updates.flag,
+      // the other filters: no filter or flag chosen leaves the URL clean.
+      flag: updates.flags,
     });
   }, [updateParams]);
   
