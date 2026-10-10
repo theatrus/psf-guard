@@ -897,7 +897,7 @@ pub fn move_rejects(
     Ok(summary)
 }
 
-fn parse_filename_from_metadata(metadata_json: &str) -> Option<String> {
+pub(crate) fn parse_filename_from_metadata(metadata_json: &str) -> Option<String> {
     let v = serde_json::from_str::<serde_json::Value>(metadata_json).ok()?;
     let raw = v.get("FileName")?.as_str()?;
     // FileName values can be full paths from NINA; we only want the basename
@@ -1375,7 +1375,7 @@ fn restore_one(
 /// `.restored` (then `.restored.1`, `.restored.2`, …) inserted before the
 /// extension. Guarantees the returned path does not currently exist, so a
 /// rename into it never overwrites.
-fn unique_restore_dest(desired: &Path) -> PathBuf {
+pub(crate) fn unique_restore_dest(desired: &Path) -> PathBuf {
     if !desired.exists() {
         return desired.to_path_buf();
     }

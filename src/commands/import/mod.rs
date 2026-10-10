@@ -257,6 +257,12 @@ pub fn collect_fits_files(dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
             {
                 let p = entry?.path();
                 if p.is_dir() {
+                    // Removed rejects wait in the trash; they are not frames to import.
+                    if p.file_name()
+                        .is_some_and(|name| name == crate::commands::reject_removal::TRASH_DIR)
+                    {
+                        continue;
+                    }
                     stack.push(p);
                 } else if crate::image_io::is_image_path(&p) {
                     files.push(p);
@@ -875,6 +881,13 @@ fn existing_basenames(
             add_metadata_basename(&mut set, &metadata);
         }
     }
+    // A removed reject's file is known too, so importing or uploading it
+    // again does not bring the frame back as a new one.
+    set.extend(
+        crate::commands::reject_removal::removed_file_names(conn)?
+            .into_iter()
+            .filter(|name| candidate_basenames.contains(name)),
+    );
     Ok(set)
 }
 

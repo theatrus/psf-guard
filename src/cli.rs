@@ -604,6 +604,100 @@ pub enum Commands {
         verbose: bool,
     },
 
+    /// Take old rejected frames out of a database: their files go to a
+    /// trash folder and a tombstone keeps what restore needs.
+    ///
+    /// Without `--apply` this only shows what would be removed and why any
+    /// reject stays. Only frames rejected at least `--days` days ago
+    /// qualify; frames a collaboration report names, and files another row
+    /// also uses, stay. See `docs/design/reject-removal.md`.
+    RemoveRejects {
+        /// Slug of the database (from the registry) to operate on.
+        #[arg(long)]
+        db: String,
+
+        /// Remove only frames rejected at least this many days ago.
+        #[arg(long, default_value_t = crate::commands::reject_removal::DEFAULT_MIN_AGE_DAYS)]
+        days: u32,
+
+        /// Keep removed files in the trash this many days before
+        /// `empty-reject-trash` may delete them.
+        #[arg(long, default_value_t = crate::commands::reject_removal::DEFAULT_RETENTION_DAYS)]
+        retention_days: u32,
+
+        /// Only this project (by Id).
+        #[arg(long)]
+        project_id: Option<i64>,
+
+        /// Only this target (by Id).
+        #[arg(long)]
+        target_id: Option<i64>,
+
+        /// Remove the frames shown; without it nothing changes.
+        #[arg(long)]
+        apply: bool,
+
+        /// The server's cache root (the `--cache-dir` the server runs
+        /// with); the removed frames' cache files under it are deleted.
+        #[arg(long, default_value = "./cache")]
+        cache_dir: String,
+
+        /// Path to the database registry JSON file (defaults to the platform
+        /// config directory).
+        #[arg(long)]
+        registry: Option<String>,
+    },
+
+    /// Put removed rejects back from the trash: a whole batch, or frames by
+    /// GUID. Never overwrites; a taken name gets a `.restored` suffix.
+    RestoreRemoved {
+        /// Slug of the database (from the registry) to operate on.
+        #[arg(long)]
+        db: String,
+
+        /// The removal batch to restore, as `list-removed` shows it.
+        #[arg(long)]
+        batch: Option<String>,
+
+        /// A removed frame's GUID; repeat for several.
+        #[arg(long)]
+        guid: Vec<String>,
+
+        /// The server's cache root (the `--cache-dir` the server runs
+        /// with); a restored frame given a new row Id must not find another
+        /// frame's cache files there.
+        #[arg(long, default_value = "./cache")]
+        cache_dir: String,
+
+        /// Path to the database registry JSON file.
+        #[arg(long)]
+        registry: Option<String>,
+    },
+
+    /// List removal batches: when, how many frames, and whether their
+    /// files are still in the trash.
+    ListRemoved {
+        /// Slug of the database (from the registry) to operate on.
+        #[arg(long)]
+        db: String,
+
+        /// Path to the database registry JSON file.
+        #[arg(long)]
+        registry: Option<String>,
+    },
+
+    /// Delete the trashed files of every removal past its retention. The
+    /// tombstones stay; those frames can no longer be restored.
+    EmptyRejectTrash {
+        /// Slug of the database (from the registry) to operate on.
+        #[arg(long)]
+        db: String,
+
+        /// Path to the database registry JSON file.
+        #[arg(long)]
+        registry: Option<String>,
+    },
+
     FilterRejected {
         /// Database file to use
         database: String,
