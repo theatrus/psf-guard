@@ -427,6 +427,7 @@ async fn mcp_endpoint_serves_tools_behind_the_token_and_checks_write_per_tool() 
         "get_stack",
         "get_stack_image",
         "get_stack_calibration",
+        "explain_calibration",
     ] {
         assert!(names.contains(&expected.to_string()), "{names:?}");
     }

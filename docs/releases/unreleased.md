@@ -4,7 +4,9 @@
   latest stacks; `get_stack` gives each frame's registration and, per night,
   whether the frames were dithered; `get_stack_calibration` lists the masters
   each session applied; and `get_stack_image` returns the stack as an image,
-  with an optional hard background stretch and crop. `list_images` can keep
+  with an optional hard background stretch and crop. `explain_calibration`
+  says why one light got, or missed, each master: every library frame for
+  its camera, by night, used or refused with the reason. `list_images` can keep
   one filter's frames and only the header keys asked for. A POST to the
   server's bare address now answers 405 and names `/api/mcp`, instead of
   returning the app's page.

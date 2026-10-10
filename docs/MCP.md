@@ -68,6 +68,7 @@ returns.
 | `get_stack` | One stack channel frame by frame: disposition and reason, registration shift and rotation, weight, noise, normalization; and per night, whether the frames were dithered or walked one way | |
 | `get_stack_image` | The stack's preview as an image: as the app shows it, or with the background stretched hard (`stretch: "background"`); crop by fractions of the frame, up to 2048 px | |
 | `get_stack_calibration` | The masters a stack applied, per session: frames each was built from, outlier rejection, the lights it calibrated | |
+| `explain_calibration` | Why one light got, or missed, each master: for bias, dark and flat, every frame the library holds for its camera by night, used, matching but unused, or refused with the readings that disagree | |
 | `get_sky_coverage` | Every target's footprint and exposure by filter | |
 | `get_jobs` | Import, quality scan and WBPP progress | |
 | `astrobin_csv` | The AstroBin acquisition CSV for a project or target | |
@@ -90,9 +91,11 @@ A typical question is "where does this pattern in the SII stack come from?"
 `list_stacks` names the channel's `job_id`. `get_stack_image` with
 `stretch: "background"` shows the pattern; a crop shows it at full detail.
 `get_stack_calibration` shows whether some sessions had no flat or a dark
-master built from two frames, and `get_stack` shows, per night, whether
-the frames were dithered: frames that walk one way without dithers turn
-anything fixed to the sensor into streaks.
+master built from two frames, and `explain_calibration` on one of their
+lights says why: a flat set marked for later lights, flats at another
+rotator angle, darks of another exposure. `get_stack` shows, per night,
+whether the frames were dithered: frames that walk one way without dithers
+turn anything fixed to the sensor into streaks.
 
 ## Try it with curl
 

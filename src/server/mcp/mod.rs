@@ -674,6 +674,20 @@ impl PsfGuardMcp {
     }
 
     #[tool(
+        description = "Why one light got the calibration masters it did: its header readings, then for bias, dark and flat every frame the library holds for its camera, grouped by night: the frames a master would take, the ones that match but lose to a nearer set, and the ones refused with the readings that disagree (rotation off, exposure, temperature, a validity mark, too far in time). Flats for other filters and frames from other cameras are only counted."
+    )]
+    async fn explain_calibration(&self, Parameters(args): Parameters<ImageArgs>) -> ToolResult {
+        let ctx = match self.database(&args.database) {
+            Ok(ctx) => ctx,
+            Err(error) => return Ok(error),
+        };
+        let db_id = ctx.id.clone();
+        Ok(render(
+            handlers::get_image_calibration(ctx, Path((db_id, args.image_id))).await,
+        ))
+    }
+
+    #[tool(
         description = "Sky coverage: every target's footprint and exposure by filter, for planning."
     )]
     async fn get_sky_coverage(&self, Parameters(args): Parameters<DatabaseArgs>) -> ToolResult {
@@ -874,6 +888,7 @@ impl ServerHandler for PsfGuardMcp {
                  For a stack, list_stacks names each channel's job; get_stack gives its frames \
                  and per-night drift, get_stack_calibration the masters it applied, and \
                  get_stack_image the picture (stretch `background` shows patterns). \
+                 explain_calibration says why one light got, or missed, each master. \
                  Catalog predictions and header values are not pixel evidence; say which one \
                  a conclusion rests on."
                     .to_string(),
