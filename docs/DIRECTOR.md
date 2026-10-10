@@ -982,23 +982,32 @@ view and is a composition aid, not pointing evidence.
 
 ### Finished stacks on the sky
 
-Once a plan is activated, the framing view also draws the panels that have
-been shot. For each activated panel it finds the rig database's latest stack
-preview of that target, the same one the Sky page and the stack preview jobs
-publish, and lays it on the sky where its plate solve puts it: the stack's
+The framing view also draws the panels that have been shot. A panel is a
+target an activation wrote, or, for a rig no activation reached, a target of
+its linked Target Scheduler project: a plan taken in from Target Scheduler
+that already matches it is never activated and still shows its stacks. For
+each panel the view finds the stacks the Sky page and the stack preview jobs
+publish for that target, one per colour composition and one per filter, and
+lays the chosen one on the sky where its plate solve puts it: the stack's
 reference frame solve carried through the stack's orientation, so a colour
-or mono stack lands on its true position, not where the plan hoped. A list
-under the image gives every panel with its rig, frames accepted against
-desired, and why a stack is missing: none built yet, or built but not solved,
-in which case it is named but not drawn. **Show finished stacks on the sky**
-hides them. Panels from different rigs are drawn side by side and never
-blended; overlaps show seams and depth differences, which is the point.
-When the framing has changed since the activation the list says so: the
-stacks stay where their solves put them and the rectangles show the new plan.
+or mono stack lands on its true position, not where the plan hoped.
+
+The **Finished stacks** button among the sky layers, or the **Stacks** box
+under the sky, turns the layer on and off; the setting is kept in this
+browser. **Stack shown** picks which stack: **Best per panel** takes a
+current colour stack first, then the mono stack with the most integration;
+a composition or a filter shows that stack on every panel that has one, and
+is kept for the plan in this browser. The list under the picker gives every
+panel with its rig, frames accepted against desired, and why its stack is
+not drawn: none built yet, none of the picked kind, or built but not solved.
+Panels from different rigs are drawn side by side and never blended;
+overlaps show seams and depth differences, which is the point. When the
+framing has changed since the activation the list says so: the stacks stay
+where their solves put them and the rectangles show the new plan.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
-| GET | `/projects/{id}/mosaic` | Per activated panel: `panel_id`, `rig`, `catalog_slug`, `target_id`, `progress` (`desired`, `acquired`, `accepted` over its exposure plans), `status` (`ready`, `unsolved`, `no_stack`, `missing_target`, `missing_catalog`) and the stack `preview` with its `wcs` when solved. `activation_revision` is `null` before the first activation; `framing_stale` flags a framing saved since. |
+| GET | `/projects/{id}/mosaic` | Per panel, activated or from a linked project: `panel_id`, `rig`, `catalog_slug`, `target_id`, `progress` (`desired`, `acquired`, `accepted` over its exposure plans), `status` of the best stack (`ready`, `unsolved`, `no_stack`, `missing_target`, `missing_catalog`), `stacks` (each with `key` such as `color:SHO` or `mono:Ha`, `label`, and `wcs` when solved; best first) and `preview`, the first of them. `activation_revision` is `null` before the first activation; `framing_stale` flags a framing saved since. |
 
 ### A mosaic as one view
 
