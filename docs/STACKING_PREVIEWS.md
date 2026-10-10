@@ -631,16 +631,12 @@ background work that yields to anything you start. A
 first stack this way gets no first color preview; once one is composed, it
 follows its channels.
 
-The header's queue lists a waiting refresh only when it expects to stack
-something. Its line names the database, the project and why it is waiting
-(*after new frames*), then the channels (*Restacks NGC 7331 · R, NGC 7331 ·
-Ha (new)*), with when it starts in the corner (*in 4 min*). A refresh that
-would find only cache hits is not shown, nor one whose channels an earlier
-refresh of the same database already covers. When a refresh finds an older
-finished build of the same frames, the card points back at it instead of
-stacking again. The guess compares each channel's frames and grades
-with its stack, so a refresh after a quality scan may still restack a channel
-it did not name; it then shows in the queue as that channel's build.
+A refresh still waiting to start is not in the header's queue or its job
+count: it is not work yet. It appears once it starts, as one build per
+channel marked `automatic`. A refresh that would find only cache hits does
+not start a build, nor does one whose channels an earlier refresh of the same
+database already covers. When a refresh finds an older finished build of the
+same frames, the card points back at it instead of stacking again.
 
 What queues a refresh, and how long it waits first:
 
@@ -1160,10 +1156,12 @@ parse, so a setup that saves is a setup a build can use.
 The whole **Stacks** panel collapses from its title, like the detail sections
 inside it, and stays collapsed across reloads. **Card size**, at the top of
 the view, sets how wide the stack and color cards are, from 300 to
-1600&nbsp;px (550 by default, two to a row on a laptop). As many fit to a row
-as the window allows, the rows sit centred, a card never grows past the
-window, and the size stays in the address. Below 980&nbsp;px wide the cards
-take one full-width column whatever the size. A
+1600&nbsp;px. Until you choose one, the cards fill the row: one to a row, or
+two on a screen wider than about 2000&nbsp;px. A size you choose stays in this
+browser and in the address; **Fit** goes back to filling the row. As many
+cards fit to a row as the window allows, the rows sit centred, and a card
+never grows past the window. Below 980&nbsp;px wide the cards take one
+full-width column whatever the size. A
 collapsed panel
 shows how many remembered channels it is holding, or that a build is running;
 the header's background jobs chip keeps reporting progress either way.

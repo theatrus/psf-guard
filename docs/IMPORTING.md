@@ -35,9 +35,12 @@ exists, because database management names paths the server then reads and
 writes. Only an editor can use those routes. `--allow-anonymous-access` opens
 them to everyone instead. See [server authentication](AUTHENTICATION.md).
 
-Settings has three tabs: **Databases** for catalogs and imports, **Catalogs**
-for the Seiza data packages, and **Sync** for moving records between catalogs.
-Sync appears once you have a catalog to move records between.
+Settings opens on **Databases**, for catalogs and imports. **Catalogs** holds
+the Seiza data packages and **Sync** moves records between catalogs; both need
+database management, and Sync appears once you have a catalog. The other tabs
+are **Setups**, **Stacking**, **Storage**, **Performance** and **Review**, then
+**Rigs** and **Exposure templates** for Planning, and **Users** on a server with
+accounts.
 
 On a first run PSF Guard has none, so it opens Settings on the Databases tab
 and offers both starting points. The overview's empty state offers the same
@@ -302,11 +305,10 @@ management. Without it, a target with many unmeasured frames is scored on the
 capture software's star counts, not the scan's, until they are analyzed (see
 [quality screening](SCREENING.md)).
 
-These controls sit with each database on the **Databases** tab. The screenshot
-below predates the tabs, so it shows them beside the Seiza catalog controls;
-the buttons and their behaviour are unchanged.
+These controls sit with each database on the **Databases** tab, with its
+options for new frames, star metadata and calibrated copies.
 
-![Analyze Missing Quality and Rescan All Quality for a configured database](settings-catalog-quality.png)
+![A database on the Databases tab: Analyze Missing Quality, Rescan All Quality and the per-database options](settings-database-options.png)
 
 The backfill uses the N.I.N.A. Fast detector for star count and HFR, which keeps
 new values comparable with Target Scheduler data. It also stores the full-star
