@@ -9,6 +9,8 @@ use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tower::Service;
 
+use crate::server::page_build;
+
 #[derive(Clone)]
 pub struct StaticFileService {
     root: PathBuf,
@@ -54,12 +56,16 @@ impl<B: Send + 'static> Service<Request<B>> for StaticFileService {
             }
 
             // Try to serve the requested file
-            match serve_file(&file_path).await {
+            match serve_file(&file_path, path).await {
                 Ok(response) => Ok(response),
                 Err(_) => {
-                    // For SPA, fall back to index.html for non-API routes
-                    if !path.starts_with("api/") && index_file.exists() {
-                        match serve_file(&index_file).await {
+                    // For SPA, fall back to index.html for non-API routes.
+                    // A missing asset gets a 404, as in `embedded_static`.
+                    if !path.starts_with("api/")
+                        && !page_build::is_hashed_asset(path)
+                        && index_file.exists()
+                    {
+                        match serve_file(&index_file, "index.html").await {
                             Ok(mut response) => {
                                 // Override content-type for index.html fallback
                                 let headers = response.headers_mut();
@@ -84,7 +90,8 @@ impl<B: Send + 'static> Service<Request<B>> for StaticFileService {
     }
 }
 
-async fn serve_file(file_path: &PathBuf) -> Result<Response<Body>, std::io::Error> {
+/// `path` is the request path below the static root.
+async fn serve_file(file_path: &PathBuf, path: &str) -> Result<Response<Body>, std::io::Error> {
     let mut file = File::open(file_path).await?;
     let mut contents = Vec::new();
     file.read_to_end(&mut contents).await?;
@@ -100,24 +107,7 @@ async fn serve_file(file_path: &PathBuf) -> Result<Response<Body>, std::io::Erro
             .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
     );
 
-    // Add caching headers for static assets
-    if let Some(path_str) = file_path.to_str() {
-        if path_str.contains("/assets/")
-            || path_str.ends_with(".js")
-            || path_str.ends_with(".css")
-            || path_str.ends_with(".wasm")
-        {
-            headers.insert(
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("public, max-age=31536000, immutable"),
-            );
-        } else {
-            headers.insert(
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("public, max-age=3600"),
-            );
-        }
-    }
+    headers.insert(header::CACHE_CONTROL, page_build::cache_control(path));
 
     let mut response = Response::builder()
         .status(StatusCode::OK)
@@ -134,4 +124,36 @@ fn not_found_response() -> Response<Body> {
         .status(StatusCode::NOT_FOUND)
         .body(Body::from("File not found"))
         .unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn the_page_is_checked_each_load_and_assets_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<!doctype html>").unwrap();
+        std::fs::create_dir(dir.path().join("assets")).unwrap();
+        std::fs::write(dir.path().join("assets/index-AbC123.js"), "export {}").unwrap();
+        let service = StaticFileService::new(dir.path().to_path_buf());
+        let get = |path: &'static str| {
+            let request = Request::builder().uri(path).body(Body::empty()).unwrap();
+            service.clone().oneshot(request)
+        };
+
+        for path in ["/", "/index.html", "/some/old/route"] {
+            let page = get(path).await.unwrap();
+            assert_eq!(page.status(), StatusCode::OK, "{path}");
+            assert_eq!(page.headers()[header::CACHE_CONTROL], "no-cache", "{path}");
+        }
+        let kept = get("/assets/index-AbC123.js").await.unwrap();
+        assert_eq!(
+            kept.headers()[header::CACHE_CONTROL],
+            "public, max-age=31536000, immutable"
+        );
+        let gone = get("/assets/index-0ldBu1ld.js").await.unwrap();
+        assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+    }
 }

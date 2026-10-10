@@ -20,6 +20,7 @@ pub mod master_cleanup;
 pub mod mcp;
 pub mod mosaic_scope;
 pub mod organization;
+pub mod page_build;
 pub mod pairing;
 pub mod peers;
 pub mod preview_queue;
@@ -59,6 +60,7 @@ use tower::ServiceBuilder;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::server::embedded_static::serve_embedded_file;
+use crate::server::page_build::PageBuild;
 use crate::server::static_file_service::StaticFileService;
 
 use crate::cli::PregenerationConfig;
@@ -995,6 +997,7 @@ async fn run_server_internal(
     let app = if let Some(static_dir_path) = &config.static_dir {
         // Use filesystem static serving (for development) with proper MIME types
         let static_path = PathBuf::from(static_dir_path);
+        let page = Arc::new(PageBuild::in_dir(static_path.clone()));
         let static_service = StaticFileService::new(static_path);
 
         tracing::info!("Serving static files from filesystem: {}", static_dir_path);
@@ -1002,6 +1005,10 @@ async fn run_server_internal(
         Router::new()
             .nest("/api", api_routes)
             .fallback_service(static_service)
+            .layer(axum::middleware::from_fn_with_state(
+                page,
+                page_build::stamp,
+            ))
             .layer(
                 ServiceBuilder::new()
                     .layer(TraceLayer::new_for_http())
@@ -1014,6 +1021,10 @@ async fn run_server_internal(
         Router::new()
             .nest("/api", api_routes)
             .fallback(serve_embedded_file)
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::new(PageBuild::Embedded),
+                page_build::stamp,
+            ))
             .layer(
                 ServiceBuilder::new()
                     .layer(TraceLayer::new_for_http())
