@@ -1064,3 +1064,8 @@
   accepted frames against what Target Scheduler asks for, with taken and
   rejected counts, and whether the part is done, active, off or not yet
   activated. A row at the top sums each rig.
+
+- A server started with `--static-dir` serves only files inside that folder.
+  A request path with `..` in it used to read any file the server could, and
+  now gets a 404. The default server, which carries the UI inside its binary,
+  was never affected.
