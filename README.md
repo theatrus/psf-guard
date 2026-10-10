@@ -800,6 +800,7 @@ psf-guard remove-rejects --db my-db --cache-dir ./cache --apply    # remove them
 psf-guard list-removed --db my-db
 psf-guard restore-removed --db my-db --batch <batch-id>
 psf-guard empty-reject-trash --db my-db   # delete files past their 14 days
+psf-guard purge-removed --db my-db        # then forget their saved rows
 ```
 
 `--cache-dir` is the server's cache root; the removed frames' cache files go
@@ -888,6 +889,7 @@ psf-guard remove-rejects --db <slug> [--days 7] [--project-id N] [--target-id N]
 psf-guard restore-removed --db <slug> (--batch ID | --guid GUID...)
 psf-guard list-removed --db <slug>
 psf-guard empty-reject-trash --db <slug>
+psf-guard purge-removed --db <slug> [--batch ID]
 
 # Two-database sync (see "Syncing between machines" above)
 psf-guard sync pull --from telescope.sqlite --to my-db

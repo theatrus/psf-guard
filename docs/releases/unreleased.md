@@ -4,10 +4,11 @@
   previews the frames rejected at least N days ago (7 by default), then
   takes them out of the catalog: their files and copies wait in a
   `.psf-guard-trash` folder, and **Restore** brings a batch back until the
-  trash is emptied, 14 days later by default. The CLI has the same steps
-  (`remove-rejects`, `restore-removed`, `list-removed`,
-  `empty-reject-trash`). Sync pulls, imports and uploads leave removed frames
-  out, and plan progress still counts them as rejected.
+  trash is emptied, 14 days later by default; then **Purge** forgets the
+  batch's saved records. The CLI has the same steps (`remove-rejects`,
+  `restore-removed`, `list-removed`, `empty-reject-trash`, `purge-removed`).
+  Sync pulls, imports and uploads leave removed frames out, even purged
+  ones, and plan progress still counts them as rejected.
 
 - Picking an exposure template for a rig on a plan's Exposures tab takes
   that template's exposure, as adding the rig does; it used to keep the old

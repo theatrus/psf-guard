@@ -11,8 +11,8 @@ use axum::{
 use serde::Deserialize;
 
 use crate::commands::reject_removal::{
-    self, ApplyReport, PlanOptions, RemovalPlan, RemovedBatch, RemovedEntry, RemovedFrame,
-    RestoreReport, RestoreSelection, Scope, StaleRemovalPlan, TrashReport,
+    self, ApplyReport, PlanOptions, PurgeReport, RemovalPlan, RemovedBatch, RemovedEntry,
+    RemovedFrame, RestoreReport, RestoreSelection, Scope, StaleRemovalPlan, TrashReport,
 };
 use crate::server::{
     api::ApiResponse,
@@ -265,6 +265,32 @@ pub async fn empty_trash(
     let report = tokio::task::spawn_blocking(move || {
         let conn = open_scheduler_connection(&path).map_err(AppError::db)?;
         reject_removal::empty_trash(&conn, now())
+            .map_err(|error| AppError::InternalError(format!("{error:#}")))
+    })
+    .await
+    .map_err(blocking_error)??;
+    Ok(Json(ApiResponse::success(report)))
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PurgeRequest {
+    #[serde(default)]
+    pub batch_id: Option<String>,
+}
+
+/// Forget the saved rows of removals whose files are gone; markers stay.
+pub async fn purge(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    request: Option<Json<PurgeRequest>>,
+) -> Result<Json<ApiResponse<PurgeReport>>, AppError> {
+    require_database_management_allowed(&state)?;
+    let request = request.map(|Json(request)| request).unwrap_or_default();
+    let path = ctx.database_path.clone();
+    let report = tokio::task::spawn_blocking(move || {
+        let conn = open_scheduler_connection(&path).map_err(AppError::db)?;
+        reject_removal::purge(&conn, request.batch_id.as_deref(), now())
             .map_err(|error| AppError::InternalError(format!("{error:#}")))
     })
     .await

@@ -686,6 +686,23 @@ pub enum Commands {
         registry: Option<String>,
     },
 
+    /// Forget the saved rows of removals whose files the trash already
+    /// deleted. A marker per frame stays, so Sync and imports still leave it
+    /// out; it can never be restored.
+    PurgeRemoved {
+        /// Slug of the database (from the registry) to operate on.
+        #[arg(long)]
+        db: String,
+
+        /// Only this removal batch; without it, every emptied one.
+        #[arg(long)]
+        batch: Option<String>,
+
+        /// Path to the database registry JSON file.
+        #[arg(long)]
+        registry: Option<String>,
+    },
+
     /// Delete the trashed files of every removal past its retention. The
     /// tombstones stay; those frames can no longer be restored.
     EmptyRejectTrash {

@@ -84,6 +84,10 @@ fn server() -> Server {
             "/api/db/{db_id}/rejects/trash/empty",
             post(reject_removal::empty_trash),
         )
+        .route(
+            "/api/db/{db_id}/rejects/removed/purge",
+            post(reject_removal::purge),
+        )
         .with_state(state.clone());
     Server {
         _dir: dir,
@@ -179,6 +183,17 @@ async fn rejects_are_previewed_removed_listed_and_restored_over_http() {
     .await;
     assert_eq!(frames["data"]["frames"][0]["guid"], "bad-one");
 
+    // Files still in the trash: nothing to purge.
+    let (status, purged) = call(
+        &s.app,
+        "POST",
+        "/api/db/rig/rejects/removed/purge",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{purged}");
+    assert_eq!(purged["data"]["frames"], 0);
+
     let (status, emptied) = call(
         &s.app,
         "POST",
@@ -234,6 +249,7 @@ async fn removal_needs_database_management() {
             json!({"batch_id": "b"}),
         ),
         ("POST", "/api/db/rig/rejects/trash/empty", Value::Null),
+        ("POST", "/api/db/rig/rejects/removed/purge", json!({})),
     ] {
         let (status, body) = call(&s.app, method, uri, body).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{uri}: {body}");

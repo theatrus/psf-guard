@@ -33,7 +33,7 @@ describe('Remove rejects', () => {
         return ok({ batch_id: 'b1', removed: [{ image_id: 1, guid: 'g1' }], failed: [], files_moved: 1, bytes: 3 * 1024 ** 2, trash_until: NOW + 14 * 86_400 });
       }),
       http.get('/api/db/rig/rejects/removed', () => ok({ frames: [], batches: removed
-        ? [{ batch_id: 'b1', removed_at: NOW, frames: 1, bytes: 3 * 1024 ** 2, trash_until: NOW + 14 * 86_400, files_deleted: 0 }] : [] })),
+        ? [{ batch_id: 'b1', removed_at: NOW, frames: 1, bytes: 3 * 1024 ** 2, trash_until: NOW + 14 * 86_400, files_deleted: 0, purged: 0 }] : [] })),
       http.post('/api/db/rig/rejects/removed/restore', () => ok({ restored: [{ guid: 'g1', image_id: 1 }], failed: [], renamed: [] })),
     );
     mount();
@@ -54,6 +54,33 @@ describe('Remove rejects', () => {
     await waitFor(() => expect(within(group).getByRole('status')).toHaveTextContent('Restored 1 reject.'));
     // Nothing is past its retention yet, so the trash cannot be emptied.
     expect(within(group).queryByRole('button', { name: 'Empty trash' })).not.toBeInTheDocument();
+  });
+
+  it('empties the trash past its retention, then purges that batch', async () => {
+    let emptied = false;
+    let purged = false;
+    server.use(
+      http.get('/api/db/rig/rejects/removed', () => ok({ frames: [], batches: [
+        { batch_id: 'old', removed_at: NOW - 30 * 86_400, frames: 2, bytes: 1024 ** 2, trash_until: NOW - 86_400,
+          files_deleted: emptied ? 2 : 0, purged: purged ? 2 : 0 },
+      ] })),
+      http.post('/api/db/rig/rejects/trash/empty', () => { emptied = true; return ok({ frames: 2, files_deleted: 4, bytes: 1024 ** 2, problems: [] }); }),
+      http.post('/api/db/rig/rejects/removed/purge', async ({ request }) => {
+        expect(await request.json()).toEqual({ batch_id: 'old' });
+        purged = true;
+        return ok({ frames: 2, bytes: 5000 });
+      }),
+    );
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Empty trash' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Deleted 4 files (1.0 MB) from the trash.');
+    const batches = screen.getByRole('list', { name: 'Removed rejects' });
+    await waitFor(() => expect(batches).toHaveTextContent('files deleted'));
+    expect(within(batches).queryByRole('button', { name: /^Restore/ })).not.toBeInTheDocument();
+    fireEvent.click(within(batches).getByRole('button', { name: /^Purge the rejects removed/ }));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Purged the saved records of 2 rejects; they can no longer be restored.'));
+    await waitFor(() => expect(batches).toHaveTextContent('purged'));
+    expect(within(batches).queryByRole('button', { name: /^Purge/ })).not.toBeInTheDocument();
   });
 
   it('says a stale preview changed and offers nothing without database management', async () => {
