@@ -3112,3 +3112,66 @@ export interface StorageFoldersUpdate {
   stack_dir?: string;
   calibration_dir?: string;
 }
+
+/** One rejected frame a removal takes, and its files. */
+export interface RejectRemovalFrame {
+  image_id: number;
+  guid: string;
+  target_id: number | null;
+  target_name: string;
+  file_name: string | null;
+  rejected_at: number;
+  reject_reason: string | null;
+  files: Array<{ kind: 'light' | 'sidecar' | 'copy'; path: string; bytes: number }>;
+}
+/** A reject a removal leaves, and why. */
+export interface RejectRemovalSkip {
+  image_id: number;
+  guid: string | null;
+  target_name: string;
+  file_name: string | null;
+  reason: string;
+}
+/** What a removal would take; Apply sends its digest back. */
+export interface RejectRemovalPlan {
+  min_age_days: number;
+  frames: RejectRemovalFrame[];
+  skipped: RejectRemovalSkip[];
+  /** Rejects still inside the grace period. */
+  waiting: number;
+  next_eligible_at: number | null;
+  without_files: number;
+  bytes: number;
+  digest: string;
+}
+export interface RejectRemovalReport {
+  batch_id: string;
+  removed: Array<{ image_id: number; guid: string }>;
+  failed: RejectRemovalSkip[];
+  files_moved: number;
+  bytes: number;
+  trash_until: number;
+}
+export interface RemovedRejectBatch {
+  batch_id: string;
+  removed_at: number;
+  frames: number;
+  bytes: number;
+  trash_until: number;
+  /** Frames whose files are already gone from the trash. */
+  files_deleted: number;
+}
+export interface RemovedRejects {
+  batches: RemovedRejectBatch[];
+}
+export interface RejectRestoreReport {
+  restored: Array<{ guid: string; image_id: number }>;
+  failed: RejectRemovalSkip[];
+  renamed: string[];
+}
+export interface RejectTrashReport {
+  frames: number;
+  files_deleted: number;
+  bytes: number;
+  problems: string[];
+}

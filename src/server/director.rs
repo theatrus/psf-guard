@@ -191,6 +191,16 @@ impl Service {
             .await
     }
 
+    /// Frames a collaboration capture or report names, which removing
+    /// rejects must leave in place.
+    pub(crate) async fn reported_image_guids(
+        self: Arc<Self>,
+    ) -> Result<std::collections::BTreeSet<String>, String> {
+        self.query(|store| store.reported_image_guids())
+            .await
+            .map_err(|error| format!("{error:?}"))
+    }
+
     /// A read on a pooled read-only connection: it runs beside any write
     /// and beside other reads, and sees the last committed state.
     async fn query<T: Send + 'static>(

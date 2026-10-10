@@ -2638,6 +2638,46 @@ export const apiClient = {
   },
 
   /** Whether this database pairs calibrated copies, and how many it has. */
+  /** What removing old rejects would take; changes nothing. */
+  previewRejectRemoval: async (dbId: string, minAgeDays: number): Promise<import('./types').RejectRemovalPlan> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<import('./types').RejectRemovalPlan>>(
+      dbPath(dbId, '/rejects/removal/preview'), { min_age_days: minAgeDays });
+    if (!data.data) throw new Error(data.error || 'Failed to preview removing rejects');
+    return data.data;
+  },
+
+  /** Remove what the preview showed; refused with 409 when it changed. */
+  applyRejectRemoval: async (dbId: string, minAgeDays: number, digest: string, retentionDays: number): Promise<import('./types').RejectRemovalReport> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<import('./types').RejectRemovalReport>>(
+      dbPath(dbId, '/rejects/removal/apply'), { min_age_days: minAgeDays, digest, retention_days: retentionDays });
+    if (!data.data) throw new Error(data.error || 'Failed to remove rejects');
+    return data.data;
+  },
+
+  getRemovedRejects: async (dbId: string): Promise<import('./types').RemovedRejects> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<import('./types').RemovedRejects>>(dbPath(dbId, '/rejects/removed'));
+    if (!data.data) throw new Error(data.error || 'Failed to list removed rejects');
+    return data.data;
+  },
+
+  restoreRemovedRejects: async (dbId: string, batchId: string): Promise<import('./types').RejectRestoreReport> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<import('./types').RejectRestoreReport>>(
+      dbPath(dbId, '/rejects/removed/restore'), { batch_id: batchId });
+    if (!data.data) throw new Error(data.error || 'Failed to restore removed rejects');
+    return data.data;
+  },
+
+  emptyRejectTrash: async (dbId: string): Promise<import('./types').RejectTrashReport> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<import('./types').RejectTrashReport>>(dbPath(dbId, '/rejects/trash/empty'));
+    if (!data.data) throw new Error(data.error || 'Failed to empty the trash');
+    return data.data;
+  },
+
   getCalibratedCopies: async (dbId: string): Promise<CalibratedCopies> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<CalibratedCopies>>(

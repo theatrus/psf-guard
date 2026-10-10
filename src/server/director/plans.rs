@@ -216,13 +216,24 @@ fn target_progress(
     };
     // Rejected frames live in `acquiredimage`; a pre-TS5 file names the column
     // `accepted` and then reports none.
-    let rejected: BTreeMap<i64, i64> = rows_of(
+    let mut rejected: BTreeMap<i64, i64> = rows_of(
         connection,
         "SELECT targetId, COUNT(*) FROM acquiredimage WHERE gradingStatus = 2 GROUP BY targetId",
         |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
     )?
     .into_iter()
     .collect();
+    // Rejects removed from the catalog still count: Target Scheduler's
+    // acquired counter includes them.
+    if import_drafts::has_column(connection, "psf_guard_removed_image", "target_id") {
+        for (target, count) in rows_of(
+            connection,
+            "SELECT target_id, COUNT(*) FROM psf_guard_removed_image WHERE target_id IS NOT NULL GROUP BY target_id",
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )? {
+            *rejected.entry(target).or_default() += count;
+        }
+    }
     let rows = rows_of(
         connection,
         &format!(
