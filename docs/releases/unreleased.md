@@ -1,5 +1,11 @@
 # Unreleased
 
+- Connecting an agent takes one step. **Settings › Users › API tokens ›
+  Connect an agent** mints a token and shows the setup to paste for Claude
+  Code and for Codex, with this server's MCP URL; a new token shows the same.
+  A server without accounts has a **Settings › Agents** tab with the setup
+  for this machine.
+
 - A browser tab left open across a server update now notices it. A
   **PSF Guard was updated** bar offers **Reload now**, and the tab reloads by
   itself the next time you change views; unsaved plan edits still ask first.
