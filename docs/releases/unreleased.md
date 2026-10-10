@@ -1,11 +1,13 @@
 # Unreleased
 
-- Remove truly bad rejects from the command line: `remove-rejects` previews,
-  then with `--apply` takes frames rejected at least 7 days ago out of the
-  catalog, moves their files and copies to a `.psf-guard-trash` folder, and
-  keeps a tombstone. `restore-removed` puts them back; `empty-reject-trash`
-  deletes files past their 14 days. Sync pulls, imports and uploads leave
-  removed frames out.
+- Remove truly bad rejects. In Settings › Databases, **Remove rejects**
+  previews the frames rejected at least N days ago (7 by default), then
+  takes them out of the catalog: their files and copies wait in a
+  `.psf-guard-trash` folder, and **Restore** brings a batch back until the
+  trash is emptied, 14 days later by default. The CLI has the same steps
+  (`remove-rejects`, `restore-removed`, `list-removed`,
+  `empty-reject-trash`). Sync pulls, imports and uploads leave removed frames
+  out, and plan progress still counts them as rejected.
 
 - Picking an exposure template for a rig on a plan's Exposures tab takes
   that template's exposure, as adding the rig does; it used to keep the old

@@ -1,8 +1,28 @@
 # Reject removal
 
-Status: **In progress.** Rejection dates, removal, restore and emptying the
-trash work from the CLI (`src/commands/reject_removal.rs`); the server API,
-plan progress and the UI follow.
+Status: **Implemented.** `src/commands/reject_removal.rs` holds the core;
+the CLI commands and the server routes (`src/server/reject_removal.rs`) call
+it, and Settings › Databases has the controls. Purging tombstones is still
+to come.
+
+## Where to run it
+
+In **Settings › Databases**, each database has **Remove rejects**: a number
+of days, **Preview**, then **Remove** with how long to keep the files in the
+trash. Removed batches are listed with **Restore**; **Empty trash** appears
+once a batch is past its retention. These need the server's
+database-management permission.
+
+| Method | Route | Body or query |
+| --- | --- | --- |
+| POST | `/api/db/{db}/rejects/removal/preview` | `{min_age_days, project_id?, target_id?}`: the plan, its skipped rejects and `digest` |
+| POST | `/api/db/{db}/rejects/removal/apply` | the same and `digest`, `retention_days`; 409 when the plan changed |
+| GET | `/api/db/{db}/rejects/removed` | `?batch=` adds that batch's frames |
+| POST | `/api/db/{db}/rejects/removed/restore` | `{batch_id}` or `{guids}` |
+| POST | `/api/db/{db}/rejects/trash/empty` | deletes files past their retention |
+
+The CLI has the same steps: `remove-rejects` (a preview unless `--apply`),
+`list-removed`, `restore-removed` and `empty-reject-trash`.
 
 Rejected subframes that are truly bad cost disk space and clutter every view
 that lists frames. Reject removal is an optional cleanup a person runs on
@@ -85,8 +105,9 @@ For each frame Apply:
    stars, PSF views, statistics, astrometry, satellites, spatial metrics),
    since Target Scheduler can reuse a deleted row's Id.
 
-Afterwards it reconciles accepted counts, refreshes the directory tree and
-file caches, and tells automatic stacks the database changed.
+Afterwards it reconciles accepted counts. The server also forgets the
+frames' pixel evidence, refreshes the directory tree, file lookups and
+navigation counts, and tells automatic stacks the database changed.
 
 `exposureplan.acquired` is left alone: Target Scheduler owns it, and a pull
 copies the rig's value back. Plan progress still counts removed rejects as

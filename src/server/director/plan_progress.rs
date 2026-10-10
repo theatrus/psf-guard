@@ -268,6 +268,20 @@ fn frames_of(path: &str, project: Uuid, read: &RigRead) -> rusqlite::Result<Coun
             }
         }
     }
+    // Rejects removed from the catalog still count as rejected.
+    if import_drafts::has_column(&connection, "psf_guard_removed_image", "exposure_id") {
+        let mut statement = connection.prepare(
+            "SELECT exposure_id, COUNT(*) FROM psf_guard_removed_image
+             WHERE project_id = ?1 AND exposure_id IS NOT NULL GROUP BY exposure_id",
+        )?;
+        let rows = statement.query_map([row_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        for row in rows {
+            let (plan, count) = row?;
+            *rejected.entry(plan).or_default() += count;
+        }
+    }
     let mut statement = connection.prepare(&format!(
         "SELECT e.Id, {plan_guid}, IFNULL(e.desired, 0), IFNULL(e.acquired, 0), IFNULL(e.accepted, 0),
                 IFNULL(e.exposure, 0), e.exposureTemplateId, {template_guid}, IFNULL(x.filtername, '')

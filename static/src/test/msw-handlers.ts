@@ -90,6 +90,7 @@ export const handlers = [
     protocol_version: 1, enabled: false, instance_id: null, database_management: true,
   }, error: null })),
   http.get('/api/db/:dbId/wbpp/runs/current', () => HttpResponse.json(idleWbppRun)),
+  http.get('/api/db/:dbId/rejects/removed', () => HttpResponse.json({ success: true, data: { batches: [], frames: [] }, error: null })),
   http.get('/api/db/:dbId/projects/:projectId/processing-settings', () => HttpResponse.json({
     success: true, data: { split_exposure_groups: true }, error: null,
   })),

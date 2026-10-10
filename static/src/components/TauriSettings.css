@@ -2152,3 +2152,44 @@
 .tauri-settings .settings-error {
   color: var(--color-error, #ff6b6b);
 }
+
+.tauri-settings .reject-removal-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.tauri-settings .reject-removal-row input[type="number"] {
+  width: 4.5rem;
+  margin: 0 4px;
+}
+
+.tauri-settings .reject-removal-plan,
+.tauri-settings .reject-removal-batches {
+  margin: 6px 0 0 22px;
+}
+
+.tauri-settings .reject-removal-plan ul {
+  margin: 4px 0;
+  padding-left: 18px;
+  max-height: 12rem;
+  overflow: auto;
+  color: var(--color-text-secondary);
+}
+
+.tauri-settings .reject-removal-batches {
+  display: grid;
+  gap: 4px;
+  padding: 0;
+  list-style: none;
+}
+
+.tauri-settings .reject-removal-batches li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--color-text-secondary);
+}

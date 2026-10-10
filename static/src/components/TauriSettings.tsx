@@ -36,6 +36,7 @@ import {
 import { starMetadataFillEnabled } from '../hooks/useStarMetadataFill';
 import QualityBackfillControls from './QualityBackfillControls';
 import CalibratedCopiesControls from './CalibratedCopiesControls';
+import RejectRemovalControls from './RejectRemovalControls';
 import MissingGuidRepair from './MissingGuidRepair';
 import AutoImportFields from './AutoImportFields';
 import AutoImportSummary from './AutoImportSummary';
@@ -1761,6 +1762,7 @@ export default function TauriSettings({
                       <MissingGuidRepair dbId={entry.id} dbName={entry.name} canManage={managementAllowed} />
                       <QualityBackfillControls dbId={entry.id} canManage={managementAllowed} />
                       <CalibratedCopiesControls dbId={entry.id} canManage={managementAllowed} />
+                      <RejectRemovalControls dbId={entry.id} canManage={managementAllowed} />
                       <AutoImportSummary dbId={entry.id} settings={entry.autoimport} />
                     </div>
                     {managementAllowed && (

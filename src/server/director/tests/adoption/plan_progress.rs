@@ -85,4 +85,19 @@ async fn progress_counts_each_objectives_exposure_plans_and_keeps_the_rest_apart
     );
     assert_eq!(rig["total"], objective["frames"]);
     assert_eq!(rig["note"], Value::Null);
+
+    // A reject removed from the catalog still counts as rejected.
+    crate::commands::reject_removal::ensure_schema(&a.db).unwrap();
+    a.db.execute(
+        "INSERT INTO psf_guard_removed_image (acquired_image_guid, acquired_image_id, project_id, target_id, exposure_id,
+            batch_id, removed_at, trash_until, rows_json, files_json)
+         VALUES ('gone', 99, ?1, ?2, ?3, 'b', 1, 1, '{}', '[]')",
+        rusqlite::params![project, target, plan],
+    )
+    .unwrap();
+    let (_, removed) = call(&a.f.app, "GET", &path, Value::Null, None).await;
+    assert_eq!(
+        removed["data"]["rigs"][0]["objectives"][0]["frames"]["rejected"], 2,
+        "{removed}"
+    );
 }

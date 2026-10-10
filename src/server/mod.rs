@@ -26,6 +26,7 @@ pub mod preview_queue;
 pub mod processing_setups;
 pub mod quality_arrival;
 pub mod quality_backfill;
+pub mod reject_removal;
 pub mod remote_audit;
 pub mod remote_sync;
 pub mod remote_upload;
@@ -466,6 +467,11 @@ async fn run_server_internal(
             get(exposure_groups::get_project_settings)
                 .put(exposure_groups::update_project_settings),
         )
+        .route("/rejects/removal/preview", post(reject_removal::preview))
+        .route("/rejects/removal/apply", post(reject_removal::apply))
+        .route("/rejects/removed", get(reject_removal::removed))
+        .route("/rejects/removed/restore", post(reject_removal::restore))
+        .route("/rejects/trash/empty", post(reject_removal::empty_trash))
         .route("/organization/preview", post(organization::preview))
         .route("/organization/apply", post(organization::apply))
         .route(
