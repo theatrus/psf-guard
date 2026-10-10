@@ -1696,7 +1696,8 @@ mod tests {
         let plan = plan(&c.conn, &c.images(), &options(&none, 7)).unwrap();
         let report = apply(&c.conn, &c.images(), &options(&none, 7), &plan.digest, 14).unwrap();
         let images = c.root.join("images");
-        let found = crate::commands::import::collect_fits_files(std::slice::from_ref(&images)).unwrap();
+        let found =
+            crate::commands::import::collect_fits_files(std::slice::from_ref(&images)).unwrap();
         assert!(
             found
                 .iter()
