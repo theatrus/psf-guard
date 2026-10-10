@@ -414,16 +414,19 @@ A light cannot be calibrated properly when:
   (**Settings › Calibration › Flat masters**, default 60 days; 0 lifts it).
 
 Each rule applies only where the library could have filled the gap, so a rig
-that never shoots flats, or never shoots darks, is not affected. With
-calibration on or automatic, stack previews leave such lights out, so they
-never mix with properly calibrated frames: the stack card counts them under
-**can't calibrate** and each frame's decision gives the reason. The report
-names each night whose lights are left out. **Check lights**, at the foot of
-the report, reads every light of the project that is not already rejected
-and lists those that cannot be calibrated, by night, filter and reason.
-**Reject N lights** then sets them Rejected with the reason, so Target
-Scheduler shoots them again. It refuses, and asks for a new check, when the
-list changed after it was shown.
+that never shoots flats, or never shoots darks, is not affected. The report
+names each night whose lights cannot be calibrated. **Check lights**, at the
+foot of the report, reads every light of the project that is not already
+rejected and lists those that cannot be calibrated, by night, filter and
+reason. **Reject N lights** then sets them Rejected with the reason, so
+Target Scheduler shoots them again. It refuses, and asks for a new check,
+when the list changed after it was shown.
+
+Stacks keep such lights unless **Settings › Calibration › Stacks › Leave out
+lights that can't be calibrated** is on. With it on, and calibration on or
+automatic, stack previews leave them out, so they never mix with properly
+calibrated frames: the stack card counts them under **can't calibrate** and
+each frame's decision gives the reason.
 
 ## Stack previews
 

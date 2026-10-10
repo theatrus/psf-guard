@@ -44,6 +44,7 @@ export default function CalibrationMatchingSettings() {
   const [reachDraft, setReachDraft] = useState('');
   const [completeDraft, setCompleteDraft] = useState('');
   const [flatAgeDraft, setFlatAgeDraft] = useState('');
+  const [excludeUncalibrated, setExcludeUncalibrated] = useState(false);
   useEffect(() => {
     if (settings.data) {
       setDraft(
@@ -56,6 +57,7 @@ export default function CalibrationMatchingSettings() {
       setReachDraft(settings.data.dark_reach_days == null ? '' : String(settings.data.dark_reach_days));
       setCompleteDraft(settings.data.complete_dark_frames == null ? '' : String(settings.data.complete_dark_frames));
       setFlatAgeDraft(settings.data.flat_max_age_days == null ? '' : String(settings.data.flat_max_age_days));
+      setExcludeUncalibrated(settings.data.exclude_uncalibrated ?? false);
     }
   }, [settings.data]);
 
@@ -67,6 +69,7 @@ export default function CalibrationMatchingSettings() {
       dark_reach_days: number | null;
       complete_dark_frames: number | null;
       flat_max_age_days: number | null;
+      exclude_uncalibrated: boolean;
     }) => apiClient.updateCalibrationSettings(update),
     onSuccess: (updated) => {
       queryClient.setQueryData(['calibration-settings'], updated);
@@ -97,6 +100,7 @@ export default function CalibrationMatchingSettings() {
     reach !== (current.dark_reach_days ?? null) ||
     complete !== (current.complete_dark_frames ?? null) ||
     flatAge !== (current.flat_max_age_days ?? null) ||
+    excludeUncalibrated !== (current.exclude_uncalibrated ?? false) ||
     (parsed === null) !== (current.rotation_tolerance_deg === null) ||
     (parsed !== null && parsed !== current.rotation_tolerance_deg) ||
     policy !== current.external_masters ||
@@ -192,12 +196,26 @@ export default function CalibrationMatchingSettings() {
         <label className="review-preference">
           <span>
             Flat age limit (days)
-            <small>Lights whose flats are further away than this are left out of stacks. 0: no limit. Empty: {current.default_flat_max_age_days ?? 60}.</small>
+            <small>Lights whose flats are further away than this can't be calibrated. 0: no limit. Empty: {current.default_flat_max_age_days ?? 60}.</small>
           </span>
           <input type="number" min={0} max={3650} step={1} value={flatAgeDraft} placeholder={String(current.default_flat_max_age_days ?? 60)}
             aria-label="Flat age limit in days" aria-invalid={flatAgeInvalid} onChange={(event) => setFlatAgeDraft(event.target.value)} />
         </label>
         {flatAgeInvalid && <p className="error-text">Enter 0 to 3650 days.</p>}
+      </fieldset>
+      <fieldset className="calibration-settings-group" disabled={save.isPending}>
+        <legend>Stacks</legend>
+        <label className="review-preference">
+          <input
+            type="checkbox"
+            checked={excludeUncalibrated}
+            onChange={(event) => setExcludeUncalibrated(event.target.checked)}
+          />
+          <span>
+            Leave out lights that can't be calibrated
+            <small>No matching flat, bias or dark, or flats past the age limit, where the library holds them for that camera.</small>
+          </span>
+        </label>
       </fieldset>
       {save.isError && (
         <p className="error-text" role="alert">{(save.error as Error).message}</p>
@@ -214,6 +232,7 @@ export default function CalibrationMatchingSettings() {
             dark_reach_days: reach,
             complete_dark_frames: complete,
             flat_max_age_days: flatAge,
+            exclude_uncalibrated: excludeUncalibrated,
           })
         }
       >

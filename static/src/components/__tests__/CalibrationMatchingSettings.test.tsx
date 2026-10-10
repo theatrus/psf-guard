@@ -68,6 +68,23 @@ describe('CalibrationMatchingSettings', () => {
     await waitFor(() => expect(saved).toMatchObject({ flat_max_age_days: 0 }));
   });
 
+  it('leaves out lights that cannot be calibrated only once turned on', async () => {
+    let saved: Record<string, unknown> | null = null;
+    server.use(
+      http.get('/api/settings/calibration', () => HttpResponse.json(current(null))),
+      http.put('/api/settings/calibration', async ({ request }) => {
+        saved = await request.json() as Record<string, unknown>;
+        return HttpResponse.json({ success: true, data: { ...current(null).data, exclude_uncalibrated: true }, error: null });
+      }),
+    );
+    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
+    const exclude = await screen.findByRole('checkbox', { name: /Leave out lights that can't be calibrated/ });
+    expect(exclude).not.toBeChecked();
+    fireEvent.click(exclude);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(saved).toMatchObject({ exclude_uncalibrated: true }));
+  });
+
   it('shows the default as the placeholder, not as a configured value', async () => {
     server.use(
       http.get('/api/settings/calibration', () => HttpResponse.json(current(null)))
@@ -102,6 +119,7 @@ describe('CalibrationMatchingSettings', () => {
         dark_reach_days: null,
         complete_dark_frames: null,
         flat_max_age_days: null,
+        exclude_uncalibrated: false,
       })
     );
     // The response is the new truth; the button falls back to disabled.
@@ -135,6 +153,7 @@ describe('CalibrationMatchingSettings', () => {
         dark_reach_days: null,
         complete_dark_frames: null,
         flat_max_age_days: null,
+        exclude_uncalibrated: false,
       })
     );
     await waitFor(() =>
@@ -194,6 +213,7 @@ describe('CalibrationMatchingSettings', () => {
       dark_reach_days: null,
       complete_dark_frames: null,
       flat_max_age_days: null,
+      exclude_uncalibrated: false,
     })));
   });
 

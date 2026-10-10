@@ -833,6 +833,7 @@ export const apiClient = {
     dark_reach_days?: number | null;
     complete_dark_frames?: number | null;
     flat_max_age_days?: number | null;
+    exclude_uncalibrated?: boolean;
   }): Promise<CalibrationSettings> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.put<ApiResponse<CalibrationSettings>>(

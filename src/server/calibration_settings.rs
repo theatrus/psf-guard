@@ -38,6 +38,8 @@ pub struct CalibrationSettingsResponse {
     /// Days; absent when the default applies, zero when the limit is lifted.
     pub flat_max_age_days: Option<f64>,
     pub default_flat_max_age_days: f64,
+    /// Stacks leave out lights that cannot be calibrated.
+    pub exclude_uncalibrated: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,6 +62,9 @@ pub struct UpdateCalibrationSettingsRequest {
     /// restores the default.
     #[serde(default, deserialize_with = "present")]
     pub flat_max_age_days: Option<Option<f64>>,
+    /// Omitted preserves the existing setting.
+    #[serde(default)]
+    pub exclude_uncalibrated: Option<bool>,
 }
 
 /// A field that was sent, `null` included, as opposed to one left out.
@@ -92,6 +97,9 @@ fn current_response(settings: Option<&CalibrationSettings>) -> CalibrationSettin
         default_complete_dark_frames: crate::calibration::DEFAULT_COMPLETE_DARK_FRAMES,
         flat_max_age_days: settings.and_then(|settings| settings.flat_max_age_days),
         default_flat_max_age_days: crate::calibration::DEFAULT_FLAT_MAX_AGE_DAYS,
+        exclude_uncalibrated: settings
+            .and_then(|settings| settings.exclude_uncalibrated)
+            .unwrap_or(false),
     }
 }
 
@@ -178,20 +186,31 @@ pub async fn update_calibration_settings(
                 .as_ref()
                 .and_then(|settings| settings.flat_max_age_days),
         };
+        let exclude_uncalibrated = request
+            .exclude_uncalibrated
+            .or_else(|| {
+                registry
+                    .calibration
+                    .as_ref()
+                    .and_then(|settings| settings.exclude_uncalibrated)
+            })
+            .unwrap_or(false);
         registry.calibration = (request.rotation_tolerance_deg.is_some()
             || external_masters.is_some()
             || flat_star_masking
             || dark_reach_days.is_some()
             || complete_dark_frames.is_some()
-            || flat_max_age_days.is_some())
-        .then_some(CalibrationSettings {
-            rotation_tolerance_deg: request.rotation_tolerance_deg,
-            external_masters,
-            flat_star_masking: flat_star_masking.then_some(true),
-            dark_reach_days,
-            complete_dark_frames,
-            flat_max_age_days,
-        });
+            || flat_max_age_days.is_some()
+            || exclude_uncalibrated)
+            .then_some(CalibrationSettings {
+                rotation_tolerance_deg: request.rotation_tolerance_deg,
+                external_masters,
+                flat_star_masking: flat_star_masking.then_some(true),
+                dark_reach_days,
+                complete_dark_frames,
+                flat_max_age_days,
+                exclude_uncalibrated: exclude_uncalibrated.then_some(true),
+            });
         Ok(registry.calibration.clone())
     })
     .await?;
@@ -237,6 +256,8 @@ mod tests {
             serde_json::from_str(r#"{"rotation_tolerance_deg":null,"flat_max_age_days":0}"#)
                 .unwrap();
         assert_eq!(lifted.flat_max_age_days, Some(Some(0.0)));
+        assert!(!response.exclude_uncalibrated, "off unless turned on");
+        assert_eq!(lifted.exclude_uncalibrated, None);
     }
 
     #[test]

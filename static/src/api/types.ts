@@ -1481,6 +1481,8 @@ export interface CalibrationSettings {
   /** Days; zero lifts the limit. */
   flat_max_age_days?: number | null;
   default_flat_max_age_days?: number;
+  /** Stacks leave out lights that cannot be calibrated. */
+  exclude_uncalibrated?: boolean;
 }
 
 /** How much of the processor work may take, as fractions of logical cores. */
@@ -2266,7 +2268,7 @@ export interface CalibrationNightFilter {
   flat_near_miss?: CalibrationFlatNearMiss | null;
   /** Masters from other software for this camera, sensor and filter. */
   external_masters?: CalibrationExternalMaster[];
-  /** Why this night's lights cannot be calibrated properly; stacks leave them out. */
+  /** Why this night's lights cannot be calibrated properly. */
   cannot_calibrate?: string | null;
 }
 

@@ -2741,9 +2741,9 @@ fn prepare_whole(
                 .any(|key| key.matches(target_id, &filter_name, exposure_group_key.as_deref()))
         });
         // Match each light against the library once: the fingerprint names
-        // the masters for the job's identity, and a light the library cannot
-        // calibrate properly is left out before the reference is chosen, so
-        // it never mixes with frames that were. A channel only lending its
+        // the masters for the job's identity, and, when the setting asks, a
+        // light the library cannot calibrate properly is left out before the
+        // reference is chosen, so it never mixes with frames that were. A channel only lending its
         // reference to a sibling's build skips both.
         let mut fingerprints: HashMap<i32, String> = HashMap::new();
         let mut uncalibrated: Vec<(i32, String)> = Vec::new();
@@ -2751,10 +2751,11 @@ fn prepare_whole(
             let directory_tree = ctx.get_directory_tree().map_err(AppError::db)?;
             let conn = ctx.db();
             let conn = conn.lock().map_err(AppError::db)?;
-            let night_boundary = (group_calibration != crate::calibration::CalibrationMode::Off)
-                .then(|| {
-                    crate::server::sky_coverage::catalog_night_boundary(&conn).unwrap_or(12 * 3600)
-                });
+            let night_boundary = (group_calibration != crate::calibration::CalibrationMode::Off
+                && crate::calibration::exclude_uncalibrated_enabled())
+            .then(|| {
+                crate::server::sky_coverage::catalog_night_boundary(&conn).unwrap_or(12 * 3600)
+            });
             for frame in &frames {
                 let (fingerprint, gap) = crate::calibration::light_calibration(
                     &conn,
@@ -5503,7 +5504,21 @@ mod tests {
             .unwrap()
         };
 
+        // Off unless a person turns it on: every light stacks.
+        let kept = prepare_job(&ctx, 1, &request("auto")).unwrap();
+        assert_eq!(kept.public.groups[0].eligible_frames, 3);
+        assert_eq!(kept.public.groups[0].calibration_excluded, 0);
+
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                crate::calibration::configure_exclude_uncalibrated(false);
+            }
+        }
+        let _restore = Restore;
+        crate::calibration::configure_exclude_uncalibrated(true);
         let auto = prepare_job(&ctx, 1, &request("auto")).unwrap();
+        assert_ne!(auto.public.job_id, kept.public.job_id);
         let group = &auto.public.groups[0];
         assert_eq!(group.eligible_frames, 2);
         assert_eq!(group.calibration_excluded, 1);

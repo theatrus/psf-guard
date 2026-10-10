@@ -1,13 +1,14 @@
 # Unreleased
 
-- Stack previews leave out lights the calibration library cannot calibrate
-  properly: no matching flat, no bias or dark, or flats more than 60 days
-  away (**Settings › Calibration › Flat age limit**; 0 lifts it). Each rule
-  only counts where the library holds that kind for the camera, so a rig that
-  never shoots flats is not affected. The stack card counts them under
-  **can't calibrate**, and each frame says why. In a project's
-  **Calibration** report, **Check lights** lists them and **Reject N lights**
-  rejects them, so Target Scheduler shoots them again.
+- Find the lights the calibration library cannot calibrate properly: no
+  matching flat, no bias or dark, or flats more than 60 days away
+  (**Settings › Calibration › Flat age limit**; 0 lifts it). Each rule only
+  counts where the library holds that kind for the camera, so a rig that
+  never shoots flats is not affected. In a project's **Calibration** report,
+  **Check lights** lists them and **Reject N lights** rejects them, so Target
+  Scheduler shoots them again. Turn on **Leave out lights that can't be
+  calibrated** to keep them out of stack previews; the stack card counts them
+  under **can't calibrate**, and each frame says why.
 
 - A browser tab left open across a server update now notices it. A
   **PSF Guard was updated** bar offers **Reload now**, and the tab reloads by

@@ -53,7 +53,7 @@ describe('CalibrationReportDialog', () => {
     );
     const user = userEvent.setup();
     render(<CalibrationReportDialog open dbId="c925" projectId={1} projectName="Bubble" onClose={() => {}} />, { wrapper });
-    expect(await screen.findByText('SII: left out of stacks · No matching flat: the nearest SII flats are 70° off its rotation')).toBeInTheDocument();
+    expect(await screen.findByText("SII: can't be calibrated · No matching flat: the nearest SII flats are 70° off its rotation")).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Check lights' }));
     expect(await screen.findByText("2 lights of 30 can't be calibrated.")).toBeInTheDocument();

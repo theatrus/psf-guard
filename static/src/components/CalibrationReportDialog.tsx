@@ -108,8 +108,8 @@ function UncalibratedLights({ dbId, projectId }: { dbId: string; projectId: numb
         </button>
       </div>
       <small className="calibration-report-muted">
-        No matching flat, no bias or dark, or flats past the age limit. Stacks leave them out;
-        rejecting them lets Target Scheduler shoot them again.
+        No matching flat, no bias or dark, or flats past the age limit. Rejecting them lets Target
+        Scheduler shoot them again; Settings › Calibration can also leave them out of stacks.
       </small>
       {gaps && (
         <>
@@ -224,7 +224,7 @@ export default function CalibrationReportDialog({
                     )).concat(night.filters.filter((filter) => filter.cannot_calibrate).map((filter) => (
                       <tr key={`${night.night}:${filter.filter}:gap`} className="calibration-report-masters">
                         <td />
-                        <td colSpan={5} className="missing">{filter.filter}: left out of stacks · {filter.cannot_calibrate}</td>
+                        <td colSpan={5} className="missing">{filter.filter}: can't be calibrated · {filter.cannot_calibrate}</td>
                       </tr>
                     ))).concat(night.filters.filter((filter) => (filter.external_masters ?? []).length > 0).map((filter) => (
                       <tr key={`${night.night}:${filter.filter}:masters`} className="calibration-report-masters">

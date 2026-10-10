@@ -2063,7 +2063,8 @@ pub(crate) fn selection_fingerprint_with_masking(
 
 /// A light's selection fingerprint, and why it cannot be calibrated
 /// properly when it cannot (see [`calibration_gap`]), from one header read.
-/// Without a night boundary the gap is not looked for: calibration is off.
+/// Without a night boundary the gap is not looked for: calibration is off,
+/// or stacks keep such lights.
 pub(crate) fn light_calibration(
     conn: &Connection,
     light_path: &Path,
@@ -2086,8 +2087,9 @@ pub(crate) fn light_calibration(
 /// Three gaps count, each only where the library could have filled it:
 /// no flat matches though the library holds flats for this sensor; no bias
 /// or dark matches though it holds either; or the flats that match were
-/// shot more than [`flat_max_age_days`] from the light. A stack leaves such
-/// a light out rather than mix it with properly calibrated frames.
+/// shot more than [`flat_max_age_days`] from the light. With
+/// [`exclude_uncalibrated_enabled`], a stack leaves such a light out rather
+/// than mix it with properly calibrated frames.
 pub fn calibration_gap(
     conn: &Connection,
     light: &FrameMeta,
@@ -2206,7 +2208,7 @@ pub struct CalibrationNightFilter {
     /// do not match.
     pub external_masters: Vec<ExternalMasterNote>,
     /// Why this night's lights cannot be calibrated properly, when they
-    /// cannot; a stack leaves them out (see [`calibration_gap`]).
+    /// cannot (see [`calibration_gap`]).
     pub cannot_calibrate: Option<String>,
 }
 
@@ -5912,6 +5914,9 @@ impl ExternalMasterPolicy {
 static EXTERNAL_MASTER_POLICY: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 static FLAT_STAR_MASKING: AtomicBool = AtomicBool::new(false);
+/// Whether stacks leave out lights that cannot be calibrated; off unless a
+/// person turns it on.
+static EXCLUDE_UNCALIBRATED: AtomicBool = AtomicBool::new(false);
 
 /// Mark a master as just used, so the disk limit takes it last. Its access
 /// time records the use, as a served preview's does: many mounts do not
@@ -6073,6 +6078,11 @@ pub fn configure(settings: Option<&crate::db_registry::CalibrationSettings>) {
             .and_then(|settings| settings.flat_star_masking)
             .unwrap_or(false),
     );
+    configure_exclude_uncalibrated(
+        settings
+            .and_then(|settings| settings.exclude_uncalibrated)
+            .unwrap_or(false),
+    );
 }
 
 /// Set the default for new calibration plans; already-running plans keep
@@ -6083,6 +6093,15 @@ pub fn configure_flat_star_masking(enabled: bool) {
 
 pub fn flat_star_masking_enabled() -> bool {
     FLAT_STAR_MASKING.load(Ordering::Relaxed)
+}
+
+/// Choose whether stacks leave out lights [`calibration_gap`] names.
+pub fn configure_exclude_uncalibrated(enabled: bool) {
+    EXCLUDE_UNCALIBRATED.store(enabled, Ordering::Relaxed);
+}
+
+pub fn exclude_uncalibrated_enabled() -> bool {
+    EXCLUDE_UNCALIBRATED.load(Ordering::Relaxed)
 }
 
 /// Choose how external masters are used for every selection this process
