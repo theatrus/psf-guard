@@ -105,9 +105,11 @@ export function choiceFrom(template: DirectorTemplate): DirectorTemplateChoice {
   return { template_guid: template.guid, template_id: template.id, name: template.name, filter_name: template.filter_name, gain: template.gain, offset: template.offset, bin: template.bin, readout_mode: template.readout_mode, moon: template.moon };
 }
 
-/** The template's own default when it has one, else the rig's for the band kind. */
+/** The template's own default when it is a usable sub length, else the
+ *  rig's for the band kind. A default under a second is a flat's or a test
+ *  frame's, which an import can leave on a light template. */
 export function defaultExposure(rig: DirectorRigProfileSummary, kind: 'broadband' | 'narrowband', template: DirectorTemplate | null): number {
-  if (template && template.default_exposure > 0) return template.default_exposure;
+  if (template && template.default_exposure >= 1) return template.default_exposure;
   return kind === 'narrowband' ? rig.default_exposure_seconds.narrowband : rig.default_exposure_seconds.broadband;
 }
 

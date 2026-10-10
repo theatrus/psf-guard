@@ -1,5 +1,13 @@
 # Unreleased
 
+- Picking an exposure template for a rig on a plan's Exposures tab takes
+  that template's exposure, as adding the rig does; it used to keep the old
+  exposure until the rig was skipped and picked again. A template whose
+  default is under a second uses the rig's exposure for the band instead.
+  A plan taken in from Target Scheduler takes each band's main exposure
+  plan, not the first; and a folder import no longer lets a few short
+  frames set a new template's default exposure.
+
 - The framing view's stack layer also shows plans taken in from Target
   Scheduler that were never activated. Turn it on or off from the sky's layer
   buttons, and pick which stack each panel shows: the best one, a colour

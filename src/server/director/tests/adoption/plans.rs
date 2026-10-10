@@ -424,6 +424,48 @@ async fn a_copied_database_file_is_named_and_left_out_of_planning() {
     let _ = (a.rig, a.objective);
 }
 
+/// A folder import can give one band a short plan first (flats or test
+/// frames taken as lights). The draft takes the band's main plan instead.
+#[tokio::test]
+async fn an_imported_plan_takes_each_bands_main_exposure_plan() {
+    let f = Fixture::new();
+    let path = register(&f, "blue", "Blue rig", &[(1, "M42", Some(Uuid::new_v4()))]);
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch(
+        "INSERT INTO exposuretemplate (Id, profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel, moonavoidanceenabled,
+            moonavoidanceseparation, moonavoidancewidth, maximumhumidity, defaultexposure, moonrelaxscale, moonrelaxmaxaltitude,
+            moonrelaxminaltitude, moondownenabled, ditherevery, minutesOffset, guid)
+         VALUES (1, 'profile-x', 'B G100 O30 1x1', 'B', 100, 30, 1, -1, 0, 0, 60, 7, 0, 0.4, 0, 5, -15, 0, -1, 0, 'tmpl-b');
+         INSERT INTO target (Id, name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+         VALUES (1, 'M42', 1, 5.588, -5.39, 2, 0.0, 100, 1, 'tgt-1');
+         INSERT INTO exposureplan (profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, enabled, guid)
+         VALUES ('profile-x', 0.4, 12, 12, 0, 1, 1, 1, 'ep-short'), ('profile-x', 180, 40, 40, 30, 1, 1, 1, 'ep-main');",
+    )
+    .unwrap();
+    let (status, listed) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let project = listed["data"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["project"]["name"] == "M42")
+        .unwrap()["project"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (_, plan) = call(
+        &f.app,
+        "GET",
+        &format!("/projects/{project}/plan"),
+        Value::Null,
+        None,
+    )
+    .await;
+    let contribution = &plan["data"]["plan"]["contributions"][0];
+    assert_eq!(contribution["exposure_seconds"], 180.0, "{plan}");
+    assert_eq!(plan["data"]["plan"]["objectives"][0]["goal"]["value"], 40);
+}
+
 #[tokio::test]
 async fn a_target_scheduler_project_is_imported_as_framing_and_plan_drafts_once() {
     let f = Fixture::new();

@@ -1022,6 +1022,9 @@ fn ensure_templates(
 ) -> Result<HashMap<TemplateKey, i64>> {
     // Most-frequent exposure per template (by frame count) seeds
     // `defaultexposure`; TS's constructor default of 60 covers the rest.
+    // Exposures of a second or more come first: a few short frames (flats
+    // or test frames taken as lights) must not set a light template's
+    // default.
     let mut frames_per_exposure: HashMap<(TemplateKey, i64), usize> = HashMap::new();
     for project in &plan.projects {
         for target in &project.targets {
@@ -1040,7 +1043,7 @@ fn ensure_templates(
         let default_exposure = frames_per_exposure
             .iter()
             .filter(|((k, _), _)| *k == key)
-            .max_by_key(|(_, count)| **count)
+            .max_by_key(|((_, exp_ms), count)| (*exp_ms >= 1000, **count, *exp_ms))
             .map(|((_, exp_ms), _)| *exp_ms as f64 / 1000.0)
             .filter(|e| *e > 0.0)
             .unwrap_or(60.0);
@@ -1458,6 +1461,32 @@ mod tests {
             object: None,
             ..light("panel", filter, ts)
         }
+    }
+
+    #[test]
+    fn a_few_short_frames_do_not_set_a_light_templates_default_exposure() {
+        // Three 0.4 s frames (flats or test frames saved as lights) and two
+        // real subs of the same filter and camera settings.
+        let mut conn = fresh_conn();
+        let mut frames: Vec<FrameMeta> = (0..3)
+            .map(|i| FrameMeta {
+                exposure_s: Some(0.4),
+                ..light("M42", "B", 1_000 + i)
+            })
+            .collect();
+        frames.extend((0..2).map(|i| FrameMeta {
+            exposure_s: Some(180.0),
+            ..light("M42", "B", 2_000 + i)
+        }));
+        import_frames(&mut conn, frames, &ImportOptions::default()).unwrap();
+        let default: f64 = conn
+            .query_row(
+                "SELECT defaultexposure FROM exposuretemplate WHERE filtername = 'B'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(default, 180.0);
     }
 
     #[test]

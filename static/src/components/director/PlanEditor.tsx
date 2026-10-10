@@ -8,7 +8,7 @@ import NumberInput from '../NumberInput';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorContribution, DirectorFrameCounts, DirectorGoal, DirectorObjective, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplate } from '../../api/directorTypes';
-import { PURPOSES, bandpassKind, bandpassOptions, bindOwnTemplates, convertGoal, coverageGaps, goalFor, speedAdjustedHours, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, libraryChoice, libraryFor, newContribution, newLibraryContribution, newObjective, onePartEach, ownTwin, panelIds, partStatus, panelsByRig, planProblem, rigPanels, rigStatus, rigTotals, samePlan, shootingRigs, templateValue, templatesFor } from './planModel';
+import { PURPOSES, bandpassKind, bandpassOptions, bindOwnTemplates, choiceFrom, convertGoal, coverageGaps, goalFor, speedAdjustedHours, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, libraryChoice, libraryFor, newContribution, newLibraryContribution, newObjective, onePartEach, ownTwin, panelIds, partStatus, panelsByRig, planProblem, rigPanels, rigStatus, rigTotals, samePlan, shootingRigs, templateValue, templatesFor } from './planModel';
 import './PlanEditor.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Plan request failed';
@@ -315,10 +315,15 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
                 const [kind, key] = event.target.value.split(':');
                 const own = kind === 'db' ? matching.find(t => String(t.id) === key) : undefined;
                 const fromLibrary = kind === 'lib' ? shared.find(t => t.id === key) : undefined;
-                setContribution(rig, objective, current => own
-                  ? { ...(current ?? newContribution(objective, rig, own, defaultExposure(rig, bandpassKind(objective.bandpass_id, templatesByRig, library), own))), template: { template_guid: own.guid, template_id: own.id, name: own.name, filter_name: own.filter_name, gain: own.gain, offset: own.offset, bin: own.bin, readout_mode: own.readout_mode } }
-                  : fromLibrary ? { ...(current ?? newLibraryContribution(objective, rig, fromLibrary)), template: libraryChoice(fromLibrary) }
-                  : null);
+                // A template picked brings its own exposure, as when the rig joined.
+                setContribution(rig, objective, current => {
+                  if (own) {
+                    const exposure = defaultExposure(rig, bandpassKind(objective.bandpass_id, templatesByRig, library), own);
+                    return { ...(current ?? newContribution(objective, rig, own, exposure)), template: choiceFrom(own), exposure_seconds: exposure };
+                  }
+                  if (fromLibrary) return { ...(current ?? newLibraryContribution(objective, rig, fromLibrary)), template: libraryChoice(fromLibrary), exposure_seconds: fromLibrary.default_exposure_seconds };
+                  return null;
+                });
               }}>
                 <option value="">Skip on this rig</option>
                 {matching.length > 0 && <optgroup label="In this database">{matching.map(t => <option key={t.id} value={`db:${t.id}`}>{t.name} ({t.filter_name}{t.bin && t.bin > 1 ? `, ${t.bin}×${t.bin}` : ''})</option>)}</optgroup>}
