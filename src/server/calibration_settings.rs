@@ -35,6 +35,9 @@ pub struct CalibrationSettingsResponse {
     /// Frames; absent when the default applies.
     pub complete_dark_frames: Option<usize>,
     pub default_complete_dark_frames: usize,
+    /// Days; absent when the default applies, zero when the limit is lifted.
+    pub flat_max_age_days: Option<f64>,
+    pub default_flat_max_age_days: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,6 +56,10 @@ pub struct UpdateCalibrationSettingsRequest {
     /// Frames. Omitted preserves the saved value; `null` restores the default.
     #[serde(default, deserialize_with = "present")]
     pub complete_dark_frames: Option<Option<usize>>,
+    /// Days, zero for no limit. Omitted preserves the saved value; `null`
+    /// restores the default.
+    #[serde(default, deserialize_with = "present")]
+    pub flat_max_age_days: Option<Option<f64>>,
 }
 
 /// A field that was sent, `null` included, as opposed to one left out.
@@ -83,6 +90,8 @@ fn current_response(settings: Option<&CalibrationSettings>) -> CalibrationSettin
         default_dark_reach_days: crate::calibration::DEFAULT_DARK_REACH_DAYS,
         complete_dark_frames: settings.and_then(|settings| settings.complete_dark_frames),
         default_complete_dark_frames: crate::calibration::DEFAULT_COMPLETE_DARK_FRAMES,
+        flat_max_age_days: settings.and_then(|settings| settings.flat_max_age_days),
+        default_flat_max_age_days: crate::calibration::DEFAULT_FLAT_MAX_AGE_DAYS,
     }
 }
 
@@ -126,6 +135,13 @@ pub async fn update_calibration_settings(
             "dark reach must be between 1 and 3650 days".into(),
         ));
     }
+    if let Some(Some(days)) = request.flat_max_age_days
+        && (!days.is_finite() || !(0.0..=MAX_DARK_REACH_DAYS).contains(&days))
+    {
+        return Err(AppError::BadRequest(
+            "the flat age limit must be between 0 (no limit) and 3650 days".into(),
+        ));
+    }
     if let Some(Some(frames)) = request.complete_dark_frames
         && !(2..=MAX_COMPLETE_DARK_FRAMES).contains(&frames)
     {
@@ -155,17 +171,26 @@ pub async fn update_calibration_settings(
                 .as_ref()
                 .and_then(|settings| settings.complete_dark_frames),
         };
+        let flat_max_age_days = match request.flat_max_age_days {
+            Some(sent) => sent,
+            None => registry
+                .calibration
+                .as_ref()
+                .and_then(|settings| settings.flat_max_age_days),
+        };
         registry.calibration = (request.rotation_tolerance_deg.is_some()
             || external_masters.is_some()
             || flat_star_masking
             || dark_reach_days.is_some()
-            || complete_dark_frames.is_some())
+            || complete_dark_frames.is_some()
+            || flat_max_age_days.is_some())
         .then_some(CalibrationSettings {
             rotation_tolerance_deg: request.rotation_tolerance_deg,
             external_masters,
             flat_star_masking: flat_star_masking.then_some(true),
             dark_reach_days,
             complete_dark_frames,
+            flat_max_age_days,
         });
         Ok(registry.calibration.clone())
     })
@@ -207,6 +232,11 @@ mod tests {
         assert_eq!(response.dark_reach_days, None);
         assert_eq!(response.default_dark_reach_days, 183.0);
         assert_eq!(response.default_complete_dark_frames, 10);
+        assert_eq!(response.default_flat_max_age_days, 60.0);
+        let lifted: UpdateCalibrationSettingsRequest =
+            serde_json::from_str(r#"{"rotation_tolerance_deg":null,"flat_max_age_days":0}"#)
+                .unwrap();
+        assert_eq!(lifted.flat_max_age_days, Some(Some(0.0)));
     }
 
     #[test]

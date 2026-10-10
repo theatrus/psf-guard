@@ -832,6 +832,7 @@ export const apiClient = {
     flat_star_masking: boolean;
     dark_reach_days?: number | null;
     complete_dark_frames?: number | null;
+    flat_max_age_days?: number | null;
   }): Promise<CalibrationSettings> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.put<ApiResponse<CalibrationSettings>>(
@@ -1446,6 +1447,28 @@ export const apiClient = {
       ApiResponse<import('./types').ProjectCalibrationReport>
     >(dbPath(dbId, `/projects/${projectId}/calibration-report`));
     if (!data.data) throw new Error(data.error || 'Failed to build the calibration report');
+    return data.data;
+  },
+
+  /** Every light of the project a stack leaves out because the library
+   *  cannot calibrate it, with a digest naming the list. */
+  getProjectCalibrationGaps: async (dbId: string, projectId: number): Promise<import('./types').ProjectCalibrationGaps> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<import('./types').ProjectCalibrationGaps>>(
+      dbPath(dbId, `/projects/${projectId}/calibration-report/rejects`)
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to check the lights');
+    return data.data;
+  },
+
+  /** Reject the lights the check listed; 409 when the list changed since. */
+  rejectUncalibratedLights: async (dbId: string, projectId: number, digest: string): Promise<BatchGradeResponse> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<BatchGradeResponse>>(
+      dbPath(dbId, `/projects/${projectId}/calibration-report/rejects`),
+      { digest }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to reject the lights');
     return data.data;
   },
 

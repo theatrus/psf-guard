@@ -1,6 +1,9 @@
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { isAxiosError } from 'axios';
 import { apiClient } from '../api/client';
-import type { CalibrationExternalMaster, CalibrationNightFilter, ProjectCalibrationReport } from '../api/types';
+import { useAccess } from '../auth/access';
+import type { CalibrationExternalMaster, CalibrationNightFilter, ProjectCalibrationGaps, ProjectCalibrationReport } from '../api/types';
 import Dialog from './Dialog';
 import './CalibrationReportDialog.css';
 
@@ -48,6 +51,90 @@ function darkCell(filter: CalibrationNightFilter): string {
 function masterNote(master: CalibrationExternalMaster): string {
   const state = master.used ? 'used' : master.matches ? 'matches, not used' : `not used: ${master.reason ?? 'no match'}`;
   return `${master.kind} master ${master.file} · ${state}`;
+}
+
+const message = (error: unknown) => isAxiosError(error)
+  ? error.response?.data?.error || error.message
+  : error instanceof Error ? error.message : 'The request failed.';
+const httpStatus = (error: unknown) => isAxiosError(error) ? error.response?.status
+  : error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined;
+const lights = (count: number) => `${count.toLocaleString()} light${count === 1 ? '' : 's'}`;
+
+/**
+ * The lights a stack leaves out because the library cannot calibrate them,
+ * found on request (every light is read), and rejected after that check so
+ * Target Scheduler shoots them again.
+ */
+function UncalibratedLights({ dbId, projectId }: { dbId: string; projectId: number }) {
+  const { canWrite } = useAccess();
+  const client = useQueryClient();
+  const [notice, setNotice] = useState('');
+  const check = useMutation({
+    retry: false,
+    mutationFn: () => apiClient.getProjectCalibrationGaps(dbId, projectId),
+    onSuccess: () => setNotice(''),
+  });
+  const reject = useMutation({
+    retry: false,
+    mutationFn: (gaps: ProjectCalibrationGaps) => apiClient.rejectUncalibratedLights(dbId, projectId, gaps.digest),
+    onSuccess: (report) => {
+      check.reset();
+      setNotice(`Rejected ${lights(report.updated)}; Target Scheduler will shoot them again.`);
+      void client.invalidateQueries({ queryKey: ['db', dbId] });
+    },
+    onError: (error) => {
+      if (httpStatus(error) === 409) {
+        check.reset();
+        setNotice('The lights changed since the check; check again.');
+      }
+    },
+  });
+  const gaps = check.data;
+  const counted = gaps
+    ? Object.entries(gaps.lights.reduce<Record<string, number>>((counts, light) => {
+      const key = `${light.night} · ${light.filter || '—'} · ${light.reason}`;
+      counts[key] = (counts[key] ?? 0) + 1;
+      return counts;
+    }, {}))
+    : [];
+  const busy = check.isPending || reject.isPending;
+  const error = check.error ?? (reject.error && httpStatus(reject.error) !== 409 ? reject.error : null);
+  return (
+    <section className="calibration-report-gaps" aria-label="Lights that can't be calibrated">
+      <div className="calibration-report-gaps-row">
+        <strong>Lights that can't be calibrated</strong>
+        <button type="button" disabled={busy} onClick={() => check.mutate()}>
+          {check.isPending ? 'Checking…' : 'Check lights'}
+        </button>
+      </div>
+      <small className="calibration-report-muted">
+        No matching flat, no bias or dark, or flats past the age limit. Stacks leave them out;
+        rejecting them lets Target Scheduler shoot them again.
+      </small>
+      {gaps && (
+        <>
+          <p>
+            {gaps.lights.length > 0
+              ? `${lights(gaps.lights.length)} of ${gaps.checked.toLocaleString()} can't be calibrated.`
+              : `All ${lights(gaps.checked)} can be calibrated.`}
+            {gaps.missing_files > 0 && ` ${lights(gaps.missing_files)} not found on disk.`}
+          </p>
+          {counted.length > 0 && (
+            <ul className="calibration-report-gap-list">
+              {counted.map(([key, count]) => <li key={key}>{key}: {count}</li>)}
+            </ul>
+          )}
+          {gaps.lights.length > 0 && canWrite && (
+            <button type="button" disabled={busy} onClick={() => reject.mutate(gaps)}>
+              {reject.isPending ? 'Rejecting…' : `Reject ${lights(gaps.lights.length)}`}
+            </button>
+          )}
+        </>
+      )}
+      {notice && <p role="status">{notice}</p>}
+      {error && <p className="calibration-report-error">{message(error)}</p>}
+    </section>
+  );
 }
 
 /**
@@ -134,7 +221,12 @@ export default function CalibrationReportDialog({
                           {filter.bias_frames || 'none'}
                         </td>
                       </tr>
-                    )).concat(night.filters.filter((filter) => (filter.external_masters ?? []).length > 0).map((filter) => (
+                    )).concat(night.filters.filter((filter) => filter.cannot_calibrate).map((filter) => (
+                      <tr key={`${night.night}:${filter.filter}:gap`} className="calibration-report-masters">
+                        <td />
+                        <td colSpan={5} className="missing">{filter.filter}: left out of stacks · {filter.cannot_calibrate}</td>
+                      </tr>
+                    ))).concat(night.filters.filter((filter) => (filter.external_masters ?? []).length > 0).map((filter) => (
                       <tr key={`${night.night}:${filter.filter}:masters`} className="calibration-report-masters">
                         <td />
                         <td colSpan={5}>
@@ -153,6 +245,7 @@ export default function CalibrationReportDialog({
                 reported.
               </p>
             )}
+            <UncalibratedLights dbId={dbId} projectId={projectId} />
           </>
         )}
       </div>

@@ -48,6 +48,25 @@ describe('CalibrationMatchingSettings', () => {
     await waitFor(() => expect(saved).toMatchObject({ dark_reach_days: 90, complete_dark_frames: 20 }));
   });
 
+  it('saves a flat age limit, zero for none, and refuses a negative one', async () => {
+    let saved: Record<string, unknown> | null = null;
+    server.use(
+      http.get('/api/settings/calibration', () => HttpResponse.json({ ...current(null), data: { ...current(null).data, default_flat_max_age_days: 60 } })),
+      http.put('/api/settings/calibration', async ({ request }) => {
+        saved = await request.json() as Record<string, unknown>;
+        return HttpResponse.json({ success: true, data: { ...current(null).data, flat_max_age_days: 0 }, error: null });
+      }),
+    );
+    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
+    const limit = await screen.findByLabelText('Flat age limit in days');
+    expect(limit).toHaveAttribute('placeholder', '60');
+    fireEvent.change(limit, { target: { value: '-1' } });
+    expect(screen.getByText('Enter 0 to 3650 days.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    fireEvent.change(limit, { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(saved).toMatchObject({ flat_max_age_days: 0 }));
+  });
 
   it('shows the default as the placeholder, not as a configured value', async () => {
     server.use(
@@ -82,6 +101,7 @@ describe('CalibrationMatchingSettings', () => {
         flat_star_masking: false,
         dark_reach_days: null,
         complete_dark_frames: null,
+        flat_max_age_days: null,
       })
     );
     // The response is the new truth; the button falls back to disabled.
@@ -114,6 +134,7 @@ describe('CalibrationMatchingSettings', () => {
         flat_star_masking: false,
         dark_reach_days: null,
         complete_dark_frames: null,
+        flat_max_age_days: null,
       })
     );
     await waitFor(() =>
@@ -172,6 +193,7 @@ describe('CalibrationMatchingSettings', () => {
       flat_star_masking: enabled,
       dark_reach_days: null,
       complete_dark_frames: null,
+      flat_max_age_days: null,
     })));
   });
 
