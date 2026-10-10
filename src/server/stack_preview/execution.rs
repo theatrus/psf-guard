@@ -7,7 +7,9 @@
 
 use crate::calibration::CalibrationPlan;
 use crate::concurrency::WorkerPolicy;
-use seiza_stacking::{LiveStacker, PipelineOptions, PoolPipelineMemory, PoolPipelineReport};
+use seiza_stacking::{
+    LiveStacker, PipelineExecution, PipelineOptions, PipelineReport, PoolPipelineMemory,
+};
 use std::path::{Path, PathBuf};
 
 const UNKNOWN_RAM_PIPELINE_BYTES: u64 = 1024 * 1024 * 1024;
@@ -31,30 +33,41 @@ impl ThreadBudget {
                 serial: true,
             };
         }
-        // Container decoding uses CPU on the reader threads too. Two readers
-        // can overlap a read with another frame's preparation without keeping
-        // half the compute allowance idle while readers wait for the pool.
-        let preparation_workers = (total / 2).clamp(1, 2);
+        // Seiza reads and prepares frames as tasks in the build's pool, so
+        // every leased thread computes. Half of them is how many frames are
+        // in preparation at once, as Seiza's command line sizes it, so the
+        // serial parts of one frame overlap the parallel parts of another.
         Self {
-            compute_workers: total - preparation_workers,
-            preparation_workers,
+            compute_workers: total,
+            preparation_workers: (total / 2).max(1),
             serial: false,
         }
     }
 
     fn sequential(self) -> Self {
         Self {
-            compute_workers: self.compute_workers.saturating_add(if self.serial {
-                0
-            } else {
-                self.preparation_workers
-            }),
             preparation_workers: 1,
             serial: true,
+            ..self
         }
     }
 }
 
+/// How a batch of frames went through [`run_pipeline`].
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PipelineRun {
+    pub frames: PipelineReport,
+    pub execution: PipelineExecution,
+    /// Frames in preparation at once.
+    pub workers: usize,
+}
+
+/// Push `paths` into `stacker` on `pool`, the build's whole thread budget.
+///
+/// Seiza reads and prepares up to `options.workers` frames at once as tasks
+/// in `pool` and integrates them in their order on the calling thread, which
+/// helps the pool while it waits, so `on_frame` runs on one of `pool`'s
+/// threads. A one-thread budget prepares one frame at a time instead.
 pub(super) fn run_pipeline(
     stacker: &mut LiveStacker,
     paths: &[PathBuf],
@@ -66,7 +79,7 @@ pub(super) fn run_pipeline(
             seiza_stacking::Result<seiza_stacking::FrameDisposition>,
         ) -> seiza_stacking::Continue
         + Send,
-) -> seiza_stacking::Result<PoolPipelineReport> {
+) -> seiza_stacking::Result<PipelineRun> {
     if threads.compute_workers == 0
         || threads.preparation_workers == 0
         || pool.current_num_threads() != threads.compute_workers
@@ -75,29 +88,33 @@ pub(super) fn run_pipeline(
             "Stack compute pool does not match its thread budget".into(),
         ));
     }
-    let options = PipelineOptions {
-        workers: Some(
-            options
-                .workers
-                .unwrap_or(threads.preparation_workers)
-                .clamp(1, threads.preparation_workers),
-        ),
-        ..*options
-    };
     if threads.serial {
-        return stacker.push_fits_sequential_with_pool(
+        let report = stacker.push_fits_sequential_with_pool(
             paths,
             options.normalized_full_scale,
             pool,
             on_frame,
-        );
+        )?;
+        return Ok(PipelineRun {
+            frames: report.frames,
+            execution: report.execution,
+            workers: report.workers,
+        });
     }
-    if rayon::current_thread_index().is_some() {
-        return Err(seiza_stacking::Error::Stack(
-            "Parallel stack preparation requires a coordinator outside the Rayon pool".into(),
-        ));
-    }
-    stacker.push_fits_pipelined_with_pool(paths, &options, pool, on_frame)
+    let workers = options
+        .workers
+        .unwrap_or(threads.preparation_workers)
+        .clamp(1, threads.preparation_workers);
+    let options = PipelineOptions {
+        workers: Some(workers),
+        ..*options
+    };
+    let frames = pool.install(|| stacker.push_fits_pipelined(paths, &options, on_frame))?;
+    Ok(PipelineRun {
+        frames,
+        execution: PipelineExecution::Overlapped,
+        workers,
+    })
 }
 
 pub(super) struct PipelineBudget {
@@ -271,12 +288,7 @@ pub(super) fn plan_pipeline(
             .min(usize::try_from(affordable).unwrap_or(usize::MAX))
     };
     if !threads.serial {
-        // A memory-limited reader count leaves CPU slots for the shared pool.
-        let total = threads
-            .compute_workers
-            .saturating_add(threads.preparation_workers);
         threads.preparation_workers = workers;
-        threads.compute_workers = total.saturating_sub(workers).max(1);
     }
     Ok(PipelineBudget {
         options: PipelineOptions {
@@ -483,10 +495,10 @@ mod tests {
         assert_eq!(mono.worker_bytes, 8_000);
         assert_eq!(rgb.worker_bytes, 11_200);
         assert_eq!(rgb.integration_bytes, 1_200);
-        assert_eq!(mono.options.workers, Some(2));
+        assert_eq!(mono.options.workers, Some(3));
         assert_eq!(rgb.options.workers, Some(1));
         assert_eq!(rgb.threads.preparation_workers, 1);
-        assert_eq!(rgb.threads.compute_workers, 7);
+        assert_eq!(rgb.threads.compute_workers, 8);
     }
 
     #[test]
@@ -683,11 +695,14 @@ mod tests {
         assert_eq!(budget.options.workers, Some(2));
         let capped =
             plan_pipeline(None, &policy(), 1, 1, &raw_plan(), &allowance(usize::MAX)).unwrap();
-        assert_eq!(capped.options.workers, Some(2));
+        assert_eq!(
+            capped.options.workers,
+            Some(seiza_stacking::MAXIMUM_WORKERS.min(policy().hard_max_workers)),
+        );
     }
 
     #[test]
-    fn thread_budget_counts_decoders_and_compute_within_the_total() {
+    fn thread_budget_computes_on_every_thread_and_prepares_half_as_many_frames() {
         for total in [0, 1] {
             assert_eq!(
                 ThreadBudget::from_total(total),
@@ -698,35 +713,38 @@ mod tests {
                 },
             );
         }
-        for (total, readers) in [(2, 1), (3, 1), (4, 2), (7, 2), (16, 2), (usize::MAX, 2)] {
+        for (total, frames) in [(2, 1), (3, 1), (4, 2), (7, 3), (16, 8)] {
             let budget = ThreadBudget::from_total(total);
             assert!(!budget.serial);
-            assert_eq!(budget.compute_workers + budget.preparation_workers, total);
-            assert_eq!(budget.preparation_workers, readers);
-            assert_eq!(budget.compute_workers, total - readers);
+            assert_eq!(budget.compute_workers, total);
+            assert_eq!(budget.preparation_workers, frames);
         }
     }
 
     #[test]
-    fn parallel_wrapper_refuses_an_accidental_rayon_coordinator() {
+    fn parallel_wrapper_also_runs_from_a_thread_of_its_pool() {
         let threads = ThreadBudget::from_total(4);
         let pool = compute_pool(&threads);
         let (_directory, mut stacker, paths) = pool.install(pipeline_fixture);
-        let result = pool.install(|| {
-            run_pipeline(
-                &mut stacker,
-                &paths,
-                &PipelineOptions::default(),
-                &pool,
-                &threads,
-                |_, _| panic!("a nested parallel coordinator must not start the batch"),
-            )
-        });
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("coordinator outside the Rayon pool"),);
-        assert!(stacker.input_paths().is_empty());
+        let mut seen = Vec::new();
+        let report = pool
+            .install(|| {
+                run_pipeline(
+                    &mut stacker,
+                    &paths,
+                    &PipelineOptions::default(),
+                    &pool,
+                    &threads,
+                    |path, outcome| {
+                        outcome.unwrap();
+                        seen.push(path.to_path_buf());
+                        Continue::Yes
+                    },
+                )
+            })
+            .unwrap();
+        assert_eq!(seen, paths);
+        assert_eq!(report.frames.integrated, 2);
     }
 
     #[test]
@@ -762,7 +780,7 @@ mod tests {
     }
 
     #[test]
-    fn parallel_wrapper_caps_readers_and_preserves_callback_order() {
+    fn parallel_wrapper_caps_frames_in_flight_and_preserves_callback_order() {
         let threads = ThreadBudget::from_total(4);
         let pool = compute_pool(&threads);
         let (_directory, mut stacker, paths) = pool.install(pipeline_fixture);
@@ -770,7 +788,6 @@ mod tests {
             workers: Some(64),
             ..PipelineOptions::default()
         };
-        let coordinator = std::thread::current().id();
         let mut seen = Vec::new();
         let report = run_pipeline(
             &mut stacker,
@@ -779,8 +796,8 @@ mod tests {
             &pool,
             &threads,
             |path, outcome| {
-                assert_eq!(std::thread::current().id(), coordinator);
-                assert!(rayon::current_thread_index().is_none());
+                // Seiza integrates on the calling thread of the pool.
+                assert!(pool.current_thread_index().is_some());
                 let outcome = outcome.unwrap();
                 assert!(
                     matches!(&outcome, FrameDisposition::Accepted(_)),

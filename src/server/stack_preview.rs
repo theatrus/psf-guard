@@ -3991,17 +3991,6 @@ fn run_group(
     // sees exactly the sequence a frame-at-a-time loop would. A frame
     // declaring itself normalized is put on the same 16-bit scale the
     // rest of the catalog uses as it is read.
-    // Only the pipeline uses the reduced compute allowance. Its readers are
-    // joined before any SNR, checkpoint or final-processing work uses `pool`.
-    let pipeline_pool = if threads.serial {
-        None
-    } else {
-        Some(
-            crate::concurrency::ComputePool::take("stack-pipeline", threads.compute_workers)
-                .map_err(|error| error.to_string())?,
-        )
-    };
-    let pipeline_pool = pipeline_pool.as_ref().unwrap_or(&pool);
     let pipeline = pipeline_budget.options;
     let mut cancelled = false;
     // Depths already behind us were measured by the build that wrote the
@@ -4088,14 +4077,14 @@ fn run_group(
         }
         active_masters = Some((session, calibration_bypassed));
         let mut consumed = 0usize;
-        // The coordinator stays outside Rayon; Seiza submits CPU work to
-        // this pool and commits outcomes in source order.
+        // Seiza prepares frames as tasks in the build's pool and commits
+        // outcomes in source order.
         let batch_started = std::time::Instant::now();
         let report = execution::run_pipeline(
             &mut stacker,
             &paths,
             &pipeline,
-            pipeline_pool,
+            &pool,
             &threads,
             |_, outcome| {
                 let (_, frame) = batch[consumed];
@@ -4203,7 +4192,11 @@ fn run_group(
             session,
             batch_frames = paths.len(),
             elapsed_seconds = batch_started.elapsed().as_secs_f64(),
-            pipeline = ?report,
+            integrated = report.frames.integrated,
+            rejected = report.frames.rejected,
+            failed = report.frames.failed,
+            preparation_workers = report.workers,
+            execution = ?report.execution,
             "Stack preparation batch finished"
         );
         batch_start = batch_end;
