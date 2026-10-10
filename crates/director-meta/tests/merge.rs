@@ -6,10 +6,11 @@ use psf_guard_director_meta::{
     catalog::ProjectMapping, framing::FramingDraft, CatalogIdentity, Error, MetaStore, Uuid,
 };
 
-fn scratch() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("director-meta-merge-{}", Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir.join("meta.sqlite")
+/// A store file in a folder that goes when the returned guard drops.
+fn scratch() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    (dir, path)
 }
 
 fn draft(project: Uuid, name: &str) -> FramingDraft {
@@ -69,7 +70,7 @@ fn linked(store: &mut MetaStore, instance: Uuid, project: Uuid, guid: Uuid, name
 
 #[test]
 fn attaching_moves_links_takes_missing_drafts_and_retires_the_absorbed_plan() {
-    let path = scratch();
+    let (_dir, path) = scratch();
     let mut store = MetaStore::create(&path).unwrap();
     let instance = store.instance_id();
     let keep = store.create_project(Uuid::new_v4(), "Heart").unwrap().id;

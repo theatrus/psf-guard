@@ -7,10 +7,11 @@ use psf_guard_director_meta::{
     CatalogIdentity, MetaStore, Uuid,
 };
 
-fn scratch() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("director-meta-import-{}", Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir.join("meta.sqlite")
+/// A store file in a folder that goes when the returned guard drops.
+fn scratch() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    (dir, path)
 }
 
 fn framing(project: Uuid, at: u64) -> FramingDraft {
@@ -80,7 +81,7 @@ fn plan(store: &mut MetaStore, name: &str, framing_at: u64, plan_at: u64) -> (Uu
 
 #[test]
 fn an_upgrade_marks_the_plans_an_import_left_untouched() {
-    let path = scratch();
+    let (_dir, path) = scratch();
     let mut store = MetaStore::create(&path).unwrap();
     // One listing imports both drafts in the same millisecond.
     let (imported, catalog, guid) = plan(&mut store, "Imported", 7, 7);
@@ -114,7 +115,7 @@ fn an_upgrade_marks_the_plans_an_import_left_untouched() {
 
 #[test]
 fn an_import_is_recorded_moved_on_and_forgotten_and_goes_with_its_plan() {
-    let path = scratch();
+    let (_dir, path) = scratch();
     let mut store = MetaStore::create(&path).unwrap();
     let (project, catalog, guid) = plan(&mut store, "Heart", 3, 3);
     let mut import = DraftImport {
