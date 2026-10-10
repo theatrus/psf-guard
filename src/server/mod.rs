@@ -472,6 +472,7 @@ async fn run_server_internal(
         .route("/rejects/removed", get(reject_removal::removed))
         .route("/rejects/removed/restore", post(reject_removal::restore))
         .route("/rejects/trash/empty", post(reject_removal::empty_trash))
+        .route("/rejects/removed/purge", post(reject_removal::purge))
         .route("/organization/preview", post(organization::preview))
         .route("/organization/apply", post(organization::apply))
         .route(

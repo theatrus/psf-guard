@@ -54,6 +54,11 @@ export default function RejectRemovalControls({ dbId, canManage }: { dbId: strin
       refresh();
     },
   });
+  const purge = useMutation({
+    retry: false,
+    mutationFn: (batch: string) => apiClient.purgeRemovedRejects(dbId, batch),
+    onSuccess: report => { setNotice(`Purged the saved records of ${frames(report.frames)}; they can no longer be restored.`); refresh(); },
+  });
   const empty = useMutation({
     retry: false,
     mutationFn: () => apiClient.emptyRejectTrash(dbId),
@@ -69,8 +74,8 @@ export default function RejectRemovalControls({ dbId, canManage }: { dbId: strin
     counts[reason] = (counts[reason] ?? 0) + 1;
     return counts;
   }, {})) : [];
-  const busy = preview.isPending || apply.isPending || restore.isPending || empty.isPending;
-  const error = preview.error ?? (apply.error && httpStatus(apply.error) !== 409 ? apply.error : null) ?? restore.error ?? empty.error;
+  const busy = preview.isPending || apply.isPending || restore.isPending || empty.isPending || purge.isPending;
+  const error = preview.error ?? (apply.error && httpStatus(apply.error) !== 409 ? apply.error : null) ?? restore.error ?? empty.error ?? purge.error;
   return (
     <div className="quality-backfill-option reject-removal" role="group" aria-label="Remove rejects">
       <div className="reject-removal-row">
@@ -115,9 +120,12 @@ export default function RejectRemovalControls({ dbId, canManage }: { dbId: strin
       {batches.length > 0 && <ul className="reject-removal-batches" aria-label="Removed rejects">
         {batches.map(batch => {
           const gone = batch.files_deleted >= batch.frames;
+          const purged = batch.purged >= batch.frames;
           return <li key={batch.batch_id}>
-            <span>{day(batch.removed_at)} · {frames(batch.frames)} · {size(batch.bytes)} · {gone ? 'files deleted' : `in the trash until ${day(batch.trash_until)}`}</span>
+            <span>{day(batch.removed_at)} · {frames(batch.frames)} · {size(batch.bytes)} · {purged ? 'purged' : gone ? 'files deleted' : `in the trash until ${day(batch.trash_until)}`}</span>
             {!gone && <button type="button" className="browse-button" disabled={busy} aria-label={`Restore the rejects removed ${day(batch.removed_at)}`} onClick={() => restore.mutate(batch.batch_id)}>Restore</button>}
+            {gone && !purged && <button type="button" className="browse-button" disabled={busy} aria-label={`Purge the rejects removed ${day(batch.removed_at)}`}
+              title="Forget their saved records. A marker stays so they never come back." onClick={() => purge.mutate(batch.batch_id)}>Purge</button>}
           </li>;
         })}
       </ul>}

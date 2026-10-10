@@ -104,6 +104,10 @@ fn rejects_are_previewed_removed_listed_and_restored_from_the_command_line() {
         "{listed}"
     );
 
+    // Nothing emptied yet, so nothing to purge.
+    let purged = run_ok(&[&["purge-removed"][..], &base].concat());
+    assert!(purged.contains("Purged the saved rows of 0"), "{purged}");
+
     // Not yet past its retention: emptying the trash keeps it.
     let emptied = run_ok(&[&["empty-reject-trash"][..], &base].concat());
     assert!(emptied.contains("Deleted 0 file(s)"), "{emptied}");

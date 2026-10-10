@@ -42,6 +42,7 @@ const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS psf_guard_removed_image (
     rejected_at INTEGER,
     trash_until INTEGER NOT NULL,
     files_deleted_at INTEGER,
+    purged_at INTEGER,
     bytes INTEGER NOT NULL DEFAULT 0,
     rows_json TEXT NOT NULL,
     files_json TEXT NOT NULL
@@ -52,7 +53,16 @@ CREATE INDEX IF NOT EXISTS idx_psf_guard_removed_image_target ON psf_guard_remov
 /// Create the tombstone table. Safe to call repeatedly.
 pub fn ensure_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA)
-        .context("creating psf_guard_removed_image")
+        .context("creating psf_guard_removed_image")?;
+    // Tables from before purging lack its column.
+    if !has_column(conn, "psf_guard_removed_image", "purged_at") {
+        conn.execute(
+            "ALTER TABLE psf_guard_removed_image ADD COLUMN purged_at INTEGER",
+            [],
+        )
+        .context("adding psf_guard_removed_image.purged_at")?;
+    }
+    Ok(())
 }
 
 fn table_exists(conn: &Connection, table: &str) -> bool {
@@ -652,8 +662,10 @@ impl std::fmt::Display for StaleRemovalPlan {
 
 impl std::error::Error for StaleRemovalPlan {}
 
-/// Everything a frame's rows were, so restore can put them back.
+/// Everything a frame's rows were, so restore can put them back. Empty
+/// once purged.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 struct RowSnapshot {
     acquiredimage: Map<String, Json>,
     imagedata: Vec<Map<String, Json>>,
@@ -920,6 +932,8 @@ pub struct RemovedBatch {
     pub trash_until: i64,
     /// Frames whose files are already gone from the trash.
     pub files_deleted: usize,
+    /// Frames whose saved rows were purged; only their markers remain.
+    pub purged: usize,
 }
 
 /// A removed frame, as the list of removals shows it.
@@ -942,11 +956,16 @@ pub fn batches(conn: &Connection) -> Result<Vec<RemovedBatch>> {
     if !table_exists(conn, "psf_guard_removed_image") {
         return Ok(Vec::new());
     }
-    let mut statement = conn.prepare(
+    let purged = if has_column(conn, "psf_guard_removed_image", "purged_at") {
+        "SUM(purged_at IS NOT NULL)"
+    } else {
+        "0"
+    };
+    let mut statement = conn.prepare(&format!(
         "SELECT batch_id, MIN(removed_at), COUNT(*), SUM(bytes), MAX(trash_until),
-                SUM(files_deleted_at IS NOT NULL)
-         FROM psf_guard_removed_image GROUP BY batch_id ORDER BY MIN(removed_at) DESC, batch_id",
-    )?;
+                SUM(files_deleted_at IS NOT NULL), {purged}
+         FROM psf_guard_removed_image GROUP BY batch_id ORDER BY MIN(removed_at) DESC, batch_id"
+    ))?;
     let rows = statement
         .query_map([], |row| {
             Ok(RemovedBatch {
@@ -956,6 +975,7 @@ pub fn batches(conn: &Connection) -> Result<Vec<RemovedBatch>> {
                 bytes: row.get(3)?,
                 trash_until: row.get(4)?,
                 files_deleted: row.get::<_, i64>(5)? as usize,
+                purged: row.get::<_, i64>(6)? as usize,
             })
         })?
         .collect::<rusqlite::Result<_>>()?;
@@ -1025,6 +1045,7 @@ struct Tombstone {
     file_name: Option<String>,
     rejected_at: Option<i64>,
     files_deleted_at: Option<i64>,
+    purged: bool,
     rows: RowSnapshot,
     files: Vec<TrashedFile>,
 }
@@ -1033,11 +1054,16 @@ fn tombstones(conn: &Connection, selection: &RestoreSelection) -> Result<Vec<Tom
     if !table_exists(conn, "psf_guard_removed_image") {
         return Ok(Vec::new());
     }
-    let mut statement = conn.prepare(
+    let purged = if has_column(conn, "psf_guard_removed_image", "purged_at") {
+        "purged_at IS NOT NULL"
+    } else {
+        "0"
+    };
+    let mut statement = conn.prepare(&format!(
         "SELECT acquired_image_guid, acquired_image_id, target_id, file_name, rejected_at,
-                files_deleted_at, rows_json, files_json, batch_id, project_id
-         FROM psf_guard_removed_image ORDER BY removed_at, acquired_image_id",
-    )?;
+                files_deleted_at, rows_json, files_json, batch_id, project_id, {purged}
+         FROM psf_guard_removed_image ORDER BY removed_at, acquired_image_id"
+    ))?;
     let wanted: HashSet<&str> = selection.guids.iter().map(String::as_str).collect();
     let mut out = Vec::new();
     let mut rows = statement.query([])?;
@@ -1057,6 +1083,7 @@ fn tombstones(conn: &Connection, selection: &RestoreSelection) -> Result<Vec<Tom
             file_name: row.get(3)?,
             rejected_at: row.get(4)?,
             files_deleted_at: row.get(5)?,
+            purged: row.get(10)?,
             rows: serde_json::from_str(&row.get::<_, String>(6)?)?,
             files: serde_json::from_str(&row.get::<_, String>(7)?)?,
         });
@@ -1122,6 +1149,10 @@ pub fn restore(conn: &Connection, selection: &RestoreSelection) -> Result<Restor
                 reason,
             })
         };
+        if tombstone.purged {
+            fail(&mut report, "its saved rows were purged".into());
+            continue;
+        }
         if tombstone.files_deleted_at.is_some() && !tombstone.files.is_empty() {
             fail(
                 &mut report,
@@ -1274,6 +1305,40 @@ pub fn restore(conn: &Connection, selection: &RestoreSelection) -> Result<Restor
     if !report.restored.is_empty() {
         crate::db::reconcile_accepted_counts(conn)?;
     }
+    Ok(report)
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PurgeReport {
+    pub frames: usize,
+    /// Bytes of saved rows and file lists dropped from the database.
+    pub bytes: u64,
+}
+
+/// Forget the saved rows of removals whose files are gone from the trash:
+/// those frames can no longer be restored, so their row data, thumbnails
+/// and file lists only take space. Each keeps a marker (its GUID, file
+/// name, target and plan) so Sync pulls and imports still leave it out and
+/// plan progress still counts it. One batch, or every one when `None`.
+pub fn purge(conn: &Connection, batch_id: Option<&str>, now: i64) -> Result<PurgeReport> {
+    let mut report = PurgeReport::default();
+    if !table_exists(conn, "psf_guard_removed_image") {
+        return Ok(report);
+    }
+    ensure_schema(conn)?;
+    let due =
+        "files_deleted_at IS NOT NULL AND purged_at IS NULL AND (?1 IS NULL OR batch_id = ?1)";
+    let (frames, bytes): (i64, Option<i64>) = conn.query_row(
+        &format!("SELECT COUNT(*), SUM(LENGTH(rows_json) + LENGTH(files_json)) FROM psf_guard_removed_image WHERE {due}"),
+        [batch_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    conn.execute(
+        &format!("UPDATE psf_guard_removed_image SET rows_json = '{{}}', files_json = '[]', purged_at = ?2 WHERE {due}"),
+        params![batch_id, now],
+    )?;
+    report.frames = frames as usize;
+    report.bytes = bytes.unwrap_or(0) as u64;
     Ok(report)
 }
 
@@ -1556,6 +1621,53 @@ mod tests {
         assert!(restored.restored.is_empty());
         assert_eq!(restored.failed.len(), 2);
         assert!(restored.failed[0].reason.contains("trash was emptied"));
+    }
+
+    #[test]
+    fn purging_keeps_a_marker_that_still_keeps_the_frame_out() {
+        let c = catalog();
+        let none = BTreeSet::new();
+        let plan = plan(&c.conn, &c.images(), &options(&none, 7)).unwrap();
+        let report = apply(&c.conn, &c.images(), &options(&none, 7), &plan.digest, 14).unwrap();
+        // Files still in the trash: nothing to purge yet.
+        assert_eq!(purge(&c.conn, None, NOW).unwrap().frames, 0);
+        empty_trash(&c.conn, NOW + 15 * DAY).unwrap();
+        let purged = purge(&c.conn, Some(&report.batch_id), NOW + 16 * DAY).unwrap();
+        assert_eq!(purged.frames, 2);
+        assert!(purged.bytes > 0);
+        assert_eq!(c.count("SELECT COUNT(*) FROM psf_guard_removed_image WHERE rows_json = '{}' AND files_json = '[]'"), 2);
+        assert_eq!(batches(&c.conn).unwrap()[0].purged, 2);
+        // Still kept out of pulls and imports, and counted by target.
+        assert!(removed_guids(&c.conn).unwrap().contains("g1"));
+        assert!(removed_file_names(&c.conn)
+            .unwrap()
+            .contains("m31_l_001.fits"));
+        assert_eq!(
+            c.count("SELECT COUNT(*) FROM psf_guard_removed_image WHERE target_id = 10"),
+            2
+        );
+        let restored = restore(
+            &c.conn,
+            &RestoreSelection {
+                batch_id: Some(report.batch_id),
+                guids: vec![],
+            },
+        )
+        .unwrap();
+        assert!(restored.restored.is_empty());
+        assert!(restored.failed[0].reason.contains("purged"));
+    }
+
+    #[test]
+    fn a_table_from_before_purging_gains_its_column() {
+        let c = catalog();
+        c.conn
+            .execute_batch(&SCHEMA.replace("    purged_at INTEGER,\n", ""))
+            .unwrap();
+        assert!(!has_column(&c.conn, "psf_guard_removed_image", "purged_at"));
+        assert!(batches(&c.conn).unwrap().is_empty());
+        ensure_schema(&c.conn).unwrap();
+        assert!(has_column(&c.conn, "psf_guard_removed_image", "purged_at"));
     }
 
     #[test]

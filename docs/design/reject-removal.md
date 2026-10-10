@@ -2,15 +2,14 @@
 
 Status: **Implemented.** `src/commands/reject_removal.rs` holds the core;
 the CLI commands and the server routes (`src/server/reject_removal.rs`) call
-it, and Settings › Databases has the controls. Purging tombstones is still
-to come.
+it, and Settings › Databases has the controls.
 
 ## Where to run it
 
 In **Settings › Databases**, each database has **Remove rejects**: a number
 of days, **Preview**, then **Remove** with how long to keep the files in the
 trash. Removed batches are listed with **Restore**; **Empty trash** appears
-once a batch is past its retention. These need the server's
+once a batch is past its retention, and **Purge** once its files are gone. These need the server's
 database-management permission.
 
 | Method | Route | Body or query |
@@ -20,9 +19,11 @@ database-management permission.
 | GET | `/api/db/{db}/rejects/removed` | `?batch=` adds that batch's frames |
 | POST | `/api/db/{db}/rejects/removed/restore` | `{batch_id}` or `{guids}` |
 | POST | `/api/db/{db}/rejects/trash/empty` | deletes files past their retention |
+| POST | `/api/db/{db}/rejects/removed/purge` | `{batch_id?}`: forgets saved rows of emptied removals |
 
 The CLI has the same steps: `remove-rejects` (a preview unless `--apply`),
-`list-removed`, `restore-removed` and `empty-reject-trash`.
+`list-removed`, `restore-removed`, `empty-reject-trash` and
+`purge-removed`.
 
 Rejected subframes that are truly bad cost disk space and clutter every view
 that lists frames. Reject removal is an optional cleanup a person runs on
@@ -140,9 +141,17 @@ Once the trash has been emptied, a frame cannot be restored.
 Emptying the trash deletes the files of every batch past its retention and
 marks those tombstones as having no files. It runs only on request.
 
+## Purging
+
+Once the trash has deleted a removal's files, it can never be restored, so
+its saved rows, thumbnails and file list only take space. Purging empties
+those (`rows_json` and `files_json`) and stamps `purged_at`. The rest of the
+row stays as a marker: the GUID keeps Sync pulls from bringing the frame
+back, the file name keeps imports from adding it again, and the target and
+plan keep it in plan progress's rejected count. Purge runs on request, for
+one batch or every emptied one; SQLite reuses the freed pages.
+
 ## Later
 
-- Purging tombstones: forget a tombstone's row data. Whether a slim GUID
-  record should remain so Sync never brings the frame back is decided then.
 - Reaching a rig's own Target Scheduler copy through the N.I.N.A. Sync
   plugin, with an acknowledged delete like flat history uses.

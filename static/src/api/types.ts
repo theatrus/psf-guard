@@ -3160,6 +3160,8 @@ export interface RemovedRejectBatch {
   trash_until: number;
   /** Frames whose files are already gone from the trash. */
   files_deleted: number;
+  /** Frames whose saved rows were purged; only markers remain. */
+  purged: number;
 }
 export interface RemovedRejects {
   batches: RemovedRejectBatch[];
@@ -3174,4 +3176,8 @@ export interface RejectTrashReport {
   files_deleted: number;
   bytes: number;
   problems: string[];
+}
+export interface RejectPurgeReport {
+  frames: number;
+  bytes: number;
 }

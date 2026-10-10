@@ -2671,6 +2671,15 @@ export const apiClient = {
     return data.data;
   },
 
+  /** Forget the saved rows of one emptied removal batch; markers stay. */
+  purgeRemovedRejects: async (dbId: string, batchId: string): Promise<import('./types').RejectPurgeReport> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<import('./types').RejectPurgeReport>>(
+      dbPath(dbId, '/rejects/removed/purge'), { batch_id: batchId });
+    if (!data.data) throw new Error(data.error || 'Failed to purge removed rejects');
+    return data.data;
+  },
+
   emptyRejectTrash: async (dbId: string): Promise<import('./types').RejectTrashReport> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.post<ApiResponse<import('./types').RejectTrashReport>>(dbPath(dbId, '/rejects/trash/empty'));

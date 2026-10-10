@@ -828,13 +828,35 @@ pub fn main() -> Result<()> {
                     day(batch.removed_at),
                     batch.frames,
                     batch.bytes as f64 / 1_048_576.0,
-                    if batch.files_deleted == batch.frames {
+                    if batch.purged == batch.frames {
+                        "purged".to_string()
+                    } else if batch.files_deleted == batch.frames {
                         "files deleted".to_string()
                     } else {
                         format!("in the trash until {}", day(batch.trash_until))
                     }
                 );
             }
+        }
+
+        Commands::PurgeRemoved {
+            db,
+            batch,
+            registry,
+        } => {
+            let (_, entry) = removal_entry(registry, &db)?;
+            let conn = Connection::open(&entry.db_path)
+                .with_context(|| format!("opening database at {}", entry.db_path))?;
+            let report = crate::commands::reject_removal::purge(
+                &conn,
+                batch.as_deref(),
+                chrono::Utc::now().timestamp(),
+            )?;
+            println!(
+                "Purged the saved rows of {} removed frame(s), {:.1} MB.",
+                report.frames,
+                report.bytes as f64 / 1_048_576.0
+            );
         }
 
         Commands::EmptyRejectTrash { db, registry } => {
