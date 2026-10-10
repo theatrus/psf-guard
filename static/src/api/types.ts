@@ -2546,6 +2546,10 @@ export interface SkyPreview {
   height: number;
   kind: 'color' | 'mono';
   filter?: string | null;
+  /** Which stack this is, the same across rebuilds: `color:<composition>` or `mono:<filter>`. */
+  key: string;
+  /** The composition (`RGB`, `SHO`) or the filter. */
+  label: string;
   /** The reference frame's plate solution, when the cache holds one. */
   wcs?: {
     crpix1: number;

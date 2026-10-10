@@ -19,11 +19,13 @@ const rigB = { rig: { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: 'C925', 
 const seed = { name: 'M31', center: { ra_degrees: 10.6847, dec_degrees: 41.269 }, position_angle_degrees: 35 };
 
 /** One panel with a solved H-alpha stack one arcsecond per pixel, north up and east left, centred on the seed; one without. */
-const solvedStack: SkyPreview = { url: '/api/db/redcat/stack-previews/job/0/preview?v=1', width: 200, height: 100, kind: 'mono', filter: 'Ha',
+const solvedStack: SkyPreview = { url: '/api/db/redcat/stack-previews/job/0/preview?v=1', width: 200, height: 100, kind: 'mono', filter: 'Ha', key: 'mono:Ha', label: 'Ha',
   wcs: { crpix1: 99.5, crpix2: 49.5, crval1: seed.center.ra_degrees, crval2: seed.center.dec_degrees, cd11: -1 / 3600, cd12: 0, cd21: 0, cd22: 1 / 3600 } };
+/** The same panel's OIII stack, not yet solved. */
+const oiiiStack: SkyPreview = { ...solvedStack, url: '/api/db/redcat/stack-previews/job/1/preview?v=1', filter: 'OIII', key: 'mono:OIII', label: 'OIII', wcs: null };
 const mosaic: DirectorMosaicPreview = { project: { id: 'project', name: 'Andromeda', revision: 1 }, activation_revision: 1, framing_revision: 1, framing_stale: false, warnings: [], panels: [
-  { panel_id: 'r1c1', rig: rigA.rig, catalog_slug: 'redcat', catalog_name: 'RedCat 61', target_guid: 'g1', target_id: 7, target_name: 'M31 r1c1', progress: { desired: 72, acquired: 40, accepted: 36 }, status: 'ready', preview: solvedStack },
-  { panel_id: 'r2c1', rig: rigA.rig, catalog_slug: 'redcat', catalog_name: 'RedCat 61', target_guid: 'g2', target_id: 8, target_name: 'M31 r2c1', progress: { desired: 72, acquired: 0, accepted: 0 }, status: 'no_stack', preview: null },
+  { panel_id: 'r1c1', rig: rigA.rig, catalog_slug: 'redcat', catalog_name: 'RedCat 61', target_guid: 'g1', target_id: 7, target_name: 'M31 r1c1', progress: { desired: 72, acquired: 40, accepted: 36 }, status: 'ready', preview: solvedStack, stacks: [solvedStack, oiiiStack] },
+  { panel_id: 'r2c1', rig: rigA.rig, catalog_slug: 'redcat', catalog_name: 'RedCat 61', target_guid: 'g2', target_id: 8, target_name: 'M31 r2c1', progress: { desired: 72, acquired: 0, accepted: 0 }, status: 'no_stack', preview: null, stacks: [] },
 ] };
 
 function fixture(existing: DirectorFramingDraft | null = null) {
@@ -336,8 +338,30 @@ describe('Framing view', () => {
     // East (increasing RA, lower pixel x) is stage-left, so pixel x runs right on the stage; north (higher pixel y) is up, so pixel y runs up.
     expect(a).toBeGreaterThan(0); expect(d).toBeLessThan(0);
     expect(e + a * 100).toBeCloseTo(512, 0); expect(f + d * 50).toBeCloseTo(384, 0);
-    fireEvent.click(screen.getByLabelText('Show finished stacks on the sky'));
+    // Another stack can be picked; a panel without it says so.
+    const pick = screen.getByLabelText('Stack shown');
+    expect([...pick.querySelectorAll('option')].map(option => option.textContent)).toEqual(['Best per panel', 'Ha', 'OIII']);
+    fireEvent.change(pick, { target: { value: 'mono:OIII' } });
+    expect(screen.getByText(/r1c1, RedCat 61: 36\/72 frames accepted; the OIII stack has no plate solve yet/)).toBeInTheDocument();
     expect(screen.queryByTestId('framing-stack')).not.toBeInTheDocument();
+    expect(window.localStorage.getItem('psf-guard.framing.stack.project')).toBe('mono:OIII');
+    fireEvent.change(pick, { target: { value: 'mono:Ha' } });
+    expect(await screen.findByTestId('framing-stack')).toHaveAttribute('href', solvedStack.url);
+    // The layer turns off from the sky's layer buttons, and stays off.
+    fireEvent.click(screen.getByRole('button', { name: 'Finished stacks' }));
+    expect(screen.queryByTestId('framing-stack')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Stack shown')).toBeDisabled();
+    expect(window.localStorage.getItem('psf-guard.framing.stacks')).toBe('off');
+    window.localStorage.removeItem('psf-guard.framing.stacks');
+    window.localStorage.removeItem('psf-guard.framing.stack.project');
+  });
+
+  it('shows the stacks of a plan never activated, from its linked project', async () => {
+    fixture();
+    server.use(http.get('/api/director/v1/projects/project/mosaic', () => HttpResponse.json(ok({ ...mosaic, activation_revision: null }))));
+    mount();
+    expect(await screen.findByTestId('framing-stack')).toHaveAttribute('href', solvedStack.url);
+    expect(screen.getByRole('button', { name: 'Finished stacks' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('finds a target by name and moves the framing and the view there', async () => {

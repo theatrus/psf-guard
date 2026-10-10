@@ -5,6 +5,7 @@ import type { MosaicPanel } from '../../../api/types';
 
 // A 1000 × 750 preview at 1.8″ a pixel, north up and east left.
 const preview = (ra: number) => ({
+  key: 'mono:L', label: 'L',
   url: `/stack-${ra}.png`, width: 1000, height: 750, kind: 'mono' as const, filter: 'L',
   wcs: { crpix1: 500, crpix2: 375, crval1: ra, crval2: 41, cd11: -0.0005, cd12: 0, cd21: 0, cd22: -0.0005 },
 });

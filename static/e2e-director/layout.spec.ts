@@ -152,6 +152,9 @@ test('planning tabs lay out without overlaps or clipping', async ({ page, reques
     await page.reload();
     await page.locator('[data-project-key]').filter({ hasText: 'Medusa Nebula' }).getByRole('button', { name: /^Open the .* plan$/ }).first().click();
     await expect(page.getByTestId('framing-panel-source')).toContainText('Size from');
+    // Taken in from Target Scheduler and never activated, the plan still
+    // lists its project's targets for the stack layer.
+    await expect(page.getByTestId('framing-stacks')).toContainText('Medusa Nebula, RedCat data: 1/40 frames accepted; no stack yet.');
     const tab = (name: string) => page.getByRole('tab', { name: new RegExp(`^${name}`) });
     const saveBar = page.getByRole('region', { name: 'Unsaved changes' });
     // A plan with an objective and three rigs on, one framed separately.
