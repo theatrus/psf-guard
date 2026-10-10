@@ -787,6 +787,27 @@ psf-guard restore-rejects --db my-db --all    # restores everything
 visible in the web UI. The legacy `filter-rejected` command remains available
 for its statistical regrading flags but has been replaced by `move-rejects`.
 
+Frames that are truly bad can go further. `remove-rejects` takes rejected
+frames out of the catalog: their files, archived or not, move to a
+`.psf-guard-trash` folder in the image directory, and a tombstone keeps what
+restore needs. Only frames rejected at least `--days` days ago qualify (7 by
+default), and frames a collaboration report names stay. Sync pulls, imports
+and uploads do not bring a removed frame back.
+
+```bash
+psf-guard remove-rejects --db my-db --cache-dir ./cache            # preview only
+psf-guard remove-rejects --db my-db --cache-dir ./cache --apply    # remove them
+psf-guard list-removed --db my-db
+psf-guard restore-removed --db my-db --batch <batch-id>
+psf-guard empty-reject-trash --db my-db   # delete files past their 14 days
+```
+
+`--cache-dir` is the server's cache root; the removed frames' cache files go
+with them. The files stay in the trash until `empty-reject-trash` runs after
+their retention (`--retention-days`, 14 by default); until then
+`restore-removed` puts files and rows back. See
+[reject removal](docs/design/reject-removal.md).
+
 ## 🔄 Syncing between machines
 
 This workflow needs two database files. Keep the directions shown below: pull
@@ -863,6 +884,10 @@ psf-guard export my-db --dest ./stacking --target "M 31" --link  # hardlinks
 # Reject archival
 psf-guard move-rejects --db <slug> [--dry-run] [--project NAME] [--target NAME]
 psf-guard restore-rejects --db <slug> [--all] [--image-id N] [--dry-run]
+psf-guard remove-rejects --db <slug> [--days 7] [--project-id N] [--target-id N] [--apply]
+psf-guard restore-removed --db <slug> (--batch ID | --guid GUID...)
+psf-guard list-removed --db <slug>
+psf-guard empty-reject-trash --db <slug>
 
 # Two-database sync (see "Syncing between machines" above)
 psf-guard sync pull --from telescope.sqlite --to my-db

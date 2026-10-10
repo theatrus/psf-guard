@@ -681,6 +681,8 @@ fn upsert_acquired_images(
     // Pre-pull destination state + duplicate-guid sets (ambiguous rows skipped).
     let (dest_map, dest_dups) = dest_guid_map(tx, table, &write_cols, guid_w)?;
     let src_dups = source_dup_guids(src, table)?;
+    // Rejects removed here stay removed: a pull does not bring them back.
+    let removed = crate::commands::reject_removal::removed_guids(tx)?;
     let source_guids: HashSet<String> = {
         let mut statement =
             src.prepare(&format!("SELECT guid FROM {table} WHERE guid IS NOT NULL"))?;
@@ -747,6 +749,13 @@ fn upsert_acquired_images(
             summary
                 .changes
                 .push(format!("skip acquiredimage {} (ambiguous guid)", guid));
+            continue;
+        }
+        if removed.contains(&guid) {
+            summary.acquiredimage.skipped += 1;
+            summary
+                .changes
+                .push(format!("skip acquiredimage {guid} (removed here)"));
             continue;
         }
 

@@ -1,7 +1,8 @@
 # Reject removal
 
-Status: **In progress.** Rejection dates are recorded; removal, restore and
-the UI follow.
+Status: **In progress.** Rejection dates, removal, restore and emptying the
+trash work from the CLI (`src/commands/reject_removal.rs`); the server API,
+plan progress and the UI follow.
 
 Rejected subframes that are truly bad cost disk space and clutter every view
 that lists frames. Reject removal is an optional cleanup a person runs on

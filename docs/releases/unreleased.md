@@ -1,5 +1,12 @@
 # Unreleased
 
+- Remove truly bad rejects from the command line: `remove-rejects` previews,
+  then with `--apply` takes frames rejected at least 7 days ago out of the
+  catalog, moves their files and copies to a `.psf-guard-trash` folder, and
+  keeps a tombstone. `restore-removed` puts them back; `empty-reject-trash`
+  deletes files past their 14 days. Sync pulls, imports and uploads leave
+  removed frames out.
+
 - Picking an exposure template for a rig on a plan's Exposures tab takes
   that template's exposure, as adding the rig does; it used to keep the old
   exposure until the rig was skipped and picked again. A template whose

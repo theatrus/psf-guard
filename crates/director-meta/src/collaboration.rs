@@ -288,6 +288,27 @@ impl MetaStore {
         Ok(result)
     }
 
+    /// GUIDs of every frame a collaboration capture or report names. A later
+    /// correction must include them, so removing rejects leaves them be.
+    pub fn reported_image_guids(&self) -> Result<BTreeSet<String>, Error> {
+        let mut guids = BTreeSet::new();
+        let mut captures = self
+            .connection
+            .prepare("SELECT image_guid FROM collaboration_capture")?;
+        for guid in captures.query_map([], |row| row.get::<_, String>(0))? {
+            guids.insert(guid?);
+        }
+        let mut reports = self
+            .connection
+            .prepare("SELECT images FROM collaboration_outbox")?;
+        for images in reports.query_map([], |row| row.get::<_, String>(0))? {
+            if let Ok(list) = serde_json::from_str::<Vec<String>>(&images?) {
+                guids.extend(list);
+            }
+        }
+        Ok(guids)
+    }
+
     /// Imported source constraints and exact panels need admission support
     /// before they can become an active program. Editing a draft is not consent.
     pub fn collaboration_requires_admission(&self, project: Uuid) -> Result<bool, Error> {

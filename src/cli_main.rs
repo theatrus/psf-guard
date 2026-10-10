@@ -664,6 +664,198 @@ pub fn main() -> Result<()> {
             );
         }
 
+        Commands::RemoveRejects {
+            db,
+            days,
+            retention_days,
+            project_id,
+            target_id,
+            apply,
+            cache_dir,
+            registry,
+        } => {
+            use crate::commands::reject_removal::{self, PlanOptions, Scope};
+            let (registry_path, entry) = removal_entry(registry, &db)?;
+            let conn = Connection::open(&entry.db_path)
+                .with_context(|| format!("opening database at {}", entry.db_path))?;
+            let protected = reported_image_guids(&registry_path)?;
+            let now = chrono::Utc::now().timestamp();
+            let options = PlanOptions {
+                scope: Scope {
+                    project_id,
+                    target_id,
+                },
+                min_age_days: days,
+                now,
+                protected_guids: &protected,
+            };
+            let plan = reject_removal::plan(&conn, &entry.image_dirs, &options)?;
+            for frame in &plan.frames {
+                println!(
+                    "REMOVE  #{} {} {}",
+                    frame.image_id,
+                    frame.target_name,
+                    frame.file_name.as_deref().unwrap_or("(no file name)")
+                );
+                for file in &frame.files {
+                    println!("        {:?} {}", file.kind, file.path.display());
+                }
+            }
+            for skipped in &plan.skipped {
+                println!(
+                    "KEEP    #{} {} {}: {}",
+                    skipped.image_id,
+                    skipped.target_name,
+                    skipped.file_name.as_deref().unwrap_or(""),
+                    skipped.reason
+                );
+            }
+            println!(
+                "\n{} frame(s) to remove ({:.1} MB, {} without files), {} kept, {} rejected less than {} day(s) ago",
+                plan.frames.len(),
+                plan.bytes as f64 / 1_048_576.0,
+                plan.without_files,
+                plan.skipped.len(),
+                plan.waiting,
+                days
+            );
+            if !apply {
+                println!("Preview only; run again with --apply to remove them.");
+                return Ok(());
+            }
+            let report = reject_removal::apply(
+                &conn,
+                &entry.image_dirs,
+                &options,
+                &plan.digest,
+                retention_days,
+            )?;
+            for failed in &report.failed {
+                println!(
+                    "FAILED  #{} {}: {}",
+                    failed.image_id, failed.target_name, failed.reason
+                );
+            }
+            let caches = std::path::Path::new(&cache_dir).join(&entry.id);
+            let forgotten = reject_removal::forget_image_caches(&caches, &report.removed);
+            if forgotten > 0 {
+                println!(
+                    "Deleted {forgotten} cache file(s) under {}.",
+                    caches.display()
+                );
+            }
+            println!(
+                "Removed {} frame(s) in batch {}; {} file(s), {:.1} MB in the trash until {}.",
+                report.removed.len(),
+                report.batch_id,
+                report.files_moved,
+                report.bytes as f64 / 1_048_576.0,
+                chrono::DateTime::from_timestamp(report.trash_until, 0)
+                    .map(|at| at.format("%Y-%m-%d").to_string())
+                    .unwrap_or_default()
+            );
+        }
+
+        Commands::RestoreRemoved {
+            db,
+            batch,
+            guid,
+            cache_dir,
+            registry,
+        } => {
+            use crate::commands::reject_removal::{self, RestoreSelection};
+            if batch.is_none() && guid.is_empty() {
+                anyhow::bail!("Name a --batch or at least one --guid to restore.");
+            }
+            let (_, entry) = removal_entry(registry, &db)?;
+            let conn = Connection::open(&entry.db_path)
+                .with_context(|| format!("opening database at {}", entry.db_path))?;
+            let report = reject_removal::restore(
+                &conn,
+                &RestoreSelection {
+                    batch_id: batch,
+                    guids: guid,
+                },
+            )?;
+            for failed in &report.failed {
+                println!(
+                    "KEPT    {}: {}",
+                    failed.guid.as_deref().unwrap_or(""),
+                    failed.reason
+                );
+            }
+            for renamed in &report.renamed {
+                println!("RENAMED {renamed}");
+            }
+            let restored: Vec<reject_removal::RemovedFrame> = report
+                .restored
+                .iter()
+                .map(|frame| reject_removal::RemovedFrame {
+                    image_id: frame.image_id,
+                    guid: frame.guid.clone(),
+                    project_id: frame.project_id,
+                    target_id: frame.target_id,
+                })
+                .collect();
+            reject_removal::forget_image_caches(
+                &std::path::Path::new(&cache_dir).join(&entry.id),
+                &restored,
+            );
+            println!(
+                "Restored {} frame(s); {} could not be restored.",
+                report.restored.len(),
+                report.failed.len()
+            );
+        }
+
+        Commands::ListRemoved { db, registry } => {
+            let (_, entry) = removal_entry(registry, &db)?;
+            let conn = Connection::open(&entry.db_path)
+                .with_context(|| format!("opening database at {}", entry.db_path))?;
+            let day = |at: i64| {
+                chrono::DateTime::from_timestamp(at, 0)
+                    .map(|at| at.format("%Y-%m-%d").to_string())
+                    .unwrap_or_default()
+            };
+            let batches = crate::commands::reject_removal::batches(&conn)?;
+            if batches.is_empty() {
+                println!("Nothing has been removed from {db}.");
+            }
+            for batch in batches {
+                println!(
+                    "{}  removed {}  {} frame(s)  {:.1} MB  {}",
+                    batch.batch_id,
+                    day(batch.removed_at),
+                    batch.frames,
+                    batch.bytes as f64 / 1_048_576.0,
+                    if batch.files_deleted == batch.frames {
+                        "files deleted".to_string()
+                    } else {
+                        format!("in the trash until {}", day(batch.trash_until))
+                    }
+                );
+            }
+        }
+
+        Commands::EmptyRejectTrash { db, registry } => {
+            let (_, entry) = removal_entry(registry, &db)?;
+            let conn = Connection::open(&entry.db_path)
+                .with_context(|| format!("opening database at {}", entry.db_path))?;
+            let report = crate::commands::reject_removal::empty_trash(
+                &conn,
+                chrono::Utc::now().timestamp(),
+            )?;
+            for problem in &report.problems {
+                println!("KEPT    {problem}");
+            }
+            println!(
+                "Deleted {} file(s), {:.1} MB, of {} removed frame(s).",
+                report.files_deleted,
+                report.bytes as f64 / 1_048_576.0,
+                report.frames
+            );
+        }
+
         Commands::FilterRejected {
             database,
             base_dir,
@@ -1428,4 +1620,40 @@ pub fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// The registry and the entry a reject-removal command names.
+fn removal_entry(
+    registry: Option<String>,
+    db: &str,
+) -> Result<(std::path::PathBuf, crate::db_registry::DbEntry)> {
+    use crate::db_registry::DbRegistry;
+    let registry_path = match registry {
+        Some(path) => std::path::PathBuf::from(path),
+        None => DbRegistry::default_path().context("resolving default registry path")?,
+    };
+    let db_registry = DbRegistry::load_or_init(&registry_path)
+        .with_context(|| format!("loading registry at {}", registry_path.display()))?;
+    let entry = db_registry.find(db).cloned().ok_or_else(|| {
+        anyhow::anyhow!(
+            "No database with slug '{}' in {}.",
+            db,
+            registry_path.display()
+        )
+    })?;
+    Ok((registry_path, entry))
+}
+
+/// Frames a collaboration capture or report names, from the Director store
+/// beside the registry; none when there is no store.
+fn reported_image_guids(registry: &std::path::Path) -> Result<std::collections::BTreeSet<String>> {
+    let path = crate::server::director::default_meta_path(registry);
+    if !path.exists() {
+        return Ok(Default::default());
+    }
+    let store = psf_guard_director_meta::MetaStore::open_reader(&path)
+        .with_context(|| format!("reading the Director store at {}", path.display()))?;
+    store
+        .reported_image_guids()
+        .with_context(|| format!("reading collaboration reports from {}", path.display()))
 }
