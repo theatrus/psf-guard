@@ -1,8 +1,9 @@
 import axios from 'axios';
-import type { AxiosInstance } from 'axios';
+import type { AxiosInstance, AxiosResponse } from 'axios';
 import type { CollaborationAction, CollaborationConnection, CollaborationReply, CollaborationWork, CollaborationWorkInput, CollaborationBackgroundInput, CollaborationBackgroundReply } from './collaborationTypes';
 import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
+import { BUILD_HEADER, noteServerBuild } from '../updates/pageBuild';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorFeasibility, DirectorMosaicPreview, DirectorResolvedName,
   DirectorSkyMarks,
   DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate, DirectorAttached, DirectorTakenValues, DirectorRigScheduling, DirectorPlanProgress } from './directorTypes';
@@ -162,11 +163,22 @@ const initializeApi = async () => {
       },
     });
 
+    // Every reply names the server's frontend build. A page served by that
+    // same server can be reloaded into it; the desktop app's page ships
+    // inside the app, so it has nothing to reload.
+    const noteBuild = (response?: AxiosResponse) => {
+      if (!serverUrl) noteServerBuild(response?.headers[BUILD_HEADER]);
+    };
+
     // Add response interceptor for error handling
     initializedApi.interceptors.response.use(
-      (response) => response,
+      (response) => {
+        noteBuild(response);
+        return response;
+      },
       (error) => {
         if (axios.isAxiosError<ApiResponse<unknown>>(error)) {
+          noteBuild(error.response);
           if (
             error.response?.status === 401
             && !error.config?.url?.startsWith('/auth/')

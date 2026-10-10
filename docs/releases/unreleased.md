@@ -1,5 +1,11 @@
 # Unreleased
 
+- A browser tab left open across a server update now notices it. A
+  **PSF Guard was updated** bar offers **Reload now**, and the tab reloads by
+  itself the next time you change views; unsaved plan edits still ask first.
+  The server no longer lets the browser keep the page for an hour, so a reload
+  always brings the new version instead of the old page and scripts.
+
 - Remove truly bad rejects. In Settings › Databases, **Remove rejects**
   previews the frames rejected at least N days ago (7 by default), then
   takes them out of the catalog: their files and copies wait in a
