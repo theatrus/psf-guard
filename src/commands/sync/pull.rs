@@ -1257,6 +1257,7 @@ pub(crate) fn sync_pull_in_transaction(
     // (which manages its own transaction) reconciles too.
     crate::db::reconcile_accepted_counts(tx)
         .context("reconciling exposure plan accepted counts")?;
+    crate::db::record_rejection_times_where_kept(tx).context("dating rejected frames")?;
 
     Ok(summary)
 }
