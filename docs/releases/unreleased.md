@@ -1,5 +1,9 @@
 # Unreleased
 
+- The Sequence view's Scoring panel draws over the page with its own
+  background and border, and its limit boxes fit inside it. A few other
+  borders and text colours that named missing theme colours show again.
+
 - Stack previews prepare several frames at once on the build's workers, as
   Seiza's command line does, instead of reading through two helper threads
   into a separate pool, so stacks build sooner with the same output.

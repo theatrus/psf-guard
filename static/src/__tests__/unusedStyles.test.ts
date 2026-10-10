@@ -89,4 +89,21 @@ describe('stylesheets', () => {
     }
     expect(problems).toEqual([]);
   });
+  it('use only custom properties something defines', () => {
+    // A var() with no fallback whose property nothing sets drops the whole
+    // declaration: the Sequence scoring panel had no background or border.
+    const defined = new Set<string>();
+    for (const text of [...css.values(), source]) {
+      for (const match of text.matchAll(/(--[a-zA-Z0-9-]+)\s*:/g)) defined.add(match[1]);
+      // Set inline from a component: style={{ ['--from' as string]: ... }}.
+      for (const match of text.matchAll(/['"`](--[a-zA-Z0-9-]+)['"`]/g)) defined.add(match[1]);
+    }
+    const missing: string[] = [];
+    for (const [file, text] of css) {
+      for (const match of text.matchAll(/var\(\s*(--[a-zA-Z0-9-]+)\s*(,)?/g)) {
+        if (!match[2] && !defined.has(match[1])) missing.push(`${file}: ${match[1]}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
 });
