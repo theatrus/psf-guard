@@ -1,5 +1,9 @@
 # Unreleased
 
+- The Sequence view's Scoring panel draws over the page with its own
+  background and border, and its limit boxes fit inside it. A few other
+  borders and text colours that named missing theme colours show again.
+
 - Give a rig Target Scheduler scheduling limits in its Setup, under Limits
   and delivery, and apply them to every project in its database, including
   ones made in N.I.N.A. A list shows each project that differs and what will
