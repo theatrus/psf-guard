@@ -1,5 +1,14 @@
 # Unreleased
 
+- Agents can look into stacks over MCP. `list_stacks` lists a project's
+  latest stacks; `get_stack` gives each frame's registration and, per night,
+  whether the frames were dithered; `get_stack_calibration` lists the masters
+  each session applied; and `get_stack_image` returns the stack as an image,
+  with an optional hard background stretch and crop. `list_images` can keep
+  one filter's frames and only the header keys asked for. A POST to the
+  server's bare address now answers 405 and names `/api/mcp`, instead of
+  returning the app's page.
+
 - A browser tab left open across a server update now notices it. A
   **PSF Guard was updated** bar offers **Reload now**, and the tab reloads by
   itself the next time you change views; unsaved plan edits still ask first.

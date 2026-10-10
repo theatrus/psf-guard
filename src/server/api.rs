@@ -247,6 +247,10 @@ pub struct ImageQuery {
     pub project_id: Option<i32>,
     pub target_id: Option<i32>,
     pub status: Option<String>,
+    /// Only this filter's frames, matched without regard to case; paging
+    /// counts the matching frames only.
+    #[serde(default)]
+    pub filter_name: Option<String>,
     pub limit: Option<i32>,
     pub offset: Option<i32>,
 }

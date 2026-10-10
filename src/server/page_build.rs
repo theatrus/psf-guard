@@ -22,6 +22,19 @@ pub fn is_hashed_asset(path: &str) -> bool {
     path.starts_with("assets/")
 }
 
+/// The answer to anything but GET or HEAD outside `/api`. The app is only
+/// ever fetched; a POST here is most often an MCP client given the bare
+/// host, so say where the endpoint is instead of answering with the page.
+pub fn method_not_allowed() -> axum::response::Response {
+    use axum::{http::header, response::IntoResponse};
+    (
+        axum::http::StatusCode::METHOD_NOT_ALLOWED,
+        [(header::ALLOW, "GET, HEAD")],
+        "PSF Guard serves its app here. The API is under /api, and the MCP endpoint is /api/mcp.",
+    )
+        .into_response()
+}
+
 pub fn cache_control(path: &str) -> HeaderValue {
     HeaderValue::from_static(if is_hashed_asset(path) {
         "public, max-age=31536000, immutable"

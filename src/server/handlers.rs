@@ -4137,15 +4137,31 @@ pub async fn get_images(
 
     let offset = params.offset.unwrap_or(0).max(0) as usize;
     let limit = params.limit.unwrap_or(100).max(0) as usize;
-    let images = db
-        .query_images_scoped(
-            status_filter,
-            params.project_id,
-            params.target_id,
-            Some(limit),
-            offset,
-        )
-        .map_err(AppError::db)?;
+    let filter_name = params
+        .filter_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+    let images = match filter_name {
+        // The scoped query cannot filter by filter name, so page after it.
+        Some(wanted) => db
+            .query_images_scoped(status_filter, params.project_id, params.target_id, None, 0)
+            .map_err(AppError::db)?
+            .into_iter()
+            .filter(|(image, _, _)| image.filter_name.eq_ignore_ascii_case(wanted))
+            .skip(offset)
+            .take(limit)
+            .collect(),
+        None => db
+            .query_images_scoped(
+                status_filter,
+                params.project_id,
+                params.target_id,
+                Some(limit),
+                offset,
+            )
+            .map_err(AppError::db)?,
+    };
 
     let mut exposure_groups = std::collections::HashMap::new();
     let projects: std::collections::HashSet<_> = images

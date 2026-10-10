@@ -38,13 +38,19 @@ use crate::{
         extract::DbContext,
         handlers::{self, AppError},
         sky_coverage,
+        stack_preview::{self, StackGroupStatus, StackPreviewImageQuery, StackPreviewJob},
         state::AppState,
         wbpp_run::{self, StartWbppRunRequest},
     },
 };
 
+mod stacks;
+
 const DEFAULT_IMAGE_LIMIT: i32 = 100;
 const MAX_IMAGE_LIMIT: i32 = 1000;
+/// The longest side `get_stack_image` returns by default, and its bounds.
+const DEFAULT_STACK_IMAGE_SIZE: u32 = 1024;
+const STACK_IMAGE_SIZES: std::ops::RangeInclusive<u32> = 256..=2048;
 
 /// Build the tower service the API router nests at `/mcp`.
 pub fn service(state: Arc<AppState>) -> StreamableHttpService<PsfGuardMcp, LocalSessionManager> {
@@ -88,10 +94,52 @@ pub struct ImageListArgs {
     pub target_id: Option<i32>,
     /// Grade filter: `pending`, `accepted`, or `rejected`.
     pub status: Option<String>,
+    /// Only this filter's frames, such as `SII`; case does not matter.
+    pub filter_name: Option<String>,
+    /// Keep only these header keys in each frame's metadata, such as
+    /// `["HFR", "DetectedStars", "RotatorPosition", "PierSide"]`. Omitted
+    /// keeps every key.
+    pub metadata_keys: Option<Vec<String>>,
     /// Page size, at most 1000 (default 100).
     pub limit: Option<i32>,
     /// Rows to skip for paging.
     pub offset: Option<i32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct StackArgs {
+    /// Database id (slug) or name.
+    pub database: String,
+    /// The project id from `list_projects`.
+    pub project_id: i32,
+    /// The stack's job id from `list_stacks`.
+    pub job_id: String,
+    /// Which channel of that job, from `list_stacks`. Default 0.
+    #[serde(default)]
+    pub group_index: usize,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct StackImageArgs {
+    /// Database id (slug) or name.
+    pub database: String,
+    /// The project id from `list_projects`.
+    pub project_id: i32,
+    /// The stack's job id from `list_stacks`.
+    pub job_id: String,
+    /// Which channel of that job, from `list_stacks`. Default 0.
+    #[serde(default)]
+    pub group_index: usize,
+    /// `display` (default), as the app shows it, or `background`, stretched
+    /// hard so gradients, vignetting, streaks and calibration patterns show.
+    #[serde(default)]
+    pub stretch: stacks::ImageStretch,
+    /// Show only this part, as fractions of the width and height from the
+    /// top left, e.g. `{"x": 0.5, "y": 0, "width": 0.5, "height": 0.5}` for
+    /// the top-right quarter.
+    pub crop: Option<stacks::CropArgs>,
+    /// Longest side of the returned image, 256 to 2048 pixels (default 1024).
+    pub max_size: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -276,6 +324,28 @@ impl PsfGuardMcp {
         }
     }
 
+    /// A stack job of this project, from memory or its manifest.
+    async fn stack_job(
+        &self,
+        ctx: &DbContext,
+        project_id: i32,
+        job_id: &str,
+    ) -> Result<StackPreviewJob, CallToolResult> {
+        let db_id = ctx.id.clone();
+        match stack_preview::get_stack_preview_job(
+            State(Arc::clone(&self.state)),
+            DbContext(Arc::clone(&ctx.0)),
+            Path((db_id, project_id, job_id.to_string())),
+        )
+        .await
+        {
+            Err(AppError::NotFound) => Err(failure(&format!(
+                "No stack {job_id} in project {project_id}; list_stacks names the current ones"
+            ))),
+            other => data(other),
+        }
+    }
+
     fn database(&self, name: &str) -> Result<DbContext, CallToolResult> {
         let wanted = name.trim();
         let databases = self.state.all_databases();
@@ -344,10 +414,30 @@ impl PsfGuardMcp {
             project_id: args.project_id,
             target_id: args.target_id,
             status: args.status,
+            filter_name: args.filter_name,
             limit: Some(limit),
             offset: args.offset,
         };
-        Ok(render(handlers::get_images(ctx, Query(query)).await))
+        let images = match data(handlers::get_images(ctx, Query(query)).await) {
+            Ok(images) => images,
+            Err(error) => return Ok(error),
+        };
+        let Some(keys) = args.metadata_keys else {
+            return Ok(render_value(&images));
+        };
+        let mut images = match serde_json::to_value(&images) {
+            Ok(images) => images,
+            Err(error) => return Ok(failure(&format!("Could not serialize the result: {error}"))),
+        };
+        for image in images.as_array_mut().into_iter().flatten() {
+            if let Some(metadata) = image
+                .get_mut("metadata")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                metadata.retain(|key, _| keys.iter().any(|wanted| wanted == key));
+            }
+        }
+        Ok(render_value(&images))
     }
 
     #[tool(description = "One image: grade, file location, header metadata and stored metrics.")]
@@ -423,6 +513,164 @@ impl PsfGuardMcp {
         Ok(render(
             handlers::get_project_calibration_report(ctx, Path((db_id, args.project_id))).await,
         ))
+    }
+
+    #[tool(
+        description = "A project's latest stack previews, one per channel (target, filter and exposure): frames integrated and left out, total exposure, the masters each calibration session applied, how much more depth would help, and the job id and group index the other stack tools take."
+    )]
+    async fn list_stacks(&self, Parameters(args): Parameters<ProjectArgs>) -> ToolResult {
+        let ctx = match self.database(&args.database) {
+            Ok(ctx) => ctx,
+            Err(error) => return Ok(error),
+        };
+        let db_id = ctx.id.clone();
+        let latest = match data(
+            stack_preview::get_latest_stack_previews(ctx, Path((db_id, args.project_id))).await,
+        ) {
+            Ok(latest) => latest,
+            Err(error) => return Ok(error),
+        };
+        let stacks: Vec<_> = latest
+            .groups
+            .iter()
+            .map(|entry| stacks::summarize(&entry.job_id, entry.created_unix_seconds, &entry.group))
+            .collect();
+        Ok(render_value(&serde_json::json!({
+            "project_id": args.project_id,
+            "stacks": stacks,
+        })))
+    }
+
+    #[tool(
+        description = "One stack channel frame by frame, in capture order: each frame's disposition and reason, where it registered (shift and rotation in reference pixels), weight, noise and normalization. Also, per night, whether the frames were dithered or walked steadily one way, which turns anything fixed to the sensor into streaks (walking noise)."
+    )]
+    async fn get_stack(&self, Parameters(args): Parameters<StackArgs>) -> ToolResult {
+        let ctx = match self.database(&args.database) {
+            Ok(ctx) => ctx,
+            Err(error) => return Ok(error),
+        };
+        let job = match self.stack_job(&ctx, args.project_id, &args.job_id).await {
+            Ok(job) => job,
+            Err(error) => return Ok(error),
+        };
+        let Some(group) = job.groups.get(args.group_index) else {
+            return Ok(failure(&format!(
+                "This stack has {} channel(s); group_index {} is not one",
+                job.groups.len(),
+                args.group_index
+            )));
+        };
+        let (acquired, boundary) = match capture_times(&ctx, group) {
+            Ok(times) => times,
+            Err(error) => return Ok(failure(&error_text(&error))),
+        };
+        let rows = stacks::frame_rows(group, &acquired, |at| stacks::night_of(at, boundary));
+        Ok(render_value(&serde_json::json!({
+            "stack": stacks::summarize(&job.job_id, job.created_unix_seconds, group),
+            "drift_by_night": stacks::drift_by_night(&rows),
+            "frames": rows,
+        })))
+    }
+
+    #[tool(
+        description = "Look at a stack: its preview image, as the app shows it or with the background stretched hard to show gradients, vignetting, streaks and calibration patterns. Crop to a region and choose the size. Returns a PNG image and a note of what part it shows."
+    )]
+    async fn get_stack_image(&self, Parameters(args): Parameters<StackImageArgs>) -> ToolResult {
+        let ctx = match self.database(&args.database) {
+            Ok(ctx) => ctx,
+            Err(error) => return Ok(error),
+        };
+        // The job is read first so a stack of another project is refused.
+        if let Err(error) = self.stack_job(&ctx, args.project_id, &args.job_id).await {
+            return Ok(error);
+        }
+        let db_id = ctx.id.clone();
+        let response = match stack_preview::get_stack_preview_image(
+            ctx,
+            Path((db_id, args.job_id.clone(), args.group_index)),
+            Query(StackPreviewImageQuery::default()),
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(AppError::NotFound) => {
+                return Ok(failure(
+                    "This stack has no image yet: it is still building, was skipped, or failed",
+                ))
+            }
+            Err(error) => return Ok(failure(&error_text(&error))),
+        };
+        let bytes = match axum::body::to_bytes(response.into_body(), 256 * 1024 * 1024).await {
+            Ok(bytes) => bytes,
+            Err(error) => return Ok(failure(&format!("Could not read the stack image: {error}"))),
+        };
+        let max_size = args
+            .max_size
+            .unwrap_or(DEFAULT_STACK_IMAGE_SIZE)
+            .clamp(*STACK_IMAGE_SIZES.start(), *STACK_IMAGE_SIZES.end());
+        let (crop, stretch) = (args.crop, args.stretch);
+        let rendered = tokio::task::spawn_blocking(move || {
+            stacks::render_png(&bytes, crop, max_size, stretch)
+        })
+        .await;
+        let (png, note) = match rendered {
+            Ok(Ok(rendered)) => rendered,
+            Ok(Err(error)) => return Ok(failure(&error)),
+            Err(error) => {
+                return Ok(failure(&format!(
+                    "Rendering the stack image failed: {error}"
+                )))
+            }
+        };
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&png);
+        let note = serde_json::to_string(&note).unwrap_or_default();
+        Ok(CallToolResult::success(vec![
+            ContentBlock::image(encoded, "image/png"),
+            ContentBlock::text(format!(
+                "The stack's preview, {note}. `crop` is [x, y, width, height] in the \
+                 preview's pixels; the preview is the stack scaled down, in the orientation the \
+                 app shows."
+            )),
+        ]))
+    }
+
+    #[tool(
+        description = "The calibration masters a stack applied, per session: each bias, dark and flat master, how many lights it calibrated, how many frames it was built from and how outliers were rejected, and notes on sessions that had none. A master built from two frames, or a session with no flat, explains many stack patterns."
+    )]
+    async fn get_stack_calibration(&self, Parameters(args): Parameters<StackArgs>) -> ToolResult {
+        let ctx = match self.database(&args.database) {
+            Ok(ctx) => ctx,
+            Err(error) => return Ok(error),
+        };
+        let job = match self.stack_job(&ctx, args.project_id, &args.job_id).await {
+            Ok(job) => job,
+            Err(error) => return Ok(error),
+        };
+        let source = serde_json::json!({ "job_id": job.job_id, "group_index": args.group_index });
+        let query = serde_json::json!({ "revision": job.artifact_revision });
+        let (Ok(path), Ok(query)) = (
+            serde_json::from_value(source),
+            serde_json::from_value(query),
+        ) else {
+            return Ok(failure("Could not name this stack's masters"));
+        };
+        let catalog = match data(
+            stack_preview::calibration_masters::get_catalog(
+                State(Arc::clone(&self.state)),
+                ctx,
+                Path(path),
+                Query(query),
+            )
+            .await,
+        ) {
+            Ok(catalog) => catalog,
+            Err(error) => return Ok(error),
+        };
+        // The links are for the app's inspector; an agent cannot follow them.
+        let mut catalog = serde_json::to_value(&catalog).unwrap_or_default();
+        strip_links(&mut catalog);
+        Ok(render_value(&catalog))
     }
 
     #[tool(
@@ -623,6 +871,9 @@ impl ServerHandler for PsfGuardMcp {
                  accepted, rejected or pending. analyze_sequence and get_image_quality report \
                  evidence and suggestions; nothing changes until grade_images runs. Jobs \
                  (import, quality scan, WBPP) return at once; poll get_jobs for progress. \
+                 For a stack, list_stacks names each channel's job; get_stack gives its frames \
+                 and per-night drift, get_stack_calibration the masters it applied, and \
+                 get_stack_image the picture (stretch `background` shows patterns). \
                  Catalog predictions and header values are not pixel evidence; say which one \
                  a conclusion rests on."
                     .to_string(),
@@ -648,6 +899,53 @@ fn render<T: Serialize>(response: Result<Json<ApiResponse<T>>, AppError>) -> Cal
             }
         }
         Err(error) => failure(&error_text(&error)),
+    }
+}
+
+/// The answer of a handler, or the tool error that says why there is none.
+fn data<T>(response: Result<Json<ApiResponse<T>>, AppError>) -> Result<T, CallToolResult> {
+    match response {
+        Ok(Json(body)) if body.success => body.data.ok_or_else(|| {
+            failure("The catalog cache is still loading for this database; try again shortly")
+        }),
+        Ok(Json(body)) => Err(failure(
+            body.error.as_deref().unwrap_or("The request failed"),
+        )),
+        Err(error) => Err(failure(&error_text(&error))),
+    }
+}
+
+/// When each of a stack's frames was taken, and where the catalog's nights
+/// split.
+fn capture_times(
+    ctx: &DbContext,
+    group: &StackGroupStatus,
+) -> Result<(std::collections::HashMap<i32, i64>, i64), AppError> {
+    let conn = ctx.db();
+    let conn = conn.lock().map_err(AppError::db)?;
+    let db = crate::db::Database::new(&conn);
+    let ids: Vec<i32> = group.frames.iter().map(|frame| frame.image_id).collect();
+    let mut acquired = std::collections::HashMap::new();
+    for chunk in ids.chunks(500) {
+        for image in db.get_images_by_ids(chunk).map_err(AppError::db)? {
+            if let Some(at) = image.acquired_date {
+                acquired.insert(image.id, at);
+            }
+        }
+    }
+    let boundary = sky_coverage::catalog_night_boundary(&conn).unwrap_or(12 * 3600);
+    Ok((acquired, boundary))
+}
+
+/// Drop the `*_url` fields, which only the app's own pages can follow.
+fn strip_links(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.retain(|key, _| !key.ends_with("_url"));
+            map.values_mut().for_each(strip_links);
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(strip_links),
+        _ => {}
     }
 }
 
