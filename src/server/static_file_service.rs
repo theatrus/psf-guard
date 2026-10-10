@@ -4,7 +4,7 @@ use axum::{
     http::{header, HeaderMap, HeaderValue, Response, StatusCode},
 };
 use mime_guess::from_path;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tower::Service;
@@ -48,12 +48,17 @@ impl<B: Send + 'static> Service<Request<B>> for StaticFileService {
             // If path is empty, serve index.html
             let path = if path.is_empty() { "index.html" } else { path };
 
-            let file_path = root.join(path);
-
-            // Security check: ensure the path is within our root directory
-            if !file_path.starts_with(&root) {
+            // Only plain names stay inside the root. `root.join` keeps a
+            // `..` (or a root or drive prefix replaces the root), and
+            // `starts_with` compares names without resolving them, so it
+            // cannot catch either.
+            if !Path::new(path)
+                .components()
+                .all(|part| matches!(part, Component::Normal(_)))
+            {
                 return Ok(not_found_response());
             }
+            let file_path = root.join(path);
 
             // Try to serve the requested file
             match serve_file(&file_path, path).await {
@@ -131,6 +136,14 @@ mod tests {
     use super::*;
     use tower::ServiceExt;
 
+    fn get(
+        service: &StaticFileService,
+        path: &str,
+    ) -> impl Future<Output = Result<Response<Body>, std::convert::Infallible>> {
+        let request = Request::builder().uri(path).body(Body::empty()).unwrap();
+        service.clone().oneshot(request)
+    }
+
     #[tokio::test]
     async fn the_page_is_checked_each_load_and_assets_kept() {
         let dir = tempfile::tempdir().unwrap();
@@ -138,22 +151,48 @@ mod tests {
         std::fs::create_dir(dir.path().join("assets")).unwrap();
         std::fs::write(dir.path().join("assets/index-AbC123.js"), "export {}").unwrap();
         let service = StaticFileService::new(dir.path().to_path_buf());
-        let get = |path: &'static str| {
-            let request = Request::builder().uri(path).body(Body::empty()).unwrap();
-            service.clone().oneshot(request)
-        };
 
         for path in ["/", "/index.html", "/some/old/route"] {
-            let page = get(path).await.unwrap();
+            let page = get(&service, path).await.unwrap();
             assert_eq!(page.status(), StatusCode::OK, "{path}");
             assert_eq!(page.headers()[header::CACHE_CONTROL], "no-cache", "{path}");
         }
-        let kept = get("/assets/index-AbC123.js").await.unwrap();
+        let kept = get(&service, "/assets/index-AbC123.js").await.unwrap();
         assert_eq!(
             kept.headers()[header::CACHE_CONTROL],
             "public, max-age=31536000, immutable"
         );
-        let gone = get("/assets/index-0ldBu1ld.js").await.unwrap();
+        let gone = get(&service, "/assets/index-0ldBu1ld.js").await.unwrap();
         assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn requests_cannot_leave_the_static_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("dist");
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::write(root.join("index.html"), "<!doctype html>").unwrap();
+        std::fs::write(root.join("assets/app.js"), "export {}").unwrap();
+        std::fs::write(dir.path().join("secret.txt"), "outside").unwrap();
+        let service = StaticFileService::new(root);
+
+        for path in [
+            "/../secret.txt",
+            "/assets/../../secret.txt",
+            "/./../secret.txt",
+        ] {
+            let response = get(&service, path).await.unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+        // Leading slashes are trimmed, so this asks for `etc/passwd` below
+        // the root and gets the app's page.
+        let body = get(&service, "//etc/passwd").await.unwrap().into_body();
+        let body = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+        assert_eq!(&body[..], b"<!doctype html>");
+        assert_eq!(
+            get(&service, "/assets/app.js").await.unwrap().status(),
+            StatusCode::OK
+        );
+        assert_eq!(get(&service, "/").await.unwrap().status(), StatusCode::OK);
     }
 }
