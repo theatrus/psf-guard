@@ -1,5 +1,9 @@
 # Unreleased
 
+- Stack previews prepare several frames at once on the build's workers, as
+  Seiza's command line does, instead of reading through two helper threads
+  into a separate pool, so stacks build sooner with the same output.
+
 - Give a rig Target Scheduler scheduling limits in its Setup, under Limits
   and delivery, and apply them to every project in its database, including
   ones made in N.I.N.A. A list shows each project that differs and what will
