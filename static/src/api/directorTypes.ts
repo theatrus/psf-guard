@@ -358,6 +358,26 @@ export interface DirectorRigScheduling {
   push: { peer_id: string; peer_name: string; applied: boolean; error: string | null } | null;
   warnings: string[];
 }
+/** Frames Target Scheduler's exposure plans ask for, took, accepted and rejected. */
+export interface DirectorFrameCounts { desired: number; acquired: number; accepted: number; rejected: number }
+export interface DirectorObjectiveProgress {
+  objective_id: string;
+  frames: DirectorFrameCounts;
+  /** Exposure plans counting toward it; 0 until one is written. */
+  exposure_plans: number;
+}
+/** One rig's progress on a plan, read from its database. */
+export interface DirectorRigProgress {
+  rig_id: string;
+  /** Its Target Scheduler project; state 0 draft, 1 active, 2 inactive, 3 closed. */
+  project: { name: string; state: number } | null;
+  objectives: DirectorObjectiveProgress[];
+  /** Exposure plans no objective of this rig claims. */
+  other: DirectorFrameCounts;
+  total: DirectorFrameCounts;
+  note: string | null;
+}
+export interface DirectorPlanProgress { rigs: DirectorRigProgress[] }
 export interface DirectorActivationReport {
   project: DirectorIdentity;
   framing_revision: number;

@@ -156,7 +156,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   const apply = useMutation({
     retry: false,
     mutationFn: () => { if (!report) throw new Error('Preview first'); return apiClient.applyDirectorActivation(projectId, report.preview_digest, visits); },
-    onSuccess: applied => { setReport(applied); for (const key of [['directorActivation', projectId], ['directorActivationCheck', projectId], ['collaborationActivation', projectId], ['db'], ['directorCatalog'], ['directorPlans']]) void client.invalidateQueries({ queryKey: key }); },
+    onSuccess: applied => { setReport(applied); for (const key of [['directorActivation', projectId], ['directorActivationCheck', projectId], ['collaborationActivation', projectId], ['directorPlanProgress', projectId], ['db'], ['directorCatalog'], ['directorPlans']]) void client.invalidateQueries({ queryKey: key }); },
     onError: error => { if (httpStatus(error) === 409) setReport(null); },
   });
   // The plan takes a rig's Target Scheduler values; then the preview runs

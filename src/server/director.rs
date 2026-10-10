@@ -38,6 +38,7 @@ pub(crate) use import_drafts::inferred_mosaic;
 mod mosaic;
 pub(super) mod pairing;
 mod plan;
+mod plan_progress;
 mod plans;
 mod program;
 mod rig_profile;
@@ -609,6 +610,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             "/projects/{id}/plan/take-target-scheduler",
             axum::routing::post(take_values::take),
         )
+        .route("/projects/{id}/plan/progress", get(plan_progress::progress))
         .route("/sky/surveys", get(sky_image::surveys))
         .route("/sky/cutout", get(sky_image::cutout))
         .route("/sky/resolve", get(sky_image::resolve))

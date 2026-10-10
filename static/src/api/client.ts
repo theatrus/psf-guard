@@ -5,7 +5,7 @@ import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorFeasibility, DirectorMosaicPreview, DirectorResolvedName,
   DirectorSkyMarks,
-  DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate, DirectorAttached, DirectorTakenValues, DirectorRigScheduling } from './directorTypes';
+  DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate, DirectorAttached, DirectorTakenValues, DirectorRigScheduling, DirectorPlanProgress } from './directorTypes';
 import type { GuidFillReport, GuidReport,
   ProjectMosaic,
   ProjectProcessingSettings,
@@ -550,6 +550,14 @@ export const apiClient = {
     const api = await getApi();
     const { data } = await api.put<ApiResponse<DirectorPlanView>>(`/director/v1/projects/${encodeURIComponent(plan.project_id)}/plan`, plan);
     if (!data.data) throw new Error(data.error || 'Failed to save plan');
+    return data.data;
+  },
+
+  /** Each rig's frames per objective, read from its Target Scheduler database. */
+  getDirectorPlanProgress: async (projectId: string): Promise<DirectorPlanProgress> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorPlanProgress>>(`/director/v1/projects/${encodeURIComponent(projectId)}/plan/progress`);
+    if (!data.data) throw new Error(data.error || 'Failed to load plan progress');
     return data.data;
   },
 
