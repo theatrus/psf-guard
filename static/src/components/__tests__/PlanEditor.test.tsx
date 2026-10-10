@@ -208,6 +208,26 @@ describe('Plan editor', () => {
     expect(rows[3]).toHaveTextContent('Off');
   });
 
+  it("takes a picked template's exposure, after goals and a hand-set exposure", async () => {
+    const objective = { id: 'o1', bandpass_id: 'h_alpha', purpose: 'faint_detail', goal: { kind: 'hours' as const, value: 6 }, priority: 1 };
+    fixture({ project_id: 'project', revision: 1, updated_at_ms: 1, objectives: [objective], contributions: [
+      { id: 'c1', objective_id: 'o1', rig_id: redcat.rig.id, template: { template_guid: null, template_id: 1, name: 'Ha 300', filter_name: 'Ha', gain: 100, offset: 30, bin: 1, readout_mode: null },
+        exposure_seconds: 120, panel_ids: [], enabled: true, goal: { kind: 'hours', value: 10 } },
+    ] });
+    mount();
+    const exposure = await screen.findByLabelText('RedCat 61 exposure for H-alpha');
+    expect(exposure).toHaveValue(120);
+    // The library's Ha 600 brings 600 s: 10 h is 60 frames.
+    fireEvent.change(screen.getByLabelText('RedCat 61 template for H-alpha'), { target: { value: 'lib:11111111-1111-4111-8111-111111111111' } });
+    expect(screen.getByLabelText('RedCat 61 exposure for H-alpha')).toHaveValue(600);
+    expect(screen.getByTestId('frames-redcat-h_alpha')).toHaveTextContent('60');
+    // Back to the rig's own Ha 300; the rig's goal stays.
+    fireEvent.change(screen.getByLabelText('RedCat 61 template for H-alpha'), { target: { value: 'db:1' } });
+    expect(screen.getByLabelText('RedCat 61 exposure for H-alpha')).toHaveValue(300);
+    expect(screen.getByLabelText('RedCat 61 goal for H-alpha')).toHaveValue(10);
+    expect(screen.getByTestId('frames-redcat-h_alpha')).toHaveTextContent('120');
+  });
+
   it('lets the Rigs tab add and drop rigs, listing only the rigs that shoot the plan', async () => {
     fixture(null, null, []);
     const controls: MutableRefObject<PlanRigControls | null> = { current: null };
