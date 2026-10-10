@@ -29,6 +29,7 @@ work. Historical checklists record delivery; they do not track current work.
 - [Director: goal-driven acquisition and phased plan](design/director.md)
 - [AstroCollab and Starfront interoperability (proposed)](design/collaboration.md)
 - [Reject archive safety model](design/reject-archive.md)
+- [Reject removal](design/reject-removal.md)
 - [Calibrated subs](design/calibrated-subs.md)
 
 ## Component-specific guides

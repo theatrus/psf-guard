@@ -245,6 +245,7 @@ pub(crate) fn sync_grades_in_transaction(
         // The destination's Target Scheduler plans against these counters.
         crate::db::reconcile_accepted_counts(tx)
             .context("reconciling exposure plan accepted counts")?;
+        crate::db::record_rejection_times_where_kept(tx).context("dating rejected frames")?;
     }
 
     Ok(summary)
