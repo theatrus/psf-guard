@@ -127,3 +127,71 @@ async fn without_database_management_activation_is_refused_as_in_the_app() {
     assert!(refused.contains("database management"), "{refused}");
     tool(&app, "list_plans", json!({})).await.unwrap();
 }
+
+/// A server with one Target Scheduler catalog: a project, a target, a
+/// template and an exposure plan.
+fn catalog_state(management: bool) -> Arc<AppState> {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    crate::ts_schema::apply_schema(&conn).unwrap();
+    conn.execute_batch(
+        "INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (1,'p','Bubble','',1,1,'pg');
+         INSERT INTO target (Id,name,active,ra,dec,epochcode,projectid,guid) VALUES (1,'Bubble Nebula',1,23.3,61.2,0,1,'tg');
+         INSERT INTO exposuretemplate (Id,profileId,name,filtername,gain,guid) VALUES (1,'p','SII','SII',100,'eg');
+         INSERT INTO exposureplan (Id,profileId,exposure,desired,acquired,accepted,targetid,exposureTemplateId,guid) VALUES (1,'p',300,50,10,8,1,1,'lg');",
+    )
+    .unwrap();
+    let state = AppState::new_for_test(conn);
+    state.set_allow_database_management(management);
+    Arc::new(state)
+}
+
+#[tokio::test]
+async fn an_agent_edits_the_scheduler_and_meets_the_management_gate() {
+    let state = catalog_state(false);
+    let app = app(&state);
+    let db = state.all_databases()[0].id.clone();
+
+    tool(
+        &app,
+        "update_exposure_plan",
+        json!({ "database": db, "exposure_plan_id": 1, "exposure": 600.0, "desired": 30, "enabled": true }),
+    )
+    .await
+    .unwrap();
+    tool(
+        &app,
+        "update_project",
+        json!({ "database": db, "project_id": 1, "changes": { "priority": 2 } }),
+    )
+    .await
+    .unwrap();
+    let scheduler = tool(
+        &app,
+        "get_project_scheduler",
+        json!({ "database": db, "project_id": 1 }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(scheduler["priority"], 2, "{scheduler}");
+    assert!(scheduler.to_string().contains("600"), "{scheduler}");
+
+    // No frames: nothing to stack, said plainly.
+    let empty = tool(
+        &app,
+        "start_stack",
+        json!({ "database": db, "project_id": 1, "filter_name": "SII" }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(empty, "No frames match that project, target and filter");
+
+    // Removing rejects needs database management, as in the app.
+    let refused = tool(
+        &app,
+        "preview_reject_removal",
+        json!({ "database": db, "min_age_days": 7 }),
+    )
+    .await
+    .unwrap_err();
+    assert!(refused.to_lowercase().contains("management"), "{refused}");
+}

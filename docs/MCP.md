@@ -105,6 +105,14 @@ read, below `/api`, as you.
 | `apply_rig_scheduling` | Write a rig's scheduling limits, with the digest `get_rig_scheduling` gave | yes, plus management |
 | `save_template`, `delete_template` | Change the shared exposure template library | yes |
 | `save_preferences` | Save observing preferences for global, a site or a rig | yes |
+| `start_stack`, `cancel_stack` | Build stack previews for a project, target or filter; stop one | yes |
+| `update_project`, `update_target` | Change scheduler settings; send only the fields to change | yes |
+| `update_exposure_plan`, `create_exposure_plan` | Change or add an exposure plan | yes |
+| `preview_reject_removal` | The rejects removal would take out, with a `digest` | yes, plus management |
+| `apply_reject_removal`, `restore_removed_rejects` | Remove those rejects to the trash with the digest; bring a batch back | yes, plus management |
+| `preview_sync`, `apply_sync` | Preview a pull or push between two open databases; apply it | yes, plus management |
+| `set_calibration_validity` | Mark calibration frames for later or earlier lights, or clear the mark | yes |
+| `solve_astrometry`, `predict_satellites` | Plate-solve a light; predict satellite crossings and check them in the pixels | yes |
 
 Jobs return at once. Poll `get_jobs` for progress.
 
