@@ -79,6 +79,7 @@ describe('TauriSettings import state', () => {
     );
 
     const usersTab = await screen.findByRole('tab', { name: 'Users' });
+    expect(screen.queryByRole('tab', { name: 'Agents' })).not.toBeInTheDocument();
     fireEvent.click(usersTab);
     expect(
       await screen.findByRole('heading', { name: 'Browser users' })
@@ -180,6 +181,14 @@ describe('TauriSettings import state', () => {
 
     expect(await screen.findByRole('heading', { name: 'Processor use' })).toBeInTheDocument();
     expect(screen.getByRole('slider', { name: 'Background work share of cores' })).toBeInTheDocument();
+  });
+
+  it('shows a server without accounts how to connect an agent, with no token', async () => {
+    render(<MemoryRouter><TauriSettings isOpen onClose={() => {}} /></MemoryRouter>, { wrapper: createWrapper() });
+    fireEvent.click(await screen.findByRole('tab', { name: 'Agents' }));
+    const url = `${window.location.origin}/api/mcp`;
+    expect(await screen.findByText(`claude mcp add --transport http psf-guard ${url}`)).toBeInTheDocument();
+    expect(screen.queryByText(/PSF_GUARD_TOKEN/)).not.toBeInTheDocument();
   });
 
   it('hides catalog management on a read-only server', async () => {
