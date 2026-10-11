@@ -1,5 +1,14 @@
 # Unreleased
 
+- Find the lights the calibration library cannot calibrate properly: no
+  matching flat, no bias or dark, or flats more than 60 days away
+  (**Settings › Calibration › Flat age limit**; 0 lifts it). Each rule only
+  counts where the library holds that kind for the camera, so a rig that
+  never shoots flats is not affected. In a project's **Calibration** report,
+  **Check lights** lists them and **Reject N lights** rejects them, so Target
+  Scheduler shoots them again. Turn on **Leave out lights that can't be
+  calibrated** to keep them out of stack previews; the stack card counts them
+  under **can't calibrate**, and each frame says why.
 - Connecting an agent takes one step. **Settings › Users › API tokens ›
   Connect an agent** mints a token and shows the setup to paste for Claude
   Code and for Codex, with this server's MCP URL; a new token shows the same.

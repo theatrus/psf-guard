@@ -2646,6 +2646,78 @@ pub async fn get_project_calibration_report(
     Ok(Json(ApiResponse::success(report)))
 }
 
+/// Read the project's lights against the library on a blocking thread, from
+/// a read-only connection, as the report does.
+async fn project_calibration_gaps(
+    ctx: &DbContext,
+    project_id: i32,
+) -> Result<crate::calibration::ProjectCalibrationGaps, AppError> {
+    let directory_tree = ctx
+        .get_directory_tree()
+        .map_err(|error| AppError::InternalError(format!("indexing image folders: {error}")))?;
+    let database_path = ctx.database_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = open_scheduler_connection_with_flags(
+            &database_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .map_err(|error| anyhow::anyhow!("opening {database_path}: {error}"))?;
+        crate::calibration::project_calibration_gaps(&conn, project_id, &directory_tree)
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("calibration check task: {error}")))?
+    .map_err(|error| AppError::InternalError(format!("calibration check: {error:#}")))
+}
+
+/// `GET /api/db/{db_id}/projects/{project_id}/calibration-report/rejects` —
+/// every light, rejected ones aside, that a stack leaves out because the
+/// library cannot calibrate it properly, with a digest naming the list.
+pub async fn get_project_calibration_gaps(
+    ctx: DbContext,
+    Path((_db_id, project_id)): Path<(String, i32)>,
+) -> Result<Json<ApiResponse<crate::calibration::ProjectCalibrationGaps>>, AppError> {
+    Ok(Json(ApiResponse::success(
+        project_calibration_gaps(&ctx, project_id).await?,
+    )))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RejectUncalibratedRequest {
+    /// The digest of the list the person saw.
+    pub digest: String,
+}
+
+/// `POST /api/db/{db_id}/projects/{project_id}/calibration-report/rejects` —
+/// reject the lights that cannot be calibrated, so Target Scheduler shoots
+/// them again. Refuses with 409 when the list is no longer the one shown.
+pub async fn reject_uncalibrated_lights(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, project_id)): Path<(String, i32)>,
+    Json(request): Json<RejectUncalibratedRequest>,
+) -> Result<Json<ApiResponse<BatchGradeResponse>>, AppError> {
+    let gaps = project_calibration_gaps(&ctx, project_id).await?;
+    if gaps.digest != request.digest {
+        return Err(AppError::Conflict(
+            "The lights that cannot be calibrated changed since the check; check again".into(),
+        ));
+    }
+    let updates = gaps
+        .lights
+        .into_iter()
+        .map(|light| {
+            (
+                light.image_id,
+                GradingStatus::Rejected,
+                Some(format!("Cannot be calibrated: {}", light.reason)),
+            )
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(ApiResponse::success(apply_grades(
+        &state, &ctx, &updates,
+    )?)))
+}
+
 /// `GET /api/db/{db_id}/images/{image_id}/calibration` — why the light got
 /// the masters it did: every frame the library holds for its camera, used,
 /// matching but unused, or refused with the readings that disagree.
@@ -4594,6 +4666,24 @@ pub async fn batch_update_image_grades(
         ));
     }
 
+    Ok(Json(ApiResponse::success(apply_grades(
+        &state, &ctx, &updates,
+    )?)))
+}
+
+/// Write grades and return what they replaced, for undo; then refresh what
+/// depends on grades.
+fn apply_grades(
+    state: &Arc<AppState>,
+    ctx: &DbContext,
+    updates: &[(i32, GradingStatus, Option<String>)],
+) -> Result<BatchGradeResponse, AppError> {
+    if updates.is_empty() {
+        return Ok(BatchGradeResponse {
+            updated: 0,
+            previous: Vec::new(),
+        });
+    }
     let conn = ctx.db();
     let conn = conn.lock().map_err(AppError::db)?;
     let db = Database::new(&conn);
@@ -4612,15 +4702,15 @@ pub async fn batch_update_image_grades(
         }
     }
 
-    db.batch_update_grading_status(&updates)
+    db.batch_update_grading_status(updates)
         .map_err(AppError::db)?;
     let changed: Vec<i32> = previous.iter().map(|entry| entry.image_id).collect();
-    note_grade_changes(&state, &ctx, &db, &changed);
+    note_grade_changes(state, ctx, &db, &changed);
 
-    Ok(Json(ApiResponse::success(BatchGradeResponse {
+    Ok(BatchGradeResponse {
         updated: updates.len(),
         previous,
-    })))
+    })
 }
 
 /// Shared DB lookup for the image handlers: the acquired-image row, the FITS

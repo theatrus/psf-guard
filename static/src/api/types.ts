@@ -755,6 +755,9 @@ export interface StackGroupStatus {
   eligible_frames: number;
   quality_excluded: number;
   missing_files: number;
+  /** Frames left out because the library cannot calibrate them properly;
+   *  each frame's decision says why. */
+  calibration_excluded?: number;
   processed_frames: number;
   /** Frames restored from a saved accumulator; zero for a fresh build. */
   reused_frames?: number;
@@ -1475,6 +1478,11 @@ export interface CalibrationSettings {
   /** Darks from one night that make a master alone; null for the default. */
   complete_dark_frames?: number | null;
   default_complete_dark_frames?: number;
+  /** Days; zero lifts the limit. */
+  flat_max_age_days?: number | null;
+  default_flat_max_age_days?: number;
+  /** Stacks leave out lights that cannot be calibrated. */
+  exclude_uncalibrated?: boolean;
 }
 
 /** How much of the processor work may take, as fractions of logical cores. */
@@ -2260,6 +2268,24 @@ export interface CalibrationNightFilter {
   flat_near_miss?: CalibrationFlatNearMiss | null;
   /** Masters from other software for this camera, sensor and filter. */
   external_masters?: CalibrationExternalMaster[];
+  /** Why this night's lights cannot be calibrated properly. */
+  cannot_calibrate?: string | null;
+}
+
+/** One light a stack leaves out because it cannot be calibrated. */
+export interface UncalibratedLight {
+  image_id: number;
+  filter: string;
+  night: string;
+  reason: string;
+}
+
+/** Every light of a project that cannot be calibrated, ready to reject. */
+export interface ProjectCalibrationGaps {
+  lights: UncalibratedLight[];
+  checked: number;
+  missing_files: number;
+  digest: string;
 }
 
 export interface CalibrationFlatNearMiss {

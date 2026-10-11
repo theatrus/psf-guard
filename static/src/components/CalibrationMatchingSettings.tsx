@@ -43,6 +43,8 @@ export default function CalibrationMatchingSettings() {
   const [flatStarMasking, setFlatStarMasking] = useState(false);
   const [reachDraft, setReachDraft] = useState('');
   const [completeDraft, setCompleteDraft] = useState('');
+  const [flatAgeDraft, setFlatAgeDraft] = useState('');
+  const [excludeUncalibrated, setExcludeUncalibrated] = useState(false);
   useEffect(() => {
     if (settings.data) {
       setDraft(
@@ -54,6 +56,8 @@ export default function CalibrationMatchingSettings() {
       setFlatStarMasking(settings.data.flat_star_masking ?? false);
       setReachDraft(settings.data.dark_reach_days == null ? '' : String(settings.data.dark_reach_days));
       setCompleteDraft(settings.data.complete_dark_frames == null ? '' : String(settings.data.complete_dark_frames));
+      setFlatAgeDraft(settings.data.flat_max_age_days == null ? '' : String(settings.data.flat_max_age_days));
+      setExcludeUncalibrated(settings.data.exclude_uncalibrated ?? false);
     }
   }, [settings.data]);
 
@@ -64,6 +68,8 @@ export default function CalibrationMatchingSettings() {
       flat_star_masking: boolean;
       dark_reach_days: number | null;
       complete_dark_frames: number | null;
+      flat_max_age_days: number | null;
+      exclude_uncalibrated: boolean;
     }) => apiClient.updateCalibrationSettings(update),
     onSuccess: (updated) => {
       queryClient.setQueryData(['calibration-settings'], updated);
@@ -88,9 +94,13 @@ export default function CalibrationMatchingSettings() {
   const reachInvalid = reach !== null && (!Number.isFinite(reach) || reach < 1 || reach > 3650);
   const complete = completeDraft.trim() === '' ? null : Number(completeDraft);
   const completeInvalid = complete !== null && (!Number.isInteger(complete) || complete < 2 || complete > 64);
+  const flatAge = flatAgeDraft.trim() === '' ? null : Number(flatAgeDraft);
+  const flatAgeInvalid = flatAge !== null && (!Number.isFinite(flatAge) || flatAge < 0 || flatAge > 3650);
   const dirty =
     reach !== (current.dark_reach_days ?? null) ||
     complete !== (current.complete_dark_frames ?? null) ||
+    flatAge !== (current.flat_max_age_days ?? null) ||
+    excludeUncalibrated !== (current.exclude_uncalibrated ?? false) ||
     (parsed === null) !== (current.rotation_tolerance_deg === null) ||
     (parsed !== null && parsed !== current.rotation_tolerance_deg) ||
     policy !== current.external_masters ||
@@ -183,6 +193,29 @@ export default function CalibrationMatchingSettings() {
           />
           <span>Mask stars in flats</span>
         </label>
+        <label className="review-preference">
+          <span>
+            Flat age limit (days)
+            <small>Lights whose flats are further away than this can't be calibrated. 0: no limit. Empty: {current.default_flat_max_age_days ?? 60}.</small>
+          </span>
+          <input type="number" min={0} max={3650} step={1} value={flatAgeDraft} placeholder={String(current.default_flat_max_age_days ?? 60)}
+            aria-label="Flat age limit in days" aria-invalid={flatAgeInvalid} onChange={(event) => setFlatAgeDraft(event.target.value)} />
+        </label>
+        {flatAgeInvalid && <p className="error-text">Enter 0 to 3650 days.</p>}
+      </fieldset>
+      <fieldset className="calibration-settings-group" disabled={save.isPending}>
+        <legend>Stacks</legend>
+        <label className="review-preference">
+          <input
+            type="checkbox"
+            checked={excludeUncalibrated}
+            onChange={(event) => setExcludeUncalibrated(event.target.checked)}
+          />
+          <span>
+            Leave out lights that can't be calibrated
+            <small>No matching flat, bias or dark, or flats past the age limit, where the library holds them for that camera.</small>
+          </span>
+        </label>
       </fieldset>
       {save.isError && (
         <p className="error-text" role="alert">{(save.error as Error).message}</p>
@@ -190,7 +223,7 @@ export default function CalibrationMatchingSettings() {
       <button
         type="button"
         className="save-button"
-        disabled={invalid || reachInvalid || completeInvalid || !dirty || save.isPending}
+        disabled={invalid || reachInvalid || completeInvalid || flatAgeInvalid || !dirty || save.isPending}
         onClick={() =>
           save.mutate({
             rotation_tolerance_deg: parsed,
@@ -198,6 +231,8 @@ export default function CalibrationMatchingSettings() {
             flat_star_masking: flatStarMasking,
             dark_reach_days: reach,
             complete_dark_frames: complete,
+            flat_max_age_days: flatAge,
+            exclude_uncalibrated: excludeUncalibrated,
           })
         }
       >
