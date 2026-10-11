@@ -403,6 +403,31 @@ the report describes what WOULD apply, not just what files exist. Warnings
 call out kinds with no matches, nights without same-night flats, and flats
 more than a month from their lights.
 
+### Lights that cannot be calibrated
+
+A light cannot be calibrated properly when:
+
+- no flat matches it, though the library holds flats for its sensor (for
+  example, every flat for its filter was shot at another rotator angle);
+- neither a bias nor a dark matches it, though the library holds either; or
+- the flats that match were shot further from it than the **Flat age limit**
+  (**Settings › Calibration › Flat masters**, default 60 days; 0 lifts it).
+
+Each rule applies only where the library could have filled the gap, so a rig
+that never shoots flats, or never shoots darks, is not affected. The report
+names each night whose lights cannot be calibrated. **Check lights**, at the
+foot of the report, reads every light of the project that is not already
+rejected and lists those that cannot be calibrated, by night, filter and
+reason. **Reject N lights** then sets them Rejected with the reason, so
+Target Scheduler shoots them again. It refuses, and asks for a new check,
+when the list changed after it was shown.
+
+Stacks keep such lights unless **Settings › Calibration › Stacks › Leave out
+lights that can't be calibrated** is on. With it on, and calibration on or
+automatic, stack previews leave them out, so they never mix with properly
+calibrated frames: the stack card counts them under **can't calibrate** and
+each frame's decision gives the reason.
+
 ## Stack previews
 
 Stack previews build masters on demand with `seiza-stacking`. Each master needs
