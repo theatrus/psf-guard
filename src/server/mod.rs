@@ -251,6 +251,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             get(handlers::get_project_calibration_report),
         )
         .route(
+            "/projects/{project_id}/calibration-report/rejects",
+            get(handlers::get_project_calibration_gaps).post(handlers::reject_uncalibrated_lights),
+        )
+        .route(
             "/projects/{project_id}/targets",
             get(handlers::list_targets),
         )

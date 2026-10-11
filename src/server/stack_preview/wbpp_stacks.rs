@@ -282,6 +282,7 @@ pub fn import_masters(
             eligible_frames: 0,
             quality_excluded: 0,
             missing_files: 0,
+            calibration_excluded: 0,
             processed_frames: 0,
             accepted_frames: 0,
             rejected_frames: 0,

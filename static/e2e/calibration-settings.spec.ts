@@ -43,13 +43,16 @@ test('flat star masking defaults off and persists on and off across reloads', as
     request.method() === 'PUT' && request.url().endsWith('/api/settings/calibration')
   );
   await settings.getByRole('button', { name: 'Save', exact: true }).click();
-  // The panel sends every field it shows; the dark settings stay at their defaults.
+  // The panel sends every field it shows; the dark and flat-age settings
+  // stay at their defaults, and stacks keep lights they cannot calibrate.
   expect((await sent).postDataJSON()).toEqual({
     rotation_tolerance_deg: original.rotation_tolerance_deg,
     external_masters: original.external_masters,
     flat_star_masking: true,
     dark_reach_days: null,
     complete_dark_frames: null,
+    flat_max_age_days: null,
+    exclude_uncalibrated: false,
   });
   await expect(settings.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
   await expect.poll(async () =>
