@@ -51,6 +51,7 @@ test('flat star masking defaults off and persists on and off across reloads', as
     flat_star_masking: true,
     dark_reach_days: null,
     complete_dark_frames: null,
+    dark_choice: 'complete',
     flat_max_age_days: null,
     exclude_uncalibrated: false,
   });

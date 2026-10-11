@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
-import type { ExternalMasterPolicy } from '../api/types';
+import type { DarkChoice, ExternalMasterPolicy } from '../api/types';
 
 const EXTERNAL_MASTER_OPTIONS: ReadonlyArray<{
   value: ExternalMasterPolicy;
@@ -43,6 +43,7 @@ export default function CalibrationMatchingSettings() {
   const [flatStarMasking, setFlatStarMasking] = useState(false);
   const [reachDraft, setReachDraft] = useState('');
   const [completeDraft, setCompleteDraft] = useState('');
+  const [darkChoice, setDarkChoice] = useState<DarkChoice>('complete');
   const [flatAgeDraft, setFlatAgeDraft] = useState('');
   const [excludeUncalibrated, setExcludeUncalibrated] = useState(false);
   useEffect(() => {
@@ -56,6 +57,7 @@ export default function CalibrationMatchingSettings() {
       setFlatStarMasking(settings.data.flat_star_masking ?? false);
       setReachDraft(settings.data.dark_reach_days == null ? '' : String(settings.data.dark_reach_days));
       setCompleteDraft(settings.data.complete_dark_frames == null ? '' : String(settings.data.complete_dark_frames));
+      setDarkChoice(settings.data.dark_choice ?? 'complete');
       setFlatAgeDraft(settings.data.flat_max_age_days == null ? '' : String(settings.data.flat_max_age_days));
       setExcludeUncalibrated(settings.data.exclude_uncalibrated ?? false);
     }
@@ -68,6 +70,7 @@ export default function CalibrationMatchingSettings() {
       flat_star_masking: boolean;
       dark_reach_days: number | null;
       complete_dark_frames: number | null;
+      dark_choice: DarkChoice;
       flat_max_age_days: number | null;
       exclude_uncalibrated: boolean;
     }) => apiClient.updateCalibrationSettings(update),
@@ -99,6 +102,7 @@ export default function CalibrationMatchingSettings() {
   const dirty =
     reach !== (current.dark_reach_days ?? null) ||
     complete !== (current.complete_dark_frames ?? null) ||
+    darkChoice !== (current.dark_choice ?? 'complete') ||
     flatAge !== (current.flat_max_age_days ?? null) ||
     excludeUncalibrated !== (current.exclude_uncalibrated ?? false) ||
     (parsed === null) !== (current.rotation_tolerance_deg === null) ||
@@ -182,6 +186,20 @@ export default function CalibrationMatchingSettings() {
             aria-label="Darks in a complete night" aria-invalid={completeInvalid} onChange={(event) => setCompleteDraft(event.target.value)} />
         </label>
         {completeInvalid && <p className="error-text">Enter 2 to 64 frames.</p>}
+        <label className="review-preference">
+          <span>
+            Dark choice
+            <small>
+              {darkChoice === 'complete'
+                ? 'A complete set beats a nearer, shorter one. Bias and WBPP exports follow it too.'
+                : 'The nearest two or more frames at one temperature, however few.'}
+            </small>
+          </span>
+          <select value={darkChoice} aria-label="Dark choice" onChange={(event) => setDarkChoice(event.target.value as DarkChoice)}>
+            <option value="complete">Complete set first</option>
+            <option value="nearest">Nearest set</option>
+          </select>
+        </label>
       </fieldset>
       <fieldset className="calibration-settings-group" disabled={save.isPending}>
         <legend>Flat masters</legend>
@@ -231,6 +249,7 @@ export default function CalibrationMatchingSettings() {
             flat_star_masking: flatStarMasking,
             dark_reach_days: reach,
             complete_dark_frames: complete,
+            dark_choice: darkChoice,
             flat_max_age_days: flatAge,
             exclude_uncalibrated: excludeUncalibrated,
           })

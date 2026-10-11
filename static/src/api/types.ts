@@ -1463,6 +1463,9 @@ export interface CatalogInstallStatus {
 
 export type ExternalMasterPolicy = 'prefer' | 'fallback' | 'ignore';
 
+/** Which darks a master starts from when several sets match a light. */
+export type DarkChoice = 'complete' | 'nearest';
+
 export interface CalibrationSettings {
   /** Configured override in degrees; null when the library default applies. */
   rotation_tolerance_deg: number | null;
@@ -1478,6 +1481,8 @@ export interface CalibrationSettings {
   /** Darks from one night that make a master alone; null for the default. */
   complete_dark_frames?: number | null;
   default_complete_dark_frames?: number;
+  /** `complete` by default: the nearest complete set beats a nearer short one. */
+  dark_choice?: DarkChoice;
   /** Days; zero lifts the limit. */
   flat_max_age_days?: number | null;
   default_flat_max_age_days?: number;
