@@ -43,6 +43,9 @@ impl<B: Send + 'static> Service<Request<B>> for StaticFileService {
         let index_file = self.index_file.clone();
 
         Box::pin(async move {
+            if req.method() != axum::http::Method::GET && req.method() != axum::http::Method::HEAD {
+                return Ok(page_build::method_not_allowed());
+            }
             let path = req.uri().path().trim_start_matches('/');
 
             // If path is empty, serve index.html
@@ -194,5 +197,19 @@ mod tests {
             StatusCode::OK
         );
         assert_eq!(get(&service, "/").await.unwrap().status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_post_to_the_app_says_where_the_api_is() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<!doctype html>").unwrap();
+        let service = StaticFileService::new(dir.path().to_path_buf());
+        let request = Request::builder()
+            .method("POST")
+            .uri("/")
+            .body(Body::empty())
+            .unwrap();
+        let response = service.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 }
