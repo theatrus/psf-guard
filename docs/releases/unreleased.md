@@ -1,5 +1,7 @@
 # Unreleased
 
+- Calibration settings have their own **Settings › Calibration** tab, where
+  the guides already pointed; they used to sit under Setups.
 - Agents can change plans over MCP, the way the app does: create and rename
   plans, save a plan or its framing whole at the revision they read, take
   values from a rig's Target Scheduler database, check feasibility, preview
@@ -47,9 +49,10 @@
   The server no longer lets the browser keep the page for an hour, so a reload
   always brings the new version instead of the old page and scripts.
 
-- Remove truly bad rejects. In Settings › Databases, **Remove rejects**
-  previews the frames rejected at least N days ago (7 by default), then
-  takes them out of the catalog: their files and copies wait in a
+- Remove truly bad rejects. In Settings › Databases, **Purge Rejects**
+  beside a database's **Import** opens a dialog that previews the frames
+  rejected at least N days ago (7 by default), then takes them out of the
+  catalog: their files and copies wait in a
   `.psf-guard-trash` folder, and **Restore** brings a batch back until the
   trash is emptied, 14 days later by default; then **Purge** forgets the
   batch's saved records. The CLI has the same steps (`remove-rejects`,

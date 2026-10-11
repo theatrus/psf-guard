@@ -44,7 +44,9 @@ test('old rejects are removed to the trash from Settings and restored', async ({
     const alreadyOpen = await page.getByRole('tab', { name: 'Databases' }).waitFor({ state: 'visible', timeout: 2000 }).then(() => true, () => false);
     if (!alreadyOpen) await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('tab', { name: 'Databases' }).click();
-    const group = page.locator('.db-row', { hasText: name }).getByRole('group', { name: 'Remove rejects' });
+    await page.locator('.db-row', { hasText: name }).getByRole('button', { name: 'Purge Rejects' }).click();
+    const dialog = page.getByRole('dialog', { name: `Purge rejects — ${name}` });
+    const group = dialog.getByRole('group', { name: 'Remove rejects' });
     // Its first sight dates the reject now, so only "0 days" takes it.
     await group.getByLabel('Days rejected').fill('0');
     await group.getByRole('button', { name: 'Preview' }).click();

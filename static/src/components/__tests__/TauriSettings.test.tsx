@@ -183,6 +183,14 @@ describe('TauriSettings import state', () => {
     expect(screen.getByRole('slider', { name: 'Background work share of cores' })).toBeInTheDocument();
   });
 
+  it('keeps calibration settings on their own tab, not under Setups', async () => {
+    render(<MemoryRouter><TauriSettings isOpen onClose={() => {}} /></MemoryRouter>, { wrapper: createWrapper() });
+    fireEvent.click(await screen.findByRole('tab', { name: 'Setups' }));
+    expect(document.querySelector('.calibration-matching-settings')).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: 'Calibration' }));
+    expect(await screen.findByRole('heading', { name: 'Calibration', level: 3 })).toBeInTheDocument();
+  });
+
   it('shows a server without accounts how to connect an agent, with no token', async () => {
     render(<MemoryRouter><TauriSettings isOpen onClose={() => {}} /></MemoryRouter>, { wrapper: createWrapper() });
     fireEvent.click(await screen.findByRole('tab', { name: 'Agents' }));

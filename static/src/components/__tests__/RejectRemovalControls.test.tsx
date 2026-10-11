@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
-import RejectRemovalControls from '../RejectRemovalControls';
+import RejectRemovalControls, { PurgeRejectsButton } from '../RejectRemovalControls';
 
 const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: null });
 const NOW = Math.floor(Date.now() / 1000);
@@ -97,5 +97,21 @@ describe('Remove rejects', () => {
     unmount();
     mount(false);
     expect(screen.queryByRole('group', { name: 'Remove rejects' })).not.toBeInTheDocument();
+  });
+
+  it('opens the removal flow in a Purge Rejects dialog, only with database management', async () => {
+    server.use(http.get('/api/db/rig/rejects/removed', () => HttpResponse.json({ success: true, error: null, data: { batches: [] } })));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const wrap = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+    const { unmount } = render(<PurgeRejectsButton dbId="rig" dbName="C925" canManage={false} />, { wrapper: wrap });
+    expect(screen.queryByRole('button', { name: 'Purge Rejects' })).toBeNull();
+    unmount();
+
+    render(<PurgeRejectsButton dbId="rig" dbName="C925" canManage />, { wrapper: wrap });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Purge Rejects' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Purge rejects — C925' });
+    expect(within(dialog).getByRole('group', { name: 'Remove rejects' })).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Days rejected')).toHaveValue(7);
   });
 });
