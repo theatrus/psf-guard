@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { apiClient } from '../api/client';
 import type { RejectRemovalPlan } from '../api/types';
+import Dialog from './Dialog';
+import './RejectRemovalControls.css';
 
 const DEFAULT_DAYS = 7;
 const DEFAULT_RETENTION = 14;
@@ -14,6 +16,22 @@ const httpStatus = (error: unknown) => isAxiosError(error) ? error.response?.sta
 const size = (bytes: number) => bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${(bytes / 1024 ** 2).toFixed(1)} MB`;
 const day = (seconds: number) => new Date(seconds * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 const frames = (count: number) => `${count.toLocaleString()} reject${count === 1 ? '' : 's'}`;
+
+/** **Purge Rejects** beside a database's Import: opens the removal flow in
+ *  a dialog. Only with database management. */
+export function PurgeRejectsButton({ dbId, dbName, canManage, disabled }: { dbId: string; dbName: string; canManage: boolean; disabled?: boolean }) {
+  const [open, setOpen] = useState(false);
+  if (!canManage) return null;
+  return <>
+    <button type="button" className="browse-button" disabled={disabled} onClick={() => setOpen(true)}
+      title="Take rejects rejected a while ago out of the catalog, files to a trash folder">
+      Purge Rejects
+    </button>
+    <Dialog open={open} onClose={() => setOpen(false)} title={`Purge rejects — ${dbName}`} className="purge-rejects-dialog">
+      <RejectRemovalControls dbId={dbId} canManage={canManage} />
+    </Dialog>
+  </>;
+}
 
 /** Remove rejects that have stayed rejected a while: their files go to a
  *  trash folder and can come back until the trash is emptied. See
@@ -77,11 +95,11 @@ export default function RejectRemovalControls({ dbId, canManage }: { dbId: strin
   const busy = preview.isPending || apply.isPending || restore.isPending || empty.isPending || purge.isPending;
   const error = preview.error ?? (apply.error && httpStatus(apply.error) !== 409 ? apply.error : null) ?? restore.error ?? empty.error ?? purge.error;
   return (
-    <div className="quality-backfill-option reject-removal" role="group" aria-label="Remove rejects">
+    <div className="purge-rejects" role="group" aria-label="Remove rejects">
+      <small>Removed frames leave the catalog; their files wait in a trash folder, and can be restored, until the trash is emptied.</small>
       <div className="reject-removal-row">
-        <strong>Remove rejects</strong>
         <label>
-          rejected
+          Rejects rejected
           <input type="number" min={0} max={3650} step={1} aria-label="Days rejected" value={days} disabled={busy}
             onChange={event => { setDays(Math.max(0, Math.round(Number(event.target.value) || 0))); setPlan(null); }} />
           days or more
@@ -90,7 +108,6 @@ export default function RejectRemovalControls({ dbId, canManage }: { dbId: strin
           {preview.isPending ? 'Looking…' : 'Preview'}
         </button>
       </div>
-      <small>Removed frames leave the catalog; their files wait in a trash folder, and can be restored, until the trash is emptied.</small>
       {plan && <div className="reject-removal-plan" data-testid="reject-removal-plan">
         <small>
           {plan.frames.length > 0 ? `${frames(plan.frames.length)} to remove (${size(plan.bytes)}).` : 'Nothing to remove.'}

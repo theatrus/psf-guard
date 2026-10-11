@@ -36,7 +36,7 @@ import {
 import { starMetadataFillEnabled } from '../hooks/useStarMetadataFill';
 import QualityBackfillControls from './QualityBackfillControls';
 import CalibratedCopiesControls from './CalibratedCopiesControls';
-import RejectRemovalControls from './RejectRemovalControls';
+import { PurgeRejectsButton } from './RejectRemovalControls';
 import MissingGuidRepair from './MissingGuidRepair';
 import AutoImportFields from './AutoImportFields';
 import AutoImportSummary from './AutoImportSummary';
@@ -57,7 +57,7 @@ import PathField from './PathField';
 /**
  * Settings groups unrelated jobs into named tabs so each stays easy to find.
  */
-type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'stacking' | 'storage' | 'performance' | 'review' | 'rigs' | 'templates' | 'users' | 'agents';
+type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'calibration' | 'stacking' | 'storage' | 'performance' | 'review' | 'rigs' | 'templates' | 'users' | 'agents';
 
 const DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE =
   '%YEAR%/%TARGET%/%NIGHT%/%TYPE%';
@@ -884,6 +884,9 @@ export default function TauriSettings({
     // Setups are global display parameters, not filesystem paths, so the tab
     // is not management-gated.
     { id: 'setups', label: 'Setups' },
+    // Matching rules, master building and which lights stacks keep; shown to
+    // everyone, saved only with write access.
+    { id: 'calibration', label: 'Calibration' },
     // Server-wide, like the setups, and not management-gated either.
     { id: 'stacking', label: 'Stacking' },
     // Where generated files live and how full their volumes may get; shown
@@ -1768,7 +1771,6 @@ export default function TauriSettings({
                       <MissingGuidRepair dbId={entry.id} dbName={entry.name} canManage={managementAllowed} />
                       <QualityBackfillControls dbId={entry.id} canManage={managementAllowed} />
                       <CalibratedCopiesControls dbId={entry.id} canManage={managementAllowed} />
-                      <RejectRemovalControls dbId={entry.id} canManage={managementAllowed} />
                       <AutoImportSummary dbId={entry.id} settings={entry.autoimport} />
                     </div>
                     {managementAllowed && (
@@ -1781,6 +1783,7 @@ export default function TauriSettings({
                         >
                           {importRunning && importDbId === entry.id ? 'Importing…' : 'Import'}
                         </button>
+                        <PurgeRejectsButton dbId={entry.id} dbName={entry.name} canManage={managementAllowed} disabled={isApplying} />
                         <button
                           className="browse-button"
                           onClick={() => startEdit(entry)}
@@ -1861,10 +1864,15 @@ export default function TauriSettings({
           {currentTab === 'setups' && (
             <div className="settings-setups">
               <ProcessingSetupsManager />
-              <CalibrationMatchingSettings />
               <ExportDefaultsSettings />
               <PixInsightSettings />
               <AstroBinSettings />
+            </div>
+          )}
+
+          {currentTab === 'calibration' && (
+            <div className="settings-setups">
+              <CalibrationMatchingSettings />
             </div>
           )}
 
