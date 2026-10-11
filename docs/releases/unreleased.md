@@ -1,5 +1,13 @@
 # Unreleased
 
+- Agents can change plans over MCP, the way the app does: create and rename
+  plans, save a plan or its framing whole at the revision they read, take
+  values from a rig's Target Scheduler database, check feasibility, preview
+  an activation and apply it with the preview's digest, push it to remote
+  rigs, apply rig scheduling limits, and keep the template library and
+  observing preferences. Activation and scheduling still need database
+  management, as in the app.
+
 - Agents see Planning over MCP: `list_plans`, `get_plan`, `get_plan_progress`,
   `get_framing`, `get_activation`, `list_rigs`, `get_rig_preferences`,
   `get_rig_scheduling`, `list_templates` and `search_sky`, plus
