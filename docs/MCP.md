@@ -95,6 +95,16 @@ read, below `/api`, as you.
 | `search_sky` | Find a target by name or designation | |
 | `api_routes` | Every route `api_get` can read, with what it answers | |
 | `api_get` | Read any of those routes, as you | |
+| `create_plan`, `rename_plan` | Start a plan, or rename one at the revision you read | yes |
+| `save_plan`, `save_framing` | Save the whole plan or framing object, changed, at the revision you read | yes |
+| `take_plan_from_target_scheduler` | Take a plan's values from what a rig's Target Scheduler database holds | yes |
+| `check_feasibility` | When the target is observable from each rig's site over the coming nights | yes |
+| `preview_activation` | Exactly what activating a plan would write to each rig, with a `preview_digest` | yes |
+| `apply_activation` | Write that preview to the rigs; refuses if anything changed since | yes, plus management |
+| `push_activation` | Send an activated plan to remote rigs | yes, plus management |
+| `apply_rig_scheduling` | Write a rig's scheduling limits, with the digest `get_rig_scheduling` gave | yes, plus management |
+| `save_template`, `delete_template` | Change the shared exposure template library | yes |
+| `save_preferences` | Save observing preferences for global, a site or a rig | yes |
 
 Jobs return at once. Poll `get_jobs` for progress.
 
@@ -102,6 +112,18 @@ The server's instructions tell the agent the ground rules PSF Guard keeps
 for people: `analyze_sequence` and `get_image_quality` suggest, and nothing
 changes until `grade_images` runs; catalog predictions and header values are
 not pixel evidence.
+
+## Changing a plan
+
+Plans change the way the app changes them. Read the plan (`get_plan`) or its
+framing (`get_framing`), change the object, and save it whole with
+`save_plan` or `save_framing`; a save made since you read it refuses, so
+read again and redo the change. Saving changes nothing on a rig. To put a
+plan on the rigs, `preview_activation` shows exactly what each rig's Target
+Scheduler database would get and returns a `preview_digest`;
+`apply_activation` writes it only if nothing changed since that preview, and
+`push_activation` sends it to rigs on other machines. Both need write access
+and a server started with `--allow-database-management`, as the app does.
 
 ## Looking into a stack
 
