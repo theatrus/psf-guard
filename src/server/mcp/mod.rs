@@ -263,13 +263,13 @@ pub struct ApiGetArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct PlanArgs {
-    /// The plan's id (a UUID) from `list_plans`.
+    /// The plan's id (a UUID): `project.id` of a row in `list_plans`.
     pub plan_id: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RigArgs {
-    /// The rig's id (a UUID) from `list_rigs`.
+    /// The rig's id (a UUID): `rig.id` of a profile in `list_rigs`.
     pub rig: String,
     /// A plan id, to see the preferences as that plan's project gets them.
     pub plan_id: Option<String>,
@@ -292,6 +292,124 @@ pub struct SkySearchArgs {
     /// At most this many matches (default 10).
     pub limit: Option<usize>,
 }
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CreatePlanArgs {
+    /// The new plan's name, usually the target's.
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RenamePlanArgs {
+    /// The plan's id from `list_plans`.
+    pub plan_id: String,
+    pub name: String,
+    /// The plan's `revision` as `list_plans` or `get_plan` showed it; a
+    /// rename since then refuses.
+    pub expected_revision: u64,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SavePlanArgs {
+    /// The plan's id from `list_plans`.
+    pub plan_id: String,
+    /// The whole plan: the object `get_plan` returns under `plan`, changed
+    /// where you mean to. Its `project_id` is `plan_id` and its `revision`
+    /// the one you read; a save since then refuses.
+    pub plan: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SaveFramingArgs {
+    /// The plan's id from `list_plans`.
+    pub plan_id: String,
+    /// The whole framing draft: the object `get_framing` returns under
+    /// `draft`, changed. Its `project_id` is `plan_id` and its `revision`
+    /// the one you read.
+    pub framing: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct TakeFromSchedulerArgs {
+    /// The plan's id from `list_plans`.
+    pub plan_id: String,
+    /// The rig (UUID from `list_rigs`) whose Target Scheduler database holds
+    /// the values to take.
+    pub rig: String,
+    /// The plan's and framing's revisions as you last read them.
+    pub plan_revision: u64,
+    pub framing_revision: u64,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct FeasibilityArgs {
+    /// The plan's id from `list_plans`.
+    pub plan_id: String,
+    /// How many nights ahead to look (the server's default when omitted).
+    pub nights: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ActivationArgs {
+    /// The plan's id from `list_plans`.
+    pub plan_id: String,
+    /// Collaboration visits to include, as the activation preview lists
+    /// them; omitted for none.
+    #[serde(default)]
+    pub collaboration: Vec<Value>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ApplyActivationArgs {
+    /// The plan's id from `list_plans`.
+    pub plan_id: String,
+    /// The `preview_digest` from `preview_activation`. If anything changed
+    /// since that preview, the apply refuses; preview again.
+    pub preview_digest: String,
+    /// The same collaboration visits the preview had.
+    #[serde(default)]
+    pub collaboration: Vec<Value>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ApplySchedulingArgs {
+    /// The rig's id from `list_rigs`.
+    pub rig: String,
+    /// The `digest` from `get_rig_scheduling`. If the rig or its database
+    /// changed since, the apply refuses; read it again.
+    pub digest: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SaveTemplateArgs {
+    /// The template's id (a UUID): one from `list_templates` to change it,
+    /// or a new one to add a template.
+    pub template_id: String,
+    /// The whole template: `id` (the same UUID), `revision` (0 for a new
+    /// one, else the one you read), `name`, `filter_name`, `gain`, `offset`,
+    /// `bin`, `readout_mode`, `default_exposure_seconds`, `updated_at_ms`.
+    pub template: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct TemplateIdArgs {
+    /// The template's id from `list_templates`.
+    pub template_id: String,
+    /// The template's `revision` as you read it; a change since refuses.
+    pub revision: u64,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SavePreferencesArgs {
+    /// `global`, `site` or `rig`.
+    pub scope: String,
+    /// The site or rig id; for `global`, the `global_id` from
+    /// `api_get /director/v1/preferences`.
+    pub id: String,
+    /// The whole settings object as `api_get
+    /// /director/v1/preferences/{scope}/{id}` returns it, changed.
+    pub settings: Value,
+}
+
 /// A database by id or name, or the tool error that names the known ones.
 macro_rules! database {
     ($self:ident, $name:expr) => {
@@ -967,7 +1085,7 @@ impl PsfGuardMcp {
     // ---------- Planning ----------
 
     #[tool(
-        description = "Planning: every plan across rigs, with its target, rigs, goals and state. The plan_id other planning tools take comes from here."
+        description = "Planning: every plan across rigs, with its target, rigs, goals and state. Each row's `project.id` is the plan_id the other planning tools take."
     )]
     async fn list_plans(&self, ctx: RequestContext<RoleServer>) -> ToolResult {
         self.answer(&ctx, Method::GET, "/director/v1/plans", None)
@@ -1034,7 +1152,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Rigs: each rig's profile (camera, scope, site, catalog) and its live status as last reported (phase, target, time). The rig id other tools take comes from here."
+        description = "Rigs: each rig's profile (camera, scope, site, catalog) and its live status as last reported (phase, target, time). Each profile's `rig.id` is the rig id the other tools take."
     )]
     async fn list_rigs(&self, ctx: RequestContext<RoleServer>) -> ToolResult {
         let profiles = attempt!(self.get(&ctx, "/director/v1/rigs/profiles").await);
@@ -1107,6 +1225,216 @@ impl PsfGuardMcp {
         );
         self.answer(&ctx, Method::GET, &path, None).await
     }
+
+    // ---------- Planning: changes ----------
+
+    #[tool(
+        description = "Create a plan (a planning project) with a name. Needs write access. Returns its id and revision; save_framing and save_plan fill it in."
+    )]
+    async fn create_plan(
+        &self,
+        Parameters(args): Parameters<CreatePlanArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let body = json!({ "id": uuid::Uuid::new_v4(), "name": args.name });
+        self.answer(&ctx, Method::POST, "/director/v1/projects", Some(body))
+            .await
+    }
+
+    #[tool(description = "Rename a plan. Refuses if it was renamed since you read its revision.")]
+    async fn rename_plan(
+        &self,
+        Parameters(args): Parameters<RenamePlanArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let path = format!("/director/v1/projects/{}", api::encode(&args.plan_id));
+        let body = json!({ "name": args.name, "expected_revision": args.expected_revision });
+        self.answer(&ctx, Method::PATCH, &path, Some(body)).await
+    }
+
+    #[tool(
+        description = "Save a plan: send the whole object get_plan returned under `plan`, changed (goals, rigs, exposures per band). Refuses a stale revision; read it again and redo the change. Saving changes nothing on the rigs until the plan is activated."
+    )]
+    async fn save_plan(
+        &self,
+        Parameters(args): Parameters<SavePlanArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let path = format!("/director/v1/projects/{}/plan", api::encode(&args.plan_id));
+        self.answer(&ctx, Method::PUT, &path, Some(args.plan)).await
+    }
+
+    #[tool(
+        description = "Save a plan's framing: send the whole object get_framing returned under `draft`, changed (centre, rotation, mosaic, panel rigs). Refuses a stale revision."
+    )]
+    async fn save_framing(
+        &self,
+        Parameters(args): Parameters<SaveFramingArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let path = format!(
+            "/director/v1/projects/{}/framing",
+            api::encode(&args.plan_id)
+        );
+        self.answer(&ctx, Method::PUT, &path, Some(args.framing))
+            .await
+    }
+
+    #[tool(
+        description = "Take a plan's values from what a rig's Target Scheduler database already holds for it (exposures, templates, goals). Refuses if the plan or framing changed since the revisions you give."
+    )]
+    async fn take_plan_from_target_scheduler(
+        &self,
+        Parameters(args): Parameters<TakeFromSchedulerArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let path = format!(
+            "/director/v1/projects/{}/plan/take-target-scheduler",
+            api::encode(&args.plan_id)
+        );
+        let body = json!({
+            "rig_id": args.rig,
+            "plan_revision": args.plan_revision,
+            "framing_revision": args.framing_revision,
+        });
+        self.answer(&ctx, Method::POST, &path, Some(body)).await
+    }
+
+    #[tool(
+        description = "When a plan's target is observable from each rig's site over the coming nights: hours above the altitude limit, Moon, twilight. A calculation; it changes nothing, but needs write access as in the app."
+    )]
+    async fn check_feasibility(
+        &self,
+        Parameters(args): Parameters<FeasibilityArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let path = format!(
+            "/director/v1/projects/{}/feasibility",
+            api::encode(&args.plan_id)
+        );
+        self.answer(
+            &ctx,
+            Method::POST,
+            &path,
+            Some(json!({ "nights": args.nights })),
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Preview activating a plan: exactly what would be written to each rig's Target Scheduler database (projects, targets, exposure plans, templates, limits) and a `preview_digest`. Writes nothing. apply_activation takes the digest."
+    )]
+    async fn preview_activation(
+        &self,
+        Parameters(args): Parameters<ActivationArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let path = format!(
+            "/director/v1/projects/{}/activation/preview",
+            api::encode(&args.plan_id)
+        );
+        let body = json!({ "collaboration": args.collaboration });
+        self.answer(&ctx, Method::POST, &path, Some(body)).await
+    }
+
+    #[tool(
+        description = "Activate a plan: write what preview_activation showed into the rigs' Target Scheduler databases. Needs the preview's `preview_digest`; if anything changed since, it refuses and you preview again. Needs write access and database management, as in the app."
+    )]
+    async fn apply_activation(
+        &self,
+        Parameters(args): Parameters<ApplyActivationArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let path = format!(
+            "/director/v1/projects/{}/activation/apply",
+            api::encode(&args.plan_id)
+        );
+        let body = json!({
+            "preview_digest": args.preview_digest,
+            "collaboration": args.collaboration,
+        });
+        self.answer(&ctx, Method::POST, &path, Some(body)).await
+    }
+
+    #[tool(
+        description = "Send an activated plan to rigs on other machines (remote rigs paired for sync), as the app's Push does. Reports each rig's outcome. Needs write access and database management."
+    )]
+    async fn push_activation(
+        &self,
+        Parameters(args): Parameters<PlanArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let path = format!(
+            "/director/v1/projects/{}/activation/push",
+            api::encode(&args.plan_id)
+        );
+        self.answer(&ctx, Method::POST, &path, Some(json!({})))
+            .await
+    }
+
+    #[tool(
+        description = "Write a rig's scheduling limits into every project of its Target Scheduler database, as get_rig_scheduling showed them. Needs that answer's `digest`; refuses if anything changed since. Needs write access and database management."
+    )]
+    async fn apply_rig_scheduling(
+        &self,
+        Parameters(args): Parameters<ApplySchedulingArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let path = format!(
+            "/director/v1/rigs/{}/scheduling/apply",
+            api::encode(&args.rig)
+        );
+        self.answer(
+            &ctx,
+            Method::POST,
+            &path,
+            Some(json!({ "digest": args.digest })),
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Add or change a template in the shared exposure template library. Refuses a stale revision."
+    )]
+    async fn save_template(
+        &self,
+        Parameters(args): Parameters<SaveTemplateArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let path = format!("/director/v1/templates/{}", api::encode(&args.template_id));
+        self.answer(&ctx, Method::PUT, &path, Some(args.template))
+            .await
+    }
+
+    #[tool(description = "Remove a template from the shared exposure template library.")]
+    async fn delete_template(
+        &self,
+        Parameters(args): Parameters<TemplateIdArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let path = api::with_query(
+            &format!("/director/v1/templates/{}", api::encode(&args.template_id)),
+            [("revision", Some(args.revision.to_string()))],
+        );
+        self.answer(&ctx, Method::DELETE, &path, None).await
+    }
+
+    #[tool(
+        description = "Save observing preferences for a scope (global, a site, or a rig): altitude, Moon, twilight and the like. Send the whole settings object, changed."
+    )]
+    async fn save_preferences(
+        &self,
+        Parameters(args): Parameters<SavePreferencesArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let path = format!(
+            "/director/v1/preferences/{}/{}",
+            api::encode(&args.scope),
+            api::encode(&args.id)
+        );
+        self.answer(&ctx, Method::PUT, &path, Some(args.settings))
+            .await
+    }
 }
 
 #[tool_handler]
@@ -1125,7 +1453,10 @@ impl ServerHandler for PsfGuardMcp {
                  masters it applied, and get_stack_image the picture (stretch `background` shows \
                  patterns). explain_calibration says why one light got, or missed, each master. \
                  Planning: list_plans and list_rigs give the ids get_plan, get_plan_progress, \
-                 get_framing, get_activation and the rig tools take. api_routes lists every \
+                 get_framing, get_activation and the rig tools take. To change a plan, read it, \
+                 change the object and save it whole (save_plan, save_framing); activation is \
+                 preview_activation, then apply_activation with its digest, then \
+                 push_activation for remote rigs. api_routes lists every \
                  route api_get can read when no tool fits. Every call runs as you: your role \
                  and the server's database-management setting decide what it may change. \
                  Catalog predictions and header values are not pixel evidence; say which one \
@@ -1189,3 +1520,6 @@ fn error_text(error: &AppError) -> String {
         AppError::NotImplemented => "Not implemented".to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests;
