@@ -1,5 +1,9 @@
 # Unreleased
 
+- Pairing a rig with the N.I.N.A. Director plugin is marked **Early beta**:
+  the **Live** table, the rig's plugin status and its camera modes carry the
+  label. Target Scheduler with PSF Guard Sync is the main way to run a rig
+  today; planning itself is not beta.
 - A planning store that will not open no longer stops the server, which
   left the desktop app on a blank window. PSF Guard starts with Planning
   off and the log names the store and the reason.

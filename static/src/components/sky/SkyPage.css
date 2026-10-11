@@ -756,3 +756,11 @@
     max-height: none;
   }
 }
+
+.sky-live .early-beta-heading {
+  margin-bottom: 8px;
+}
+
+.sky-live .early-beta-heading h2 {
+  margin: 0;
+}

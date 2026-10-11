@@ -5,6 +5,7 @@ import { apiClient } from '../../api/client';
 import type { DirectorRigStatusView } from '../../api/directorTypes';
 import { describeNow, errorsOf, formatAge } from './dashboardModel';
 import { retryWhenBusy } from './retry';
+import EarlyBeta from './EarlyBeta';
 import { planHref } from './planAddress';
 import { useDirectorClock } from '../../hooks/useDirectorClock';
 
@@ -25,7 +26,7 @@ export default function DirectorDashboard() {
   const age = (at: number | null | undefined) => at ? formatAge(now - at) : 'never';
   return <section className="director-records director-dashboard" aria-label="Live rigs">
     <div className="director-toolbar">
-      <h2>Live</h2>
+      <div className="early-beta-heading"><h2>Live</h2><EarlyBeta /></div>
       <button type="button" title="Refresh live status" aria-label="Refresh live status" disabled={statuses.isFetching} onClick={() => void statuses.refetch()}><RefreshCw size={16} /></button>
     </div>
     {statuses.isPending && <p role="status">Loading live status...</p>}
