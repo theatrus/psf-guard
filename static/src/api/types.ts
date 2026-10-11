@@ -464,6 +464,18 @@ export interface StackCalibrationMaster {
   rejected_samples: number | null;
   minimum_clean_samples: number | null;
   maximum_clean_samples: number | null;
+  /** The source frames still in the library; absent when none are recorded. */
+  sources?: CalibrationFrameSpan;
+}
+
+/** What a set of calibration frames spans. */
+export interface CalibrationFrameSpan {
+  frames: number;
+  temp_min_c?: number;
+  temp_max_c?: number;
+  first_night?: string;
+  last_night?: string;
+  nights: number;
 }
 
 export interface StackCalibrationMasters {

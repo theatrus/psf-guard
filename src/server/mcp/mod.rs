@@ -919,7 +919,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Why one light got the calibration masters it did: its header readings, then for bias, dark and flat every frame the library holds for its camera, grouped by night: the frames a master would take, the ones that match but lose to a nearer set, and the ones refused with the readings that disagree (rotation off, exposure, temperature, a validity mark, too far in time). Flats for other filters and frames from other cameras are only counted."
+        description = "Why one light got the calibration masters it did: its header readings, then for bias, dark and flat every frame the library holds for its camera, grouped by night with each night's sensor temperatures: the frames a master would take, the ones that match but lose to another set, and the ones refused with the readings that disagree (rotation off, exposure, temperature, a validity mark, too far in time). `master` sums up what each master would be built from: frames, coldest and warmest reading, first and last night. Flats for other filters and frames from other cameras are only counted."
     )]
     async fn explain_calibration(
         &self,
@@ -966,7 +966,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "One stack channel frame by frame, in capture order: each frame's disposition and reason, where it registered (shift and rotation in reference pixels), weight, noise and normalization. Also, per night, whether the frames were dithered or walked steadily one way, which turns anything fixed to the sensor into streaks (walking noise)."
+        description = "One stack channel frame by frame, in capture order: each frame's sensor temperature, disposition and reason, where it registered (shift and rotation in reference pixels), weight, noise and normalization. Also, per night, whether the frames were dithered or walked steadily one way, which turns anything fixed to the sensor into streaks (walking noise)."
     )]
     async fn get_stack(
         &self,
@@ -985,11 +985,11 @@ impl PsfGuardMcp {
                 args.group_index
             )));
         };
-        let (acquired, boundary) = match capture_times(&db, group) {
-            Ok(times) => times,
+        let (captures, boundary) = match capture_times(&db, group) {
+            Ok(captures) => captures,
             Err(error) => return Ok(failure(&error_text(&error))),
         };
-        let rows = stacks::frame_rows(group, &acquired, |at| stacks::night_of(at, boundary));
+        let rows = stacks::frame_rows(group, &captures, |at| stacks::night_of(at, boundary));
         Ok(text_result(&json!({
             "stack": stacks::summarize(&job.job_id, job.created_unix_seconds, group),
             "drift_by_night": stacks::drift_by_night(&rows),
@@ -1069,7 +1069,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "The calibration masters a stack applied, per session: each bias, dark and flat master, how many lights it calibrated, how many frames it was built from and how outliers were rejected, and notes on sessions that had none. A master built from two frames, or a session with no flat, explains many stack patterns."
+        description = "The calibration masters a stack applied, per session: each bias, dark and flat master, how many lights it calibrated, how many frames it was built from, the sensor temperatures and nights of those frames (`sources`), how outliers were rejected, and notes on sessions that had none. A master built from two frames, one shot far warmer than the lights, or a session with no flat explains many stack patterns."
     )]
     async fn get_stack_calibration(
         &self,
@@ -1933,21 +1933,25 @@ fn text_result(value: &Value) -> CallToolResult {
 fn capture_times(
     ctx: &DbContext,
     group: &StackGroupStatus,
-) -> Result<(std::collections::HashMap<i32, i64>, i64), AppError> {
+) -> Result<(std::collections::HashMap<i32, stacks::Capture>, i64), AppError> {
     let conn = ctx.db();
     let conn = conn.lock().map_err(AppError::db)?;
     let db = crate::db::Database::new(&conn);
     let ids: Vec<i32> = group.frames.iter().map(|frame| frame.image_id).collect();
-    let mut acquired = std::collections::HashMap::new();
+    let mut captures = std::collections::HashMap::new();
     for chunk in ids.chunks(500) {
         for image in db.get_images_by_ids(chunk).map_err(AppError::db)? {
-            if let Some(at) = image.acquired_date {
-                acquired.insert(image.id, at);
-            }
+            captures.insert(
+                image.id,
+                stacks::Capture {
+                    at: image.acquired_date,
+                    camera_temp_c: stacks::camera_temp(&image.metadata),
+                },
+            );
         }
     }
     let boundary = sky_coverage::catalog_night_boundary(&conn).unwrap_or(12 * 3600);
-    Ok((acquired, boundary))
+    Ok((captures, boundary))
 }
 
 /// Drop the `*_url` fields, which only the app's own pages can follow.
