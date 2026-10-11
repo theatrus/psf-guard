@@ -263,13 +263,13 @@ pub struct ApiGetArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct PlanArgs {
-    /// The plan's id (a UUID) from `list_plans`.
+    /// The plan's id (a UUID): `project.id` of a row in `list_plans`.
     pub plan_id: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RigArgs {
-    /// The rig's id (a UUID) from `list_rigs`.
+    /// The rig's id (a UUID): `rig.id` of a profile in `list_rigs`.
     pub rig: String,
     /// A plan id, to see the preferences as that plan's project gets them.
     pub plan_id: Option<String>,
@@ -1085,7 +1085,7 @@ impl PsfGuardMcp {
     // ---------- Planning ----------
 
     #[tool(
-        description = "Planning: every plan across rigs, with its target, rigs, goals and state. The plan_id other planning tools take comes from here."
+        description = "Planning: every plan across rigs, with its target, rigs, goals and state. Each row's `project.id` is the plan_id the other planning tools take."
     )]
     async fn list_plans(&self, ctx: RequestContext<RoleServer>) -> ToolResult {
         self.answer(&ctx, Method::GET, "/director/v1/plans", None)
@@ -1152,7 +1152,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Rigs: each rig's profile (camera, scope, site, catalog) and its live status as last reported (phase, target, time). The rig id other tools take comes from here."
+        description = "Rigs: each rig's profile (camera, scope, site, catalog) and its live status as last reported (phase, target, time). Each profile's `rig.id` is the rig id the other tools take."
     )]
     async fn list_rigs(&self, ctx: RequestContext<RoleServer>) -> ToolResult {
         let profiles = attempt!(self.get(&ctx, "/director/v1/rigs/profiles").await);
