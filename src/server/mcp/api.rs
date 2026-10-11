@@ -298,6 +298,10 @@ pub(super) const READABLE_ROUTES: &[(&str, &str)] = &[
         "Calibration coverage by night and filter",
     ),
     (
+        "/db/{db}/projects/{project_id}/calibration-report/rejects",
+        "Lights the library cannot calibrate, with a digest",
+    ),
+    (
         "/db/{db}/projects/{project_id}/stack-previews/latest",
         "Latest stack per channel",
     ),

@@ -1,5 +1,13 @@
 # Unreleased
 
+- Agents can change the catalog over MCP as the app does: build and cancel
+  stack previews, change projects, targets and exposure plans, remove and
+  restore rejects (preview first, apply with its digest), preview and apply
+  a sync between databases, mark calibration frames' validity, plate-solve a
+  light, predict satellite crossings, and find and reject the lights the
+  library cannot calibrate. Removal and sync still need database
+  management.
+
 - Calibration settings have their own **Settings › Calibration** tab, where
   the guides already pointed; they used to sit under Setups.
 - Agents can change plans over MCP, the way the app does: create and rename
