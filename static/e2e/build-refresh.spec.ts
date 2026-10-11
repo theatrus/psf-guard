@@ -45,4 +45,7 @@ test('an open tab loads a newer server build when it changes views', async ({ pa
   await page.getByRole('navigation', { name: 'Views' }).getByRole('button', { name: 'Library' }).click();
   await expect(page.getByRole('heading', { name: 'Earlier work' })).toBeVisible({ timeout: 15_000 });
   expect(await marked(page)).toBe(true);
+  // The app keeps polling; a request still in the route when the page
+  // closes would otherwise fail the test.
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
