@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Layers, RotateCcw } from 'lucide-react';
 import { apiClient } from '../api/client';
-import type { CalibrationMasterSource, StackCalibrationMaster } from '../api/types';
+import type { CalibrationFrameSpan, CalibrationMasterSource, StackCalibrationMaster } from '../api/types';
 import StackPreviewInspector from './StackPreviewInspector';
 
 interface Inspection {
@@ -18,6 +18,23 @@ const kindLabels: Record<StackCalibrationMaster['kind'], string> = {
 
 function usageLabel(master: StackCalibrationMaster): string {
   return master.usages.map((usage) => `${usage.channel} / Session ${usage.session}`).join(', ');
+}
+
+/** The sensor temperatures and nights a master's source frames span. */
+function spanText(span: CalibrationFrameSpan): string[] {
+  const celsius = (value: number) => `${value.toFixed(1)} °C`;
+  const parts: string[] = [];
+  if (span.temp_min_c != null && span.temp_max_c != null) {
+    parts.push(span.temp_min_c === span.temp_max_c
+      ? celsius(span.temp_min_c)
+      : `${span.temp_min_c.toFixed(1)} to ${celsius(span.temp_max_c)}`);
+  }
+  if (span.first_night && span.last_night) {
+    parts.push(span.nights === 1
+      ? span.first_night
+      : `${span.nights} nights, ${span.first_night} to ${span.last_night}`);
+  }
+  return parts;
 }
 
 function stretchUrl(url: string | null, midtone: number, shadow: number): string | null {
@@ -53,8 +70,10 @@ export function CalibrationMasterInspector({ dbId, source, title, label, onClose
   const imageUrl = master?.available
     ? stretchUrl(master.original_preview_url, stretch.midtone, stretch.shadow)
     : null;
+  const sources = master?.sources;
   const summary = master ? [
     ...(master.source_count != null ? [`${master.source_count} source frames`] : []),
+    ...(sources ? spanText(sources) : []),
     ...(master.rejection_method ? [master.rejection_method] : []),
     ...(master.masked_samples != null ? [`${master.masked_samples.toLocaleString()} masked samples`] : []),
     ...(master.rejected_samples != null ? [`${master.rejected_samples.toLocaleString()} rejected samples`] : []),

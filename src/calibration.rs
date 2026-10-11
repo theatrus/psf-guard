@@ -10,7 +10,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use seiza_fits::{HeaderValue, WriteHeaderCard};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::UNIX_EPOCH;
@@ -2533,6 +2533,9 @@ pub struct ExplainedLight {
 pub struct KindExplanation {
     /// `bias`, `dark` or `flat`.
     pub kind: String,
+    /// The frames a master would take, in sum: how many, their sensor
+    /// temperatures and their nights, to set against the light's.
+    pub master: FrameSpan,
     /// The nights whose frames a master would take.
     pub used: Vec<NightFrames>,
     /// Frames that match, but another set was taken instead.
@@ -2549,6 +2552,48 @@ pub struct KindExplanation {
 pub struct NightFrames {
     pub night: String,
     pub frames: usize,
+    /// The coldest and warmest sensor reading among them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temp_min_c: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temp_max_c: Option<f64>,
+}
+
+/// What a set of calibration frames spans: how many, the sensor
+/// temperatures they were shot at, and the nights. Two frames from one warm
+/// night read very differently here from eighty at the set point.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct FrameSpan {
+    pub frames: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temp_min_c: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temp_max_c: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_night: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_night: Option<String>,
+    pub nights: usize,
+}
+
+impl FrameSpan {
+    /// Sum up frames given as (sensor temperature, night).
+    pub fn of(frames: impl IntoIterator<Item = (Option<f64>, Option<String>)>) -> Self {
+        let mut span = Self::default();
+        let mut nights = BTreeSet::new();
+        for (temp, night) in frames {
+            span.frames += 1;
+            if let Some(temp) = temp.filter(|temp| temp.is_finite()) {
+                span.temp_min_c = Some(span.temp_min_c.map_or(temp, |min| min.min(temp)));
+                span.temp_max_c = Some(span.temp_max_c.map_or(temp, |max| max.max(temp)));
+            }
+            nights.extend(night);
+        }
+        span.nights = nights.len();
+        span.first_night = nights.first().cloned();
+        span.last_night = nights.last().cloned();
+        span
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -2565,14 +2610,25 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
     let selected = select_for_light(conn, light)?;
     let light_signature = light_signature(light);
     let by_night = |frames: &[CalibrationFrame]| {
-        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+        let mut nights: BTreeMap<String, Vec<Option<f64>>> = BTreeMap::new();
         for frame in frames {
-            *counts.entry(night(frame.captured_at)).or_default() += 1;
+            nights
+                .entry(night(frame.captured_at))
+                .or_default()
+                .push(frame.camera_temp);
         }
-        counts
+        nights
             .into_iter()
             .rev()
-            .map(|(night, frames)| NightFrames { night, frames })
+            .map(|(night, temps)| {
+                let span = FrameSpan::of(temps.into_iter().map(|temp| (temp, None)));
+                NightFrames {
+                    night,
+                    frames: span.frames,
+                    temp_min_c: span.temp_min_c,
+                    temp_max_c: span.temp_max_c,
+                }
+            })
             .collect::<Vec<_>>()
     };
     let mut kinds = Vec::new();
@@ -2631,6 +2687,12 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
         });
         kinds.push(KindExplanation {
             kind: kind.as_str().to_string(),
+            master: FrameSpan::of(master.iter().map(|frame| {
+                (
+                    frame.camera_temp,
+                    frame.captured_at.map(|at| night(Some(at))),
+                )
+            })),
             used: by_night(&master),
             matching_unused: by_night(&unused),
             refused,
@@ -8403,6 +8465,28 @@ mod tests {
         assert_eq!(master.len(), 12, "the complete set, not the warm pair");
         assert!(master.iter().all(|frame| frame.camera_temp == Some(-10.0)));
 
+        // The explanation shows what the master spans and what it passed over.
+        let explained = explain_calibration(&conn, &test_light(&temp, light_at)).unwrap();
+        let dark = explained
+            .kinds
+            .iter()
+            .find(|kind| kind.kind == "dark")
+            .unwrap();
+        assert_eq!(
+            (
+                dark.master.frames,
+                dark.master.temp_min_c,
+                dark.master.temp_max_c
+            ),
+            (12, Some(-10.0), Some(-10.0))
+        );
+        let unused: Vec<_> = dark
+            .matching_unused
+            .iter()
+            .map(|night| (night.frames, night.temp_min_c))
+            .collect();
+        assert_eq!(unused, vec![(1, Some(-8.3)), (1, Some(-7.9))]);
+
         // A WBPP export places the same set, so WBPP builds the same master.
         let export = export_destinations(
             &conn,
@@ -8690,8 +8774,21 @@ mod tests {
             flat.used,
             vec![NightFrames {
                 night: night(light_at - 2 * day),
-                frames: 2
+                frames: 2,
+                temp_min_c: Some(-10.0),
+                temp_max_c: Some(-10.0),
             }]
+        );
+        assert_eq!(
+            flat.master,
+            FrameSpan {
+                frames: 2,
+                temp_min_c: Some(-10.0),
+                temp_max_c: Some(-10.0),
+                first_night: Some(night(light_at - 2 * day)),
+                last_night: Some(night(light_at - 2 * day)),
+                nights: 1,
+            }
         );
         assert_eq!(flat.refused.len(), 1, "{:?}", flat.refused);
         assert_eq!(flat.refused[0].night, night(light_at + 7 * day));

@@ -145,6 +145,9 @@ pub(super) struct FrameRow {
     pub image_id: i32,
     pub night: Option<String>,
     pub acquired_unix_seconds: Option<i64>,
+    /// The sensor temperature N.I.N.A. recorded, to set against the masters'.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera_temp_c: Option<f64>,
     pub disposition: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -171,9 +174,25 @@ pub(super) struct FrameRow {
     pub normalization_offset: Option<f32>,
 }
 
+/// When a light was captured and how cold its sensor was, from the catalog.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct Capture {
+    pub at: Option<i64>,
+    pub camera_temp_c: Option<f64>,
+}
+
+/// The `CameraTemp` a catalog row's metadata records, as a number or text.
+pub(super) fn camera_temp(metadata: &str) -> Option<f64> {
+    let metadata: serde_json::Value = serde_json::from_str(metadata).ok()?;
+    let temp = metadata.get("CameraTemp")?;
+    temp.as_f64()
+        .or_else(|| temp.as_str()?.trim().parse().ok())
+        .filter(|temp: &f64| temp.is_finite())
+}
+
 pub(super) fn frame_rows(
     group: &StackGroupStatus,
-    acquired: &HashMap<i32, i64>,
+    captures: &HashMap<i32, Capture>,
     night_of: impl Fn(i64) -> String,
 ) -> Vec<FrameRow> {
     let mut rows: Vec<FrameRow> = group
@@ -181,11 +200,13 @@ pub(super) fn frame_rows(
         .iter()
         .map(|frame| {
             let transform = frame.registered_mapping.as_ref().map(|map| map.transform());
-            let at = acquired.get(&frame.image_id).copied();
+            let capture = captures.get(&frame.image_id).copied().unwrap_or_default();
+            let at = capture.at;
             FrameRow {
                 image_id: frame.image_id,
                 night: at.map(&night_of),
                 acquired_unix_seconds: at,
+                camera_temp_c: capture.camera_temp_c,
                 disposition: frame.disposition.clone(),
                 reason: frame.reason.clone(),
                 quality_score: frame.quality_score,
@@ -417,6 +438,7 @@ mod tests {
             image_id: at as i32,
             night: Some(night.into()),
             acquired_unix_seconds: Some(at),
+            camera_temp_c: None,
             disposition: "accepted".into(),
             reason: None,
             quality_score: None,
@@ -430,6 +452,15 @@ mod tests {
             normalization_gain: None,
             normalization_offset: None,
         }
+    }
+
+    #[test]
+    fn a_light_temperature_reads_from_its_metadata() {
+        assert_eq!(camera_temp(r#"{"CameraTemp":-10.0}"#), Some(-10.0));
+        assert_eq!(camera_temp(r#"{"CameraTemp":" -7.9 "}"#), Some(-7.9));
+        assert_eq!(camera_temp(r#"{"CameraTemp":null}"#), None);
+        assert_eq!(camera_temp(r#"{"FileName":"a.fits"}"#), None);
+        assert_eq!(camera_temp("not json"), None);
     }
 
     #[test]

@@ -175,6 +175,10 @@ pub struct MasterEntry {
     rejected_samples: Option<u64>,
     minimum_clean_samples: Option<u64>,
     maximum_clean_samples: Option<u64>,
+    /// The source frames still in the library: how many, the sensor
+    /// temperatures and the nights they were shot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sources: Option<crate::calibration::FrameSpan>,
 }
 
 #[derive(Debug, Serialize)]
@@ -543,6 +547,7 @@ fn supplement_entry(ctx: &DatabaseContext, entry: &mut MasterEntry) {
         return;
     };
     entry.source_count = usize::try_from(count).ok();
+    entry.sources = master_sources(&conn, &path);
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) {
         entry.rejection_method = value
             .get("rejection_method")
@@ -557,6 +562,42 @@ fn supplement_entry(ctx: &DatabaseContext, entry: &mut MasterEntry) {
                 mask.get("maximum_clean_samples").and_then(|v| v.as_u64());
         }
     }
+}
+
+/// What the master's source frames span, from the library rows that remain.
+/// A catalog too old to record the frames answers nothing.
+fn master_sources(
+    conn: &rusqlite::Connection,
+    path: &std::path::Path,
+) -> Option<crate::calibration::FrameSpan> {
+    let mut statement = conn
+        .prepare(
+            "SELECT frame.camera_temp, frame.captured_at
+             FROM psf_guard_calibration_master master
+             JOIN json_each(master.source_frame_uuids) source
+             JOIN psf_guard_calibration_frame frame ON frame.frame_uuid = source.value
+             WHERE master.cache_path = ?1",
+        )
+        .ok()?;
+    let frames = statement
+        .query_map([path.to_string_lossy().as_ref()], |row| {
+            Ok((row.get::<_, Option<f64>>(0)?, row.get::<_, Option<i64>>(1)?))
+        })
+        .ok()?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .ok()?;
+    if frames.is_empty() {
+        return None;
+    }
+    let boundary = crate::server::sky_coverage::catalog_night_boundary(conn).unwrap_or(12 * 3600);
+    Some(crate::calibration::FrameSpan::of(frames.into_iter().map(
+        |(temp, at)| {
+            (
+                temp,
+                at.map(|at| crate::server::sky_coverage::night_of(at, boundary)),
+            )
+        },
+    )))
 }
 
 fn catalog(
@@ -597,6 +638,7 @@ fn catalog(
                 rejected_samples: None,
                 minimum_clean_samples: None,
                 maximum_clean_samples: None,
+                sources: None,
             };
             supplement_entry(ctx, &mut entry);
             entry

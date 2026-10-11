@@ -1,5 +1,10 @@
 # Unreleased
 
+- A stack's calibration masters show the sensor temperatures and nights of
+  the frames they were built from, in the master inspector and over MCP.
+  Over MCP, `explain_calibration` also gives each night's temperatures and
+  what each master would span, and `get_stack` each light's temperature, so
+  a master shot warmer than its lights stands out.
 - Agents can change the catalog over MCP as the app does: build and cancel
   stack previews, change projects, targets and exposure plans, remove and
   restore rejects (preview first, apply with its digest), preview and apply
