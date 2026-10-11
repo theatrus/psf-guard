@@ -28,6 +28,9 @@ pub enum RefreshStatus {
 /// Handlers reach a specific database via the `DbContext` extractor which
 /// looks up by the `{db_id}` path segment.
 pub struct AppState {
+    /// The `/api` router, once built; the MCP tools send their requests
+    /// through it as the caller.
+    api_router: std::sync::OnceLock<axum::Router>,
     /// Canonical multi-DB state, keyed by slug.
     pub databases: RwLock<HashMap<String, Arc<DatabaseContext>>>,
     /// Pre-generation configuration (process-global).
@@ -416,6 +419,18 @@ impl StorageStatus {
 }
 
 impl AppState {
+    /// Keep the built `/api` router for in-process calls. Only the first
+    /// call counts.
+    pub fn set_api_router(&self, router: axum::Router) {
+        let _ = self.api_router.set(router);
+    }
+
+    pub fn api_router(&self) -> Option<axum::Router> {
+        self.api_router.get().cloned()
+    }
+}
+
+impl AppState {
     /// Build state for N configured databases. Each entry opens its own
     /// SQLite connection; failures bubble up immediately.
     pub fn from_databases(
@@ -448,6 +463,7 @@ impl AppState {
         }
 
         Ok(Self {
+            api_router: std::sync::OnceLock::new(),
             databases: RwLock::new(map),
             pregeneration_config,
             storage_status: RwLock::new(StorageStatus::defaulting_to(&storage_roots.cache)),
@@ -660,6 +676,7 @@ impl AppState {
         databases.insert(slug, ctx);
 
         Self {
+            api_router: std::sync::OnceLock::new(),
             databases: RwLock::new(databases),
             pregeneration_config: crate::cli::PregenerationConfig::default(),
             storage_roots: crate::server::storage::StorageRoots::single("/tmp/psf-guard-test"),
