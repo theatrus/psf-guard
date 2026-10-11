@@ -4,7 +4,7 @@ use axum::{
     body::Body,
     http::{header::COOKIE, HeaderMap, Method, Request, StatusCode},
     middleware,
-    routing::{delete, get, post},
+    routing::get,
     Router,
 };
 use http_body_util::BodyExt;
@@ -13,9 +13,7 @@ use psf_guard::{
     config::ServerAuthConfig,
     server::{
         auth::{self, ServerAuth},
-        mcp,
         state::AppState,
-        user_admin,
     },
 };
 use rusqlite::Connection;
@@ -62,24 +60,20 @@ fn app(directory: &tempfile::TempDir) -> (Router, Arc<AppState>) {
     ));
     state.set_registry_path(Some(database_registry_path));
 
-    let api = Router::new()
-        .route("/auth/login", post(auth::login))
-        .route(
-            "/auth/tokens",
-            get(user_admin::list_tokens).post(user_admin::create_token),
-        )
-        .route("/auth/tokens/{id}", delete(user_admin::revoke_token))
+    // The real API, whose router the MCP tools call back through, plus a
+    // stand-in route that is only a read and a write.
+    let real = psf_guard::server::api_router(Arc::clone(&state));
+    let catalog = Router::new()
         .route(
             "/catalog",
             get(|| async { "catalog" }).put(|| async { "changed" }),
         )
-        .nest_service("/mcp", mcp::service(Arc::clone(&state)))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::authorize_api,
         ))
         .with_state(Arc::clone(&state));
-    (Router::new().nest("/api", api), state)
+    (Router::new().nest("/api", real.merge(catalog)), state)
 }
 
 async fn send(app: &Router, request: Request<Body>) -> (StatusCode, HeaderMap, Value) {
@@ -428,6 +422,13 @@ async fn mcp_endpoint_serves_tools_behind_the_token_and_checks_write_per_tool() 
         "get_stack_image",
         "get_stack_calibration",
         "explain_calibration",
+        "api_routes",
+        "api_get",
+        "list_plans",
+        "get_plan",
+        "get_plan_progress",
+        "list_rigs",
+        "search_sky",
     ] {
         assert!(names.contains(&expected.to_string()), "{names:?}");
     }
@@ -461,6 +462,23 @@ async fn mcp_endpoint_serves_tools_behind_the_token_and_checks_write_per_tool() 
         tool_text(&unknown).contains("list_stacks names the current ones"),
         "{unknown}"
     );
+
+    // The whole API, read as the caller.
+    let routes = client.tool("api_routes", json!({})).await;
+    assert!(
+        tool_text(&routes).contains("/director/v1/plans"),
+        "{routes}"
+    );
+    let info = client.tool("api_get", json!({ "path": "/info" })).await;
+    assert_ne!(info["isError"], true, "{info}");
+    assert!(tool_text(&info).contains("version"), "{info}");
+    let recursion = client.tool("api_get", json!({ "path": "/mcp" })).await;
+    assert_eq!(recursion["isError"], true, "{recursion}");
+
+    // Planning answers through the same router; here it is off, and says so.
+    let plans = client.tool("list_plans", json!({})).await;
+    assert_eq!(plans["isError"], true, "{plans}");
+    assert_ne!(tool_text(&plans), "Not found", "{plans}");
 
     let missing = client.tool("get_jobs", json!({ "database": "nope" })).await;
     assert_eq!(missing["isError"], true);

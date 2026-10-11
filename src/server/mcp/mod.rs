@@ -1,17 +1,14 @@
 //! Model Context Protocol server for agents.
 //!
-//! The endpoint sits inside the API router at `/api/mcp`, so the same
-//! middleware that guards the UI guards it: a session cookie, a personal
+//! The endpoint sits inside the API router at `/api/mcp`, behind the same
+//! middleware that guards the UI: a session cookie, a personal
 //! `Authorization: Bearer psfg_…` token, or the open access a server with no
-//! accounts gives its own machine. Each tool is a thin call into an existing
-//! HTTP handler. The middleware cannot tell a read from a write by method
-//! here, because MCP carries everything as a POST, so the tools that change
-//! the catalog check the caller's role themselves.
+//! accounts gives its own machine. Each tool sends its request back through
+//! that router as the caller (see [`api`]), so the read-only role, database
+//! management and every handler's own checks apply to an agent exactly as
+//! they do to a person.
 
-use axum::{
-    extract::{Json, Path, Query, State},
-    http::request::Parts,
-};
+use axum::http::Method;
 use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig},
@@ -23,27 +20,20 @@ use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::{
-    astrobin::AstroBinDetail,
-    commands::import::ImportScope,
-    server::{
-        api::{
-            ApiResponse, BatchGradeEntry, BatchGradeRequest, ImageQuery, ImportRequest,
-            QualityBackfillRequest, ScoringOverrideQuery, SequenceAnalysisQuery,
-        },
-        astrobin_export::{self, AstroBinExportQuery},
-        auth::{AccessRole, RequestAccess},
-        extract::DbContext,
-        handlers::{self, AppError},
-        sky_coverage,
-        stack_preview::{self, StackGroupStatus, StackPreviewImageQuery, StackPreviewJob},
-        state::AppState,
-        wbpp_run::{self, StartWbppRunRequest},
-    },
+use crate::server::{
+    extract::DbContext,
+    handlers::AppError,
+    sky_coverage,
+    stack_preview::{LatestStackPreviews, StackGroupStatus, StackPreviewJob},
+    state::AppState,
 };
+use api::{Caller, Reply};
 
+mod api;
 mod stacks;
 
 const DEFAULT_IMAGE_LIMIT: i32 = 100;
@@ -244,8 +234,8 @@ pub struct AstroBinArgs {
     pub detail: Option<AstroBinDetailArg>,
 }
 
-/// Mirrors [`ImportScope`] so the schema can name the choices.
-#[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
+/// Which frames an import touches.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ImportScopeArg {
     All,
@@ -253,97 +243,79 @@ pub enum ImportScopeArg {
     Calibration,
 }
 
-impl From<ImportScopeArg> for ImportScope {
-    fn from(value: ImportScopeArg) -> Self {
-        match value {
-            ImportScopeArg::All => Self::All,
-            ImportScopeArg::Lights => Self::Lights,
-            ImportScopeArg::Calibration => Self::Calibration,
-        }
-    }
-}
-
-/// Mirrors [`AstroBinDetail`] so the schema can name the choices.
-#[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
+/// How much an AstroBin export says.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AstroBinDetailArg {
     Essentials,
     Full,
 }
 
-impl From<AstroBinDetailArg> for AstroBinDetail {
-    fn from(value: AstroBinDetailArg) -> Self {
-        match value {
-            AstroBinDetailArg::Essentials => Self::Essentials,
-            AstroBinDetailArg::Full => Self::Full,
-        }
-    }
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ApiGetArgs {
+    /// A route below `/api` from `api_routes`, with its placeholders filled,
+    /// such as `/db/c925/images/4796` or `/director/v1/plans`.
+    pub path: String,
+    /// Query parameters, such as `{"project_id": "1", "limit": "50"}`.
+    #[serde(default)]
+    pub query: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Serialize)]
-struct JobsSnapshot {
-    import: crate::server::import_job::ImportJobProgress,
-    quality_backfill: crate::server::quality_backfill::QualityBackfillProgress,
-    wbpp_run: crate::server::wbpp_run::WbppRunProgress,
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct PlanArgs {
+    /// The plan's id (a UUID) from `list_plans`.
+    pub plan_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RigArgs {
+    /// The rig's id (a UUID) from `list_rigs`.
+    pub rig: String,
+    /// A plan id, to see the preferences as that plan's project gets them.
+    pub plan_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct TemplateArgs {
+    /// A rig catalog's database id, for the templates in that rig's
+    /// database. Omitted gives the shared template library.
+    pub database: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SkySearchArgs {
+    /// A name or catalog designation, such as `NGC 7635` or `Bubble`.
+    pub query: String,
+    /// Also ask the online name resolver (Sesame), through the cache.
+    #[serde(default)]
+    pub online: bool,
+    /// At most this many matches (default 10).
+    pub limit: Option<usize>,
+}
+/// A database by id or name, or the tool error that names the known ones.
+macro_rules! database {
+    ($self:ident, $name:expr) => {
+        match $self.database($name) {
+            Ok(db) => db,
+            Err(error) => return Ok(error),
+        }
+    };
+}
+
+/// The value, or return the tool error.
+macro_rules! attempt {
+    ($result:expr) => {
+        match $result {
+            Ok(value) => value,
+            Err(error) => return Ok(error),
+        }
+    };
 }
 
 #[tool_router]
 impl PsfGuardMcp {
     pub fn new(state: Arc<AppState>) -> Self {
         Self { state }
-    }
-
-    fn access(&self, ctx: &RequestContext<RoleServer>) -> Result<RequestAccess, McpError> {
-        if let Some(access) = ctx
-            .extensions
-            .get::<Parts>()
-            .and_then(|parts| parts.extensions.get::<RequestAccess>())
-        {
-            return Ok(access.clone());
-        }
-        // No middleware ran (a direct in-process mount). Only a server with no
-        // accounts that trusts its callers stays open.
-        if self.state.server_auth().is_none() && self.state.anonymous_access_trusted() {
-            return Ok(RequestAccess {
-                role: AccessRole::ReadWrite,
-                username: None,
-                api_token: false,
-            });
-        }
-        Err(McpError::invalid_request(
-            "Sign in or send an API token to use this server",
-            None,
-        ))
-    }
-
-    fn require_write(&self, ctx: &RequestContext<RoleServer>) -> Result<(), CallToolResult> {
-        match self.access(ctx) {
-            Ok(access) if access.role == AccessRole::ReadWrite => Ok(()),
-            Ok(_) => Err(failure("This account has read-only access")),
-            Err(error) => Err(failure(error.message.as_ref())),
-        }
-    }
-
-    /// A stack job of this project, from memory or its manifest.
-    async fn stack_job(
-        &self,
-        ctx: &DbContext,
-        project_id: i32,
-        job_id: &str,
-    ) -> Result<StackPreviewJob, CallToolResult> {
-        let db_id = ctx.id.clone();
-        match stack_preview::get_stack_preview_job(
-            State(Arc::clone(&self.state)),
-            DbContext(Arc::clone(&ctx.0)),
-            Path((db_id, project_id, job_id.to_string())),
-        )
-        .await
-        {
-            Err(AppError::NotFound) => Err(failure(&format!(
-                "No stack {job_id} in project {project_id}; list_stacks names the current ones"
-            ))),
-            other => data(other),
-        }
     }
 
     fn database(&self, name: &str) -> Result<DbContext, CallToolResult> {
@@ -369,134 +341,292 @@ impl PsfGuardMcp {
             })
     }
 
+    /// Send a request through the API as the caller and keep its data.
+    async fn send(
+        &self,
+        ctx: &RequestContext<RoleServer>,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<Value, CallToolResult> {
+        let reply = api::send(&self.state, &Caller::of(ctx), method, path, body.as_ref())
+            .await
+            .map_err(|error| failure(&error))?;
+        api::data(reply).map_err(|error| failure(&error))
+    }
+
+    async fn get(
+        &self,
+        ctx: &RequestContext<RoleServer>,
+        path: &str,
+    ) -> Result<Value, CallToolResult> {
+        self.send(ctx, Method::GET, path, None).await
+    }
+
+    /// A request whose data is the tool's whole answer.
+    async fn answer(
+        &self,
+        ctx: &RequestContext<RoleServer>,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> ToolResult {
+        Ok(match self.send(ctx, method, path, body).await {
+            Ok(value) => text_result(&value),
+            Err(error) => error,
+        })
+    }
+
+    /// A stack job of this project, with a pointer to `list_stacks` when it
+    /// is not one.
+    async fn stack_job(
+        &self,
+        ctx: &RequestContext<RoleServer>,
+        db: &str,
+        project_id: i32,
+        job_id: &str,
+    ) -> Result<StackPreviewJob, CallToolResult> {
+        let path = format!(
+            "/db/{}/projects/{project_id}/stack-previews/{}",
+            api::encode(db),
+            api::encode(job_id)
+        );
+        let reply = api::send(&self.state, &Caller::of(ctx), Method::GET, &path, None)
+            .await
+            .map_err(|error| failure(&error))?;
+        if reply.status() == axum::http::StatusCode::NOT_FOUND {
+            return Err(failure(&format!(
+                "No stack {job_id} in project {project_id}; list_stacks names the current ones"
+            )));
+        }
+        let value = api::data(reply).map_err(|error| failure(&error))?;
+        serde_json::from_value(value)
+            .map_err(|error| failure(&format!("Could not read the stack job: {error}")))
+    }
+
+    // ---------- The whole API, read only ----------
+
+    #[tool(
+        description = "Every route api_get can read: its path below /api, with placeholders such as {db} (a database id), {project_id}, {image_id}, {plan_id} (a planning UUID) and {rig} (a rig UUID), and what it answers. Use it to find data no other tool gives."
+    )]
+    async fn api_routes(&self) -> ToolResult {
+        let routes: Vec<Value> = api::READABLE_ROUTES
+            .iter()
+            .map(|(path, answers)| json!({ "path": path, "answers": answers }))
+            .collect();
+        Ok(text_result(&json!({ "routes": routes })))
+    }
+
+    #[tool(
+        description = "Read any route the UI reads, as you: GET below /api, such as /db/c925/flat-history or /director/v1/projects/<uuid>/mosaic. api_routes lists them. Answers JSON only; images come from get_stack_image."
+    )]
+    async fn api_get(
+        &self,
+        Parameters(args): Parameters<ApiGetArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        if let Err(error) = api::readable_path(&args.path) {
+            return Ok(failure(&error));
+        }
+        let path = api::with_query(
+            &args.path,
+            args.query
+                .iter()
+                .map(|(key, value)| (key.as_str(), Some(value.clone()))),
+        );
+        self.answer(&ctx, Method::GET, &path, None).await
+    }
+
+    // ---------- Catalogs ----------
+
     #[tool(
         description = "List the catalogs this server has open: id (slug), name, database path, and image folders. Every other tool takes one of these ids."
     )]
-    async fn list_databases(&self) -> ToolResult {
-        Ok(render(
-            handlers::list_databases(State(Arc::clone(&self.state))).await,
-        ))
+    async fn list_databases(&self, ctx: RequestContext<RoleServer>) -> ToolResult {
+        self.answer(&ctx, Method::GET, "/databases", None).await
     }
 
     #[tool(
         description = "Projects in a database with their targets, exposure plans, progress and recent frames."
     )]
-    async fn list_projects(&self, Parameters(args): Parameters<DatabaseArgs>) -> ToolResult {
-        let ctx = match self.database(&args.database) {
-            Ok(ctx) => ctx,
-            Err(error) => return Ok(error),
-        };
-        Ok(render(handlers::get_projects_overview(ctx).await))
+    async fn list_projects(
+        &self,
+        Parameters(args): Parameters<DatabaseArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!("/db/{}/projects/overview", api::encode(&db.id));
+        self.answer(&ctx, Method::GET, &path, None).await
     }
 
     #[tool(description = "Targets in a database with coordinates, grade counts and last capture.")]
-    async fn list_targets(&self, Parameters(args): Parameters<DatabaseArgs>) -> ToolResult {
-        let ctx = match self.database(&args.database) {
-            Ok(ctx) => ctx,
-            Err(error) => return Ok(error),
-        };
-        Ok(render(handlers::get_targets_overview(ctx).await))
+    async fn list_targets(
+        &self,
+        Parameters(args): Parameters<DatabaseArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!("/db/{}/targets/overview", api::encode(&db.id));
+        self.answer(&ctx, Method::GET, &path, None).await
     }
 
     #[tool(
-        description = "Images (light frames) with grade, filter, exposure and stored metrics. Filter by project, target or grade; page with limit and offset."
+        description = "A project's Target Scheduler settings, its targets and their exposure plans: priority, minimum altitude, moon avoidance, desired and accepted counts."
     )]
-    async fn list_images(&self, Parameters(args): Parameters<ImageListArgs>) -> ToolResult {
-        let ctx = match self.database(&args.database) {
-            Ok(ctx) => ctx,
-            Err(error) => return Ok(error),
-        };
+    async fn get_project_scheduler(
+        &self,
+        Parameters(args): Parameters<ProjectArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!(
+            "/db/{}/projects/{}/scheduler",
+            api::encode(&db.id),
+            args.project_id
+        );
+        self.answer(&ctx, Method::GET, &path, None).await
+    }
+
+    #[tool(
+        description = "Images (light frames) with grade, filter, exposure and stored metrics. Filter by project, target, grade or filter name; keep only the metadata keys asked for; page with limit and offset."
+    )]
+    async fn list_images(
+        &self,
+        Parameters(args): Parameters<ImageListArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
         let limit = args
             .limit
             .unwrap_or(DEFAULT_IMAGE_LIMIT)
             .clamp(1, MAX_IMAGE_LIMIT);
-        let query = ImageQuery {
-            project_id: args.project_id,
-            target_id: args.target_id,
-            status: args.status,
-            filter_name: args.filter_name,
-            limit: Some(limit),
-            offset: args.offset,
-        };
-        let images = match data(handlers::get_images(ctx, Query(query)).await) {
-            Ok(images) => images,
-            Err(error) => return Ok(error),
-        };
-        let Some(keys) = args.metadata_keys else {
-            return Ok(render_value(&images));
-        };
-        let mut images = match serde_json::to_value(&images) {
-            Ok(images) => images,
-            Err(error) => return Ok(failure(&format!("Could not serialize the result: {error}"))),
-        };
-        for image in images.as_array_mut().into_iter().flatten() {
-            if let Some(metadata) = image
-                .get_mut("metadata")
-                .and_then(serde_json::Value::as_object_mut)
-            {
-                metadata.retain(|key, _| keys.iter().any(|wanted| wanted == key));
+        let path = api::with_query(
+            &format!("/db/{}/images", api::encode(&db.id)),
+            [
+                ("project_id", args.project_id.map(|id| id.to_string())),
+                ("target_id", args.target_id.map(|id| id.to_string())),
+                ("status", args.status),
+                ("filter_name", args.filter_name),
+                ("limit", Some(limit.to_string())),
+                ("offset", args.offset.map(|offset| offset.to_string())),
+            ],
+        );
+        let mut images = attempt!(self.get(&ctx, &path).await);
+        if let Some(keys) = args.metadata_keys {
+            for image in images.as_array_mut().into_iter().flatten() {
+                if let Some(metadata) = image.get_mut("metadata").and_then(Value::as_object_mut) {
+                    metadata.retain(|key, _| keys.iter().any(|wanted| wanted == key));
+                }
             }
         }
-        Ok(render_value(&images))
+        Ok(text_result(&images))
     }
 
     #[tool(description = "One image: grade, file location, header metadata and stored metrics.")]
-    async fn get_image(&self, Parameters(args): Parameters<ImageArgs>) -> ToolResult {
-        let ctx = match self.database(&args.database) {
-            Ok(ctx) => ctx,
-            Err(error) => return Ok(error),
-        };
-        let db_id = ctx.id.clone();
-        Ok(render(
-            handlers::get_image(ctx, Path((db_id, args.image_id))).await,
-        ))
+    async fn get_image(
+        &self,
+        Parameters(args): Parameters<ImageArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!("/db/{}/images/{}", api::encode(&db.id), args.image_id);
+        self.answer(&ctx, Method::GET, &path, None).await
     }
 
     #[tool(
         description = "Quality context for one image: its score, the issues found, and how it sits in its target and filter sequence. Uses stored evidence; it does not start a scan."
     )]
-    async fn get_image_quality(&self, Parameters(args): Parameters<ImageArgs>) -> ToolResult {
-        let ctx = match self.database(&args.database) {
-            Ok(ctx) => ctx,
-            Err(error) => return Ok(error),
-        };
-        let db_id = ctx.id.clone();
-        Ok(render(
-            handlers::get_image_quality(
-                ctx,
-                Path((db_id, args.image_id)),
-                Query(ScoringOverrideQuery::default()),
-            )
-            .await,
-        ))
+    async fn get_image_quality(
+        &self,
+        Parameters(args): Parameters<ImageArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!(
+            "/db/{}/analysis/image/{}",
+            api::encode(&db.id),
+            args.image_id
+        );
+        self.answer(&ctx, Method::GET, &path, None).await
     }
 
     #[tool(
         description = "Score a sequence of frames relative to each other: per-image scores, suggested rejects and their reasons, for one target, one project, or the whole database. Suggestions are advice; grade_images applies them."
     )]
-    async fn analyze_sequence(&self, Parameters(args): Parameters<SequenceArgs>) -> ToolResult {
-        let ctx = match self.database(&args.database) {
-            Ok(ctx) => ctx,
-            Err(error) => return Ok(error),
-        };
-        let query = SequenceAnalysisQuery {
-            target_id: args.target_id,
-            project_id: args.project_id,
-            all_projects: args.all_projects,
-            filter_name: args.filter_name,
-            ..SequenceAnalysisQuery::default()
-        };
-        Ok(render(handlers::analyze_sequence(ctx, Query(query)).await))
+    async fn analyze_sequence(
+        &self,
+        Parameters(args): Parameters<SequenceArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = api::with_query(
+            &format!("/db/{}/analysis/sequence", api::encode(&db.id)),
+            [
+                ("target_id", args.target_id.map(|id| id.to_string())),
+                ("project_id", args.project_id.map(|id| id.to_string())),
+                (
+                    "all_projects",
+                    args.all_projects.then(|| "true".to_string()),
+                ),
+                ("filter_name", args.filter_name),
+            ],
+        );
+        self.answer(&ctx, Method::GET, &path, None).await
     }
 
     #[tool(description = "Whole-database counts: images by grade, projects, targets, exposure.")]
-    async fn get_statistics(&self, Parameters(args): Parameters<DatabaseArgs>) -> ToolResult {
-        let ctx = match self.database(&args.database) {
-            Ok(ctx) => ctx,
-            Err(error) => return Ok(error),
-        };
-        Ok(render(handlers::get_overall_stats(ctx).await))
+    async fn get_statistics(
+        &self,
+        Parameters(args): Parameters<DatabaseArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!("/db/{}/stats/overall", api::encode(&db.id));
+        self.answer(&ctx, Method::GET, &path, None).await
     }
+
+    #[tool(
+        description = "Sky coverage: every target's footprint and exposure by filter, for planning."
+    )]
+    async fn get_sky_coverage(
+        &self,
+        Parameters(args): Parameters<DatabaseArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!("/db/{}/sky/coverage", api::encode(&db.id));
+        self.answer(&ctx, Method::GET, &path, None).await
+    }
+
+    #[tool(
+        description = "AstroBin acquisition CSV for a project or target: one row per night and filter, plus the filters that still need an AstroBin id."
+    )]
+    async fn astrobin_csv(
+        &self,
+        Parameters(args): Parameters<AstroBinArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let detail = args
+            .detail
+            .and_then(|detail| serde_json::to_value(detail).ok())
+            .and_then(|detail| detail.as_str().map(str::to_owned));
+        let path = api::with_query(
+            &format!("/db/{}/astrobin-export", api::encode(&db.id)),
+            [
+                ("project_id", args.project_id.map(|id| id.to_string())),
+                ("target_id", args.target_id.map(|id| id.to_string())),
+                (
+                    "include_pending",
+                    args.include_pending.then(|| "true".to_string()),
+                ),
+                ("detail", detail),
+            ],
+        );
+        self.answer(&ctx, Method::GET, &path, None).await
+    }
+
+    // ---------- Calibration ----------
 
     #[tool(
         description = "Which darks, flats and bias frames the calibration library can match to a project's lights, and which nights lack them."
@@ -504,55 +634,90 @@ impl PsfGuardMcp {
     async fn get_calibration_report(
         &self,
         Parameters(args): Parameters<ProjectArgs>,
+        ctx: RequestContext<RoleServer>,
     ) -> ToolResult {
-        let ctx = match self.database(&args.database) {
-            Ok(ctx) => ctx,
-            Err(error) => return Ok(error),
-        };
-        let db_id = ctx.id.clone();
-        Ok(render(
-            handlers::get_project_calibration_report(ctx, Path((db_id, args.project_id))).await,
-        ))
+        let db = database!(self, &args.database);
+        let path = format!(
+            "/db/{}/projects/{}/calibration-report",
+            api::encode(&db.id),
+            args.project_id
+        );
+        self.answer(&ctx, Method::GET, &path, None).await
     }
+
+    #[tool(
+        description = "The calibration library by night: bias, darks, dark-flats and flats with their settings, validity marks, and the masters built from them."
+    )]
+    async fn get_calibration_library(
+        &self,
+        Parameters(args): Parameters<DatabaseArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!("/db/{}/calibrations", api::encode(&db.id));
+        self.answer(&ctx, Method::GET, &path, None).await
+    }
+
+    #[tool(
+        description = "Why one light got the calibration masters it did: its header readings, then for bias, dark and flat every frame the library holds for its camera, grouped by night: the frames a master would take, the ones that match but lose to a nearer set, and the ones refused with the readings that disagree (rotation off, exposure, temperature, a validity mark, too far in time). Flats for other filters and frames from other cameras are only counted."
+    )]
+    async fn explain_calibration(
+        &self,
+        Parameters(args): Parameters<ImageArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!(
+            "/db/{}/images/{}/calibration",
+            api::encode(&db.id),
+            args.image_id
+        );
+        self.answer(&ctx, Method::GET, &path, None).await
+    }
+
+    // ---------- Stacks ----------
 
     #[tool(
         description = "A project's latest stack previews, one per channel (target, filter and exposure): frames integrated and left out, total exposure, the masters each calibration session applied, how much more depth would help, and the job id and group index the other stack tools take."
     )]
-    async fn list_stacks(&self, Parameters(args): Parameters<ProjectArgs>) -> ToolResult {
-        let ctx = match self.database(&args.database) {
-            Ok(ctx) => ctx,
-            Err(error) => return Ok(error),
-        };
-        let db_id = ctx.id.clone();
-        let latest = match data(
-            stack_preview::get_latest_stack_previews(ctx, Path((db_id, args.project_id))).await,
-        ) {
-            Ok(latest) => latest,
-            Err(error) => return Ok(error),
-        };
+    async fn list_stacks(
+        &self,
+        Parameters(args): Parameters<ProjectArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!(
+            "/db/{}/projects/{}/stack-previews/latest",
+            api::encode(&db.id),
+            args.project_id
+        );
+        let latest: LatestStackPreviews = attempt!(serde_json::from_value(attempt!(
+            self.get(&ctx, &path).await
+        ))
+        .map_err(|error| failure(&format!("Could not read the stacks: {error}"))));
         let stacks: Vec<_> = latest
             .groups
             .iter()
             .map(|entry| stacks::summarize(&entry.job_id, entry.created_unix_seconds, &entry.group))
             .collect();
-        Ok(render_value(&serde_json::json!({
-            "project_id": args.project_id,
-            "stacks": stacks,
-        })))
+        Ok(text_result(
+            &json!({ "project_id": args.project_id, "stacks": stacks }),
+        ))
     }
 
     #[tool(
         description = "One stack channel frame by frame, in capture order: each frame's disposition and reason, where it registered (shift and rotation in reference pixels), weight, noise and normalization. Also, per night, whether the frames were dithered or walked steadily one way, which turns anything fixed to the sensor into streaks (walking noise)."
     )]
-    async fn get_stack(&self, Parameters(args): Parameters<StackArgs>) -> ToolResult {
-        let ctx = match self.database(&args.database) {
-            Ok(ctx) => ctx,
-            Err(error) => return Ok(error),
-        };
-        let job = match self.stack_job(&ctx, args.project_id, &args.job_id).await {
-            Ok(job) => job,
-            Err(error) => return Ok(error),
-        };
+    async fn get_stack(
+        &self,
+        Parameters(args): Parameters<StackArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let job = attempt!(
+            self.stack_job(&ctx, &db.id, args.project_id, &args.job_id)
+                .await
+        );
         let Some(group) = job.groups.get(args.group_index) else {
             return Ok(failure(&format!(
                 "This stack has {} channel(s); group_index {} is not one",
@@ -560,12 +725,12 @@ impl PsfGuardMcp {
                 args.group_index
             )));
         };
-        let (acquired, boundary) = match capture_times(&ctx, group) {
+        let (acquired, boundary) = match capture_times(&db, group) {
             Ok(times) => times,
             Err(error) => return Ok(failure(&error_text(&error))),
         };
         let rows = stacks::frame_rows(group, &acquired, |at| stacks::night_of(at, boundary));
-        Ok(render_value(&serde_json::json!({
+        Ok(text_result(&json!({
             "stack": stacks::summarize(&job.job_id, job.created_unix_seconds, group),
             "drift_by_night": stacks::drift_by_night(&rows),
             "frames": rows,
@@ -575,34 +740,42 @@ impl PsfGuardMcp {
     #[tool(
         description = "Look at a stack: its preview image, as the app shows it or with the background stretched hard to show gradients, vignetting, streaks and calibration patterns. Crop to a region and choose the size. Returns a PNG image and a note of what part it shows."
     )]
-    async fn get_stack_image(&self, Parameters(args): Parameters<StackImageArgs>) -> ToolResult {
-        let ctx = match self.database(&args.database) {
-            Ok(ctx) => ctx,
-            Err(error) => return Ok(error),
-        };
+    async fn get_stack_image(
+        &self,
+        Parameters(args): Parameters<StackImageArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
         // The job is read first so a stack of another project is refused.
-        if let Err(error) = self.stack_job(&ctx, args.project_id, &args.job_id).await {
-            return Ok(error);
-        }
-        let db_id = ctx.id.clone();
-        let response = match stack_preview::get_stack_preview_image(
-            ctx,
-            Path((db_id, args.job_id.clone(), args.group_index)),
-            Query(StackPreviewImageQuery::default()),
-        )
-        .await
-        {
-            Ok(response) => response,
-            Err(AppError::NotFound) => {
+        attempt!(
+            self.stack_job(&ctx, &db.id, args.project_id, &args.job_id)
+                .await
+        );
+        let path = format!(
+            "/db/{}/stack-previews/{}/{}/preview",
+            api::encode(&db.id),
+            api::encode(&args.job_id),
+            args.group_index
+        );
+        let reply = attempt!(
+            api::send(&self.state, &Caller::of(&ctx), Method::GET, &path, None)
+                .await
+                .map_err(|error| failure(&error))
+        );
+        let bytes = match reply {
+            Reply::Bytes { status, body, .. } if status.is_success() => body,
+            Reply::Bytes { status, .. } | Reply::Json(status, _)
+                if status == axum::http::StatusCode::NOT_FOUND =>
+            {
                 return Ok(failure(
                     "This stack has no image yet: it is still building, was skipped, or failed",
                 ))
             }
-            Err(error) => return Ok(failure(&error_text(&error))),
-        };
-        let bytes = match axum::body::to_bytes(response.into_body(), 256 * 1024 * 1024).await {
-            Ok(bytes) => bytes,
-            Err(error) => return Ok(failure(&format!("Could not read the stack image: {error}"))),
+            other => {
+                return Ok(failure(&api::data(other).err().unwrap_or_else(|| {
+                    "The stack image is not a picture".to_string()
+                })))
+            }
         };
         let max_size = args
             .max_size
@@ -638,100 +811,63 @@ impl PsfGuardMcp {
     #[tool(
         description = "The calibration masters a stack applied, per session: each bias, dark and flat master, how many lights it calibrated, how many frames it was built from and how outliers were rejected, and notes on sessions that had none. A master built from two frames, or a session with no flat, explains many stack patterns."
     )]
-    async fn get_stack_calibration(&self, Parameters(args): Parameters<StackArgs>) -> ToolResult {
-        let ctx = match self.database(&args.database) {
-            Ok(ctx) => ctx,
-            Err(error) => return Ok(error),
-        };
-        let job = match self.stack_job(&ctx, args.project_id, &args.job_id).await {
-            Ok(job) => job,
-            Err(error) => return Ok(error),
-        };
-        let source = serde_json::json!({ "job_id": job.job_id, "group_index": args.group_index });
-        let query = serde_json::json!({ "revision": job.artifact_revision });
-        let (Ok(path), Ok(query)) = (
-            serde_json::from_value(source),
-            serde_json::from_value(query),
-        ) else {
-            return Ok(failure("Could not name this stack's masters"));
-        };
-        let catalog = match data(
-            stack_preview::calibration_masters::get_catalog(
-                State(Arc::clone(&self.state)),
-                ctx,
-                Path(path),
-                Query(query),
-            )
-            .await,
-        ) {
-            Ok(catalog) => catalog,
-            Err(error) => return Ok(error),
-        };
+    async fn get_stack_calibration(
+        &self,
+        Parameters(args): Parameters<StackArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let job = attempt!(
+            self.stack_job(&ctx, &db.id, args.project_id, &args.job_id)
+                .await
+        );
+        let path = api::with_query(
+            &format!(
+                "/db/{}/stack-previews/{}/{}/calibration-masters",
+                api::encode(&db.id),
+                api::encode(&job.job_id),
+                args.group_index
+            ),
+            [("revision", Some(job.artifact_revision.clone()))],
+        );
+        let mut catalog = attempt!(self.get(&ctx, &path).await);
         // The links are for the app's inspector; an agent cannot follow them.
-        let mut catalog = serde_json::to_value(&catalog).unwrap_or_default();
         strip_links(&mut catalog);
-        Ok(render_value(&catalog))
+        Ok(text_result(&catalog))
     }
 
-    #[tool(
-        description = "Why one light got the calibration masters it did: its header readings, then for bias, dark and flat every frame the library holds for its camera, grouped by night: the frames a master would take, the ones that match but lose to a nearer set, and the ones refused with the readings that disagree (rotation off, exposure, temperature, a validity mark, too far in time). Flats for other filters and frames from other cameras are only counted."
-    )]
-    async fn explain_calibration(&self, Parameters(args): Parameters<ImageArgs>) -> ToolResult {
-        let ctx = match self.database(&args.database) {
-            Ok(ctx) => ctx,
-            Err(error) => return Ok(error),
-        };
-        let db_id = ctx.id.clone();
-        Ok(render(
-            handlers::get_image_calibration(ctx, Path((db_id, args.image_id))).await,
-        ))
-    }
-
-    #[tool(
-        description = "Sky coverage: every target's footprint and exposure by filter, for planning."
-    )]
-    async fn get_sky_coverage(&self, Parameters(args): Parameters<DatabaseArgs>) -> ToolResult {
-        let ctx = match self.database(&args.database) {
-            Ok(ctx) => ctx,
-            Err(error) => return Ok(error),
-        };
-        Ok(render(sky_coverage::get_sky_coverage(ctx).await))
-    }
+    // ---------- Jobs ----------
 
     #[tool(
         description = "Progress of the database's background jobs: import, quality scan, and WBPP run. Poll this after starting one."
     )]
-    async fn get_jobs(&self, Parameters(args): Parameters<DatabaseArgs>) -> ToolResult {
-        let ctx = match self.database(&args.database) {
-            Ok(ctx) => ctx,
-            Err(error) => return Ok(error),
-        };
-        let snapshot = JobsSnapshot {
-            import: crate::server::import_job::progress_snapshot(&ctx.import_job),
-            quality_backfill: crate::server::quality_backfill::snapshot(&ctx.quality_backfill),
-            wbpp_run: wbpp_run::progress_snapshot(&ctx.0.wbpp_run),
-        };
-        Ok(render_value(&snapshot))
+    async fn get_jobs(
+        &self,
+        Parameters(args): Parameters<DatabaseArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let base = format!("/db/{}", api::encode(&db.id));
+        let import = attempt!(self.get(&ctx, &format!("{base}/import")).await);
+        let quality = attempt!(
+            self.get(&ctx, &format!("{base}/analysis/quality-backfill"))
+                .await
+        );
+        let wbpp = attempt!(self.get(&ctx, &format!("{base}/wbpp/runs/current")).await);
+        Ok(text_result(&json!({
+            "import": import,
+            "quality_backfill": quality,
+            "wbpp_run": wbpp,
+        })))
     }
 
     #[tool(
-        description = "AstroBin acquisition CSV for a project or target: one row per night and filter, plus the filters that still need an AstroBin id."
+        description = "Stack builds and WBPP runs across every database: what runs now and what waits in the queue."
     )]
-    async fn astrobin_csv(&self, Parameters(args): Parameters<AstroBinArgs>) -> ToolResult {
-        let ctx = match self.database(&args.database) {
-            Ok(ctx) => ctx,
-            Err(error) => return Ok(error),
-        };
-        let query = AstroBinExportQuery {
-            project_id: args.project_id,
-            target_id: args.target_id,
-            include_pending: args.include_pending,
-            detail: args.detail.map(Into::into).unwrap_or_default(),
-        };
-        Ok(render(
-            astrobin_export::get_astrobin_export(State(Arc::clone(&self.state)), ctx, Query(query))
-                .await,
-        ))
+    async fn get_activity(&self, ctx: RequestContext<RoleServer>) -> ToolResult {
+        let stacks = attempt!(self.get(&ctx, "/stack-activity").await);
+        let wbpp = attempt!(self.get(&ctx, "/wbpp/activity").await);
+        Ok(text_result(&json!({ "stacks": stacks, "wbpp": wbpp })))
     }
 
     #[tool(
@@ -742,28 +878,22 @@ impl PsfGuardMcp {
         Parameters(args): Parameters<GradeArgs>,
         ctx: RequestContext<RoleServer>,
     ) -> ToolResult {
-        if let Err(denied) = self.require_write(&ctx) {
-            return Ok(denied);
-        }
-        let db = match self.database(&args.database) {
-            Ok(db) => db,
-            Err(error) => return Ok(error),
-        };
-        let request = BatchGradeRequest {
-            updates: args
-                .updates
-                .into_iter()
-                .map(|entry| BatchGradeEntry {
-                    image_id: entry.image_id,
-                    status: entry.status,
-                    reason: entry.reason,
-                })
-                .collect(),
-        };
-        Ok(render(
-            handlers::batch_update_image_grades(State(Arc::clone(&self.state)), db, Json(request))
-                .await,
-        ))
+        let db = database!(self, &args.database);
+        let updates: Vec<Value> = args
+            .updates
+            .into_iter()
+            .map(|entry| {
+                json!({ "image_id": entry.image_id, "status": entry.status, "reason": entry.reason })
+            })
+            .collect();
+        let path = format!("/db/{}/images/grade", api::encode(&db.id));
+        self.answer(
+            &ctx,
+            Method::POST,
+            &path,
+            Some(json!({ "updates": updates })),
+        )
+        .await
     }
 
     #[tool(
@@ -774,25 +904,15 @@ impl PsfGuardMcp {
         Parameters(args): Parameters<BackfillArgs>,
         ctx: RequestContext<RoleServer>,
     ) -> ToolResult {
-        if let Err(denied) = self.require_write(&ctx) {
-            return Ok(denied);
-        }
-        let db = match self.database(&args.database) {
-            Ok(db) => db,
-            Err(error) => return Ok(error),
-        };
-        let request = QualityBackfillRequest {
-            force: args.force,
-            fill_metadata: None,
-        };
-        Ok(render(
-            handlers::start_quality_backfill_route(
-                State(Arc::clone(&self.state)),
-                db,
-                Json(request),
-            )
-            .await,
-        ))
+        let db = database!(self, &args.database);
+        let path = format!("/db/{}/analysis/quality-backfill", api::encode(&db.id));
+        self.answer(
+            &ctx,
+            Method::POST,
+            &path,
+            Some(json!({ "force": args.force })),
+        )
+        .await
     }
 
     #[tool(
@@ -803,29 +923,15 @@ impl PsfGuardMcp {
         Parameters(args): Parameters<ImportArgs>,
         ctx: RequestContext<RoleServer>,
     ) -> ToolResult {
-        if let Err(denied) = self.require_write(&ctx) {
-            return Ok(denied);
-        }
-        let db = match self.database(&args.database) {
-            Ok(db) => db,
-            Err(error) => return Ok(error),
-        };
-        let request = ImportRequest {
-            image_dirs: None,
-            time_gap_days: None,
-            profile_id: None,
-            dry_run: args.dry_run,
-            backfill: args.backfill,
-            fill_metadata: None,
-            attach_existing: None,
-            scope: args.scope.map(Into::into),
-            skip_processed: None,
-            accept_other_rigs: args.accept_other_rigs,
-            match_radius_deg: None,
-        };
-        Ok(render(
-            handlers::start_import_route(State(Arc::clone(&self.state)), db, Json(request)).await,
-        ))
+        let db = database!(self, &args.database);
+        let path = format!("/db/{}/import", api::encode(&db.id));
+        let body = json!({
+            "dry_run": args.dry_run,
+            "backfill": args.backfill,
+            "scope": args.scope,
+            "accept_other_rigs": args.accept_other_rigs,
+        });
+        self.answer(&ctx, Method::POST, &path, Some(body)).await
     }
 
     #[tool(
@@ -836,23 +942,15 @@ impl PsfGuardMcp {
         Parameters(args): Parameters<WbppArgs>,
         ctx: RequestContext<RoleServer>,
     ) -> ToolResult {
-        if let Err(denied) = self.require_write(&ctx) {
-            return Ok(denied);
-        }
-        let db = match self.database(&args.database) {
-            Ok(db) => db,
-            Err(error) => return Ok(error),
-        };
-        let request = StartWbppRunRequest {
-            project_id: args.project_id,
-            target_id: args.target_id,
-            include_pending: args.include_pending,
-            filter_name: args.filter_name,
-            ..StartWbppRunRequest::default()
-        };
-        Ok(render(
-            wbpp_run::start_wbpp_run(State(Arc::clone(&self.state)), db, Json(request)).await,
-        ))
+        let db = database!(self, &args.database);
+        let path = format!("/db/{}/wbpp/runs", api::encode(&db.id));
+        let body = json!({
+            "project_id": args.project_id,
+            "target_id": args.target_id,
+            "include_pending": args.include_pending,
+            "filter_name": args.filter_name,
+        });
+        self.answer(&ctx, Method::POST, &path, Some(body)).await
     }
 
     #[tool(description = "Stop the database's running WBPP run. Needs write access.")]
@@ -861,16 +959,153 @@ impl PsfGuardMcp {
         Parameters(args): Parameters<DatabaseArgs>,
         ctx: RequestContext<RoleServer>,
     ) -> ToolResult {
-        if let Err(denied) = self.require_write(&ctx) {
-            return Ok(denied);
-        }
-        let db = match self.database(&args.database) {
-            Ok(db) => db,
-            Err(error) => return Ok(error),
-        };
-        Ok(render(
-            wbpp_run::cancel_wbpp_run(State(Arc::clone(&self.state)), db).await,
+        let db = database!(self, &args.database);
+        let path = format!("/db/{}/wbpp/runs/current", api::encode(&db.id));
+        self.answer(&ctx, Method::DELETE, &path, None).await
+    }
+
+    // ---------- Planning ----------
+
+    #[tool(
+        description = "Planning: every plan across rigs, with its target, rigs, goals and state. The plan_id other planning tools take comes from here."
+    )]
+    async fn list_plans(&self, ctx: RequestContext<RoleServer>) -> ToolResult {
+        self.answer(&ctx, Method::GET, "/director/v1/plans", None)
+            .await
+    }
+
+    #[tool(
+        description = "One plan: its target and framing, the rigs it uses, each rig's exposures per band (template, exposure, goal) and its settings."
+    )]
+    async fn get_plan(
+        &self,
+        Parameters(args): Parameters<PlanArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let path = format!("/director/v1/projects/{}/plan", api::encode(&args.plan_id));
+        self.answer(&ctx, Method::GET, &path, None).await
+    }
+
+    #[tool(
+        description = "A plan's progress: per rig and objective, the frames accepted against the goal, taken, rejected, and whether each part is done, active, off or not yet activated."
+    )]
+    async fn get_plan_progress(
+        &self,
+        Parameters(args): Parameters<PlanArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let path = format!(
+            "/director/v1/projects/{}/plan/progress",
+            api::encode(&args.plan_id)
+        );
+        self.answer(&ctx, Method::GET, &path, None).await
+    }
+
+    #[tool(
+        description = "A plan's framing draft: centre, rotation, panels for a mosaic, and the rig each panel uses."
+    )]
+    async fn get_framing(
+        &self,
+        Parameters(args): Parameters<PlanArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let path = format!(
+            "/director/v1/projects/{}/framing",
+            api::encode(&args.plan_id)
+        );
+        self.answer(&ctx, Method::GET, &path, None).await
+    }
+
+    #[tool(
+        description = "A plan's activation: what was last written to the rigs' Target Scheduler databases, and whether the plan has changed since."
+    )]
+    async fn get_activation(
+        &self,
+        Parameters(args): Parameters<PlanArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let base = format!(
+            "/director/v1/projects/{}/activation",
+            api::encode(&args.plan_id)
+        );
+        let last = attempt!(self.get(&ctx, &base).await);
+        let check = attempt!(self.get(&ctx, &format!("{base}/check")).await);
+        Ok(text_result(&json!({ "last": last, "check": check })))
+    }
+
+    #[tool(
+        description = "Rigs: each rig's profile (camera, scope, site, catalog) and its live status as last reported (phase, target, time). The rig id other tools take comes from here."
+    )]
+    async fn list_rigs(&self, ctx: RequestContext<RoleServer>) -> ToolResult {
+        let profiles = attempt!(self.get(&ctx, "/director/v1/rigs/profiles").await);
+        let status = attempt!(self.get(&ctx, "/director/v1/rigs/status").await);
+        Ok(text_result(
+            &json!({ "profiles": profiles, "status": status }),
         ))
+    }
+
+    #[tool(
+        description = "A rig's effective observing preferences, after global, site, rig and (with plan_id) project settings: altitude, Moon, twilight and the like, with where each value comes from."
+    )]
+    async fn get_rig_preferences(
+        &self,
+        Parameters(args): Parameters<RigArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let path = api::with_query(
+            &format!("/director/v1/rigs/{}/preferences", api::encode(&args.rig)),
+            [("project_id", args.plan_id)],
+        );
+        self.answer(&ctx, Method::GET, &path, None).await
+    }
+
+    #[tool(
+        description = "The Target Scheduler limits a rig's settings would write to each project in its database, and which differ from what the database holds now. Reading it changes nothing."
+    )]
+    async fn get_rig_scheduling(
+        &self,
+        Parameters(args): Parameters<RigArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let path = format!("/director/v1/rigs/{}/scheduling", api::encode(&args.rig));
+        self.answer(&ctx, Method::GET, &path, None).await
+    }
+
+    #[tool(
+        description = "Exposure templates: the shared library, or with database a rig catalog's own templates (filter, gain, offset, binning, default exposure, Moon settings)."
+    )]
+    async fn list_templates(
+        &self,
+        Parameters(args): Parameters<TemplateArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let path = match args.database {
+            Some(name) => {
+                let db = database!(self, &name);
+                format!("/director/v1/catalogs/{}/templates", api::encode(&db.id))
+            }
+            None => "/director/v1/templates".to_string(),
+        };
+        self.answer(&ctx, Method::GET, &path, None).await
+    }
+
+    #[tool(
+        description = "Find a target by name or designation in the local catalogs (and with online, the Sesame resolver through its cache): names, coordinates, size and type."
+    )]
+    async fn search_sky(
+        &self,
+        Parameters(args): Parameters<SkySearchArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let path = api::with_query(
+            "/director/v1/sky/search",
+            [
+                ("q", Some(args.query)),
+                ("limit", args.limit.map(|limit| limit.to_string())),
+                ("online", args.online.then(|| "true".to_string())),
+            ],
+        );
+        self.answer(&ctx, Method::GET, &path, None).await
     }
 }
 
@@ -880,15 +1115,19 @@ impl ServerHandler for PsfGuardMcp {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("psf-guard", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "PSF Guard catalogs, grades and stacks astrophotography frames. Start with \
-                 list_databases; every other tool takes a database id from it. Grades are \
-                 accepted, rejected or pending. analyze_sequence and get_image_quality report \
-                 evidence and suggestions; nothing changes until grade_images runs. Jobs \
-                 (import, quality scan, WBPP) return at once; poll get_jobs for progress. \
-                 For a stack, list_stacks names each channel's job; get_stack gives its frames \
-                 and per-night drift, get_stack_calibration the masters it applied, and \
-                 get_stack_image the picture (stretch `background` shows patterns). \
-                 explain_calibration says why one light got, or missed, each master. \
+                "PSF Guard catalogs, grades and stacks astrophotography frames, and plans what \
+                 rigs shoot next. Start with list_databases; catalog tools take a database id \
+                 from it. Grades are accepted, rejected or pending. analyze_sequence and \
+                 get_image_quality report evidence and suggestions; nothing changes until \
+                 grade_images runs. Jobs (import, quality scan, WBPP) return at once; poll \
+                 get_jobs for progress. For a stack, list_stacks names each channel's job; \
+                 get_stack gives its frames and per-night drift, get_stack_calibration the \
+                 masters it applied, and get_stack_image the picture (stretch `background` shows \
+                 patterns). explain_calibration says why one light got, or missed, each master. \
+                 Planning: list_plans and list_rigs give the ids get_plan, get_plan_progress, \
+                 get_framing, get_activation and the rig tools take. api_routes lists every \
+                 route api_get can read when no tool fits. Every call runs as you: your role \
+                 and the server's database-management setting decide what it may change. \
                  Catalog predictions and header values are not pixel evidence; say which one \
                  a conclusion rests on."
                     .to_string(),
@@ -900,38 +1139,12 @@ fn failure(message: &str) -> CallToolResult {
     CallToolResult::error(vec![ContentBlock::text(message.to_string())])
 }
 
-fn render<T: Serialize>(response: Result<Json<ApiResponse<T>>, AppError>) -> CallToolResult {
-    match response {
-        Ok(Json(body)) => {
-            if !body.success {
-                return failure(body.error.as_deref().unwrap_or("The request failed"));
-            }
-            match body.data {
-                Some(data) => render_value(&data),
-                None => failure(
-                    "The catalog cache is still loading for this database; try again shortly",
-                ),
-            }
-        }
-        Err(error) => failure(&error_text(&error)),
-    }
-}
-
-/// The answer of a handler, or the tool error that says why there is none.
-fn data<T>(response: Result<Json<ApiResponse<T>>, AppError>) -> Result<T, CallToolResult> {
-    match response {
-        Ok(Json(body)) if body.success => body.data.ok_or_else(|| {
-            failure("The catalog cache is still loading for this database; try again shortly")
-        }),
-        Ok(Json(body)) => Err(failure(
-            body.error.as_deref().unwrap_or("The request failed"),
-        )),
-        Err(error) => Err(failure(&error_text(&error))),
-    }
+fn text_result(value: &Value) -> CallToolResult {
+    CallToolResult::success(vec![ContentBlock::text(api::text(value))])
 }
 
 /// When each of a stack's frames was taken, and where the catalog's nights
-/// split.
+/// split. Read after the job itself was read as the caller.
 fn capture_times(
     ctx: &DbContext,
     group: &StackGroupStatus,
@@ -953,21 +1166,14 @@ fn capture_times(
 }
 
 /// Drop the `*_url` fields, which only the app's own pages can follow.
-fn strip_links(value: &mut serde_json::Value) {
+fn strip_links(value: &mut Value) {
     match value {
-        serde_json::Value::Object(map) => {
+        Value::Object(map) => {
             map.retain(|key, _| !key.ends_with("_url"));
             map.values_mut().for_each(strip_links);
         }
-        serde_json::Value::Array(items) => items.iter_mut().for_each(strip_links),
+        Value::Array(items) => items.iter_mut().for_each(strip_links),
         _ => {}
-    }
-}
-
-fn render_value<T: Serialize>(value: &T) -> CallToolResult {
-    match serde_json::to_string_pretty(value) {
-        Ok(text) => CallToolResult::success(vec![ContentBlock::text(text)]),
-        Err(error) => failure(&format!("Could not serialize the result: {error}")),
     }
 }
 
