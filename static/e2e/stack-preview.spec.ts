@@ -197,6 +197,64 @@ function seedSyntheticColorStacks(databaseId: string, projectId: number, withCal
   );
 }
 
+test('refuses RC-Astro values past the tool range beside Apply, where the server refusals show too', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  seedSyntheticColorStacks(dbId, 2);
+  await page.route('**/api/tools/rc-astro', (route) => route.fulfill({ json: {
+    success: true,
+    data: {
+      available: true,
+      executable: 'e2e-capabilities-fixture',
+      tools: [{
+        schema_version: 6, cli_version: '2.6.6', key: 'bxt',
+        name: 'RC-Astro BlurXTerminator', ml_version: 5, licensed: true, license_message: null,
+        parameters: [
+          { name: 'ss', flag: '--ss', label: 'Sharpen Stars', description: 'Amount of stellar sharpening',
+            kind: { type: 'float', default: 0.5, min: 0, max: 0.7 } },
+          { name: 'sn', flag: '--sn', label: 'Sharpen Nonstellar', description: 'Amount of nonstellar sharpening',
+            kind: { type: 'float', default: 0.5, min: 0, max: 1 } },
+        ],
+      }],
+    }, error: null,
+  } }));
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2`);
+  const card = page.locator('.stack-color-card[data-color-kind="rgb"]');
+  await card.getByRole('button', { name: 'Build RGB color preview' }).click();
+  await expect(card.locator('.stack-preview-progress')).toHaveAttribute(
+    'data-stack-color-state', 'completed', { timeout: 90_000 }
+  );
+  let starts = 0;
+  await page.route(/\/stack-previews\/color$/, (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    starts += 1;
+    return route.fulfill({ status: 400, json: {
+      success: false, data: null, error: 'RC-Astro BlurXTerminator is not licensed on this server',
+    } });
+  });
+  const processing = card.locator('.stack-color-processing');
+  await processing.locator('summary').click();
+  const red = processing.getByRole('region', { name: 'R input stretch stack' });
+  await red.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }).check();
+  await red.getByRole('spinbutton', { name: 'Sharpen Stars' }).fill('0.9');
+  await red.getByRole('spinbutton', { name: 'Sharpen Nonstellar' }).fill('0.9');
+  await expect(red.getByRole('spinbutton', { name: 'Sharpen Stars' })).toHaveAttribute('aria-invalid', 'true');
+  await processing.getByRole('button', { name: 'Apply processing stack' }).click();
+  const refusal = processing.getByRole('alert');
+  await expect(refusal).toHaveText('R: RC-Astro BlurXTerminator: Sharpen Stars must be between 0 and 0.7');
+  await expect(refusal).toBeInViewport();
+  expect(starts).toBe(0);
+  await processing.screenshot({ path: testInfo.outputPath('rc-astro-range-refusal.png') });
+
+  // Within range, the request goes out; the server's refusal lands beside the button.
+  await red.getByRole('spinbutton', { name: 'Sharpen Stars' }).fill('0.6');
+  await processing.getByRole('button', { name: 'Apply processing stack' }).click();
+  await expect(refusal).toHaveText('RC-Astro BlurXTerminator is not licensed on this server');
+  await expect(refusal).toBeInViewport();
+  expect(starts).toBe(1);
+  await processing.screenshot({ path: testInfo.outputPath('rc-astro-server-refusal.png') });
+});
+
 test('retains RC-Astro color steps in saved setups on desktop and mobile', async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   seedSyntheticColorStacks(dbId, 2);

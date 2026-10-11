@@ -1,5 +1,10 @@
 # Unreleased
 
+- A color stack's processing panel no longer fails silently. An RC-Astro
+  value past the tool's range, such as BlurXTerminator's Sharpen Stars above
+  0.7, is marked on the field and stops Apply with the reason, and a refusal
+  from the server shows beside the button you pressed rather than at the top
+  of the section. Mono stacks check the same ranges.
 - A stack's calibration masters show the sensor temperatures and nights of
   the frames they were built from, in the master inspector and over MCP.
   Over MCP, `explain_calibration` also gives each night's temperatures and

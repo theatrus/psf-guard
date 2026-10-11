@@ -59,6 +59,13 @@ interface ColorOperation {
 
 type ExposureCardSet = ColorExposureSet & { retained?: boolean };
 
+/** A refused start, kept on the card that asked so it shows where the person looked. */
+interface CardStartError {
+  message: string;
+  /** Whether Apply processing stack asked, rather than Build. */
+  processing: boolean;
+}
+
 const terminalStates = new Set(['completed', 'failed']);
 const paletteOrder: StackNarrowbandPalette[] = [
   'sho', 'soh', 'hso', 'hos', 'osh', 'ohs', 'hoo', 'foraxx-sho', 'foraxx-hoo',
@@ -147,6 +154,7 @@ function ColorCard({
   onBuild,
   onInspect,
   onProcessingApply,
+  startError,
   sourceControls,
   exposureSetKey,
   exposureLabel,
@@ -171,6 +179,8 @@ function ColorCard({
   onBuild: () => void;
   onInspect: (job: StackColorJob) => void;
   onProcessingApply: (processing: StackColorProcessing) => void;
+  /** Why the server refused this card's last build or Apply. */
+  startError?: CardStartError;
   sourceControls?: ReactNode;
   exposureSetKey?: string;
   exposureLabel?: string;
@@ -281,6 +291,9 @@ function ColorCard({
           </button>
         </div>
       </header>
+      {startError && !startError.processing && (
+        <div className="stack-preview-message error" role="alert">{startError.message}</div>
+      )}
       {sourceControls}
       {unavailableReason && <div className="stack-color-unavailable">{unavailableReason}</div>}
 
@@ -381,6 +394,7 @@ function ColorCard({
         deconvolutions={artifact?.resolved_input_deconvolutions ?? {}}
         rcAstro={artifact?.resolved_input_rc_astro ?? {}}
         disabled={!canCompute || busy || unavailable}
+        applyError={startError?.processing ? startError.message : null}
         onApply={onProcessingApply}
       />
 
@@ -442,9 +456,9 @@ export default function StackColorPreviewPanel({
     queryFn: () => apiClient.getStackColorCatalog(dbId, projectId),
   });
 
+  const [startErrorByCard, setStartErrorByCard] = useState<Record<string, CardStartError>>({});
   const {
     mutate: startColor,
-    error: startError,
     reset: resetStart,
   } = useMutation({
     mutationFn: (operation: ColorOperation) => apiClient.startStackColor(operation.dbId, operation.projectId, {
@@ -456,7 +470,24 @@ export default function StackColorPreviewPanel({
       processing: operation.processing,
       ...(operation.inputSources ? { input_sources: operation.inputSources } : {}),
     }),
-    onMutate: (operation) => setPendingCardKeys((current) => new Set(current).add(operation.cardKey)),
+    onMutate: (operation) => {
+      setPendingCardKeys((current) => new Set(current).add(operation.cardKey));
+      setStartErrorByCard((current) => {
+        const next = { ...current };
+        delete next[operation.cardKey];
+        return next;
+      });
+    },
+    onError: (error, operation) => {
+      if (operation.dbId !== dbId || operation.projectId !== projectId) return;
+      setStartErrorByCard((current) => ({
+        ...current,
+        [operation.cardKey]: {
+          message: error instanceof Error ? error.message : 'Color preview failed',
+          processing: operation.operationKey.endsWith(':processing'),
+        },
+      }));
+    },
     onSettled: (_data, _error, operation) => setPendingCardKeys((current) => {
       const next = new Set(current);
       next.delete(operation.cardKey);
@@ -516,6 +547,7 @@ export default function StackColorPreviewPanel({
     setSourcesByCard({});
     setSavedByCard({});
     setPendingCardKeys(new Set());
+    setStartErrorByCard({});
     setInspector(null);
     resetStart();
   }, [dbId, projectId, resetStart]);
@@ -575,7 +607,7 @@ export default function StackColorPreviewPanel({
   // channelBuildRunning no longer locks color out; a queued color job simply
   // waits its turn behind the mono builds on the shared permit.
   void channelBuildRunning;
-  const error = startError ?? statusError ?? catalog.error;
+  const error = statusError ?? catalog.error;
 
   const newestWatched = (
     targetId: number,
@@ -737,6 +769,7 @@ export default function StackColorPreviewPanel({
           inputSources: sources.inputSources,
         })}
         onInspect={setInspector}
+        startError={startErrorByCard[key]}
         onProcessingApply={(processing) => startColor({
           dbId, projectId,
           targetId: target.target_id, kind, palette, force: false,
