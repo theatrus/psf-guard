@@ -18,6 +18,7 @@ import type { GuidFillReport, GuidReport,
   CalibrationMasterSource,
   StackCalibrationMasters,
   ExternalMasterPolicy,
+  DarkChoice,
   RemoteImageUploadDirectoryTemplateSource,
   ApiResponse,
   ExportLayout,
@@ -832,6 +833,7 @@ export const apiClient = {
     flat_star_masking: boolean;
     dark_reach_days?: number | null;
     complete_dark_frames?: number | null;
+    dark_choice?: DarkChoice;
     flat_max_age_days?: number | null;
     exclude_uncalibrated?: boolean;
   }): Promise<CalibrationSettings> => {

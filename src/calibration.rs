@@ -2535,7 +2535,7 @@ pub struct KindExplanation {
     pub kind: String,
     /// The nights whose frames a master would take.
     pub used: Vec<NightFrames>,
-    /// Frames that match, but a nearer complete set was taken instead.
+    /// Frames that match, but another set was taken instead.
     pub matching_unused: Vec<NightFrames>,
     /// Frames that do not match, by night and reason, newest night first.
     pub refused: Vec<RefusedFrames>,
@@ -6070,6 +6070,22 @@ static DARK_REACH_BITS: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomic
 /// infinity "no limit".
 static FLAT_MAX_AGE_BITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Which darks, or bias frames, a master is built from when several sets
+/// match a light.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DarkChoice {
+    /// The nearest complete set at one temperature, and the nearest short
+    /// set only when none is complete. The default.
+    #[default]
+    Complete,
+    /// The nearest set of two or more at one temperature, however short.
+    Nearest,
+}
+
+static DARK_CHOICE_NEAREST: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// What to do when the library holds a master built by other software
 /// (PixInsight's WBPP, Siril) alongside — or instead of — raw frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
@@ -6269,6 +6285,7 @@ pub fn configure(settings: Option<&crate::db_registry::CalibrationSettings>) {
     configure_dark_reach(settings.and_then(|settings| settings.dark_reach_days));
     configure_flat_max_age(settings.and_then(|settings| settings.flat_max_age_days));
     configure_complete_dark_frames(settings.and_then(|settings| settings.complete_dark_frames));
+    configure_dark_choice(settings.and_then(|settings| settings.dark_choice));
     configure_external_master_policy(settings.and_then(|settings| settings.external_masters));
     configure_flat_star_masking(
         settings
@@ -6299,6 +6316,23 @@ pub fn configure_exclude_uncalibrated(enabled: bool) {
 
 pub fn exclude_uncalibrated_enabled() -> bool {
     EXCLUDE_UNCALIBRATED.load(Ordering::Relaxed)
+}
+
+/// Choose which darks every dark master this process builds starts from.
+/// `None` keeps the default, [`DarkChoice::Complete`].
+pub fn configure_dark_choice(choice: Option<DarkChoice>) {
+    DARK_CHOICE_NEAREST.store(
+        choice.unwrap_or_default() == DarkChoice::Nearest,
+        Ordering::Relaxed,
+    );
+}
+
+pub fn dark_choice() -> DarkChoice {
+    if DARK_CHOICE_NEAREST.load(Ordering::Relaxed) {
+        DarkChoice::Nearest
+    } else {
+        DarkChoice::Complete
+    }
 }
 
 /// Choose how external masters are used for every selection this process
@@ -6608,12 +6642,28 @@ fn master_subset_of_one_mode(kind: CalibrationKind, frames: &[CalibrationFrame])
     } else {
         seiza_calibration::FrameRole::Other
     };
-    let clustered = seiza_calibration::coherent_subset_indices(
-        &seiza_signatures,
-        role,
-        MIN_MASTER_FRAMES,
-        &tolerances(),
-    );
+    let cluster = |minimum| {
+        seiza_calibration::coherent_subset_indices(&seiza_signatures, role, minimum, &tolerances())
+    };
+    // Seiza takes the nearest anchor whose cluster reaches the minimum. With
+    // a minimum of two, a warm pair of darks shot near the lights beat eighty
+    // at the set point a few weeks away, and the pair's read noise went into
+    // every light as banding. Bias had the same flaw: five frames at -4 °C
+    // beat thirty at the set point. So by default a dark or bias master looks
+    // for a complete set first and settles for a short one only when no
+    // cluster has one.
+    let clustered = if matches!(kind, CalibrationKind::Dark | CalibrationKind::Bias)
+        && dark_choice() == DarkChoice::Complete
+    {
+        let complete = cluster(complete_dark_frames());
+        if complete.len() >= complete_dark_frames() {
+            complete
+        } else {
+            cluster(MIN_MASTER_FRAMES)
+        }
+    } else {
+        cluster(MIN_MASTER_FRAMES)
+    };
 
     // The integrator takes its first frame as the reference and measures every
     // later one against it, so anchor on the same frame it will. Candidates
@@ -8267,6 +8317,24 @@ mod tests {
         conn
     }
 
+    /// Frames of one kind at these times and sensor temperatures.
+    fn library_at(temp: &tempfile::TempDir, kind: &str, frames: &[(i64, f64)]) -> Connection {
+        let mut metas = Vec::new();
+        for (index, (at, celsius)) in frames.iter().enumerate() {
+            let path = temp.path().join(format!("{kind}-{index}.fits"));
+            write_test_fits(&path, kind, 1_000);
+            let mut meta = crate::commands::import::headers::read_frame_meta(&path);
+            meta.timestamp = Some(*at);
+            meta.camera_temp = Some(*celsius);
+            metas.push(meta);
+        }
+        let mut conn = Connection::open_in_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        import_calibration_frames(&tx, &metas, Some("profile")).unwrap();
+        tx.commit().unwrap();
+        conn
+    }
+
     fn test_light(temp: &tempfile::TempDir, at: i64) -> FrameMeta {
         let path = temp.path().join("light.fits");
         write_test_fits(&path, "LIGHT", 1_100);
@@ -8311,6 +8379,94 @@ mod tests {
             3
         );
         configure_complete_dark_frames(None);
+    }
+
+    #[test]
+    fn a_complete_set_at_the_set_point_beats_a_nearer_warm_pair() {
+        let _settings = POLICY_LOCK.lock().unwrap();
+        let light_at = 1_790_000_000i64;
+        let day = 86_400i64;
+        // The Cat's Eye library: two warm darks the nights after the lights,
+        // twelve at the -10 °C set point a week later. All fall within the
+        // light's 3 °C match, and the pair sits within 1 °C of each other.
+        let warm = [(light_at + day, -7.9), (light_at + 2 * day, -8.3)];
+        let set_point = (0..12).map(|i| (light_at + 7 * day + i * 60, -10.0));
+        let temp = tempfile::tempdir().unwrap();
+        let conn = library_at(
+            &temp,
+            "DARK",
+            &warm.into_iter().chain(set_point).collect::<Vec<_>>(),
+        );
+        let selected = select_for_light(&conn, &test_light(&temp, light_at)).unwrap();
+        assert_eq!(selected.dark.len(), 14);
+        let master = coherent_master_subset(CalibrationKind::Dark, &selected.dark);
+        assert_eq!(master.len(), 12, "the complete set, not the warm pair");
+        assert!(master.iter().all(|frame| frame.camera_temp == Some(-10.0)));
+
+        // A WBPP export places the same set, so WBPP builds the same master.
+        let export = export_destinations(
+            &conn,
+            &test_light(&temp, light_at),
+            "NGC 6543",
+            None,
+            crate::commands::export::ExportLayout::Wbpp,
+            0,
+        )
+        .unwrap();
+        let placed = export
+            .items
+            .iter()
+            .filter(|(kind, _, _)| *kind == CalibrationKind::Dark)
+            .count();
+        assert_eq!(placed, 12);
+        assert_eq!(export.dark_set.unwrap().frame_uuids.len(), 12);
+
+        // The setting can ask for the nearest set instead, however short.
+        configure_dark_choice(Some(DarkChoice::Nearest));
+        let nearest = coherent_master_subset(CalibrationKind::Dark, &selected.dark);
+        configure_dark_choice(None);
+        assert_eq!(nearest.len(), 2);
+        assert!(nearest
+            .iter()
+            .all(|frame| frame.captured_at.unwrap() < light_at + 3 * day));
+
+        // With no complete set anywhere, the nearest pair still makes a master.
+        let set_point = (0..5).map(|i| (light_at + 7 * day + i * 60, -10.0));
+        let temp = tempfile::tempdir().unwrap();
+        let conn = library_at(
+            &temp,
+            "DARK",
+            &warm.into_iter().chain(set_point).collect::<Vec<_>>(),
+        );
+        let selected = select_for_light(&conn, &test_light(&temp, light_at)).unwrap();
+        let master = coherent_master_subset(CalibrationKind::Dark, &selected.dark);
+        assert_eq!(master.len(), 2);
+        assert!(master
+            .iter()
+            .all(|frame| frame.captured_at.unwrap() < light_at + 3 * day));
+    }
+
+    #[test]
+    fn bias_prefers_a_complete_set_too() {
+        let _settings = POLICY_LOCK.lock().unwrap();
+        let light_at = 1_790_000_000i64;
+        let day = 86_400i64;
+        // Five warm bias frames the night after the lights, twelve at the
+        // set point a week later. Bias does not match on temperature.
+        let warm = (0..5).map(|i| (light_at + day + i * 60, -4.1));
+        let set_point = (0..12).map(|i| (light_at + 7 * day + i * 60, -10.0));
+        let temp = tempfile::tempdir().unwrap();
+        let conn = library_at(&temp, "BIAS", &warm.chain(set_point).collect::<Vec<_>>());
+        let selected = select_for_light(&conn, &test_light(&temp, light_at)).unwrap();
+        assert_eq!(selected.bias.len(), 17);
+        let master = coherent_master_subset(CalibrationKind::Bias, &selected.bias);
+        assert_eq!(master.len(), 12);
+        assert!(master.iter().all(|frame| frame.camera_temp == Some(-10.0)));
+
+        configure_dark_choice(Some(DarkChoice::Nearest));
+        let nearest = coherent_master_subset(CalibrationKind::Bias, &selected.bias);
+        configure_dark_choice(None);
+        assert_eq!(nearest.len(), 5);
     }
 
     #[test]

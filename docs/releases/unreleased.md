@@ -8,6 +8,12 @@
   library cannot calibrate. Removal and sync still need database
   management.
 
+- Dark and bias masters now prefer a complete set at the sensor's set point
+  over a nearer handful at another temperature. Before, two warm darks shot
+  near the lights could beat dozens at the set point and leave row banding in
+  the stack. **Settings › Calibration › Dark choice** sets it; *Nearest set*
+  keeps the old rule. WBPP exports follow the same choice. Stacks whose
+  masters change rebuild.
 - Calibration settings have their own **Settings › Calibration** tab, where
   the guides already pointed; they used to sit under Setups.
 - Agents can change plans over MCP, the way the app does: create and rename

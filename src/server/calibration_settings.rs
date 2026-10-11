@@ -10,7 +10,7 @@ use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::calibration::ExternalMasterPolicy;
+use crate::calibration::{DarkChoice, ExternalMasterPolicy};
 use crate::db_registry::{CalibrationSettings, DbRegistry};
 use crate::server::{
     api::ApiResponse,
@@ -35,6 +35,9 @@ pub struct CalibrationSettingsResponse {
     /// Frames; absent when the default applies.
     pub complete_dark_frames: Option<usize>,
     pub default_complete_dark_frames: usize,
+    /// Which darks a master starts from. Always populated: the default is
+    /// `complete`.
+    pub dark_choice: DarkChoice,
     /// Days; absent when the default applies, zero when the limit is lifted.
     pub flat_max_age_days: Option<f64>,
     pub default_flat_max_age_days: f64,
@@ -58,6 +61,9 @@ pub struct UpdateCalibrationSettingsRequest {
     /// Frames. Omitted preserves the saved value; `null` restores the default.
     #[serde(default, deserialize_with = "present")]
     pub complete_dark_frames: Option<Option<usize>>,
+    /// Omitted preserves the saved choice.
+    #[serde(default)]
+    pub dark_choice: Option<DarkChoice>,
     /// Days, zero for no limit. Omitted preserves the saved value; `null`
     /// restores the default.
     #[serde(default, deserialize_with = "present")]
@@ -95,6 +101,9 @@ fn current_response(settings: Option<&CalibrationSettings>) -> CalibrationSettin
         default_dark_reach_days: crate::calibration::DEFAULT_DARK_REACH_DAYS,
         complete_dark_frames: settings.and_then(|settings| settings.complete_dark_frames),
         default_complete_dark_frames: crate::calibration::DEFAULT_COMPLETE_DARK_FRAMES,
+        dark_choice: settings
+            .and_then(|settings| settings.dark_choice)
+            .unwrap_or_default(),
         flat_max_age_days: settings.and_then(|settings| settings.flat_max_age_days),
         default_flat_max_age_days: crate::calibration::DEFAULT_FLAT_MAX_AGE_DAYS,
         exclude_uncalibrated: settings
@@ -179,6 +188,16 @@ pub async fn update_calibration_settings(
                 .as_ref()
                 .and_then(|settings| settings.complete_dark_frames),
         };
+        // Like the external master policy, the default is not written down.
+        let dark_choice = request
+            .dark_choice
+            .or_else(|| {
+                registry
+                    .calibration
+                    .as_ref()
+                    .and_then(|settings| settings.dark_choice)
+            })
+            .filter(|choice| *choice != DarkChoice::default());
         let flat_max_age_days = match request.flat_max_age_days {
             Some(sent) => sent,
             None => registry
@@ -200,6 +219,7 @@ pub async fn update_calibration_settings(
             || flat_star_masking
             || dark_reach_days.is_some()
             || complete_dark_frames.is_some()
+            || dark_choice.is_some()
             || flat_max_age_days.is_some()
             || exclude_uncalibrated)
             .then_some(CalibrationSettings {
@@ -208,6 +228,7 @@ pub async fn update_calibration_settings(
                 flat_star_masking: flat_star_masking.then_some(true),
                 dark_reach_days,
                 complete_dark_frames,
+                dark_choice,
                 flat_max_age_days,
                 exclude_uncalibrated: exclude_uncalibrated.then_some(true),
             });
@@ -258,6 +279,12 @@ mod tests {
         assert_eq!(lifted.flat_max_age_days, Some(Some(0.0)));
         assert!(!response.exclude_uncalibrated, "off unless turned on");
         assert_eq!(lifted.exclude_uncalibrated, None);
+        assert_eq!(response.dark_choice, DarkChoice::Complete);
+        assert_eq!(lifted.dark_choice, None, "left out keeps the saved choice");
+        let nearest: UpdateCalibrationSettingsRequest =
+            serde_json::from_str(r#"{"rotation_tolerance_deg":null,"dark_choice":"nearest"}"#)
+                .unwrap();
+        assert_eq!(nearest.dark_choice, Some(DarkChoice::Nearest));
     }
 
     #[test]

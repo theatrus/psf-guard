@@ -237,7 +237,8 @@ nearest cluster with enough frames builds the master, so a stray single flat
 near the lights cannot orphan a complete session from a week earlier.
 
 Darks keep for months, so a dark master can pool several nights, nearest
-first. Two settings under **Settings › Calibration › Dark masters** bound it:
+first. Three settings under **Settings › Calibration › Dark masters** shape
+it:
 
 - **Dark reach** (default 183 days): a dark shot further than this from the
   light does not match. A dark marked to serve only lights before or after it
@@ -245,6 +246,16 @@ first. Two settings under **Settings › Calibration › Dark masters** bound it
 - **Complete night** (default 10 darks): when the nearest night alone has
   this many matching darks, the master uses that night only. With fewer, the
   nights within reach pool.
+- **Dark choice** (default *Complete set first*): the nearest temperature
+  cluster with a complete night's worth of darks builds the master, and a
+  nearer, shorter cluster builds it only when no cluster is complete. Darks
+  match a light within 3 °C but cluster within 1 °C, so two warm darks shot
+  the night after the lights could otherwise beat eighty at the set point a
+  week later; a two-frame master puts its own read noise into every light,
+  and the stack shows it as row banding. *Nearest set* keeps the older rule:
+  the nearest cluster of two or more, however short. Bias masters follow the
+  same choice, with the same count for a complete set. A WBPP export places
+  the same frames, so WBPP builds the same masters.
 
 ### Validity boundaries
 
