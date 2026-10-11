@@ -79,12 +79,17 @@ returns.
 | `list_databases` | Open catalogs: id, name, path, image folders | |
 | `list_projects` | Projects with targets, plans, progress, recent frames | |
 | `list_targets` | Targets with coordinates, grade counts, last capture | |
-| `list_images` | Lights with grade, filter, exposure and stored metrics; filter by project, target, grade; page with `limit` and `offset` | |
+| `list_images` | Lights with grade, filter, exposure and stored metrics; filter by project, target, grade and filter name; keep only the `metadata_keys` asked for; page with `limit` and `offset` | |
 | `get_image` | One image: grade, location, header metadata, metrics | |
 | `get_image_quality` | Score, issues, and place in the sequence, from stored evidence | |
 | `analyze_sequence` | Relative scores and suggested rejects for a target, project, or the database | |
 | `get_statistics` | Whole-database counts | |
 | `get_calibration_report` | Calibration frames the library matches to a project's nights | |
+| `list_stacks` | A project's latest stack per channel: frames integrated and left out, exposure, the masters each calibration session applied, the SNR outlook, and the `job_id` and `group_index` the other stack tools take | |
+| `get_stack` | One stack channel frame by frame: disposition and reason, registration shift and rotation, weight, noise, normalization; and per night, whether the frames were dithered or walked one way | |
+| `get_stack_image` | The stack's preview as an image: as the app shows it, or with the background stretched hard (`stretch: "background"`); crop by fractions of the frame, up to 2048 px | |
+| `get_stack_calibration` | The masters a stack applied, per session: frames each was built from, outlier rejection, the lights it calibrated | |
+| `explain_calibration` | Why one light got, or missed, each master: for bias, dark and flat, every frame the library holds for its camera by night, used, matching but unused, or refused with the readings that disagree | |
 | `get_sky_coverage` | Every target's footprint and exposure by filter | |
 | `get_jobs` | Import, quality scan and WBPP progress | |
 | `astrobin_csv` | The AstroBin acquisition CSV for a project or target | |
@@ -101,6 +106,18 @@ for people: `analyze_sequence` and `get_image_quality` suggest, and nothing
 changes until `grade_images` runs; catalog predictions and header values are
 not pixel evidence.
 
+## Looking into a stack
+
+A typical question is "where does this pattern in the SII stack come from?"
+`list_stacks` names the channel's `job_id`. `get_stack_image` with
+`stretch: "background"` shows the pattern; a crop shows it at full detail.
+`get_stack_calibration` shows whether some sessions had no flat or a dark
+master built from two frames, and `explain_calibration` on one of their
+lights says why: a flat set marked for later lights, flats at another
+rotator angle, darks of another exposure. `get_stack` shows, per night,
+whether the frames were dithered: frames that walk one way without dithers
+turn anything fixed to the sensor into streaks.
+
 ## Try it with curl
 
 ```bash
@@ -115,6 +132,9 @@ curl -s https://guard.example/api/mcp \
 
 ## Notes for operators
 
+- The URL must end in `/api/mcp`. The bare host serves the app: it answers
+  a POST with 405 and a note naming the endpoint, so a client given the
+  wrong URL fails with that message.
 - The endpoint sits inside the API router, so the login middleware, the
   read-only role, and the database-management gate apply to it as they do
   to the UI.
