@@ -167,295 +167,9 @@ fn check_management_needs_a_login(
     Ok(())
 }
 
-async fn run_server_internal(
-    config: ServerConfig,
-    shutdown_rx: Option<oneshot::Receiver<()>>,
-) -> anyhow::Result<()> {
-    let anonymous_access_trusted =
-        anonymous_access_is_trusted(&config.host, config.allow_anonymous_access);
-    check_management_needs_a_login(
-        &config.host,
-        config.allow_database_management,
-        anonymous_access_trusted,
-        config.auth.is_some(),
-    )?;
-
-    let director_meta = director::resolve_meta_path(
-        config.director_meta.as_deref(),
-        config.registry_path.as_deref(),
-    );
-    director::validate_registry_separation(
-        director_meta.as_deref(),
-        config.registry_path.as_deref(),
-    )?;
-    let director = director::Service::configured(director_meta.as_deref())?;
-    if let Some(path) = &director_meta {
-        tracing::info!("🧭 Director meta store: {}", path.display());
-    }
-
-    tracing::info!("🚀 Starting PSF Guard server");
-    tracing::info!(
-        "📊 Databases ({}):{}",
-        config.databases.len(),
-        config
-            .databases
-            .iter()
-            .map(|d| format!("\n   - {} ({}): {}", d.name, d.id, d.db_path))
-            .collect::<String>()
-    );
-
-    // Log pregeneration configuration
-    if config.pregeneration_config.is_enabled() {
-        let enabled_formats = config.pregeneration_config.enabled_formats();
-        tracing::info!(
-            "🎨 Background pre-generation enabled for: {} (cache expiry: {})",
-            enabled_formats.join(", "),
-            humantime::format_duration(config.pregeneration_config.cache_expiry)
-        );
-    } else {
-        tracing::info!("🎨 Background pre-generation disabled");
-    }
-
-    // Settle the storage folders, moving files when a setting changed one,
-    // before any database opens a folder below them.
-    let storage_config = config.storage.clone();
-    let registry_for_storage = config.registry_path.clone();
-    // Only the first server of a process moves files: one restarted inside
-    // the desktop app may still have the old one's background work writing.
-    let allow_moves = !SERVER_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst);
-    let startup_storage = tokio::task::spawn_blocking(move || {
-        storage::prepare(
-            &storage_config,
-            registry_for_storage.as_deref(),
-            allow_moves,
-        )
-    })
-    .await?;
-    for note in &startup_storage.notes {
-        if note.starts_with("Moved") {
-            tracing::info!("📦 {note}");
-        } else {
-            tracing::warn!("📦 {note}");
-        }
-    }
-    tracing::info!(
-        "💾 Cache directory: {}",
-        startup_storage.roots.cache.display()
-    );
-    tracing::info!(
-        "💾 Stack directory: {}",
-        startup_storage.roots.stacks.display()
-    );
-    tracing::info!(
-        "💾 Calibration master directory: {}",
-        startup_storage.roots.calibration.display()
-    );
-    // Read after the storage step, which may have recorded the folders.
-    let registry = config
-        .registry_path
-        .as_deref()
-        .and_then(|path| crate::db_registry::DbRegistry::load_or_init(path).ok());
-    if let Some(registry) = &registry {
-        apply_registry_settings(registry);
-    }
-
-    // Create app state
-    let state = match AppState::from_databases_with_astrometry(
-        config.databases.clone(),
-        startup_storage.roots.clone(),
-        config.pregeneration_config.clone(),
-        config.astrometry_config.clone(),
-    ) {
-        Ok(mut state) => {
-            state.director = director;
-            tracing::info!("✅ Application state initialized successfully");
-            state.set_registry_path(config.registry_path.clone());
-            state.set_allow_database_management(config.allow_database_management);
-            state.set_site_banner(config.site_banner.clone());
-            state.set_server_auth(config.auth.clone());
-            state.set_anonymous_access_trusted(anonymous_access_trusted);
-            state.set_worker_policy(config.worker_policy);
-            state.set_preview_encoding(config.preview_encoding);
-            state.set_preview_color_default(config.preview_color_default);
-            remote_upload::configure_keep_failed_uploads(config.keep_failed_uploads);
-            if config.keep_failed_uploads {
-                tracing::info!(
-                    "🧪 keep_failed_uploads is on: a failed remote upload leaves its staged file \
-                     in the receive directory for inspection"
-                );
-            }
-            if let Some(banner) = &config.site_banner {
-                tracing::info!("📢 Site banner enabled: {}", banner.title);
-            }
-            if config.auth.is_some() {
-                tracing::info!("🔐 Browser authentication enabled");
-            } else if !anonymous_access_trusted {
-                tracing::warn!(
-                    "🔐 No user accounts, so {} answers 401 to every API request. Add one \
-                     with `psf-guard users add <name> --role read-write` and restart, or \
-                     bind the server to 127.0.0.1 to keep it on this machine. Remote sync \
-                     and image upload keys keep working either way.",
-                    config.host
-                );
-            } else if config.allow_anonymous_access && !auth::host_is_loopback(&config.host) {
-                tracing::warn!(
-                    "⚠️ --allow-anonymous-access is ON with no user accounts. Everyone who \
-                     can reach {} gets full editor access to every catalog. Add users and \
-                     drop the flag as soon as you can.",
-                    config.host
-                );
-            } else {
-                tracing::info!(
-                    "🔓 No user accounts; {} is a loopback server and stays open to this machine",
-                    config.host
-                );
-            }
-            state.set_storage_status(state::StorageStatus {
-                config: config.storage.clone(),
-                notes: startup_storage.notes.clone(),
-            });
-            for (slug, from, to) in &startup_storage.calibration_moves {
-                if let Some(ctx) = state.get_database(slug) {
-                    storage::relocate::follow_master_rows(&ctx, from, to);
-                }
-            }
-            // Shares chosen in Settings sit over the config file's.
-            if let Some(registry) = &registry {
-                state.apply_worker_settings(registry.workers.as_ref());
-            }
-            let policy = state.worker_policy();
-            tracing::info!(
-                "📐 Worker ratios — interactive {:.2}, background {:.2} (of {} logical cores)",
-                policy.interactive_ratio,
-                policy.background_ratio,
-                crate::concurrency::logical_cores()
-            );
-            report_preview_settings(&state, &config);
-            if config.allow_database_management {
-                if config.auth.is_some() {
-                    tracing::warn!(
-                        "⚠️ Database management via HTTP is enabled for authenticated editors."
-                    );
-                } else {
-                    tracing::warn!(
-                        "⚠️ Database management via HTTP is ENABLED with no login. Anyone \
-                         who can reach {} can add/edit/remove configured databases.",
-                        config.host
-                    );
-                }
-            } else {
-                tracing::info!(
-                    "🔒 Database management via HTTP is disabled. Pass \
-                     --allow-database-management to the server command to enable."
-                );
-            }
-            Arc::new(state)
-        }
-        Err(e) => {
-            tracing::error!("❌ Failed to initialize server: {}", e);
-            return Err(e);
-        }
-    };
-
-    // Release feeds are process-global. Refresh once now and then every 24
-    // hours; browser reloads only read this cache through the API.
-    state.update_notices.start_refresh_loop();
-
-    // For the job journal's last write at shutdown; the router takes `state`.
-    let journal_state = Arc::clone(&state);
-
-    // Remembered stack previews follow the catalog when the operator asked
-    // for that; the scheduler idles otherwise.
-    crate::server::stack_preview::automatic::spawn(Arc::clone(&state));
-
-    // The queue from before a restart comes back, then the journal keeps it
-    // from here on. Frames that arrived while the server was down reach
-    // remembered previews through one check of every database, after the
-    // usual settling delay; a check that finds nothing new starts nothing.
-    {
-        let state = Arc::clone(&state);
-        tokio::spawn(async move {
-            crate::server::stack_preview::journal::restore(&state).await;
-            crate::server::stack_preview::journal::spawn_writer(Arc::clone(&state));
-            if crate::server::stack_preview::automatic::policy().enabled {
-                for ctx in state.all_databases() {
-                    state.auto_stacks.touch_database(
-                        &ctx.id,
-                        crate::server::stack_preview::automatic::RefreshReason::Sync,
-                    );
-                }
-            }
-        });
-    }
-
-    // Databases that asked for it import new frames on open and on schedule.
-    crate::server::autoimport::spawn(Arc::clone(&state));
-    crate::server::director::spawn_collaboration(Arc::clone(&state));
-
-    // Build PSF Guard's query indexes on each configured catalog, once, off
-    // the request path and before cache refreshes start long-lived reads.
-    // Startup is the quietest moment: no PSF Guard import or database
-    // management is in flight. An external writer can still win the race; the
-    // short index attempt then skips safely. See `spawn_query_index_build`.
-    {
-        let paths: Vec<String> = state
-            .databases
-            .read()
-            .map(|databases| {
-                databases
-                    .values()
-                    .map(|ctx| ctx.database_path.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        for path in paths {
-            crate::server::database_context::spawn_query_index_build(path.clone());
-            crate::server::database_context::spawn_calibration_header_backfill(path.clone());
-            crate::server::database_context::spawn_dark_level_backfill(path);
-        }
-    }
-
-    // Kick off a background cache refresh for every configured database.
-    for ctx in state.all_databases() {
-        let status = ctx.ensure_cache_available();
-        match status {
-            crate::server::state::RefreshStatus::InProgressWait
-            | crate::server::state::RefreshStatus::InProgressServeStale => {
-                tracing::info!("🔄 Cache refresh started at server startup (db={})", ctx.id);
-            }
-            crate::server::state::RefreshStatus::NotNeeded => {
-                tracing::info!("✅ Cache is already available at startup (db={})", ctx.id);
-            }
-            crate::server::state::RefreshStatus::NeedsRefresh => {
-                tracing::warn!(
-                    "⚠️ Cache refresh needed but not started for db={} - this shouldn't happen",
-                    ctx.id
-                );
-            }
-        }
-    }
-
-    // Keep the cache's volume under its limit, culling previews first.
-    {
-        let state_clone = Arc::clone(&state);
-        tokio::spawn(async move {
-            cache_budget::run(state_clone).await;
-        });
-    }
-    // Remove superseded stacks in every database, not only those building.
-    tokio::spawn(stack_preview::run_janitor(Arc::clone(&state)));
-    // Scan newly arrived frames where a database asks for it.
-    tokio::spawn(quality_arrival::run(Arc::clone(&state)));
-
-    // Start background image pre-generation if enabled
-    if config.pregeneration_config.is_enabled() {
-        let state_clone = Arc::clone(&state);
-        tokio::spawn(async move {
-            background_pregeneration_task(state_clone).await;
-        });
-    }
-
-    // Per-DB routes — nested under /api/db/{db_id}/.
+/// The `/api` router: every route, the MCP endpoint, and the JSON and
+/// authorization layers.
+pub fn api_router(state: Arc<AppState>) -> Router {
     let db_routes: Router<Arc<AppState>> = Router::new()
         .route("/refresh-cache", put(handlers::refresh_file_cache))
         .route("/cache-progress", get(handlers::get_cache_refresh_progress))
@@ -995,7 +709,303 @@ async fn run_server_internal(
             Arc::clone(&state),
             auth::authorize_api,
         ))
-        .with_state(state);
+        .with_state(Arc::clone(&state));
+    // The MCP tools send their requests through this same router, as the
+    // caller, so every gate the UI meets applies to an agent too.
+    state.set_api_router(api_routes.clone());
+    api_routes
+}
+
+async fn run_server_internal(
+    config: ServerConfig,
+    shutdown_rx: Option<oneshot::Receiver<()>>,
+) -> anyhow::Result<()> {
+    let anonymous_access_trusted =
+        anonymous_access_is_trusted(&config.host, config.allow_anonymous_access);
+    check_management_needs_a_login(
+        &config.host,
+        config.allow_database_management,
+        anonymous_access_trusted,
+        config.auth.is_some(),
+    )?;
+
+    let director_meta = director::resolve_meta_path(
+        config.director_meta.as_deref(),
+        config.registry_path.as_deref(),
+    );
+    director::validate_registry_separation(
+        director_meta.as_deref(),
+        config.registry_path.as_deref(),
+    )?;
+    let director = director::Service::configured(director_meta.as_deref())?;
+    if let Some(path) = &director_meta {
+        tracing::info!("🧭 Director meta store: {}", path.display());
+    }
+
+    tracing::info!("🚀 Starting PSF Guard server");
+    tracing::info!(
+        "📊 Databases ({}):{}",
+        config.databases.len(),
+        config
+            .databases
+            .iter()
+            .map(|d| format!("\n   - {} ({}): {}", d.name, d.id, d.db_path))
+            .collect::<String>()
+    );
+
+    // Log pregeneration configuration
+    if config.pregeneration_config.is_enabled() {
+        let enabled_formats = config.pregeneration_config.enabled_formats();
+        tracing::info!(
+            "🎨 Background pre-generation enabled for: {} (cache expiry: {})",
+            enabled_formats.join(", "),
+            humantime::format_duration(config.pregeneration_config.cache_expiry)
+        );
+    } else {
+        tracing::info!("🎨 Background pre-generation disabled");
+    }
+
+    // Settle the storage folders, moving files when a setting changed one,
+    // before any database opens a folder below them.
+    let storage_config = config.storage.clone();
+    let registry_for_storage = config.registry_path.clone();
+    // Only the first server of a process moves files: one restarted inside
+    // the desktop app may still have the old one's background work writing.
+    let allow_moves = !SERVER_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst);
+    let startup_storage = tokio::task::spawn_blocking(move || {
+        storage::prepare(
+            &storage_config,
+            registry_for_storage.as_deref(),
+            allow_moves,
+        )
+    })
+    .await?;
+    for note in &startup_storage.notes {
+        if note.starts_with("Moved") {
+            tracing::info!("📦 {note}");
+        } else {
+            tracing::warn!("📦 {note}");
+        }
+    }
+    tracing::info!(
+        "💾 Cache directory: {}",
+        startup_storage.roots.cache.display()
+    );
+    tracing::info!(
+        "💾 Stack directory: {}",
+        startup_storage.roots.stacks.display()
+    );
+    tracing::info!(
+        "💾 Calibration master directory: {}",
+        startup_storage.roots.calibration.display()
+    );
+    // Read after the storage step, which may have recorded the folders.
+    let registry = config
+        .registry_path
+        .as_deref()
+        .and_then(|path| crate::db_registry::DbRegistry::load_or_init(path).ok());
+    if let Some(registry) = &registry {
+        apply_registry_settings(registry);
+    }
+
+    // Create app state
+    let state = match AppState::from_databases_with_astrometry(
+        config.databases.clone(),
+        startup_storage.roots.clone(),
+        config.pregeneration_config.clone(),
+        config.astrometry_config.clone(),
+    ) {
+        Ok(mut state) => {
+            state.director = director;
+            tracing::info!("✅ Application state initialized successfully");
+            state.set_registry_path(config.registry_path.clone());
+            state.set_allow_database_management(config.allow_database_management);
+            state.set_site_banner(config.site_banner.clone());
+            state.set_server_auth(config.auth.clone());
+            state.set_anonymous_access_trusted(anonymous_access_trusted);
+            state.set_worker_policy(config.worker_policy);
+            state.set_preview_encoding(config.preview_encoding);
+            state.set_preview_color_default(config.preview_color_default);
+            remote_upload::configure_keep_failed_uploads(config.keep_failed_uploads);
+            if config.keep_failed_uploads {
+                tracing::info!(
+                    "🧪 keep_failed_uploads is on: a failed remote upload leaves its staged file \
+                     in the receive directory for inspection"
+                );
+            }
+            if let Some(banner) = &config.site_banner {
+                tracing::info!("📢 Site banner enabled: {}", banner.title);
+            }
+            if config.auth.is_some() {
+                tracing::info!("🔐 Browser authentication enabled");
+            } else if !anonymous_access_trusted {
+                tracing::warn!(
+                    "🔐 No user accounts, so {} answers 401 to every API request. Add one \
+                     with `psf-guard users add <name> --role read-write` and restart, or \
+                     bind the server to 127.0.0.1 to keep it on this machine. Remote sync \
+                     and image upload keys keep working either way.",
+                    config.host
+                );
+            } else if config.allow_anonymous_access && !auth::host_is_loopback(&config.host) {
+                tracing::warn!(
+                    "⚠️ --allow-anonymous-access is ON with no user accounts. Everyone who \
+                     can reach {} gets full editor access to every catalog. Add users and \
+                     drop the flag as soon as you can.",
+                    config.host
+                );
+            } else {
+                tracing::info!(
+                    "🔓 No user accounts; {} is a loopback server and stays open to this machine",
+                    config.host
+                );
+            }
+            state.set_storage_status(state::StorageStatus {
+                config: config.storage.clone(),
+                notes: startup_storage.notes.clone(),
+            });
+            for (slug, from, to) in &startup_storage.calibration_moves {
+                if let Some(ctx) = state.get_database(slug) {
+                    storage::relocate::follow_master_rows(&ctx, from, to);
+                }
+            }
+            // Shares chosen in Settings sit over the config file's.
+            if let Some(registry) = &registry {
+                state.apply_worker_settings(registry.workers.as_ref());
+            }
+            let policy = state.worker_policy();
+            tracing::info!(
+                "📐 Worker ratios — interactive {:.2}, background {:.2} (of {} logical cores)",
+                policy.interactive_ratio,
+                policy.background_ratio,
+                crate::concurrency::logical_cores()
+            );
+            report_preview_settings(&state, &config);
+            if config.allow_database_management {
+                if config.auth.is_some() {
+                    tracing::warn!(
+                        "⚠️ Database management via HTTP is enabled for authenticated editors."
+                    );
+                } else {
+                    tracing::warn!(
+                        "⚠️ Database management via HTTP is ENABLED with no login. Anyone \
+                         who can reach {} can add/edit/remove configured databases.",
+                        config.host
+                    );
+                }
+            } else {
+                tracing::info!(
+                    "🔒 Database management via HTTP is disabled. Pass \
+                     --allow-database-management to the server command to enable."
+                );
+            }
+            Arc::new(state)
+        }
+        Err(e) => {
+            tracing::error!("❌ Failed to initialize server: {}", e);
+            return Err(e);
+        }
+    };
+
+    // Release feeds are process-global. Refresh once now and then every 24
+    // hours; browser reloads only read this cache through the API.
+    state.update_notices.start_refresh_loop();
+
+    // For the job journal's last write at shutdown; the router takes `state`.
+    let journal_state = Arc::clone(&state);
+
+    // Remembered stack previews follow the catalog when the operator asked
+    // for that; the scheduler idles otherwise.
+    crate::server::stack_preview::automatic::spawn(Arc::clone(&state));
+
+    // The queue from before a restart comes back, then the journal keeps it
+    // from here on. Frames that arrived while the server was down reach
+    // remembered previews through one check of every database, after the
+    // usual settling delay; a check that finds nothing new starts nothing.
+    {
+        let state = Arc::clone(&state);
+        tokio::spawn(async move {
+            crate::server::stack_preview::journal::restore(&state).await;
+            crate::server::stack_preview::journal::spawn_writer(Arc::clone(&state));
+            if crate::server::stack_preview::automatic::policy().enabled {
+                for ctx in state.all_databases() {
+                    state.auto_stacks.touch_database(
+                        &ctx.id,
+                        crate::server::stack_preview::automatic::RefreshReason::Sync,
+                    );
+                }
+            }
+        });
+    }
+
+    // Databases that asked for it import new frames on open and on schedule.
+    crate::server::autoimport::spawn(Arc::clone(&state));
+    crate::server::director::spawn_collaboration(Arc::clone(&state));
+
+    // Build PSF Guard's query indexes on each configured catalog, once, off
+    // the request path and before cache refreshes start long-lived reads.
+    // Startup is the quietest moment: no PSF Guard import or database
+    // management is in flight. An external writer can still win the race; the
+    // short index attempt then skips safely. See `spawn_query_index_build`.
+    {
+        let paths: Vec<String> = state
+            .databases
+            .read()
+            .map(|databases| {
+                databases
+                    .values()
+                    .map(|ctx| ctx.database_path.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for path in paths {
+            crate::server::database_context::spawn_query_index_build(path.clone());
+            crate::server::database_context::spawn_calibration_header_backfill(path.clone());
+            crate::server::database_context::spawn_dark_level_backfill(path);
+        }
+    }
+
+    // Kick off a background cache refresh for every configured database.
+    for ctx in state.all_databases() {
+        let status = ctx.ensure_cache_available();
+        match status {
+            crate::server::state::RefreshStatus::InProgressWait
+            | crate::server::state::RefreshStatus::InProgressServeStale => {
+                tracing::info!("🔄 Cache refresh started at server startup (db={})", ctx.id);
+            }
+            crate::server::state::RefreshStatus::NotNeeded => {
+                tracing::info!("✅ Cache is already available at startup (db={})", ctx.id);
+            }
+            crate::server::state::RefreshStatus::NeedsRefresh => {
+                tracing::warn!(
+                    "⚠️ Cache refresh needed but not started for db={} - this shouldn't happen",
+                    ctx.id
+                );
+            }
+        }
+    }
+
+    // Keep the cache's volume under its limit, culling previews first.
+    {
+        let state_clone = Arc::clone(&state);
+        tokio::spawn(async move {
+            cache_budget::run(state_clone).await;
+        });
+    }
+    // Remove superseded stacks in every database, not only those building.
+    tokio::spawn(stack_preview::run_janitor(Arc::clone(&state)));
+    // Scan newly arrived frames where a database asks for it.
+    tokio::spawn(quality_arrival::run(Arc::clone(&state)));
+
+    // Start background image pre-generation if enabled
+    if config.pregeneration_config.is_enabled() {
+        let state_clone = Arc::clone(&state);
+        tokio::spawn(async move {
+            background_pregeneration_task(state_clone).await;
+        });
+    }
+
+    // Per-DB routes — nested under /api/db/{db_id}/.
+    let api_routes = api_router(Arc::clone(&state));
 
     // Create main app with either embedded or filesystem static serving
     let app = if let Some(static_dir_path) = &config.static_dir {

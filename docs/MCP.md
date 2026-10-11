@@ -39,19 +39,22 @@ else. See [server authentication](AUTHENTICATION.md).
 ## What a token may do
 
 A token acts as its user. An editor's token can grade and start jobs; a
-viewer's token, or any token minted **read only**, can only read. The tools
-that change the catalog check this themselves and answer with a tool error
-rather than a protocol failure, so an agent can explain the refusal.
-`start_wbpp_run` and `cancel_wbpp_run` further need a server started with
-`--allow-database-management`, like the UI action.
+viewer's token, or any token minted **read only**, can only read. Every tool
+sends its request back through the same `/api` router the UI uses, as the
+caller, so the read-only role, `--allow-database-management` and each
+handler's own checks apply to an agent exactly as to a person. A refusal
+comes back as a tool error with the API's own message, so an agent can
+explain it.
 
 A token cannot mint or revoke tokens. That takes a browser session.
 
 ## Tools
 
-Every tool but `list_databases` takes `database`, the id (slug) or name
-from `list_databases`. Results are JSON text, the same shapes the UI API
-returns.
+Catalog tools take `database`, the id (slug) or name from
+`list_databases`; Planning tools take a `plan_id` from `list_plans` or a
+`rig` from `list_rigs`. Results are JSON text, the same shapes the UI API
+returns. When no tool fits, `api_routes` lists every route `api_get` can
+read, below `/api`, as you.
 
 | Tool | What it answers | Needs write |
 |---|---|---|
@@ -77,6 +80,21 @@ returns.
 | `start_import` | Scan the configured folders for new lights and calibration frames | yes |
 | `start_wbpp_run` | Run PixInsight WBPP on a project's or target's accepted lights | yes, plus management |
 | `cancel_wbpp_run` | Stop the running WBPP run | yes, plus management |
+| `get_project_scheduler` | A project's Target Scheduler settings, targets and exposure plans | |
+| `get_calibration_library` | The calibration library by night, with validity marks and masters | |
+| `get_activity` | Stack builds and WBPP runs across databases, running and queued | |
+| `list_plans` | Planning: every plan with its target, rigs, goals and state | |
+| `get_plan` | One plan: framing, rigs, exposures per band | |
+| `get_plan_progress` | Frames per rig and objective against the goals | |
+| `get_framing` | The framing draft: centre, rotation, mosaic panels | |
+| `get_activation` | What was last written to the rigs, and whether the plan changed since | |
+| `list_rigs` | Rig profiles and live status | |
+| `get_rig_preferences` | A rig's effective observing preferences, and where each value comes from | |
+| `get_rig_scheduling` | The Target Scheduler limits a rig would write to each project | |
+| `list_templates` | The exposure template library, or a rig catalog's templates | |
+| `search_sky` | Find a target by name or designation | |
+| `api_routes` | Every route `api_get` can read, with what it answers | |
+| `api_get` | Read any of those routes, as you | |
 
 Jobs return at once. Poll `get_jobs` for progress.
 

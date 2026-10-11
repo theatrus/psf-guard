@@ -1,5 +1,13 @@
 # Unreleased
 
+- Agents see Planning over MCP: `list_plans`, `get_plan`, `get_plan_progress`,
+  `get_framing`, `get_activation`, `list_rigs`, `get_rig_preferences`,
+  `get_rig_scheduling`, `list_templates` and `search_sky`, plus
+  `get_project_scheduler`, `get_calibration_library` and `get_activity`.
+  `api_routes` and `api_get` read any route the UI reads. Every MCP tool now
+  runs through the same API as the UI, as the caller, so roles and database
+  management limit an agent exactly as they limit a person.
+
 - Agents can look into stacks over MCP. `list_stacks` lists a project's
   latest stacks; `get_stack` gives each frame's registration and, per night,
   whether the frames were dithered; `get_stack_calibration` lists the masters
