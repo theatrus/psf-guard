@@ -93,7 +93,7 @@ meridian flip compare directly; scoring still compares it only between frames
 of the same exposure and settings. It needs a fresh plate solve and a Gaia star
 catalog. A Tycho-2 catalog mixes two bands and is not used. A value in the image
 metadata is used as recorded. Frames scanned before this measurement existed
-have no SNR until the next quality scan with **Force** set.
+have no SNR until **Rescan All Quality** runs.
 
 A low relative score alone does not name a fault or recommend rejection. The
 UI labels catalog-only results as **Catalog-relative score** and says which
