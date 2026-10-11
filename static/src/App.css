@@ -5228,8 +5228,18 @@
 .stack-rc-astro-fields {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(105px, 1fr));
+  align-items: start;
   gap: 0.42rem;
   margin-top: 0.4rem;
+}
+
+.stack-rc-astro-field-error {
+  color: var(--color-error);
+  font-size: 0.56rem;
+}
+
+.stack-rc-astro-fields input[aria-invalid="true"] {
+  border-color: var(--color-error);
 }
 
 .stack-rc-astro-switch {

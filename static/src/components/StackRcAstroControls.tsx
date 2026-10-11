@@ -1,5 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
-import { apiClient } from '../api/client';
+import { rangeProblem, useRcAstroCapabilities } from './rcAstroSchema';
 import type {
   ExternalToolParameter,
   ExternalToolSchema,
@@ -34,12 +33,7 @@ export default function StackRcAstroControls({
   disabled: boolean;
   onChange: (config: RcAstroProcessing | null) => void;
 }) {
-  const capabilities = useQuery({
-    queryKey: ['rc-astro-capabilities'],
-    queryFn: apiClient.getRcAstroCapabilities,
-    staleTime: 5 * 60 * 1000,
-    retry: false,
-  });
+  const capabilities = useRcAstroCapabilities();
 
   if (!capabilities.data?.available) {
     if (capabilities.data?.error || capabilities.error || config?.steps.length || result) {
@@ -229,12 +223,14 @@ function ParameterField({
     );
   }
   const numeric = typeof value === 'number' ? value : kind.default;
+  const problem = value === undefined ? null : rangeProblem(parameter, value);
   return (
     <label className="stack-stretch-field" title={parameter.description}>
       <span>{parameter.label}</span>
       <input
         type="number"
         aria-label={parameter.label}
+        aria-invalid={problem ? true : undefined}
         value={Number.isFinite(numeric) ? numeric : ''}
         min={kind.min}
         max={kind.max}
@@ -242,6 +238,9 @@ function ParameterField({
         disabled={disabled}
         onChange={(event) => onChange(event.target.valueAsNumber)}
       />
+      {problem && (
+        <small className="stack-rc-astro-field-error">{kind.min} to {kind.max}</small>
+      )}
     </label>
   );
 }
