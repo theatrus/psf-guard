@@ -1,5 +1,12 @@
 # Unreleased
 
+- Agents can change the catalog over MCP as the app does: build and cancel
+  stack previews, change projects, targets and exposure plans, remove and
+  restore rejects (preview first, apply with its digest), preview and apply
+  a sync between databases, mark calibration frames' validity, plate-solve a
+  light and predict satellite crossings. Removal and sync still need
+  database management.
+
 - Agents can change plans over MCP, the way the app does: create and rename
   plans, save a plan or its framing whole at the revision they read, take
   values from a rig's Target Scheduler database, check feasibility, preview

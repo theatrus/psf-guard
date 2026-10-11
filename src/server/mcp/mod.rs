@@ -410,6 +410,138 @@ pub struct SavePreferencesArgs {
     pub settings: Value,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct StartStackArgs {
+    /// Database id (slug) or name.
+    pub database: String,
+    /// The project to stack.
+    pub project_id: i32,
+    /// Only this target's frames.
+    pub target_id: Option<i32>,
+    /// Only this filter's frames, such as `SII`.
+    pub filter_name: Option<String>,
+    /// Leave out pending frames as well as rejected ones.
+    #[serde(default)]
+    pub accepted_only: bool,
+    /// `auto` (default), `on` (refuse to stack without masters) or `off`.
+    pub calibration: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ProjectChangesArgs {
+    /// Database id (slug) or name.
+    pub database: String,
+    pub project_id: i32,
+    /// Only the fields to change: `name`, `description`, `state`,
+    /// `priority`, `minimum_time`, `minimum_altitude`, `maximum_altitude`,
+    /// `use_custom_horizon`, `horizon_offset`, `meridian_window`,
+    /// `filter_switch_frequency`, … as `get_project_scheduler` names them.
+    pub changes: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct TargetChangesArgs {
+    /// Database id (slug) or name.
+    pub database: String,
+    pub target_id: i32,
+    /// Only the fields to change: `name`, `active`, `ra_hours`,
+    /// `dec_degrees`, `rotation`, `roi`, `project_id`, `epoch_code`.
+    pub changes: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ExposurePlanChangeArgs {
+    /// Database id (slug) or name.
+    pub database: String,
+    /// The exposure plan's id from `get_project_scheduler`.
+    pub exposure_plan_id: i32,
+    /// Seconds per frame.
+    pub exposure: f64,
+    /// Frames wanted.
+    pub desired: i32,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct NewExposurePlanArgs {
+    /// Database id (slug) or name.
+    pub database: String,
+    pub target_id: i32,
+    /// `exposure`, `desired`, `enabled`, and either `exposure_template_id`
+    /// or a new template's `filter_name`, `template_name`, `gain`, `offset`,
+    /// `bin`, `readout_mode`.
+    pub plan: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RejectRemovalArgs {
+    /// Database id (slug) or name.
+    pub database: String,
+    /// Only rejects rejected at least this many days ago.
+    pub min_age_days: u32,
+    pub project_id: Option<i64>,
+    pub target_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ApplyRejectRemovalArgs {
+    /// Database id (slug) or name.
+    pub database: String,
+    /// The same as the preview.
+    pub min_age_days: u32,
+    pub project_id: Option<i64>,
+    pub target_id: Option<i64>,
+    /// The preview's `digest`; refuses when the rejects changed since.
+    pub digest: String,
+    /// Days the files wait in the trash before they may be deleted
+    /// (the server's default when omitted).
+    pub retention_days: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RemovedBatchArgs {
+    /// Database id (slug) or name.
+    pub database: String,
+    /// A batch id from `api_get /db/{db}/rejects/removed`.
+    pub batch_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SyncPreviewArgs {
+    /// The database to change (id or name).
+    pub database: String,
+    /// The other database: the source for `pull`, the destination for
+    /// `push_planning` and `push_grades`.
+    pub peer_database: String,
+    /// `pull` (frames and structure from the telescope), `push_planning`,
+    /// or `push_grades`.
+    pub kind: String,
+    /// Limit to one project or target, by name.
+    pub project: Option<String>,
+    pub target: Option<String>,
+    /// For `pull`, copy image files too.
+    pub with_image_data: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SyncApplyArgs {
+    /// The database the preview changes (id or name).
+    pub database: String,
+    /// The preview's id from `preview_sync`.
+    pub preview_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ValidityArgs {
+    /// Database id (slug) or name.
+    pub database: String,
+    /// Calibration frame UUIDs from `get_calibration_library`.
+    pub frame_uuids: Vec<String>,
+    /// `forward` (serve only lights after them), `backward`, or `both`
+    /// (clear the mark).
+    pub direction: String,
+}
+
 /// A database by id or name, or the tool error that names the known ones.
 macro_rules! database {
     ($self:ident, $name:expr) => {
@@ -1433,6 +1565,278 @@ impl PsfGuardMcp {
             api::encode(&args.id)
         );
         self.answer(&ctx, Method::PUT, &path, Some(args.settings))
+            .await
+    }
+
+    // ---------- Catalog: changes ----------
+
+    #[tool(
+        description = "Build stack previews for a project, or one target or filter of it: the server groups the frames by target, filter and exposure and stacks each channel. Returns the job; list_stacks and get_stack follow it. Needs write access."
+    )]
+    async fn start_stack(
+        &self,
+        Parameters(args): Parameters<StartStackArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let base = format!("/db/{}", api::encode(&db.id));
+        // The build takes the frames by id; page through the project's.
+        let mut image_ids = Vec::new();
+        for page in 0.. {
+            let path = api::with_query(
+                &format!("{base}/images"),
+                [
+                    ("project_id", Some(args.project_id.to_string())),
+                    ("target_id", args.target_id.map(|id| id.to_string())),
+                    ("filter_name", args.filter_name.clone()),
+                    ("limit", Some(MAX_IMAGE_LIMIT.to_string())),
+                    ("offset", Some((page * MAX_IMAGE_LIMIT).to_string())),
+                ],
+            );
+            let images = attempt!(self.get(&ctx, &path).await);
+            let rows = images.as_array().cloned().unwrap_or_default();
+            image_ids.extend(rows.iter().filter_map(|image| image["id"].as_i64()));
+            if rows.len() < MAX_IMAGE_LIMIT as usize {
+                break;
+            }
+        }
+        if image_ids.is_empty() {
+            return Ok(failure("No frames match that project, target and filter"));
+        }
+        let body = json!({
+            "image_ids": image_ids,
+            "accepted_only": args.accepted_only,
+            "calibration": args.calibration.unwrap_or_else(|| "auto".into()),
+        });
+        let path = format!("{base}/projects/{}/stack-previews", args.project_id);
+        self.answer(&ctx, Method::POST, &path, Some(body)).await
+    }
+
+    #[tool(description = "Stop a stack build that is queued or running.")]
+    async fn cancel_stack(
+        &self,
+        Parameters(args): Parameters<StackArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!(
+            "/db/{}/projects/{}/stack-previews/{}/cancel",
+            api::encode(&db.id),
+            args.project_id,
+            api::encode(&args.job_id)
+        );
+        self.answer(&ctx, Method::POST, &path, Some(json!({})))
+            .await
+    }
+
+    #[tool(
+        description = "Change a project's Target Scheduler settings: send only the fields to change (priority, state, altitude limits, meridian window, …). Needs write access."
+    )]
+    async fn update_project(
+        &self,
+        Parameters(args): Parameters<ProjectChangesArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!("/db/{}/projects/{}", api::encode(&db.id), args.project_id);
+        self.answer(&ctx, Method::PUT, &path, Some(args.changes))
+            .await
+    }
+
+    #[tool(
+        description = "Change a target: send only the fields to change (active, coordinates in RA hours and Dec degrees, rotation, name, project). Needs write access."
+    )]
+    async fn update_target(
+        &self,
+        Parameters(args): Parameters<TargetChangesArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!("/db/{}/targets/{}", api::encode(&db.id), args.target_id);
+        self.answer(&ctx, Method::PUT, &path, Some(args.changes))
+            .await
+    }
+
+    #[tool(description = "Change an exposure plan's exposure, frames wanted and whether it is on.")]
+    async fn update_exposure_plan(
+        &self,
+        Parameters(args): Parameters<ExposurePlanChangeArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!(
+            "/db/{}/exposure-plans/{}",
+            api::encode(&db.id),
+            args.exposure_plan_id
+        );
+        let body =
+            json!({ "exposure": args.exposure, "desired": args.desired, "enabled": args.enabled });
+        self.answer(&ctx, Method::PUT, &path, Some(body)).await
+    }
+
+    #[tool(
+        description = "Add an exposure plan to a target, with an existing exposure template or a new one."
+    )]
+    async fn create_exposure_plan(
+        &self,
+        Parameters(args): Parameters<NewExposurePlanArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!(
+            "/db/{}/targets/{}/exposure-plans",
+            api::encode(&db.id),
+            args.target_id
+        );
+        self.answer(&ctx, Method::POST, &path, Some(args.plan))
+            .await
+    }
+
+    #[tool(
+        description = "Preview removing rejects: the frames rejected at least min_age_days ago that would leave the catalog (their files to a trash folder, restorable), the ones that stay and why, and a `digest`. Writes nothing. Needs database management, as in the app."
+    )]
+    async fn preview_reject_removal(
+        &self,
+        Parameters(args): Parameters<RejectRemovalArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!("/db/{}/rejects/removal/preview", api::encode(&db.id));
+        let body = json!({
+            "min_age_days": args.min_age_days,
+            "project_id": args.project_id,
+            "target_id": args.target_id,
+        });
+        self.answer(&ctx, Method::POST, &path, Some(body)).await
+    }
+
+    #[tool(
+        description = "Remove the rejects preview_reject_removal listed: out of the catalog, files into the trash folder, restorable until the trash is emptied. Needs the preview's `digest`; refuses if the rejects changed since. Needs write access and database management."
+    )]
+    async fn apply_reject_removal(
+        &self,
+        Parameters(args): Parameters<ApplyRejectRemovalArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!("/db/{}/rejects/removal/apply", api::encode(&db.id));
+        let mut body = json!({
+            "min_age_days": args.min_age_days,
+            "project_id": args.project_id,
+            "target_id": args.target_id,
+            "digest": args.digest,
+        });
+        if let Some(days) = args.retention_days {
+            body["retention_days"] = json!(days);
+        }
+        self.answer(&ctx, Method::POST, &path, Some(body)).await
+    }
+
+    #[tool(
+        description = "Bring a batch of removed rejects back into the catalog, with their files, while the trash still holds them."
+    )]
+    async fn restore_removed_rejects(
+        &self,
+        Parameters(args): Parameters<RemovedBatchArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!("/db/{}/rejects/removed/restore", api::encode(&db.id));
+        self.answer(
+            &ctx,
+            Method::POST,
+            &path,
+            Some(json!({ "batch_id": args.batch_id })),
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Preview a sync between two open databases: `pull` frames and structure from a telescope database, or push planning or grades to it. Shows every change and returns a preview id; writes nothing. Needs database management."
+    )]
+    async fn preview_sync(
+        &self,
+        Parameters(args): Parameters<SyncPreviewArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let peer = database!(self, &args.peer_database);
+        let path = format!("/databases/{}/sync/preview", api::encode(&db.id));
+        let body = json!({
+            "peer_db_id": peer.id,
+            "kind": args.kind,
+            "project": args.project,
+            "target": args.target,
+            "with_image_data": args.with_image_data,
+        });
+        self.answer(&ctx, Method::POST, &path, Some(body)).await
+    }
+
+    #[tool(
+        description = "Apply a sync preview, as the app's Apply does. Refuses if either database changed since the preview; refresh or preview again. Needs write access and database management."
+    )]
+    async fn apply_sync(
+        &self,
+        Parameters(args): Parameters<SyncApplyArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!(
+            "/databases/{}/sync/previews/{}/apply",
+            api::encode(&db.id),
+            api::encode(&args.preview_id)
+        );
+        self.answer(&ctx, Method::POST, &path, Some(json!({})))
+            .await
+    }
+
+    #[tool(
+        description = "Mark calibration frames as serving only lights after them (`forward`, as after a cleaning), only before them (`backward`), or clear the mark (`both`). Changes which masters later stacks take."
+    )]
+    async fn set_calibration_validity(
+        &self,
+        Parameters(args): Parameters<ValidityArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!("/db/{}/calibrations/frames/validity", api::encode(&db.id));
+        let body = json!({ "frame_uuids": args.frame_uuids, "direction": args.direction });
+        self.answer(&ctx, Method::PUT, &path, Some(body)).await
+    }
+
+    #[tool(
+        description = "Plate-solve one light from its pixels and keep the solution for overlays and astrometry grading. Takes seconds to a minute."
+    )]
+    async fn solve_astrometry(
+        &self,
+        Parameters(args): Parameters<ImageArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!(
+            "/db/{}/images/{}/astrometry",
+            api::encode(&db.id),
+            args.image_id
+        );
+        self.answer(&ctx, Method::POST, &path, Some(json!({})))
+            .await
+    }
+
+    #[tool(
+        description = "Predict which satellites crossed one light during its exposure, and check each predicted track against the pixels. Fetches fresh orbital elements, as the app's button does; the predictions are predictions, the pixel check is evidence."
+    )]
+    async fn predict_satellites(
+        &self,
+        Parameters(args): Parameters<ImageArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!(
+            "/db/{}/images/{}/satellites",
+            api::encode(&db.id),
+            args.image_id
+        );
+        self.answer(&ctx, Method::POST, &path, Some(json!({})))
             .await
     }
 }
