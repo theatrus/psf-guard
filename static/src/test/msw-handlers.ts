@@ -82,6 +82,7 @@ export const handlers = [
     return HttpResponse.json({ ...json, data: json.data ? [json.data] : null }, { status: single.status });
   }),
   http.get('/api/director/v1/templates', () => HttpResponse.json({ success: true, data: [], error: null })),
+  http.get('/api/director/v1/projects/:id/plan/progress', () => HttpResponse.json({ success: true, data: { rigs: [] }, error: null })),
   http.get('/api/director/v1/sky/search', ({ request }) => HttpResponse.json({
     success: true, data: { query: new URL(request.url).searchParams.get('q') ?? '', local: { available: false, note: 'object catalog is not configured', items: [] }, online: null, online_state: 'skipped', online_cached: false }, error: null,
   })),
@@ -89,6 +90,7 @@ export const handlers = [
     protocol_version: 1, enabled: false, instance_id: null, database_management: true,
   }, error: null })),
   http.get('/api/db/:dbId/wbpp/runs/current', () => HttpResponse.json(idleWbppRun)),
+  http.get('/api/db/:dbId/rejects/removed', () => HttpResponse.json({ success: true, data: { batches: [], frames: [] }, error: null })),
   http.get('/api/db/:dbId/projects/:projectId/processing-settings', () => HttpResponse.json({
     success: true, data: { split_exposure_groups: true }, error: null,
   })),

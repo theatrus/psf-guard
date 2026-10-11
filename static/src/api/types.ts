@@ -464,6 +464,18 @@ export interface StackCalibrationMaster {
   rejected_samples: number | null;
   minimum_clean_samples: number | null;
   maximum_clean_samples: number | null;
+  /** The source frames still in the library; absent when none are recorded. */
+  sources?: CalibrationFrameSpan;
+}
+
+/** What a set of calibration frames spans. */
+export interface CalibrationFrameSpan {
+  frames: number;
+  temp_min_c?: number;
+  temp_max_c?: number;
+  first_night?: string;
+  last_night?: string;
+  nights: number;
 }
 
 export interface StackCalibrationMasters {
@@ -755,6 +767,9 @@ export interface StackGroupStatus {
   eligible_frames: number;
   quality_excluded: number;
   missing_files: number;
+  /** Frames left out because the library cannot calibrate them properly;
+   *  each frame's decision says why. */
+  calibration_excluded?: number;
   processed_frames: number;
   /** Frames restored from a saved accumulator; zero for a fresh build. */
   reused_frames?: number;
@@ -1460,6 +1475,9 @@ export interface CatalogInstallStatus {
 
 export type ExternalMasterPolicy = 'prefer' | 'fallback' | 'ignore';
 
+/** Which darks a master starts from when several sets match a light. */
+export type DarkChoice = 'complete' | 'nearest';
+
 export interface CalibrationSettings {
   /** Configured override in degrees; null when the library default applies. */
   rotation_tolerance_deg: number | null;
@@ -1475,6 +1493,13 @@ export interface CalibrationSettings {
   /** Darks from one night that make a master alone; null for the default. */
   complete_dark_frames?: number | null;
   default_complete_dark_frames?: number;
+  /** `complete` by default: the nearest complete set beats a nearer short one. */
+  dark_choice?: DarkChoice;
+  /** Days; zero lifts the limit. */
+  flat_max_age_days?: number | null;
+  default_flat_max_age_days?: number;
+  /** Stacks leave out lights that cannot be calibrated. */
+  exclude_uncalibrated?: boolean;
 }
 
 /** How much of the processor work may take, as fractions of logical cores. */
@@ -2260,6 +2285,24 @@ export interface CalibrationNightFilter {
   flat_near_miss?: CalibrationFlatNearMiss | null;
   /** Masters from other software for this camera, sensor and filter. */
   external_masters?: CalibrationExternalMaster[];
+  /** Why this night's lights cannot be calibrated properly. */
+  cannot_calibrate?: string | null;
+}
+
+/** One light a stack leaves out because it cannot be calibrated. */
+export interface UncalibratedLight {
+  image_id: number;
+  filter: string;
+  night: string;
+  reason: string;
+}
+
+/** Every light of a project that cannot be calibrated, ready to reject. */
+export interface ProjectCalibrationGaps {
+  lights: UncalibratedLight[];
+  checked: number;
+  missing_files: number;
+  digest: string;
 }
 
 export interface CalibrationFlatNearMiss {
@@ -2546,6 +2589,10 @@ export interface SkyPreview {
   height: number;
   kind: 'color' | 'mono';
   filter?: string | null;
+  /** Which stack this is, the same across rebuilds: `color:<composition>` or `mono:<filter>`. */
+  key: string;
+  /** The composition (`RGB`, `SHO`) or the filter. */
+  label: string;
   /** The reference frame's plate solution, when the cache holds one. */
   wcs?: {
     crpix1: number;
@@ -3107,4 +3154,73 @@ export interface StorageFoldersUpdate {
   cache_dir?: string;
   stack_dir?: string;
   calibration_dir?: string;
+}
+
+/** One rejected frame a removal takes, and its files. */
+export interface RejectRemovalFrame {
+  image_id: number;
+  guid: string;
+  target_id: number | null;
+  target_name: string;
+  file_name: string | null;
+  rejected_at: number;
+  reject_reason: string | null;
+  files: Array<{ kind: 'light' | 'sidecar' | 'copy'; path: string; bytes: number }>;
+}
+/** A reject a removal leaves, and why. */
+export interface RejectRemovalSkip {
+  image_id: number;
+  guid: string | null;
+  target_name: string;
+  file_name: string | null;
+  reason: string;
+}
+/** What a removal would take; Apply sends its digest back. */
+export interface RejectRemovalPlan {
+  min_age_days: number;
+  frames: RejectRemovalFrame[];
+  skipped: RejectRemovalSkip[];
+  /** Rejects still inside the grace period. */
+  waiting: number;
+  next_eligible_at: number | null;
+  without_files: number;
+  bytes: number;
+  digest: string;
+}
+export interface RejectRemovalReport {
+  batch_id: string;
+  removed: Array<{ image_id: number; guid: string }>;
+  failed: RejectRemovalSkip[];
+  files_moved: number;
+  bytes: number;
+  trash_until: number;
+}
+export interface RemovedRejectBatch {
+  batch_id: string;
+  removed_at: number;
+  frames: number;
+  bytes: number;
+  trash_until: number;
+  /** Frames whose files are already gone from the trash. */
+  files_deleted: number;
+  /** Frames whose saved rows were purged; only markers remain. */
+  purged: number;
+}
+export interface RemovedRejects {
+  batches: RemovedRejectBatch[];
+}
+export interface RejectRestoreReport {
+  restored: Array<{ guid: string; image_id: number }>;
+  failed: RejectRemovalSkip[];
+  renamed: string[];
+}
+export interface RejectTrashReport {
+  frames: number;
+  files_deleted: number;
+  bytes: number;
+  problems: string[];
+}
+export interface RejectPurgeReport {
+  frames: number;
+  bytes: number;
 }

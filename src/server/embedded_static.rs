@@ -1,15 +1,25 @@
 use axum::{
     body::Body,
-    http::{header, HeaderMap, HeaderValue, Response, StatusCode, Uri},
+    http::{header, HeaderMap, HeaderValue, Method, Response, StatusCode, Uri},
     response::IntoResponse,
 };
 use include_dir::{include_dir, Dir};
 use mime_guess::from_path;
 
+use crate::server::page_build;
+
 // Embed the static files at compile time
 static STATIC_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/static/dist");
 
-pub async fn serve_embedded_file(uri: Uri) -> impl IntoResponse {
+/// The embedded index.html, which names the build it belongs to.
+pub fn index_html() -> Option<&'static str> {
+    STATIC_DIR.get_file("index.html")?.contents_utf8()
+}
+
+pub async fn serve_embedded_file(method: Method, uri: Uri) -> impl IntoResponse {
+    if method != Method::GET && method != Method::HEAD {
+        return page_build::method_not_allowed();
+    }
     let path = uri.path().trim_start_matches('/');
 
     // If path is empty, serve index.html
@@ -33,23 +43,7 @@ pub async fn serve_embedded_file(uri: Uri) -> impl IntoResponse {
             HeaderValue::from_str(mime_type.as_ref())
                 .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
         );
-
-        // Add caching headers for static assets
-        if path.contains("/assets/")
-            || path.ends_with(".js")
-            || path.ends_with(".css")
-            || path.ends_with(".wasm")
-        {
-            headers.insert(
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("public, max-age=31536000, immutable"),
-            );
-        } else {
-            headers.insert(
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("public, max-age=3600"),
-            );
-        }
+        headers.insert(header::CACHE_CONTROL, page_build::cache_control(path));
 
         let body = Body::from(file.contents());
         let mut response_builder = Response::builder().status(StatusCode::OK);
@@ -61,20 +55,18 @@ pub async fn serve_embedded_file(uri: Uri) -> impl IntoResponse {
 
         response_builder.body(body).unwrap().into_response()
     } else {
-        // For SPA, fall back to index.html for non-API routes
+        // For SPA, fall back to index.html for non-API routes. A missing
+        // asset is a page from an older build asking for its files: answer
+        // 404, not a page of HTML it would try to run as a script.
         if !path.starts_with("api/")
+            && !page_build::is_hashed_asset(path)
             && let Some(index_file) = STATIC_DIR.get_file("index.html")
         {
-            let mut headers = HeaderMap::new();
-            headers.insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("text/html; charset=utf-8"),
-            );
-            headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-
             let body = Body::from(index_file.contents());
             return Response::builder()
                 .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+                .header(header::CACHE_CONTROL, "no-cache")
                 .body(body)
                 .unwrap()
                 .into_response();
@@ -99,6 +91,56 @@ mod tests {
         assert!(
             STATIC_DIR.get_file("index.html").is_some(),
             "index.html should exist in embedded static files"
+        );
+    }
+
+    async fn get(path: &str) -> axum::response::Response {
+        serve_embedded_file(Method::GET, path.parse().unwrap())
+            .await
+            .into_response()
+    }
+
+    #[tokio::test]
+    async fn only_get_and_head_reach_the_app() {
+        let posted = serve_embedded_file(Method::POST, "/".parse().unwrap())
+            .await
+            .into_response();
+        assert_eq!(posted.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(posted.headers()[header::ALLOW], "GET, HEAD");
+        let body = axum::body::to_bytes(posted.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("/api/mcp"));
+        let head = serve_embedded_file(Method::HEAD, "/".parse().unwrap())
+            .await
+            .into_response();
+        assert_eq!(head.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn the_page_is_checked_each_load_and_assets_kept() {
+        for path in ["/", "/index.html", "/some/old/route"] {
+            let page = get(path).await;
+            assert_eq!(page.status(), StatusCode::OK, "{path}");
+            assert_eq!(page.headers()[header::CACHE_CONTROL], "no-cache", "{path}");
+        }
+
+        let asset = STATIC_DIR
+            .get_dir("assets")
+            .and_then(|assets| assets.files().next())
+            .expect("the frontend build writes assets/");
+        let asset = format!("/{}", asset.path().to_string_lossy().replace('\\', "/"));
+        let kept = get(&asset).await;
+        assert_eq!(kept.status(), StatusCode::OK);
+        assert_eq!(
+            kept.headers()[header::CACHE_CONTROL],
+            "public, max-age=31536000, immutable"
+        );
+
+        // A script an older page asks for is gone, not answered with HTML.
+        assert_eq!(
+            get("/assets/index-0ldBu1ld.js").await.status(),
+            StatusCode::NOT_FOUND
         );
     }
 

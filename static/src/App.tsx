@@ -12,6 +12,7 @@ import KeyboardShortcutHelp from './components/KeyboardShortcutHelp';
 import ServerInfoPanel from './components/ServerInfoPanel';
 import SiteBanner from './components/SiteBanner';
 import UpdateNotice from './components/UpdateNotice';
+import BuildRefresh from './components/BuildRefresh';
 import TauriSettings from './components/TauriSettings';
 import { isOverviewPath, isPlanningPath, isSkyPath, useDbProjectTarget, withoutPlanningParams } from './hooks/useUrlState';
 import { isTauriApp, tauriConfig } from './utils/tauri';
@@ -279,6 +280,7 @@ function AppContent() {
 
       <SiteBanner banner={serverInfo?.banner} />
       <UpdateNotice installedVersion={serverInfo?.version} />
+      <BuildRefresh />
 
       <main className="app-main">
         <Outlet />

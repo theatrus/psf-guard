@@ -38,6 +38,7 @@ pub(crate) use import_drafts::inferred_mosaic;
 mod mosaic;
 pub(super) mod pairing;
 mod plan;
+mod plan_progress;
 mod plans;
 mod program;
 mod rig_profile;
@@ -188,6 +189,16 @@ impl Service {
     ) -> Result<T, Error> {
         self.with_writer(move |store| operation(store).map_err(Error::from))
             .await
+    }
+
+    /// Frames a collaboration capture or report names, which removing
+    /// rejects must leave in place.
+    pub(crate) async fn reported_image_guids(
+        self: Arc<Self>,
+    ) -> Result<std::collections::BTreeSet<String>, String> {
+        self.query(|store| store.reported_image_guids())
+            .await
+            .map_err(|error| format!("{error:?}"))
     }
 
     /// A read on a pooled read-only connection: it runs beside any write
@@ -609,6 +620,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             "/projects/{id}/plan/take-target-scheduler",
             axum::routing::post(take_values::take),
         )
+        .route("/projects/{id}/plan/progress", get(plan_progress::progress))
         .route("/sky/surveys", get(sky_image::surveys))
         .route("/sky/cutout", get(sky_image::cutout))
         .route("/sky/resolve", get(sky_image::resolve))

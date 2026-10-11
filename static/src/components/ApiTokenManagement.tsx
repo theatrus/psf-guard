@@ -3,6 +3,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import { apiClient } from '../api/client';
 import { describeTokenExpiry, formatTokenDate } from '../utils/apiTokens';
+import AgentConnect from './AgentConnect';
+import { useMcpUrl } from '../utils/agentSetup';
 import type { ApiResponse, AuthTokenSummary, MintedAuthToken } from '../api/types';
 
 interface ApiTokenManagementProps {
@@ -36,6 +38,9 @@ export default function ApiTokenManagement({
   const [status, setStatus] = useState('');
   const [minted, setMinted] = useState<MintedAuthToken | null>(null);
   const [copied, setCopied] = useState(false);
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [agentWrites, setAgentWrites] = useState(false);
+  const mcpUrl = useMcpUrl();
 
   const publish = (tokens: AuthTokenSummary[]) => {
     queryClient.setQueryData(['authTokens'], tokens);
@@ -69,6 +74,27 @@ export default function ApiTokenManagement({
       setMinted(result);
       setCopied(false);
       resetForm();
+    } catch (error) {
+      setStatus(errorMessage(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // One step for the usual case: a token of your own, labelled for the
+  // agent, and the setup to paste.
+  const connectAgent = async () => {
+    setSaving(true);
+    setStatus('');
+    try {
+      const result = await apiClient.createAuthToken({
+        label: `agent ${new Date().toISOString().slice(0, 10)}`,
+        read_only: !agentWrites,
+      });
+      publish(result.tokens);
+      setMinted(result);
+      setCopied(false);
+      setAgentOpen(false);
     } catch (error) {
       setStatus(errorMessage(error));
     } finally {
@@ -115,19 +141,56 @@ export default function ApiTokenManagement({
           </p>
         </div>
         {!formOpen && (
-          <button
-            type="button"
-            className="add-directory-button"
-            onClick={() => {
-              setFormOpen(true);
-              setMinted(null);
-              setStatus('');
-            }}
-          >
-            + New token
-          </button>
+          <div className="db-row-actions">
+            <button
+              type="button"
+              className="add-directory-button"
+              onClick={() => {
+                setAgentOpen(true);
+                setMinted(null);
+                setStatus('');
+              }}
+            >
+              Connect an agent
+            </button>
+            <button
+              type="button"
+              className="add-directory-button"
+              onClick={() => {
+                setFormOpen(true);
+                setAgentOpen(false);
+                setMinted(null);
+                setStatus('');
+              }}
+            >
+              + New token
+            </button>
+          </div>
         )}
       </div>
+
+      {agentOpen && (
+        <div className="token-secret" role="group" aria-label="Connect an agent">
+          <p>A token for Claude Code or Codex, with the setup to paste.</p>
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={agentWrites}
+              onChange={(event) => setAgentWrites(event.target.checked)}
+              disabled={saving}
+            />{' '}
+            Let it grade and start jobs
+          </label>
+          <div className="modal-buttons">
+            <button type="button" className="save-button" disabled={saving} onClick={() => void connectAgent()}>
+              {saving ? 'Creating…' : 'Create token'}
+            </button>
+            <button type="button" className="cancel-button" disabled={saving} onClick={() => setAgentOpen(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {minted && (
         <div className="token-secret" role="status">
@@ -140,6 +203,7 @@ export default function ApiTokenManagement({
               {copied ? 'Copied' : 'Copy'}
             </button>
           </div>
+          <AgentConnect url={mcpUrl} token={minted.token} />
           <button type="button" className="cancel-button" onClick={() => setMinted(null)}>
             Done
           </button>

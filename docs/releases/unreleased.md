@@ -1,5 +1,110 @@
 # Unreleased
 
+- A color stack's processing panel no longer fails silently. An RC-Astro
+  value past the tool's range, such as BlurXTerminator's Sharpen Stars above
+  0.7, is marked on the field and stops Apply with the reason, and a refusal
+  from the server shows beside the button you pressed rather than at the top
+  of the section. Mono stacks check the same ranges.
+- A stack's calibration masters show the sensor temperatures and nights of
+  the frames they were built from, in the master inspector and over MCP.
+  Over MCP, `explain_calibration` also gives each night's temperatures and
+  what each master would span, and `get_stack` each light's temperature, so
+  a master shot warmer than its lights stands out.
+- Agents can change the catalog over MCP as the app does: build and cancel
+  stack previews, change projects, targets and exposure plans, remove and
+  restore rejects (preview first, apply with its digest), preview and apply
+  a sync between databases, mark calibration frames' validity, plate-solve a
+  light, predict satellite crossings, and find and reject the lights the
+  library cannot calibrate. Removal and sync still need database
+  management.
+
+- Dark and bias masters now prefer a complete set at the sensor's set point
+  over a nearer handful at another temperature. Before, two warm darks shot
+  near the lights could beat dozens at the set point and leave row banding in
+  the stack. **Settings › Calibration › Dark choice** sets it; *Nearest set*
+  keeps the old rule. WBPP exports follow the same choice. Stacks whose
+  masters change rebuild.
+- Calibration settings have their own **Settings › Calibration** tab, where
+  the guides already pointed; they used to sit under Setups.
+- Agents can change plans over MCP, the way the app does: create and rename
+  plans, save a plan or its framing whole at the revision they read, take
+  values from a rig's Target Scheduler database, check feasibility, preview
+  an activation and apply it with the preview's digest, push it to remote
+  rigs, apply rig scheduling limits, and keep the template library and
+  observing preferences. Activation and scheduling still need database
+  management, as in the app.
+
+- Agents see Planning over MCP: `list_plans`, `get_plan`, `get_plan_progress`,
+  `get_framing`, `get_activation`, `list_rigs`, `get_rig_preferences`,
+  `get_rig_scheduling`, `list_templates` and `search_sky`, plus
+  `get_project_scheduler`, `get_calibration_library` and `get_activity`.
+  `api_routes` and `api_get` read any route the UI reads. Every MCP tool now
+  runs through the same API as the UI, as the caller, so roles and database
+  management limit an agent exactly as they limit a person.
+
+- Find the lights the calibration library cannot calibrate properly: no
+  matching flat, no bias or dark, or flats more than 60 days away
+  (**Settings › Calibration › Flat age limit**; 0 lifts it). Each rule only
+  counts where the library holds that kind for the camera, so a rig that
+  never shoots flats is not affected. In a project's **Calibration** report,
+  **Check lights** lists them and **Reject N lights** rejects them, so Target
+  Scheduler shoots them again. Turn on **Leave out lights that can't be
+  calibrated** to keep them out of stack previews; the stack card counts them
+  under **can't calibrate**, and each frame says why.
+- Connecting an agent takes one step. **Settings › Users › API tokens ›
+  Connect an agent** mints a token and shows the setup to paste for Claude
+  Code and for Codex, with this server's MCP URL; a new token shows the same.
+  A server without accounts has a **Settings › Agents** tab with the setup
+  for this machine.
+- Agents can look into stacks over MCP. `list_stacks` lists a project's
+  latest stacks; `get_stack` gives each frame's registration and, per night,
+  whether the frames were dithered; `get_stack_calibration` lists the masters
+  each session applied; and `get_stack_image` returns the stack as an image,
+  with an optional hard background stretch and crop. `explain_calibration`
+  says why one light got, or missed, each master: every library frame for
+  its camera, by night, used or refused with the reason. `list_images` can keep
+  one filter's frames and only the header keys asked for. A POST to the
+  server's bare address now answers 405 and names `/api/mcp`, instead of
+  returning the app's page.
+
+- A browser tab left open across a server update now notices it. A
+  **PSF Guard was updated** bar offers **Reload now**, and the tab reloads by
+  itself the next time you change views; unsaved plan edits still ask first.
+  The server no longer lets the browser keep the page for an hour, so a reload
+  always brings the new version instead of the old page and scripts.
+
+- Remove truly bad rejects. In Settings › Databases, **Purge Rejects**
+  beside a database's **Import** opens a dialog that previews the frames
+  rejected at least N days ago (7 by default), then takes them out of the
+  catalog: their files and copies wait in a
+  `.psf-guard-trash` folder, and **Restore** brings a batch back until the
+  trash is emptied, 14 days later by default; then **Purge** forgets the
+  batch's saved records. The CLI has the same steps (`remove-rejects`,
+  `restore-removed`, `list-removed`, `empty-reject-trash`, `purge-removed`).
+  Sync pulls, imports and uploads leave removed frames out, even purged
+  ones, and plan progress still counts them as rejected.
+
+- Picking an exposure template for a rig on a plan's Exposures tab takes
+  that template's exposure, as adding the rig does; it used to keep the old
+  exposure until the rig was skipped and picked again. A template whose
+  default is under a second uses the rig's exposure for the band instead.
+  A plan taken in from Target Scheduler takes each band's main exposure
+  plan, not the first; and a folder import no longer lets a few short
+  frames set a new template's default exposure.
+
+- The framing view's stack layer also shows plans taken in from Target
+  Scheduler that were never activated. Turn it on or off from the sky's layer
+  buttons, and pick which stack each panel shows: the best one, a colour
+  composition, or one filter. Both choices are kept in this browser.
+
+- The Sequence view's Scoring panel draws over the page with its own
+  background and border, and its limit boxes fit inside it. A few other
+  borders and text colours that named missing theme colours show again.
+
+- Stack previews prepare several frames at once on the build's workers, as
+  Seiza's command line does, instead of reading through two helper threads
+  into a separate pool, so stacks build sooner with the same output.
+
 - Give a rig Target Scheduler scheduling limits in its Setup, under Limits
   and delivery, and apply them to every project in its database, including
   ones made in N.I.N.A. A list shows each project that differs and what will
@@ -1024,3 +1129,13 @@
   The bar now lists what changed in each section, and calls a section
   unsaved only when it can say what changed: showing the same rigs in a new
   order is no longer an edit.
+
+- A plan's Exposures tab shows each rig's progress and status per objective:
+  accepted frames against what Target Scheduler asks for, with taken and
+  rejected counts, and whether the part is done, active, off or not yet
+  activated. A row at the top sums each rig.
+
+- A server started with `--static-dir` serves only files inside that folder.
+  A request path with `..` in it used to read any file the server could, and
+  now gets a 404. The default server, which carries the UI inside its binary,
+  was never affected.

@@ -237,7 +237,8 @@ nearest cluster with enough frames builds the master, so a stray single flat
 near the lights cannot orphan a complete session from a week earlier.
 
 Darks keep for months, so a dark master can pool several nights, nearest
-first. Two settings under **Settings › Calibration › Dark masters** bound it:
+first. Three settings under **Settings › Calibration › Dark masters** shape
+it:
 
 - **Dark reach** (default 183 days): a dark shot further than this from the
   light does not match. A dark marked to serve only lights before or after it
@@ -245,6 +246,16 @@ first. Two settings under **Settings › Calibration › Dark masters** bound it
 - **Complete night** (default 10 darks): when the nearest night alone has
   this many matching darks, the master uses that night only. With fewer, the
   nights within reach pool.
+- **Dark choice** (default *Complete set first*): the nearest temperature
+  cluster with a complete night's worth of darks builds the master, and a
+  nearer, shorter cluster builds it only when no cluster is complete. Darks
+  match a light within 3 °C but cluster within 1 °C, so two warm darks shot
+  the night after the lights could otherwise beat eighty at the set point a
+  week later; a two-frame master puts its own read noise into every light,
+  and the stack shows it as row banding. *Nearest set* keeps the older rule:
+  the nearest cluster of two or more, however short. Bias masters follow the
+  same choice, with the same count for a complete set. A WBPP export places
+  the same frames, so WBPP builds the same masters.
 
 ### Validity boundaries
 
@@ -402,6 +413,31 @@ per night and filter is matched exactly as a stack build would match it, so
 the report describes what WOULD apply, not just what files exist. Warnings
 call out kinds with no matches, nights without same-night flats, and flats
 more than a month from their lights.
+
+### Lights that cannot be calibrated
+
+A light cannot be calibrated properly when:
+
+- no flat matches it, though the library holds flats for its sensor (for
+  example, every flat for its filter was shot at another rotator angle);
+- neither a bias nor a dark matches it, though the library holds either; or
+- the flats that match were shot further from it than the **Flat age limit**
+  (**Settings › Calibration › Flat masters**, default 60 days; 0 lifts it).
+
+Each rule applies only where the library could have filled the gap, so a rig
+that never shoots flats, or never shoots darks, is not affected. The report
+names each night whose lights cannot be calibrated. **Check lights**, at the
+foot of the report, reads every light of the project that is not already
+rejected and lists those that cannot be calibrated, by night, filter and
+reason. **Reject N lights** then sets them Rejected with the reason, so
+Target Scheduler shoots them again. It refuses, and asks for a new check,
+when the list changed after it was shown.
+
+Stacks keep such lights unless **Settings › Calibration › Stacks › Leave out
+lights that can't be calibrated** is on. With it on, and calibration on or
+automatic, stack previews leave them out, so they never mix with properly
+calibrated frames: the stack card counts them under **can't calibrate** and
+each frame's decision gives the reason.
 
 ## Stack previews
 

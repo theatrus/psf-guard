@@ -1,4 +1,4 @@
-//! Each activated panel's latest stack preview, placed by its plate solve.
+//! Each panel's finished stacks, placed by their plate solves.
 
 use super::activation::activated;
 use super::*;
@@ -94,7 +94,7 @@ fn write_stack(cache: &std::path::Path, project_row: i64, target_id: i64, solved
 async fn mosaic_places_each_panels_stack_by_its_solve_and_names_the_rest() {
     let a = activated().await;
     let path = format!("/projects/{}/mosaic", a.project);
-    // Before activation there are no panels, only the reason.
+    // Before activation, with no linked project, there are no panels, only the reason.
     let (status, empty) = call(&a.f.app, "GET", &path, Value::Null, None).await;
     assert_eq!(status, StatusCode::OK, "{empty}");
     assert_eq!(empty["data"]["activation_revision"], Value::Null);
@@ -102,7 +102,7 @@ async fn mosaic_places_each_panels_stack_by_its_solve_and_names_the_rest() {
     assert!(empty["data"]["warnings"][0]
         .as_str()
         .unwrap()
-        .contains("Activate"));
+        .contains("activate the plan"));
 
     let (_, preview) = call(
         &a.f.app,
@@ -202,4 +202,99 @@ async fn mosaic_places_each_panels_stack_by_its_solve_and_names_the_rest() {
         StatusCode::NOT_FOUND
     );
     let _ = (a.rig, a.objective);
+}
+
+/// A plan taken in from Target Scheduler that already matches it is never
+/// activated; its linked project's targets are the panels, and every
+/// finished stack of each is offered, the most integration first.
+#[tokio::test]
+async fn a_linked_project_shows_its_stacks_without_an_activation() {
+    let a = activated().await;
+    let source = Uuid::new_v4();
+    a.db.execute(
+        "INSERT INTO project (Id, profileId, name, description, state, priority, isMosaic, flatsHandling, guid)
+         VALUES (7, 'profile-a', 'M31 by hand', '', 1, 1, 0, 0, ?1)",
+        [source.to_string()],
+    )
+    .unwrap();
+    a.db.execute(
+        "INSERT INTO target (Id, name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+         VALUES (5, 'M31 Panel 1', 1, 0.7, 41.3, 2, 0.0, 100, 7, ?1)",
+        [Uuid::new_v4().to_string()],
+    )
+    .unwrap();
+    a.db.execute(
+        "INSERT INTO exposureplan (profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId)
+         VALUES ('profile-a', 300, 40, 12, 10, 5, 1)",
+        [],
+    )
+    .unwrap();
+    let catalog = crate::catalog_identity::read(&a.db).unwrap().unwrap().id;
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        store
+            .link_catalog_project(&psf_guard_director_meta::catalog::ProjectMapping {
+                catalog_id: catalog,
+                source_project_guid: source,
+                source_profile_id: "profile-a".into(),
+                project_id: a.project,
+                rig_id: a.rig,
+            })
+            .unwrap();
+    }
+    let cache =
+        a.f.state
+            .get_database("rig")
+            .unwrap()
+            .cache_dir_path
+            .clone();
+    let stacks = crate::server::storage::stacks(&cache);
+    std::fs::create_dir_all(&stacks).unwrap();
+    let group = |index: usize, filter: &str, seconds: f64| {
+        json!({"job_id": format!("job-{filter}"), "artifact_revision": "r1", "accepted_only": false, "created_unix_seconds": 1, "group": {
+            "index": index, "target_id": 5, "target_name": "M31 Panel 1", "filter_name": filter,
+            "state": "ready", "total_candidates": 3, "eligible_frames": 3, "quality_excluded": 0, "missing_files": 0,
+            "processed_frames": 3, "accepted_frames": 3, "rejected_frames": 0,
+            "reference_image_id": 42, "total_exposure_seconds": seconds,
+            "preview_url": format!("/api/db/rig/stack-previews/job-{filter}/{index}/preview?v=1"), "fits_url": null, "error": null, "frames": [],
+        }})
+    };
+    std::fs::write(
+        stacks.join("latest-project-7.json"),
+        json!({"schema_version": 1, "database_id": "rig", "project_id": 7, "updated_unix_seconds": 1,
+            "groups": [group(0, "Ha", 900.0), group(1, "OIII", 1800.0)]}).to_string(),
+    )
+    .unwrap();
+
+    let (status, mosaic) = call(
+        &a.f.app,
+        "GET",
+        &format!("/projects/{}/mosaic", a.project),
+        Value::Null,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{mosaic}");
+    let data = &mosaic["data"];
+    assert_eq!(data["activation_revision"], Value::Null);
+    assert_eq!(data["warnings"], json!([]));
+    let panels = data["panels"].as_array().unwrap();
+    assert_eq!(panels.len(), 1, "{mosaic}");
+    let panel = &panels[0];
+    assert_eq!(panel["panel_id"], "M31 Panel 1");
+    assert_eq!(panel["target_id"], 5);
+    assert_eq!(
+        panel["progress"],
+        json!({"desired": 40, "acquired": 12, "accepted": 10})
+    );
+    let keys: Vec<&str> = panel["stacks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["mono:OIII", "mono:Ha"]);
+    assert_eq!(panel["stacks"][1]["label"], "Ha");
+    assert_eq!(panel["preview"]["key"], "mono:OIII");
+    assert_eq!(panel["status"], "unsolved");
 }

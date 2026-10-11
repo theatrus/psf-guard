@@ -5,7 +5,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { applyRealSchema } from '../e2e/fixtures/sync';
 
-test("a rig's Target Scheduler limits reach every project in its database on Apply", async ({ page, request }, testInfo) => {
+test("a rig's Target Scheduler limits reach every project in its database on Apply", async ({ page, request }) => {
   const run = process.env.PSF_GUARD_DIRECTOR_E2E_TMP!;
   const dir = fs.mkdtempSync(path.join(run, 'rig-limits-'));
   const slug = `rig-limits-${randomUUID()}`;

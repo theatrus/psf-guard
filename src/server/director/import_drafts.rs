@@ -104,6 +104,18 @@ fn source_targets(
     Ok(targets)
 }
 
+/// One band of a plan taken in from Target Scheduler, so far: its main
+/// plan's template and exposure, and the most frames any of its plans asks
+/// for.
+struct Band {
+    template: usize,
+    exposure: f64,
+    desired: u32,
+    /// What makes a plan the main one: a second or more, then frames asked
+    /// for, then length.
+    rank: (bool, u32, u64),
+}
+
 /// Distinct positions along one camera axis, within `tolerance`, in order.
 fn clusters(values: &[f64], tolerance: f64) -> Vec<f64> {
     let mut sorted = values.to_vec();
@@ -448,8 +460,12 @@ pub(super) fn read_drafts(
             })?
             .collect::<Result<Vec<_>, _>>()?;
         // One objective per bandpass; the frames a panel wants is the most
-        // any of its plans asks for, since Director counts per panel.
-        let mut by_bandpass: BTreeMap<String, (usize, f64, u32)> = BTreeMap::new();
+        // any of its plans asks for, since Director counts per panel. Its
+        // template and exposure come from the band's main plan: one of at
+        // least a second, then the one asking for most frames. A short plan
+        // made first (flats or test frames taken as lights) never sets them.
+        let main = |exposure: f64, desired: u32| (exposure >= 1.0, desired, exposure.to_bits());
+        let mut by_bandpass: BTreeMap<String, Band> = BTreeMap::new();
         let mut left_out = std::collections::BTreeSet::new();
         for (template_id, exposure, desired) in rows {
             let Some(index) =
@@ -472,14 +488,26 @@ pub(super) fn read_drafts(
                 .unwrap_or(template.default_exposure)
                 .max(0.001);
             let desired = desired.unwrap_or(0).clamp(0, 100_000) as u32;
-            let entry = by_bandpass
+            let rank = main(exposure, desired);
+            let band = by_bandpass
                 .entry(template.bandpass.id.clone())
-                .or_insert((index, exposure, 0));
-            entry.2 = entry.2.max(desired);
+                .or_insert(Band {
+                    template: index,
+                    exposure,
+                    desired: 0,
+                    rank,
+                });
+            if rank > band.rank {
+                band.template = index;
+                band.exposure = exposure;
+                band.rank = rank;
+            }
+            band.desired = band.desired.max(desired);
         }
         let mut objectives = Vec::new();
         let mut contributions = Vec::new();
-        for (bandpass_id, (index, exposure, desired)) in by_bandpass {
+        for (bandpass_id, band) in by_bandpass {
+            let (index, exposure, desired) = (band.template, band.exposure, band.desired);
             if desired == 0 {
                 continue;
             }

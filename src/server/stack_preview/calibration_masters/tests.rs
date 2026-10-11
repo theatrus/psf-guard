@@ -305,6 +305,10 @@ fn optional_provenance_is_reported_without_recreating_forgotten_catalog_rows() {
         (entry.minimum_clean_samples, entry.maximum_clean_samples),
         (Some(2), Some(8))
     );
+    assert!(
+        entry.sources.is_none(),
+        "a catalog that never recorded the frames has no span"
+    );
     db.lock()
         .unwrap()
         .execute("DELETE FROM psf_guard_calibration_master", [])
@@ -322,6 +326,48 @@ fn optional_provenance_is_reported_without_recreating_forgotten_catalog_rows() {
         )
         .unwrap();
     assert_eq!(count, 0, "inspection must never rebuild or record masters");
+}
+
+#[test]
+fn a_master_reports_the_temperatures_and_nights_of_its_source_frames() {
+    let fixture = Fixture::new();
+    let master = fixture.master(CalibrationKind::Dark, 'c');
+    let path = fixture.write_master(&master);
+    let (_, source) = fixture.stack(AppliedCalibration {
+        dark_master: Some(master.label),
+        ..Default::default()
+    });
+    {
+        let db = fixture.ctx.db();
+        let conn = db.lock().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE psf_guard_calibration_master (cache_path TEXT, source_count INTEGER,
+                 source_frame_uuids TEXT, statistics_json TEXT);
+             CREATE TABLE psf_guard_calibration_frame (frame_uuid TEXT, camera_temp REAL,
+                 captured_at INTEGER);
+             INSERT INTO psf_guard_calibration_frame VALUES
+                 ('warm', -7.9, 1787097600), ('warmer', -8.3, 1787184000), ('other', -10.0, 1787184000);",
+        )
+        .unwrap();
+        // Three frames recorded, one since forgotten.
+        conn.execute(
+            "INSERT INTO psf_guard_calibration_master VALUES (?1, 3, ?2, '{}')",
+            rusqlite::params![path.to_string_lossy(), r#"["warm","warmer","forgotten"]"#],
+        )
+        .unwrap();
+    }
+    let catalog = catalog(&fixture.state, &fixture.ctx, &source).unwrap();
+    let entry = &catalog.masters[0];
+    assert_eq!(entry.source_count, Some(3));
+    let sources = entry.sources.as_ref().unwrap();
+    assert_eq!(sources.frames, 2);
+    assert_eq!(
+        (sources.temp_min_c, sources.temp_max_c),
+        (Some(-8.3), Some(-7.9))
+    );
+    assert_eq!(sources.nights, 2);
+    let json = serde_json::to_value(entry).unwrap();
+    assert_eq!(json["sources"]["temp_min_c"], -8.3);
 }
 
 #[test]

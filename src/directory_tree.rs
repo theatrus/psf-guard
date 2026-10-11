@@ -122,7 +122,9 @@ impl DirectoryTree {
         // Skip certain directories to avoid unwanted areas
         if let Some(dir_name) = dir.file_name() {
             let name = dir_name.to_string_lossy();
-            if matches!(name.as_ref(), ".git" | "node_modules" | "target" | ".cache") {
+            if matches!(name.as_ref(), ".git" | "node_modules" | "target" | ".cache")
+                || name == crate::commands::reject_removal::TRASH_DIR
+            {
                 tracing::trace!("⏭️  Skipping directory: {:?}", dir);
                 return Ok(());
             }

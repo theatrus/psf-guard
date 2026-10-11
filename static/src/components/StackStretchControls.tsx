@@ -7,6 +7,7 @@ import type {
 import StackStretchStageEditor from './StackStretchStageEditor';
 import StackDeconvolutionControls from './StackDeconvolutionControls';
 import StackRcAstroControls from './StackRcAstroControls';
+import { rcAstroProblem, useRcAstroCapabilities } from './rcAstroSchema';
 import ProcessingSetupsBar from './ProcessingSetupsBar';
 import { builtinViewSetups } from './processingSetups';
 import { validateDeconvolution } from './stackDeconvolution';
@@ -60,6 +61,7 @@ export default function StackStretchControls({
     requestForPreview(applied, displayReferred)
   );
   const [pending, setPending] = useState(false);
+  const rcAstroTools = useRcAstroCapabilities().data?.tools;
   const [reverting, setReverting] = useState(false);
   const [pendingProgress, setPendingProgress] =
     useState<StackStretchPendingProgress | null>(null);
@@ -105,14 +107,11 @@ export default function StackStretchControls({
       setError(deconvolutionError);
       return;
     }
-    // A cleared number field reads as NaN and would serialize as null.
-    const badRcAstro = request.rc_astro?.steps.some((step) =>
-      Object.values(step.parameters).some(
-        (value) => typeof value === 'number' && !Number.isFinite(value)
-      )
-    );
-    if (badRcAstro) {
-      setError('Enter a finite value for every RC-Astro parameter');
+    // A cleared number field reads as NaN and would serialize as null; a
+    // value past the tool's range would only be refused by the server.
+    const rcAstroError = rcAstroProblem(request.rc_astro, rcAstroTools);
+    if (rcAstroError) {
+      setError(rcAstroError);
       return;
     }
     setPending(true);

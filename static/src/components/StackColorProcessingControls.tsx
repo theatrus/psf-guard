@@ -12,6 +12,7 @@ import type {
 } from '../api/types';
 import StackDeconvolutionControls from './StackDeconvolutionControls';
 import StackRcAstroControls from './StackRcAstroControls';
+import { rcAstroProblem, useRcAstroCapabilities } from './rcAstroSchema';
 import { validateDeconvolution } from './stackDeconvolution';
 import StackStretchStageEditor from './StackStretchStageEditor';
 import { defaultStretchRequest, stretchModelLabels } from './stackStretchModels';
@@ -477,7 +478,8 @@ function StageLane({
 }
 
 export default function StackColorProcessingControls({
-  label, roles, applied, backgrounds, protections, fallbacks, deconvolutions, rcAstro = {}, disabled, onApply,
+  label, roles, applied, backgrounds, protections, fallbacks, deconvolutions, rcAstro = {}, disabled,
+  applyError, onApply,
 }: {
   label: string;
   roles: StackColorRole[];
@@ -488,8 +490,11 @@ export default function StackColorProcessingControls({
   deconvolutions: Partial<Record<StackColorRole, StackDeconvolutionResult>>;
   rcAstro?: StackColorJob['resolved_input_rc_astro'];
   disabled: boolean;
+  /** Why the server refused the last Apply, shown beside the button. */
+  applyError?: string | null;
   onApply: (processing: StackColorProcessing) => void;
 }) {
+  const rcAstroTools = useRcAstroCapabilities().data?.tools;
   const defaults = useMemo(() => defaultColorProcessing(roles), [roles]);
   const baseline = applied
     ? { ...applied, input_deconvolutions: applied.input_deconvolutions ?? {},
@@ -535,6 +540,13 @@ export default function StackColorProcessingControls({
       const deconvolutionError = validateDeconvolution(config);
       if (deconvolutionError) {
         setError(deconvolutionError);
+        return;
+      }
+    }
+    for (const role of roles) {
+      const problem = rcAstroProblem(draft.input_rc_astro?.[role], rcAstroTools);
+      if (problem) {
+        setError(`${roleLabels[role]}: ${problem}`);
         return;
       }
     }
@@ -607,7 +619,9 @@ export default function StackColorProcessingControls({
             }))}
           />
         </div>
-        {error && <div className="stack-stretch-error" role="alert">{error}</div>}
+        {(error ?? applyError) && (
+          <div className="stack-stretch-error" role="alert">{error ?? applyError}</div>
+        )}
         <div className="stack-stretch-actions">
           <button type="button" disabled={disabled || !changed} onClick={submit}>
             Apply processing stack

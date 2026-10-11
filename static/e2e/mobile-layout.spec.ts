@@ -133,7 +133,11 @@ test('project picker opens usable on a phone', async ({ page }, testInfo) => {
 
 test('image detail fits a phone', async ({ page }, testInfo) => {
   await page.goto(`/#/detail/1?db=${encodeURIComponent(dbId)}&project=1`);
-  await expect(page.getByRole('img', { name: 'Alpha M44 - B' })).toBeVisible({
+  // The grid's card for the same frame can be mounted under the detail view
+  // with the same alt text, so name the detail image itself.
+  await expect(
+    page.locator('img.detail-main-image[alt="Alpha M44 - B"]')
+  ).toBeVisible({
     timeout: 15_000,
   });
   await expectPhoneFit(page, testInfo, 'detail');

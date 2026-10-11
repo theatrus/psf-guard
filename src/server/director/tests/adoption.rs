@@ -9,6 +9,7 @@ mod feasibility;
 mod framing;
 mod mosaic;
 mod plan;
+mod plan_progress;
 mod plans;
 mod program;
 mod remote_push;

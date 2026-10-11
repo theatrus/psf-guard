@@ -10,7 +10,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use seiza_fits::{HeaderValue, WriteHeaderCard};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::UNIX_EPOCH;
@@ -61,6 +61,10 @@ pub const DEFAULT_DARK_REACH_DAYS: f64 = 183.0;
 /// says otherwise: when the nearest night has this many, older nights are not
 /// pooled in.
 pub const DEFAULT_COMPLETE_DARK_FRAMES: usize = 10;
+/// How far from a light its flats may have been shot, in days, before the
+/// light counts as one that cannot be calibrated, when no setting says
+/// otherwise. Dust moves; the report already warns past thirty days.
+pub const DEFAULT_FLAT_MAX_AGE_DAYS: f64 = 60.0;
 static COMPLETE_DARK_FRAMES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(DEFAULT_COMPLETE_DARK_FRAMES);
 /// Frames within this long of the nearest one count as its night.
@@ -183,6 +187,30 @@ pub struct CalibrationSelection {
     /// Darks and dark-flats that matched but were left out because library
     /// health found stray light in them.
     pub stray_light: Vec<CalibrationFrame>,
+    /// Which kinds the library holds for this light's sensor at all.
+    pub library: LibraryKinds,
+}
+
+/// Which kinds of usable frame the library holds for one light's sensor,
+/// whatever their optics, exposure, age or validity mark. A light only
+/// lacks what its library could have given it: a rig that never shoots
+/// flats is not short of one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LibraryKinds {
+    pub bias: bool,
+    pub dark: bool,
+    pub flat: bool,
+}
+
+impl LibraryKinds {
+    fn note(&mut self, kind: CalibrationKind) {
+        match kind {
+            CalibrationKind::Bias => self.bias = true,
+            CalibrationKind::Dark => self.dark = true,
+            CalibrationKind::Flat => self.flat = true,
+            CalibrationKind::DarkFlat => {}
+        }
+    }
 }
 
 /// How many frames of each kind a master built for one light would take.
@@ -1946,13 +1974,17 @@ pub fn select_for_light(conn: &Connection, light: &FrameMeta) -> Result<Calibrat
         if candidate.is_master && policy == ExternalMasterPolicy::Ignore {
             continue;
         }
+        let sensor = sensor_matches(light, &candidate);
+        if sensor && candidate.stray_light.is_none() {
+            selected.library.note(candidate.kind);
+        }
         // A frame marked usable only forward or backward of its capture —
         // shot around an optics change or cleaning — never serves a light
         // on the other side of that boundary.
         if !validity_admits(&candidate, light.timestamp) {
             continue;
         }
-        if !sensor_matches(light, &candidate) {
+        if !sensor {
             continue;
         }
         let matches = match candidate.kind {
@@ -2029,6 +2061,85 @@ pub(crate) fn selection_fingerprint_with_masking(
     Ok(selection_hash(&selected, flat_star_masking))
 }
 
+/// A light's selection fingerprint, and why it cannot be calibrated
+/// properly when it cannot (see [`calibration_gap`]), from one header read.
+/// Without a night boundary the gap is not looked for: calibration is off,
+/// or stacks keep such lights.
+pub(crate) fn light_calibration(
+    conn: &Connection,
+    light_path: &Path,
+    directory_tree: Option<&crate::directory_tree::DirectoryTree>,
+    flat_star_masking: bool,
+    night_boundary: Option<i64>,
+) -> Result<(String, Option<String>)> {
+    let light = crate::commands::import::headers::read_frame_meta(light_path);
+    let mut selected = select_for_light(conn, &light)?;
+    let gap = match night_boundary {
+        Some(boundary) => calibration_gap(conn, &light, &selected, boundary)?,
+        None => None,
+    };
+    remap_missing_sources(&mut selected, directory_tree);
+    Ok((selection_hash(&selected, flat_star_masking), gap))
+}
+
+/// Why a light cannot be calibrated properly, in a few words, or `None`.
+///
+/// Three gaps count, each only where the library could have filled it:
+/// no flat matches though the library holds flats for this sensor; no bias
+/// or dark matches though it holds either; or the flats that match were
+/// shot more than [`flat_max_age_days`] from the light. With
+/// [`exclude_uncalibrated_enabled`], a stack leaves such a light out rather
+/// than mix it with properly calibrated frames.
+pub fn calibration_gap(
+    conn: &Connection,
+    light: &FrameMeta,
+    selected: &CalibrationSelection,
+    night_boundary: i64,
+) -> Result<Option<String>> {
+    if selected.flat.is_empty() && selected.library.flat {
+        let reason = match flat_near_miss(conn, light, night_boundary)? {
+            Some(miss) => format!(
+                "No matching flat: the nearest {}flats are {:.0}° off its rotation",
+                miss.filter
+                    .as_deref()
+                    .map(|filter| format!("{filter} "))
+                    .unwrap_or_default(),
+                miss.off_by_deg
+            ),
+            None => "No matching flat".to_string(),
+        };
+        return Ok(Some(reason));
+    }
+    if selected.bias.is_empty()
+        && selected.dark.is_empty()
+        && (selected.library.bias || selected.library.dark)
+    {
+        return Ok(Some("No matching bias or dark".to_string()));
+    }
+    let limit = flat_max_age_days();
+    if let (Some(flats_at), Some(light_at)) = (flat_session_at(selected), light.timestamp) {
+        let age = flats_at.abs_diff(light_at) as f64 / 86_400.0;
+        if age > limit {
+            return Ok(Some(format!(
+                "Its flats are {age:.0} days from it, past the {limit:.0}-day limit"
+            )));
+        }
+    }
+    Ok(None)
+}
+
+/// When the flats a master would take were shot: the median capture time
+/// of the coherent set, the way a stack reduces them.
+fn flat_session_at(selected: &CalibrationSelection) -> Option<i64> {
+    let subset = coherent_master_subset(CalibrationKind::Flat, &selected.flat);
+    let mut times: Vec<i64> = subset
+        .iter()
+        .filter_map(|frame| frame.captured_at)
+        .collect();
+    times.sort();
+    times.get(times.len() / 2).copied()
+}
+
 // ---------- Project calibration report ----------
 
 /// How one project's lights are covered by the calibration library: what
@@ -2096,6 +2207,97 @@ pub struct CalibrationNightFilter {
     /// flat, this filter): which this night would use, and why the others
     /// do not match.
     pub external_masters: Vec<ExternalMasterNote>,
+    /// Why this night's lights cannot be calibrated properly, when they
+    /// cannot (see [`calibration_gap`]).
+    pub cannot_calibrate: Option<String>,
+}
+
+/// One light a stack would leave out because it cannot be calibrated.
+#[derive(Debug, Clone, Serialize)]
+pub struct UncalibratedLight {
+    pub image_id: i32,
+    pub filter: String,
+    pub night: String,
+    pub reason: String,
+}
+
+/// Every light of a project that cannot be calibrated, ready to reject.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectCalibrationGaps {
+    pub lights: Vec<UncalibratedLight>,
+    /// Lights read, rejected ones aside.
+    pub checked: usize,
+    /// Lights whose file was not found, so could not be read.
+    pub missing_files: usize,
+    /// Names this exact list, so rejecting it can refuse a list that
+    /// changed after it was shown.
+    pub digest: String,
+}
+
+/// Read every light of a project that is not already rejected and match it
+/// against the library as a stack would, keeping the ones a stack leaves
+/// out. One header read and one selection per light.
+pub fn project_calibration_gaps(
+    conn: &Connection,
+    project_id: i32,
+    directory_tree: &crate::directory_tree::DirectoryTree,
+) -> Result<ProjectCalibrationGaps> {
+    let db = crate::db::Database::new(conn);
+    let rows = db
+        .query_images_scoped(None, Some(project_id), None, None, 0)
+        .context("querying project lights")?;
+    let boundary = catalog_night_boundary(conn);
+    let mut lights = Vec::new();
+    let (mut checked, mut missing_files) = (0usize, 0usize);
+    for (image, _project, _target) in &rows {
+        if image.grading_status == 2 {
+            continue;
+        }
+        let Some(path) = crate::utils::extract_filename(&image.metadata)
+            .and_then(|basename| directory_tree.find_file_first(&basename).cloned())
+        else {
+            missing_files += 1;
+            continue;
+        };
+        checked += 1;
+        let meta = crate::commands::import::headers::read_frame_meta(&path);
+        let selected = select_for_light(conn, &meta)?;
+        if let Some(reason) = calibration_gap(conn, &meta, &selected, boundary)? {
+            lights.push(UncalibratedLight {
+                image_id: image.id,
+                filter: image.filter_name.clone(),
+                night: image
+                    .acquired_date
+                    .map(|at| night_of(at, boundary))
+                    .unwrap_or_else(|| "unknown".into()),
+                reason,
+            });
+        }
+    }
+    lights.sort_by(|left, right| {
+        right
+            .night
+            .cmp(&left.night)
+            .then_with(|| left.filter.cmp(&right.filter))
+            .then_with(|| left.image_id.cmp(&right.image_id))
+    });
+    let mut hasher = Sha256::new();
+    for light in &lights {
+        hasher.update(light.image_id.to_le_bytes());
+        hasher.update(light.reason.as_bytes());
+        hasher.update(b"\0");
+    }
+    let digest = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Ok(ProjectCalibrationGaps {
+        lights,
+        checked,
+        missing_files,
+        digest,
+    })
 }
 
 /// One master built by other software, against one night's lights.
@@ -2194,60 +2396,7 @@ fn external_master_notes(
             let matches = chosen
                 .iter()
                 .any(|frame| frame.frame_uuid == candidate.frame_uuid);
-            let reason = if matches {
-                None
-            } else if let Some(why) = &candidate.stray_light {
-                Some(format!("kept out for stray light: {why}"))
-            } else if !validity_admits(&candidate, light.timestamp) {
-                Some(match candidate.valid_direction {
-                    Some(ValidDirection::Forward) => "marked for lights after it".to_string(),
-                    _ => "marked for lights before it".to_string(),
-                })
-            } else if !sensor_matches(light, &candidate) {
-                Some(seiza_calibration::describe_sensor_mismatch(
-                    light_seiza,
-                    master_seiza,
-                ))
-            } else {
-                Some(match kind {
-                    CalibrationKind::Dark => {
-                        let mut reasons = Vec::new();
-                        if !exposure_matches(light.exposure_s, candidate.exposure_s) {
-                            reasons.push(seiza_calibration::describe_value(
-                                "exposure",
-                                light.exposure_s,
-                                candidate.exposure_s,
-                                "s",
-                            ));
-                        }
-                        if !temperature_admits(light.camera_temp, &candidate) {
-                            reasons.push(seiza_calibration::describe_value(
-                                "temperature",
-                                light.camera_temp,
-                                candidate.camera_temp,
-                                "C",
-                            ));
-                        }
-                        if !dark_within_reach(&candidate, light.timestamp) {
-                            reasons.push(format!(
-                                "shot more than {:.0} days from the lights",
-                                dark_reach_days()
-                            ));
-                        }
-                        if reasons.is_empty() {
-                            "does not match".to_string()
-                        } else {
-                            reasons.join("; ")
-                        }
-                    }
-                    CalibrationKind::Flat => seiza_calibration::describe_optics_mismatch(
-                        light_seiza,
-                        master_seiza,
-                        &tolerances(),
-                    ),
-                    _ => "does not match".to_string(),
-                })
-            };
+            let reason = (!matches).then(|| refusal(light, &light_signature, &candidate));
             let file = candidate
                 .source_path
                 .file_name()
@@ -2263,6 +2412,318 @@ fn external_master_notes(
         }
     }
     Ok(notes)
+}
+
+/// Why a frame of the library does not calibrate this light, in the
+/// readings that disagree. Asked only of frames the selection left out.
+fn refusal(light: &FrameMeta, light_signature: &Signature, candidate: &CalibrationFrame) -> String {
+    let candidate_signature = frame_signature(candidate);
+    let (light_seiza, frame_seiza) = (&light_signature.seiza, &candidate_signature.seiza);
+    if candidate.is_master && external_master_policy() == ExternalMasterPolicy::Ignore {
+        return "masters from other software are ignored".to_string();
+    }
+    if let Some(why) = &candidate.stray_light {
+        return format!("kept out for stray light: {why}");
+    }
+    if !validity_admits(candidate, light.timestamp) {
+        return match candidate.valid_direction {
+            Some(ValidDirection::Forward) => "marked for lights after it".to_string(),
+            _ => "marked for lights before it".to_string(),
+        };
+    }
+    if !sensor_matches(light, candidate) {
+        return seiza_calibration::describe_sensor_mismatch(light_seiza, frame_seiza);
+    }
+    match candidate.kind {
+        CalibrationKind::Dark => {
+            let mut reasons = Vec::new();
+            if !exposure_matches(light.exposure_s, candidate.exposure_s) {
+                reasons.push(seiza_calibration::describe_value(
+                    "exposure",
+                    light.exposure_s,
+                    candidate.exposure_s,
+                    "s",
+                ));
+            }
+            if !temperature_admits(light.camera_temp, candidate) {
+                reasons.push(seiza_calibration::describe_value(
+                    "temperature",
+                    light.camera_temp,
+                    candidate.camera_temp,
+                    "C",
+                ));
+            }
+            if !dark_within_reach(candidate, light.timestamp) {
+                reasons.push(format!(
+                    "shot more than {:.0} days from the lights",
+                    dark_reach_days()
+                ));
+            }
+            if reasons.is_empty() {
+                "does not match".to_string()
+            } else {
+                reasons.join("; ")
+            }
+        }
+        CalibrationKind::Flat => {
+            seiza_calibration::describe_optics_mismatch(light_seiza, frame_seiza, &tolerances())
+        }
+        _ => "does not match".to_string(),
+    }
+}
+
+/// Whether a frame comes from the light's camera and sensor size; frames
+/// from another rig are counted, not explained.
+fn same_camera(light: &Signature, frame: &Signature) -> bool {
+    let differs = |left: Option<i64>, right: Option<i64>| matches!((left, right), (Some(a), Some(b)) if a != b);
+    let other_camera = matches!(
+        (light.seiza.camera.as_deref(), frame.seiza.camera.as_deref()),
+        (Some(a), Some(b)) if !a.eq_ignore_ascii_case(b)
+    );
+    !(other_camera
+        || differs(light.seiza.width, frame.seiza.width)
+        || differs(light.seiza.height, frame.seiza.height))
+}
+
+/// Whether a flat is for the light's filter at all; a flat for another
+/// filter is another flat, not a near miss.
+fn same_filter(light: &Signature, frame: &Signature) -> bool {
+    let filter_only = |filter: &Option<String>| {
+        let mut signature = seiza_calibration::FrameSignature::default();
+        signature.filter = filter.clone();
+        signature
+    };
+    seiza_calibration::optics_consistent(
+        &filter_only(&light.seiza.filter),
+        &filter_only(&frame.seiza.filter),
+        &tolerances(),
+    )
+}
+
+// ---------- Why a light got its masters ----------
+
+/// For one light, every frame the library holds for its camera and what
+/// became of it: the frames each master would take, the frames that match
+/// but lose to a nearer set, and the frames refused, with the reason, all
+/// grouped by night.
+#[derive(Debug, Clone, Serialize)]
+pub struct CalibrationExplanation {
+    pub light: ExplainedLight,
+    pub kinds: Vec<KindExplanation>,
+}
+
+/// The readings matching compares, as the light's header gives them.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExplainedLight {
+    pub file: String,
+    pub night: Option<String>,
+    pub filter: Option<String>,
+    pub exposure_s: Option<f64>,
+    pub gain: Option<i64>,
+    pub offset: Option<i64>,
+    pub binning: Option<String>,
+    pub camera_temp: Option<f64>,
+    pub rotator_deg: Option<f64>,
+    pub camera: Option<String>,
+    pub telescope: Option<String>,
+    pub focal_length_mm: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KindExplanation {
+    /// `bias`, `dark` or `flat`.
+    pub kind: String,
+    /// The frames a master would take, in sum: how many, their sensor
+    /// temperatures and their nights, to set against the light's.
+    pub master: FrameSpan,
+    /// The nights whose frames a master would take.
+    pub used: Vec<NightFrames>,
+    /// Frames that match, but another set was taken instead.
+    pub matching_unused: Vec<NightFrames>,
+    /// Frames that do not match, by night and reason, newest night first.
+    pub refused: Vec<RefusedFrames>,
+    /// Flats for other filters, counted rather than listed.
+    pub other_filters: usize,
+    /// Frames from another camera or sensor size, counted.
+    pub other_cameras: usize,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct NightFrames {
+    pub night: String,
+    pub frames: usize,
+    /// The coldest and warmest sensor reading among them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temp_min_c: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temp_max_c: Option<f64>,
+}
+
+/// What a set of calibration frames spans: how many, the sensor
+/// temperatures they were shot at, and the nights. Two frames from one warm
+/// night read very differently here from eighty at the set point.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct FrameSpan {
+    pub frames: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temp_min_c: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temp_max_c: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_night: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_night: Option<String>,
+    pub nights: usize,
+}
+
+impl FrameSpan {
+    /// Sum up frames given as (sensor temperature, night).
+    pub fn of(frames: impl IntoIterator<Item = (Option<f64>, Option<String>)>) -> Self {
+        let mut span = Self::default();
+        let mut nights = BTreeSet::new();
+        for (temp, night) in frames {
+            span.frames += 1;
+            if let Some(temp) = temp.filter(|temp| temp.is_finite()) {
+                span.temp_min_c = Some(span.temp_min_c.map_or(temp, |min| min.min(temp)));
+                span.temp_max_c = Some(span.temp_max_c.map_or(temp, |max| max.max(temp)));
+            }
+            nights.extend(night);
+        }
+        span.nights = nights.len();
+        span.first_night = nights.first().cloned();
+        span.last_night = nights.last().cloned();
+        span
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct RefusedFrames {
+    pub night: String,
+    pub frames: usize,
+    pub reason: String,
+}
+
+pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<CalibrationExplanation> {
+    let boundary = catalog_night_boundary(conn);
+    let night =
+        |at: Option<i64>| at.map_or_else(|| "unknown".to_string(), |at| night_of(at, boundary));
+    let selected = select_for_light(conn, light)?;
+    let light_signature = light_signature(light);
+    let by_night = |frames: &[CalibrationFrame]| {
+        let mut nights: BTreeMap<String, Vec<Option<f64>>> = BTreeMap::new();
+        for frame in frames {
+            nights
+                .entry(night(frame.captured_at))
+                .or_default()
+                .push(frame.camera_temp);
+        }
+        nights
+            .into_iter()
+            .rev()
+            .map(|(night, temps)| {
+                let span = FrameSpan::of(temps.into_iter().map(|temp| (temp, None)));
+                NightFrames {
+                    night,
+                    frames: span.frames,
+                    temp_min_c: span.temp_min_c,
+                    temp_max_c: span.temp_max_c,
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut kinds = Vec::new();
+    for (kind, chosen) in [
+        (CalibrationKind::Bias, &selected.bias),
+        (CalibrationKind::Dark, &selected.dark),
+        (CalibrationKind::Flat, &selected.flat),
+    ] {
+        let master = coherent_master_subset(kind, chosen);
+        let in_master: HashSet<&str> = master
+            .iter()
+            .map(|frame| frame.frame_uuid.as_str())
+            .collect();
+        let unused: Vec<CalibrationFrame> = chosen
+            .iter()
+            .filter(|frame| !in_master.contains(frame.frame_uuid.as_str()))
+            .cloned()
+            .collect();
+        let chosen_uuids: HashSet<&str> = chosen
+            .iter()
+            .map(|frame| frame.frame_uuid.as_str())
+            .collect();
+        let (mut other_filters, mut other_cameras) = (0, 0);
+        let mut refused: BTreeMap<(String, String), usize> = BTreeMap::new();
+        for candidate in query_kind(conn, kind)? {
+            if chosen_uuids.contains(candidate.frame_uuid.as_str()) {
+                continue;
+            }
+            let signature = frame_signature(&candidate);
+            if !same_camera(&light_signature, &signature) {
+                other_cameras += 1;
+                continue;
+            }
+            if kind == CalibrationKind::Flat && !same_filter(&light_signature, &signature) {
+                other_filters += 1;
+                continue;
+            }
+            let reason = refusal(light, &light_signature, &candidate);
+            *refused
+                .entry((night(candidate.captured_at), reason))
+                .or_default() += 1;
+        }
+        let mut refused: Vec<RefusedFrames> = refused
+            .into_iter()
+            .map(|((night, reason), frames)| RefusedFrames {
+                night,
+                frames,
+                reason,
+            })
+            .collect();
+        refused.sort_by(|left, right| {
+            right
+                .night
+                .cmp(&left.night)
+                .then(left.reason.cmp(&right.reason))
+        });
+        kinds.push(KindExplanation {
+            kind: kind.as_str().to_string(),
+            master: FrameSpan::of(master.iter().map(|frame| {
+                (
+                    frame.camera_temp,
+                    frame.captured_at.map(|at| night(Some(at))),
+                )
+            })),
+            used: by_night(&master),
+            matching_unused: by_night(&unused),
+            refused,
+            other_filters,
+            other_cameras,
+        });
+    }
+    Ok(CalibrationExplanation {
+        light: ExplainedLight {
+            file: light
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            night: light.timestamp.map(|at| night_of(at, boundary)),
+            filter: light.filter.clone(),
+            exposure_s: light.exposure_s,
+            gain: light.gain,
+            offset: light.offset,
+            binning: light
+                .binning_x
+                .zip(light.binning_y)
+                .map(|(x, y)| format!("{x}x{y}")),
+            camera_temp: light.camera_temp,
+            rotator_deg: light.rotator_position,
+            camera: light.camera.clone(),
+            telescope: light.telescope.clone(),
+            focal_length_mm: light.focal_length_mm,
+        },
+        kinds,
+    })
 }
 
 /// The smaller way round between two rotator angles, in degrees.
@@ -2453,14 +2914,7 @@ pub fn project_calibration_report(
             }
         }
 
-        let flat_subset = coherent_master_subset(CalibrationKind::Flat, &selected.flat);
-        let flat_session_at = if flat_subset.is_empty() {
-            None
-        } else {
-            let mut times: Vec<i64> = flat_subset.iter().filter_map(|f| f.captured_at).collect();
-            times.sort();
-            times.get(times.len() / 2).copied()
-        };
+        let flat_session_at = flat_session_at(&selected);
         let nightly_flats = selected.flat.iter().any(|frame| {
             frame
                 .captured_at
@@ -2490,6 +2944,7 @@ pub fn project_calibration_report(
         } else {
             None
         };
+        let cannot_calibrate = calibration_gap(conn, &meta, &selected, boundary)?;
 
         let mut missing = Vec::new();
         if selected.bias.is_empty() {
@@ -2518,6 +2973,7 @@ pub fn project_calibration_report(
             missing,
             flat_near_miss,
             external_masters,
+            cannot_calibrate,
         };
         let entry = nights
             .entry(night.clone())
@@ -5672,6 +6128,25 @@ fn frame_signature(frame: &CalibrationFrame) -> Signature {
 static ROTATION_TOLERANCE_BITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Configured dark reach in f64 days; zero means "not configured".
 static DARK_REACH_BITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Configured flat age limit in f64 days; zero means "not configured" and
+/// infinity "no limit".
+static FLAT_MAX_AGE_BITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Which darks, or bias frames, a master is built from when several sets
+/// match a light.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DarkChoice {
+    /// The nearest complete set at one temperature, and the nearest short
+    /// set only when none is complete. The default.
+    #[default]
+    Complete,
+    /// The nearest set of two or more at one temperature, however short.
+    Nearest,
+}
+
+static DARK_CHOICE_NEAREST: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// What to do when the library holds a master built by other software
 /// (PixInsight's WBPP, Siril) alongside — or instead of — raw frames.
@@ -5714,6 +6189,9 @@ impl ExternalMasterPolicy {
 static EXTERNAL_MASTER_POLICY: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 static FLAT_STAR_MASKING: AtomicBool = AtomicBool::new(false);
+/// Whether stacks leave out lights that cannot be calibrated; off unless a
+/// person turns it on.
+static EXCLUDE_UNCALIBRATED: AtomicBool = AtomicBool::new(false);
 
 /// Mark a master as just used, so the disk limit takes it last. Its access
 /// time records the use, as a served preview's does: many mounts do not
@@ -5867,11 +6345,18 @@ pub fn rewrite_master_paths(
 pub fn configure(settings: Option<&crate::db_registry::CalibrationSettings>) {
     configure_rotation_tolerance(settings.and_then(|settings| settings.rotation_tolerance_deg));
     configure_dark_reach(settings.and_then(|settings| settings.dark_reach_days));
+    configure_flat_max_age(settings.and_then(|settings| settings.flat_max_age_days));
     configure_complete_dark_frames(settings.and_then(|settings| settings.complete_dark_frames));
+    configure_dark_choice(settings.and_then(|settings| settings.dark_choice));
     configure_external_master_policy(settings.and_then(|settings| settings.external_masters));
     configure_flat_star_masking(
         settings
             .and_then(|settings| settings.flat_star_masking)
+            .unwrap_or(false),
+    );
+    configure_exclude_uncalibrated(
+        settings
+            .and_then(|settings| settings.exclude_uncalibrated)
             .unwrap_or(false),
     );
 }
@@ -5884,6 +6369,32 @@ pub fn configure_flat_star_masking(enabled: bool) {
 
 pub fn flat_star_masking_enabled() -> bool {
     FLAT_STAR_MASKING.load(Ordering::Relaxed)
+}
+
+/// Choose whether stacks leave out lights [`calibration_gap`] names.
+pub fn configure_exclude_uncalibrated(enabled: bool) {
+    EXCLUDE_UNCALIBRATED.store(enabled, Ordering::Relaxed);
+}
+
+pub fn exclude_uncalibrated_enabled() -> bool {
+    EXCLUDE_UNCALIBRATED.load(Ordering::Relaxed)
+}
+
+/// Choose which darks every dark master this process builds starts from.
+/// `None` keeps the default, [`DarkChoice::Complete`].
+pub fn configure_dark_choice(choice: Option<DarkChoice>) {
+    DARK_CHOICE_NEAREST.store(
+        choice.unwrap_or_default() == DarkChoice::Nearest,
+        Ordering::Relaxed,
+    );
+}
+
+pub fn dark_choice() -> DarkChoice {
+    if DARK_CHOICE_NEAREST.load(Ordering::Relaxed) {
+        DarkChoice::Nearest
+    } else {
+        DarkChoice::Complete
+    }
 }
 
 /// Choose how external masters are used for every selection this process
@@ -5932,6 +6443,30 @@ pub fn configure_dark_reach(days: Option<f64>) {
         None => 0,
     };
     DARK_REACH_BITS.store(bits, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Override how far from a light its flats may have been shot before the
+/// light cannot be calibrated. `None` keeps [`DEFAULT_FLAT_MAX_AGE_DAYS`];
+/// zero lifts the limit.
+pub fn configure_flat_max_age(days: Option<f64>) {
+    let bits = match days {
+        Some(0.0) => f64::INFINITY.to_bits(),
+        Some(value) if value.is_finite() && value > 0.0 => value.to_bits(),
+        Some(other) => {
+            tracing::warn!("ignoring flat age limit {other}: not a non-negative number of days");
+            return;
+        }
+        None => 0,
+    };
+    FLAT_MAX_AGE_BITS.store(bits, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Days; infinite when the limit is lifted.
+pub fn flat_max_age_days() -> f64 {
+    match FLAT_MAX_AGE_BITS.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => DEFAULT_FLAT_MAX_AGE_DAYS,
+        bits => f64::from_bits(bits),
+    }
 }
 
 /// How many darks from one night make a master on their own. `None` keeps
@@ -6169,12 +6704,28 @@ fn master_subset_of_one_mode(kind: CalibrationKind, frames: &[CalibrationFrame])
     } else {
         seiza_calibration::FrameRole::Other
     };
-    let clustered = seiza_calibration::coherent_subset_indices(
-        &seiza_signatures,
-        role,
-        MIN_MASTER_FRAMES,
-        &tolerances(),
-    );
+    let cluster = |minimum| {
+        seiza_calibration::coherent_subset_indices(&seiza_signatures, role, minimum, &tolerances())
+    };
+    // Seiza takes the nearest anchor whose cluster reaches the minimum. With
+    // a minimum of two, a warm pair of darks shot near the lights beat eighty
+    // at the set point a few weeks away, and the pair's read noise went into
+    // every light as banding. Bias had the same flaw: five frames at -4 °C
+    // beat thirty at the set point. So by default a dark or bias master looks
+    // for a complete set first and settles for a short one only when no
+    // cluster has one.
+    let clustered = if matches!(kind, CalibrationKind::Dark | CalibrationKind::Bias)
+        && dark_choice() == DarkChoice::Complete
+    {
+        let complete = cluster(complete_dark_frames());
+        if complete.len() >= complete_dark_frames() {
+            complete
+        } else {
+            cluster(MIN_MASTER_FRAMES)
+        }
+    } else {
+        cluster(MIN_MASTER_FRAMES)
+    };
 
     // The integrator takes its first frame as the reference and measures every
     // later one against it, so anchor on the same frame it will. Candidates
@@ -6357,6 +6908,7 @@ pub fn export_destinations(
         dark_flat: coherent_master_subset(CalibrationKind::DarkFlat, &selected.dark_flat),
         flat: coherent_master_subset(CalibrationKind::Flat, &selected.flat),
         stray_light: Vec::new(),
+        library: selected.library,
     };
     let flat_session = flat_session_label(&selected.flat, night_boundary);
     let dark_set = selected.dark.first().map(|nearest| {
@@ -7827,6 +8379,24 @@ mod tests {
         conn
     }
 
+    /// Frames of one kind at these times and sensor temperatures.
+    fn library_at(temp: &tempfile::TempDir, kind: &str, frames: &[(i64, f64)]) -> Connection {
+        let mut metas = Vec::new();
+        for (index, (at, celsius)) in frames.iter().enumerate() {
+            let path = temp.path().join(format!("{kind}-{index}.fits"));
+            write_test_fits(&path, kind, 1_000);
+            let mut meta = crate::commands::import::headers::read_frame_meta(&path);
+            meta.timestamp = Some(*at);
+            meta.camera_temp = Some(*celsius);
+            metas.push(meta);
+        }
+        let mut conn = Connection::open_in_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        import_calibration_frames(&tx, &metas, Some("profile")).unwrap();
+        tx.commit().unwrap();
+        conn
+    }
+
     fn test_light(temp: &tempfile::TempDir, at: i64) -> FrameMeta {
         let path = temp.path().join("light.fits");
         write_test_fits(&path, "LIGHT", 1_100);
@@ -7874,6 +8444,116 @@ mod tests {
     }
 
     #[test]
+    fn a_complete_set_at_the_set_point_beats_a_nearer_warm_pair() {
+        let _settings = POLICY_LOCK.lock().unwrap();
+        let light_at = 1_790_000_000i64;
+        let day = 86_400i64;
+        // The Cat's Eye library: two warm darks the nights after the lights,
+        // twelve at the -10 °C set point a week later. All fall within the
+        // light's 3 °C match, and the pair sits within 1 °C of each other.
+        let warm = [(light_at + day, -7.9), (light_at + 2 * day, -8.3)];
+        let set_point = (0..12).map(|i| (light_at + 7 * day + i * 60, -10.0));
+        let temp = tempfile::tempdir().unwrap();
+        let conn = library_at(
+            &temp,
+            "DARK",
+            &warm.into_iter().chain(set_point).collect::<Vec<_>>(),
+        );
+        let selected = select_for_light(&conn, &test_light(&temp, light_at)).unwrap();
+        assert_eq!(selected.dark.len(), 14);
+        let master = coherent_master_subset(CalibrationKind::Dark, &selected.dark);
+        assert_eq!(master.len(), 12, "the complete set, not the warm pair");
+        assert!(master.iter().all(|frame| frame.camera_temp == Some(-10.0)));
+
+        // The explanation shows what the master spans and what it passed over.
+        let explained = explain_calibration(&conn, &test_light(&temp, light_at)).unwrap();
+        let dark = explained
+            .kinds
+            .iter()
+            .find(|kind| kind.kind == "dark")
+            .unwrap();
+        assert_eq!(
+            (
+                dark.master.frames,
+                dark.master.temp_min_c,
+                dark.master.temp_max_c
+            ),
+            (12, Some(-10.0), Some(-10.0))
+        );
+        let unused: Vec<_> = dark
+            .matching_unused
+            .iter()
+            .map(|night| (night.frames, night.temp_min_c))
+            .collect();
+        assert_eq!(unused, vec![(1, Some(-8.3)), (1, Some(-7.9))]);
+
+        // A WBPP export places the same set, so WBPP builds the same master.
+        let export = export_destinations(
+            &conn,
+            &test_light(&temp, light_at),
+            "NGC 6543",
+            None,
+            crate::commands::export::ExportLayout::Wbpp,
+            0,
+        )
+        .unwrap();
+        let placed = export
+            .items
+            .iter()
+            .filter(|(kind, _, _)| *kind == CalibrationKind::Dark)
+            .count();
+        assert_eq!(placed, 12);
+        assert_eq!(export.dark_set.unwrap().frame_uuids.len(), 12);
+
+        // The setting can ask for the nearest set instead, however short.
+        configure_dark_choice(Some(DarkChoice::Nearest));
+        let nearest = coherent_master_subset(CalibrationKind::Dark, &selected.dark);
+        configure_dark_choice(None);
+        assert_eq!(nearest.len(), 2);
+        assert!(nearest
+            .iter()
+            .all(|frame| frame.captured_at.unwrap() < light_at + 3 * day));
+
+        // With no complete set anywhere, the nearest pair still makes a master.
+        let set_point = (0..5).map(|i| (light_at + 7 * day + i * 60, -10.0));
+        let temp = tempfile::tempdir().unwrap();
+        let conn = library_at(
+            &temp,
+            "DARK",
+            &warm.into_iter().chain(set_point).collect::<Vec<_>>(),
+        );
+        let selected = select_for_light(&conn, &test_light(&temp, light_at)).unwrap();
+        let master = coherent_master_subset(CalibrationKind::Dark, &selected.dark);
+        assert_eq!(master.len(), 2);
+        assert!(master
+            .iter()
+            .all(|frame| frame.captured_at.unwrap() < light_at + 3 * day));
+    }
+
+    #[test]
+    fn bias_prefers_a_complete_set_too() {
+        let _settings = POLICY_LOCK.lock().unwrap();
+        let light_at = 1_790_000_000i64;
+        let day = 86_400i64;
+        // Five warm bias frames the night after the lights, twelve at the
+        // set point a week later. Bias does not match on temperature.
+        let warm = (0..5).map(|i| (light_at + day + i * 60, -4.1));
+        let set_point = (0..12).map(|i| (light_at + 7 * day + i * 60, -10.0));
+        let temp = tempfile::tempdir().unwrap();
+        let conn = library_at(&temp, "BIAS", &warm.chain(set_point).collect::<Vec<_>>());
+        let selected = select_for_light(&conn, &test_light(&temp, light_at)).unwrap();
+        assert_eq!(selected.bias.len(), 17);
+        let master = coherent_master_subset(CalibrationKind::Bias, &selected.bias);
+        assert_eq!(master.len(), 12);
+        assert!(master.iter().all(|frame| frame.camera_temp == Some(-10.0)));
+
+        configure_dark_choice(Some(DarkChoice::Nearest));
+        let nearest = coherent_master_subset(CalibrationKind::Bias, &selected.bias);
+        configure_dark_choice(None);
+        assert_eq!(nearest.len(), 5);
+    }
+
+    #[test]
     fn darks_reach_six_months_unless_a_mark_or_the_setting_says_otherwise() {
         let _settings = POLICY_LOCK.lock().unwrap();
         let light_at = 1_790_000_000i64;
@@ -7910,6 +8590,225 @@ mod tests {
         assert_eq!(select_for_light(&conn, &light).unwrap().dark.len(), 3);
         configure_dark_reach(None);
         assert_eq!(dark_reach_days(), DEFAULT_DARK_REACH_DAYS);
+    }
+
+    /// A library of flats (and optionally bias frames) shot `flats_at`, at
+    /// one rotator angle, for [`calibration_gap`] tests.
+    fn gap_library(temp: &tempfile::TempDir, flats_at: i64, with_bias: bool) -> Connection {
+        let mut metas = Vec::new();
+        for index in 0..3 {
+            let path = temp.path().join(format!("flat-{index}.fits"));
+            write_test_fits(&path, "FLAT", 1_000 + index as i16);
+            let mut meta = crate::commands::import::headers::read_frame_meta(&path);
+            meta.timestamp = Some(flats_at + index as i64);
+            meta.rotator_position = Some(94.7);
+            metas.push(meta);
+        }
+        if with_bias {
+            for index in 0..3 {
+                let path = temp.path().join(format!("bias-{index}.fits"));
+                write_test_fits(&path, "BIAS", 500 + index as i16);
+                let mut meta = crate::commands::import::headers::read_frame_meta(&path);
+                meta.timestamp = Some(flats_at + index as i64);
+                metas.push(meta);
+            }
+        }
+        let mut conn = Connection::open_in_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        import_calibration_frames(&tx, &metas, Some("profile")).unwrap();
+        tx.commit().unwrap();
+        conn
+    }
+
+    #[test]
+    fn a_light_the_library_cannot_calibrate_says_why() {
+        let _settings = POLICY_LOCK.lock().unwrap();
+        let day = 86_400i64;
+        let light_at = 1_790_000_000i64;
+        let temp = tempfile::tempdir().unwrap();
+        let conn = gap_library(&temp, light_at - 2 * day, false);
+        let gap = |light: &FrameMeta| {
+            let selected = select_for_light(&conn, light).unwrap();
+            calibration_gap(&conn, light, &selected, 12 * 3600).unwrap()
+        };
+
+        // The flats' angle, two days on: calibrated. The library holds no
+        // bias or dark, so their absence is not a gap.
+        let mut light = test_light(&temp, light_at);
+        light.rotator_position = Some(94.7);
+        assert_eq!(gap(&light), None);
+
+        // Another angle: the library holds flats, none fits.
+        light.rotator_position = Some(120.0);
+        assert_eq!(
+            gap(&light).as_deref(),
+            Some("No matching flat: the nearest Ha flats are 25° off its rotation")
+        );
+
+        // The right angle, but seventy days on.
+        light.rotator_position = Some(94.7);
+        light.timestamp = Some(light_at + 68 * day);
+        assert_eq!(
+            gap(&light).as_deref(),
+            Some("Its flats are 70 days from it, past the 60-day limit")
+        );
+        configure_flat_max_age(Some(0.0));
+        assert_eq!(gap(&light), None, "zero lifts the limit");
+        configure_flat_max_age(Some(90.0));
+        assert_eq!(gap(&light), None);
+        configure_flat_max_age(None);
+    }
+
+    #[test]
+    fn a_rig_without_flats_is_not_short_of_one() {
+        let _settings = POLICY_LOCK.lock().unwrap();
+        let light_at = 1_790_000_000i64;
+        let temp = tempfile::tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        let light = test_light(&temp, light_at);
+        let selected = select_for_light(&conn, &light).unwrap();
+        assert_eq!(selected.library, LibraryKinds::default());
+        assert_eq!(
+            calibration_gap(&conn, &light, &selected, 12 * 3600).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn bias_kept_behind_a_validity_mark_leaves_the_light_without_any() {
+        let _settings = POLICY_LOCK.lock().unwrap();
+        let day = 86_400i64;
+        let light_at = 1_790_000_000i64;
+        let temp = tempfile::tempdir().unwrap();
+        let conn = gap_library(&temp, light_at + day, true);
+        let mut light = test_light(&temp, light_at);
+        light.rotator_position = Some(94.7);
+        let selected = select_for_light(&conn, &light).unwrap();
+        assert!(!selected.bias.is_empty());
+        assert_eq!(
+            calibration_gap(&conn, &light, &selected, 12 * 3600).unwrap(),
+            None
+        );
+
+        // The bias was shot after a cleaning and serves only lights after it.
+        let bias: Vec<String> = conn
+            .prepare("SELECT frame_uuid FROM psf_guard_calibration_frame WHERE kind = 'bias'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        set_frames_validity(&conn, &bias, Some(ValidDirection::Forward)).unwrap();
+        let selected = select_for_light(&conn, &light).unwrap();
+        assert!(selected.bias.is_empty() && selected.library.bias);
+        assert_eq!(
+            calibration_gap(&conn, &light, &selected, 12 * 3600)
+                .unwrap()
+                .as_deref(),
+            Some("No matching bias or dark")
+        );
+    }
+
+    #[test]
+    fn a_light_is_told_why_each_frame_did_or_did_not_calibrate_it() {
+        let _settings = POLICY_LOCK.lock().unwrap();
+        let day = 86_400i64;
+        let light_at = 1_790_000_000i64;
+        let temp = tempfile::tempdir().unwrap();
+        let mut metas = Vec::new();
+        // Flats at the light's angle two days before, and at another angle
+        // a week after.
+        for (index, (at, rotation)) in [
+            (light_at - 2 * day, 94.7),
+            (light_at - 2 * day + 60, 94.7),
+            (light_at + 7 * day, 120.0),
+            (light_at + 7 * day + 60, 120.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let path = temp.path().join(format!("flat-{index}.fits"));
+            write_test_fits(&path, "FLAT", 1_000 + index as i16);
+            let mut meta = crate::commands::import::headers::read_frame_meta(&path);
+            meta.timestamp = Some(at);
+            meta.rotator_position = Some(rotation);
+            metas.push(meta);
+        }
+        // Bias shot after a cleaning, for the lights after it.
+        for index in 0..2 {
+            let path = temp.path().join(format!("bias-{index}.fits"));
+            write_test_fits(&path, "BIAS", 500 + index as i16);
+            let mut meta = crate::commands::import::headers::read_frame_meta(&path);
+            meta.timestamp = Some(light_at + day + index as i64);
+            metas.push(meta);
+        }
+        let mut conn = Connection::open_in_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        import_calibration_frames(&tx, &metas, Some("profile")).unwrap();
+        tx.commit().unwrap();
+        let bias: Vec<String> = conn
+            .prepare("SELECT frame_uuid FROM psf_guard_calibration_frame WHERE kind = 'bias'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        set_frames_validity(&conn, &bias, Some(ValidDirection::Forward)).unwrap();
+
+        let mut light = test_light(&temp, light_at);
+        light.rotator_position = Some(94.7);
+        let explanation = explain_calibration(&conn, &light).unwrap();
+        assert_eq!(explanation.light.rotator_deg, Some(94.7));
+        assert_eq!(explanation.light.filter.as_deref(), Some("Ha"));
+        let kind = |name: &str| {
+            explanation
+                .kinds
+                .iter()
+                .find(|kind| kind.kind == name)
+                .unwrap()
+        };
+        let night = |at: i64| night_of(at, 12 * 3600);
+
+        let flat = kind("flat");
+        assert_eq!(
+            flat.used,
+            vec![NightFrames {
+                night: night(light_at - 2 * day),
+                frames: 2,
+                temp_min_c: Some(-10.0),
+                temp_max_c: Some(-10.0),
+            }]
+        );
+        assert_eq!(
+            flat.master,
+            FrameSpan {
+                frames: 2,
+                temp_min_c: Some(-10.0),
+                temp_max_c: Some(-10.0),
+                first_night: Some(night(light_at - 2 * day)),
+                last_night: Some(night(light_at - 2 * day)),
+                nights: 1,
+            }
+        );
+        assert_eq!(flat.refused.len(), 1, "{:?}", flat.refused);
+        assert_eq!(flat.refused[0].night, night(light_at + 7 * day));
+        assert_eq!(flat.refused[0].frames, 2);
+        assert!(
+            flat.refused[0].reason.contains("rotation"),
+            "{}",
+            flat.refused[0].reason
+        );
+
+        let bias = kind("bias");
+        assert!(bias.used.is_empty());
+        assert_eq!(
+            bias.refused,
+            vec![RefusedFrames {
+                night: night(light_at + day),
+                frames: 2,
+                reason: "marked for lights after it".into(),
+            }]
+        );
     }
 
     #[test]

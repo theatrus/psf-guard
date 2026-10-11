@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { Check, Crosshair, Globe, Grid3x3, Layers, LocateFixed, Orbit, RefreshCw, RotateCw, Sparkles, SquareDashedMousePointer, Sun, Telescope, Undo2 } from 'lucide-react';
+import { Check, Crosshair, Globe, Grid3x3, Images, Layers, LocateFixed, Orbit, RefreshCw, RotateCw, Sparkles, SquareDashedMousePointer, Sun, Telescope, Undo2 } from 'lucide-react';
 import NumberInput from '../NumberInput';
 import { useDraftSection } from './pageDraftsState';
 import { describeFramingChanges } from './draftChanges';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
+import type { SkyPreview } from '../../api/types';
 import type { DirectorCutoutRequest, DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigFraming, DirectorRigProfileSummary, DirectorSkyMarks, DirectorSkyPosition } from '../../api/directorTypes';
 import {
   DEFAULT_STAGE, MAX_VIEW_FOV, MIN_VIEW_FOV, TILE_MAX_FOV, angleAt, clampFov, deprojectFrom, deprojectOn, draftFromState, fitViewFov, formatDec, formatDegrees, formatRaHours, framingBackdrop, framingGraticule, framingProblems, fromStage,
@@ -41,6 +42,10 @@ const ROTATE_SKY_KEY = 'psf-guard.framing.rotateSky';
 const SURVEY_KEY = 'psf-guard.framing.survey';
 const MARK_KEYS = { objects: 'psf-guard.framing.marks.objects', bodies: 'psf-guard.framing.marks.bodies', solar: 'psf-guard.framing.marks.solar' } as const;
 const SHOWN_CATALOGS_KEY = 'psf-guard.framing.marks.catalogs';
+/** Whether finished stacks are drawn on the sky, in this browser. */
+const STACKS_KEY = 'psf-guard.framing.stacks';
+/** The stack picked for one plan, by its key; none means each panel's best. */
+const STACK_CHOICE_KEY = 'psf-guard.framing.stack.';
 /** The catalog families a mark can come from, by the letters a designation
  *  starts with. Messier, NGC, IC, Sharpless, the Lynds catalogs and the
  *  supernova remnants start on: the map an imager frames by. The rest, PGC's faint galaxies and HD's stars above all,
@@ -84,17 +89,20 @@ function remember(key: string, value: string) {
 }
 /** Where to point when the project has no catalog target yet: a name the
  *  catalogs know, or coordinates typed in. */
-/** One line per activated panel: whose it is, how far along, and whether its stack can be placed. */
-function describeStack(panel: DirectorMosaicPanel): string {
+/** How the picker names a stack. */
+const stackName = (stack: SkyPreview) => stack.kind === 'color' ? `Colour ${stack.label}` : stack.label;
+/** The stack a panel shows: the one picked, or its best. */
+const shownStack = (panel: DirectorMosaicPanel, choice: string): SkyPreview | null =>
+  choice ? panel.stacks.find(stack => stack.key === choice) ?? null : panel.stacks[0] ?? panel.preview;
+/** One line per panel: whose it is, how far along, and whether the stack it shows can be placed. */
+function describeStack(panel: DirectorMosaicPanel, choice: string, choiceName: string): string {
   const who = `${panel.panel_id}, ${panel.catalog_name || panel.rig.name}`;
   const done = panel.progress ? `${panel.progress.accepted}/${panel.progress.desired} frames accepted` : 'no exposure plans';
-  switch (panel.status) {
-    case 'ready': return `${who}: ${done}; ${panel.preview?.kind === 'color' ? 'colour' : panel.preview?.filter ?? 'mono'} stack placed by its solve.`;
-    case 'unsolved': return `${who}: ${done}; the stack has no plate solve yet, so it cannot be placed.`;
-    case 'no_stack': return `${who}: ${done}; no stack yet.`;
-    case 'missing_target': return `${who}: its target row is gone from the database.`;
-    default: return `${who}: its database is no longer registered here.`;
-  }
+  if (panel.status === 'missing_target') return `${who}: its target row is gone from the database.`;
+  if (panel.status === 'missing_catalog') return `${who}: its database is no longer registered here.`;
+  const stack = shownStack(panel, choice);
+  if (!stack) return choice && panel.stacks.length > 0 ? `${who}: ${done}; no ${choiceName} stack.` : `${who}: ${done}; no stack yet.`;
+  return stack.wcs ? `${who}: ${done}; ${stackName(stack)} stack placed by its solve.` : `${who}: ${done}; the ${stackName(stack)} stack has no plate solve yet, so it cannot be placed.`;
 }
 
 function StartFraming({ canWrite, onStart }: { canWrite: boolean; onStart: (seed: FramingSeed) => void }) {
@@ -424,12 +432,27 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   const pictureUp = !!cutout.image && (webgl ? !skyLost : !!skyMatrix);
   // Finished per-panel stacks, drawn where their plate solves put them: a
   // review of coverage and seams over the plan, never a processed image.
-  const [showStacks, setShowStacks] = useState(true);
+  // Both are remembered in this browser: the layer for every plan, the
+  // stack picked for this one.
+  const [showStacks, setShowStacks] = useState(() => remembered(STACKS_KEY, ['on', 'off'] as const, 'on') === 'on');
+  const chooseShowStacks = (on: boolean) => { setShowStacks(on); remember(STACKS_KEY, on ? 'on' : 'off'); };
+  const [stackPick, setStackPick] = useState(() => { try { return window.localStorage.getItem(STACK_CHOICE_KEY + projectId) ?? ''; } catch { return ''; } });
+  const chooseStack = (key: string) => { setStackPick(key); remember(STACK_CHOICE_KEY + projectId, key); };
   const mosaic = useQuery({ queryKey: ['directorMosaic', projectId], queryFn: () => apiClient.getDirectorMosaic(projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false, staleTime: 60_000 });
+  // Every stack some panel has, colour first, each once.
+  const stackChoices = useMemo(() => {
+    const found = new Map<string, SkyPreview>();
+    for (const panel of mosaic.data?.panels ?? []) for (const stack of panel.stacks ?? []) if (!found.has(stack.key)) found.set(stack.key, stack);
+    return [...found.values()].sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'color' ? -1 : 1) || a.label.localeCompare(b.label));
+  }, [mosaic.data]);
+  // A stack picked before that no panel has now falls back to each panel's best.
+  const stackChoice = stackChoices.some(stack => stack.key === stackPick) ? stackPick : '';
+  const stackChoiceName = stackChoices.find(stack => stack.key === stackChoice);
   const placedStacks = useMemo(() => !showStacks || !state || !stageView || !mosaic.data ? [] : mosaic.data.panels.flatMap(panel => {
-    const matrix = panel.preview ? stackMatrix(panel.preview, stageView, state.viewFov, stageSize) : null;
-    return panel.preview && matrix ? [{ panel, preview: panel.preview, matrix }] : [];
-  }), [showStacks, state, stageView, mosaic.data, stageSize]);
+    const preview = shownStack(panel, stackChoice);
+    const matrix = preview ? stackMatrix(preview, stageView, state.viewFov, stageSize) : null;
+    return preview && matrix ? [{ panel, preview, matrix }] : [];
+  }), [showStacks, state, stageView, mosaic.data, stageSize, stackChoice]);
   // A view narrower than the footprint hides its edges and handle. The fit
   // takes every panel corner as it is drawn, turned by the camera angle,
   // and the handle past the top edge. It widens the view once when the
@@ -795,6 +818,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
             <button type="button" aria-pressed={showObjects} aria-label="Deep-sky marks" title="Deep-sky marks from the object catalog" onClick={() => chooseMarks('objects', !showObjects)}><Telescope size={15} /></button>
             <button type="button" aria-pressed={showBodies} aria-label="Comets and asteroids" title="Comets and asteroids where they are now" onClick={() => chooseMarks('bodies', !showBodies)}><Orbit size={15} /></button>
             <button type="button" aria-pressed={showSolar} aria-label="Sun, Moon and planets" title="Sun, Moon and planets where they are now" onClick={() => chooseMarks('solar', !showSolar)}><Sun size={15} /></button>
+            {stackChoices.length > 0 && <button type="button" aria-pressed={showStacks} aria-label="Finished stacks" title="Finished stacks, placed by their plate solves" onClick={() => chooseShowStacks(!showStacks)}><Images size={15} /></button>}
           </div>
         </div>
         <div className="framing-stage-status">
@@ -826,11 +850,17 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         <span className="director-muted" data-testid="framing-view-center">view {formatRaHours(state.viewCenter.ra_degrees)}, {formatDec(state.viewCenter.dec_degrees)}</span>
       </p>
       </div>
-      {mosaic.data && mosaic.data.activation_revision !== null && <div className="framing-stacks" data-testid="framing-stacks">
-        <label className="framing-check"><input type="checkbox" checked={showStacks} onChange={event => setShowStacks(event.target.checked)} />Show finished stacks on the sky</label>
+      {mosaic.data && mosaic.data.panels.length > 0 && <div className="framing-stacks" data-testid="framing-stacks">
+        {stackChoices.length > 0 && <div className="framing-stacks-pick">
+          <label className="framing-check"><input type="checkbox" checked={showStacks} onChange={event => chooseShowStacks(event.target.checked)} />Stacks</label>
+          <select aria-label="Stack shown" value={stackChoice} disabled={!showStacks} onChange={event => chooseStack(event.target.value)}>
+            <option value="">Best per panel</option>
+            {stackChoices.map(stack => <option key={stack.key} value={stack.key}>{stackName(stack)}</option>)}
+          </select>
+        </div>}
         {mosaic.data.framing_stale && <p className="director-muted">The framing changed since the last activation. Stacks sit where their solves put them; the rectangles are the new plan.</p>}
         {mosaic.data.warnings.map(warning => <p key={warning} className="director-muted">{warning}</p>)}
-        <ul>{mosaic.data.panels.map(panel => <li key={`${panel.rig.id}-${panel.panel_id}`}>{describeStack(panel)}</li>)}</ul>
+        <ul>{mosaic.data.panels.map(panel => <li key={`${panel.rig.id}-${panel.panel_id}`}>{describeStack(panel, stackChoice, stackChoiceName ? stackName(stackChoiceName) : '')}</li>)}</ul>
       </div>}
       <p className="director-muted framing-attribution">{survey ? `${survey.name}: ${survey.bandpass}. ${survey.attribution}.` : 'Choose a survey.'} For composition only.</p>
       <VisibilityPanel projectId={projectId} center={state.center} rigCenters={liveRigCenters} compact />

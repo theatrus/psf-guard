@@ -48,6 +48,61 @@ describe('CalibrationMatchingSettings', () => {
     await waitFor(() => expect(saved).toMatchObject({ dark_reach_days: 90, complete_dark_frames: 20 }));
   });
 
+  it('starts on a complete set of darks and saves the nearest set when chosen', async () => {
+    let saved: Record<string, unknown> | null = null;
+    server.use(
+      http.get('/api/settings/calibration', () => HttpResponse.json(current(null))),
+      http.put('/api/settings/calibration', async ({ request }) => {
+        saved = await request.json() as Record<string, unknown>;
+        return HttpResponse.json({ success: true, data: { ...current(null).data, dark_choice: 'nearest' }, error: null });
+      }),
+    );
+    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
+    const choice = await screen.findByLabelText('Dark choice');
+    expect(choice).toHaveValue('complete');
+    expect(screen.getByText(/A complete set beats a nearer, shorter one/)).toBeInTheDocument();
+    fireEvent.change(choice, { target: { value: 'nearest' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(saved).toMatchObject({ dark_choice: 'nearest' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled());
+  });
+
+  it('saves a flat age limit, zero for none, and refuses a negative one', async () => {
+    let saved: Record<string, unknown> | null = null;
+    server.use(
+      http.get('/api/settings/calibration', () => HttpResponse.json({ ...current(null), data: { ...current(null).data, default_flat_max_age_days: 60 } })),
+      http.put('/api/settings/calibration', async ({ request }) => {
+        saved = await request.json() as Record<string, unknown>;
+        return HttpResponse.json({ success: true, data: { ...current(null).data, flat_max_age_days: 0 }, error: null });
+      }),
+    );
+    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
+    const limit = await screen.findByLabelText('Flat age limit in days');
+    expect(limit).toHaveAttribute('placeholder', '60');
+    fireEvent.change(limit, { target: { value: '-1' } });
+    expect(screen.getByText('Enter 0 to 3650 days.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    fireEvent.change(limit, { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(saved).toMatchObject({ flat_max_age_days: 0 }));
+  });
+
+  it('leaves out lights that cannot be calibrated only once turned on', async () => {
+    let saved: Record<string, unknown> | null = null;
+    server.use(
+      http.get('/api/settings/calibration', () => HttpResponse.json(current(null))),
+      http.put('/api/settings/calibration', async ({ request }) => {
+        saved = await request.json() as Record<string, unknown>;
+        return HttpResponse.json({ success: true, data: { ...current(null).data, exclude_uncalibrated: true }, error: null });
+      }),
+    );
+    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
+    const exclude = await screen.findByRole('checkbox', { name: /Leave out lights that can't be calibrated/ });
+    expect(exclude).not.toBeChecked();
+    fireEvent.click(exclude);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(saved).toMatchObject({ exclude_uncalibrated: true }));
+  });
 
   it('shows the default as the placeholder, not as a configured value', async () => {
     server.use(
@@ -82,6 +137,9 @@ describe('CalibrationMatchingSettings', () => {
         flat_star_masking: false,
         dark_reach_days: null,
         complete_dark_frames: null,
+        dark_choice: 'complete',
+        flat_max_age_days: null,
+        exclude_uncalibrated: false,
       })
     );
     // The response is the new truth; the button falls back to disabled.
@@ -114,6 +172,9 @@ describe('CalibrationMatchingSettings', () => {
         flat_star_masking: false,
         dark_reach_days: null,
         complete_dark_frames: null,
+        dark_choice: 'complete',
+        flat_max_age_days: null,
+        exclude_uncalibrated: false,
       })
     );
     await waitFor(() =>
@@ -172,6 +233,9 @@ describe('CalibrationMatchingSettings', () => {
       flat_star_masking: enabled,
       dark_reach_days: null,
       complete_dark_frames: null,
+      dark_choice: 'complete',
+      flat_max_age_days: null,
+      exclude_uncalibrated: false,
     })));
   });
 

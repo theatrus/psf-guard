@@ -358,6 +358,26 @@ export interface DirectorRigScheduling {
   push: { peer_id: string; peer_name: string; applied: boolean; error: string | null } | null;
   warnings: string[];
 }
+/** Frames Target Scheduler's exposure plans ask for, took, accepted and rejected. */
+export interface DirectorFrameCounts { desired: number; acquired: number; accepted: number; rejected: number }
+export interface DirectorObjectiveProgress {
+  objective_id: string;
+  frames: DirectorFrameCounts;
+  /** Exposure plans counting toward it; 0 until one is written. */
+  exposure_plans: number;
+}
+/** One rig's progress on a plan, read from its database. */
+export interface DirectorRigProgress {
+  rig_id: string;
+  /** Its Target Scheduler project; state 0 draft, 1 active, 2 inactive, 3 closed. */
+  project: { name: string; state: number } | null;
+  objectives: DirectorObjectiveProgress[];
+  /** Exposure plans no objective of this rig claims. */
+  other: DirectorFrameCounts;
+  total: DirectorFrameCounts;
+  note: string | null;
+}
+export interface DirectorPlanProgress { rigs: DirectorRigProgress[] }
 export interface DirectorActivationReport {
   project: DirectorIdentity;
   framing_revision: number;
@@ -385,12 +405,15 @@ export interface DirectorMosaicPanel {
   rig: DirectorIdentity;
   catalog_slug: string | null;
   catalog_name: string;
-  target_guid: string;
+  target_guid: string | null;
   target_id: number | null;
   target_name: string | null;
   progress: { desired: number; acquired: number; accepted: number } | null;
   status: 'ready' | 'unsolved' | 'no_stack' | 'missing_target' | 'missing_catalog';
+  /** The stack drawn by default: the first of `stacks`. */
   preview: SkyPreview | null;
+  /** Every finished stack of the panel's target, best first. */
+  stacks: SkyPreview[];
 }
 export interface DirectorMosaicPreview {
   project: DirectorIdentity;

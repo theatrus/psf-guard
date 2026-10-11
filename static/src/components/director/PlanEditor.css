@@ -28,3 +28,9 @@
 .plan-other-rigs { margin-top: 10px; }
 .plan-other-rigs > summary { cursor: pointer; color: var(--color-text-secondary); }
 .director-rig-database { margin-top: 6px; }
+.plan-contributions .plan-rig-summary td { background: var(--color-bg-secondary); }
+.plan-progress { display: grid; grid-template-columns: 4rem auto; align-items: center; column-gap: 6px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.plan-progress small { grid-column: 1 / -1; }
+.plan-progress-bar { height: 6px; border-radius: 3px; background: var(--color-bg-tertiary); overflow: hidden; }
+.plan-progress-bar > span { display: block; height: 100%; background: var(--color-success); }
+@media (max-width: 700px) { .plan-contributions .plan-rig-summary { padding: 8px; border-radius: 6px; background: var(--color-bg-secondary); } .plan-contributions .plan-rig-summary td { background: none; } }

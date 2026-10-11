@@ -78,6 +78,66 @@ pub fn reconcile_accepted_counts(conn: &Connection) -> Result<usize> {
     Ok(changed)
 }
 
+/// The table that dates each rejected frame; see [`record_rejection_times`].
+const REJECTED_AT_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS psf_guard_rejected_at (
+    acquired_image_guid TEXT PRIMARY KEY NOT NULL,
+    rejected_at INTEGER NOT NULL
+)";
+
+/// Date every rejected frame, so removing rejects can wait out a grace
+/// period first (docs/design/reject-removal.md). Every place PSF Guard
+/// changes grades calls this beside [`reconcile_accepted_counts`] (Sync
+/// through [`record_rejection_times_where_kept`]); a reject made elsewhere,
+/// by Target Scheduler's own grader or on a Sync peer, is dated when PSF
+/// Guard first notices it. A frame graded away from rejected
+/// loses its date, so rejecting it again starts the wait over. Frames
+/// without a GUID are left out, since removal keys on it. Returns how many
+/// dates were added or dropped.
+pub fn record_rejection_times(conn: &Connection) -> Result<usize> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0);
+    record_rejection_times_at(conn, now)
+}
+
+/// [`record_rejection_times`] for Sync: only in a database that already
+/// keeps the dates, so a rig's Target Scheduler copy never gains the table.
+pub fn record_rejection_times_where_kept(conn: &Connection) -> Result<usize> {
+    let kept: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'psf_guard_rejected_at')",
+        [],
+        |row| row.get(0),
+    )?;
+    if kept {
+        record_rejection_times(conn)
+    } else {
+        Ok(0)
+    }
+}
+
+/// [`record_rejection_times`] with the clock given, in Unix seconds.
+pub fn record_rejection_times_at(conn: &Connection, now: i64) -> Result<usize> {
+    if !SchemaCapabilities::table_has_column(conn, "acquiredimage", "guid")
+        || !SchemaCapabilities::table_has_column(conn, "acquiredimage", "gradingStatus")
+    {
+        return Ok(0);
+    }
+    conn.execute(REJECTED_AT_SCHEMA, [])?;
+    let added = conn.execute(
+        "INSERT OR IGNORE INTO psf_guard_rejected_at (acquired_image_guid, rejected_at)
+         SELECT guid, ?1 FROM acquiredimage
+         WHERE gradingStatus = 2 AND guid IS NOT NULL AND TRIM(guid) <> ''",
+        [now],
+    )?;
+    let dropped = conn.execute(
+        "DELETE FROM psf_guard_rejected_at WHERE acquired_image_guid NOT IN (
+             SELECT guid FROM acquiredimage WHERE gradingStatus = 2 AND guid IS NOT NULL)",
+        [],
+    )?;
+    Ok(added + dropped)
+}
+
 /// Database access layer for PSF Guard
 pub struct Database<'a> {
     conn: &'a Connection,
@@ -934,6 +994,7 @@ impl<'a> Database<'a> {
             params![status as i32, reject_reason, image_id],
         )?;
         reconcile_accepted_counts(&tx)?;
+        record_rejection_times(&tx)?;
         tx.commit()?;
         Ok(())
     }
@@ -954,6 +1015,7 @@ impl<'a> Database<'a> {
         }
 
         reconcile_accepted_counts(&tx)?;
+        record_rejection_times(&tx)?;
         tx.commit()?;
         Ok(())
     }
@@ -1166,6 +1228,7 @@ impl<'a> Database<'a> {
         let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let count = self.conn.execute(&query, param_refs.as_slice())?;
         reconcile_accepted_counts(self.conn)?;
+        record_rejection_times(self.conn)?;
 
         Ok(count)
     }
@@ -1597,6 +1660,119 @@ impl<'a> Database<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rejection_dates(conn: &Connection) -> Vec<(String, i64)> {
+        let mut statement = conn
+            .prepare(
+                "SELECT acquired_image_guid, rejected_at FROM psf_guard_rejected_at ORDER BY 1",
+            )
+            .unwrap();
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_reject_keeps_its_first_date_until_it_is_graded_otherwise() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE acquiredimage (Id INTEGER PRIMARY KEY, gradingStatus INTEGER NOT NULL, guid TEXT);
+             INSERT INTO acquiredimage VALUES (1, 2, 'a'), (2, 1, 'b'), (3, 2, NULL), (4, 2, ' ');",
+        )
+        .unwrap();
+        // Rows without a GUID cannot be removed, so they are not dated.
+        assert_eq!(record_rejection_times_at(&conn, 100).unwrap(), 1);
+        assert_eq!(rejection_dates(&conn), [("a".to_string(), 100)]);
+        // Seen again later, a reject keeps its first date.
+        conn.execute(
+            "UPDATE acquiredimage SET gradingStatus = 2 WHERE Id = 2",
+            [],
+        )
+        .unwrap();
+        record_rejection_times_at(&conn, 200).unwrap();
+        assert_eq!(
+            rejection_dates(&conn),
+            [("a".to_string(), 100), ("b".to_string(), 200)]
+        );
+        // Accepted, it loses its date; rejected again, the wait starts over.
+        conn.execute(
+            "UPDATE acquiredimage SET gradingStatus = 1 WHERE Id = 1",
+            [],
+        )
+        .unwrap();
+        record_rejection_times_at(&conn, 300).unwrap();
+        assert_eq!(rejection_dates(&conn), [("b".to_string(), 200)]);
+        conn.execute(
+            "UPDATE acquiredimage SET gradingStatus = 2 WHERE Id = 1",
+            [],
+        )
+        .unwrap();
+        record_rejection_times_at(&conn, 400).unwrap();
+        assert_eq!(
+            rejection_dates(&conn),
+            [("a".to_string(), 400), ("b".to_string(), 200)]
+        );
+    }
+
+    #[test]
+    fn sync_dates_rejects_only_where_they_are_already_kept() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE acquiredimage (Id INTEGER PRIMARY KEY, gradingStatus INTEGER NOT NULL, guid TEXT);
+             INSERT INTO acquiredimage VALUES (1, 2, 'a');",
+        )
+        .unwrap();
+        // A rig's Target Scheduler copy never gains PSF Guard's table.
+        assert_eq!(record_rejection_times_where_kept(&conn).unwrap(), 0);
+        record_rejection_times_at(&conn, 100).unwrap();
+        conn.execute("INSERT INTO acquiredimage VALUES (2, 2, 'b')", [])
+            .unwrap();
+        assert_eq!(record_rejection_times_where_kept(&conn).unwrap(), 1);
+    }
+
+    #[test]
+    fn dating_rejects_skips_a_schema_without_guids() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE acquiredimage (Id INTEGER PRIMARY KEY, gradingStatus INTEGER NOT NULL);
+             INSERT INTO acquiredimage VALUES (1, 2);",
+        )
+        .unwrap();
+        assert_eq!(record_rejection_times_at(&conn, 100).unwrap(), 0);
+        let tables: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'psf_guard_rejected_at'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0);
+    }
+
+    #[test]
+    fn grading_a_frame_rejected_dates_it() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO project (Id, profileId, name) VALUES (1, 'test', 'P');
+             INSERT INTO target (Id, name, active, epochcode, projectId) VALUES (10, 'T', 1, 0, 1);
+             INSERT INTO acquiredimage
+                (Id, projectId, targetId, acquireddate, filtername, gradingStatus, metadata, guid) VALUES
+                (1, 1, 10, 100, 'R', 0, '{}', 'g1'), (2, 1, 10, 200, 'R', 0, '{}', 'g2');",
+        )
+        .unwrap();
+        let db = Database::new(&conn);
+        db.batch_update_grading_status(&[(1, GradingStatus::Rejected, Some("Clouds".into()))])
+            .unwrap();
+        let dated = rejection_dates(&conn);
+        assert_eq!(dated.len(), 1);
+        assert_eq!(dated[0].0, "g1");
+        db.update_grading_status(1, GradingStatus::Accepted, None)
+            .unwrap();
+        assert!(rejection_dates(&conn).is_empty());
+    }
 
     #[test]
     fn empty_catalog_statistics_are_zero() {

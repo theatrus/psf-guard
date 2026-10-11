@@ -84,6 +84,9 @@ async function readDetailFitState(page: Page) {
 test('preview images load with per-DB-nested URLs and render pixels', async ({
   page,
 }) => {
+  // Each card's preview may still be generating on a cold cache; give every
+  // card its own wait rather than one for the lot.
+  test.setTimeout(120_000);
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
 
   const cards = page.locator('.image-card');
@@ -114,14 +117,17 @@ test('preview images load with per-DB-nested URLs and render pixels', async ({
     await card.scrollIntoViewIfNeeded();
     const img = card.locator('img').first();
     await expect(img).toBeAttached({ timeout: 15_000 });
-    await page.waitForFunction(
-      (el) =>
-        el instanceof HTMLImageElement &&
-        el.complete &&
-        el.naturalWidth > 0,
-      await img.elementHandle(),
-      { timeout: 30_000 }
-    );
+    // Found afresh on every poll: a card can swap its <img> once the
+    // preview is ready, and a handle to the old one never loads.
+    await expect
+      .poll(
+        () =>
+          img.evaluate((el) =>
+            (el as HTMLImageElement).complete ? (el as HTMLImageElement).naturalWidth : 0
+          ),
+        { timeout: 30_000 }
+      )
+      .toBeGreaterThan(0);
     const dims = await img.evaluate((el) => ({
       natW: (el as HTMLImageElement).naturalWidth,
       natH: (el as HTMLImageElement).naturalHeight,

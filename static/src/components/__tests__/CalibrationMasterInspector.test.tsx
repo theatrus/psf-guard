@@ -15,6 +15,7 @@ const flat: StackCalibrationMaster = {
   preview_url: '/flat.png?revision=old', original_preview_url: '/flat-original.png?revision=old',
   fits_url: '/flat.fits?revision=old', source_count: 12, rejection_method: 'delta-sigma',
   masked_samples: 20, rejected_samples: 4, minimum_clean_samples: 2, maximum_clean_samples: 12,
+  sources: { frames: 12, temp_min_c: -10.1, temp_max_c: -9.9, first_night: '2026-08-18', last_night: '2026-10-09', nights: 3 },
 };
 const bias: StackCalibrationMaster = {
   ...flat, id: 'b'.repeat(64), kind: 'bias', label: 'Bias master',
@@ -62,6 +63,8 @@ describe('CalibrationMasterInspector', () => {
     expect(screen.getByText('R / Session 1: 10 light frames')).toBeInTheDocument();
     expect(screen.getByText('R / Session 2: 8 light frames / Estimated pedestal 201.5 ADU')).toBeInTheDocument();
     expect(screen.getByText('20 masked samples')).toBeInTheDocument();
+    expect(screen.getByText('-10.1 to -9.9 °C')).toBeInTheDocument();
+    expect(screen.getByText('3 nights, 2026-08-18 to 2026-10-09')).toBeInTheDocument();
     expect(screen.getByText('2-12 retained samples / pixel')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Download master FITS' })).toHaveAttribute('href', flat.fits_url);
     expect(screen.queryByRole('button', { name: 'Find source artifact' })).not.toBeInTheDocument();

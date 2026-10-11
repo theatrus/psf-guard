@@ -1,10 +1,11 @@
 use psf_guard_director_meta::{templates::ExposureTemplate, Error, MetaStore};
 use uuid::Uuid;
 
-fn scratch() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("director-meta-templates-{}", Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir.join("meta.sqlite")
+/// A store file in a folder that goes when the returned guard drops.
+fn scratch() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    (dir, path)
 }
 
 fn template(name: &str, filter: &str) -> ExposureTemplate {
@@ -25,7 +26,7 @@ fn template(name: &str, filter: &str) -> ExposureTemplate {
 
 #[test]
 fn moon_settings_survive_storage_and_invalid_updates_do_not_replace_them() {
-    let path = scratch();
+    let (_dir, path) = scratch();
     let mut store = MetaStore::create(&path).unwrap();
     let mut value = template("OIII", "OIII");
     value.moon = Some(psf_guard_director_core::moon::MoonPolicy {
@@ -45,7 +46,7 @@ fn moon_settings_survive_storage_and_invalid_updates_do_not_replace_them() {
 
 #[test]
 fn the_library_saves_lists_updates_and_deletes_with_compare_and_set() {
-    let path = scratch();
+    let (_dir, path) = scratch();
     let mut store = MetaStore::create(&path).unwrap();
     assert!(store.templates().unwrap().is_empty());
 

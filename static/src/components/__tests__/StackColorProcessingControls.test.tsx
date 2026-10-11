@@ -53,6 +53,53 @@ describe('StackColorProcessingControls', () => {
       } } }),
     })));
   });
+  it('refuses a sharpening past the tool range beside Apply, and shows a server refusal there too', async () => {
+    const user = userEvent.setup();
+    const onApply = vi.fn();
+    server.use(
+      http.get('/api/tools/rc-astro', () => HttpResponse.json({ success: true, data: {
+        available: true, tools: [{ key: 'bxt', name: 'RC-Astro BlurXTerminator', licensed: true,
+          cli_version: '2.6.6', ml_version: 5, schema_version: 6, license_message: null, parameters: [
+            { name: 'ss', flag: '--ss', label: 'Sharpen Stars', description: '',
+              kind: { type: 'float', default: 0.5, min: 0, max: 0.7 } },
+            { name: 'sn', flag: '--sn', label: 'Sharpen Nonstellar', description: '',
+              kind: { type: 'float', default: 0.5, min: 0, max: 1 } },
+          ] }],
+      }, error: null })),
+    );
+    const props = {
+      label: 'RGB', roles: ['red', 'green', 'blue'] as const,
+      applied: defaultColorProcessing(['red', 'green', 'blue']),
+      backgrounds: {}, protections: {}, fallbacks: {}, deconvolutions: {},
+      disabled: false, onApply,
+    };
+    const { unmount } = renderWithQueries(
+      <StackColorProcessingControls {...props} roles={[...props.roles]} />
+    );
+    await user.click(screen.getByText('Processing stack'));
+    const red = screen.getByRole('region', { name: 'R input stretch stack' });
+    await user.click(await within(red).findByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }));
+    const stars = within(red).getByRole('spinbutton', { name: 'Sharpen Stars' });
+    await user.clear(stars);
+    await user.type(stars, '0.9');
+    expect(stars).toHaveAttribute('aria-invalid', 'true');
+    expect(within(red).getByText('0 to 0.7')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Apply processing stack' }));
+    expect(onApply).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'R: RC-Astro BlurXTerminator: Sharpen Stars must be between 0 and 0.7'
+    );
+
+    // A refusal the panel could not foresee shows beside the button as well.
+    unmount();
+    renderWithQueries(
+      <StackColorProcessingControls {...props} roles={[...props.roles]}
+        applyError="RC-Astro BlurXTerminator is not licensed on this server" />
+    );
+    expect(await screen.findByText('RC-Astro BlurXTerminator is not licensed on this server'))
+      .toHaveAttribute('role', 'alert');
+  });
+
   it('lets the user disable catalog background protection', async () => {
     const user = userEvent.setup();
     const onApply = vi.fn();

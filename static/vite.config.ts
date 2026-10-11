@@ -1,10 +1,28 @@
 /// <reference types="vitest/config" />
-import { defineConfig } from 'vite'
+import { createHash } from 'node:crypto'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
+
+/** Stamps index.html with the build it belongs to: a hash of the page and
+ *  of every file the build wrote, all named by their content. The server
+ *  reports the same stamp on each reply, so an open tab can tell when the
+ *  server holds a newer page (`src/updates/pageBuild.ts`). */
+const buildStamp = (): Plugin => ({
+  name: 'psf-guard-build-stamp',
+  apply: 'build',
+  transformIndexHtml: {
+    order: 'post',
+    handler: (html, { bundle }) => {
+      const files = Object.keys(bundle ?? {}).sort().join('\n')
+      const build = createHash('sha256').update(html).update(files).digest('hex').slice(0, 16)
+      return [{ tag: 'meta', attrs: { name: 'psf-guard-build', content: build }, injectTo: 'head' }]
+    },
+  },
+})
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), buildStamp()],
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],

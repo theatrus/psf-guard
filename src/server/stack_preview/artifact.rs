@@ -1490,6 +1490,7 @@ mod tests {
             eligible_frames: 3,
             quality_excluded: 0,
             missing_files: 0,
+            calibration_excluded: 0,
             processed_frames: 3,
             accepted_frames: 3,
             rejected_frames: 0,

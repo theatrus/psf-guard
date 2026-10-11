@@ -1,4 +1,4 @@
-import type { DirectorContribution, DirectorGoal, DirectorLibraryTemplate, DirectorMoonPolicy, DirectorMosaic, DirectorObjective, DirectorPlanDraft, DirectorRigProfileSummary, DirectorTemplate, DirectorTemplateChoice, DirectorFramingDraft} from '../../api/directorTypes';
+import type { DirectorContribution, DirectorObjectiveProgress, DirectorRigProgress, DirectorGoal, DirectorLibraryTemplate, DirectorMoonPolicy, DirectorMosaic, DirectorObjective, DirectorPlanDraft, DirectorRigProfileSummary, DirectorTemplate, DirectorTemplateChoice, DirectorFramingDraft} from '../../api/directorTypes';
 
 export const PURPOSES: Array<{ id: string; name: string }> = [
   { id: 'faint_detail', name: 'Faint detail' },
@@ -105,9 +105,11 @@ export function choiceFrom(template: DirectorTemplate): DirectorTemplateChoice {
   return { template_guid: template.guid, template_id: template.id, name: template.name, filter_name: template.filter_name, gain: template.gain, offset: template.offset, bin: template.bin, readout_mode: template.readout_mode, moon: template.moon };
 }
 
-/** The template's own default when it has one, else the rig's for the band kind. */
+/** The template's own default when it is a usable sub length, else the
+ *  rig's for the band kind. A default under a second is a flat's or a test
+ *  frame's, which an import can leave on a light template. */
 export function defaultExposure(rig: DirectorRigProfileSummary, kind: 'broadband' | 'narrowband', template: DirectorTemplate | null): number {
-  if (template && template.default_exposure > 0) return template.default_exposure;
+  if (template && template.default_exposure >= 1) return template.default_exposure;
   return kind === 'narrowband' ? rig.default_exposure_seconds.narrowband : rig.default_exposure_seconds.broadband;
 }
 
@@ -271,4 +273,27 @@ export function coverageGaps(plan: DirectorPlanDraft, panels: string[], ownFrame
 /** Frames a rig owes across its panels, for the per-rig total. */
 export function panelFactor(contribution: DirectorContribution, panels: string[]): number {
   return contribution.panel_ids.length === 0 ? Math.max(1, panels.length) : contribution.panel_ids.filter(id => panels.includes(id)).length;
+}
+
+/** Target Scheduler's project states, by number. */
+export const PROJECT_STATES = ['Draft', 'Active', 'Inactive', 'Closed'];
+
+const projectState = (rig: DirectorRigProgress) => rig.project ? PROJECT_STATES[rig.project.state] ?? `State ${rig.project.state}` : 'Not activated';
+const finished = (frames: { desired: number; accepted: number }) => frames.desired > 0 && frames.accepted >= frames.desired;
+
+/** Where one rig's part of an objective stands: switched off, not yet in
+ *  Target Scheduler, done, or its project's state. */
+export function partStatus(contribution: DirectorContribution | null, rig: DirectorRigProgress | undefined, objective: DirectorObjectiveProgress | undefined): string {
+  if (!contribution || !rig) return '';
+  if (!contribution.enabled) return 'Off';
+  if (!rig.project || !objective || objective.exposure_plans === 0) return 'Not activated';
+  return finished(objective.frames) ? 'Done' : projectState(rig);
+}
+
+/** Where a rig stands on the whole plan. */
+export function rigStatus(rig: DirectorRigProgress | undefined): string {
+  if (!rig) return '';
+  if (!rig.project) return 'Not activated';
+  const parts = rig.objectives.filter(objective => objective.exposure_plans > 0);
+  return parts.length > 0 && parts.every(objective => finished(objective.frames)) ? 'Done' : projectState(rig);
 }
