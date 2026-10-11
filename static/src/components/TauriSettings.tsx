@@ -49,13 +49,15 @@ import CalibrationLibrarySummary from './CalibrationLibrarySummary';
 import AstroBinFilterSummary from './AstroBinFilterSummary';
 import UserManagement from './UserManagement';
 import ApiTokenManagement from './ApiTokenManagement';
+import AgentConnect from './AgentConnect';
+import { useMcpUrl } from '../utils/agentSetup';
 import './TauriSettings.css';
 import PathField from './PathField';
 
 /**
  * Settings groups unrelated jobs into named tabs so each stays easy to find.
  */
-type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'stacking' | 'storage' | 'performance' | 'review' | 'rigs' | 'templates' | 'users';
+type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'stacking' | 'storage' | 'performance' | 'review' | 'rigs' | 'templates' | 'users' | 'agents';
 
 const DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE =
   '%YEAR%/%TARGET%/%NIGHT%/%TYPE%';
@@ -899,6 +901,10 @@ export default function TauriSettings({
     ...(!isTauri && access.status.authentication_required
       ? ([{ id: 'users', label: 'Users' }] as const)
       : []),
+    // With accounts, agents connect from Users with a token of their own.
+    ...(access.status.authentication_required
+      ? []
+      : ([{ id: 'agents', label: 'Agents' }] as const)),
   ];
   // Derive rather than store: removing the last database takes the Sync tab
   // away, and the selection has to fall back in the same render.
@@ -1881,6 +1887,8 @@ export default function TauriSettings({
             </div>
           )}
 
+          {currentTab === 'agents' && <AgentsSettings />}
+
           {currentTab === 'users' && (
             <>
               <UserManagement currentUsername={access.status.username} />
@@ -1924,6 +1932,23 @@ export default function TauriSettings({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Agents on a server without accounts: the endpoint answers this machine
+ *  without a token, so the setup is the URL alone. */
+function AgentsSettings() {
+  const url = useMcpUrl();
+  return (
+    <div className="settings-section">
+      <h3>Agents</h3>
+      <p>
+        Claude Code, Codex or another MCP client can read the catalog, grade and start jobs
+        through <code>{url || '/api/mcp'}</code>. This server has no accounts, so it answers
+        only this machine and needs no token.
+      </p>
+      <AgentConnect url={url} />
     </div>
   );
 }

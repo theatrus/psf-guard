@@ -9,25 +9,46 @@ answers, so a reverse proxy needs nothing extra.
 
 ## Connect
 
-On a server with user accounts, the endpoint takes a personal API token.
-Mint one under **Settings → Users → API tokens**, or from the CLI:
+On a server with user accounts, open **Settings › Users › API tokens** and
+choose **Connect an agent**. It mints a token of your own (read only unless
+you tick **Let it grade and start jobs**) and shows the setup to paste for
+Claude Code and for Codex, with this server's URL. **+ New token** mints one
+with a label, expiry or user of your choosing, and shows the same setup.
+From the CLI:
 
 ```bash
 psf-guard users token create editor --label "claude on laptop" --expires-days 90
 ```
 
-The token is shown once. Send it as a bearer credential. For Claude Code:
+The token is shown once. Send it as a bearer credential.
+
+For Claude Code:
 
 ```bash
 claude mcp add --transport http psf-guard https://guard.example/api/mcp \
   --header "Authorization: Bearer psfg_…"
 ```
 
+For Codex, add the server to `~/.codex/config.toml` and give it the token
+through an environment variable, so the token never sits in the file:
+
+```toml
+[mcp_servers.psf-guard]
+url = "https://guard.example/api/mcp"
+bearer_token_env_var = "PSF_GUARD_TOKEN"
+```
+
+```bash
+export PSF_GUARD_TOKEN=psfg_…
+```
+
 Any MCP client that speaks streamable HTTP works the same way: URL
-`https://guard.example/api/mcp`, header `Authorization: Bearer psfg_…`.
+`https://guard.example/api/mcp`, header `Authorization: Bearer psfg_…`. The
+URL must end in `/api/mcp`.
 
 A loopback server with no accounts, which is what the desktop app and
-`psf-guard server` on a developer machine run, needs no token:
+`psf-guard server` on a developer machine run, needs no token. Its
+**Settings › Agents** tab shows the setup:
 
 ```bash
 claude mcp add --transport http psf-guard http://127.0.0.1:3000/api/mcp

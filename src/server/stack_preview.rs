@@ -393,6 +393,12 @@ pub struct StackGroupStatus {
     pub eligible_frames: usize,
     pub quality_excluded: usize,
     pub missing_files: usize,
+    /// Frames left out because they cannot be calibrated properly: no
+    /// matching flat, no bias or dark, or flats past the age limit, where
+    /// the library holds such frames for their sensor. Each frame's reason
+    /// is on its decision.
+    #[serde(default)]
+    pub calibration_excluded: usize,
     pub processed_frames: usize,
     pub accepted_frames: usize,
     pub rejected_frames: usize,
@@ -2730,6 +2736,59 @@ fn prepare_whole(
             });
         }
 
+        let fingerprinted = fingerprint_only.is_none_or(|keys| {
+            keys.iter()
+                .any(|key| key.matches(target_id, &filter_name, exposure_group_key.as_deref()))
+        });
+        // Match each light against the library once: the fingerprint names
+        // the masters for the job's identity, and, when the setting asks, a
+        // light the library cannot calibrate properly is left out before the
+        // reference is chosen, so it never mixes with frames that were. A channel only lending its
+        // reference to a sibling's build skips both.
+        let mut fingerprints: HashMap<i32, String> = HashMap::new();
+        let mut uncalibrated: Vec<(i32, String)> = Vec::new();
+        if !frames.is_empty() && fingerprinted {
+            let directory_tree = ctx.get_directory_tree().map_err(AppError::db)?;
+            let conn = ctx.db();
+            let conn = conn.lock().map_err(AppError::db)?;
+            let night_boundary = (group_calibration != crate::calibration::CalibrationMode::Off
+                && crate::calibration::exclude_uncalibrated_enabled())
+            .then(|| {
+                crate::server::sky_coverage::catalog_night_boundary(&conn).unwrap_or(12 * 3600)
+            });
+            for frame in &frames {
+                let (fingerprint, gap) = crate::calibration::light_calibration(
+                    &conn,
+                    &frame.path,
+                    Some(&directory_tree),
+                    flat_star_masking,
+                    night_boundary,
+                )
+                .map_err(AppError::db)?;
+                fingerprints.insert(frame.image_id, fingerprint);
+                if let Some(reason) = gap {
+                    uncalibrated.push((frame.image_id, reason));
+                }
+            }
+        }
+        let calibration_excluded = uncalibrated.len();
+        if calibration_excluded > 0 {
+            let left_out: HashMap<i32, &str> = uncalibrated
+                .iter()
+                .map(|(image_id, reason)| (*image_id, reason.as_str()))
+                .collect();
+            frames.retain(|frame| {
+                let Some(reason) = left_out.get(&frame.image_id) else {
+                    return true;
+                };
+                decisions.push(StackFrameDecision {
+                    quality_score: frame.quality_score,
+                    ..excluded_decision_for(frame.image_id, (*reason).to_string())
+                });
+                false
+            });
+        }
+
         frames.sort_by(|left, right| {
             right
                 .quality_score
@@ -2746,24 +2805,20 @@ fn prepare_whole(
         if frames.len() > 1 && request.order == snr::StackFrameOrder::Capture {
             frames[1..].sort_by_key(|frame| (frame.acquired_date.unwrap_or(0), frame.image_id));
         }
-        let fingerprinted = fingerprint_only.is_none_or(|keys| {
-            keys.iter()
-                .any(|key| key.matches(target_id, &filter_name, exposure_group_key.as_deref()))
-        });
-        if !frames.is_empty() && fingerprinted {
-            let directory_tree = ctx.get_directory_tree().map_err(AppError::db)?;
-            let conn = ctx.db();
-            let conn = conn.lock().map_err(AppError::db)?;
-            for frame in &frames {
-                let fingerprint = crate::calibration::selection_fingerprint_with_masking(
-                    &conn,
-                    &frame.path,
-                    Some(&directory_tree),
-                    flat_star_masking,
-                )
-                .map_err(AppError::db)?;
+        // Hashed in the order the frames stack, as before the calibration
+        // check existed, so a channel with nothing left out keeps its
+        // identity and its cached stack.
+        for frame in &frames {
+            if let Some(fingerprint) = fingerprints.get(&frame.image_id) {
                 hasher.update(fingerprint.as_bytes());
                 group_hasher.update(fingerprint.as_bytes());
+            }
+        }
+        for (image_id, reason) in &uncalibrated {
+            for digest in [&mut hasher, &mut group_hasher] {
+                digest.update(b"\0uncalibrated\0");
+                digest.update(image_id.to_le_bytes());
+                digest.update(reason.as_bytes());
             }
         }
         identities.push(GroupIdentity {
@@ -2795,6 +2850,7 @@ fn prepare_whole(
             eligible_frames,
             quality_excluded,
             missing_files,
+            calibration_excluded,
             processed_frames: 0,
             accepted_frames: 0,
             rejected_frames: 0,
@@ -2810,7 +2866,13 @@ fn prepare_whole(
             snr_url: None,
             final_pass: None,
             calibration_progress: None,
-            error: (eligible_frames < 2).then(|| "Fewer than two eligible FITS frames".to_string()),
+            error: (eligible_frames < 2).then(|| match uncalibrated.first() {
+                Some((_, reason)) => format!(
+                    "Fewer than two frames can be calibrated; {calibration_excluded} left out \
+                     ({reason})"
+                ),
+                None => "Fewer than two eligible FITS frames".to_string(),
+            }),
             calibration: crate::calibration::AppliedCalibration::default(),
             input_images,
             frames: decisions,
@@ -3050,10 +3112,17 @@ fn excluded_decision(
     reason: String,
 ) -> StackFrameDecision {
     StackFrameDecision {
-        image_id: image.id,
+        quality_score: Some(scored.quality_score),
+        ..excluded_decision_for(image.id, reason)
+    }
+}
+
+fn excluded_decision_for(image_id: i32, reason: String) -> StackFrameDecision {
+    StackFrameDecision {
+        image_id,
         disposition: "excluded".into(),
         reason: Some(reason),
-        quality_score: Some(scored.quality_score),
+        quality_score: None,
         matched_stars: None,
         registration_rms_pixels: None,
         registration_drift_pixels: None,
@@ -5119,6 +5188,7 @@ mod tests {
             eligible_frames: 2,
             quality_excluded: 0,
             missing_files: 0,
+            calibration_excluded: 0,
             processed_frames: 2,
             accepted_frames: 2,
             rejected_frames: 0,
@@ -5348,6 +5418,126 @@ mod tests {
         assert_eq!(unsplit.public.groups.len(), 1);
         assert!(unsplit.public.groups[0].exposure_group.is_none());
         assert_ne!(unsplit.public.job_id, subset.public.job_id);
+    }
+
+    /// A tiny FITS frame with the readings calibration matching compares.
+    fn write_calibration_test_fits(path: &FsPath, kind: &str, rotation: f64) {
+        use std::io::Write as _;
+        let cards = [
+            "SIMPLE  =                    T".to_string(),
+            "BITPIX  =                   16".to_string(),
+            "NAXIS   =                    2".to_string(),
+            "NAXIS1  =                    4".to_string(),
+            "NAXIS2  =                    4".to_string(),
+            format!("IMAGETYP= '{kind}'"),
+            "FILTER  = 'Ha'".to_string(),
+            "EXPTIME =                300.0".to_string(),
+            "GAIN    =                  100".to_string(),
+            "OFFSET  =                   20".to_string(),
+            "XBINNING=                    1".to_string(),
+            "YBINNING=                    1".to_string(),
+            "CCD-TEMP=                -10.0".to_string(),
+            "TELESCOP= 'Scope'".to_string(),
+            "INSTRUME= 'Camera'".to_string(),
+            format!("ROTATANG= {rotation:20.1}"),
+            "END".to_string(),
+        ];
+        let mut header = Vec::new();
+        for card in cards {
+            let mut bytes = card.into_bytes();
+            bytes.resize(80, b' ');
+            header.extend(bytes);
+        }
+        header.resize(header.len().div_ceil(2880) * 2880, b' ');
+        let mut payload = Vec::new();
+        for _ in 0..16 {
+            payload.extend(1_000i16.to_be_bytes());
+        }
+        payload.resize(2880, 0);
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(&header).unwrap();
+        file.write_all(&payload).unwrap();
+    }
+
+    #[test]
+    fn a_light_the_library_cannot_calibrate_is_left_out_and_says_why() {
+        let directory = tempfile::tempdir().unwrap();
+        let images = directory.path().join("images");
+        std::fs::create_dir(&images).unwrap();
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        conn.execute_batch("INSERT INTO project(Id,name,profileId,guid) VALUES(1,'Project','profile','project-one');
+            INSERT INTO target(Id,name,projectId,active,ra,dec,epochcode,rotation,roi,guid)
+                VALUES(1,'Target',1,1,10,20,0,0,100,'target-one');").unwrap();
+        // Two lights at the flats' angle, one turned away from them.
+        for (id, rotation) in [(1, 94.7), (2, 94.7), (3, 120.0)] {
+            let name = format!("light-{id}.fits");
+            write_calibration_test_fits(&images.join(&name), "LIGHT", rotation);
+            conn.execute(
+                "INSERT INTO acquiredimage(Id,projectId,targetId,gradingStatus,metadata,acquireddate,filtername)
+                 VALUES(?1,1,1,1,?2,?1,'Ha')",
+                rusqlite::params![
+                    id,
+                    serde_json::json!({"FileName": name, "ExposureDuration": 300.0}).to_string()
+                ],
+            )
+            .unwrap();
+        }
+        let mut flats = Vec::new();
+        for index in 0..3 {
+            let path = directory.path().join(format!("flat-{index}.fits"));
+            write_calibration_test_fits(&path, "FLAT", 94.7);
+            flats.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        let tx = conn.transaction().unwrap();
+        crate::calibration::import_calibration_frames(&tx, &flats, Some("profile")).unwrap();
+        tx.commit().unwrap();
+
+        let mut ctx = DatabaseContext::new_for_test(conn);
+        ctx.use_storage_for_test(directory.path());
+        ctx.image_dir_paths = vec![images];
+        let ctx = Arc::new(ctx);
+        let request = |calibration: &str| {
+            serde_json::from_value::<StackPreviewRequest>(
+                serde_json::json!({"image_ids": [1, 2, 3], "calibration": calibration}),
+            )
+            .unwrap()
+        };
+
+        // Off unless a person turns it on: every light stacks.
+        let kept = prepare_job(&ctx, 1, &request("auto")).unwrap();
+        assert_eq!(kept.public.groups[0].eligible_frames, 3);
+        assert_eq!(kept.public.groups[0].calibration_excluded, 0);
+
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                crate::calibration::configure_exclude_uncalibrated(false);
+            }
+        }
+        let _restore = Restore;
+        crate::calibration::configure_exclude_uncalibrated(true);
+        let auto = prepare_job(&ctx, 1, &request("auto")).unwrap();
+        assert_ne!(auto.public.job_id, kept.public.job_id);
+        let group = &auto.public.groups[0];
+        assert_eq!(group.eligible_frames, 2);
+        assert_eq!(group.calibration_excluded, 1);
+        let left_out = group
+            .frames
+            .iter()
+            .find(|frame| frame.image_id == 3)
+            .expect("the turned light is listed");
+        assert_eq!(left_out.disposition, "excluded");
+        assert_eq!(
+            left_out.reason.as_deref(),
+            Some("No matching flat: the nearest Ha flats are 25° off its rotation")
+        );
+
+        // With calibration off nothing is missing, and the job differs.
+        let off = prepare_job(&ctx, 1, &request("off")).unwrap();
+        assert_eq!(off.public.groups[0].eligible_frames, 3);
+        assert_eq!(off.public.groups[0].calibration_excluded, 0);
+        assert_ne!(off.public.job_id, auto.public.job_id);
     }
 
     #[test]

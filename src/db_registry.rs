@@ -664,6 +664,14 @@ pub struct CalibrationSettings {
     /// uses [`crate::calibration::DEFAULT_COMPLETE_DARK_FRAMES`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub complete_dark_frames: Option<usize>,
+    /// How far from a light its flats may have been shot, in days, before
+    /// the light cannot be calibrated. Zero lifts the limit; absent uses
+    /// [`crate::calibration::DEFAULT_FLAT_MAX_AGE_DAYS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flat_max_age_days: Option<f64>,
+    /// Stacks leave out lights that cannot be calibrated. Absent means off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude_uncalibrated: Option<bool>,
 }
 
 /// What the export dialog starts from. The dialog still offers every layout
@@ -1198,6 +1206,8 @@ mod tests {
                 flat_star_masking: Some(true),
                 dark_reach_days: Some(90.0),
                 complete_dark_frames: Some(20),
+                flat_max_age_days: Some(0.0),
+                exclude_uncalibrated: Some(true),
             }),
             ..Default::default()
         };

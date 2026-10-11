@@ -927,7 +927,15 @@ Before handing frames to Seiza, PSF Guard excludes:
 2. Pending images when **Accepted only** is enabled; and
 3. images for which the current sequence analysis has a `regrade_reason`,
    including confirmed cloud/obstruction, off-target, tracking-loss, and
-   corroborated no-solve decisions.
+   corroborated no-solve decisions; and
+4. when **Leave out lights that can't be calibrated** is on (Settings ›
+   Calibration, off by default) and calibration is on or automatic, images
+   the library cannot calibrate properly: no matching flat, no bias or dark,
+   or flats past the age limit,
+   each only where the library holds that kind for the sensor (see
+   [Lights that cannot be calibrated](CALIBRATION_LIBRARY.md#lights-that-cannot-be-calibrated)).
+   They are left out before the reference is chosen, and the card counts
+   them under **can't calibrate**.
 
 The server log names each frame a build leaves out, once as each group
 starts, and each frame Seiza rejects or cannot read, with the reason. The
