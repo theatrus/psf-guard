@@ -1274,11 +1274,10 @@ pub enum Commands {
         #[arg(long)]
         allow_database_management: bool,
 
-        /// Keep Director's planning store at this separate SQLite path instead
-        /// of the default file beside the registry. Requires
-        /// --allow-database-management, which also turns Director on. Creates
-        /// a new store only if the path does not exist; never adopts a catalog
-        /// or arbitrary database.
+        /// Keep the planning store at this separate SQLite path instead of
+        /// the default file beside the registry. Requires
+        /// --allow-database-management. Creates a new store only if the path
+        /// does not exist; never adopts a catalog or arbitrary database.
         #[arg(long, requires = "allow_database_management")]
         director_meta: Option<std::path::PathBuf>,
 

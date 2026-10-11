@@ -741,8 +741,8 @@ async fn run_server_internal(
         director_meta.as_deref(),
         config.registry_path.as_deref(),
     )?;
-    let director = director::Service::configured(director_meta.as_deref())?;
-    if let Some(path) = &director_meta {
+    let director = director::Service::configured_or_off(director_meta.as_deref());
+    if let (Some(path), Some(_)) = (&director_meta, &director) {
         tracing::info!("🧭 Director meta store: {}", path.display());
     }
 

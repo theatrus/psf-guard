@@ -131,7 +131,7 @@ read, below `/api`, as you.
 | `update_exposure_plan`, `create_exposure_plan` | Change or add an exposure plan | yes |
 | `preview_reject_removal` | The rejects removal would take out, with a `digest` | yes, plus management |
 | `apply_reject_removal`, `restore_removed_rejects` | Remove those rejects to the trash with the digest; bring a batch back | yes, plus management |
-| `preview_sync`, `apply_sync` | Preview a pull or push between two open databases; apply it | yes, plus management |
+| `preview_sync`, `apply_sync` | Preview a pull or push between two open databases; apply it | yes |
 | `set_calibration_validity` | Mark calibration frames for later or earlier lights, or clear the mark | yes |
 | `solve_astrometry`, `predict_satellites` | Plate-solve a light; predict satellite crossings and check them in the pixels | yes |
 | `check_uncalibrated_lights` | A project's lights the library cannot calibrate properly, by night, filter and reason, with a `digest` | |
