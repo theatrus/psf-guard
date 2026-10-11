@@ -423,6 +423,11 @@ async fn mcp_endpoint_serves_tools_behind_the_token_and_checks_write_per_tool() 
         "grade_images",
         "start_import",
         "start_wbpp_run",
+        "list_stacks",
+        "get_stack",
+        "get_stack_image",
+        "get_stack_calibration",
+        "explain_calibration",
     ] {
         assert!(names.contains(&expected.to_string()), "{names:?}");
     }
@@ -444,6 +449,18 @@ async fn mcp_endpoint_serves_tools_behind_the_token_and_checks_write_per_tool() 
     let jobs = client.tool("get_jobs", json!({ "database": db_id })).await;
     assert_ne!(jobs["isError"], true, "{jobs}");
     assert!(tool_text(&jobs).contains("quality_backfill"));
+
+    let unknown = client
+        .tool(
+            "get_stack_image",
+            json!({ "database": db_id, "project_id": 1, "job_id": "a".repeat(64), "stretch": "background" }),
+        )
+        .await;
+    assert_eq!(unknown["isError"], true, "{unknown}");
+    assert!(
+        tool_text(&unknown).contains("list_stacks names the current ones"),
+        "{unknown}"
+    );
 
     let missing = client.tool("get_jobs", json!({ "database": "nope" })).await;
     assert_eq!(missing["isError"], true);

@@ -2718,6 +2718,31 @@ pub async fn reject_uncalibrated_lights(
     )?)))
 }
 
+/// `GET /api/db/{db_id}/images/{image_id}/calibration` — why the light got
+/// the masters it did: every frame the library holds for its camera, used,
+/// matching but unused, or refused with the readings that disagree.
+pub async fn get_image_calibration(
+    ctx: DbContext,
+    Path((_db_id, image_id)): Path<(String, i32)>,
+) -> Result<Json<ApiResponse<crate::calibration::CalibrationExplanation>>, AppError> {
+    let (image, filename, target_name) = resolve_image_meta(&ctx, image_id)?;
+    let path = find_fits_file(&ctx, &image, &target_name, &filename)?;
+    let database_path = ctx.database_path.clone();
+    let explanation = tokio::task::spawn_blocking(move || {
+        let conn = open_scheduler_connection_with_flags(
+            &database_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .map_err(|error| anyhow::anyhow!("opening {database_path}: {error}"))?;
+        let light = crate::commands::import::headers::read_frame_meta(&path);
+        crate::calibration::explain_calibration(&conn, &light)
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("calibration explanation task: {error}")))?
+    .map_err(|error| AppError::InternalError(format!("explaining calibration: {error:#}")))?;
+    Ok(Json(ApiResponse::success(explanation)))
+}
+
 /// `PUT /api/db/{db_id}/projects/{project_id}` — update scheduler fields.
 pub async fn update_project_route(
     State(_state): State<Arc<AppState>>,
@@ -4209,15 +4234,31 @@ pub async fn get_images(
 
     let offset = params.offset.unwrap_or(0).max(0) as usize;
     let limit = params.limit.unwrap_or(100).max(0) as usize;
-    let images = db
-        .query_images_scoped(
-            status_filter,
-            params.project_id,
-            params.target_id,
-            Some(limit),
-            offset,
-        )
-        .map_err(AppError::db)?;
+    let filter_name = params
+        .filter_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+    let images = match filter_name {
+        // The scoped query cannot filter by filter name, so page after it.
+        Some(wanted) => db
+            .query_images_scoped(status_filter, params.project_id, params.target_id, None, 0)
+            .map_err(AppError::db)?
+            .into_iter()
+            .filter(|(image, _, _)| image.filter_name.eq_ignore_ascii_case(wanted))
+            .skip(offset)
+            .take(limit)
+            .collect(),
+        None => db
+            .query_images_scoped(
+                status_filter,
+                params.project_id,
+                params.target_id,
+                Some(limit),
+                offset,
+            )
+            .map_err(AppError::db)?,
+    };
 
     let mut exposure_groups = std::collections::HashMap::new();
     let projects: std::collections::HashSet<_> = images

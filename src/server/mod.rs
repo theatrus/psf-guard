@@ -700,6 +700,10 @@ async fn run_server_internal(
         )
         .route("/images/{image_id}/stars", get(handlers::get_image_stars))
         .route(
+            "/images/{image_id}/calibration",
+            get(handlers::get_image_calibration),
+        )
+        .route(
             "/images/{image_id}/annotated",
             get(handlers::get_annotated_image),
         )

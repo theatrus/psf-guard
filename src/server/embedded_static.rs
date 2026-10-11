@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    http::{header, HeaderMap, HeaderValue, Response, StatusCode, Uri},
+    http::{header, HeaderMap, HeaderValue, Method, Response, StatusCode, Uri},
     response::IntoResponse,
 };
 use include_dir::{include_dir, Dir};
@@ -16,7 +16,10 @@ pub fn index_html() -> Option<&'static str> {
     STATIC_DIR.get_file("index.html")?.contents_utf8()
 }
 
-pub async fn serve_embedded_file(uri: Uri) -> impl IntoResponse {
+pub async fn serve_embedded_file(method: Method, uri: Uri) -> impl IntoResponse {
+    if method != Method::GET && method != Method::HEAD {
+        return page_build::method_not_allowed();
+    }
     let path = uri.path().trim_start_matches('/');
 
     // If path is empty, serve index.html
@@ -92,9 +95,26 @@ mod tests {
     }
 
     async fn get(path: &str) -> axum::response::Response {
-        serve_embedded_file(path.parse().unwrap())
+        serve_embedded_file(Method::GET, path.parse().unwrap())
             .await
             .into_response()
+    }
+
+    #[tokio::test]
+    async fn only_get_and_head_reach_the_app() {
+        let posted = serve_embedded_file(Method::POST, "/".parse().unwrap())
+            .await
+            .into_response();
+        assert_eq!(posted.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(posted.headers()[header::ALLOW], "GET, HEAD");
+        let body = axum::body::to_bytes(posted.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("/api/mcp"));
+        let head = serve_embedded_file(Method::HEAD, "/".parse().unwrap())
+            .await
+            .into_response();
+        assert_eq!(head.status(), StatusCode::OK);
     }
 
     #[tokio::test]
