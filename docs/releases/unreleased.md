@@ -1,5 +1,13 @@
 # Unreleased
 
+- Agents see Planning over MCP: `list_plans`, `get_plan`, `get_plan_progress`,
+  `get_framing`, `get_activation`, `list_rigs`, `get_rig_preferences`,
+  `get_rig_scheduling`, `list_templates` and `search_sky`, plus
+  `get_project_scheduler`, `get_calibration_library` and `get_activity`.
+  `api_routes` and `api_get` read any route the UI reads. Every MCP tool now
+  runs through the same API as the UI, as the caller, so roles and database
+  management limit an agent exactly as they limit a person.
+
 - Connecting an agent takes one step. **Settings › Users › API tokens ›
   Connect an agent** mints a token and shows the setup to paste for Claude
   Code and for Codex, with this server's MCP URL; a new token shows the same.
