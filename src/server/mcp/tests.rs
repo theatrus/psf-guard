@@ -128,10 +128,13 @@ async fn without_database_management_activation_is_refused_as_in_the_app() {
     tool(&app, "list_plans", json!({})).await.unwrap();
 }
 
-/// A server with one Target Scheduler catalog: a project, a target, a
-/// template and an exposure plan.
-fn catalog_state(management: bool) -> Arc<AppState> {
-    let conn = rusqlite::Connection::open_in_memory().unwrap();
+/// A server with one Target Scheduler catalog on disk: a project, a target,
+/// a template and an exposure plan, and an (empty) image folder.
+fn catalog_state(dir: &tempfile::TempDir, management: bool) -> Arc<AppState> {
+    let path = dir.path().join("rig.sqlite");
+    let images = dir.path().join("images");
+    std::fs::create_dir_all(&images).unwrap();
+    let conn = rusqlite::Connection::open(&path).unwrap();
     crate::ts_schema::apply_schema(&conn).unwrap();
     conn.execute_batch(
         "INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (1,'p','Bubble','',1,1,'pg');
@@ -140,14 +143,32 @@ fn catalog_state(management: bool) -> Arc<AppState> {
          INSERT INTO exposureplan (Id,profileId,exposure,desired,acquired,accepted,targetid,exposureTemplateId,guid) VALUES (1,'p',300,50,10,8,1,1,'lg');",
     )
     .unwrap();
-    let state = AppState::new_for_test(conn);
+    drop(conn);
+    let catalog = crate::server::database_context::DatabaseContext::new(
+        "rig".into(),
+        "Rig".into(),
+        path.display().to_string(),
+        vec![images.display().to_string()],
+        None,
+        None,
+        None,
+        dir.path().join("cache"),
+    )
+    .unwrap();
+    let state = AppState::new_for_test(rusqlite::Connection::open_in_memory().unwrap());
+    {
+        let mut databases = state.databases.write().unwrap();
+        databases.clear();
+        databases.insert(catalog.id.clone(), Arc::new(catalog));
+    }
     state.set_allow_database_management(management);
     Arc::new(state)
 }
 
 #[tokio::test]
 async fn an_agent_edits_the_scheduler_and_meets_the_management_gate() {
-    let state = catalog_state(false);
+    let dir = tempfile::tempdir().unwrap();
+    let state = catalog_state(&dir, false);
     let app = app(&state);
     let db = state.all_databases()[0].id.clone();
 
@@ -184,6 +205,26 @@ async fn an_agent_edits_the_scheduler_and_meets_the_management_gate() {
     .await
     .unwrap_err();
     assert_eq!(empty, "No frames match that project, target and filter");
+
+    // No frames to read, so none that cannot be calibrated; the digest
+    // still names the (empty) list.
+    let uncalibrated = tool(
+        &app,
+        "check_uncalibrated_lights",
+        json!({ "database": db, "project_id": 1 }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(uncalibrated["lights"], json!([]));
+    assert_eq!(uncalibrated["digest"].as_str().unwrap().len(), 64);
+    assert!(tool(
+        &app,
+        "reject_uncalibrated_lights",
+        json!({ "database": db, "project_id": 1, "digest": "stale" }),
+    )
+    .await
+    .unwrap_err()
+    .contains("changed since the check"));
 
     // Removing rejects needs database management, as in the app.
     let refused = tool(

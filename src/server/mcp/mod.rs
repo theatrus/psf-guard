@@ -542,6 +542,16 @@ pub struct ValidityArgs {
     pub direction: String,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RejectUncalibratedArgs {
+    /// Database id (slug) or name.
+    pub database: String,
+    pub project_id: i32,
+    /// The `digest` from `check_uncalibrated_lights`; refuses if the list
+    /// changed since.
+    pub digest: String,
+}
+
 /// A database by id or name, or the tool error that names the known ones.
 macro_rules! database {
     ($self:ident, $name:expr) => {
@@ -1838,6 +1848,46 @@ impl PsfGuardMcp {
         );
         self.answer(&ctx, Method::POST, &path, Some(json!({})))
             .await
+    }
+
+    #[tool(
+        description = "Every light of a project, rejected ones aside, that the calibration library cannot calibrate properly: no matching flat, no bias or dark, or flats past the age limit, each where the library holds that kind for the camera. With each light's night, filter and reason, and a `digest`. Reads every light's header; writes nothing."
+    )]
+    async fn check_uncalibrated_lights(
+        &self,
+        Parameters(args): Parameters<ProjectArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!(
+            "/db/{}/projects/{}/calibration-report/rejects",
+            api::encode(&db.id),
+            args.project_id
+        );
+        self.answer(&ctx, Method::GET, &path, None).await
+    }
+
+    #[tool(
+        description = "Reject the lights check_uncalibrated_lights listed, with the reason, so Target Scheduler shoots them again. Needs its `digest`; refuses if the list changed since. Returns the grades it replaced. Needs write access."
+    )]
+    async fn reject_uncalibrated_lights(
+        &self,
+        Parameters(args): Parameters<RejectUncalibratedArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!(
+            "/db/{}/projects/{}/calibration-report/rejects",
+            api::encode(&db.id),
+            args.project_id
+        );
+        self.answer(
+            &ctx,
+            Method::POST,
+            &path,
+            Some(json!({ "digest": args.digest })),
+        )
+        .await
     }
 }
 

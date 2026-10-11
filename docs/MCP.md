@@ -134,6 +134,8 @@ read, below `/api`, as you.
 | `preview_sync`, `apply_sync` | Preview a pull or push between two open databases; apply it | yes, plus management |
 | `set_calibration_validity` | Mark calibration frames for later or earlier lights, or clear the mark | yes |
 | `solve_astrometry`, `predict_satellites` | Plate-solve a light; predict satellite crossings and check them in the pixels | yes |
+| `check_uncalibrated_lights` | A project's lights the library cannot calibrate properly, by night, filter and reason, with a `digest` | |
+| `reject_uncalibrated_lights` | Reject them with that digest, so Target Scheduler shoots them again | yes |
 
 Jobs return at once. Poll `get_jobs` for progress.
 
