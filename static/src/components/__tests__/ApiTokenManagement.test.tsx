@@ -82,6 +82,35 @@ describe('ApiTokenManagement', () => {
     expect(screen.queryByText('Copy this token now.')).not.toBeInTheDocument();
   });
 
+  it('connects an agent in one step: a read-only token and the setup for Claude Code and Codex', async () => {
+    let created: Record<string, unknown> | null = null;
+    const token = 'psfg_' + 'b'.repeat(64);
+    server.use(
+      http.get('/api/auth/tokens', () => HttpResponse.json(ok([]))),
+      http.post('/api/auth/tokens', async ({ request }) => {
+        created = await request.json() as Record<string, unknown>;
+        const summary: AuthTokenSummary = {
+          id: 'agent1', username: 'editor', label: String(created.label), role: 'read_only', read_only: true, created_at: 1_758_100_000,
+        };
+        return HttpResponse.json(ok({ token, summary, tokens: [summary] }));
+      }),
+    );
+    render(<ApiTokenManagement currentUsername="editor" isEditor />, { wrapper: wrapper() });
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect an agent' }));
+    expect(screen.getByLabelText('Let it grade and start jobs')).not.toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Create token' }));
+
+    await waitFor(() => expect(created).not.toBeNull());
+    expect(created).toMatchObject({ read_only: true });
+    expect(String(created!.label)).toMatch(/^agent \d{4}-\d{2}-\d{2}$/);
+    const url = `${window.location.origin}/api/mcp`;
+    expect(await screen.findByText(`claude mcp add --transport http psf-guard ${url} --header "Authorization: Bearer ${token}"`)).toBeInTheDocument();
+    const codex = screen.getByText((_, element) => element?.tagName === 'PRE' && (element.textContent ?? '').includes('[mcp_servers.psf-guard]'));
+    expect(codex.textContent).toContain(`url = "${url}"`);
+    expect(codex.textContent).toContain('bearer_token_env_var = "PSF_GUARD_TOKEN"');
+    expect(codex.textContent).not.toContain(token);
+  });
+
   it('hides the user field from a viewer', async () => {
     server.use(http.get('/api/auth/tokens', () => HttpResponse.json(ok([]))));
     render(<ApiTokenManagement currentUsername="viewer" isEditor={false} />, {

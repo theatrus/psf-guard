@@ -9,6 +9,11 @@
   Scheduler shoots them again. Turn on **Leave out lights that can't be
   calibrated** to keep them out of stack previews; the stack card counts them
   under **can't calibrate**, and each frame says why.
+- Connecting an agent takes one step. **Settings › Users › API tokens ›
+  Connect an agent** mints a token and shows the setup to paste for Claude
+  Code and for Codex, with this server's MCP URL; a new token shows the same.
+  A server without accounts has a **Settings › Agents** tab with the setup
+  for this machine.
 - Agents can look into stacks over MCP. `list_stacks` lists a project's
   latest stacks; `get_stack` gives each frame's registration and, per night,
   whether the frames were dithered; `get_stack_calibration` lists the masters
