@@ -147,11 +147,12 @@ impl BoundGeometry {
                 project_maximum_degrees: preferences.maximum_altitude_degrees,
                 horizon_offset_degrees: preferences.horizon_offset_degrees,
             };
+            // A hit copies the cached windows; a miss keeps a copy of its own.
             let computed = if let Some((_, _, computed)) = cache
                 .iter()
                 .find(|(id, previous, _)| id == &resolved.target.id && *previous == limits)
             {
-                computed
+                computed.clone()
             } else {
                 let position = IcrsPosition {
                     ra_degrees: f64::from(resolved.target.icrs_ra_mas) / f64::from(MAS_PER_DEGREE),
@@ -176,27 +177,26 @@ impl BoundGeometry {
                 )
                 .map_err(Error::Geometry)?;
                 let computed = intersect(&altitude.windows, &meridian.windows)?;
-                cache.push((resolved.target.id.clone(), limits, computed));
-                &cache.last().unwrap().2
+                cache.push((resolved.target.id.clone(), limits, computed.clone()));
+                computed
             };
-            let mut eligible = intersect(&allocated, computed)?;
+            let mut eligible = intersect(&allocated, &computed)?;
             non_lunar_windows.insert(goal.id.clone(), eligible.clone());
             if let Some(policy) = &resolved.recipe.moon
                 && policy.enabled
             {
-                if moon_track.is_none() {
-                    moon_track = Some(
-                        crate::moon::MoonTrack::new(
-                            constraints.rig.site,
-                            constraints.rig.orientation,
-                            span,
-                        )
-                        .map_err(Error::Geometry)?,
-                    );
-                }
+                // Built once, on the first Moon-sensitive goal.
+                let track = match moon_track.take() {
+                    Some(track) => track,
+                    None => crate::moon::MoonTrack::new(
+                        constraints.rig.site,
+                        constraints.rig.orientation,
+                        span,
+                    )
+                    .map_err(Error::Geometry)?,
+                };
                 let lunar = moon_track
-                    .as_ref()
-                    .unwrap()
+                    .insert(track)
                     .windows(
                         policy,
                         IcrsPosition {
