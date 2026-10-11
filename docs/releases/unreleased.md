@@ -1,5 +1,8 @@
 # Unreleased
 
+- Calibration settings have their own **Settings › Calibration** tab, where
+  the guides already pointed; they used to sit under Setups.
+
 - Find the lights the calibration library cannot calibrate properly: no
   matching flat, no bias or dark, or flats more than 60 days away
   (**Settings › Calibration › Flat age limit**; 0 lifts it). Each rule only
@@ -31,9 +34,10 @@
   The server no longer lets the browser keep the page for an hour, so a reload
   always brings the new version instead of the old page and scripts.
 
-- Remove truly bad rejects. In Settings › Databases, **Remove rejects**
-  previews the frames rejected at least N days ago (7 by default), then
-  takes them out of the catalog: their files and copies wait in a
+- Remove truly bad rejects. In Settings › Databases, **Purge Rejects**
+  beside a database's **Import** opens a dialog that previews the frames
+  rejected at least N days ago (7 by default), then takes them out of the
+  catalog: their files and copies wait in a
   `.psf-guard-trash` folder, and **Restore** brings a batch back until the
   trash is emptied, 14 days later by default; then **Purge** forgets the
   batch's saved records. The CLI has the same steps (`remove-rejects`,
