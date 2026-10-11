@@ -6,7 +6,7 @@ let original: CalibrationSettings;
 
 async function openCalibration(page: Page) {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('tab', { name: 'Setups', exact: true }).click();
+  await page.getByRole('tab', { name: 'Calibration', exact: true }).click();
   return page.locator('.calibration-matching-settings');
 }
 
