@@ -64,7 +64,7 @@ pub enum ExportPlacementArg {
     Reflink,
     /// Symbolic links to the originals, which may sit on a network mount.
     Symlink,
-    /// Place nothing: the WBPP runner names the originals where they are.
+    /// Place nothing: the WBPP runner points to the originals where they are.
     Reference,
 }
 
@@ -420,11 +420,11 @@ pub enum Commands {
 
         /// How the frames land. `symlink` points the tree at the originals,
         /// which may be on a network mount; `reference` places nothing and
-        /// writes a WBPP runner that names them where they are.
+        /// writes a WBPP runner that points to them where they are.
         #[arg(long, value_enum, default_value_t = ExportPlacementArg::Copy)]
         placement: ExportPlacementArg,
 
-        /// For `--placement reference`: the folder the runner names frames
+        /// For `--placement reference`: the folder the runner finds frames
         /// below, as this machine sees it. Defaults to the frames' common
         /// parent.
         #[arg(long)]
@@ -609,7 +609,7 @@ pub enum Commands {
     ///
     /// Without `--apply` this only shows what would be removed and why any
     /// reject stays. Only frames rejected at least `--days` days ago
-    /// qualify; frames a collaboration report names, and files another row
+    /// qualify; frames in a collaboration report, and files another row
     /// also uses, stay. See `docs/design/reject-removal.md`.
     RemoveRejects {
         /// Slug of the database (from the registry) to operate on.
@@ -1176,8 +1176,8 @@ pub enum Commands {
     /// pull` mirrors structure + captured images from a telescope DB into your
     /// local DB (preserving local grading), `sync planning` pushes planning
     /// settings back without changing telescope capture history, and `sync
-    /// grades` pushes grading decisions back. Use each named direction instead
-    /// of reversing one, which could overwrite work.
+    /// grades` pushes grading decisions back. Use the command for each direction
+    /// instead of reversing one, which could overwrite work.
     Sync {
         #[command(subcommand)]
         kind: SyncKind,

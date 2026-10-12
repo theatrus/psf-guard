@@ -210,7 +210,7 @@ fn open<'a>(
         .find(|entry| entry.id == database)
         .with_context(|| {
             format!(
-                "remote access names database '{database}', which is not registered. \
+                "remote access is set for database '{database}', which is not registered. \
                  Configured: {known}"
             )
         })?;

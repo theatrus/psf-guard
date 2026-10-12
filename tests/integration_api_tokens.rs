@@ -459,7 +459,7 @@ async fn mcp_endpoint_serves_tools_behind_the_token_and_checks_write_per_tool() 
         .await;
     assert_eq!(unknown["isError"], true, "{unknown}");
     assert!(
-        tool_text(&unknown).contains("list_stacks names the current ones"),
+        tool_text(&unknown).contains("list_stacks gives the current ones"),
         "{unknown}"
     );
 

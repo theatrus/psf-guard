@@ -103,13 +103,13 @@ chip, from any view) draws each rig that reports to Director on the map
 where it points now: a green ring while it exposes, gold while it does
 anything else, dashed red with "(quiet)" when it has stopped talking or
 "(old report)" when it talks but its last status is over ten minutes old.
-A dotted ring labelled "at target" is a place taken from the target the
-rig names, not a position its mount reported. Saved pictures leave the
-rigs out. A list beside the map names each rig, whether it is
+A dotted ring labelled "at target" sits on the rig's target, not on a
+position its mount reported. Saved pictures leave the
+rigs out. A list beside the map shows each rig, whether it is
 online, and what it says it is doing; choosing one turns the map to it and
 comes in close. The full Live table sits under the timeline. A rig is
-placed from the mount position its plugin reports, or failing that from the
-target it names; see the status payload in [DIRECTOR.md](DIRECTOR.md).
+placed from the mount position its plugin reports, or failing that at its
+target; see the status payload in [DIRECTOR.md](DIRECTOR.md).
 The choice lives in the URL (`live=1`).
 
 ## Saving a picture

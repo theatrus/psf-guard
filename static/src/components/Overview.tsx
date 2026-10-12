@@ -229,7 +229,7 @@ export default function Overview() {
       alert(
         `Exported ${label}: ${
           referenced > 0 && placed === 0
-            ? `${referenced} file(s) named in place`
+            ? `${referenced} file(s) left in place`
             : `${placed} file(s) placed`
         }` +
           `${summary.linked > 0 ? ` (${summary.linked} hardlinked)` : ''}` +

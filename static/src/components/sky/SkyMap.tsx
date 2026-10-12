@@ -490,7 +490,7 @@ export default function SkyMap({
                   data-rig={rig.name}
                   data-source={rig.source ?? undefined}
                 >
-                  <title>{`${rig.name}: ${rig.now}${rig.staleReason ? ` (${rig.staleReason})` : ''}. ${rig.source === 'pointing' ? 'Where its mount reports it points.' : `At the centre of ${rig.targetName}, the target it names; not a reported position.`}`}</title>
+                  <title>{`${rig.name}: ${rig.now}${rig.staleReason ? ` (${rig.staleReason})` : ''}. ${rig.source === 'pointing' ? 'Where its mount reports it points.' : `At the centre of ${rig.targetName}, not a reported position.`}`}</title>
                   <circle cx={at.x} cy={at.y} r={r} vectorEffect="non-scaling-stroke" />
                   <path
                     d={`M${at.x - 1.8 * r} ${at.y}H${at.x - 1.1 * r}M${at.x + 1.1 * r} ${at.y}H${at.x + 1.8 * r}M${at.x} ${at.y - 1.8 * r}V${at.y - 1.1 * r}M${at.x} ${at.y + 1.1 * r}V${at.y + 1.8 * r}`}

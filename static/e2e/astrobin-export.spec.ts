@@ -139,7 +139,7 @@ test('Settings shows each database its own filter map with night ranges', async 
   await page.goto('/');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const summary = page.locator('.astrobin-filter-summary');
-  await expect(summary).toContainText('none named yet');
+  await expect(summary).toContainText('none yet');
   await summary.getByRole('button', { name: 'Edit filters' }).click();
 
   const dialog = page.locator('.astrobin-filter-map');

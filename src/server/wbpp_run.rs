@@ -1273,7 +1273,7 @@ async fn run(
         let hint = errors
             .last()
             .cloned()
-            .unwrap_or_else(|| "WBPP's log names no error; read it in the run folder".into());
+            .unwrap_or_else(|| "WBPP's log shows no error; read it in the run folder".into());
         anyhow::bail!("WBPP wrote no master: {hint}");
     }
     if !finished {

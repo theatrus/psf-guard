@@ -84,7 +84,7 @@ needs the server's database-management permission.
 
 A frame qualifies when it is rejected, has a GUID, was dated at least N
 days ago, and lies in the chosen scope (database, project or target). The
-preview names each frame left out and why:
+preview lists each frame left out and why:
 
 - it appears in a collaboration report or capture (a later correction must
   include it);

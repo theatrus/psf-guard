@@ -470,7 +470,7 @@ the `psf_guard_director_*` side tables) are plain SQL with type CHECKs, never
 their SQLite does not know would make the whole schema unreadable to them.
 Sync moves Target Scheduler tables only, so identity spreads by file copy
 alone; the Director treats two registered files with one identity as one
-catalog, names the copy and plans with the first by slug.
+catalog: it plans with the first by slug and reports the other as a copy.
 
 Keep stable catalog lineage for moves, renames and synchronized copies. A copy
 of a database does not become a second telescope or earn extra project credit.
@@ -505,7 +505,7 @@ retryable. Do not silently rewrite a user's mappings or invent rigs at check-in.
 
 The user owns one PSF Guard project. Adding a rig gives that rig a contribution
 plan for the same project; it does not require the user to create another
-independent project and roll it up manually later. "Global project" names the
+independent project and roll it up manually later. "Global project" means the
 coordinator's stable identity in the implementation, not a separate product
 concept or a second list of projects users must maintain.
 
@@ -531,7 +531,7 @@ the shared project identity. Imported TS projects retain their source GUIDs and
 explicit adapter links, but those rows are not a requirement to create another
 user-facing project. An existing project can gain planning and rig participation
 through a reviewed adoption workflow that reuses its data and identity links.
-Never silently combine same-named projects or infer rig ownership from a name.
+Never silently combine projects with the same name or infer rig ownership from a name.
 Shared GUIDs are identity: the same project synced to two rig databases is one
 plan with two rigs, taken in without an operator step.
 
@@ -602,7 +602,7 @@ split. They narrow the sections above for this stage; they do not replace them.
   while connected is welcome but never required for execution.
 - **A remote rig is a pulled copy plus a peer.** A rig at another site is
   represented here by the database pulled from that site's PSF Guard, a
-  registered Sync peer. Its rig profile names the peer; activation writes the
+  registered Sync peer. Its rig profile points to the peer; activation writes the
   copy, then hands the planning tables to the peer through Sync's planning
   push, so the same GUIDs exist in both files and the remote Target Scheduler
   runs them. The remote PSF Guard stores those rows; it does not plan them.
@@ -644,16 +644,16 @@ pairing for program inspection and capture/status reporting; see the exact
 [pairing contract](../DIRECTOR.md#pair-a-director-client). Equipment registration
 remains operator-managed. Sync keys and operator tokens are not plugin enrollment.
 Every request
-names the coordinator instance, catalog and rig UUIDs and is refused on a
+carries the coordinator instance, catalog and rig UUIDs and is refused on a
 mismatched tuple even when the slug exists.
 
 | Endpoint | Owner | Purpose |
 | --- | --- | --- |
 | `GET /rigs/{rig}/program` | backend | The current preview for the rig, built from its activated plans and reported equipment: core `Assignment` (stable 24 h validity, one goal per eligible activated exposure plan with live `accepted`) and `Program`, `links` joining each goal to its project, objective, contribution, panel, source project GUID, target GUID and exposure plan GUID, `rig` context (site, horizon, limits, rotation), and `omitted` reasons. Unchanged pulls retain exact content across restart. `If-None-Match` gives `304`; `422` until equipment and executable activated work exist. Not an acquisition lease. |
 | `PUT /rigs/{rig}/equipment` | backend, operator-authenticated only | Reports core `Configuration`, optional complete `filter_names` keyed by its filter IDs, optics, site, horizon and limits into the rig profile with `source: plugin`. The tuple must match the server's `catalog_rig` binding (`403` otherwise); an identical report is a no-op. Paired clients do not yet have this write permission. Activation will later freeze setup revisions from the profile and mark active plans stale when it changes. |
-| `POST /rigs/{rig}/checkin` | backend merged; plugin next | One ledger's `ExecutionEvent` page (≤256, ascending, verbatim) with the held `program_revision`; the reply acknowledges `acknowledged_through` for that ledger, names duplicates and conflicts per sequence, and says `program_changed`. Saved receipts feed `pending` in the next pull. Grade application and replacement-assignment proposals are still open. |
+| `POST /rigs/{rig}/checkin` | backend merged; plugin next | One ledger's `ExecutionEvent` page (≤256, ascending, verbatim) with the held `program_revision`; the reply acknowledges `acknowledged_through` for that ledger, lists duplicates and conflicts per sequence, and says `program_changed`. Saved receipts feed `pending` in the next pull. Grade application and replacement-assignment proposals are still open. |
 | `POST /rigs/{rig}/framing-cache` | planned, lower priority | The plugin uploads entries of a rig's own framing cache. Whole-sky imagery no longer needs it: the server reads N.I.N.A.'s downloadable `FramingAssistantCache` sets from `<cache>/director/sky-maps` (`psf-guard sky-maps install`) and renders any view from their tiles (`src/sky_maps.rs`). What remains for the upload is a rig's plate-solved captures. |
-| `POST /rigs/{rig}/status` | backend merged; plugin next | Coalesced live status per session, newest wins, late reports refused; `GET /rigs/status` is the operator view. Loss of it changes connectivity only. The Live table reads these payload fields when present: `phase` (or `state`), `target_name` (or `target`), `operation` with `operation_started_ms`, `wait_reason`, `safety`, `queue_depth`, `errors` (or `error`); send them under those names. The Sky's Live view also reads `pointing: { ra_degrees, dec_degrees }`, the mount's current position in ICRS (J2000) **degrees**: right ascension 0–360, not N.I.N.A.'s hours. Convert with the mount's reported `EquatorialSystem`: JNow coordinates go to J2000, J2000 ones pass through. Send it with every report while the mount is connected and leave it out when it is not. Without it the Sky marks the rig at the centre of the Target Scheduler *target* named in `target_name` (the target row, one per mosaic panel, not the project), matched without regard to case among that rig's plan targets, and labels the place as taken from the target. The chip and the Sky count a rig as exposing only for `phase` values `exposing`, `imaging` or `capturing`; send one of those while a light frame is being taken. |
+| `POST /rigs/{rig}/status` | backend merged; plugin next | Coalesced live status per session, newest wins, late reports refused; `GET /rigs/status` is the operator view. Loss of it changes connectivity only. The Live table reads these payload fields when present: `phase` (or `state`), `target_name` (or `target`), `operation` with `operation_started_ms`, `wait_reason`, `safety`, `queue_depth`, `errors` (or `error`); send them under those names. The Sky's Live view also reads `pointing: { ra_degrees, dec_degrees }`, the mount's current position in ICRS (J2000) **degrees**: right ascension 0–360, not N.I.N.A.'s hours. Convert with the mount's reported `EquatorialSystem`: JNow coordinates go to J2000, J2000 ones pass through. Send it with every report while the mount is connected and leave it out when it is not. Without it the Sky marks the rig at the centre of the Target Scheduler *target* in `target_name` (the target row, one per mosaic panel, not the project), matched without regard to case among that rig's plan targets, and labels the place as taken from the target. The chip and the Sky count a rig as exposing only for `phase` values `exposing`, `imaging` or `capturing`; send one of those while a light frame is being taken. |
 
 The plugin must not read TS tables from the rig database as its planning
 input and must not call an endpoint before its row above says it exists.
@@ -694,7 +694,7 @@ input and must not call an endpoint before its row above says it exists.
    exposure plans with the side tables above, record the activation in meta
    schema 9, and link new projects. `GET /rigs/{rig}/program` serves the
    core program from those rows and the plugin's equipment report. Remote
-   rigs done: a rig profile names a registered Sync peer (`peer_id`), Apply
+   rigs done: a rig profile points to a registered Sync peer (`peer_id`), Apply
    pushes the rig database's planning tables to that peer with Sync's
    planning push after the local commit, `POST
    /projects/{id}/activation/push` resends the last activation, and every
@@ -1031,7 +1031,7 @@ remain attached to the originating rig/setup and contribution.
 A mosaic is one project whose framing has more than one panel. Two things
 follow from the rig split above and from how rigs differ in field size:
 
-- **Panels are owned per rig.** A contribution names the panels its rig
+- **Panels are owned per rig.** A contribution lists the panels its rig
   shoots (`panel_ids` in the plan draft; empty means every panel). A wide
   rig may cover the whole target as one panel while a long-focus rig takes
   a subset, or two similar rigs split the grid. The plan editor gives each
@@ -1052,7 +1052,7 @@ follow from the rig split above and from how rigs differ in field size:
 
 Done: per-rig panel selection in the plan editor (a panel chooser per rig,
 every panel by default), activation writing only the targets and plans a rig
-owns and naming uncovered panels, and per-rig totals scaled by panels. The
+owns and listing uncovered panels, and per-rig totals scaled by panels. The
 mosaic preview is done as a framing-view layer: `GET /projects/{id}/mosaic`
 finds each activated panel's latest stack preview in its rig's cache through
 the Sky page's placement code (reference-frame solve composed with the
@@ -1088,7 +1088,7 @@ them registered to the imagery across projections, RA wrap and the poles.
 
 The workflow must:
 
-- Offer named survey/band choices and comparison by opacity or blinking without
+- Offer survey/band choices and comparison by opacity or blinking without
   changing the saved target, position angle, panel IDs or any rig's footprint.
 - Show attribution, survey identifier, bandpass, resolution and available
   coverage. Record survey identity/version and display choices with the draft,
@@ -1398,7 +1398,7 @@ of "taken over"; and a row activation would take over without a GUID
 refuses the rig until Fill in GUIDs repairs it, instead of a GUID minted in
 one copy.
 
-**Director names targets.** Names help, so they are planned: activation sets
+**Director sets target names.** Names help, so they are planned: activation sets
 each target's name to the plan's, on existing rows as well as new ones, and
 "matches" compares names. Rows are found by GUID first, so a rename never
 loses a row.
@@ -1447,7 +1447,7 @@ the intended architecture, not the current catalog implementation. Existing
 catalog code still reads/writes TS-shaped tables; no migration has shipped.
 
 The future Settings/UI workflow is **Import Target Scheduler database** into a
-native catalog, then optionally retain a named TS sync connection. Import alone
+native catalog, then optionally retain a TS sync connection. Import alone
 does not grant ongoing writeback. That connection identifies source provenance,
 destination catalog, supported schema version, selected data classes and
 direction, conflict policy, last successful sync and pending differences.
@@ -1723,7 +1723,7 @@ fixed-filter rig needs no wheel, for example, while a required disconnected
 guider or missing configured safety monitor is not silently ignored.
 
 Resolve each policy as Director default, explicit user configuration, or a
-named native/plugin hook. Show the effective owner and prevent double execution
+native/plugin hook. Show the effective owner and prevent double execution
 (two autofocus, dither or safety policies for one boundary). Defaults use actual
 profile/capability settings and conservative timing estimates, not universal
 hidden constants or a fabricated safe state. With no safety source configured,
@@ -1734,7 +1734,7 @@ limits but cannot override native safety, flip handling or operator settings.
 This is a phase-2 requirement. Plugin
 [#31](https://github.com/theatrus/psf-guard-director-nina-plugin/pull/31)
 exports a **Director Session
-configuration preview** with the seven named instruction editors, native
+configuration preview** with the seven instruction editors, native
 triggers/conditions, grouped local-policy fields and display-only session status.
 The later prepared-target increment connects this editor to a public executor;
 automatic scheduling remains gated. Exporting the editor alone was not admission.
@@ -2535,7 +2535,7 @@ recoverable failures, not "Working". Define page/byte limits and cancellation
 between committed pages, so large backlogs resume without resending everything.
 
 On reconnect, account for old-revision captures before activating replacement
-intent and allocation. An acknowledgement must name the exact accepted event
+intent and allocation. An acknowledgement must give the exact accepted event
 cursors and grading/configuration revisions used in the next baseline; retries
 cannot add local pending credit twice. Record unsupported/conflicting events
 without discarding them or falsely acknowledging them as applied. Do not silently
@@ -2563,7 +2563,7 @@ treat TS tables as the planner's internal schema.
 | Central reporting | Coalesced live status is separate from durable capture/preparation receipts. Network errors update connectivity only; they do not fail an otherwise authorized local exposure or erase evidence. `POST /rigs/{rig}/status` and `GET /rigs/status` exist, with contact records and the Live table. | Optional bounded session sender is implemented. Authorization or malformed acknowledgements stop work; transport outages may continue under the explicit offline policy. |
 | Batch reconciliation | Bounded independent event pages, exact feed cursors, idempotent acknowledgements, grading/configuration revisions and replacement assignment proposal. Manual, sequencer and automatic check-ins use the same implementation. `/checkin` and `/operations` store capture and preparation pages independently. | Both feeds and production entry points are implemented without deleting journal evidence. Grade application and replacement assignment proposal remain open. |
 
-The planning-flow endpoint table names the intended `/api/director/v1`
+The planning-flow endpoint table lists the intended `/api/director/v1`
 interfaces and records which are still planned. Finalize their wire contracts
 with implementation; the plugin must not silently call an unimplemented endpoint or
 reuse the operator-only metadata API for rig credentials. Keep browser/operator
@@ -2591,7 +2591,7 @@ must prove authorization and evidence validity. No connection, startup hook or s
 state, extend expiry, reset attempt budgets or revive an uncertain operation.
 
 Preparation/capture receipts are journaled before delivery. A page acknowledgement
-must name its coordinator, catalog, rig, ledger, feed and highest contiguous
+must give its coordinator, catalog, rig, ledger, feed and highest contiguous
 committed cursor. Never acknowledge beyond the page, across feeds or across
 ledgers. A lost reply is retried with identical event IDs; late old-session
 status cannot overwrite current live state. The local queue retains evidence
@@ -2729,7 +2729,7 @@ interactive editor (or the explicitly trusted local operator) calls
 `allocation_id` (caller UUID for retry), `client_id`, and the reviewed
 `preview_revision`. The handler recompiles/checks that revision, verifies the
 live catalog/rig/client/profile binding, and freezes the full envelope. The
-shared core validates the program. The new assignment is named
+shared core validates the program. The new assignment is called
 `allocation-{allocation_id}`, distinct from the preview ledger identity.
 
 The response has `schema_version: 1`, those scope IDs plus `profile_id`,
@@ -2741,7 +2741,7 @@ only the client explicitly selected by the operator can fetch it, using its
 normal bearer token and profile header. Other clients, even a second pairing
 for the same profile, are refused. Paired clients cannot POST admission.
 
-Check-in/status `program_revision` continues to name the source preview revision
+Check-in/status `program_revision` continues to point to the source preview revision
 for change hints, not the new allocation snapshot revision. Reports can include
 allocation identity/revision in their status payload, and capture events retain
 the allocated assignment identity. A plan-change hint never replaces a grant.
@@ -3999,7 +3999,7 @@ programs. Geometry can change under a new setup UUID without inventing a new
 equipment fingerprint. Changed content requires a new snapshot/setup ID;
 registering the same ID again is idempotent only for unchanged content. Bounded ID
 inventories support discovery, but neither their ordering nor a display name selects a
-"latest" configuration. Planning must name an explicit revision.
+"latest" configuration. Planning must give an explicit revision.
 
 Equipment, site, horizon and altitude validation use the shared core. Snapshot
 payloads must fit its request-size bound; oversize horizons are refused, never
@@ -4044,7 +4044,7 @@ membership does not authorize stacking them together.
 `BoundProject` owns and validates a bounded snapshot. Target and recipe checks
 reuse the execution program's validators; conflicting meanings for one target
 or configuration-scoped recipe ID are refused. Resolving a contribution requires
-the explicitly named setup and configuration, never a display-name match or a
+an explicit setup and configuration, never a display-name match or a
 "latest" lookup. The host must load that immutable setup from trusted storage;
 resolution validates capabilities, not the authenticity of caller-supplied
 configuration data. An objective with no contribution is not yet a fully bound
@@ -4067,7 +4067,7 @@ different project returns a conflict. A changed plan needs a new snapshot ID.
 There is no implicit latest/active plan pointer or assignment issuance.
 
 Reads use one SQLite snapshot and validate both the bounded payload and exact
-reference inventory. Same-named projects and rigs remain distinct. Listings are
+reference inventory. Projects and rigs with the same name remain distinct. Listings are
 bounded, project-scoped ID pages, not revision chronology. Backup/restore retains
 the plan, referenced configurations and instance identity. Upgrading schema 1
 or 2 to 3 is transactional; older backups remain read-only until the restored
@@ -4558,7 +4558,7 @@ the user copies by hand. When this is taken up, alongside Phase 6:
   can be told apart from two edits;
 - sync is a compare-and-set exchange of records, not a file copy, over the
   same HTTP the plugin already pulls programs through, with the last writer
-  named and a conflict surfaced rather than merged silently;
+  recorded and a conflict surfaced rather than merged silently;
 - each record type says which fields travel and which stay local (a rig's
   site travels; its catalog path does not), and activation never follows a
   synced draft without the user applying it on the receiving side;

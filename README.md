@@ -77,7 +77,7 @@ processing. Your image files stay where they are.
   PixInsight WBPP's layout with ready-to-run scripts, chosen per export — or
   by moving rejected files and sidecars into a recorded, reversible archive.
 - **Sync separate copies** by pulling telescope projects and captures, then
-  pushing edited plans and reviewed grades back in the named direction.
+  pushing edited plans and reviewed grades back in the direction you choose.
 - **Run analysis tools** for N.I.N.A. Fast and HocusFocus star detection,
   Gaussian or Moffat PSF fitting, annotations, and batch reports.
 
@@ -573,7 +573,7 @@ their roles are distinct:
 |------|---------|
 | `objects.bin` | Coordinate-only object association plus solved labels and catalog outlines |
 | `stars-lite-tycho2.bin`, `stars-gaia.bin`, or `stars-deep-gaia17.bin` | Hinted plate solving; Seiza selects the deepest installed catalog |
-| `blind-gaia16.idx` | Blind fallback when the pointing hint is absent or stale. PSF Guard uses the index beside the star catalog first, unless the `astrometry.blind_index` setting or `SEIZA_BLIND_INDEX` names one |
+| `blind-gaia16.idx` | Blind fallback when the pointing hint is absent or stale. PSF Guard uses the index beside the star catalog first, unless the `astrometry.blind_index` setting or `SEIZA_BLIND_INDEX` points to one |
 
 Check what the running process discovered before troubleshooting an image:
 
@@ -646,7 +646,7 @@ across views. Use the Sequence selectors to focus Clouded, Off Target,
 Unsolved, or all Recommended frames.
 
 The scan runs spatial, photometric, and astrometric analysis on the server. It
-shows solved-center scatter, field-relative offsets, and named issue evidence.
+shows solved-center scatter, field-relative offsets, and the evidence behind each issue.
 Session scores find changes within a capture run; the target/filter stack view
 also finds weak frames across nights while keeping capture settings comparable.
 A stack comparison needs at least three matching frames across two sessions;
@@ -714,7 +714,7 @@ in the registry JSON). The Export action then runs as a background job with
 progress: it places the same tree — lights, matching calibration frames, and
 the WBPP runner scripts — into a per-scope folder below that directory,
 cloning files (reflink) where the filesystem supports it and copying where it
-does not. Because the operator named the directory up front, the action needs
+does not. Because the operator chose the directory up front, the action needs
 no database-management grant.
 
 You can export a whole project or one target. The action appears when PSF Guard
@@ -791,7 +791,7 @@ Frames that are truly bad can go further. `remove-rejects` takes rejected
 frames out of the catalog: their files, archived or not, move to a
 `.psf-guard-trash` folder in the image directory, and a tombstone keeps what
 restore needs. Only frames rejected at least `--days` days ago qualify (7 by
-default), and frames a collaboration report names stay. Sync pulls, imports
+default), and frames in a collaboration report stay. Sync pulls, imports
 and uploads do not bring a removed frame back.
 
 ```bash
@@ -844,7 +844,7 @@ server-owned preview before Apply. The preview keeps a frozen source snapshot
 and returns after a page reload. Apply rejects destination changes before it
 writes. Pending grades are excluded from the UI grade push by default.
 
-![Data Transfer workspace with named source and destination catalogs](docs/data-transfer.png)
+![Data Transfer workspace with a source and a destination catalog](docs/data-transfer.png)
 
 Native one-off file handles, versioned remote bundles, the remote protocol,
 and the future N.I.N.A. plugin boundary are tracked in
@@ -1160,8 +1160,8 @@ the other format at startup, and deleting it is yours to decide.
 arrives as an extension-less staging file in the receive directory and is
 moved into place only after its checksum, header, and destination check out;
 a rejected upload normally leaves nothing behind. With the key on, the staged
-file stays, and the log names it, so what the client actually sent can be
-examined. Published frames take the receive directory's usual permissions
+file stays, and the log gives its path, so you can see what the client
+sent. Published frames take the receive directory's usual permissions
 (umask or default ACL) rather than a temporary file's `0600`.
 
 `preview_color` also decides which rendition background pre-generation warms.

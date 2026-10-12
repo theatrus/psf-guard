@@ -321,7 +321,7 @@ pub fn plan(
             continue;
         }
         if options.protected_guids.contains(&guid) {
-            skip(&mut plan, &row, "a collaboration report names it".into());
+            skip(&mut plan, &row, "it is in a collaboration report".into());
             continue;
         }
         if let Some(name) = &file_name
