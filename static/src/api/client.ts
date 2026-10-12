@@ -15,7 +15,7 @@ import type { GuidFillReport, GuidReport,
   SchedulerFlatHistoryPage,
   CalibrationSettings,
   StackAutomationSettings,
-  CalibrationMasterSource,
+  StackMasterSource,
   StackCalibrationMasters,
   ExternalMasterPolicy,
   DarkChoice,
@@ -92,6 +92,9 @@ import type { GuidFillReport, GuidReport,
   QualityBackfillStatus,
   CalibratedCopies,
   PreviewDescriptor,
+  ImagePreviewDescriptor,
+  CalibrationMasterPreviewDescriptor,
+  CalibrationFramePreviewDescriptor,
   GenerationStatus,
   AstrometryAnalysis,
   SatelliteAnalysis,
@@ -125,9 +128,16 @@ import type { GuidFillReport, GuidReport,
   AstrometryValidationReport,
   CatalogInstallPreset,
   CatalogInstallStatus,
-  CalibrationLibraryDetails,
   CalibrationLibrarySummary,
   CalibrationMutationOutcome,
+  CalibrationFrameDetail,
+  CalibrationFramePage,
+  CalibrationFrameSize,
+  CalibrationFrameStretch,
+  CalibrationFrameView,
+  CalibrationListFilters,
+  CalibrationSessionPage,
+  LibraryCalibrationMasters,
   PeerSummary,
   PeerCheck,
   RemoteSyncRequest,
@@ -1547,13 +1557,76 @@ export const apiClient = {
     return data.data;
   },
 
-  getCalibrationLibraryDetails: async (dbId: string): Promise<CalibrationLibraryDetails> => {
+  /** One page of calibration frames the filters keep. */
+  getCalibrationFrames: async (
+    dbId: string,
+    filters: CalibrationListFilters
+  ): Promise<CalibrationFramePage> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.get<ApiResponse<CalibrationLibraryDetails>>(
-      dbPath(dbId, '/calibrations/details')
+    const { data } = await apiInstance.get<ApiResponse<CalibrationFramePage>>(
+      dbPath(dbId, '/calibrations/frames'),
+      { params: filters }
     );
     if (!data.data) throw new Error(data.error || 'Failed to read calibration frames');
     return data.data;
+  },
+
+  /** One page of the sessions holding frames the filters keep. */
+  getCalibrationSessions: async (
+    dbId: string,
+    filters: CalibrationListFilters
+  ): Promise<CalibrationSessionPage> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<CalibrationSessionPage>>(
+      dbPath(dbId, '/calibrations/sessions'),
+      { params: filters }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read calibration sessions');
+    return data.data;
+  },
+
+  /** One frame: its measurement, findings and its session's numbers. */
+  getCalibrationFrame: async (dbId: string, frameUuid: string): Promise<CalibrationFrameDetail> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<CalibrationFrameDetail>>(
+      dbPath(dbId, `/calibrations/frames/${encodeURIComponent(frameUuid)}`)
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read the calibration frame');
+    return data.data;
+  },
+
+  /** A picture of one raw calibration frame; 202 while it is drawn. */
+  getCalibrationFramePreviewUrl: (
+    dbId: string,
+    frameUuid: string,
+    options: { view: CalibrationFrameView; size: CalibrationFrameSize; stretch: CalibrationFrameStretch }
+  ): string => {
+    const params = new URLSearchParams({
+      view: options.view,
+      size: options.size,
+      stretch: options.stretch,
+    });
+    return withServerUrl(
+      `/api${dbPath(dbId, `/calibrations/frames/${encodeURIComponent(frameUuid)}/preview`)}?${params}`
+    );
+  },
+
+  /** Every master the library recorded, in the inspector's shape. */
+  getLibraryCalibrationMasters: async (dbId: string): Promise<LibraryCalibrationMasters> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<LibraryCalibrationMasters>>(
+      dbPath(dbId, '/calibrations/masters')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read calibration masters');
+    return {
+      ...data.data,
+      masters: data.data.masters.map((master) => ({
+        ...master,
+        preview_url: master.preview_url ? withServerUrl(master.preview_url) : null,
+        original_preview_url: master.original_preview_url ? withServerUrl(master.original_preview_url) : null,
+        fits_url: master.fits_url ? withServerUrl(master.fits_url) : null,
+      })),
+    };
   },
 
   getSchedulerFlatHistory: async (
@@ -2430,8 +2503,19 @@ export const apiClient = {
     requests: PreviewDescriptor[]
   ): Promise<GenerationStatus[]> => {
     const apiInstance = await getApi();
-    const imageRequests = requests.filter((d) => d.kind !== 'calibration_master');
-    const masterRequests = requests.filter((d) => d.kind === 'calibration_master');
+    // Three endpoints answer: light previews, a stack's masters, and the
+    // calibration library's frames and masters.
+    const route = (d: PreviewDescriptor) =>
+      d.kind === 'calibration_frame' || (d.kind === 'calibration_master' && d.source.kind === 'library')
+        ? 'library'
+        : d.kind === 'calibration_master' ? 'stack' : 'image';
+    const imageRequests = requests.filter((d) => route(d) === 'image') as ImagePreviewDescriptor[];
+    const masterRequests = requests.filter((d) => route(d) === 'stack') as (
+      CalibrationMasterPreviewDescriptor & { source: StackMasterSource }
+    )[];
+    const libraryRequests = requests.filter((d) => route(d) === 'library') as (
+      CalibrationFramePreviewDescriptor | CalibrationMasterPreviewDescriptor
+    )[];
     const imageRequest = imageRequests.length ? apiInstance.post<
       ApiResponse<{ statuses: GenerationStatus[] }>
     >(dbPath(dbId, '/images/generation-status'), {
@@ -2463,20 +2547,30 @@ export const apiClient = {
         shadow: d.shadow,
       })),
     }).then(({ data }) => data.data?.statuses ?? []) : Promise.resolve([]);
+    const libraryRequest = libraryRequests.length ? apiInstance.post<
+      ApiResponse<{ statuses: GenerationStatus[] }>
+    >(dbPath(dbId, '/calibrations/generation-status'), {
+      requests: libraryRequests.map((d) => d.kind === 'calibration_frame'
+        ? { target: 'frame', id: d.frameUuid, view: d.view, size: d.size, stretch: d.stretch }
+        : { target: 'master', id: d.masterId, size: d.size, midtone: d.midtone, shadow: d.shadow }),
+    }).then(({ data }) => data.data?.statuses ?? []) : Promise.resolve([]);
     // An unavailable endpoint must not stall unrelated previews in this batch.
-    const [images, masters] = await Promise.allSettled([imageRequest, masterRequest]);
-    const imageStatuses = images.status === 'fulfilled' ? images.value : [];
-    const masterStatuses = masters.status === 'fulfilled' ? masters.value : [];
-    let imageIndex = 0;
-    let masterIndex = 0;
-    return requests.map((d) => (d.kind === 'calibration_master'
-      ? masterStatuses[masterIndex++]
-      : imageStatuses[imageIndex++]) ?? { state: 'generating' });
+    const [images, masters, library] = await Promise.allSettled([imageRequest, masterRequest, libraryRequest]);
+    const statuses = {
+      image: images.status === 'fulfilled' ? images.value : [],
+      stack: masters.status === 'fulfilled' ? masters.value : [],
+      library: library.status === 'fulfilled' ? library.value : [],
+    };
+    const next = { image: 0, stack: 0, library: 0 };
+    return requests.map((d) => {
+      const kind = route(d);
+      return statuses[kind][next[kind]++] ?? { state: 'generating' };
+    });
   },
 
   getStackCalibrationMasters: async (
     dbId: string,
-    source: CalibrationMasterSource
+    source: StackMasterSource
   ): Promise<StackCalibrationMasters> => {
     const apiInstance = await getApi();
     const artifactPath = source.kind === 'mono'

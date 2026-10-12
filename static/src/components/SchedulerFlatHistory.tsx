@@ -105,10 +105,10 @@ export default function SchedulerFlatHistory({ dbId, canManage }: {
           onClick={() => { void history.refetch(); }}><RefreshCw size={16} /></button>
       </form>
       {message && <p className="flat-history-message" role="status">{message}</p>}
-      {history.error && <p className="calibration-library-error" role="alert">
+      {history.error && <p className="calibration-error" role="alert">
         Could not load scheduler flat coverage: {history.error.message}
       </p>}
-      {invalidate.error && <p className="calibration-library-error" role="alert">
+      {invalidate.error && <p className="calibration-error" role="alert">
         {invalidate.error.message}
       </p>}
       {canManage && selectedIds.length > 0 && (
@@ -138,9 +138,9 @@ export default function SchedulerFlatHistory({ dbId, canManage }: {
         </form>
       )}
       <div className="flat-history-table-scroll" aria-busy={history.isFetching}>
-        {history.isLoading && <p className="calibration-library-empty">Loading scheduler flat coverage...</p>}
+        {history.isLoading && <p className="calibration-empty">Loading scheduler flat coverage...</p>}
         {!history.isLoading && !history.error && rows.length === 0 && (
-          <p className="calibration-library-empty">No scheduler flat coverage matches these filters.</p>
+          <p className="calibration-empty">No scheduler flat coverage matches these filters.</p>
         )}
         {rows.length > 0 && <table className="flat-history-table">
           <thead><tr>

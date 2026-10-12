@@ -35,25 +35,28 @@ test('invalidates selected flat coverage, retains decisions across stale snapsho
   await page.getByRole('tab', { name: 'Databases', exact: true }).click();
   await page.locator('.db-entry').filter({ has: page.locator('.db-row-slug', { hasText: REVIEW_DB }) })
     .getByRole('button', { name: 'Manage', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: 'Calibration library' });
-  await dialog.getByRole('tab', { name: 'Scheduler flats', exact: true }).click();
-  await dialog.getByLabel('Target, source or filter').fill(source);
-  await dialog.getByRole('button', { name: 'Search', exact: true }).click();
-  await expect(dialog.locator('tbody tr')).toHaveCount(3);
-  await dialog.getByRole('checkbox', { name: 'Select coverage 1 for NGC 7331', exact: true }).check();
-  await dialog.getByRole('checkbox', { name: 'Select coverage 2 for NGC 7331', exact: true }).check();
-  await expect(dialog.getByRole('button', { name: 'Invalidate coverage', exact: true })).toBeDisabled();
-  await dialog.getByLabel('Reason', { exact: true }).fill('Bright-star artifacts in the luminance sky flats');
-  expect(await dialog.getByRole('button', { name: 'Refresh coverage', exact: true }).locator('svg')
+  // Manage leaves Settings for the database's calibration page.
+  await expect(page).toHaveURL(new RegExp(`#/calibration\\?db=${REVIEW_DB}`));
+  await page.getByRole('tab', { name: 'Scheduler flats', exact: true }).click();
+  await expect(page).toHaveURL(/calTab=scheduler/);
+  const panel = page.getByRole('tabpanel', { name: 'Scheduler flats' });
+  await panel.getByLabel('Target, source or filter').fill(source);
+  await panel.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect(panel.locator('tbody tr')).toHaveCount(3);
+  await panel.getByRole('checkbox', { name: 'Select coverage 1 for NGC 7331', exact: true }).check();
+  await panel.getByRole('checkbox', { name: 'Select coverage 2 for NGC 7331', exact: true }).check();
+  await expect(panel.getByRole('button', { name: 'Invalidate coverage', exact: true })).toBeDisabled();
+  await panel.getByLabel('Reason', { exact: true }).fill('Bright-star artifacts in the luminance sky flats');
+  expect(await panel.getByRole('button', { name: 'Refresh coverage', exact: true }).locator('svg')
     .evaluate((el) => el.getBoundingClientRect().width)).toBeGreaterThanOrEqual(16);
-  await dialog.screenshot({ path: testInfo.outputPath('flat-history-desktop.png') });
+  await panel.screenshot({ path: testInfo.outputPath('flat-history-desktop.png') });
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(dialog.getByRole('button', { name: 'Invalidate coverage', exact: true })).toBeVisible();
-  expect(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
-  await dialog.screenshot({ path: testInfo.outputPath('flat-history-mobile.png') });
-  await dialog.getByRole('button', { name: 'Invalidate coverage', exact: true }).click();
-  await expect(dialog.getByRole('status')).toHaveText('2 coverage records awaiting sync.');
-  await expect(dialog.locator('tbody tr')).toHaveCount(1);
+  await expect(panel.getByRole('button', { name: 'Invalidate coverage', exact: true })).toBeVisible();
+  expect(await panel.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await panel.screenshot({ path: testInfo.outputPath('flat-history-mobile.png') });
+  await panel.getByRole('button', { name: 'Invalidate coverage', exact: true }).click();
+  await expect(panel.getByRole('status')).toHaveText('2 coverage records awaiting sync.');
+  await expect(panel.locator('tbody tr')).toHaveCount(1);
 
   // A stale plugin snapshot must not revive the explicitly invalidated coverage.
   expect((await review.post('/api/sync/v1/flat-history/snapshot', { headers, data: snapshot })).ok()).toBe(true);
@@ -70,11 +73,11 @@ test('invalidates selected flat coverage, retains decisions across stale snapsho
   });
   expect(ack.status(), await ack.text()).toBe(200);
   await page.setViewportSize({ width: 1280, height: 900 });
-  await dialog.getByLabel('Coverage status', { exact: true }).selectOption('all');
-  await expect(dialog.locator('tbody tr')).toHaveCount(3);
-  await expect(dialog.locator('tbody').getByText('Coverage removed', { exact: true })).toBeVisible();
-  await expect(dialog.locator('tbody').getByText('Changed in NINA', { exact: true })).toBeVisible();
-  await expect(dialog.getByText('Source coverage changed; new flats preserved.', { exact: true })).toBeVisible();
+  await panel.getByLabel('Coverage status', { exact: true }).selectOption('all');
+  await expect(panel.locator('tbody tr')).toHaveCount(3);
+  await expect(panel.locator('tbody').getByText('Coverage removed', { exact: true })).toBeVisible();
+  await expect(panel.locator('tbody').getByText('Changed in NINA', { exact: true })).toBeVisible();
+  await expect(panel.getByText('Source coverage changed; new flats preserved.', { exact: true })).toBeVisible();
   const remaining = await review.post('/api/sync/v1/flat-history/pending', { headers, data: scope });
   expect((await remaining.json()).data.decisions).toEqual([]);
 });

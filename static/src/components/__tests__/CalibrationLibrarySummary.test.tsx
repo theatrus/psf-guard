@@ -2,7 +2,8 @@ import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { server } from '../../test/msw-server';
 import CalibrationLibrarySummary from '../CalibrationLibrarySummary';
 
@@ -46,81 +47,40 @@ describe('CalibrationLibrarySummary', () => {
       )
     );
 
-    render(<CalibrationLibrarySummary dbId="demo" />, { wrapper: wrapper() });
+    render(<MemoryRouter><CalibrationLibrarySummary dbId="demo" /></MemoryRouter>, { wrapper: wrapper() });
 
     expect(await screen.findByText(/42 frames · 3 cached masters/)).toBeInTheDocument();
     expect(screen.getByText('Scope · Camera')).toBeInTheDocument();
     expect(screen.getByText(/10 bias · 12 dark · 8 dark-flat · 12 flat/)).toBeInTheDocument();
   });
 
-  it('opens a database-scoped frame manager', async () => {
-    const summary = {
-      schema_version: 1,
-      frame_count: 1,
-      master_count: 1,
-      rigs: [
-        {
-          rig_uuid: 'rig-1',
-          name: 'Scope · Camera',
-          frame_count: 1,
-          bias: 0,
-          dark: 1,
-          dark_flat: 0,
-          flat: 0,
-        },
-      ],
-    };
+  it('opens the calibration page for its database and closes what holds it', async () => {
     server.use(
-      http.get('/api/db/demo/calibrations/details', () =>
+      http.get('/api/db/demo/calibrations', () =>
         HttpResponse.json({
           success: true,
-          data: {
-            summary,
-            frames: [
-              {
-                frame_uuid: 'frame-1',
-                rig_uuid: 'rig-1',
-                kind: 'dark',
-                source_path: '/calibration/dark-300s.fits',
-                source_exists: true,
-                camera: 'Camera',
-                width: 3000,
-                height: 2000,
-                binning_x: 1,
-                binning_y: 1,
-                gain: 100,
-                readout_mode_name: 'Extend Fullwell 2CMS',
-                exposure_s: 300,
-                camera_temp: -10,
-              },
-            ],
-          },
+          data: { schema_version: 9, frame_count: 1, master_count: 0, rigs: [] },
           error: null,
           status: 'ready',
         })
-      ),
-      http.get('/api/db/demo/calibrations', () =>
-        HttpResponse.json({ success: true, data: summary, error: null, status: 'ready' })
       )
     );
-
+    const onOpen = vi.fn();
+    function Location() {
+      const location = useLocation();
+      return <output aria-label="location">{location.pathname + location.search}</output>;
+    }
     render(
-      <CalibrationLibrarySummary dbId="demo" dbName="Demo DB" canManage />,
+      <MemoryRouter initialEntries={['/?db=other&project=4&plan=x']}>
+        <CalibrationLibrarySummary dbId="demo" canManage onOpen={onOpen} />
+        <Location />
+      </MemoryRouter>,
       { wrapper: wrapper() }
     );
     fireEvent.click(await screen.findByRole('button', { name: 'Manage' }));
 
-    expect(await screen.findByRole('dialog', { name: 'Calibration library' })).toBeInTheDocument();
-    // Groups start collapsed: the night header is visible, its rows are not.
-    const nightToggle = await screen.findByRole('button', { name: /Date unknown/ });
-    expect(screen.queryByText('dark-300s.fits')).toBeNull();
-    fireEvent.click(nightToggle);
-    expect(await screen.findByText('dark-300s.fits')).toBeInTheDocument();
-    // The readout mode's name sits with the other sensor settings, since it
-    // gates matching the same way gain and offset do.
-    expect(
-      screen.getByText(/3000×2000 · 1×1 bin · gain 100 · Extend Fullwell 2CMS · 300s/)
-    ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Forget' })).toBeInTheDocument();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    // Another database's project does not come along, nor Planning's keys.
+    expect(screen.getByRole('status', { name: 'location' })).toHaveTextContent('/calibration?db=demo');
   });
 });

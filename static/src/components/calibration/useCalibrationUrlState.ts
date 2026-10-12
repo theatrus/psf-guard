@@ -1,0 +1,192 @@
+import { useCallback, useMemo } from 'react';
+import { CALIBRATION_PARAMS, useUrlParams } from '../../hooks/useUrlState';
+import type {
+  CalibrationFrameSort,
+  CalibrationFrameStretch,
+  CalibrationFrameView,
+  CalibrationGradeFilter,
+  CalibrationKind,
+  CalibrationListFilters,
+} from '../../api/types';
+
+export type CalibrationTab = 'frames' | 'masters' | 'scheduler';
+
+const KINDS: CalibrationKind[] = ['bias', 'dark', 'dark_flat', 'flat'];
+const GRADES: CalibrationGradeFilter[] = ['ok', 'suspect', 'poor', 'ungraded'];
+const SORTS: CalibrationFrameSort[] = ['newest', 'oldest', 'file', 'grade'];
+const STRETCHES: CalibrationFrameStretch[] = ['wide', 'normal', 'tight'];
+
+function oneOf<T extends string>(value: string | null, allowed: readonly T[]): T | undefined {
+  return allowed.find((item) => item === value);
+}
+
+function number(value: string | null): number | undefined {
+  if (value === null || value.trim() === '') return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/** The filters as the page's URL holds them. */
+export interface CalibrationFilterState {
+  rig?: string;
+  kind?: CalibrationKind;
+  filter?: string;
+  exposure?: number;
+  tempMin?: number;
+  tempMax?: number;
+  from?: string;
+  to?: string;
+  grade?: CalibrationGradeFilter;
+  keptOut?: boolean;
+  missing?: boolean;
+  sort?: CalibrationFrameSort;
+}
+
+const FILTER_KEYS: Record<keyof CalibrationFilterState, (typeof CALIBRATION_PARAMS)[number]> = {
+  rig: 'calRig',
+  kind: 'calKind',
+  filter: 'calFilter',
+  exposure: 'calExposure',
+  tempMin: 'calTempMin',
+  tempMax: 'calTempMax',
+  from: 'calFrom',
+  to: 'calTo',
+  grade: 'calGrade',
+  keptOut: 'calKept',
+  missing: 'calMissing',
+  sort: 'calSort',
+};
+
+/** The filters in the form the frame and session routes take. */
+export function listFilters(state: CalibrationFilterState): CalibrationListFilters {
+  const filters: CalibrationListFilters = {
+    rig: state.rig,
+    kind: state.kind,
+    filter: state.filter,
+    exposure: state.exposure,
+    temp_min: state.tempMin,
+    temp_max: state.tempMax,
+    night_from: state.from,
+    night_to: state.to,
+    grade: state.grade,
+    kept_out: state.keptOut,
+    missing: state.missing || undefined,
+  };
+  return Object.fromEntries(
+    Object.entries(filters).filter(([, value]) => value !== undefined)
+  ) as CalibrationListFilters;
+}
+
+/**
+ * Everything the calibration page shows lives in the URL, so a reload or a
+ * shared link opens the same view: the tab, the filters, the session page,
+ * the session and frame, and how the frame is drawn.
+ */
+export function useCalibrationUrlState() {
+  const { getParam, updateParams } = useUrlParams();
+
+  const tab: CalibrationTab = oneOf(getParam('calTab'), ['frames', 'masters', 'scheduler'] as const) ?? 'frames';
+  const rig = getParam('calRig') || undefined;
+  const kind = oneOf(getParam('calKind'), KINDS);
+  const filter = getParam('calFilter') || undefined;
+  const exposure = number(getParam('calExposure'));
+  const tempMin = number(getParam('calTempMin'));
+  const tempMax = number(getParam('calTempMax'));
+  const from = getParam('calFrom') || undefined;
+  const to = getParam('calTo') || undefined;
+  const grade = oneOf(getParam('calGrade'), GRADES);
+  const kept = getParam('calKept');
+  const keptOut = kept === 'true' ? true : kept === 'false' ? false : undefined;
+  const missing = getParam('calMissing') === 'true' || undefined;
+  const sort = oneOf(getParam('calSort'), SORTS);
+  const filters = useMemo<CalibrationFilterState>(
+    () => ({ rig, kind, filter, exposure, tempMin, tempMax, from, to, grade, keptOut, missing, sort }),
+    [rig, kind, filter, exposure, tempMin, tempMax, from, to, grade, keptOut, missing, sort]
+  );
+  const page = Math.max(0, Math.floor(number(getParam('calPage')) ?? 0));
+  const session = getParam('calSession');
+  const frame = getParam('calFrame');
+  const view: CalibrationFrameView = getParam('calView') === 'session' ? 'session' : 'frame';
+  const stretch: CalibrationFrameStretch = oneOf(getParam('calStretch'), STRETCHES) ?? 'normal';
+  const full = getParam('calFull') === '1';
+  const master = getParam('calMaster');
+
+  const setTab = useCallback(
+    (next: CalibrationTab) => updateParams({ calTab: next === 'frames' ? null : next, calMaster: null }),
+    [updateParams]
+  );
+  /** Change filters; the session list starts again at its first page. */
+  const setFilters = useCallback(
+    (changes: Partial<CalibrationFilterState>) => {
+      const updates: Record<string, string | null> = { calPage: null };
+      for (const [key, value] of Object.entries(changes) as [keyof CalibrationFilterState, unknown][]) {
+        updates[FILTER_KEYS[key]] =
+          value === undefined || value === null || value === '' ? null : String(value);
+      }
+      updateParams(updates);
+    },
+    [updateParams]
+  );
+  const clearFilters = useCallback(
+    () => updateParams(Object.fromEntries(Object.values(FILTER_KEYS).map((key) => [key, null]))),
+    [updateParams]
+  );
+  const setPage = useCallback((next: number) => updateParams({ calPage: next > 0 ? next : null }), [updateParams]);
+  const selectSession = useCallback(
+    (id: string | null, frameUuid: string | null = null) =>
+      updateParams({ calSession: id, calFrame: frameUuid, calView: null }),
+    [updateParams]
+  );
+  const selectFrame = useCallback((uuid: string | null) => updateParams({ calFrame: uuid }), [updateParams]);
+  const setView = useCallback(
+    (next: CalibrationFrameView) => updateParams({ calView: next === 'session' ? 'session' : null }),
+    [updateParams]
+  );
+  const setStretch = useCallback(
+    (next: CalibrationFrameStretch) => updateParams({ calStretch: next === 'normal' ? null : next }),
+    [updateParams]
+  );
+  const setFull = useCallback((next: boolean) => updateParams({ calFull: next ? '1' : null }), [updateParams]);
+  const openMaster = useCallback((id: string | null) => updateParams({ calMaster: id }), [updateParams]);
+  /** Forget the session, frame, page and master chosen. */
+  const resetSelection = useCallback(
+    () => updateParams({ calSession: null, calFrame: null, calPage: null, calMaster: null, calView: null }),
+    [updateParams]
+  );
+  /** Another database: nothing chosen in this one carries over. */
+  const setDatabase = useCallback(
+    (db: string) =>
+      updateParams({
+        db,
+        project: null,
+        target: null,
+        mosaic: null,
+        ...Object.fromEntries(CALIBRATION_PARAMS.filter((key) => key !== 'calTab').map((key) => [key, null])),
+      }),
+    [updateParams]
+  );
+
+  return {
+    tab,
+    filters,
+    page,
+    session,
+    frame,
+    view,
+    stretch,
+    full,
+    master,
+    setTab,
+    setFilters,
+    clearFilters,
+    setPage,
+    selectSession,
+    selectFrame,
+    setView,
+    setStretch,
+    setFull,
+    openMaster,
+    resetSelection,
+    setDatabase,
+  };
+}
