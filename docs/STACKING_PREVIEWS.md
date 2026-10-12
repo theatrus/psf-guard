@@ -844,6 +844,10 @@ original sensor grid: CFA masters are not debayered, rotated, or registered.
 Already-RGB masters retain their color channels. **FITS** downloads the cached
 master unchanged; display settings never change calibration or the stack.
 
+The **Masters** tab of the
+[Calibration page](CALIBRATION_LIBRARY.md#browse-the-library) opens the same
+inspector for any master the library recorded, without a stack.
+
 Inspection reads the completed artifact's recorded master references, not the
 current library selection. Color stacks follow their recorded channel
 revisions. Missing master files or older stacks without sufficient provenance

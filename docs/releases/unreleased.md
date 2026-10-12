@@ -4,6 +4,16 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- A **Calibration** page shows a database's calibration library: its sessions
+  by night, kind and settings, each frame as a picture drawn for its kind,
+  and a flat divided by the rest of its session so that drying dew stands
+  out from dust. Beside each frame are its grade and its numbers next to its
+  session's, with **Keep out**, **Use anyway**, validity marks and
+  **Forget**. ← → flip through a session. A **Masters** tab lists every
+  master with its sources and the projects using it, and opens any of them
+  without a stack. Open it from Settings › Databases or a project's
+  Calibration report; it replaces the calibration library dialog, and its
+  filters and choices stay in the address.
 - The Library flags projects whose lights the calibration library serves
   poorly with a **Poor** or **Check** pill, worked out in the background:
   lights it cannot calibrate (now also lights from a camera with no

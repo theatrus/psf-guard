@@ -41,26 +41,114 @@ with that rig. Target Scheduler row IDs are not used as calibration identity.
 Settings shows each rig and its bias, dark, dark-flat, and flat coverage. A
 database copy carries this catalog with its projects and grades.
 
-Choose **Manage** on a database's calibration summary to inspect every frame.
-The library view filters by rig and frame type, marks paths that no longer
-exist, shows the settings used for matching, and shows each frame's
-[grade](#frame-grades). With database management enabled, it can:
+## Browse the library
 
-- scan the database's configured folders again;
-- forget a wrong or stale catalog entry without deleting its FITS file;
-- keep a frame out of masters and exports, use a poor one anyway, or clear
-  that choice;
-- clear generated masters while keeping all raw frames and catalog records.
+The **Calibration** page shows one database's library: its sessions, the
+frames of a session as pictures, one frame with its numbers beside its
+session's, and the masters built from them. Open it with **Manage** (or
+**View**) on a database's calibration summary in **Settings › Databases**,
+or with **Browse calibration** in a project's Calibration report, which the
+Library's calibration pill also opens. Everything chosen on the page lives
+in its address, `#/calibration?db=…`, so a reload or a shared link opens
+the same view: the database, the tab, the filters, the session, the frame
+and how it is drawn.
 
-Forgetting a frame also drops every master record that used it, including
-downstream masters that used one of those masters. Clearing masters waits for
-any active stack preview and rebuilds them on demand later.
+### Sessions and frames
+
+A session is the frames of one kind shot one night with one set of capture
+settings: the sensor mode, frame size and binning, and then for flats the
+filter and rotator angle, for darks and dark-flats the exposure and sensor
+temperature, and for bias the exposure. A temperature or an angle drifts
+while a set is shot, so a frame joins a session while it sits within 1.5 °C
+(darks) or 1° (flats) of the next; bias is not split by temperature, since
+a bias set is often shot while the sensor cools. Nights split as in
+[Validity boundaries](#validity-boundaries).
+
+The filters narrow the sessions and their frames: rig, type, filter,
+exposure, a temperature range, a range of nights, the grade, whether the
+frame is kept out, and frames whose file is not on disk. The session list
+shows the newest night first, each session with its frames counted by grade.
+Choosing a session shows its frames as a strip of small pictures, in the
+order they were shot unless **Order** says otherwise, and the first one in
+the viewer.
+
+← and → move through the frames of a session; ↑ and ↓ move through the
+sessions; **C** turns the comparison below on and off. The viewer keeps its
+zoom and position while the frames of one session change, so flipping
+through them compares the same place, and the last picture stays up until
+the next one is drawn.
+
+### Pictures
+
+Each kind is drawn to show what can go wrong with it. A flat is divided by
+its own median, per CFA site on a colour sensor, and shown as a window
+around that level: **Wide** ±50%, **Normal** ±15%, **Tight** ±3%. Bias,
+darks and dark-flats are shown as a window around their median of ±30, ±6
+or ±2 noise sigmas, so banding shows as stripes and hot pixels as white
+points. Pictures are reduced by block means, so a hot pixel stays visible
+at any size. **Full size** draws the frame at its own resolution.
+
+**Compare with session** divides a flat by the median of every flat of its
+session, each first binned to at most 1,024 pixels a side and divided by its
+own median. What all the flats share, dust and vignetting, divides out; what
+changes between them, such as drying dew, stays. The window is then ±10%,
+±3% or ±1%. It needs three flats in the session. The session's median is
+worked out once, which reads every flat of the session, and kept for the
+other flats. **Spots** marks the deepest spots grading measured in the
+frame.
+
+Pictures are drawn by the same queue as light previews: the page asks, the
+server answers that the picture is on its way, and one poll for the whole
+page waits for it. Nothing is drawn while a request waits. The pictures and
+session medians are kept below the database's cache folder in
+`calibration-previews`, keyed by the frame's file as it is now, the view,
+size and stretch, and the drawing method, and the disk limit removes them
+with the other previews. Reading a frame costs more than drawing it, so the
+strip's picture and the viewer's come from one read.
+
+### One frame
+
+The panel beside the viewer gives the frame's file, capture time and
+settings, its grade and main reason, and the numbers grading measured, each
+beside the median of the other measured frames of its session: for a flat
+its level, clipped share, noise and spots; for a bias or dark its level,
+spread, noise, row and column banding and hot pixels. Below them are the
+limits the frame crossed, each with its value and the limit.
+
+With database management enabled, the panel can keep the frame out of
+masters and exports, use a poor one anyway, or clear that choice (see
+[Choosing for yourself](#choosing-for-yourself)), mark which lights it
+serves (see [Validity boundaries](#validity-boundaries)), and forget it. The
+session's header marks or forgets every frame of the session shown.
+
+Forgetting a frame removes its catalog record without deleting its FITS
+file. It also drops every master record that used it, including downstream
+masters that used one of those masters.
+
+### Masters
+
+The **Masters** tab lists every master the library recorded, newest first:
+its kind, filter or exposure, its source frames with their nights and
+temperatures, when it was built, and the projects whose latest stacks use
+it. Badges mark a bias or dark master built from fewer than five frames
+(**Thin**), a flat master whose set carries changing spots, one the flat
+check set aside, one from other software, and one whose file is gone.
+**View** opens the master in the same inspector a stack's **Masters** button
+opens (see [Inspect calibration masters](STACKING_PREVIEWS.md#inspect-calibration-masters)),
+with display stretch, zoom and an unchanged FITS download, but no stack
+needed. With database management enabled, **Clear generated masters**
+removes them all while keeping every raw frame and catalog record. It waits
+for any active stack preview; stacks build masters again when they need
+them.
+
+New frames come in through **Import** in Settings, which scans the
+database's configured folders.
 
 ## Scheduler flat coverage
 
 The NINA plugin sends Target Scheduler's `flathistory` coverage records during
-grade pulls and applied reconciles. In **Settings > Databases**, open the
-database's calibration library and choose **Scheduler flats**. Filter by target,
+grade pulls and applied reconciles. Open the database's
+[Calibration page](#browse-the-library) and choose **Scheduler flats**. Filter by target,
 source, filter, or status, then select the suspect coverage records and choose
 **Invalidate coverage** with a reason. This requires database management access.
 
@@ -224,9 +312,9 @@ side, is recorded and left ungraded. An ungraded frame stays in use.
 
 ### Choosing for yourself
 
-The library shows each graded frame's grade and main reason, such as
-**Poor · stray light** or **Suspect · noise**; hover for the numbers. A
-collapsed night counts its frames kept out and its suspect ones. With
+The calibration page shows each graded frame's grade and main reason, such
+as **Poor · stray light** or **Suspect · noise**, with the numbers behind
+it, and each session counts its frames by grade and those kept out. With
 database management enabled, each frame offers:
 
 - **Keep out**: leave the frame out of masters and exports whatever its
@@ -265,9 +353,9 @@ The dark check catches this. A dark more than one noise sigma above the
 quietest frame that could stand in for it is poor, with the reason **stray
 light**. Peers come from every night, so a morning whose darks all leaked
 is still caught by a clean set from another night. A lone frame with
-nothing to compare against stays in use. The library shows each measured
-dark's and dark-flat's level and spread in ADU under its settings, such as
-`Level 503 ± 4.4 ADU`. The verdict also goes into the frame's `stray_light`
+nothing to compare against stays in use. The frame panel gives each measured
+dark's and dark-flat's level and spread in ADU beside its session's. The
+verdict also goes into the frame's `stray_light`
 column, which older PSF Guard builds read. Master building applies the same
 rule to its own inputs, which catches a dark the job has not reached yet.
 
@@ -350,23 +438,18 @@ it:
 Nearest-in-time is the right default, but it cannot know about a dust
 cleaning, a re-spaced imaging train, or any other change that makes older
 calibration wrong for newer lights. When nights lack their own frames, mark
-the boundary yourself: in the **Calibration library**, frames are grouped by
-imaging night, collapsed to one row per night until expanded, with flats
-(and their dark-flats) in one section and darks and bias in their own —
-those batches stay valid far longer than flats and should not interleave
-with per-night flat groups. A night splits where the catalog's lights are
-never captured, as in [Sky coverage](SKY_COVERAGE.md), so dusk and dawn
-flats share the date of the night between them, as N.I.N.A.'s
-`DATEMINUS12` folders do. The coverage report and export folders use the
-same nights. A catalog with no lights splits at noon UTC. Each night row can also **Forget night**,
-removing that section's records for the night (and dependent masters) in
-one step without touching the FITS files. Select a night (or several) and
-mark those frames usable
-**only for lights after them** (a set shot right after the change) or **only
-for lights before them** (the final set shot before it). Marked frames carry
-a badge, and matching never selects them across their boundary, in either
-direction, for any kind. Marking the same selection **in both directions
-again** clears the boundary. A light captured exactly at the boundary
+the boundary yourself on the [Calibration page](#browse-the-library): a
+session's header marks every frame of the session, and the frame panel one
+frame. A night splits where the catalog's lights are never captured, as in
+[Sky coverage](SKY_COVERAGE.md), so dusk and dawn flats share the date of
+the night between them, as N.I.N.A.'s `DATEMINUS12` folders do. The coverage
+report and export folders use the same nights. A catalog with no lights
+splits at noon UTC. The session header can also **Forget session**,
+removing its records (and dependent masters) in one step without touching
+the FITS files. Mark frames usable **After only** (a set shot right after
+the change) or **Before only** (the final set shot before it). Marked frames
+carry a badge, and matching never selects them across their boundary, in
+either direction, for any kind. **Both** clears the boundary. A light captured exactly at the boundary
 instant matches either way, and a frame with no recorded capture time
 cannot be judged and keeps matching — the same rule as any unrecorded
 setting. Marks survive folder re-scans, sync to other catalogs with the
@@ -485,7 +568,9 @@ between runs forces a clean rebuild instead of mixing calibrations.
 ## Project coverage report
 
 Each project card on the Library has a **Calibration** action that reports
-how the library covers that project's lights: per kind, how many frames
+how the library covers that project's lights (its **Browse calibration**
+button opens the [Calibration page](#browse-the-library) for the project's
+database): per kind, how many frames
 match and which capture sessions they span; and per imaging night and
 filter, the flat session a master would build from, its distance from the
 lights, and whether the night has its own flats. The dark column gives what
@@ -636,8 +721,9 @@ master records Seiza's verdict on its set of flats: spots that change
 across the set but sit in most of its frames survive into the master.
 
 Lights that need different master sets are partitioned into calibration
-sessions, and each light uses its session's masters. Choose **Masters** on a
-completed mono or color stack to inspect its recorded files, their session and
+sessions, and each light uses its session's masters. The **Masters** tab of
+the [Calibration page](#browse-the-library) lists every recorded master. Choose
+**Masters** on a completed mono or color stack to inspect its recorded files, their session and
 channel usage, and available rejection statistics. The inspector supports
 display stretch, native-size zoom, and unchanged FITS downloads. Missing cached
 masters are reported without rebuilding them. See
