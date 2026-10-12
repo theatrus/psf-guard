@@ -7,8 +7,8 @@ clipped orbital path inside the sensor, searches the nearby FITS pixels for a
 matching linear trail, and labels the candidate with the satellite name and
 NORAD identity supplied by the orbital catalog.
 
-The current integration uses `seiza 0.24.0`, `seiza-fits 0.3.0`, and
-`seiza-satellites 0.13.0`.
+The current integration uses `seiza 0.29.0`, `seiza-fits 0.3.0`, and
+`seiza-satellites 0.18.0`.
 
 ## Evidence boundary
 
