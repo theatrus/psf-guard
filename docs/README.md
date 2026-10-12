@@ -35,7 +35,7 @@ work. Historical checklists record delivery; they do not track current work.
 ## Component-specific guides
 
 - [Server authentication](AUTHENTICATION.md)
-- [Experimental Director management and API](DIRECTOR.md)
+- [Director management and API](DIRECTOR.md) (plugin pairing and collaboration are in early beta)
 - [MCP server for agents](MCP.md)
 - [Release guide](RELEASING.md)
 - [App and server updates](UPDATES.md)

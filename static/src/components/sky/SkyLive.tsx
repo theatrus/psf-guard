@@ -1,5 +1,6 @@
 import { Crosshair } from 'lucide-react';
 import type { PlacedRig } from './liveRigs';
+import EarlyBeta from '../director/EarlyBeta';
 
 const STATE_LABEL: Record<PlacedRig['connectivity'], string> = { online: 'Online', stale: 'Quiet', offline: 'Offline', never: 'Never seen' };
 
@@ -7,7 +8,7 @@ const STATE_LABEL: Record<PlacedRig['connectivity'], string> = { online: 'Online
  *  it is doing, and where the map puts it. Choosing one turns the map to it. */
 export default function SkyLive({ rigs, onFocus }: { rigs: PlacedRig[]; onFocus?: (rig: PlacedRig) => void }) {
   return <aside className="sky-live" aria-label="Live rigs on the sky">
-    <h2>Live</h2>
+    <div className="early-beta-heading"><h2>Live</h2><EarlyBeta /></div>
     {rigs.length === 0 && <p className="sky-live-empty">No rig has reported yet.</p>}
     <ul>
       {rigs.map(rig => (

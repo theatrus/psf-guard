@@ -111,11 +111,15 @@ describe('Rig profile card', () => {
     fireEvent.keyDown(opticsTab, { key: 'End' });
     expect(screen.getByRole('tab', { name: 'Collaboration' })).toHaveFocus();
     expect(await screen.findByRole('button', { name: 'Connect server' })).toBeVisible();
+    expect(within(screen.getByRole('region', { name: 'Collaboration' })).getByText('Early beta')).toHaveAttribute('title', 'Collaboration through a shared server is an early beta.');
     expect(screen.queryByRole('button', { name: 'Save rig profile' })).not.toBeInTheDocument();
   });
   it('fills optics and site from frame headers, previews the field, and saves with the read revision', async () => {
     const { saves } = fixture(); mount();
     expect(await screen.findAllByText('Not set', { selector: '.rig-profile-source' })).toHaveLength(2);
+    // Only the Director plugin reports camera modes, and it is an early beta.
+    expect(screen.getByText(/only the N\.I\.N\.A\. Director plugin reports them/)).toBeInTheDocument();
+    expect(screen.getByText('Early beta')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Use frame headers (newest.fits)' }));
     expect(screen.getByLabelText('Sensor width')).toHaveValue(6248);
     expect(screen.getByTestId('rig-profile-fov')).toHaveTextContent('Field 5.38° × 3.60°, 3.10″ per pixel, f/4.9');

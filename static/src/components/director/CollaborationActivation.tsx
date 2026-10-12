@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import type { CollaborationVisit } from '../../api/collaborationTypes';
+import EarlyBeta, { COLLABORATION_BETA } from './EarlyBeta';
 
 export default function CollaborationActivation({ projectId, value, onChange, disabled }: {
   projectId: string; value: CollaborationVisit[]; onChange: (value: CollaborationVisit[]) => void; disabled: boolean;
@@ -8,7 +9,7 @@ export default function CollaborationActivation({ projectId, value, onChange, di
   const query = useQuery({ queryKey: ['collaborationActivation', projectId], queryFn: () => apiClient.getCollaborationActivation(projectId), retry: false });
   if (query.isError) return <p role="alert">Collaboration assignments could not be loaded: {query.error.message}</p>;
   if (!query.data?.imports.length) return null;
-  return <fieldset disabled={disabled} className="collaboration-activation"><legend>Collaboration assignments</legend>
+  return <fieldset disabled={disabled} className="collaboration-activation"><legend>Collaboration assignments <EarlyBeta note={COLLABORATION_BETA} /></legend>
     {query.data.imports.map(i => {
       const selected = value.find(v => v.import_id === i.import_id);
       return <div key={i.import_id}>
