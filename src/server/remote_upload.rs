@@ -260,11 +260,10 @@ pub async fn upload_image(
         crate::server::stack_preview::automatic::RefreshReason::Arrival,
     );
     crate::server::quality_arrival::note_arrival(&ctx.id);
-    // A new calibration frame is graded before a stack or an export relies
-    // on it, as after an import, once the batch stops arriving.
-    if asks_for_grading(calibration_kind) {
-        crate::server::calibration_quality::note_upload(&state, &ctx.database_path);
-    }
+    // Once the batch stops arriving, a new calibration frame is graded
+    // before a stack or an export relies on it, and every project's
+    // calibration health is judged again, as after an import.
+    crate::server::calibration_quality::note_upload(&state, &ctx.database_path);
     tracing::info!(
         "Remote image received for db={}: {} ({} bytes, sha256={})",
         ctx.id,
@@ -273,12 +272,6 @@ pub async fn upload_image(
         response_sha256
     );
     Ok(Json(ApiResponse::success(published.response)))
-}
-
-/// Whether an upload of this kind asks for the calibration grading pass,
-/// which grades every calibration kind and no lights.
-fn asks_for_grading(kind: Option<CalibrationKind>) -> bool {
-    kind.is_some()
 }
 
 struct PublishedRemoteImage {
@@ -2290,20 +2283,6 @@ fn encode_digest(digest: impl AsRef<[u8]>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn uploaded_calibration_frames_ask_for_grading_and_lights_do_not() {
-        // Every calibration kind is graded now, not only darks.
-        for kind in [
-            CalibrationKind::Bias,
-            CalibrationKind::Dark,
-            CalibrationKind::DarkFlat,
-            CalibrationKind::Flat,
-        ] {
-            assert!(asks_for_grading(Some(kind)), "{kind:?}");
-        }
-        assert!(!asks_for_grading(None), "a light");
-    }
 
     #[test]
     fn rendered_artifact_revision_tracks_mapping_path_and_content() {

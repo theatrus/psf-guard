@@ -15,7 +15,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::UNIX_EPOCH;
 
+mod health;
 mod quality;
+pub use health::{
+    current_keys as health_keys, project_health, project_lights, summarize as summarize_health,
+    HealthCode, HealthFinding, HealthLevel, HealthLibrary, LightResult, NightFilterLights,
+    ProjectHealth, ProjectLight, FLAT_CHECK_AGE_DAYS, HEALTH_ALGORITHM_VERSION,
+};
 /// Synthetic frames for tests elsewhere in the crate.
 #[cfg(test)]
 pub(crate) mod test_frames {
@@ -1866,89 +1872,117 @@ fn table_column_names(conn: &Connection, table: &str) -> Result<Vec<String>> {
 }
 
 pub fn select_for_light(conn: &Connection, light: &FrameMeta) -> Result<CalibrationSelection> {
-    // Not `schema_exists`: a catalog whose tables predate a column this query
-    // selects has the table but not the column, and asking for it fails the
-    // whole stack with a raw SQL error. Opening the catalog upgrades it; one
-    // that could not be upgraded reports no calibration instead.
-    if !schema_supports_current_reads(conn) {
-        return Ok(CalibrationSelection::default());
-    }
-    let mut statement = conn.prepare(&format!(
-        "{} ORDER BY f.captured_at DESC, f.id DESC",
-        frame_select(conn, &[])
-    ))?;
-    let frames = statement
-        .query_map([], row_to_frame)?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut selected = CalibrationSelection::default();
-    let policy = external_master_policy();
-    for candidate in frames {
-        if candidate.is_master && policy == ExternalMasterPolicy::Ignore {
-            continue;
+    Ok(LibrarySnapshot::load(conn)?.select(light))
+}
+
+/// Every frame of a library, read once so many lights can be matched
+/// against it without a query each.
+pub(crate) struct LibrarySnapshot {
+    /// Newest first, as matching walks them.
+    frames: Vec<CalibrationFrame>,
+}
+
+impl LibrarySnapshot {
+    pub(crate) fn load(conn: &Connection) -> Result<Self> {
+        // Not `schema_exists`: a catalog whose tables predate a column this
+        // query selects has the table but not the column, and asking for it
+        // fails the whole stack with a raw SQL error. Opening the catalog
+        // upgrades it; one that could not be upgraded reports no
+        // calibration instead.
+        if !schema_supports_current_reads(conn) {
+            return Ok(Self { frames: Vec::new() });
         }
-        let sensor = sensor_matches(light, &candidate);
-        // A frame kept out still shows the library holds this kind, so a
-        // light whose only flats are poor is reported as one that cannot
-        // be calibrated rather than as one whose rig shoots none.
-        if sensor {
-            selected.library.note(candidate.kind);
-        }
-        // A frame marked usable only forward or backward of its capture —
-        // shot around an optics change or cleaning — never serves a light
-        // on the other side of that boundary.
-        if !validity_admits(&candidate, light.timestamp) {
-            continue;
-        }
-        if !sensor {
-            continue;
-        }
-        let matches = match candidate.kind {
-            CalibrationKind::Bias => true,
-            CalibrationKind::Dark => {
-                exposure_matches(light.exposure_s, candidate.exposure_s)
-                    && temperature_admits(light.camera_temp, &candidate)
-                    && dark_within_reach(&candidate, light.timestamp)
-            }
-            CalibrationKind::DarkFlat => false,
-            CalibrationKind::Flat => flat_matches(light, &candidate),
-        };
-        if matches && candidate.kept_out.is_some() {
-            selected.kept_out.push(candidate);
-            continue;
-        }
-        if matches {
-            match candidate.kind {
-                CalibrationKind::Bias => selected.bias.push(candidate),
-                CalibrationKind::Dark => selected.dark.push(candidate),
-                CalibrationKind::Flat => selected.flat.push(candidate),
-                CalibrationKind::DarkFlat => {}
-            }
-        }
+        let mut statement = conn.prepare(&format!(
+            "{} ORDER BY f.captured_at DESC, f.id DESC",
+            frame_select(conn, &[])
+        ))?;
+        let frames = statement
+            .query_map([], row_to_frame)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(Self { frames })
     }
 
-    sort_candidates(&mut selected.bias, light.timestamp);
-    sort_candidates(&mut selected.dark, light.timestamp);
-    sort_candidates(&mut selected.flat, light.timestamp);
-    if let Some(flat) = selected.flat.first() {
-        for candidate in query_kind(conn, CalibrationKind::DarkFlat)? {
-            // Dark-flats pair with the flat, but the boundary is judged
-            // against the light: the mark protects the imaging on the
-            // other side of the change.
-            if validity_admits(&candidate, light.timestamp)
-                && frame_pair_matches(flat, &candidate)
-                && exposure_matches(flat.exposure_s, candidate.exposure_s)
-                && temperature_matches(flat.camera_temp, candidate.camera_temp)
-            {
-                if candidate.kept_out.is_some() {
-                    selected.kept_out.push(candidate);
-                } else {
-                    selected.dark_flat.push(candidate);
+    pub(crate) fn frames(&self) -> &[CalibrationFrame] {
+        &self.frames
+    }
+
+    fn of_kind(&self, kind: CalibrationKind) -> impl Iterator<Item = &CalibrationFrame> {
+        self.frames.iter().filter(move |frame| frame.kind == kind)
+    }
+
+    /// What a stack would match to `light`: [`select_for_light`] without
+    /// reading the catalog again.
+    pub(crate) fn select(&self, light: &FrameMeta) -> CalibrationSelection {
+        let mut selected = CalibrationSelection::default();
+        let policy = external_master_policy();
+        for candidate in &self.frames {
+            if candidate.is_master && policy == ExternalMasterPolicy::Ignore {
+                continue;
+            }
+            let sensor = sensor_matches(light, candidate);
+            // A frame kept out still shows the library holds this kind, so a
+            // light whose only flats are poor is reported as one that cannot
+            // be calibrated rather than as one whose rig shoots none.
+            if sensor {
+                selected.library.note(candidate.kind);
+            }
+            // A frame marked usable only forward or backward of its capture —
+            // shot around an optics change or cleaning — never serves a light
+            // on the other side of that boundary.
+            if !validity_admits(candidate, light.timestamp) {
+                continue;
+            }
+            if !sensor {
+                continue;
+            }
+            let matches = match candidate.kind {
+                CalibrationKind::Bias => true,
+                CalibrationKind::Dark => {
+                    exposure_matches(light.exposure_s, candidate.exposure_s)
+                        && temperature_admits(light.camera_temp, candidate)
+                        && dark_within_reach(candidate, light.timestamp)
+                }
+                CalibrationKind::DarkFlat => false,
+                CalibrationKind::Flat => flat_matches(light, candidate),
+            };
+            if matches && candidate.kept_out.is_some() {
+                selected.kept_out.push(candidate.clone());
+                continue;
+            }
+            if matches {
+                match candidate.kind {
+                    CalibrationKind::Bias => selected.bias.push(candidate.clone()),
+                    CalibrationKind::Dark => selected.dark.push(candidate.clone()),
+                    CalibrationKind::Flat => selected.flat.push(candidate.clone()),
+                    CalibrationKind::DarkFlat => {}
                 }
             }
         }
+
+        sort_candidates(&mut selected.bias, light.timestamp);
+        sort_candidates(&mut selected.dark, light.timestamp);
+        sort_candidates(&mut selected.flat, light.timestamp);
+        if let Some(flat) = selected.flat.first() {
+            for candidate in self.of_kind(CalibrationKind::DarkFlat) {
+                // Dark-flats pair with the flat, but the boundary is judged
+                // against the light: the mark protects the imaging on the
+                // other side of the change.
+                if validity_admits(candidate, light.timestamp)
+                    && frame_pair_matches(flat, candidate)
+                    && exposure_matches(flat.exposure_s, candidate.exposure_s)
+                    && temperature_matches(flat.camera_temp, candidate.camera_temp)
+                {
+                    if candidate.kept_out.is_some() {
+                        selected.kept_out.push(candidate.clone());
+                    } else {
+                        selected.dark_flat.push(candidate.clone());
+                    }
+                }
+            }
+        }
+        sort_candidates(&mut selected.dark_flat, light.timestamp);
+        selected
     }
-    sort_candidates(&mut selected.dark_flat, light.timestamp);
-    Ok(selected)
 }
 
 pub fn selection_fingerprint(
@@ -2011,8 +2045,21 @@ pub fn calibration_gap(
     selected: &CalibrationSelection,
     night_boundary: i64,
 ) -> Result<Option<String>> {
+    calibration_gap_with(light, selected, night_boundary, || {
+        query_kind(conn, CalibrationKind::Flat)
+    })
+}
+
+/// [`calibration_gap`] with the library's flats read by `flats`, and only
+/// when a near miss has to be looked for.
+pub(crate) fn calibration_gap_with<Flats: AsRef<[CalibrationFrame]>>(
+    light: &FrameMeta,
+    selected: &CalibrationSelection,
+    night_boundary: i64,
+    flats: impl FnOnce() -> Result<Flats>,
+) -> Result<Option<String>> {
     if selected.flat.is_empty() && selected.library.flat {
-        let reason = match flat_near_miss(conn, light, night_boundary)? {
+        let reason = match flat_near_miss_in(flats()?.as_ref(), light, night_boundary) {
             Some(miss) => format!(
                 "No matching flat: the nearest {}flats are {:.0}° off its rotation",
                 miss.filter
@@ -2045,7 +2092,7 @@ pub fn calibration_gap(
 
 /// When the flats a master would take were shot: the median capture time
 /// of the coherent set, the way a stack reduces them.
-fn flat_session_at(selected: &CalibrationSelection) -> Option<i64> {
+pub(crate) fn flat_session_at(selected: &CalibrationSelection) -> Option<i64> {
     let subset = coherent_master_subset(CalibrationKind::Flat, &selected.flat);
     let mut times: Vec<i64> = subset
         .iter()
@@ -2680,27 +2727,38 @@ fn flat_near_miss(
     light: &FrameMeta,
     boundary: i64,
 ) -> Result<Option<FlatNearMiss>> {
-    let Some(light_rotation) = light.rotator_position.filter(|angle| angle.is_finite()) else {
-        return Ok(None);
-    };
+    Ok(flat_near_miss_in(
+        &query_kind(conn, CalibrationKind::Flat)?,
+        light,
+        boundary,
+    ))
+}
+
+/// [`flat_near_miss`] among `flats`, the library's flats.
+fn flat_near_miss_in(
+    flats: &[CalibrationFrame],
+    light: &FrameMeta,
+    boundary: i64,
+) -> Option<FlatNearMiss> {
+    let light_rotation = light.rotator_position.filter(|angle| angle.is_finite())?;
     let tolerance = tolerances();
     let mut relaxed = tolerances();
     relaxed.rotation_deg = 180.0;
     let light_signature = light_signature(light);
     let policy = external_master_policy();
     let mut near: Vec<(f64, CalibrationFrame)> = Vec::new();
-    for candidate in query_kind(conn, CalibrationKind::Flat)? {
+    for candidate in flats {
         if (candidate.is_master && policy == ExternalMasterPolicy::Ignore)
             || candidate.kept_out.is_some()
-            || !validity_admits(&candidate, light.timestamp)
-            || !sensor_matches(light, &candidate)
+            || !validity_admits(candidate, light.timestamp)
+            || !sensor_matches(light, candidate)
         {
             continue;
         }
         let Some(rotation) = candidate.rotation.filter(|angle| angle.is_finite()) else {
             continue;
         };
-        let signature = frame_signature(&candidate);
+        let signature = frame_signature(candidate);
         let optics = if candidate.is_master {
             seiza_calibration::optics_consistent(&light_signature.seiza, &signature.seiza, &relaxed)
         } else {
@@ -2708,7 +2766,7 @@ fn flat_near_miss(
         };
         let off = rotation_gap(light_rotation, rotation);
         if optics && off > tolerance.rotation_deg {
-            near.push((off, candidate));
+            near.push((off, candidate.clone()));
         }
     }
     // Nearest angle first, then nearest in time.
@@ -2721,9 +2779,7 @@ fn flat_near_miss(
             .total_cmp(right_off)
             .then(distance(left).cmp(&distance(right)))
     });
-    let Some((off, best)) = near.first() else {
-        return Ok(None);
-    };
+    let (off, best) = near.first()?;
     let best_rotation = best.rotation.unwrap_or(light_rotation);
     let session = best.captured_at.map(|at| night_of(at, boundary));
     let frames = near
@@ -2735,7 +2791,7 @@ fn flat_near_miss(
                 })
         })
         .count();
-    Ok(Some(FlatNearMiss {
+    Some(FlatNearMiss {
         filter: best.filter.clone(),
         flat_rotation_deg: best_rotation,
         light_rotation_deg: light_rotation,
@@ -2743,7 +2799,7 @@ fn flat_near_miss(
         tolerance_deg: tolerance.rotation_deg,
         session,
         frames,
-    }))
+    })
 }
 
 /// The imaging night a timestamp belongs to, for a catalog whose nights split
@@ -9019,7 +9075,7 @@ mod tests {
 
     /// Serializes the tests that change the process-wide external-master
     /// policy, which every selection in the process reads.
-    static POLICY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(super) static POLICY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn replace_test_fits_filter(path: &Path, filter_card: &str) {
         let mut bytes = std::fs::read(path).unwrap();

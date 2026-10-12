@@ -4,6 +4,7 @@ pub mod auth;
 pub mod autoimport;
 pub mod cache;
 pub mod cache_budget;
+pub mod calibration_health;
 pub mod calibration_quality;
 pub mod calibration_settings;
 pub mod catalog_install;
@@ -259,6 +260,11 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             "/projects/{project_id}/calibration-report",
             get(handlers::get_project_calibration_report),
         )
+        .route(
+            "/projects/{project_id}/calibration-health",
+            get(calibration_health::get_project_health),
+        )
+        .route("/calibration-health", get(calibration_health::get_health))
         .route(
             "/projects/{project_id}/calibration-report/rejects",
             get(handlers::get_project_calibration_gaps).post(handlers::reject_uncalibrated_lights),
