@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
@@ -73,6 +73,7 @@ describe('Activation panel', () => {
     ]}))),http.post('/api/director/v1/projects/project/activation/preview',async({request})=>{requested=await request.json();return HttpResponse.json(ok(report(false)));}));
     mount();
     const assignment=await screen.findByRole('checkbox',{name:/RedCat.*2026-10-05/});
+    expect(within(screen.getByRole('group',{name:/Collaboration assignments/})).getByText('Early beta')).toHaveAttribute('title',expect.stringContaining('Collaboration'));
     fireEvent.click(assignment);
     expect(screen.queryByLabelText(/window end/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button',{name:'Preview'}));

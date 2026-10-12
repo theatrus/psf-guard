@@ -1,15 +1,23 @@
 # Director management
 
-Director is experimental. It has no page of its own: plans live in the
-**Library** beside the projects they shoot, each plan has a **workspace**
-reached from the Library or from the header's scope, and the rigs
-live on the **Sky** and in **Settings**. Director stays the name of the
-plugin, the protocol and the API. This API manages global
-project, site and rig identities in a separate meta database. Director clients can pair to inspect programs and report
-receipts/status. Pairing does not allocate work or enable acquisition. The NINA
-runtime preview and PSF Guard Sync remain separate.
+Planning has no page of its own: plans live in the **Library** beside the
+projects they shoot, each plan has a **workspace** reached from the Library or
+from the header's scope, and the rigs live on the **Sky** and in **Settings**.
+Director stays the name of the plugin, the protocol and the API. This API
+manages global project, site and rig identities in a separate meta database.
+
+Target Scheduler with PSF Guard Sync is the main way to run a rig today.
+Activation writes ordinary Target Scheduler projects, and Sync carries them to
+N.I.N.A. Pairing a rig with the N.I.N.A. Director plugin is an early beta: a
+paired plugin pulls its program, checks in captures and reports live status.
+The app marks what the plugin drives **Early beta**: the **Live** table, the
+rig's plugin status and its camera modes. Pairing does not allocate work or
+enable acquisition, and PSF Guard Sync stays separate from it.
 
 ## Collaboration Sign-In
+
+Collaboration is an early beta. The app marks a rig's **Collaboration** section
+and a plan's collaboration assignments **Early beta**.
 
 PSF Guard owns the collaboration loop. Director receives ordinary rig plans and
 reports execution; PSF Guard Sync transports database changes and images. Neither
@@ -590,6 +598,8 @@ client credentials are the limited exception to operator authentication describe
 below; Sync credentials remain unrelated.
 
 ### Pair a Director client
+
+Early beta, like everything the Director plugin drives.
 
 This operator API has no pairing UI yet. Open Director to adopt the registered
 database first, then use its exact `catalog_id` and bound `rig_id`; get the coordinator's
@@ -1288,6 +1298,8 @@ pulls its program from this server, the coordinator, and reports here.
 
 ## Program pull
 
+Early beta.
+
 The Director plugin fetches its work from the coordinator the way Sync does:
 over HTTP, on its own schedule, and it keeps running on the last program it
 holds when the network is away.
@@ -1314,6 +1326,8 @@ and why. The server binds the program through the core before answering; a
 program that does not bind is a `422` with the reason, never a partial pull.
 
 ## Check-in and live status
+
+Early beta. The **Live** table on the Sky reads these reports.
 
 | Method | Route | Body or query |
 | --- | --- | --- |

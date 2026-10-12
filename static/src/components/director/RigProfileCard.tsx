@@ -11,6 +11,7 @@ import CollaborationConnections from './CollaborationConnections';
 import RigSchedulingApply from './RigSchedulingApply';
 import SchedulingFields from './SchedulingFields';
 import { compactOverrides, inheritedLimits } from './schedulingModel';
+import EarlyBeta from './EarlyBeta';
 import WorkspaceTabs from './WorkspaceTabs';
 import { workspacePanel } from './workspacePanel';
 import { applyDefaults, describeSource, editFromForm, fieldOfView, formFromProfile, formatFieldOfView, opticsFromForm, type RigProfileForm } from './rigProfileForm';
@@ -224,7 +225,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
         {peers.isError && <p className="director-muted">Peers could not be loaded; they are kept under Settings, Remote PSF Guard.</p>}
         {peers.data?.length === 0 && <p className="director-muted">No peer registered yet; add one under Settings, Remote PSF Guard.</p>}
       </fieldset>
-      <p className="director-muted">Camera modes and filters: {data.profile.configuration ? describeSource(data.profile.configuration.source, data.profile.configuration.reported_at_ms) : 'not reported yet; the N.I.N.A. plugin supplies them.'}</p>
+      <p className="director-muted">Camera modes and filters: {data.profile.configuration ? describeSource(data.profile.configuration.source, data.profile.configuration.reported_at_ms) : 'not reported; only the N.I.N.A. Director plugin reports them.'} <EarlyBeta /></p>
       </div>
       {(problem || save.isError) && !stale && <p className="director-error" role="alert">{problem || message(save.error)}</p>}
       {canWrite && <div className="director-actions"><button type="submit" disabled={disabled}><Check size={16} />{save.isPending ? 'Saving...' : 'Save rig profile'}</button></div>}

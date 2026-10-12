@@ -6,6 +6,7 @@ import { useAccess } from '../../auth/access';
 import type { CollaborationConnection } from '../../api/collaborationTypes';
 import CollaborationWorkflows from './CollaborationWorkflows';
 import CollaborationWizard from './CollaborationWizard';
+import EarlyBeta, { COLLABORATION_BETA } from './EarlyBeta';
 import { collaborationMessage, connectionStates } from './collaborationUi';
 
 export default function CollaborationConnections({ rig, name, active = true }: { rig: string; name: string; active?: boolean }) {
@@ -24,7 +25,7 @@ export default function CollaborationConnections({ rig, name, active = true }: {
     if (wizard) setWizard({ id: connection.binding.id });
   };
   return <section className="collaboration-connections" aria-label="Collaboration">
-    <div className="director-toolbar"><h3>Collaboration</h3><div className="director-actions">
+    <div className="director-toolbar"><div className="early-beta-heading"><h3>Collaboration</h3><EarlyBeta note={COLLABORATION_BETA} /></div><div className="director-actions">
       <button type="button" title="Reload collaboration connections" aria-label="Reload collaboration connections" disabled={query.isFetching} onClick={() => void query.refetch()}><RefreshCw size={16} /></button>
       {canWrite && <button type="button" onClick={() => setWizard({ id: null })}><Plus size={16} />Connect server</button>}
     </div></div>

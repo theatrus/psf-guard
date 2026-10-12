@@ -64,6 +64,12 @@ describe('Director live dashboard', () => {
     expect(screen.getAllByText('nothing activated')).toHaveLength(2);
   });
 
+  it('marks live status as the Director plugin early beta, and names Target Scheduler as the main path', async () => {
+    mount([online]);
+    expect(await screen.findByRole('heading', { name: 'Live' })).toBeInTheDocument();
+    expect(screen.getByText('Early beta')).toHaveAttribute('title', expect.stringContaining('Target Scheduler with PSF Guard Sync is the main path today'));
+  });
+
   it('says when no rig exists yet', async () => {
     mount([]);
     expect(await screen.findByText(/No rig yet/)).toBeInTheDocument();

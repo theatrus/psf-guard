@@ -112,7 +112,7 @@ export function describeSource(source: DirectorSource | null | undefined, at?: n
   const when = at ? ` on ${new Date(at).toLocaleDateString()}` : '';
   switch (source.kind) {
     case 'frame_headers': return `From frame headers of ${source.file_name}${when}`;
-    case 'plugin': return `Reported by the N.I.N.A. plugin${when}`;
+    case 'plugin': return `Reported by the N.I.N.A. Director plugin${when}`;
     default: return `Set by hand${when}`;
   }
 }

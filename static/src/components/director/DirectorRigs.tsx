@@ -8,6 +8,7 @@ import { openSettings } from '../../utils/settingsIntent';
 import { formatDegrees } from './framingModel';
 import RigProfileCard from './RigProfileCard';
 import DirectorSites from './DirectorSites';
+import EarlyBeta from './EarlyBeta';
 import { retryWhenBusy } from './retry';
 
 function describeStatus(payload: Record<string, unknown>, at: number): string {
@@ -27,7 +28,7 @@ export default function DirectorRigs() {
   const peers = useQuery({ queryKey: ['peers'], queryFn: apiClient.getPeers, retry: false, refetchOnWindowFocus: false, enabled: profiles.data?.some(entry => entry.profile?.peer_id) ?? false });
   return <><section aria-label="Rig databases" className="director-records director-rigs">
     <div className="director-toolbar"><h2>Rigs</h2></div>
-    <p className="director-muted">Each registered database is one rig, and its projects are plans. Setup holds the rig's optics, site and limits; the Director plugin reports the rest.</p>
+    <p className="director-muted">Each registered database is one rig, and its projects are plans. Setup holds the rig's optics, site and limits. Target Scheduler and PSF Guard Sync run the rig; the N.I.N.A. Director plugin can also pair and report its status. <EarlyBeta /></p>
     {databases.isPending && <p role="status">Loading rig databases...</p>}
     {databases.isError && <div role="alert"><p>{databases.error.message}</p><button type="button" onClick={() => void databases.refetch()}>Retry</button></div>}
     {databases.data?.length === 0 && <button type="button" onClick={() => openSettings('add')}>Add database</button>}
@@ -44,7 +45,7 @@ export default function DirectorRigs() {
               : profile.field_of_view ? `Field ${formatDegrees(profile.field_of_view.width_degrees)} × ${formatDegrees(profile.field_of_view.height_degrees)}, ${profile.field_of_view.pixel_scale_arcsec.toFixed(2)}″/px${profile.profile?.configuration ? ', camera reported' : ', camera not reported yet'}`
               : 'A rig, no optics yet'}</span>
             {profile?.profile?.peer_id && <span className="director-muted">Plans push to {peers.data?.find(peer => peer.id === profile.profile?.peer_id)?.name ?? profile.profile.peer_id}</span>}
-            {status?.status && <span className="director-muted">Plugin: {describeStatus(status.status.payload, status.status.reported_at_ms)}</span>}
+            {status?.status && <span className="director-muted">Director plugin: {describeStatus(status.status.payload, status.status.reported_at_ms)}</span>}
           </div>
           <Link to={`/?${new URLSearchParams({ db: db.id, dbfilter: db.id })}`}><BookOpen size={16} aria-hidden="true" />Library</Link>
           <button type="button" aria-expanded={expanded} aria-controls={setupId} aria-label={`Setup ${db.name}`} title={`Setup ${db.name}`} onClick={() => setOpenSetup(expanded ? null : db.id)}>{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}Setup</button>
