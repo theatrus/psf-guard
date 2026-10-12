@@ -361,7 +361,7 @@ pub(super) const READABLE_ROUTES: &[(&str, &str)] = &[
         "/db/{db}/sky/coverage",
         "Each target's footprint and exposure by filter",
     ),
-    ("/db/{db}/calibrations", "The calibration library by night"),
+    ("/db/{db}/calibrations", "Calibration totals per rig"),
     (
         "/db/{db}/calibrations/details",
         "Calibration frames in detail",

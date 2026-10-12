@@ -125,6 +125,16 @@ function formatSettings(frame: CalibrationFrameSummary): string {
   return values.filter(Boolean).join(' · ') || 'No matching settings in the FITS header';
 }
 
+/** A measured dark's median level and spread, in ADU; nothing until then. */
+function DarkLevel({ frame }: { frame: CalibrationFrameSummary }) {
+  const level = frame.dark_level;
+  if (level === null || level === undefined) return null;
+  const adu = (value: number) => (value < 10 ? value.toFixed(1) : String(Math.round(value)));
+  const sigma = frame.dark_level_sigma;
+  const spread = sigma === null || sigma === undefined ? '' : ` ± ${adu(sigma)}`;
+  return <small>{`Level ${adu(level)}${spread} ADU`}</small>;
+}
+
 export default function CalibrationLibraryDialog({
   dbId,
   dbName,
@@ -547,6 +557,7 @@ export default function CalibrationLibraryDialog({
                       <td>
                         <span>{formatSettings(frame)}</span>
                         {frame.camera && <small>{frame.camera}</small>}
+                        <DarkLevel frame={frame} />
                       </td>
                       <td>
                         <span

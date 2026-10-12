@@ -305,6 +305,8 @@ pub struct CalibrationFrameSummary {
     pub valid_direction: Option<ValidDirection>,
     /// Median level of a raw dark or dark-flat, once measured.
     pub dark_level: Option<f64>,
+    /// Spread of that dark's pixels around the median, measured with it.
+    pub dark_level_sigma: Option<f64>,
     /// Why library health keeps this dark out of masters and exports.
     pub stray_light: Option<String>,
 }
@@ -1585,11 +1587,15 @@ pub fn library_details(conn: &Connection) -> Result<CalibrationLibraryDetails> {
     } else {
         "0 AS is_master"
     };
-    let (stray_light_column, dark_level_column) = if has("stray_light") && has("dark_level") {
-        ("stray_light", "dark_level")
-    } else {
-        ("NULL AS stray_light", "NULL AS dark_level")
-    };
+    let (stray_light_column, dark_level_columns) =
+        if has("stray_light") && has("dark_level") && has("dark_level_sigma") {
+            ("stray_light", "dark_level, dark_level_sigma")
+        } else {
+            (
+                "NULL AS stray_light",
+                "NULL AS dark_level, NULL AS dark_level_sigma",
+            )
+        };
     let mut statement = conn.prepare(&format!(
         r#"
         SELECT id, frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
@@ -1597,17 +1603,21 @@ pub fn library_details(conn: &Connection) -> Result<CalibrationLibraryDetails> {
                binning_x, binning_y, gain, offset, readout_mode, bayer_pattern,
                exposure_s, camera_temp, filter_name, focal_length_mm,
                NULL AS rotation, {validity_column}, {readout_name_column}, {is_master_column},
-               {stray_light_column}, {dark_level_column}
+               {stray_light_column}, {dark_level_columns}
         FROM psf_guard_calibration_frame
         ORDER BY kind, captured_at DESC, source_path COLLATE NOCASE
         "#
     ))?;
     let frames = statement
         .query_map([], |row| {
-            Ok((row_to_frame(row)?, row.get::<_, Option<f64>>(27)?))
+            Ok((
+                row_to_frame(row)?,
+                row.get::<_, Option<f64>>(27)?,
+                row.get::<_, Option<f64>>(28)?,
+            ))
         })?
         .map(|row| {
-            row.map(|(frame, dark_level)| CalibrationFrameSummary {
+            row.map(|(frame, level, sigma)| CalibrationFrameSummary {
                 frame_uuid: frame.frame_uuid,
                 rig_uuid: frame.rig_uuid,
                 kind: frame.kind,
@@ -1632,7 +1642,8 @@ pub fn library_details(conn: &Connection) -> Result<CalibrationLibraryDetails> {
                 filter: frame.filter,
                 focal_length_mm: frame.focal_length_mm,
                 valid_direction: frame.valid_direction,
-                dark_level,
+                dark_level: level,
+                dark_level_sigma: sigma,
                 stray_light: frame.stray_light,
             })
         })
@@ -9869,6 +9880,7 @@ mod tests {
             .find(|frame| is_leak(Path::new(&frame.source_path)))
             .unwrap();
         assert_eq!(leaked.dark_level, Some(900.0));
+        assert_eq!(leaked.dark_level_sigma, Some(0.0), "noiseless test frame");
         assert!(
             leaked
                 .stray_light

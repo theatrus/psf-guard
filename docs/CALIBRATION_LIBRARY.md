@@ -167,21 +167,21 @@ pushes every light's sky below zero and carves a bowl that later shows as
 colored corners.
 
 PSF Guard checks the library for this in the background. After the server
-starts and after each import, it reads every raw dark and dark-flat once and
-records its median level and pixel noise. It then compares each frame with
-every frame that could stand in for it: the same kind, rig and sensor
-settings, a matching exposure and temperature, from any night. A frame more
-than one noise sigma above the quietest of those is marked **Stray light**.
-Frames from other nights take part, so a morning whose darks all leaked is
-still caught by a clean set from another night. A lone frame with nothing to
-compare against stays in use.
+starts, after each import, and once remote uploads of darks pause for two
+minutes, it reads every new raw dark and dark-flat once and records its median
+level and pixel noise. It then compares each frame with every frame that could
+stand in for it: the same kind, rig and sensor settings, a matching exposure
+and temperature, from any night. A frame more than one noise sigma above the
+quietest of those is marked **Stray light**. Frames from other nights take
+part, so a morning whose darks all leaked is still caught by a clean set from
+another night. A lone frame with nothing to compare against stays in use.
 
 A marked dark is left out of stack masters, WBPP exports, and calibration
-reports, which name what was left out. The calibration library shows the mark
-on the frame and a count on its night. Nothing is deleted: the grade changes
-when the library does, and forgetting a frame regrades the rest. Master
-building applies the same rule to its own inputs, which catches a dark the
-background pass has not reached yet.
+reports, which name what was left out. The calibration library shows each
+measured frame's level and noise in ADU, the mark on the frame, and a count on
+its night. Nothing is deleted: the grade changes when the library does, and
+forgetting a frame regrades the rest. Master building applies the same rule to
+its own inputs, which catches a dark the background pass has not reached yet.
 
 ## Upgrades and backups
 
