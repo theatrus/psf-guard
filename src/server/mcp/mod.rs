@@ -1762,7 +1762,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Preview a sync between two open databases: `pull` frames and structure from a telescope database, or push planning or grades to it. Shows every change and returns a preview id; writes nothing. Needs database management."
+        description = "Preview a sync between two open databases: `pull` frames and structure from a telescope database, or push planning or grades to it. Shows every change and returns a preview id; writes nothing."
     )]
     async fn preview_sync(
         &self,
@@ -1783,7 +1783,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Apply a sync preview, as the app's Apply does. Refuses if either database changed since the preview; refresh or preview again. Needs write access and database management."
+        description = "Apply a sync preview, as the app's Apply does. Refuses if either database changed since the preview; refresh or preview again. Needs write access."
     )]
     async fn apply_sync(
         &self,

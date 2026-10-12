@@ -151,7 +151,6 @@ pub const MAX_TOKEN_DAYS: u32 = 3650;
 /// SHA-256 of the secret; the secret is shown once, when it is minted. A
 /// token never grants more than its user has, and `read_only` narrows it.
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AuthTokenRecord {
     pub id: String,
     pub username: String,
@@ -164,6 +163,10 @@ pub struct AuthTokenRecord {
     /// Unix seconds; `None` never expires.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<i64>,
+    /// Token fields from a newer build, kept so that build's tokens survive
+    /// a run of this one.
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: UnknownFields,
 }
 
 impl fmt::Debug for AuthTokenRecord {
@@ -208,6 +211,7 @@ impl AuthTokenRecord {
             read_only,
             created_at: now,
             expires_at: expires_in_days.map(|days| now + i64::from(days) * 86_400),
+            extra: UnknownFields::new(),
         };
         Ok((secret, record))
     }
@@ -703,12 +707,21 @@ mod tests {
                 "schema_version": 1,
                 "users": [{"username": "viewer", "role": "read_only", "password_hash": hash, "theme": "dark"}],
                 "sessions": [{"id": "s1"}],
+                "tokens": [{
+                    "id": "t1",
+                    "username": "viewer",
+                    "label": "agent",
+                    "token_hash": "0".repeat(64),
+                    "created_at": 0,
+                    "scopes": ["catalog:read"],
+                }],
             })
             .to_string(),
         )
         .unwrap();
         let mut loaded = AuthRegistry::load(&path).unwrap();
         assert!(loaded.users[0].verify_password("long-view-secret"));
+        assert_eq!(loaded.tokens.len(), 1);
         loaded
             .add(
                 AuthUserRecord::new("editor", AccessRole::ReadWrite, "long-edit-secret").unwrap(),
@@ -719,6 +732,7 @@ mod tests {
         let written: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(written["sessions"][0]["id"], "s1");
+        assert_eq!(written["tokens"][0]["scopes"][0], "catalog:read");
         let users = written["users"].as_array().unwrap();
         assert_eq!(users.len(), 2);
         assert_eq!(

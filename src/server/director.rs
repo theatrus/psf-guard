@@ -159,6 +159,24 @@ pub(crate) fn spawn_collaboration(state: Arc<AppState>) {
 }
 
 impl Service {
+    /// The store at startup, or Planning off when it will not open: a store
+    /// on a filesystem without WAL, one a newer build wrote, or a folder
+    /// that cannot be written must not stop the server. The log names the
+    /// path and the reason.
+    pub(crate) fn configured_or_off(path: Option<&FilePath>) -> Option<Arc<Self>> {
+        match Self::configured(path) {
+            Ok(service) => service,
+            Err(error) => {
+                tracing::error!(
+                    "🧭 Planning is off: its store at {} would not open: {error:#}",
+                    path.map(|path| path.display().to_string())
+                        .unwrap_or_default()
+                );
+                None
+            }
+        }
+    }
+
     /// Call during startup, never with a client-supplied filesystem path.
     pub(crate) fn configured(path: Option<&FilePath>) -> anyhow::Result<Option<Arc<Self>>> {
         let Some(path) = path else { return Ok(None) };

@@ -237,6 +237,8 @@ fn startup_is_explicit_and_never_adopts_a_foreign_file() {
     assert!(!path.exists());
     std::fs::write(&path, b"foreign data").unwrap();
     assert!(Service::configured(Some(&path)).is_err());
+    // Startup goes on with Planning off rather than stopping the server.
+    assert!(Service::configured_or_off(Some(&path)).is_none());
     assert_eq!(std::fs::read(path).unwrap(), b"foreign data");
 }
 

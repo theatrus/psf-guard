@@ -534,7 +534,11 @@ pub struct StorageSettings {
     /// Moves Settings asked for and the next start carries out: one per
     /// folder, from the folder in use when it was saved. A move that fails
     /// stays here and is tried again.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "lenient_moves",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub moves: Vec<StorageMove>,
 }
 
@@ -543,6 +547,46 @@ impl StorageSettings {
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
+}
+
+/// A choice a newer build may write with a value this one does not know.
+/// It reads as unset, so one new option never stops the registry loading;
+/// the next save drops it, as an older build drops any field it lacks.
+fn lenient<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let Some(value) = Option::<serde_json::Value>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    match serde_json::from_value(value.clone()) {
+        Ok(parsed) => Ok(Some(parsed)),
+        Err(error) => {
+            tracing::warn!(
+                "Registry setting {value} is unknown to this version ({error}); using the default"
+            );
+            Ok(None)
+        }
+    }
+}
+
+/// Folder moves this version cannot read are left out; the rest still run.
+fn lenient_moves<'de, D>(deserializer: D) -> std::result::Result<Vec<StorageMove>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(values
+        .into_iter()
+        .filter_map(|value| match serde_json::from_value(value.clone()) {
+            Ok(planned) => Some(planned),
+            Err(error) => {
+                tracing::warn!("Skipping folder move {value} this version cannot read ({error})");
+                None
+            }
+        })
+        .collect())
 }
 
 /// A folder move waiting for the next start.
@@ -602,7 +646,11 @@ pub struct StackAutomationSettings {
     pub grade_delay_minutes: Option<u32>,
     /// How stack previews integrate their frames; absent uses Seiza's
     /// recommended method.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub method: Option<crate::server::stack_preview::StackMethod>,
     /// Automatic refreshes also stack channels with no stack yet; absent
     /// means only the channels already stacked.
@@ -651,7 +699,11 @@ pub struct CalibrationSettings {
     pub rotation_tolerance_deg: Option<f64>,
     /// How masters built by other software are used: `prefer` (the
     /// default), `fallback`, or `ignore`. Absent means prefer.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub external_masters: Option<crate::calibration::ExternalMasterPolicy>,
     /// Mask stars in raw flats before integration. Absent means disabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -667,7 +719,11 @@ pub struct CalibrationSettings {
     /// Whether a dark master starts from the nearest complete set or the
     /// nearest set however short. Absent means
     /// [`crate::calibration::DarkChoice::Complete`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub dark_choice: Option<crate::calibration::DarkChoice>,
     /// How far from a light its flats may have been shot, in days, before
     /// the light cannot be calibrated. Zero lifts the limit; absent uses
@@ -685,11 +741,19 @@ pub struct CalibrationSettings {
 pub struct ExportSettings {
     /// Layout new exports start from. Absent means the standard
     /// grouped-by-target tree.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub default_layout: Option<crate::commands::export::ExportLayout>,
     /// The WBPP settings an export or an in-app run starts from. Absent
     /// means the defaults.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub wbpp: Option<crate::commands::export::wbpp::WbppOptions>,
 }
 
@@ -1198,6 +1262,48 @@ mod tests {
             "Trip_2025-08-01/%TARGET%/%NIGHT%/%TYPE%"
         ));
         assert!(!template_carries_a_date("%TARGET%/%NIGHT%/%TYPE%"));
+    }
+
+    #[test]
+    fn choices_a_newer_build_wrote_read_as_unset_and_the_registry_still_loads() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let raw = serde_json::json!({
+            "schema_version": 2,
+            "databases": [],
+            "calibration": {
+                "dark_choice": "by_gain",
+                "external_masters": "fallback",
+                "complete_dark_frames": 20
+            },
+            "stacking": { "method": { "normalization": "per_star" }, "build_new_channels": true },
+            "export": { "default_layout": "by_moon_phase" },
+            "storage": {
+                "cache_dir": "/cache",
+                "moves": [
+                    { "kind": "previews", "from": "/a", "to": "/b" },
+                    { "kind": "stacks", "from": "/c", "to": "/d" }
+                ]
+            }
+        });
+        std::fs::write(&path, raw.to_string()).unwrap();
+
+        let reg = DbRegistry::load_or_init(&path).unwrap();
+        let calibration = reg.calibration.unwrap();
+        assert_eq!(calibration.dark_choice, None);
+        assert_eq!(
+            calibration.external_masters,
+            Some(crate::calibration::ExternalMasterPolicy::Fallback)
+        );
+        assert_eq!(calibration.complete_dark_frames, Some(20));
+        let stacking = reg.stacking.unwrap();
+        assert_eq!(stacking.method, None);
+        assert_eq!(stacking.build_new_channels, Some(true));
+        assert_eq!(reg.export.unwrap().default_layout, None);
+        let storage = reg.storage.unwrap();
+        assert_eq!(storage.cache_dir.as_deref(), Some("/cache"));
+        assert_eq!(storage.moves.len(), 1);
+        assert_eq!(storage.moves[0].to, "/d");
     }
 
     #[test]

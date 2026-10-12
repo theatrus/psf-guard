@@ -1,5 +1,8 @@
 # Unreleased
 
+- A planning store that will not open no longer stops the server, which
+  left the desktop app on a blank window. PSF Guard starts with Planning
+  off and the log names the store and the reason.
 - A color stack's processing panel no longer fails silently. An RC-Astro
   value past the tool's range, such as BlurXTerminator's Sharpen Stars above
   0.7, is marked on the field and stops Apply with the reason, and a refusal
@@ -15,8 +18,7 @@
   restore rejects (preview first, apply with its digest), preview and apply
   a sync between databases, mark calibration frames' validity, plate-solve a
   light, predict satellite crossings, and find and reject the lights the
-  library cannot calibrate. Removal and sync still need database
-  management.
+  library cannot calibrate. Removal still needs database management.
 
 - Dark and bias masters now prefer a complete set at the sensor's set point
   over a nearer handful at another temperature. Before, two warm darks shot
