@@ -1628,8 +1628,8 @@ export interface WbppRunProgress {
   frames: number;
   lights: number;
   missing_files: number;
-  /** Darks the calibration library left out because they caught stray light. */
-  stray_light_darks?: number;
+  /** Calibration frames the library keeps out: graded poor or kept out by hand. */
+  kept_out_frames?: number;
   command: string | null;
   pid: number | null;
   started_at: number | null;

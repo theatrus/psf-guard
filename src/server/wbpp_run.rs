@@ -70,10 +70,11 @@ pub struct WbppRunProgress {
     pub lights: usize,
     /// Catalog rows whose file was not found, so they are not in the run.
     pub missing_files: usize,
-    /// Darks the calibration library left out because they caught stray
-    /// light.
-    #[serde(default)]
-    pub stray_light_darks: usize,
+    /// Calibration frames the library keeps out: graded poor, kept out by
+    /// hand, or marked for stray light. Runs recorded before grading called
+    /// this `stray_light_darks`.
+    #[serde(default, alias = "stray_light_darks")]
+    pub kept_out_frames: usize,
     /// The command line, as a person would type it.
     pub command: Option<String>,
     pub pid: Option<u32>,
@@ -1150,7 +1151,7 @@ async fn run(
             plan.items.len(),
             lights,
             plan.missing.len(),
-            plan.stray_light.len(),
+            plan.kept_out.len(),
         );
         let _ = &plan_store;
         Ok((summary, runner))
@@ -1158,12 +1159,12 @@ async fn run(
     .await
     .map_err(|e| anyhow::anyhow!("planning task: {e}"))??;
 
-    let (frames, lights, missing, stray_light) = plan_summary;
+    let (frames, lights, missing, kept_out) = plan_summary;
     update(&store, |progress| {
         progress.frames = frames;
         progress.lights = lights;
         progress.missing_files = missing;
-        progress.stray_light_darks = stray_light;
+        progress.kept_out_frames = kept_out;
         progress.stage = "launching".to_string();
     });
     if cancel.load(Ordering::SeqCst) {
