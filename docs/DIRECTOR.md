@@ -16,6 +16,9 @@ enable acquisition, and PSF Guard Sync stays separate from it.
 
 ## Collaboration Sign-In
 
+Collaboration is an early beta. The app marks a rig's **Collaboration** section
+and a plan's collaboration assignments **Early beta**.
+
 PSF Guard owns the collaboration loop. Director receives ordinary rig plans and
 reports execution; PSF Guard Sync transports database changes and images. Neither
 plugin needs a direct Starfront connection. The independent

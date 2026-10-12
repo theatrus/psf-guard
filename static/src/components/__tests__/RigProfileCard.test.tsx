@@ -111,6 +111,7 @@ describe('Rig profile card', () => {
     fireEvent.keyDown(opticsTab, { key: 'End' });
     expect(screen.getByRole('tab', { name: 'Collaboration' })).toHaveFocus();
     expect(await screen.findByRole('button', { name: 'Connect server' })).toBeVisible();
+    expect(within(screen.getByRole('region', { name: 'Collaboration' })).getByText('Early beta')).toHaveAttribute('title', 'Collaboration through a shared server is an early beta.');
     expect(screen.queryByRole('button', { name: 'Save rig profile' })).not.toBeInTheDocument();
   });
   it('fills optics and site from frame headers, previews the field, and saves with the read revision', async () => {
