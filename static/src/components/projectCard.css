@@ -312,6 +312,10 @@ a.library-name:hover, a.library-family-name:hover { text-decoration: underline; 
 .library-pill-grading .grade-rejected::before { content: '✗'; margin-right: 2px; color: #ff6b6b; }
 .library-pill-grading .grade-pending::before { content: '·'; margin-right: 2px; color: var(--color-text-hint); }
 .library-pill.files-missing { color: var(--color-warning-light); }
+.library-pill-calibration { border: 1px solid transparent; cursor: pointer; font: inherit; font-size: 12px; }
+.library-pill-calibration.is-poor { color: #ff6b6b; background: rgba(255, 107, 107, 0.14); }
+.library-pill-calibration.is-check { color: #f2c94c; background: rgba(242, 201, 76, 0.14); }
+.library-pill-calibration:hover { border-color: currentColor; }
 .library-family { border: 1px solid var(--color-border-tertiary); border-radius: 22px; padding: 6px; background: var(--color-bg-elevated); }
 .library-family-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 4px 8px 8px; }
 .library-family-name { flex: 1 1 10rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

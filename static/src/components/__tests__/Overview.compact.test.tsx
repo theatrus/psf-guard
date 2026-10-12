@@ -101,6 +101,49 @@ describe('compact Library', () => {
     expect(screen.getAllByTestId('library-row')).toHaveLength(4);
   });
 
+  it('flags calibration with a pill that opens the report, and Show narrows to it', async () => {
+    setDisplayPreferences({ showNightChip: true, showAllChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
+    twoRigs();
+    // Only C925's Loner has a finding; its health is per database.
+    server.use(
+      http.get('/api/db/:dbId/calibration-health', ({ params }) => ok({
+        running: false,
+        projects: params.dbId === 'c925'
+          ? [{ project_id: 2, level: 'poor', poor_lights: 4, check_lights: 0, checked: 8, computed_at: 1 },
+            { project_id: 1, level: null, poor_lights: 0, check_lights: 0, checked: 15, computed_at: 1 }]
+          : [],
+      })),
+      http.get('/api/db/c925/projects/2/calibration-report', () => ok({ warnings: [], kinds: [], nights: [], lights_missing_files: 0 })),
+      http.get('/api/db/c925/projects/2/calibration-health', () => ok({ running: false, computed_at: 1, health: {
+        project_id: 2, level: 'poor', checked: 8, missing_files: 0, poor_lights: 4, check_lights: 0,
+        findings: [{ code: 'no_library', level: 'poor', reason: 'No calibration frames match its camera and settings', lights: 4,
+          nights: [{ night: '2026-07-01', filter: 'SII', lights: 4 }] }],
+      } })),
+    );
+    render(<Overview />, { wrapper: wrapper('/') });
+    const pill = await screen.findByRole('button', { name: 'Calibration Poor for Loner' });
+    expect(screen.getAllByRole('button', { name: /^Calibration (Poor|Check) for/ })).toHaveLength(1);
+    fireEvent.click(pill);
+    expect(await screen.findByText('No calibration frames match its camera and settings: 4 lights')).toBeInTheDocument();
+    expect(screen.getByText('2026-07-01 SII: 4')).toBeInTheDocument();
+  });
+
+  it('narrows the Library to projects with calibration issues', async () => {
+    setDisplayPreferences({ showNightChip: true, showAllChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
+    twoRigs();
+    server.use(
+      http.get('/api/db/:dbId/calibration-health', ({ params }) => ok({
+        running: false,
+        projects: params.dbId === 'redcat' ? [{ project_id: 2, level: 'check', poor_lights: 0, check_lights: 1, checked: 8, computed_at: 1 }] : [],
+      })),
+    );
+    render(<Overview />, { wrapper: wrapper('/?show=calibration') });
+    await screen.findByRole('button', { name: 'Calibration Check for Loner' });
+    const rows = screen.getAllByTestId('library-row');
+    expect(rows).toHaveLength(1);
+    expect(within(rows[0]).getByText('Loner')).toBeInTheDocument();
+  });
+
   it('groups by GUID, sums progress, and names states', () => {
     const a = { ...project(1, 'Heart', shared, 10, 40, 100), db_id: 'a', db_name: 'A' };
     const b = { ...project(2, 'Heart', shared.toLowerCase(), 5, 20, 200), db_id: 'b', db_name: 'B' };
