@@ -4,6 +4,7 @@ pub mod auth;
 pub mod autoimport;
 pub mod cache;
 pub mod cache_budget;
+pub mod calibration_browser;
 pub mod calibration_health;
 pub mod calibration_quality;
 pub mod calibration_settings;
@@ -206,7 +207,19 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/calibrations/frames/{frame_uuid}",
-            delete(handlers::forget_calibration_frame),
+            get(calibration_browser::get_frame).delete(handlers::forget_calibration_frame),
+        )
+        .route(
+            "/calibrations/frames/{frame_uuid}/preview",
+            get(calibration_browser::get_frame_preview),
+        )
+        .route(
+            "/calibrations/sessions",
+            get(calibration_browser::list_sessions),
+        )
+        .route(
+            "/calibrations/generation-status",
+            post(calibration_browser::post_generation_status),
         )
         .route(
             "/calibrations/frames/validity",
@@ -222,11 +235,19 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/calibrations/frames",
-            delete(handlers::forget_calibration_frames),
+            get(calibration_browser::list_frames).delete(handlers::forget_calibration_frames),
         )
         .route(
             "/calibrations/masters",
-            delete(handlers::clear_calibration_masters),
+            get(calibration_browser::list_masters).delete(handlers::clear_calibration_masters),
+        )
+        .route(
+            "/calibrations/masters/{master_uuid}/preview",
+            get(calibration_browser::get_master_preview),
+        )
+        .route(
+            "/calibrations/masters/{master_uuid}/fits",
+            get(calibration_browser::download_master_fits),
         )
         .route(
             "/projects/{project_id}",
