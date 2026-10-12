@@ -102,7 +102,7 @@ read, below `/api`, as you.
 | `start_wbpp_run` | Run PixInsight WBPP on a project's or target's accepted lights | yes, plus management |
 | `cancel_wbpp_run` | Stop the running WBPP run | yes, plus management |
 | `get_project_scheduler` | A project's Target Scheduler settings, targets and exposure plans | |
-| `get_calibration_library` | The calibration library by night, with validity marks and masters | |
+| `get_calibration_library` | Calibration totals: frames and masters, and per rig the count of each kind and the oldest and newest capture | |
 | `get_activity` | Stack builds and WBPP runs across databases, running and queued | |
 | `list_plans` | Planning: every plan with its target, rigs, goals and state | |
 | `get_plan` | One plan: framing, rigs, exposures per band | |

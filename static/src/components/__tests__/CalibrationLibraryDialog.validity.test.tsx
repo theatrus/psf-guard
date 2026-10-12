@@ -213,4 +213,38 @@ describe('calibration validity marking', () => {
     expect(badge.getAttribute('title')).toContain('669.0 above the quietest dark');
     expect(screen.getAllByText('Stray light')).toHaveLength(1);
   });
+
+  it('shows the level of each measured dark and nothing for the rest', async () => {
+    serveLibrary([
+      {
+        ...flat('dark-measured', earlyNight),
+        kind: 'dark',
+        dark_level: 503.4,
+        dark_level_sigma: 4.42,
+      },
+      { ...flat('dark-new', earlyNight + 600), kind: 'dark' },
+      {
+        ...flat('dark-flat-measured', earlyNight + 300),
+        kind: 'dark_flat',
+        dark_level: 1172,
+        dark_level_sigma: 12.6,
+      },
+      flat('flat-a', earlyNight + 900),
+    ]);
+    render(
+      <CalibrationLibraryDialog dbId="demo" dbName="Demo" canManage onClose={() => {}} />,
+      { wrapper: wrapper() }
+    );
+
+    // Flats and dark-flats share one night row, darks have another.
+    for (const toggle of await screen.findAllByRole('button', { name: /Night of 2026-06-01/ })) {
+      fireEvent.click(toggle);
+    }
+    expect(await screen.findByText('Level 503 ± 4.4 ADU')).toBeInTheDocument();
+    expect(screen.getByText('Level 1172 ± 13 ADU')).toBeInTheDocument();
+    // The dark not measured yet and the flat carry no level.
+    expect(screen.getByText('dark-new.fits')).toBeInTheDocument();
+    expect(screen.getByText('flat-a.fits')).toBeInTheDocument();
+    expect(screen.getAllByText(/^Level /)).toHaveLength(2);
+  });
 });

@@ -2177,6 +2177,8 @@ export interface CalibrationFrameSummary {
   valid_direction?: CalibrationValidDirection | null;
   /** Median level of a raw dark or dark-flat, once measured. */
   dark_level?: number | null;
+  /** Spread of that dark's pixels around the median, measured with it. */
+  dark_level_sigma?: number | null;
   /**
    * Why library health keeps this dark out of masters and exports: its level
    * sits well above the matching darks, the mark of stray light.

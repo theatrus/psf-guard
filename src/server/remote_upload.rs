@@ -260,6 +260,11 @@ pub async fn upload_image(
         crate::server::stack_preview::automatic::RefreshReason::Arrival,
     );
     crate::server::quality_arrival::note_arrival(&ctx.id);
+    // A new dark is checked for stray light before a stack or an export
+    // relies on it, as after an import.
+    if measures_dark_level(calibration_kind) {
+        crate::server::database_context::note_dark_arrival(ctx.database_path.clone());
+    }
     tracing::info!(
         "Remote image received for db={}: {} ({} bytes, sha256={})",
         ctx.id,
@@ -268,6 +273,15 @@ pub async fn upload_image(
         response_sha256
     );
     Ok(Json(ApiResponse::success(published.response)))
+}
+
+/// Whether an upload of this kind asks for the dark-level pass, which
+/// measures darks and dark-flats only.
+fn measures_dark_level(kind: Option<CalibrationKind>) -> bool {
+    matches!(
+        kind,
+        Some(CalibrationKind::Dark | CalibrationKind::DarkFlat)
+    )
 }
 
 struct PublishedRemoteImage {
@@ -2279,6 +2293,19 @@ fn encode_digest(digest: impl AsRef<[u8]>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uploaded_darks_and_dark_flats_ask_for_the_dark_level_pass() {
+        assert!(measures_dark_level(Some(CalibrationKind::Dark)));
+        assert!(measures_dark_level(Some(CalibrationKind::DarkFlat)));
+        for kind in [
+            None,
+            Some(CalibrationKind::Bias),
+            Some(CalibrationKind::Flat),
+        ] {
+            assert!(!measures_dark_level(kind), "{kind:?}");
+        }
+    }
 
     #[test]
     fn rendered_artifact_revision_tracks_mapping_path_and_content() {

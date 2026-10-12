@@ -244,67 +244,150 @@ pub(crate) fn spawn_calibration_header_backfill(path: String) {
 /// the library for stray light, off every request path.
 ///
 /// Each dark is a full read of a raw frame, so a large library on a NAS takes
-/// minutes. One pass runs per database at a time; a second request while one
-/// runs is dropped, since the running pass will reach the new frames or the
-/// next start will.
+/// minutes. One pass runs per database at a time. A pass measures only the
+/// darks it found when it began, so a request while one runs makes it run
+/// once more when it ends.
 pub(crate) fn spawn_dark_level_backfill(path: String) {
-    static RUNNING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-    {
-        let mut running = RUNNING
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if running.contains(&path) {
-            return;
-        }
-        running.push(path.clone());
-    }
-    std::thread::spawn(move || {
-        let outcome = Connection::open_with_flags(&path, db_open_flags())
-            .and_then(|conn| {
-                conn.busy_timeout(INDEX_BUILD_BUSY_TIMEOUT)?;
-                Ok(conn)
-            })
-            .map_err(anyhow::Error::from)
-            .and_then(|conn| {
-                let mut announced = false;
-                crate::calibration::measure_dark_levels(&conn, |done, total| {
-                    if !announced {
-                        tracing::info!(
-                            "Measuring the level of {total} calibration dark(s) in {path} to \
-                             check them for stray light"
-                        );
-                        announced = true;
-                    }
-                    if done < total && done % 50 == 0 {
-                        tracing::info!("Dark levels: {done} of {total} frames in {path}");
-                    }
-                })
-            });
-        match outcome {
-            Ok(outcome) if outcome.stray_light > 0 => tracing::warn!(
-                "{} calibration dark(s) in {path} caught stray light and are kept out of \
-                 masters and exports ({} measured this pass, {} unreadable)",
-                outcome.stray_light,
-                outcome.measured,
-                outcome.unreadable
-            ),
-            Ok(outcome) if outcome.pending > 0 => tracing::info!(
-                "Measured {} calibration dark(s) in {path}; none caught stray light \
-                 ({} unreadable, left for the next pass)",
-                outcome.measured,
-                outcome.unreadable
-            ),
-            Ok(_) => {}
-            Err(error) => tracing::info!(
-                "Paused measuring calibration darks in {path}: {error:#}. \
-                 The next pass continues where this left off."
-            ),
-        }
-        RUNNING
+    static PASSES: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
+    let passes = || {
+        PASSES
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .retain(|running| running != &path);
+    };
+    if !claim_dark_level_pass(&mut passes(), &path) {
+        return;
+    }
+    std::thread::spawn(move || loop {
+        run_dark_level_pass(&path);
+        if !finish_dark_level_pass(&mut passes(), &path) {
+            break;
+        }
     });
+}
+
+/// Start a pass for `path`, or, when one runs already, ask it to run again.
+/// Each entry is a catalog with a pass running and whether another was asked
+/// for meanwhile.
+fn claim_dark_level_pass(passes: &mut Vec<(String, bool)>, path: &str) -> bool {
+    match passes.iter_mut().find(|(running, _)| running == path) {
+        Some((_, again)) => {
+            *again = true;
+            false
+        }
+        None => {
+            passes.push((path.to_string(), false));
+            true
+        }
+    }
+}
+
+/// End a pass for `path`. True when another was asked for while it ran; the
+/// catalog then stays claimed for that pass.
+fn finish_dark_level_pass(passes: &mut Vec<(String, bool)>, path: &str) -> bool {
+    let Some(index) = passes.iter().position(|(running, _)| running == path) else {
+        return false;
+    };
+    if passes[index].1 {
+        passes[index].1 = false;
+        true
+    } else {
+        passes.remove(index);
+        false
+    }
+}
+
+/// One pass on its own connection, logging what it found.
+fn run_dark_level_pass(path: &str) {
+    let outcome = Connection::open_with_flags(path, db_open_flags())
+        .and_then(|conn| {
+            conn.busy_timeout(INDEX_BUILD_BUSY_TIMEOUT)?;
+            Ok(conn)
+        })
+        .map_err(anyhow::Error::from)
+        .and_then(|conn| {
+            let mut announced = false;
+            crate::calibration::measure_dark_levels(&conn, |done, total| {
+                if !announced {
+                    tracing::info!(
+                        "Measuring the level of {total} calibration dark(s) in {path} to \
+                         check them for stray light"
+                    );
+                    announced = true;
+                }
+                if done < total && done % 50 == 0 {
+                    tracing::info!("Dark levels: {done} of {total} frames in {path}");
+                }
+            })
+        });
+    match outcome {
+        Ok(outcome) if outcome.stray_light > 0 => tracing::warn!(
+            "{} calibration dark(s) in {path} caught stray light and are kept out of \
+             masters and exports ({} measured this pass, {} unreadable)",
+            outcome.stray_light,
+            outcome.measured,
+            outcome.unreadable
+        ),
+        Ok(outcome) if outcome.pending > 0 => tracing::info!(
+            "Measured {} calibration dark(s) in {path}; none caught stray light \
+             ({} unreadable, left for the next pass)",
+            outcome.measured,
+            outcome.unreadable
+        ),
+        Ok(_) => {}
+        Err(error) => tracing::info!(
+            "Paused measuring calibration darks in {path}: {error:#}. \
+             The next pass continues where this left off."
+        ),
+    }
+}
+
+/// How long the dark-level pass waits after the last dark a remote client
+/// uploads, so darks that arrive one request at a time share one pass.
+const DARK_ARRIVAL_SETTLE: Duration = Duration::from_secs(2 * 60);
+
+/// Catalogs with uploaded darks waiting for a pass, and when the last came.
+static DARK_ARRIVALS: std::sync::LazyLock<Mutex<HashMap<String, Instant>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// A dark or dark-flat reached this catalog by remote upload. Its level is
+/// measured once uploads to the catalog pause for [`DARK_ARRIVAL_SETTLE`];
+/// each new dark before then pushes the pass back.
+pub(crate) fn note_dark_arrival(path: String) {
+    let arrivals = || {
+        DARK_ARRIVALS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    };
+    if arrivals().insert(path.clone(), Instant::now()).is_some() {
+        // A thread already waits for this catalog.
+        return;
+    }
+    std::thread::spawn(move || {
+        loop {
+            let wait = dark_arrival_wait(&mut arrivals(), &path, Instant::now());
+            match wait {
+                Some(wait) => std::thread::sleep(wait),
+                None => break,
+            }
+        }
+        spawn_dark_level_backfill(path);
+    });
+}
+
+/// How much longer uploads to `path` must stay quiet before its pass, or
+/// `None` once they have, which clears the entry for the next arrival.
+fn dark_arrival_wait(
+    arrivals: &mut HashMap<String, Instant>,
+    path: &str,
+    now: Instant,
+) -> Option<Duration> {
+    let quiet = now.saturating_duration_since(*arrivals.get(path)?);
+    if quiet >= DARK_ARRIVAL_SETTLE {
+        arrivals.remove(path);
+        None
+    } else {
+        Some(DARK_ARRIVAL_SETTLE - quiet)
+    }
 }
 
 /// Pair calibrated and registered copies already on disk with their lights,
@@ -2277,6 +2360,44 @@ impl Clone for DatabaseContext {
 mod tests {
     use super::*;
     use rusqlite::Connection;
+
+    #[test]
+    fn a_dark_level_request_during_a_pass_runs_one_more() {
+        let mut passes = Vec::new();
+        assert!(claim_dark_level_pass(&mut passes, "a.sqlite"));
+        // Requests while it runs collapse into one more pass.
+        assert!(!claim_dark_level_pass(&mut passes, "a.sqlite"));
+        assert!(!claim_dark_level_pass(&mut passes, "a.sqlite"));
+        // Another catalog runs its own.
+        assert!(claim_dark_level_pass(&mut passes, "b.sqlite"));
+
+        assert!(finish_dark_level_pass(&mut passes, "a.sqlite"));
+        assert!(!finish_dark_level_pass(&mut passes, "a.sqlite"));
+        // Once it stops, the next request starts a pass.
+        assert!(claim_dark_level_pass(&mut passes, "a.sqlite"));
+    }
+
+    #[test]
+    fn uploaded_darks_wait_for_uploads_to_pause() {
+        let start = Instant::now();
+        let mut arrivals = HashMap::from([("a.sqlite".to_string(), start)]);
+        assert_eq!(
+            dark_arrival_wait(&mut arrivals, "a.sqlite", start),
+            Some(DARK_ARRIVAL_SETTLE)
+        );
+        // A dark a minute later pushes the pass back.
+        let later = start + Duration::from_secs(60);
+        arrivals.insert("a.sqlite".into(), later);
+        assert_eq!(
+            dark_arrival_wait(&mut arrivals, "a.sqlite", start + DARK_ARRIVAL_SETTLE),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            dark_arrival_wait(&mut arrivals, "a.sqlite", later + DARK_ARRIVAL_SETTLE),
+            None
+        );
+        assert!(arrivals.is_empty(), "the next dark starts a new wait");
+    }
 
     #[test]
     fn connection_reopen_invalidates_shared_project_exposure_cache() {

@@ -535,7 +535,8 @@ pub struct SyncApplyArgs {
 pub struct ValidityArgs {
     /// Database id (slug) or name.
     pub database: String,
-    /// Calibration frame UUIDs from `get_calibration_library`.
+    /// Calibration frame UUIDs, as `api_get` reads them from
+    /// `/db/{db}/calibrations/details`.
     pub frame_uuids: Vec<String>,
     /// `forward` (serve only lights after them), `backward`, or `both`
     /// (clear the mark).
@@ -906,7 +907,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "The calibration library by night: bias, darks, dark-flats and flats with their settings, validity marks, and the masters built from them."
+        description = "Calibration library totals: how many frames and masters it holds, and for each rig its name, telescope and camera, how many bias, darks, dark-flats and flats, and its oldest and newest capture. Lists no single frames."
     )]
     async fn get_calibration_library(
         &self,
