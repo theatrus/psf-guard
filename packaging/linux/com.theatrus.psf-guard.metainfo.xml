@@ -57,7 +57,6 @@
   <url type="homepage">https://psf-guard.com/</url>
   <url type="help">https://psf-guard.com/docs/</url>
   <url type="bugtracker">https://github.com/theatrus/psf-guard/issues</url>
-  <url type="vcs-browser">https://github.com/theatrus/psf-guard</url>
   <screenshots>
     <screenshot type="default">
       <caption>The Library: every project and target across your catalogs, with capture and grading progress</caption>

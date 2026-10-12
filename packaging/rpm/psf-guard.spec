@@ -93,8 +93,39 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
-* Sun Sep 27 2026 Yann Ramin <github@theatr.us> - 0.11.0-1
-- Interim development version on main: Director planning preview; released builds come from release/* branches
+* Sun Oct 11 2026 Yann Ramin <github@theatr.us> - 0.11.0-1
+- Planning: frame targets and mosaics on the sky, set exposure plans per rig, and write them into each rig's Target Scheduler database
+- Stacks has a view of its own: noise-weighted channel stacks, colour composed after the last channel, and WBPP runs from the same page
+- Dark and bias masters prefer a complete set at the set point; lights the library cannot calibrate are named; Settings, Calibration tab
+- PSF Guard is an MCP server: agents read and change catalogs, plans and stacks within the app's limits
+- Quality scans measure signal-to-noise against Gaia stars
+- Stacks and masters can use their own folders, a disk limit clears old previews, and Purge Rejects moves old rejects to a trash folder
+- Pairing a rig with the N.I.N.A. Director plugin is an early beta; Target Scheduler with PSF Guard Sync stays the main path
+
+* Wed Oct 07 2026 Yann Ramin <github@theatr.us> - 0.10.5-1
+- WBPP exports and runs give each night's darks their own set, so WBPP no longer averages them into one master
+- Dark masters use the nearest complete night of darks, and darks more than six months from the lights no longer match
+- The calibration coverage report says why a night has no flats and which masters from other software it uses
+- The desktop app writes a daily log file; Settings, Open logs opens the folder
+
+* Sat Oct 03 2026 Yann Ramin <github@theatr.us> - 0.10.4-1
+- Analyze new frames as they arrive, an option per database, scores frames that sync, upload or import brings in
+- Frames with plenty of stars no longer score near zero because one measurement found none
+- The quality scan no longer records zero stars for a frame still being copied
+- Calibration frames are dated by the night they belong to; dawn flats west of Greenwich no longer land a day late
+- Frames far softer than their target's best score low, judged across every night
+- A rotator that slipped is caught: frames turned away from the target's framing without a reported turn score low and stay out of stacks
+
+* Sun Sep 27 2026 Yann Ramin <github@theatr.us> - 0.10.3-1
+- A server that ran a newer preview build starts again on 0.10: the browser user file keeps fields this version does not know, such as API tokens, instead of refusing to load
+
+* Sat Sep 26 2026 Yann Ramin <github@theatr.us> - 0.10.2-1
+- Stack in WBPP runs PixInsight's WeightedBatchPreprocessing on the server, with a queue across databases
+- WBPP settings for exports and runs: quality, Fast Integration, drizzle, autocrop, rejection
+- Automatic import scans image directories on open and on a schedule
+- AstroBin acquisition CSV from the Overview and the astrobin-csv command
+- RGB masters preview in colour instead of crashing the preview worker
+- N.I.N.A. flat coverage sync no longer fails after a server update
 
 * Thu Sep 24 2026 Yann Ramin <github@theatr.us> - 0.10.1-1
 - Empty catalogs and projects show zero grading counts instead of a database error
