@@ -857,6 +857,50 @@
   color: var(--color-error);
 }
 
+.tauri-settings .scan-rules-patterns {
+  font-family: monospace;
+  resize: vertical;
+  min-height: 3em;
+}
+
+.tauri-settings .scan-rules-exposure {
+  max-width: 10em;
+}
+
+.tauri-settings .autoimport-notes {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+.tauri-settings .autoimport-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tauri-settings .autoimport-held {
+  padding: 2px 4px 2px 10px;
+  border-left: 3px solid var(--color-warning, #e0a020);
+  background: var(--color-bg-tertiary);
+}
+
+.tauri-settings .import-rule-notes {
+  margin: 6px 0;
+  color: var(--color-text-secondary);
+  font-size: 0.9em;
+}
+
+.tauri-settings .import-folder-picked {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+  font-size: 0.9em;
+  word-break: break-all;
+}
+
 .tauri-settings .quality-backfill-error {
   align-self: center;
   color: var(--color-error);

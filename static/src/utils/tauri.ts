@@ -83,6 +83,8 @@ export interface DbEntry {
   process_dir?: string;
   /** Automatic import of new frames, when turned on. */
   autoimport?: import('../api/types').AutoImportSettings;
+  /** What every import from the image folders leaves out. */
+  scan_rules?: import('../api/types').ScanRules;
 }
 
 // Process-global Seiza catalog paths. data_dir configures a complete bundle;

@@ -26,6 +26,7 @@ const settings: AutoImportSettings = {
   scope: 'all',
   backfill: true,
   accept_other_rigs: false,
+  new_targets: 'ask',
 };
 
 const finished: ImportJobProgress = {
@@ -105,6 +106,75 @@ describe('AutoImportSummary', () => {
     expect(line.textContent).toContain('next in 25 min');
     fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
     await waitFor(() => expect(runs).toBe(1));
+  });
+});
+
+describe('AutoImportSummary notes', () => {
+  const held: ImportJobProgress = {
+    ...finished,
+    outcome: {
+      ...finished.outcome!,
+      imported: 2,
+      attached: 2,
+      scan_rules: { files_skipped: 12, folders_skipped: 1, ignored_folders: 0 },
+      skipped_by_filter: 3,
+      left_out: [{ reason: 'no_target_name', frames: 3, example: '/data/af_01.fits' }],
+      new_targets: 'ask',
+      skipped_unmatched: 11,
+      unmatched: [
+        { target: 'NGC 7000', frames: 8, folders: ['/data/NGC7000/LIGHT'] },
+        { target: null, frames: 3, folders: ['/data/misc', '/data/NGC7000/LIGHT'] },
+      ],
+    },
+  };
+
+  it('says what the last run left out and offers Review for held frames', async () => {
+    const reviewed: string[][] = [];
+    server.use(
+      http.get('/api/db/rig/autoimport', () =>
+        HttpResponse.json(ok({ settings, progress: held, last_started_at: 1 }))
+      )
+    );
+    render(
+      <AutoImportSummary
+        dbId="rig"
+        settings={settings}
+        onReview={(folders) => reviewed.push(folders)}
+      />,
+      { wrapper: wrapper() }
+    );
+    expect(await screen.findByText('12 skipped by scan rules')).toBeInTheDocument();
+    expect(screen.getByText('1 folder(s) skipped by scan rules')).toBeInTheDocument();
+    expect(screen.getByText('3 left out: no target name')).toBeInTheDocument();
+    expect(screen.getByText('11 held: no matching project')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    expect(reviewed).toEqual([['/data/NGC7000/LIGHT', '/data/misc']]);
+  });
+
+  it('offers no Review for frames left out, or without the management gate', async () => {
+    server.use(
+      http.get('/api/db/rig/autoimport', () =>
+        HttpResponse.json(
+          ok({
+            settings,
+            progress: { ...held, outcome: { ...held.outcome!, new_targets: 'skip' } },
+            last_started_at: 1,
+          })
+        )
+      ),
+      http.get('/api/db/viewer/autoimport', () =>
+        HttpResponse.json(ok({ settings, progress: held, last_started_at: 1 }))
+      )
+    );
+    render(<AutoImportSummary dbId="rig" settings={settings} onReview={() => undefined} />, {
+      wrapper: wrapper(),
+    });
+    expect(await screen.findByText('11 left out: no matching project')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Review' })).not.toBeInTheDocument();
+
+    render(<AutoImportSummary dbId="viewer" settings={settings} />, { wrapper: wrapper() });
+    expect(await screen.findByText('11 held: no matching project')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Review' })).not.toBeInTheDocument();
   });
 });
 

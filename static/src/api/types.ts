@@ -1887,7 +1887,37 @@ export interface DatabaseSummary {
   process_directory?: string;
   /** Automatic import of new frames, when turned on. */
   autoimport?: AutoImportSettings;
+  /** What every import from the image folders leaves out, when set. */
+  scan_rules?: ScanRules;
 }
+
+/**
+ * What every import from a database's image folders leaves out. Patterns
+ * match paths relative to the image folder; one with no `/` matches a file
+ * or folder name at any depth.
+ */
+export interface ScanRules {
+  exclude: string[];
+  /** When any are set, only files matching one are read. */
+  include: string[];
+  /** A frame with no IMAGETYP is left out instead of taken for a light. */
+  lights_must_say_light: boolean;
+  /** A light with no OBJECT is left out instead of becoming "Unknown Target". */
+  require_object: boolean;
+  /** Lights shorter than this, or of unknown length, are left out. */
+  min_exposure_seconds?: number | null;
+}
+
+export const DEFAULT_SCAN_RULES: ScanRules = {
+  exclude: [],
+  include: [],
+  lights_must_say_light: false,
+  require_object: false,
+  min_exposure_seconds: null,
+};
+
+/** What a run does with lights that match no target in the catalog. */
+export type NewTargets = 'create' | 'skip' | 'ask';
 
 /** When and what an automatic import brings in. */
 export interface AutoImportSettings {
@@ -1900,6 +1930,8 @@ export interface AutoImportSettings {
   /** Queue the background quality scan for the frames a run brings in. */
   backfill: boolean;
   accept_other_rigs: boolean;
+  /** Lights that match no target: held for review (the default), left out, or made into projects. */
+  new_targets: NewTargets;
 }
 
 export const DEFAULT_AUTOIMPORT_SETTINGS: AutoImportSettings = {
@@ -1909,6 +1941,7 @@ export const DEFAULT_AUTOIMPORT_SETTINGS: AutoImportSettings = {
   scope: 'all',
   backfill: true,
   accept_other_rigs: false,
+  new_targets: 'ask',
 };
 
 /** `GET /api/db/{db_id}/autoimport`. */
@@ -2091,6 +2124,16 @@ export interface ImportOutcome {
   /** Lights from a rig the catalog has not recorded, left out. */
   skipped_other_rig?: number;
   other_rigs?: ImportOtherRigSummary[];
+  /** Files and folders the scan rules left out before reading a header. */
+  scan_rules?: ScanRuleReport;
+  /** Lights the scan rules' light filters left out. */
+  skipped_by_filter?: number;
+  left_out?: ImportLeftOutSummary[];
+  /** What the run did with lights that match no existing target. */
+  new_targets?: NewTargets;
+  /** Lights left out or held because they match no existing target. */
+  skipped_unmatched?: number;
+  unmatched?: ImportUnmatchedSummary[];
   imported: number;
   /** Frames attached to targets that already existed. */
   attached: number;
@@ -2105,6 +2148,32 @@ export interface ImportOutcome {
   attach_summaries: ImportAttachSummary[];
   created_target_ids: number[];
   attached_target_ids: number[];
+}
+
+export interface ScanRuleReport {
+  /** Image files an exclude or include pattern left out. */
+  files_skipped: number;
+  /** Folders an exclude pattern left out, with everything below. */
+  folders_skipped: number;
+  /** Folders a `.psfguardignore` file left out, with everything below. */
+  ignored_folders: number;
+}
+
+export type ImportLeftOutReason = 'no_image_type' | 'no_target_name' | 'short_exposure';
+
+/** Lights one light filter left out. */
+export interface ImportLeftOutSummary {
+  reason: ImportLeftOutReason;
+  frames: number;
+  example: string;
+}
+
+/** Lights of one target name that match nothing in the catalog. */
+export interface ImportUnmatchedSummary {
+  /** The frames' OBJECT; absent when they have none. */
+  target?: string | null;
+  frames: number;
+  folders: string[];
 }
 
 /** Frames from one rig the catalog does not know, left out of a run. */
