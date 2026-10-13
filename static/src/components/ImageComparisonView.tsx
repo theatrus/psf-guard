@@ -378,13 +378,11 @@ export default function ImageComparisonView({
 
   // Handle zoom events
   const handleLeftZoom = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
     e.stopPropagation();
     leftZoom.handleWheel(e);
   }, [leftZoom]);
 
   const handleRightZoom = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
     e.stopPropagation();
     if (!syncZoom) {
       rightZoom.handleWheel(e);
