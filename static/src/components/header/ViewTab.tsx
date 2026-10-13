@@ -12,9 +12,9 @@ interface ViewTabProps {
 
 /**
  * One view in the header, shown by its icon. The current view also shows
- * its name. Any other shows its name while hovered or focused, drawn over
- * the tabs beside it rather than pushing them along, so nothing moves under
- * the pointer and the header's row fit does not change.
+ * its name. Any other slides its name out of the button while hovered or
+ * focused, and the current view folds its name away meanwhile, still
+ * highlighted, so the row keeps about the same width.
  */
 export default function ViewTab({ label, icon: Icon, current, disabled, title, onClick }: ViewTabProps) {
   return (
@@ -28,11 +28,7 @@ export default function ViewTab({ label, icon: Icon, current, disabled, title, o
       title={title}
     >
       <Icon size={16} aria-hidden="true" />
-      {current ? (
-        <span className="view-tab-name">{label}</span>
-      ) : (
-        <span className="view-tab-flyout" aria-hidden="true">{label}</span>
-      )}
+      <span className="view-tab-name" aria-hidden="true">{label}</span>
     </button>
   );
 }

@@ -168,6 +168,13 @@ function AppContent() {
         </div>
 
         <nav className="header-view-tabs header-nav" aria-label="Views" data-header-part="nav">
+          {/* The Sky follows no scope, so it stands apart, ahead of the rest. */}
+          <ViewTab
+            label="Sky"
+            icon={Telescope}
+            current={isOnSky}
+            onClick={() => navigate(toScoped('/sky'))}
+          />
           <ViewTab
             label="Library"
             icon={LibraryBig}
@@ -176,7 +183,7 @@ function AppContent() {
           />
           {/* The scope, from the whole to the part: the project (a plan shot
               by several rigs is one), its workspace, then which rig and
-              target Images and Sequence show. */}
+              target the views after it show. */}
           <div className="header-group header-scope" role="group" aria-label="Scope">
             <ProjectTargetSelector />
             {plan.enabled && (
@@ -207,6 +214,16 @@ function AppContent() {
               title={hasReviewScope ? undefined : 'Choose a project or database first'}
               onClick={() => navigate(toScoped('/sequence'))}
             />
+            {/* In pipeline order: the lights, their sequence, the calibration
+                that serves them, then the stacks they make. Calibration
+                follows the database and rig in scope; with no database it
+                opens on the first. */}
+            <ViewTab
+              label="Calibration"
+              icon={TestTubeDiagonal}
+              current={isOnCalibration}
+              onClick={() => navigate(toScoped('/calibration'))}
+            />
             <ViewTab
               label="Stacks"
               icon={SquareStack}
@@ -215,21 +232,7 @@ function AppContent() {
               title={hasReviewScope ? undefined : 'Choose a project or database first'}
               onClick={() => navigate(toScoped('/stacks'))}
             />
-            {/* The calibration library of the database in scope; it picks
-                the first database when none is. */}
-            <ViewTab
-              label="Calibration"
-              icon={TestTubeDiagonal}
-              current={isOnCalibration}
-              onClick={() => navigate(toScoped('/calibration'))}
-            />
           </div>
-          <ViewTab
-            label="Sky"
-            icon={Telescope}
-            current={isOnSky}
-            onClick={() => navigate(toScoped('/sky'))}
-          />
         </nav>
 
         <div className="header-utilities" data-header-part="utilities">

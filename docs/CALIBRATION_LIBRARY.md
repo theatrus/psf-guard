@@ -46,7 +46,7 @@ database copy carries this catalog with its projects and grades.
 The **Calibration** page shows one database's library: its sessions, the
 frames of a session as pictures, one frame with its numbers beside its
 session's, and the masters built from them. Open it with the header's
-**Calibration** tab, beside Images, Sequence and Stacks. It shows the
+**Calibration** tab, between Sequence and Stacks. It shows the
 database the header's project picker has in scope, or the first database
 when none is. With a project in scope it opens on that project's rig: the
 one whose frames came from the project's N.I.N.A. profile, when exactly one

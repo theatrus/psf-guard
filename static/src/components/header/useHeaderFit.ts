@@ -63,6 +63,10 @@ export function useHeaderFit(header: RefObject<HTMLElement | null>): boolean {
       const nav = part('nav');
       const utilities = part('utilities');
       if (!brand || !nav || !utilities) return;
+      // A hovered or focused view tab shows its name for the moment; the
+      // row is decided from the tabs at rest, once the pointer or focus
+      // leaves, so the header never jumps between layouts under the pointer.
+      if (nav.querySelector('.view-tab:hover, .view-tab:focus-visible')) return;
       const apply = (next: boolean) => {
         // Set at once, so a flip never paints a frame of overlap; React
         // renders the same class when the state lands.
@@ -112,12 +116,18 @@ export function useHeaderFit(header: RefObject<HTMLElement | null>): boolean {
         for (const item of group.children) resize.observe(item);
       }
     };
+    // Measure again once a tab's name folds away.
+    const settle = () => requestAnimationFrame(measure);
+    root.addEventListener('pointerleave', settle);
+    root.addEventListener('focusout', settle);
     phone.addEventListener('change', measure);
     watch();
     measure();
     return () => {
       resize.disconnect();
       mutations.disconnect();
+      root.removeEventListener('pointerleave', settle);
+      root.removeEventListener('focusout', settle);
       phone.removeEventListener('change', measure);
     };
   }, [header]);
