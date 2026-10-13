@@ -27,7 +27,7 @@ export default function AstroBinFilterSummary({ dbId, dbName = dbId, canManage =
             {map.isError
               ? 'AstroBin filters could not be read.'
               : entries.length === 0
-                ? 'AstroBin filters: none named yet; the export uses the server-wide defaults.'
+                ? 'AstroBin filters: none yet; the export uses the server-wide defaults.'
                 : `AstroBin filters · ${names.size} name${names.size === 1 ? '' : 's'}, ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'}`}
           </div>
           <button className="calibration-manage-button" onClick={() => setOpen(true)}>

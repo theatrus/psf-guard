@@ -435,7 +435,7 @@ pub struct ProjectChangesArgs {
     /// Only the fields to change: `name`, `description`, `state`,
     /// `priority`, `minimum_time`, `minimum_altitude`, `maximum_altitude`,
     /// `use_custom_horizon`, `horizon_offset`, `meridian_window`,
-    /// `filter_switch_frequency`, … as `get_project_scheduler` names them.
+    /// `filter_switch_frequency`, … as `get_project_scheduler` spells them.
     pub changes: Value,
 }
 
@@ -657,7 +657,7 @@ impl PsfGuardMcp {
             .map_err(|error| failure(&error))?;
         if reply.status() == axum::http::StatusCode::NOT_FOUND {
             return Err(failure(&format!(
-                "No stack {job_id} in project {project_id}; list_stacks names the current ones"
+                "No stack {job_id} in project {project_id}; list_stacks gives the current ones"
             )));
         }
         let value = api::data(reply).map_err(|error| failure(&error))?;
@@ -1903,7 +1903,7 @@ impl ServerHandler for PsfGuardMcp {
                  from it. Grades are accepted, rejected or pending. analyze_sequence and \
                  get_image_quality report evidence and suggestions; nothing changes until \
                  grade_images runs. Jobs (import, quality scan, WBPP) return at once; poll \
-                 get_jobs for progress. For a stack, list_stacks names each channel's job; \
+                 get_jobs for progress. For a stack, list_stacks gives each channel's job; \
                  get_stack gives its frames and per-night drift, get_stack_calibration the \
                  masters it applied, and get_stack_image the picture (stretch `background` shows \
                  patterns). explain_calibration says why one light got, or missed, each master. \

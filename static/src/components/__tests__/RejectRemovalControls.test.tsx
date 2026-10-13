@@ -25,7 +25,7 @@ describe('Remove rejects', () => {
         previews.push(await request.json());
         return ok({ min_age_days: 3, waiting: 2, next_eligible_at: NOW + 86_400, without_files: 0, bytes: 3 * 1024 ** 2, digest: 'd'.repeat(64),
           frames: [{ image_id: 1, guid: 'g1', target_id: 1, target_name: 'M42', file_name: 'M42_Ha_001.fits', rejected_at: NOW - 9 * 86_400, reject_reason: 'Clouds', files: [] }],
-          skipped: [{ image_id: 5, guid: 'g5', target_name: 'M42', file_name: null, reason: 'a collaboration report names it' }] });
+          skipped: [{ image_id: 5, guid: 'g5', target_name: 'M42', file_name: null, reason: 'it is in a collaboration report' }] });
       }),
       http.post('/api/db/rig/rejects/removal/apply', async ({ request }) => {
         applies.push(await request.json());
@@ -44,7 +44,7 @@ describe('Remove rejects', () => {
     expect(previews).toEqual([{ min_age_days: 3 }]);
     expect(plan).toHaveTextContent('1 reject to remove (3.0 MB).');
     expect(plan).toHaveTextContent('2 rejects rejected more recently');
-    expect(plan).toHaveTextContent('1 stay: a collaboration report names it.');
+    expect(plan).toHaveTextContent('1 stay: it is in a collaboration report.');
     fireEvent.click(within(group).getByRole('button', { name: 'Remove 1 reject' }));
     expect(await within(group).findByRole('status')).toHaveTextContent('Removed 1 reject; their files wait in the trash until');
     expect(applies).toEqual([{ min_age_days: 3, digest: 'd'.repeat(64), retention_days: 14 }]);

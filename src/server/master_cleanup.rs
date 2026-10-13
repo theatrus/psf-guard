@@ -243,7 +243,7 @@ pub fn referenced_labels(stack_root: &Path) -> Option<HashSet<String>> {
     for file in files {
         let Ok(text) = std::fs::read_to_string(&file) else {
             tracing::warn!(
-                "Not removing calibration masters: {} could not be read, and it may name one",
+                "Not removing calibration masters: {} could not be read, and it may refer to one",
                 file.display()
             );
             return None;

@@ -58,7 +58,7 @@ export function describeExportProgress(progress: ExportJobProgress | undefined):
         outcome.copied + outcome.linked + (outcome.reflinked ?? 0) + (outcome.symlinked ?? 0);
       const parts =
         (outcome.referenced ?? 0) > 0 && placed === 0
-          ? [`${outcome.referenced} file(s) named in place`]
+          ? [`${outcome.referenced} file(s) left in place`]
           : [`${placed} file(s) placed`];
       if ((outcome.reflinked ?? 0) > 0) parts.push(`${outcome.reflinked} reflinked`);
       if ((outcome.symlinked ?? 0) > 0) parts.push(`${outcome.symlinked} linked to the originals`);

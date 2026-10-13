@@ -220,7 +220,7 @@ pub async fn restore(
     require_database_management_allowed(&state)?;
     if selection.batch_id.is_none() && selection.guids.is_empty() {
         return Err(AppError::BadRequest(
-            "Name a batch or frames to restore.".into(),
+            "Choose a batch or frames to restore.".into(),
         ));
     }
     let context = ctx.0.clone();

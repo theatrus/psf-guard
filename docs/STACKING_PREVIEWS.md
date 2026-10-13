@@ -19,8 +19,8 @@ already built for the same inputs and settings comes back at once instead of
 stacking again; a channel with too few frames shows as skipped. Each channel
 build still learns the pier-side mapping from its sibling channels' reference
 frames, so an unsolved channel faces the way the solved ones do, as it did
-when they shared one build. **Build channel** sends the same set with the
-channel named, so it makes the same build and shares its cache. Once a result exists, the corresponding actions become
+when they shared one build. **Build channel** sends the same set and the
+channel, so it makes the same build and shares its cache. Once a result exists, the corresponding actions become
 **Rebuild current set** and **Rebuild channel**. An individual rebuild replaces
 only that channel's remembered result; the other channel cards remain intact.
 
@@ -61,8 +61,8 @@ group membership, prevents incompatible remembered stacks from being reused.
 Color previews offer separate RGB, LRGB, and narrowband cards for matching
 exposure bands. For example, 30-second and 300-second RGB inputs produce two
 cards, each ready to build without selecting its channels by hand. A band
-without every required channel stays visible but disabled, with its missing
-roles named. Different exposure combinations retain separate color previews;
+without every required channel stays visible but disabled, and says which
+roles are missing. Different exposure combinations retain separate color previews;
 rebuilding one does not replace another. **Custom combination** exposes manual
 source selection for deliberately mixed exposures or ambiguous channels. This
 is not automatic HDR blending or saturated-pixel replacement.
@@ -259,11 +259,11 @@ what nothing references any more:
 - mono and color job directories absent from every durable latest and WBPP
   index and from the in-memory job list, and cached color inputs no kept job
   points at;
-- stretch and deconvolution results no processing selection names, a week
+- stretch and deconvolution results no processing selection uses, a week
   after they were last selected or used, so a variant you might pick again
   stays a while;
 - artifact searches whose stack is gone;
-- the indices of deleted projects, and with them the stacks only they named.
+- the indices of deleted projects, and with them the stacks only they listed.
   Merging a project moves its indices onto the project it merged into, so its
   stacks stay.
 
@@ -275,7 +275,7 @@ changes and a newer build of the same identity supersedes it. A full day of
 grace on top means nothing a long build session or an open inspector still
 touches is swept out from under it. An index or processing selection that
 cannot be read, from a newer build or a torn write, stops the sweep of that
-database, since what it names cannot be told from what nothing names; the
+database, since the sweep can no longer tell which files are in use; the
 server log says which file.
 
 Resume checkpoints are replaced in place when their group's input set
@@ -289,7 +289,7 @@ A build belongs to the server, not to the page that started it. The header's
 background jobs chip counts it for as long as any mono or color build is
 queued or running, in every view and in every database. The chip shows only
 the overall progress and the number of jobs. Hover, focus or click it to open
-the queue: each build names its target and channel and how far it has got, and
+the queue: each build shows its target and channel and how far it has got, and
 waiting builds say `queued` with their place in line. Catalog refreshes,
 quality scans and WBPP runs share the same chip. Click what a row works on to
 go there: a build or WBPP run opens its target's stacks, a quality scan the
@@ -325,7 +325,7 @@ progress instead of an idle panel.
 **Stack in WBPP**, beside **Build stacks**, runs PixInsight's WBPP on the
 server for the project, or for the target chosen in the header; it opens the
 same run dialog as the Library's project cards, needs the same
-database-management grant, and names the run's state while one is queued,
+database-management grant, and shows the run's state while one is queued,
 running or finished. With a target chosen it shows only that target's run.
 For a project with several targets it asks for a target first: WBPP stacks
 a project's targets together, so their masters could not come back as stacks.
@@ -759,8 +759,8 @@ in each:
 | Stacks | stacks, color previews, WBPP stacks, saved processing, WBPP runs | `--stack-dir`, `[cache] stack_directory` |
 | Calibration masters | masters built from calibration frames | `--calibration-dir`, `[cache] calibration_directory` |
 
-Stacks and masters go in the cache unless something names their own folder.
-The command line wins over the config file. A folder neither names can be
+Stacks and masters go in the cache unless something sets their own folder.
+The command line wins over the config file. A folder neither sets can be
 chosen in Settings → **Storage** → **Folders**, in the desktop
 app too; Settings shows a fixed folder but cannot change it. Choosing
 folders needs database management.
@@ -806,7 +806,7 @@ deletes resume checkpoints a day old or more from stack folders there. A full
 stack volume never deletes previews from a cache on another disk. Last, and
 only while no build runs and when it would bring the volume back under, it
 deletes calibration masters from master folders there that nobody used for a
-week, least recently used first, those no stack names before those one does.
+week, least recently used first, those no stack uses before those one does.
 A master the catalog does not record, or whose frames are gone, is never
 deleted: it could not be built again. Changing a limit in Settings checks the
 volumes at once but leaves masters to the next regular pass. Stacks, color previews and WBPP stacks are never
@@ -857,7 +857,7 @@ calibration library in the same database. It builds and caches sigma-clipped
 masters from two or more matching inputs, then supplies the bias, dark, and
 flat masters to Seiza. Raw CFA data is calibrated before debayering.
 
-While masters build, the card and the header queue name the master, Seiza's
+While masters build, the card and the header queue show the master, Seiza's
 stage, and the frame or tile under way, for example *Building master dark ·
 integrating frame 5/8*. Seiza reports each step: a bias or dark reads every
 frame, rereads the darks it kept when the stray-light screen set some aside,
@@ -933,7 +933,7 @@ Before handing frames to Seiza, PSF Guard excludes:
    They are left out before the reference is chosen, and the card counts
    them under **can't calibrate**.
 
-The server log names each frame a build leaves out, once as each group
+The server log lists each frame a build leaves out, once as each group
 starts, and each frame Seiza rejects or cannot read, with the reason. The
 desktop app writes that log to a file; see the README's desktop install
 section.
@@ -966,7 +966,7 @@ will disappear, and quality-based frame exclusion still applies.
 
 The final passes repeat calibration, cosmetic correction, debayering,
 normalization, and resampling using each frame's saved registration mapping.
-Progress names the pass and frame, and logs report the rejected sample count.
+Progress shows the pass and frame, and logs report the rejected sample count.
 Changing or removing a source while the build runs fails the build rather
 than publishing a mixed-source result. Stop retains the online checkpoint;
 the next build restarts final rejection. The signal-to-noise depth chart still
@@ -1087,7 +1087,7 @@ step, reuses every artifact before the change instead of rerunning the whole
 chain. Runs use the tool's saved compute device (GPU where
 supported, CPU fallback) and PSF Guard exchanges 32-bit-float FITS
 normalized to the unit scale the tools expect, restoring the physical scale
-afterward. Find the CLI on `PATH`, or name it with the `PSF_GUARD_RC_ASTRO`
+afterward. Find the CLI on `PATH`, or set its path in the `PSF_GUARD_RC_ASTRO`
 environment variable for service units with a minimal `PATH`.
 `GET /api/tools/rc-astro` reports the probe the UI uses.
 
@@ -1149,14 +1149,14 @@ it was saved from, and applying it to a card with different channels matches
 channels by name: the rest fall back to the default input stretch, except that
 one treatment shared by several saved channels follows the setup to every
 channel. Deconvolution and RC-Astro steps never follow a setup onto a channel
-it did not name; these remain opt-in per channel. Saved tool settings remain
+it did not include; these remain opt-in per channel. Saved tool settings remain
 visible and removable when a server lacks that tool or its license.
 
 The built-in setups are derived from the editors' own defaults and cannot be
 deleted. In **Settings → Setups**, **Export all** downloads every saved setup
 as one JSON file, and each row exports on its own; both use the same document
 shape, so any export feeds the import. **Import…** merges such a file,
-replacing same-named setups, and refuses the whole file if any entry does not
+replacing setups of the same name, and refuses the whole file if any entry does not
 validate. The server checks
 every saved or imported setup against the same types the build endpoints
 parse, so a setup that saves is a setup a build can use.
@@ -1348,7 +1348,7 @@ artifact, and applying a processing stack retains the crop the card is showing.
 
 A completed card reports the kept size and the share of the grid retained. When
 one channel's coverage sits far enough from the others to look like a pointing
-error rather than dither, the card names it: that channel bounded the crop, and
+error rather than dither, the card says which: that channel bounded the crop, and
 reshooting or dropping it recovers the field. The server logs the same warning.
 
 | Standard SHO | Foraxx SHO |
@@ -1379,7 +1379,7 @@ and artifact publication. When extraction or deconvolution is disabled, its
 phase is retained as explicitly skipped. **Pipeline phases** preserves each
 phase's completed, skipped,
 reused, or failed state and identifies the active role and stage in the live
-label. A failed fit stops the build with its input role named; disable
+label. A failed fit stops the build and says which input role failed; disable
 extraction or adjust the sampling controls to retry. **Inspect** opens the same
 native-size pan/zoom inspector as a mono stack. **FITS** downloads the full RGB
 result for further inspection. A color result is marked **Out of date**—but
@@ -1567,7 +1567,7 @@ DELETE /api/processing-setups/{name}
 The save body is `{ "name": "Deep SHO", "kind": "view" | "color",
 "settings": { ... } }` with settings shaped exactly like the matching build
 request fragment above. The GET response is also the export document: the
-import endpoint accepts it verbatim and replaces same-named setups.
+import endpoint accepts it verbatim and replaces setups of the same name.
 
 The POST body is `{ "image_ids": [...], "accepted_only": false, "force":
 false, "order": "capture" | "quality" }`; `order` defaults to `capture`.
@@ -1614,6 +1614,6 @@ in stack-image pixels:
 }
 ```
 
-The response names an asynchronous search. Poll its GET endpoint until the
+The response points to an asynchronous search. Poll its GET endpoint until the
 state is `completed` or `failed`; completed results include immutable crop
 URLs and per-frame outlier evidence.

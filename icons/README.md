@@ -1,7 +1,7 @@
 # Application icons
 
 The web mark at `static/public/psf-guard.svg` is the source for every packaged
-desktop application icon. Regenerate the five files named in
+desktop application icon. Regenerate the five files listed in
 `tauri.conf.json` from the repository root:
 
 ```bash

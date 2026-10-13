@@ -72,7 +72,7 @@ Evidence, strongest first; the first that decides wins:
 4. Otherwise `raw`.
 
 Software names alone decide nothing: Siril stamps `PROGRAM` on any file it
-saves, and APP copies N.I.N.A.'s `SWCREATE` forward. They only name the
+saves, and APP copies N.I.N.A.'s `SWCREATE` forward. They only set the
 `producer` once something else has decided the kind.
 
 Siril's registration writes no mark at all (the transforms live in its
@@ -91,21 +91,21 @@ A derivative pairs with the catalogued light where all of these hold:
 - exposure equal within 1 ms;
 - filter equal after the catalog's filter-name normalisation;
 - the same target, by `OBJECT` or by the light's target when `OBJECT` is
-  absent, and the same camera where both name one.
+  absent, and the same camera where both record one.
 
 The file stem settles a tie (`frame_0042_c.xisf` against
 `frame_0042.fits`). A derivative that matches two lights and no name
 settles it is **ambiguous**: it is reported and not paired.
 
 A derivative known only by its **name** pairs only with a light that its
-name or its recorded source names. This is not caution for its own sake: on
+name or its recorded source points to. This is not caution for its own sake: on
 the maintainer's share, Siril registered an APP stack, and the result has no
 stack count and carries the reference light's time, exposure and filter.
 Matching keywords alone would pair that stack with the light. Siril renames
 frames when it builds a sequence, so its `<sequence>_conversion.txt`
 (`'source' -> 'frame'` lines) is the record of where each frame came from,
 read from the derivative's folder. A source the catalog does not hold (an
-APP stack, a file on another machine) names no light, so its copies stay
+APP stack, a file on another machine) points to no light, so its copies stay
 unpaired; a registered copy never becomes a light of its own.
 
 Every distinct copy of a light pairs, and each is an option a view can
@@ -123,8 +123,8 @@ Pairing is **on by default**:
 - import routes a derivative into pairing instead of cataloguing it, and
   drops recorded copies by name before reading headers on an automatic run;
 - a background pass after each directory refresh pairs copies already on
-  disk with lights already catalogued. It reads only files named the way the
-  tools name their output (a refresh cannot read every header of a
+  disk with lights already catalogued. It reads only files whose names match the
+  tools' output (a refresh cannot read every header of a
   calibration library), at most 2,000 headers a pass, on its own connection,
   standing aside while an import runs. It never adds a light; a copy known
   only by its header is paired when it is imported;
@@ -169,7 +169,7 @@ PSF Guard tables; Target Scheduler tables are never altered.
 | `derivative_uuid` TEXT PK | Stable identity, the sync key. |
 | `acquired_image_guid` TEXT | The light it belongs to (`acquiredimage.guid`). |
 | `kind` TEXT | `calibrated` or `registered` (registered once the geometry changed). |
-| `steps` TEXT | The steps applied, `calibrated,cosmetic,registered`; names the option. |
+| `steps` TEXT | The steps applied, as in `calibrated,cosmetic,registered`; they identify the option. |
 | `primary_source` INTEGER | 1 when the light row's own file is this derivative. |
 | `file_name` TEXT | Basename; resolved locally through the directory tree. |
 | `source_tail` TEXT | The last path segments where it was found, for the resolver. |
@@ -200,7 +200,7 @@ carry it explicitly:
   A record whose light did not come across is skipped and counted.
 - **Remote HTTP sync**: the table rides in a merge bundle only between peers
   that advertise `frame_derivatives_v1`, since an older peer rejects a
-  bundle naming a table it does not know (see
+  bundle carrying a table it does not know (see
   [data transfer](data-transfer.md#calibrated-copy-records)).
 - **Adoption**: when sync gives a row PSF Guard minted the telescope's guid,
   its records follow it.

@@ -71,8 +71,8 @@ export default function TemplateLibrary() {
     onError: error => setProblem(message(error)),
   });
   const problemWith = (draft: Draft): string | null => {
-    if (!draft.name.trim()) return 'Name the template.';
-    if (!draft.filter_name.trim()) return 'Name the filter as the rig does.';
+    if (!draft.name.trim()) return 'The template needs a name.';
+    if (!draft.filter_name.trim()) return 'Enter the filter as the rig spells it.';
     if (!(draft.default_exposure_seconds > 0)) return 'The exposure must be above zero seconds.';
     return moonProblem(draft.moon);
   };

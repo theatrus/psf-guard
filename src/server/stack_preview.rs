@@ -1232,8 +1232,8 @@ impl StackPreviewManager {
             Ok(keep) => keep,
             Err(unreadable) => {
                 tracing::warn!(
-                    "Not pruning stacks below {}: {} could not be read, so what it names \
-                     cannot be told from what nothing names",
+                    "Not pruning stacks below {}: {} could not be read, so it is unclear \
+                     which stacks are still in use",
                     stack_root.display(),
                     unreadable.display()
                 );

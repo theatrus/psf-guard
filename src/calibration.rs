@@ -7154,7 +7154,7 @@ fn verify_sources(
             kept.push((index, frame));
         } else {
             tracing::info!(
-                "calibration frame {} names a file another row already covers ({}); using it once",
+                "calibration frame {} points to a file another row already covers ({}); using it once",
                 frame.frame_uuid,
                 frame.source_path.display()
             );

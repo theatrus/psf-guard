@@ -99,7 +99,7 @@ again. Two things differ from raw frames:
   `CCD-TEMP`. A master is therefore held to the rule two calibration frames
   are held to: what both sides record must agree, and a camera name or
   sensor size must still match. Exposure still has to match for a dark. The
-  stack report names what the match had to take on trust.
+  stack report says what the match had to take on trust.
 - **Scale is settled on the way in.** WBPP's FITS masters are 32-bit floats
   normalized to 0..1 with no declared bounds. PSF Guard copies the master
   into its cache once, placing such a file on the same 16-bit scale as every
@@ -144,7 +144,7 @@ response is judged per CFA phase.
 - When the frames that disagree are a minority, the master rebuilds from the
   rest and the stack card says how many were left out.
 - When the set as a whole disagrees with itself, the next-nearest flat set
-  takes its place and the card names both.
+  takes its place and the card shows both.
 - When there is no other set, the master serves and the card says the set
   was unstable and needs retaking.
 
@@ -177,7 +177,7 @@ part, so a morning whose darks all leaked is still caught by a clean set from
 another night. A lone frame with nothing to compare against stays in use.
 
 A marked dark is left out of stack masters, WBPP exports, and calibration
-reports, which name what was left out. The calibration library shows each
+reports, which list what was left out. The calibration library shows each
 measured frame's level and noise in ADU, the mark on the frame, and a count on
 its night. Nothing is deleted: the grade changes when the library does, and
 forgetting a frame regrades the rest. Master building applies the same rule to
@@ -196,7 +196,7 @@ scheduler.sqlite.psf-guard-backup-v4-20260902-031500.sqlite
 The name carries the schema the catalog had and the UTC time. The three newest
 backups of a catalog are kept; older ones are removed as new ones arrive. If
 the copy cannot be written (disk full, folder read-only), the upgrade does not
-run, the catalog stays readable at its old schema, and the log names the path
+run, the catalog stays readable at its old schema, and the log gives the path
 to clear. An upgrade never reads frame files; anything that needs them, such
 as recording readout-mode names, runs after the server is up.
 
@@ -219,8 +219,8 @@ a number, and PSF Guard keeps that name and compares it case-insensitively,
 so a High Gain dark never serves an Extend Fullwell light. The name is the
 one setting where a candidate that recorded nothing is still accepted: it is
 a label the capture software chose, and frames from software that writes a
-number or nothing would otherwise stop matching lights that name a mode.
-Two frames that both name a mode must agree, and a master never mixes two
+number or nothing would otherwise stop matching lights that record a mode.
+Two frames that both record a mode must agree, and a master never mixes two
 names. For a library built before names were kept, the server reads them off
 the frames' headers after it has started, in the background and in chunks,
 logging its progress; a frame whose file is unreachable is tried again at the
@@ -386,8 +386,8 @@ setting affects new stack requests; a queued or running stack keeps the value
 captured with its cache key.
 
 A master that fails to build does not fail the stack. The frames integrate
-without that master, and the stack card's calibration warning names the
-master that was skipped and the reason. A master whose input master failed —
+without that master, and the stack card's calibration warning says which
+master was skipped and why. A master whose input master failed —
 a flat whose bias did not build — is skipped rather than built without it,
 because a flat normalized with the bias pedestal still in it would miscorrect
 every light. Resume checkpoints and source-frame searches compare the masters
@@ -403,7 +403,7 @@ filter, the flat session a master would build from, its distance from the
 lights, and whether the night has its own flats. The dark column gives what
 one dark master would use: its frames, the nights they span and the nearest
 night's distance; hover for every matching dark within reach. A night with
-no flat names the nearest flat refused only for its rotator angle, how far
+no flat shows the nearest flat refused only for its rotator angle, how far
 off it is and the limit, which is the usual cause when a rotator moved.
 Masters from other software for the lights' camera, sensor size and (for
 flats) filter are listed under the night: used, matching but not used under
@@ -426,7 +426,7 @@ A light cannot be calibrated properly when:
 
 Each rule applies only where the library could have filled the gap, so a rig
 that never shoots flats, or never shoots darks, is not affected. The report
-names each night whose lights cannot be calibrated. **Check lights**, at the
+lists each night whose lights cannot be calibrated. **Check lights**, at the
 foot of the report, reads every light of the project that is not already
 rejected and lists those that cannot be calibrated, by night, filter and
 reason. **Reject N lights** then sets them Rejected with the reason, so
@@ -477,7 +477,7 @@ hour, while no stack build runs, PSF Guard removes from the master folder:
 
 - half-written files a stopped build left (`*.fits.tmp-*`), a day old;
 - masters a newer master built from exactly the same frames replaced, once
-  unused for a day and named by no stack index or job manifest. Masters
+  unused for a day and absent from every stack index and job manifest. Masters
   from other frames, such as another night's flats or another gain's darks,
   never count as replacements.
 
@@ -538,7 +538,7 @@ target's lights, and under the night they were shot because two nights of one
 target can need different flats for one filter. Merging either would have WBPP
 integrate both into a single master flat.
 
-In the WBPP layout the light's path names the same night as its flats. The
+In the WBPP layout the light's path carries the same night as its flats. The
 runner passes `keywords=SESSION` with keyword grouping on, and WBPP reads the
 value out of the `SESSION_<night>` folder: each night's lights calibrate with
 that night's flats, bias and darks carry no session and serve every night, and
@@ -548,8 +548,8 @@ folder. The grouped-by-target layout only sorts the flats by night.
 Darks get the same treatment when lights in one export need different ones:
 when lights of one exposure and gain were matched to different dark masters
 (say, each to its own complete night), each set of darks goes in a
-`DARKSET_<night>` folder named for its nearest dark, with a short digest when
-two sets share a night, and each light's path names its set. The runner then
+`DARKSET_<night>` folder for its nearest dark's night, with a short digest when
+two sets share a night, and each light's path carries its set. The runner then
 passes `keywords=SESSION;DARKSET`. WBPP lets a calibration group serve a light
 only when every keyword the group carries equals the light's, and prefers the
 group matching the most (`keywordsMatchCount` in WBPP's
@@ -596,8 +596,8 @@ the stack previews do; rejects are never exported) and how the files land:
   `--placement reference` with `--local-root` and `--remote-root`;
   `--placement symlink` links. In the browser, where an export is a zip
   download unless the database has a server export directory, **Scripts
-  only** downloads the same three scripts as a small zip, with the frames
-  named where they are on the server's storage; `placement=reference` on
+  only** downloads the same three scripts as a small zip, pointing at the frames
+  where they are on the server's storage; `placement=reference` on
   the download URL does the same.
 
 A WBPP export also carries `run-wbpp.sh` and `run-wbpp.cmd`, which hand it to
@@ -672,8 +672,8 @@ running likewise waits for the next start. Until then queries still work; they
 just scan. Target Scheduler ships it without any, so looking up one
 target's images meant reading every row of the table — seconds per query on a
 catalog of a few thousand images, and repeated often enough to hold up the
-Library page. The indexes are named `idx_psf_guard_acquiredimage_target` and
-`idx_psf_guard_acquiredimage_project`, so it is clear who added them and they
+Library page. The index names, `idx_psf_guard_acquiredimage_target` and
+`idx_psf_guard_acquiredimage_project`, show who added them and that they
 are safe to drop. Adding an index changes no data and no table: Target
 Scheduler and N.I.N.A. keep working exactly as before, and simply run faster.
 

@@ -40,7 +40,7 @@ or with `automationMode=true,paramList` on the command line.
 
 The Export action on a project card or target row, with the **WBPP**
 layout, writes the frames (or, with **Reference in place**, only the
-scripts that name them) and three files beside them:
+scripts that point to them) and three files beside them:
 
 - `run-wbpp.js`, the PixInsight script. It carries the frames, the
   settings and the per-group drizzle and Fast Integration choices, and
@@ -86,7 +86,7 @@ folder** under **Settings → Setups → PixInsight** puts every database's
 runs below it (`<folder>/<database>/<project>-<time>/`) and shows the
 space free there. Without one, a database's runs go under its export
 directory when it has one, and only otherwise under the cache. The run
-dialog can also name a folder for one run. The dialog shows the space
+dialog can also pick a folder for one run. The dialog shows the space
 free at the folder when the run began.
 
 The dialog then follows WBPP's own log: which step it is on, how long the
@@ -137,7 +137,7 @@ folder next to `_Source`, with one folder per processing project and the
 WBPP masters in a `master/` folder inside it. PSF Guard can put a run's
 masters there. Give the database a **process directory** under **Settings
 → Databases** (the rig's `_Process` folder), and the run dialog offers
-**Save the masters**: name the project's folder, and the masters are
+**Save the masters**: enter the project's folder, and the masters are
 copied to `<process directory>/<folder>/master/`. Tick **Save the masters
 when done** before a run to have it happen as the run ends, or press
 **Save masters** afterwards.
@@ -145,8 +145,8 @@ when done** before a run to have it happen as the run ends, or press
 The folder name is remembered per project, so the next run of the same
 project offers it again. Nothing already in the folder is overwritten: a
 file already there with the same size is taken as the same file and
-skipped, one with a different size is left alone and named in the
-outcome. Only the `master/` files are copied; the calibrated and
+skipped, one with a different size is left alone, and the
+outcome lists it. Only the `master/` files are copied; the calibrated and
 registered frames stay in the run folder.
 
 ### See the stacks and their color in PSF Guard
@@ -160,12 +160,12 @@ integrates the targets together.
 
 ## What can go wrong
 
-- **PixInsight not found.** The settings panel lists where it looked. Name
-  the executable: `PixInsight.sh` under `bin/` on Linux, the binary inside
+- **PixInsight not found.** The settings panel lists where it looked. Enter
+  the executable's path: `PixInsight.sh` under `bin/` on Linux, the binary inside
   the app bundle on macOS, `PixInsight.exe` on Windows.
 - **No display.** On a Linux server, install `xvfb`. PSF Guard uses
   `xvfb-run -a` on its own once it is on the path.
-- **Frames not found.** The run names each frame by its full path on the
+- **Frames not found.** The run reads each frame from its full path on the
   server. A catalog row whose file is not below the database's image
   folders is left out and counted in the dialog.
 - **Fewer darks than the library holds.** Darks the calibration library

@@ -157,7 +157,7 @@ pub async fn forget_calibration_frames(
     Json(request): Json<ForgetCalibrationFramesRequest>,
 ) -> Result<Json<ApiResponse<crate::calibration::CalibrationMutationOutcome>>, AppError> {
     if request.frame_uuids.is_empty() {
-        return Err(AppError::BadRequest("no frames named".into()));
+        return Err(AppError::BadRequest("no frames given".into()));
     }
     let conn = ctx.db();
     let mut conn = conn.lock().map_err(AppError::db)?;
@@ -201,7 +201,7 @@ pub async fn set_calibration_validity(
         }
     };
     if request.frame_uuids.is_empty() {
-        return Err(AppError::BadRequest("no frames named".into()));
+        return Err(AppError::BadRequest("no frames given".into()));
     }
     let conn = ctx.db();
     let conn = conn.lock().map_err(AppError::db)?;

@@ -118,7 +118,7 @@ Example with depth=1, segment="REJECT":
 CLI flag > per-DB registry override > global default.
 
 - Global default: `{ segment_name: "REJECT", depth: 1, sidecar_exts: [".json", ".txt"] }`. Hardcoded in source.
-- A sidecar extension may not name a frame container (`.fits`, `.fit`, `.fts`, `.xisf`). PSF Guard catalogs those as images with their own grade, so archiving one as a sibling's companion would move a file the catalog still calls accepted. Such a list is refused with an error.
+- A sidecar extension may not be a frame container's (`.fits`, `.fit`, `.fts`, `.xisf`). PSF Guard catalogs those as images with their own grade, so archiving one as a sibling's companion would move a file the catalog still calls accepted. Such a list is refused with an error.
 - Per-DB registry override: optional `reject_archive` block in each `DbEntry`. New fields on the JSON shape (additive — old configs keep working):
   ```jsonc
   {
