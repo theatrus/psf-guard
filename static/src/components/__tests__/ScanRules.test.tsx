@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { HttpResponse, http } from 'msw';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -89,6 +89,9 @@ describe('Settings scan rules and Review', () => {
     Element.prototype.scrollIntoView = () => {};
   });
   afterEach(() => {
+    // Unmount first: an effect still pending when the test ends would
+    // otherwise scroll after the stub is gone (seen on a slow CI runner).
+    cleanup();
     Element.prototype.scrollIntoView = originalScrollIntoView;
   });
   const idle: ImportJobProgress = {
