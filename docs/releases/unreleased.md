@@ -46,3 +46,8 @@
 - Planning no longer says **PSF Guard was updated** after every reload. A
   survey image the browser had kept from before an update carried the old
   build, and the page took it for news of a newer one.
+- Changing a filter's template in a plan before its first activation no longer
+  leaves the old exposure plan running in Target Scheduler beside the new one.
+  Activation turns off a plan on the target that takes the same frames at
+  another length, the preview lists it as replaced, and the plan asks to be
+  activated until it is.
