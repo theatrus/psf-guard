@@ -35,8 +35,8 @@ export default function ScanRulesFields({ value, onChange }: ScanRulesFieldsProp
         className="file-path-input scan-rules-patterns"
         rows={2}
         spellCheck={false}
-        placeholder="*LIGHT*"
-        title="One pattern per line. When set, only files that match one are read."
+        placeholder="LIGHT"
+        title="One pattern per line. When set, only files that match one, or sit in a folder that does, are read."
         value={value.include.join('\n')}
         onChange={(event) => set({ include: lines(event.target.value) })}
       />
@@ -55,6 +55,17 @@ export default function ScanRulesFields({ value, onChange }: ScanRulesFieldsProp
           onChange={(event) => set({ require_object: event.target.checked })}
         />{' '}
         Lights need a target name
+      </label>
+      <label
+        className="checkbox-label"
+        title="Attach frames within 0.5° of a target whose name differs"
+      >
+        <input
+          type="checkbox"
+          checked={value.match_by_position}
+          onChange={(event) => set({ match_by_position: event.target.checked })}
+        />{' '}
+        Match targets by position
       </label>
       <label htmlFor="scan-rules-min-exposure">Shortest light (s):</label>
       <input

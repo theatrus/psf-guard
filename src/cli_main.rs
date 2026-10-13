@@ -541,6 +541,7 @@ pub fn main() -> Result<()> {
                 dry_run,
                 attach_existing: !no_attach,
                 match_radius_deg,
+                match_by_position: rules.match_by_position,
                 scope: if lights_only {
                     crate::commands::import::ImportScope::Lights
                 } else if calibration_only {

@@ -52,10 +52,14 @@ describe('ScanRulesFields', () => {
     expect(latest.include).toEqual(['*LIGHT*']);
     fireEvent.click(screen.getByRole('checkbox', { name: 'Lights must say LIGHT' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Lights need a target name' }));
+    const byPosition = screen.getByRole('checkbox', { name: 'Match targets by position' });
+    expect(byPosition).toBeChecked();
+    fireEvent.click(byPosition);
     fireEvent.change(screen.getByLabelText('Shortest light (s):'), { target: { value: '10' } });
     expect(latest).toMatchObject({
       lights_must_say_light: true,
       require_object: true,
+      match_by_position: false,
       min_exposure_seconds: 10,
     });
     fireEvent.change(screen.getByLabelText('Shortest light (s):'), { target: { value: '' } });
@@ -209,6 +213,8 @@ describe('Settings scan rules and Review', () => {
     await waitFor(() => expect(saved).toHaveLength(1));
     expect(saved[0].scan_rules?.exclude).toEqual(['**/Hocus Focus/**', '**/PierCam/**']);
     expect(saved[0].scan_rules?.require_object).toBe(true);
+    // Stored rules from before the setting existed match by position.
+    expect(saved[0].scan_rules?.match_by_position).toBe(true);
     expect(saved[0].autoimport?.new_targets).toBe('ask');
   });
 

@@ -78,6 +78,11 @@ pub struct ImportOptions {
     /// Coordinate-match radius for attaching to an existing target, in
     /// degrees of angular separation.
     pub match_radius_deg: f64,
+    /// Attach a frame whose OBJECT matches no target name to the nearest
+    /// target within `match_radius_deg`, including a frame with no OBJECT.
+    /// On by default; a database's scan rules can turn it off, leaving an
+    /// exact name match as the only way to attach.
+    pub match_by_position: bool,
     /// Which frame kinds this run imports.
     pub scope: ImportScope,
     /// Leave processing output out of the catalog: integrations, and
@@ -122,6 +127,7 @@ impl Default for ImportOptions {
             dry_run: false,
             attach_existing: true,
             match_radius_deg: DEFAULT_MATCH_RADIUS_DEG,
+            match_by_position: true,
             scope: ImportScope::default(),
             skip_processed: false,
             pair_derivatives: true,
@@ -620,7 +626,10 @@ pub fn import_frames(
         let mut attach: HashMap<usize, Vec<FrameMeta>> = HashMap::new();
         let mut matched_by: HashMap<usize, &'static str> = HashMap::new();
         for frame in lights {
-            match match_existing_target(&frame, &existing_targets, options.match_radius_deg) {
+            let radius = options
+                .match_by_position
+                .then_some(options.match_radius_deg);
+            match match_existing_target(&frame, &existing_targets, radius) {
                 Some((idx, how)) => {
                     attach.entry(idx).or_default().push(frame);
                     matched_by.entry(idx).or_insert(how);
@@ -898,10 +907,12 @@ fn angular_separation_deg(ra1: f64, dec1: f64, ra2: f64, dec2: f64) -> f64 {
 /// Find the existing target a frame belongs to: exact (case-insensitive)
 /// OBJECT-name match wins; otherwise the nearest target whose coordinates
 /// are within `radius_deg`. Returns the index and how the match was made.
+/// The existing target a frame belongs to: by OBJECT name first, then, when
+/// `radius_deg` is set, the nearest target within it.
 fn match_existing_target(
     frame: &FrameMeta,
     targets: &[ExistingTarget],
-    radius_deg: f64,
+    radius_deg: Option<f64>,
 ) -> Option<(usize, &'static str)> {
     if let Some(object) = frame
         .object
@@ -931,6 +942,7 @@ fn match_existing_target(
         }
     }
 
+    let radius_deg = radius_deg?;
     let (ra, dec) = (frame.ra_deg?, frame.dec_deg?);
     targets
         .iter()
@@ -965,7 +977,7 @@ pub(crate) fn resolve_existing_target_identity(
 ) -> Result<Option<(String, String)>> {
     let targets = load_existing_targets(conn)?;
     Ok(
-        match_existing_target(frame, &targets, radius_deg).map(|(index, _)| {
+        match_existing_target(frame, &targets, Some(radius_deg)).map(|(index, _)| {
             (
                 targets[index].name.clone(),
                 targets[index].project_name.clone(),
@@ -2908,5 +2920,57 @@ mod tests {
         assert!(!plain
             .iter()
             .any(|path| path.starts_with(root.join("PierCam"))));
+    }
+
+    #[test]
+    fn position_matching_is_a_choice() {
+        let created = |conn: &mut Connection| {
+            import_frames(
+                conn,
+                vec![light("M31", "Ha", 1_000)],
+                &ImportOptions::default(),
+            )
+            .unwrap();
+        };
+        // Named differently, at M31's position.
+        let renamed = || FrameMeta {
+            path: PathBuf::from("/data/andromeda_2000.fits"),
+            ..light("Andromeda", "Ha", 2_000)
+        };
+        // No OBJECT at all, at M31's position, as an autofocus frame has.
+        let unnamed = || FrameMeta {
+            path: PathBuf::from("/data/af_3000.fits"),
+            object: None,
+            ..light("M31", "Ha", 3_000)
+        };
+        let off = ImportOptions {
+            match_by_position: false,
+            ..ImportOptions::default()
+        };
+
+        let mut conn = fresh_conn();
+        created(&mut conn);
+        let outcome = import_frames(&mut conn, vec![renamed(), unnamed()], &off).unwrap();
+        assert_eq!(outcome.attached, 0, "off: only a name match attaches");
+        assert_eq!(outcome.targets_created, 2);
+
+        let mut conn = fresh_conn();
+        created(&mut conn);
+        let outcome = import_frames(
+            &mut conn,
+            vec![renamed(), unnamed()],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(outcome.attached, 2, "on: both attach to M31 by position");
+        assert_eq!(outcome.attach_summaries[0].matched_by, "coordinates");
+        assert_eq!(outcome.targets_created, 0);
+
+        // A name match attaches either way.
+        let mut conn = fresh_conn();
+        created(&mut conn);
+        let outcome = import_frames(&mut conn, vec![light("m31", "Ha", 4_000)], &off).unwrap();
+        assert_eq!(outcome.attached, 1);
+        assert_eq!(outcome.attach_summaries[0].matched_by, "name");
     }
 }

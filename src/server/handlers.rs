@@ -3156,6 +3156,8 @@ pub async fn start_import_route(
         match_radius_deg: req
             .match_radius_deg
             .unwrap_or(crate::commands::import::DEFAULT_MATCH_RADIUS_DEG),
+        // The import job applies the database's setting.
+        match_by_position: true,
         scope: req.scope.unwrap_or_default(),
         skip_processed: req.skip_processed.unwrap_or(false),
         // The database's setting decides; the import job applies it.
@@ -3448,6 +3450,7 @@ fn run_import_blocking(
         .pair_calibrated_copies
         .load(std::sync::atomic::Ordering::Relaxed);
     options.light_filter = ctx.scan_rules.light_filter();
+    options.match_by_position = ctx.scan_rules.match_by_position;
     let mut outcome = imp::import_frames(&mut conn, frames, &options)?;
     outcome.scanned += prefiltered;
     outcome.skipped_existing += prefiltered;

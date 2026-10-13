@@ -137,7 +137,8 @@ The matching rules prevent common duplicates and splits:
 
 - a basename already stored in the database is skipped;
 - an `OBJECT` name match attaches to the existing target;
-- otherwise, coordinates within 0.5 degrees attach to the existing target; and
+- otherwise, coordinates within 0.5 degrees attach to the existing target,
+  unless the database's scan rules turn **Match targets by position** off; and
 - unmatched frames create new project and target rows.
 
 The same scan catalogs calibration frames and deduplicates them by canonical
@@ -215,8 +216,10 @@ Edit → Scan rules**:
   out, and a folder that matches is never entered, so nothing below it is
   read. `**/Hocus Focus/**` keeps Hocus Focus's autofocus frames out;
   `**/PierCam/**` and `**/Automation/**` work the same way.
-- **Include only**: when set, only files matching one of these patterns are
-  read, such as `*LIGHT*`.
+- **Include only**: when set, only files matching one of these patterns, or
+  inside a folder matching one, are read. `LIGHT` keeps every file in
+  N.I.N.A.'s `LIGHT` folders; `*.xisf` keeps XISF files wherever they are.
+  The walk still enters every folder that is not excluded.
 - **Lights must say LIGHT**: a frame with no `IMAGETYP` (or `FRAME`) is left
   out, instead of being taken for a light as it is by default.
 - **Lights need a target name**: a light with no `OBJECT` is left out,
@@ -224,6 +227,14 @@ Edit → Scan rules**:
   and test frames usually have no `OBJECT`.
 - **Shortest light (s)**: lights shorter than this, or with no exposure
   time, are left out.
+- **Match targets by position** (on by default): a light whose `OBJECT`
+  matches no target name attaches to the nearest target within 0.5 degrees,
+  so a frame need not use the target's name exactly. A light with no `OBJECT`
+  at all attaches the same way. Off, only an exact name match (in any letter
+  case) attaches, and anything else is a new target: created, held or left
+  out, as the import decides. Frames with no `OBJECT`, such as autofocus
+  frames taken at the target, are kept out by **Lights need a target name**,
+  whatever this is set to.
 
 Patterns match a path relative to the image folder that holds it, in any
 letter case, with `/` or `\` between folders. A pattern with no `/` matches a

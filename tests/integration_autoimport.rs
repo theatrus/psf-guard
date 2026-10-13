@@ -620,6 +620,58 @@ async fn autofocus_frames_stay_out_by_pattern_ignore_file_or_target_name() {
     let progress = run_now(&state, &slug).await;
     assert_eq!(progress["outcome"]["imported"], 3, "{progress}");
     assert_eq!(target_names(&db_path), vec!["M31", "Unknown Target"]);
+
+    // Autofocus frames taken at the target carry its position and no
+    // OBJECT. With position matching off, they match nothing and are held.
+    let at_m31 = images.join("Hocus Focus/AutoFocus_20260110_020304/attempt01");
+    for step in 1..=2 {
+        write_frame(
+            // A name the catalog does not have yet: it drops known
+            // basenames before reading a header.
+            &at_m31.join(format!("af_m31_{step:02}.fits")),
+            Some("LIGHT"),
+            None,
+            M31,
+            &format!("2026-01-10T02:0{step}:00.000"),
+            2.0,
+        );
+    }
+    let ask = json!({ "enabled": true, "on_open": true, "backfill": false });
+    let (status, body) = put_settings(
+        &state,
+        &slug,
+        json!({ "autoimport": ask, "scan_rules": { "match_by_position": false } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["scan_rules"]["match_by_position"], false);
+    let progress = run_now(&state, &slug).await;
+    let outcome = &progress["outcome"];
+    assert_eq!(outcome["attached"], 0, "{progress}");
+    assert_eq!(outcome["skipped_unmatched"], 2, "{progress}");
+    assert!(outcome["unmatched"][0]["target"].is_null(), "{progress}");
+
+    // On, the default, they attach to M31 by position, which is why
+    // "Lights need a target name" is the rule that keeps them out.
+    let (status, body) = put_settings(
+        &state,
+        &slug,
+        json!({ "autoimport": create, "scan_rules": { "match_by_position": true } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["data"].get("scan_rules").is_none(),
+        "defaults store as none: {body}"
+    );
+    let progress = run_now(&state, &slug).await;
+    let outcome = &progress["outcome"];
+    assert_eq!(outcome["attached"], 2, "{progress}");
+    assert_eq!(
+        outcome["attach_summaries"][0]["matched_by"], "coordinates",
+        "{progress}"
+    );
+    assert_eq!(target_names(&db_path), vec!["M31", "Unknown Target"]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

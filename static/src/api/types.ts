@@ -1898,7 +1898,7 @@ export interface DatabaseSummary {
  */
 export interface ScanRules {
   exclude: string[];
-  /** When any are set, only files matching one are read. */
+  /** When any are set, only files matching one, or inside a folder matching one, are read. */
   include: string[];
   /** A frame with no IMAGETYP is left out instead of taken for a light. */
   lights_must_say_light: boolean;
@@ -1906,6 +1906,8 @@ export interface ScanRules {
   require_object: boolean;
   /** Lights shorter than this, or of unknown length, are left out. */
   min_exposure_seconds?: number | null;
+  /** Attach a light whose name matches no target to a target within 0.5°. On by default. */
+  match_by_position: boolean;
 }
 
 export const DEFAULT_SCAN_RULES: ScanRules = {
@@ -1914,6 +1916,7 @@ export const DEFAULT_SCAN_RULES: ScanRules = {
   lights_must_say_light: false,
   require_object: false,
   min_exposure_seconds: null,
+  match_by_position: true,
 };
 
 /** What a run does with lights that match no target in the catalog. */

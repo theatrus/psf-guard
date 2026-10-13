@@ -18,16 +18,17 @@ use std::path::{Path, PathBuf};
 pub const IGNORE_FILE: &str = ".psfguardignore";
 
 /// A database's scan rules, as stored in its registry entry. The defaults
-/// change nothing: every image file is read, and every frame that looks
-/// like a light is one.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+/// change nothing: every image file is read, every frame that looks like a
+/// light is one, and a light attaches to a target by name or by position.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ScanRules {
     /// Patterns for files and folders to leave out, relative to the image
     /// folder that holds them. A pattern that matches a folder skips
     /// everything below it.
     pub exclude: Vec<String>,
-    /// When any are set, only files matching one of these are read.
+    /// When any are set, only files matching one of these, or inside a
+    /// folder matching one, are read.
     pub include: Vec<String>,
     /// A frame with no IMAGETYP (or FRAME) is left out instead of being
     /// taken for a light.
@@ -37,6 +38,23 @@ pub struct ScanRules {
     pub require_object: bool,
     /// Lights shorter than this, or of unknown length, are left out.
     pub min_exposure_seconds: Option<f64>,
+    /// Attach a light whose OBJECT matches no target name to a target
+    /// within 0.5° of it, including a light with no OBJECT. On by default;
+    /// off, only an exact name match attaches.
+    pub match_by_position: bool,
+}
+
+impl Default for ScanRules {
+    fn default() -> Self {
+        Self {
+            exclude: Vec::new(),
+            include: Vec::new(),
+            lights_must_say_light: false,
+            require_object: false,
+            min_exposure_seconds: None,
+            match_by_position: true,
+        }
+    }
 }
 
 impl ScanRules {
@@ -198,7 +216,9 @@ impl PathFilter {
         !relative.is_empty() && patterns.is_match(&relative)
     }
 
-    /// Whether the patterns keep this file.
+    /// Whether the patterns keep this file. An include pattern keeps it
+    /// when it matches the file or any folder above it, so `LIGHT` keeps
+    /// everything in N.I.N.A.'s `…/LIGHT/` folders.
     pub fn keeps_file(&self, file: &Path, walk_root: &Path) -> bool {
         if self.exclude_files.is_none() && self.include.is_none() {
             return true;
@@ -211,9 +231,13 @@ impl PathFilter {
         {
             return false;
         }
-        self.include
-            .as_ref()
-            .is_none_or(|patterns| patterns.is_match(&relative))
+        self.include.as_ref().is_none_or(|patterns| {
+            // The file's path, then each folder above it up to the root.
+            std::iter::successors(Some(relative.as_str()), |path| {
+                path.rfind('/').map(|end| &path[..end])
+            })
+            .any(|path| patterns.is_match(path))
+        })
     }
 }
 
@@ -355,6 +379,25 @@ mod tests {
     }
 
     #[test]
+    fn an_include_pattern_keeps_files_inside_a_matching_folder() {
+        let root = root();
+        let filter = rules(&[], &["LIGHT"])
+            .path_filter(std::slice::from_ref(&root))
+            .unwrap();
+        assert!(filter.keeps_file(&root.join("M31/2026-01-11/LIGHT/x.fits"), &root));
+        assert!(filter.keeps_file(&root.join("LIGHT/x.fits"), &root));
+        assert!(!filter.keeps_file(&root.join("M31/2026-01-11/FLAT/x.fits"), &root));
+        // The folder name must match whole, not as part of a longer name.
+        assert!(!filter.keeps_file(&root.join("M31/LIGHTS_OLD/x.fits"), &root));
+        // A file-name pattern still matches the file.
+        let filter = rules(&[], &["*.xisf"])
+            .path_filter(std::slice::from_ref(&root))
+            .unwrap();
+        assert!(filter.keeps_file(&root.join("M31/LIGHT/x.xisf"), &root));
+        assert!(!filter.keeps_file(&root.join("M31/LIGHT/x.fits"), &root));
+    }
+
+    #[test]
     fn paths_match_relative_to_the_configured_root_not_the_folder_walked() {
         let root = root();
         let filter = rules(&["/M31/Test"], &[])
@@ -373,6 +416,15 @@ mod tests {
         assert!(text.contains("exclude pattern \"[abc\""), "{text}");
         let error = rules(&[], &["{a,b"]).validate().unwrap_err();
         assert!(error.to_string().contains("include pattern \"{a,b\""));
+    }
+
+    #[test]
+    fn rules_that_only_keep_position_matching_on_are_the_defaults() {
+        let stored: ScanRules = serde_json::from_str(r#"{"exclude":[]}"#).unwrap();
+        assert!(stored.match_by_position);
+        assert_eq!(stored, ScanRules::default());
+        let off: ScanRules = serde_json::from_str(r#"{"match_by_position":false}"#).unwrap();
+        assert_ne!(off.normalized(), ScanRules::default());
     }
 
     #[test]
