@@ -817,7 +817,13 @@ mod tests {
                     .unwrap()
                     .format("%Y-%m-%dT%H:%M:%S")
                     .to_string();
-                let name = format!("{}-{at}-{index}.fits", kind.to_ascii_lowercase());
+                // Windows refuses `:` in a file name, so the name takes the
+                // time with dashes; the header keeps the real one.
+                let name = format!(
+                    "{}-{}-{index}.fits",
+                    kind.to_ascii_lowercase(),
+                    at.replace(':', "-")
+                );
                 let path = self.path(&name);
                 write_frame(&path, kind, SIZE, &at, |x, y| {
                     pixel(index, x, y) + 5.0 * noise(x, y, index as u64 + 7)

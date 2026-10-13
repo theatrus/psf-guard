@@ -8106,7 +8106,7 @@ mod tests {
 
     #[test]
     fn a_pixinsight_master_dark_is_adopted_on_the_right_scale() {
-        let _policy = POLICY_LOCK.lock().unwrap();
+        let _policy = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         configure_external_master_policy(None);
         let temp = tempfile::tempdir().unwrap();
         let master_path = temp.path().join("masterDark_BIN-1_EXPOSURE-300.00s.fits");
@@ -8192,7 +8192,7 @@ mod tests {
 
     #[test]
     fn an_external_xisf_bias_with_a_blank_filter_is_adopted() {
-        let _policy = POLICY_LOCK.lock().unwrap();
+        let _policy = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         configure_external_master_policy(None);
         for filter_value in ["", "   ", "''", "'   '"] {
             let temp = tempfile::tempdir().unwrap();
@@ -8209,7 +8209,7 @@ mod tests {
 
     #[test]
     fn an_external_fits_bias_with_an_undefined_filter_is_adopted() {
-        let _policy = POLICY_LOCK.lock().unwrap();
+        let _policy = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         configure_external_master_policy(None);
         let temp = tempfile::tempdir().unwrap();
         let master_path = temp.path().join("masterBias.fits");
@@ -8381,7 +8381,7 @@ mod tests {
 
     #[test]
     fn a_master_build_reports_each_frame_read_and_stops_inside_the_build() {
-        let _policy = POLICY_LOCK.lock().unwrap();
+        let _policy = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let temp = tempfile::tempdir().unwrap();
         let mut metadata = Vec::new();
         for index in 0..3 {
@@ -8512,7 +8512,7 @@ mod tests {
 
     #[test]
     fn a_complete_night_of_darks_stands_alone_and_a_short_one_pools() {
-        let _settings = POLICY_LOCK.lock().unwrap();
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let light_at = 1_790_000_000i64;
         let day = 86_400i64;
         // Twelve darks the night before, five a month earlier.
@@ -8550,7 +8550,7 @@ mod tests {
 
     #[test]
     fn a_complete_set_at_the_set_point_beats_a_nearer_warm_pair() {
-        let _settings = POLICY_LOCK.lock().unwrap();
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let light_at = 1_790_000_000i64;
         let day = 86_400i64;
         // The Cat's Eye library: two warm darks the nights after the lights,
@@ -8637,7 +8637,7 @@ mod tests {
 
     #[test]
     fn bias_prefers_a_complete_set_too() {
-        let _settings = POLICY_LOCK.lock().unwrap();
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let light_at = 1_790_000_000i64;
         let day = 86_400i64;
         // Five warm bias frames the night after the lights, twelve at the
@@ -8660,7 +8660,7 @@ mod tests {
 
     #[test]
     fn darks_reach_six_months_unless_a_mark_or_the_setting_says_otherwise() {
-        let _settings = POLICY_LOCK.lock().unwrap();
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let light_at = 1_790_000_000i64;
         let day = 86_400i64;
         let temp = tempfile::tempdir().unwrap();
@@ -8727,7 +8727,7 @@ mod tests {
 
     #[test]
     fn a_light_the_library_cannot_calibrate_says_why() {
-        let _settings = POLICY_LOCK.lock().unwrap();
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let day = 86_400i64;
         let light_at = 1_790_000_000i64;
         let temp = tempfile::tempdir().unwrap();
@@ -8766,7 +8766,7 @@ mod tests {
 
     #[test]
     fn a_rig_without_flats_is_not_short_of_one() {
-        let _settings = POLICY_LOCK.lock().unwrap();
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let light_at = 1_790_000_000i64;
         let temp = tempfile::tempdir().unwrap();
         let conn = Connection::open_in_memory().unwrap();
@@ -8781,7 +8781,7 @@ mod tests {
 
     #[test]
     fn bias_kept_behind_a_validity_mark_leaves_the_light_without_any() {
-        let _settings = POLICY_LOCK.lock().unwrap();
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let day = 86_400i64;
         let light_at = 1_790_000_000i64;
         let temp = tempfile::tempdir().unwrap();
@@ -8816,7 +8816,7 @@ mod tests {
 
     #[test]
     fn a_light_is_told_why_each_frame_did_or_did_not_calibrate_it() {
-        let _settings = POLICY_LOCK.lock().unwrap();
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let day = 86_400i64;
         let light_at = 1_790_000_000i64;
         let temp = tempfile::tempdir().unwrap();
@@ -8918,7 +8918,7 @@ mod tests {
 
     #[test]
     fn a_flat_refused_for_its_angle_is_named_with_how_far_off_it_is() {
-        let _settings = POLICY_LOCK.lock().unwrap();
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let light_at = 1_790_000_000i64;
         let temp = tempfile::tempdir().unwrap();
         let mut metas = Vec::new();
@@ -8969,7 +8969,7 @@ mod tests {
 
     #[test]
     fn the_external_master_policy_decides_between_a_master_and_raw_frames() {
-        let _policy = POLICY_LOCK.lock().unwrap();
+        let _policy = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let temp = tempfile::tempdir().unwrap();
         let mut calibration_meta = Vec::new();
         let master_path = temp.path().join("masterDark.fits");
