@@ -131,7 +131,10 @@ missing solver catalog from blocking the initial catalog build.
 
 Use the **Import** button on a configured database. PSF Guard first runs a dry
 preview and lists frames that will attach to existing targets and frames that
-will create new projects. Confirm the preview to write it.
+will create new projects. It also says what the import changes in what Target
+Scheduler will shoot: each existing target's line ends with, for example,
+"adds 1 exposure plan" or "raises acquired on 2 plans", and a line gives any
+new exposure templates. Confirm the preview to write it.
 
 The matching rules prevent common duplicates and splits:
 
@@ -292,6 +295,19 @@ with N.I.N.A. and synced to the rig, so a project the run made would land on
 the live rig without anyone seeing it first. A database saved before this
 setting existed asks first too. Held frames are read again on the next run,
 until they are imported or a scan rule leaves them out.
+
+Under Ask first and Leave out, a run also leaves scheduling alone in projects
+it did not make. Attaching a frame to a target can add an exposure template,
+add an exposure plan, or raise a plan's acquired count, and any of those
+changes what Target Scheduler shoots next. So in a project whose description
+does not start with "Imported by PSF Guard" (the mark every imported project
+carries), a run only adds the image row, and only to a plan the target
+already has for the frame's filter settings and exposure. That plan's counts
+stay as they were. A frame that would need a new template or plan there is
+held, "no exposure plan", and **Review** previews it with the rest. In
+projects an import made, a run adds plans and raises counts as it always
+has. **Create a project** and every import a person starts keep doing both
+everywhere; the preview says which plans they add or raise.
 
 A run takes the configured image directories only, never a path it was not
 given, so it works without `--allow-database-management`. The database's scan

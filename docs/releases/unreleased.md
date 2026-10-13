@@ -51,3 +51,8 @@
   Activation turns off a plan on the target that takes the same frames at
   another length, the preview lists it as replaced, and the plan asks to be
   activated until it is.
+- Automatic import no longer changes what Target Scheduler will shoot in
+  projects it did not create. There it only adds image rows to exposure
+  plans that already exist, and leaves their counts alone. Frames that would
+  need a new plan wait for **Review** with the rest. The import preview now
+  says which plans an import adds or raises.
