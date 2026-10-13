@@ -472,6 +472,9 @@ pub struct DatabaseSummary {
     /// Automatic import of new frames, when turned on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub autoimport: Option<crate::db_registry::AutoImportSettings>,
+    /// What every import from the image folders leaves out, when set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan_rules: Option<crate::commands::import::scan_rules::ScanRules>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1057,6 +1060,10 @@ pub struct UpdateDatabaseRequest {
     /// defaults (off) clear them.
     #[serde(default)]
     pub autoimport: Option<crate::db_registry::AutoImportSettings>,
+    /// Replace the scan rules. Absent leaves them alone; rules that change
+    /// nothing clear them. A bad pattern answers 400 and says which.
+    #[serde(default)]
+    pub scan_rules: Option<crate::commands::import::scan_rules::ScanRules>,
 }
 
 #[derive(Debug, Serialize)]

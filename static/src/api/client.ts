@@ -65,6 +65,7 @@ import type { GuidFillReport, GuidReport,
   ImportRequest,
   ImportStatus,
   AutoImportSettings,
+  ScanRules,
   AutoImportStatus,
   FileCheckResponse,
   DirectoryTreeResponse,
@@ -1224,6 +1225,8 @@ export const apiClient = {
       process_dir?: string;
       /** Replace the automatic import settings; the defaults (off) clear them. */
       autoimport?: AutoImportSettings;
+      /** Replace the scan rules; rules that change nothing clear them. */
+      scan_rules?: ScanRules;
     }
   ): Promise<DatabaseSummary> => {
     const apiInstance = await getApi();

@@ -25,8 +25,9 @@ import StorageSettings from './StorageSettings';
 import ExportDefaultsSettings from './ExportDefaultsSettings';
 import AstroBinSettings from './AstroBinSettings';
 import PixInsightSettings from './PixInsightSettings';
-import type { AutoImportSettings, DatabaseSummary } from '../api/types';
-import { DEFAULT_AUTOIMPORT_SETTINGS } from '../api/types';
+import type { AutoImportSettings, DatabaseSummary, ScanRules } from '../api/types';
+import { DEFAULT_AUTOIMPORT_SETTINGS, DEFAULT_SCAN_RULES } from '../api/types';
+import { scanRuleNotes } from '../utils/importNotes';
 import {
   describeImportProgress,
   importFinishedMessage,
@@ -40,6 +41,7 @@ import { PurgeRejectsButton } from './RejectRemovalControls';
 import MissingGuidRepair from './MissingGuidRepair';
 import AutoImportFields from './AutoImportFields';
 import AutoImportSummary from './AutoImportSummary';
+import ScanRulesFields from './ScanRulesFields';
 import RemotePeerSync from './RemotePeerSync';
 import SchedulerSyncControls from './SchedulerSyncControls';
 import RemoteSyncPreviews from './RemoteSyncPreviews';
@@ -155,6 +157,7 @@ export default function TauriSettings({
     useState(false);
   const [formExportDir, setFormExportDir] = useState('');
   const [formProcessDir, setFormProcessDir] = useState('');
+  const [formScanRules, setFormScanRules] = useState<ScanRules>(DEFAULT_SCAN_RULES);
   const [formAutoImport, setFormAutoImport] = useState<AutoImportSettings>(
     DEFAULT_AUTOIMPORT_SETTINGS
   );
@@ -236,6 +239,7 @@ export default function TauriSettings({
                 export_dir: summary.export_directory,
                 process_dir: summary.process_directory,
                 autoimport: summary.autoimport,
+                scan_rules: summary.scan_rules,
                 remote_image_upload: {
                   enabled: summary.remote_image_upload?.enabled ?? false,
                   image_dir: summary.remote_image_upload?.image_directory,
@@ -271,6 +275,7 @@ export default function TauriSettings({
             export_dir: s.export_directory,
             process_dir: s.process_directory,
             autoimport: s.autoimport,
+            scan_rules: s.scan_rules,
             remote_image_upload: {
               enabled: s.remote_image_upload?.enabled ?? false,
               image_dir: s.remote_image_upload?.image_directory,
@@ -369,6 +374,7 @@ export default function TauriSettings({
     setFormExportDir(entry.export_dir ?? '');
     setFormProcessDir(entry.process_dir ?? '');
     setFormAutoImport({ ...DEFAULT_AUTOIMPORT_SETTINGS, ...(entry.autoimport ?? {}) });
+    setFormScanRules({ ...DEFAULT_SCAN_RULES, ...(entry.scan_rules ?? {}) });
     setFormRemoteUploadEnabled(entry.remote_image_upload?.enabled ?? false);
     setFormRemoteSyncEnabled(entry.remote_image_upload?.sync_enabled ?? false);
     setFormRemoteUploadDir(
@@ -657,6 +663,7 @@ export default function TauriSettings({
           export_dir: formExportDir.trim(),
           process_dir: formProcessDir.trim(),
           autoimport: formAutoImport,
+          scan_rules: formScanRules,
           remote_image_upload: {
             enabled: formRemoteUploadEnabled,
             image_directory: formRemoteUploadDir || undefined,
@@ -746,7 +753,11 @@ export default function TauriSettings({
     );
   };
 
-  const handleImport = async (entry: DbEntry) => {
+  /**
+   * Preview an import of the database's folders, or of `folders` when the
+   * auto-import summary asks to review frames it held.
+   */
+  const handleImport = async (entry: DbEntry, folders?: string[]) => {
     if (entry.image_dirs.length === 0) {
       setStatusMessage(
         `"${entry.name}" has no image directories configured — edit it and add the folders to import.`
@@ -758,7 +769,7 @@ export default function TauriSettings({
     setImportAnalyzeQuality(false);
     setImportScope('all');
     setImportSkipProcessed(false);
-    setImportSelectedDirs([...entry.image_dirs]);
+    setImportSelectedDirs(folders?.length ? [...folders] : [...entry.image_dirs]);
     setImportFolders([]);
     apiClient
       .getImportFolders(entry.id)
@@ -769,7 +780,7 @@ export default function TauriSettings({
         scope: undefined,
         skip_processed: undefined,
         accept_other_rigs: undefined,
-        image_dirs: undefined,
+        image_dirs: folders?.length ? [...folders] : undefined,
       });
     } catch (err) {
       console.error('import preview failed to start:', err);
@@ -1324,6 +1335,7 @@ export default function TauriSettings({
               value={formProcessDir}
               onChange={setFormProcessDir}
             />
+            <ScanRulesFields value={formScanRules} onChange={setFormScanRules} />
             <AutoImportFields value={formAutoImport} onChange={setFormAutoImport} />
           </div>
         )}
@@ -1463,6 +1475,37 @@ export default function TauriSettings({
                 ))}
               </div>
             )}
+            {(() => {
+              // A review picks the folders a run held, often deeper than the
+              // tree above lists; they stay visible here and can be unticked.
+              const listed = new Set<string>([...confirmImport.image_dirs]);
+              for (const root of importFolders) {
+                listed.add(root.path);
+                for (const child of root.children) {
+                  listed.add(child.path);
+                  for (const grandchild of child.children) listed.add(grandchild.path);
+                }
+              }
+              const picked = importSelectedDirs.filter((dir) => !listed.has(dir));
+              if (picked.length === 0) return null;
+              return (
+                <div className="import-folder-picked">
+                  {picked.map((dir) => (
+                    <label key={dir}>
+                      <input
+                        type="checkbox"
+                        checked
+                        onChange={() =>
+                          setImportSelectedDirs((current) => current.filter((d) => d !== dir))
+                        }
+                        disabled={importRunning || isApplying}
+                      />
+                      {dir}
+                    </label>
+                  ))}
+                </div>
+              );
+            })()}
             <label className="quality-analysis-option import-skip-processed">
               <input
                 type="checkbox"
@@ -1522,6 +1565,11 @@ export default function TauriSettings({
               <div className="muted">
                 {importProgress.outcome.skipped_out_of_scope} frame(s) outside the
                 selected scope.
+              </div>
+            )}
+            {scanRuleNotes(importProgress.outcome).length > 0 && (
+              <div className="import-rule-notes">
+                {scanRuleNotes(importProgress.outcome).join(' · ')}
               </div>
             )}
             {(importProgress.outcome.other_rigs ?? []).map((other) => (
@@ -1771,7 +1819,15 @@ export default function TauriSettings({
                       <MissingGuidRepair dbId={entry.id} dbName={entry.name} canManage={managementAllowed} />
                       <QualityBackfillControls dbId={entry.id} canManage={managementAllowed} />
                       <CalibratedCopiesControls dbId={entry.id} canManage={managementAllowed} />
-                      <AutoImportSummary dbId={entry.id} settings={entry.autoimport} />
+                      <AutoImportSummary
+                        dbId={entry.id}
+                        settings={entry.autoimport}
+                        onReview={
+                          managementAllowed
+                            ? (folders) => handleImport(entry, folders)
+                            : undefined
+                        }
+                      />
                     </div>
                     {managementAllowed && (
                       <div className="db-row-actions">

@@ -137,7 +137,8 @@ The matching rules prevent common duplicates and splits:
 
 - a basename already stored in the database is skipped;
 - an `OBJECT` name match attaches to the existing target;
-- otherwise, coordinates within 0.5 degrees attach to the existing target; and
+- otherwise, coordinates within 0.5 degrees attach to the existing target,
+  unless the database's scan rules turn **Match targets by position** off; and
 - unmatched frames create new project and target rows.
 
 The same scan catalogs calibration frames and deduplicates them by canonical
@@ -197,8 +198,68 @@ psf-guard import archive ./new-camera --accept-other-rigs
 
 Use `--no-attach` when every new frame should create imported structure instead
 of attaching to an existing name or coordinate match. `--lights-only` and
-`--calibration-only` scope the run to one frame kind. `remove-imported` can
+`--calibration-only` scope the run to one frame kind. `--exclude PATTERN`
+leaves files and folders out, as an exclude scan rule does; repeat it for more
+patterns, and `create-db` takes it too. When `import` targets a registered
+database, that database's scan rules apply as well. `remove-imported` can
 remove projects created by an import; always preview it first.
+
+## Scan rules
+
+Image folders often hold more than lights: autofocus frames, plate-solve
+tests, flats, pier-camera timelapses, processing output. Scan rules leave
+those out of every import from a database's folders, so you do not have to
+move your files to suit PSF Guard. Set them under **Settings → Databases →
+Edit → Scan rules**:
+
+- **Exclude**: one pattern per line. A file or folder that matches is left
+  out, and a folder that matches is never entered, so nothing below it is
+  read. `**/Hocus Focus/**` keeps Hocus Focus's autofocus frames out;
+  `**/PierCam/**` and `**/Automation/**` work the same way.
+- **Include only**: when set, only files matching one of these patterns, or
+  inside a folder matching one, are read. `LIGHT` keeps every file in
+  N.I.N.A.'s `LIGHT` folders; `*.xisf` keeps XISF files wherever they are.
+  The walk still enters every folder that is not excluded.
+- **Lights must say LIGHT**: a frame with no `IMAGETYP` (or `FRAME`) is left
+  out, instead of being taken for a light as it is by default.
+- **Lights need a target name**: a light with no `OBJECT` is left out,
+  instead of being filed under a new "Unknown Target" project. Autofocus
+  and test frames usually have no `OBJECT`.
+- **Shortest light (s)**: lights shorter than this, or with no exposure
+  time, are left out.
+- **Match targets by position** (on by default): a light whose `OBJECT`
+  matches no target name attaches to the nearest target within 0.5 degrees,
+  so a frame need not use the target's name exactly. A light with no `OBJECT`
+  at all attaches the same way. Off, only an exact name match (in any letter
+  case) attaches, and anything else is a new target: created, held or left
+  out, as the import decides. Frames with no `OBJECT`, such as autofocus
+  frames taken at the target, are kept out by **Lights need a target name**,
+  whatever this is set to.
+
+Patterns match a path relative to the image folder that holds it, in any
+letter case, with `/` or `\` between folders. A pattern with no `/` matches a
+file or folder name at any depth, so `Hocus Focus` and `**/Hocus Focus/**`
+do the same thing. A pattern with a `/` reads from the image folder: `/FLAT`
+or `FLAT/*.fits` match only at the top. `*` stays within one folder name and
+`**` crosses folders. A bad pattern is refused when you save, with the
+pattern and the reason.
+
+The three light filters apply only to frames that would become lights.
+Calibration frames still go to the calibration library, which never writes
+Target Scheduler rows. Exclude and include patterns apply to calibration
+frames too.
+
+A `.psfguardignore` file in a folder skips that folder and everything below
+it, on every import: manual, automatic, the CLI, and a new catalog made from
+images. Its contents are not read. This works with no scan rules at all.
+
+The preview and the automatic import's status line say what the rules left
+out: "12 skipped by scan rules", "1 folder(s) skipped by .psfguardignore",
+"3 left out: no target name". The rules affect imports only. Frames already in
+a catalog stay visible, even when a new rule would leave them out. A remote
+upload from N.I.N.A. does not use scan rules.
+
+The rules travel with the database entry in the registry as `scan_rules`.
 
 ## Import new frames automatically
 
@@ -217,10 +278,24 @@ import**:
   checkbox does.
 - **Include frames from other rigs**: off by default, as for a manual
   import.
+- **New targets**: what a run does with lights that match no target in the
+  catalog. **Ask first**, the default, holds them: the run attaches frames
+  for the targets the catalog has and writes nothing for the rest. The
+  status line then says, for example, "11 held: no matching project", with
+  a **Review** button that opens the import preview for the folders that
+  hold them, so you confirm new projects as you would for a manual import.
+  **Leave out** lists them and does nothing more. **Create a project**
+  creates projects and targets for them, as every run did before.
 
-A run needs no confirmation. It takes the configured image directories
-only, never a path it was not given, so it works without
-`--allow-database-management`. Before reading a single header it drops
+Ask first is the default because the scheduler database is often shared
+with N.I.N.A. and synced to the rig, so a project the run made would land on
+the live rig without anyone seeing it first. A database saved before this
+setting existed asks first too. Held frames are read again on the next run,
+until they are imported or a scan rule leaves them out.
+
+A run takes the configured image directories only, never a path it was not
+given, so it works without `--allow-database-management`. The database's scan
+rules apply to it as to any import. Before reading a single header it drops
 every file the catalog already has: a light by its basename, a calibration
 frame by its path and fingerprint. A folder of thousands of known frames
 therefore costs a directory walk and one query, and a run that finds
