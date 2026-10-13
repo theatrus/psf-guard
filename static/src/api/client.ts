@@ -1475,14 +1475,18 @@ export const apiClient = {
     return data.data;
   },
 
+  /** Rejected lights are left out unless `includeRejected` is set. */
   getProjectCalibrationReport: async (
     dbId: string,
-    projectId: number
+    projectId: number,
+    includeRejected = false
   ): Promise<import('./types').ProjectCalibrationReport> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<
       ApiResponse<import('./types').ProjectCalibrationReport>
-    >(dbPath(dbId, `/projects/${projectId}/calibration-report`));
+    >(dbPath(dbId, `/projects/${projectId}/calibration-report`), {
+      params: includeRejected ? { include_rejected: true } : undefined,
+    });
     if (!data.data) throw new Error(data.error || 'Failed to build the calibration report');
     return data.data;
   },

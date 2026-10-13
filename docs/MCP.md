@@ -87,7 +87,7 @@ read, below `/api`, as you.
 | `get_image_quality` | Score, issues, and place in the sequence, from stored evidence | |
 | `analyze_sequence` | Relative scores and suggested rejects for a target, project, or the database | |
 | `get_statistics` | Whole-database counts | |
-| `get_calibration_report` | Calibration frames the library matches to a project's nights | |
+| `get_calibration_report` | Calibration frames the library matches to a project's nights; rejected lights are left out unless `include_rejected` is set | |
 | `list_stacks` | A project's latest stack per channel: frames integrated and left out, exposure, the masters each calibration session applied, the SNR outlook, and the `job_id` and `group_index` the other stack tools take | |
 | `get_stack` | One stack channel frame by frame: sensor temperature, disposition and reason, registration shift and rotation, weight, noise, normalization; and per night, whether the frames were dithered or walked one way | |
 | `get_stack_image` | The stack's preview as an image: as the app shows it, or with the background stretched hard (`stretch: "background"`); crop by fractions of the frame, up to 2048 px | |

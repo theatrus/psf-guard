@@ -2689,12 +2689,20 @@ pub async fn get_server_export_progress(
     )))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CalibrationReportQuery {
+    /// Count rejected lights too; the report leaves them out by default.
+    #[serde(default)]
+    pub include_rejected: bool,
+}
+
 /// `GET /api/db/{db_id}/projects/{project_id}/calibration-report` — how the
 /// calibration library covers one project's lights: what matches, how old
 /// it is, and whether each night has its own flats.
 pub async fn get_project_calibration_report(
     ctx: DbContext,
     Path((_db_id, project_id)): Path<(String, i32)>,
+    Query(query): Query<CalibrationReportQuery>,
 ) -> Result<Json<ApiResponse<crate::calibration::ProjectCalibrationReport>>, AppError> {
     let directory_tree = ctx
         .get_directory_tree()
@@ -2706,7 +2714,12 @@ pub async fn get_project_calibration_report(
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
         )
         .map_err(|error| anyhow::anyhow!("opening {database_path}: {error}"))?;
-        crate::calibration::project_calibration_report(&conn, project_id, &directory_tree)
+        crate::calibration::project_calibration_report(
+            &conn,
+            project_id,
+            &directory_tree,
+            query.include_rejected,
+        )
     })
     .await
     .map_err(|error| AppError::InternalError(format!("report task: {error}")))?

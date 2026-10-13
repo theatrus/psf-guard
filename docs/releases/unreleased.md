@@ -69,3 +69,6 @@
 - A running stack's status, which the page asks for every second, no longer
   carries each frame's background map. For a 122-frame stack that cut each
   reply from 1.1 MB to about 70 KB.
+- A project's calibration coverage report leaves rejected lights out, so a
+  night you rejected no longer shows up as lacking flats or darks.
+  **Include N rejected lights** adds them back.

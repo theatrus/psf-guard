@@ -2598,6 +2598,9 @@ export interface ProjectCalibrationReport {
   kinds: CalibrationKindSummary[];
   warnings: string[];
   lights_missing_files: number;
+  /** The project's rejected lights, counted whether or not the report includes them. */
+  rejected_lights: number;
+  rejected_included: boolean;
 }
 
 export interface CalibrationKindSummary {
