@@ -1,7 +1,7 @@
 /** What the Library can narrow to. A project shot by several rigs is one
  *  family: it matches a state when any rig has it, since the plan is live
  *  wherever one rig still shoots it; Closed and Done ask for every rig. */
-export type LibraryShow = 'all' | 'active' | 'open' | 'done' | 'draft' | 'inactive' | 'closed' | 'unlinked';
+export type LibraryShow = 'all' | 'active' | 'open' | 'done' | 'draft' | 'inactive' | 'closed' | 'calibration' | 'unlinked';
 
 export const SHOW_OPTIONS: ReadonlyArray<{ value: LibraryShow; label: string; planning?: true }> = [
   { value: 'all', label: 'All projects' },
@@ -11,6 +11,9 @@ export const SHOW_OPTIONS: ReadonlyArray<{ value: LibraryShow; label: string; pl
   { value: 'draft', label: 'Draft' },
   { value: 'inactive', label: 'Inactive' },
   { value: 'closed', label: 'Closed' },
+  // Projects whose lights the calibration library serves poorly, or that
+  // hold something worth a look.
+  { value: 'calibration', label: 'Calibration issues' },
   // Only Planning has projects without a database.
   { value: 'unlinked', label: 'No database', planning: true },
 ];
@@ -20,7 +23,13 @@ export function parseShow(value: string | null, planning: boolean): LibraryShow 
   return option && (planning || !option.planning) ? option.value : 'all';
 }
 
-interface Member { state: number; accepted_images: number; total_desired: number }
+interface Member {
+  state: number;
+  accepted_images: number;
+  total_desired: number;
+  /** The calibration health level, when the background check found one. */
+  calibration_level?: string | null;
+}
 
 /** A plan the Library has no row for: nothing captured yet, so its rigs'
  *  project states are all there is to go on, and it cannot be done. Closed
@@ -38,6 +47,7 @@ export function waitingPlanMatchesShow(links: { source_state?: number | null }[]
     case 'closed': return closed;
     case 'open': return !closed;
     case 'done': return false;
+    case 'calibration': return false;
     case 'unlinked': return false;
   }
 }
@@ -60,6 +70,7 @@ export function familyMatchesShow(members: Member[], show: LibraryShow): boolean
     case 'closed': return closed;
     case 'done': return done;
     case 'open': return !done && !closed;
+    case 'calibration': return members.some(member => !!member.calibration_level);
     case 'unlinked': return false;
   }
 }

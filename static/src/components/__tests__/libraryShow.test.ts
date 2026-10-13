@@ -30,6 +30,15 @@ describe('Library show filter', () => {
     expect(familyMatchesShow(mixed, 'unlinked')).toBe(false);
   });
 
+  it('shows a plan with calibration issues on any rig, and never a waiting one', () => {
+    const quiet = member(1, 10, 40);
+    expect(familyMatchesShow([quiet, { ...quiet, calibration_level: 'check' }], 'calibration')).toBe(true);
+    expect(familyMatchesShow([{ ...quiet, calibration_level: 'poor' }], 'calibration')).toBe(true);
+    expect(familyMatchesShow([quiet, { ...quiet, calibration_level: null }], 'calibration')).toBe(false);
+    expect(waitingPlanMatchesShow([{ source_state: 1 }], 'calibration')).toBe(false);
+    expect(parseShow('calibration', false)).toBe('calibration');
+  });
+
   it('keeps a waiting plan closed on every rig out of the list until Closed is asked for', () => {
     expect(waitingPlanMatchesShow([{ source_state: 3 }, { source_state: 3 }], 'all')).toBe(false);
     expect(waitingPlanMatchesShow([{ source_state: 3 }, { source_state: 3 }], 'closed')).toBe(true);

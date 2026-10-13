@@ -1444,6 +1444,27 @@ export const apiClient = {
   },
 
   /** Calibration coverage for one project's lights. */
+  getCalibrationHealth: async (dbId: string): Promise<import('./types').CalibrationHealthList> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<import('./types').CalibrationHealthList>>(
+      dbPath(dbId, '/calibration-health')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read calibration health');
+    return data.data;
+  },
+
+  getProjectCalibrationHealth: async (
+    dbId: string,
+    projectId: number
+  ): Promise<import('./types').ProjectCalibrationHealthResponse> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<
+      ApiResponse<import('./types').ProjectCalibrationHealthResponse>
+    >(dbPath(dbId, `/projects/${projectId}/calibration-health`));
+    if (!data.data) throw new Error(data.error || 'Failed to read calibration health');
+    return data.data;
+  },
+
   getProjectCalibrationReport: async (
     dbId: string,
     projectId: number

@@ -4,10 +4,12 @@
 //! A pass measures every raw frame that has no measurement from the current
 //! algorithm of its current file, then grades the whole library (see
 //! [`crate::calibration::grade_library`]). It runs when the server starts,
-//! after an import, after a forget, and two minutes after remote uploads of
-//! calibration frames stop arriving, so a batch sent one frame at a time
-//! shares a pass. A pass measures only the frames it found when it began,
-//! so a request while one runs makes it run once more when it ends.
+//! after an import, after a forget, and two minutes after remote uploads
+//! stop arriving, so a batch sent one frame at a time shares a pass. When it
+//! ends, the calibration health of every project is judged again (see
+//! [`crate::server::calibration_health`]). A pass measures only the frames
+//! it found when it began, so a request while one runs makes it run once
+//! more when it ends.
 //!
 //! Measuring reads every pixel of a frame. The pass leases its workers from
 //! the shared background budget, whose memory ceiling sizes it, and reads
@@ -131,21 +133,26 @@ pub fn request(state: &Arc<AppState>, path: &str) {
     }
     let state = Arc::clone(state);
     let path = path.to_string();
-    std::thread::spawn(move || loop {
-        run_logged(&state, &path, &job);
-        if !finish(&mut job.flags.lock().unwrap_or_else(|p| p.into_inner())) {
-            break;
+    std::thread::spawn(move || {
+        loop {
+            run_logged(&state, &path, &job);
+            if !finish(&mut job.flags.lock().unwrap_or_else(|p| p.into_inner())) {
+                break;
+            }
         }
+        // Grades decide what each project's lights get; judge them again.
+        crate::server::calibration_health::request(&state, &path);
     });
 }
 
-/// Catalogs with uploaded calibration frames waiting for a pass, and when
-/// the last one came.
+/// Catalogs with uploaded frames waiting for a pass, and when the last one
+/// came.
 static UPLOADS: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(Default::default);
 
-/// A calibration frame reached the catalog at `path` by remote upload. The
-/// pass starts once uploads to it pause for [`UPLOAD_SETTLE`]; each new
-/// frame before then pushes it back.
+/// A frame reached the catalog at `path` by remote upload: a calibration
+/// frame to grade, or a light whose project's calibration health the pass
+/// that follows judges again. The pass starts once uploads to it pause for
+/// [`UPLOAD_SETTLE`]; each new frame before then pushes it back.
 pub fn note_upload(state: &Arc<AppState>, path: &str) {
     let uploads = || UPLOADS.lock().unwrap_or_else(|p| p.into_inner());
     if uploads().insert(path.to_string(), Instant::now()).is_some() {

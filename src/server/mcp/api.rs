@@ -370,6 +370,14 @@ pub(super) const READABLE_ROUTES: &[(&str, &str)] = &[
         "/db/{db}/calibrations/quality",
         "Calibration grading progress, and frames by grade",
     ),
+    (
+        "/db/{db}/calibration-health",
+        "Each project's calibration health: poor or check, with light counts",
+    ),
+    (
+        "/db/{db}/projects/{project_id}/calibration-health",
+        "One project's calibration findings by night and filter",
+    ),
     ("/db/{db}/flat-history", "Target Scheduler flat history"),
     ("/db/{db}/rejects/removed", "Removed rejects, by batch"),
     (

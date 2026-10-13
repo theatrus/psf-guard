@@ -8,6 +8,7 @@ import type {
   TargetNavigation,
   TargetOverview,
   OverallStats,
+  ProjectCalibrationHealthSummary,
   SkyCoverage,
 } from '../api/types';
 
@@ -228,4 +229,32 @@ export function useMergedSkyCoverage() {
     ...merged,
     isLoading: dbsLoading || merged.isLoading,
   };
+}
+
+/**
+ * Each project's calibration health across every database, keyed by
+ * `db:project`, for projects the background pass found something in. Only
+ * kept results come back: a project without one shows nothing. While a
+ * pass runs the list is read again every few seconds.
+ */
+export function useCalibrationHealth() {
+  const { data: databases } = useAllDatabases();
+  const queries = useQueries({
+    queries: (databases ?? []).map((db) => ({
+      queryKey: ['db', db.id, 'calibration-health'],
+      queryFn: () => apiClient.getCalibrationHealth(db.id),
+      staleTime: 30_000,
+      refetchInterval: (query: { state: { data?: { running: boolean } } }) =>
+        query.state.data?.running ? 5_000 : false,
+    })),
+  });
+  return useMemo(() => {
+    const map = new Map<string, ProjectCalibrationHealthSummary>();
+    (databases ?? []).forEach((db, index) => {
+      for (const project of queries[index]?.data?.projects ?? []) {
+        if (project.level) map.set(`${db.id}:${project.project_id}`, project);
+      }
+    });
+    return map;
+  }, [queries, databases]);
 }

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { apiClient } from '../api/client';
 import { useAccess } from '../auth/access';
-import type { CalibrationExternalMaster, CalibrationNightFilter, ProjectCalibrationGaps, ProjectCalibrationReport } from '../api/types';
+import type { CalibrationExternalMaster, CalibrationHealthFinding, CalibrationHealthLevel, CalibrationNightFilter, ProjectCalibrationGaps, ProjectCalibrationReport } from '../api/types';
 import Dialog from './Dialog';
 import './CalibrationReportDialog.css';
 
@@ -137,6 +137,61 @@ function UncalibratedLights({ dbId, projectId }: { dbId: string; projectId: numb
   );
 }
 
+const LEVEL_WORDS: Record<CalibrationHealthLevel, string> = { poor: 'Poor', check: 'Check' };
+
+const nightsText = (finding: CalibrationHealthFinding) =>
+  finding.nights.map((night) => `${night.night} ${night.filter || '—'}: ${night.lights}`).join(' · ');
+
+/**
+ * What the background check found for this project: each finding with its
+ * lights by night and filter. Read from the kept result; never worked out
+ * here, so a project the check has not reached says so.
+ */
+function QualitySection({ dbId, projectId }: { dbId: string; projectId: number }) {
+  const query = useQuery({
+    queryKey: ['db', dbId, 'project', projectId, 'calibration-health'],
+    queryFn: () => apiClient.getProjectCalibrationHealth(dbId, projectId),
+    staleTime: 30_000,
+  });
+  const health = query.data?.health;
+  return (
+    <section className="calibration-report-quality" aria-label="Quality">
+      <strong>Quality</strong>
+      {query.isLoading && <p className="calibration-report-muted">Reading…</p>}
+      {query.error && <p className="calibration-report-error">{message(query.error)}</p>}
+      {query.data && !health && (
+        <p className="calibration-report-muted">
+          {query.data.running ? 'Being checked now.' : 'Not checked yet.'}
+        </p>
+      )}
+      {health && health.findings.length === 0 && (
+        <p>Nothing found in {lights(health.checked)}.</p>
+      )}
+      {health && health.findings.length > 0 && (
+        <>
+          <p>
+            {health.poor_lights > 0
+              ? `${health.poor_lights.toLocaleString()} of ${lights(health.checked)} can't be calibrated properly${health.check_lights > 0 ? `; ${health.check_lights.toLocaleString()} more to check` : ''}.`
+              : `${health.check_lights.toLocaleString()} of ${lights(health.checked)} to check.`}
+          </p>
+          <ul className="calibration-report-findings">
+            {health.findings.map((finding) => (
+              <li key={`${finding.level}:${finding.code}:${finding.reason}`}>
+                <span className={`calibration-report-level is-${finding.level}`}>{LEVEL_WORDS[finding.level]}</span>
+                {' '}{finding.reason}: {lights(finding.lights)}
+                <small className="calibration-report-muted">{nightsText(finding)}</small>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {health && health.missing_files > 0 && (
+        <p className="calibration-report-muted">{lights(health.missing_files)} not found or not readable.</p>
+      )}
+    </section>
+  );
+}
+
 /**
  * How the calibration library covers one project: what matches its lights,
  * how old it is, and whether each night has its own flats. Read-only; the
@@ -159,6 +214,7 @@ export default function CalibrationReportDialog({
   return (
     <Dialog open={open} onClose={onClose} title={`Calibration coverage — ${projectName}`}>
       <div className="calibration-report">
+        <QualitySection dbId={dbId} projectId={projectId} />
         {report.isLoading && <p className="calibration-report-muted">Matching the library…</p>}
         {report.error && (
           <p className="calibration-report-error">

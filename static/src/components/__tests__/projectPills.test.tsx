@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
-import { DatesPill, ProgressPill, StatePill } from '../projectPills';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { CalibrationPill, DatesPill, ProgressPill, StatePill } from '../projectPills';
 
 describe('project pills', () => {
   it('reads Done once the goal is met, a percent before, and a count without a goal', () => {
@@ -25,5 +25,25 @@ describe('project pills', () => {
     expect(screen.getByText(/3 d ago/)).toBeInTheDocument();
     render(<DatesPill earliest={null} latest={null} nowMs={now} />);
     expect(screen.getByText('No dates')).toBeInTheDocument();
+  });
+
+  it('shows calibration as an icon and one word, and opens the report', () => {
+    const open = vi.fn();
+    const health = { project_id: 3, level: 'poor' as const, poor_lights: 12, check_lights: 1, checked: 40, computed_at: 1 };
+    const { container, rerender } = render(<CalibrationPill health={health} name="Bubble" onOpen={open} />);
+    const pill = screen.getByRole('button', { name: 'Calibration Poor for Bubble' });
+    expect(pill).toHaveTextContent('Poor');
+    expect(pill).toHaveClass('is-poor');
+    expect(pill).toHaveAttribute('title', "Calibration: 12 lights can't be calibrated properly; 1 light to check");
+    fireEvent.click(pill);
+    expect(open).toHaveBeenCalledTimes(1);
+
+    rerender(<CalibrationPill health={{ ...health, level: 'check', poor_lights: 0, check_lights: 5 }} name="Bubble" onOpen={open} />);
+    expect(screen.getByRole('button', { name: 'Calibration Check for Bubble' })).toHaveClass('is-check');
+    // Nothing found, or no current result: no pill at all.
+    rerender(<CalibrationPill health={{ ...health, level: null }} name="Bubble" onOpen={open} />);
+    expect(container).toBeEmptyDOMElement();
+    rerender(<CalibrationPill health={undefined} name="Bubble" onOpen={open} />);
+    expect(container).toBeEmptyDOMElement();
   });
 });
