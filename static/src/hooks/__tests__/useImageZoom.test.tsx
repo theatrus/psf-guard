@@ -281,8 +281,10 @@ describe('useImageZoom touch gestures', () => {
     expect(state.scale).toBeCloseTo(0.8, 5);
     expect(state.offsetX).toBeCloseTo(-340, 5);
     expect(state.offsetY).toBeCloseTo(-203.2, 1);
-    expect(start.preventDefault).toHaveBeenCalled();
-    expect(move.preventDefault).toHaveBeenCalled();
+    // React's touch listeners are passive; touch-action: none on the
+    // container keeps the gesture local, so the handlers never ask.
+    expect(start.preventDefault).not.toHaveBeenCalled();
+    expect(move.preventDefault).not.toHaveBeenCalled();
     expect(onViewModeChange).toHaveBeenLastCalledWith('user');
   });
 
@@ -308,7 +310,7 @@ describe('useImageZoom touch gestures', () => {
       before.offsetY - 80,
       5
     );
-    expect(move.preventDefault).toHaveBeenCalled();
+    expect(move.preventDefault).not.toHaveBeenCalled();
   });
 });
 
