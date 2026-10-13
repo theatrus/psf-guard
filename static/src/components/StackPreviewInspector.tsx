@@ -270,7 +270,6 @@ export default function StackPreviewInspector({
     const touch = event.touches[0];
     const point = imagePointFromClient(touch.clientX, touch.clientY);
     if (!point) return;
-    event.preventDefault();
     setDragStart(point);
     setDragEnd(point);
     setRegion(null);
@@ -285,7 +284,6 @@ export default function StackPreviewInspector({
     const touch = event.touches[0];
     const point = imagePointFromClient(touch.clientX, touch.clientY);
     if (!point) return;
-    event.preventDefault();
     setDragEnd(point);
   };
 
