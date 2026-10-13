@@ -569,6 +569,39 @@ pub struct LatestStackPreviews {
     pub groups: Vec<LatestStackPreviewGroup>,
 }
 
+impl StackGroupStatus {
+    /// Leave out what only the server reads. Each frame's registered mapping
+    /// holds its background normalization tiles, about 11 KB a frame; the
+    /// final pass and the sky coverage read them from the stored job, and
+    /// the page never does.
+    fn strip_for_client(&mut self) {
+        for frame in &mut self.frames {
+            frame.registered_mapping = None;
+        }
+    }
+}
+
+impl StackPreviewJob {
+    /// The job as a reply sends it: the page polls a running job every
+    /// second, and with its frame mappings a 122-frame stack ran to 1.1 MB.
+    pub fn for_client(mut self) -> Self {
+        self.groups
+            .iter_mut()
+            .for_each(StackGroupStatus::strip_for_client);
+        self
+    }
+}
+
+impl LatestStackPreviews {
+    /// The index as a reply sends it, without each frame's mapping.
+    pub fn for_client(mut self) -> Self {
+        for latest in &mut self.groups {
+            latest.group.strip_for_client();
+        }
+        self
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StackActivityKind {
@@ -1656,7 +1689,7 @@ pub async fn start_stack_previews(
     if let Some(cached) = started.cached {
         compose_after_cache_hits(&state, &ctx.0, vec![cached]).await;
     }
-    Ok(Json(ApiResponse::success(started.job)))
+    Ok(Json(ApiResponse::success(started.job.for_client())))
 }
 
 /// `POST /api/db/{db}/projects/{project}/stack-previews/channels` — the
@@ -1693,7 +1726,9 @@ pub async fn start_stack_preview_channels(
     // Once every channel is in line, so color waits for the ones still to
     // build rather than composing from a half-queued set.
     compose_after_cache_hits(&state, &ctx.0, cached).await;
-    Ok(Json(ApiResponse::success(jobs)))
+    Ok(Json(ApiResponse::success(
+        jobs.into_iter().map(StackPreviewJob::for_client).collect(),
+    )))
 }
 
 struct Started {
@@ -1842,7 +1877,11 @@ pub async fn cancel_stack_preview_job(
         ));
     }
     Ok(Json(ApiResponse::success(
-        state.stack_previews.get(&job_id).unwrap_or(job),
+        state
+            .stack_previews
+            .get(&job_id)
+            .unwrap_or(job)
+            .for_client(),
     )))
 }
 
@@ -2100,7 +2139,7 @@ pub async fn get_latest_stack_previews(
         return Err(AppError::NotFound);
     }
     let latest = current_project_latest_stacks(&ctx, project_id, latest)?;
-    Ok(Json(ApiResponse::success(latest)))
+    Ok(Json(ApiResponse::success(latest.for_client())))
 }
 
 pub async fn get_stack_preview_job(
@@ -2113,7 +2152,7 @@ pub async fn get_stack_preview_job(
         if job.database_id != ctx.id || job.project_id != project_id {
             return Err(AppError::NotFound);
         }
-        return Ok(Json(ApiResponse::success(job)));
+        return Ok(Json(ApiResponse::success(job.for_client())));
     }
     let path = manifest_path(&ctx.stack_root, &job_id);
     let bytes = std::fs::read(path).map_err(|_| AppError::NotFound)?;
@@ -2123,7 +2162,7 @@ pub async fn get_stack_preview_job(
         return Err(AppError::NotFound);
     }
     let _ = state.stack_previews.insert(job.clone());
-    Ok(Json(ApiResponse::success(job)))
+    Ok(Json(ApiResponse::success(job.for_client())))
 }
 
 pub async fn get_stack_preview_image(
@@ -5212,6 +5251,33 @@ mod tests {
             }],
             frames: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_reply_leaves_out_each_frames_mapping() {
+        let pixels = seiza_stacking::LinearImage::new(512, 512, 1, vec![100.0; 512 * 512]).unwrap();
+        let mut group = ready_group(5, "Ha", 11);
+        group.frames = (0..4)
+            .map(|index| StackFrameDecision {
+                disposition: "integrated".into(),
+                reason: None,
+                registered_mapping: Some(seiza_stacking::RegisteredFrameMapping::identity(&pixels)),
+                ..excluded_decision_for(11 + index, String::new())
+            })
+            .collect();
+        let job = completed_job("job-a", vec![group]);
+        let stored = serde_json::to_string(&job).unwrap();
+        let sent = job.clone().for_client();
+
+        assert!(sent.groups[0]
+            .frames
+            .iter()
+            .all(|frame| frame.registered_mapping.is_none()));
+        assert_eq!(sent.groups[0].frames.len(), 4);
+        assert_eq!(sent.groups[0].frames[0].disposition, "integrated");
+        // The stored job keeps them for the final pass and the sky coverage.
+        assert!(job.groups[0].frames[0].registered_mapping.is_some());
+        assert!(serde_json::to_string(&sent).unwrap().len() < stored.len());
     }
 
     fn completed_job(job_id: &str, groups: Vec<StackGroupStatus>) -> StackPreviewJob {

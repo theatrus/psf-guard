@@ -66,3 +66,6 @@
   plans that already exist, and leaves their counts alone. Frames that would
   need a new plan wait for **Review** with the rest. The import preview now
   says which plans an import adds or raises.
+- A running stack's status, which the page asks for every second, no longer
+  carries each frame's background map. For a 122-frame stack that cut each
+  reply from 1.1 MB to about 70 KB.
