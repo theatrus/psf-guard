@@ -186,7 +186,7 @@ pub struct SetCalibrationValidityResponse {
 /// PUT /api/db/{db}/calibrations/frames/validity — mark frames as usable
 /// only for lights after them, only before them, or both again.
 pub async fn set_calibration_validity(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Json(request): Json<SetCalibrationValidityRequest>,
 ) -> Result<Json<ApiResponse<SetCalibrationValidityResponse>>, AppError> {
@@ -210,6 +210,8 @@ pub async fn set_calibration_validity(
     if updated == 0 {
         return Err(AppError::NotFound);
     }
+    // What each project's lights get has changed.
+    crate::server::calibration_health::request(&state, &ctx.database_path);
     Ok(Json(ApiResponse::success(SetCalibrationValidityResponse {
         updated,
     })))
@@ -226,7 +228,7 @@ pub struct SetCalibrationQualityOverrideRequest {
 /// grade, keep them out of masters and exports, or clear that choice. A
 /// kept-out frame stays in the library, so a rescan does not bring it back.
 pub async fn set_calibration_quality_override(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Json(request): Json<SetCalibrationQualityOverrideRequest>,
 ) -> Result<Json<ApiResponse<SetCalibrationValidityResponse>>, AppError> {
@@ -250,6 +252,8 @@ pub async fn set_calibration_quality_override(
     if updated == 0 {
         return Err(AppError::NotFound);
     }
+    // What each project's lights get has changed.
+    crate::server::calibration_health::request(&state, &ctx.database_path);
     Ok(Json(ApiResponse::success(SetCalibrationValidityResponse {
         updated,
     })))
@@ -1192,6 +1196,11 @@ pub(crate) async fn execute_scheduler_sync_paths(
             crate::server::stack_preview::automatic::RefreshReason::Sync,
         );
         crate::server::quality_arrival::note_arrival(&destination_id_for_cache);
+        // Synced calibration frames are graded, and then every project's
+        // calibration health is judged again.
+        if let Some(destination) = state.get_database(&destination_id_for_cache) {
+            crate::server::calibration_quality::request(state, &destination.database_path);
+        }
     }
     Ok((response, fingerprint))
 }
@@ -1470,6 +1479,8 @@ pub async fn add_database_route(
     // Kick a background refresh for the newly-registered DB so file/dir caches
     // populate without the user having to refresh manually.
     let _ = ctx.ensure_cache_available();
+    // Grade its calibration frames and judge its projects, as at start.
+    crate::server::calibration_quality::request(&state, &ctx.database_path);
 
     Ok(Json(ApiResponse::success(summary_of(&ctx))))
 }

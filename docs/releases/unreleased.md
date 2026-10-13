@@ -4,6 +4,14 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- The Library flags projects whose lights the calibration library serves
+  poorly with a **Poor** or **Check** pill, worked out in the background:
+  lights it cannot calibrate (now also lights from a camera with no
+  calibration frames at all), thin dark masters, flats that carry changing
+  spots, old or mixed flats, suspect frames in use. The pill opens the
+  Calibration report, whose new **Quality** section counts the lights by
+  night and filter, and **Show › Calibration issues** lists just those
+  projects.
 - PSF Guard grades every bias, dark, dark-flat and flat in the calibration
   library as OK, suspect or poor. Flats are judged against the rest of their
   session for clipping, exposure, the light pattern and spots that come and

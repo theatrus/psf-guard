@@ -274,6 +274,7 @@ pub async fn sync_with_peer(
             crate::server::stack_preview::automatic::RefreshReason::Sync,
         );
         crate::server::quality_arrival::note_arrival(&context.id);
+        crate::server::calibration_quality::request(&state, &context.database_path);
     }
     Ok(Json(ApiResponse::success(RemoteSyncResult {
         applied: outcome.applied,

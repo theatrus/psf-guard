@@ -2270,6 +2270,53 @@ export interface CalibrationFrameSummary {
 
 export type CalibrationGrade = 'ok' | 'suspect' | 'poor';
 
+/** How well the library calibrates a project: lights that cannot be
+ *  calibrated properly, or ones worth a look. */
+export type CalibrationHealthLevel = 'poor' | 'check';
+
+export interface ProjectCalibrationHealthSummary {
+  project_id: number;
+  /** Absent when nothing was found. */
+  level: CalibrationHealthLevel | null;
+  poor_lights: number;
+  check_lights: number;
+  checked: number;
+  computed_at: number;
+}
+
+export interface CalibrationHealthList {
+  /** Projects with a current result; one missing has none yet. */
+  projects: ProjectCalibrationHealthSummary[];
+  running: boolean;
+}
+
+export interface CalibrationHealthFinding {
+  code: string;
+  level: CalibrationHealthLevel;
+  /** In plain words, with its numbers. */
+  reason: string;
+  lights: number;
+  /** Newest night first. */
+  nights: { night: string; filter: string; lights: number }[];
+}
+
+export interface ProjectCalibrationHealth {
+  project_id: number;
+  level: CalibrationHealthLevel | null;
+  checked: number;
+  missing_files: number;
+  poor_lights: number;
+  check_lights: number;
+  findings: CalibrationHealthFinding[];
+}
+
+export interface ProjectCalibrationHealthResponse {
+  /** Absent until the background pass has judged the project as it is. */
+  health: ProjectCalibrationHealth | null;
+  computed_at: number | null;
+  running: boolean;
+}
+
 export type CalibrationQualityOverride = 'use' | 'exclude';
 
 export type CalibrationValidDirection = 'forward' | 'backward';

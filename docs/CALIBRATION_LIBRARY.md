@@ -527,6 +527,51 @@ automatic, stack previews leave them out, so they never mix with properly
 calibrated frames: the stack card counts them under **can't calibrate** and
 each frame's decision gives the reason.
 
+### Calibration health
+
+PSF Guard also judges how well the library calibrates each project, so the
+Library can flag the projects worth a look without anyone opening a report.
+Every light that is not rejected is read and matched as a stack would match
+it, and what it would get is judged on two levels.
+
+**Poor**: the light cannot be calibrated properly.
+
+- Nothing in the library matches its camera and settings, though the
+  library holds frames for other cameras. A camera that has never had
+  calibration frames shows here; the rules above say nothing about it.
+- One of the rules above: no flat, or no bias or dark, or flats past the age
+  limit.
+- Its dark master would use fewer than five frames, or its bias master
+  would, when no dark serves it. A short set puts its own noise into every
+  light.
+- Its flats carry changing spots into their master: spots that come and go
+  across the set, such as drying dew, sit in most of its frames.
+
+**Check**: worth a look; the light still calibrates.
+
+- Its flats were shot more than 30 days from it.
+- Its flat master takes flats from more than one night.
+- Its masters use frames graded suspect.
+- Frames kept out by hand leave its bias, darks or flats under five frames.
+- Its bias master would use fewer than five frames while a dark serves it,
+  or a few changing spots sit in most of its flats.
+
+A light takes its worst finding, and a project its worst light. The Library
+shows a **🧪 Poor** or **🧪 Check** pill after the grading and date pills,
+on the compact row and the card; it opens the Calibration report, whose
+**Quality** section lists each finding with its lights by night and filter.
+**Show › Calibration issues** narrows the Library to those projects.
+
+Reading every light takes time, so this runs in the background, never on a
+request: after each grading pass (which follows the server start, imports,
+syncs, forgets and remote uploads), and when a frame is kept out or used
+anyway, a validity mark changes, or the calibration settings change. It uses
+the background worker share and waits while interactive work runs. The
+results are kept below the database's cache folder, each filed under a key
+of the library and its grades, the project's lights, the calibration
+settings and the rules, so a project is read again only when one of those
+changed. Until then, a project whose result no longer holds shows no pill.
+
 ## Stack previews
 
 Stack previews build masters on demand with `seiza-stacking`. Each master needs
