@@ -1991,6 +1991,207 @@ async fn the_check_runs_on_a_copy_and_finds_nothing_to_change_after_an_apply() {
     );
 }
 
+/// The saved plan revision, for comparing with the activation record.
+fn plan_revision(f: &Fixture, project: Uuid) -> u64 {
+    let store = f.state.director.as_ref().unwrap().writer.lock().unwrap();
+    store.plan_draft(project).unwrap().unwrap().revision
+}
+
+/// The activation record's plan revision.
+async fn recorded_plan_revision(f: &Fixture, project: Uuid) -> u64 {
+    let (status, last) = call(
+        &f.app,
+        "GET",
+        &format!("/projects/{project}/activation"),
+        Value::Null,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{last}");
+    last["data"]["activation"]["plan_revision"]
+        .as_u64()
+        .unwrap()
+}
+
+/// Each plan row the report would change, as "action name | detail".
+fn plan_writes(data: &Value) -> Vec<String> {
+    data["rigs"][0]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "plan" && c["action"] != "unchanged" && c["action"] != "keep")
+        .map(|c| {
+            format!(
+                "{} {} | {}",
+                c["action"].as_str().unwrap(),
+                c["name"].as_str().unwrap(),
+                c["detail"].as_str().unwrap()
+            )
+        })
+        .collect()
+}
+
+/// SNR G132 on ultracat131: G moved from a 120 s template to a 300 s one
+/// before the first activation, and that activation, older than the rule
+/// that turns off a plan another length replaced, left the G_120 plan on
+/// beside the new one. The record had the saved plan, so the page never
+/// asked again. The check reads the rows, not the record: it lists the plan
+/// to turn off, as the preview does, and lists nothing once that is applied.
+#[tokio::test]
+async fn the_check_lists_a_replaced_plan_left_on_under_an_up_to_date_record() {
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    activate_now(&a.f, a.project, "first").await;
+    // What the older activation left: the 120 s plan it never owned, on a
+    // template with the same settings, at that template's default length.
+    a.db.execute(
+        "INSERT INTO exposuretemplate (Id, profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel, moonavoidanceenabled,
+            moonavoidanceseparation, moonavoidancewidth, maximumhumidity, defaultexposure, moonrelaxscale, moonrelaxmaxaltitude,
+            moonrelaxminaltitude, moondownenabled, ditherevery, minutesOffset, guid)
+         VALUES (2, 'profile-a', 'Ha 120', 'Ha', 100, 30, 1, -1, 0, 0, 60, 7, 0, 120, 0, 5, -15, 0, -1, 0, ?1)",
+        [Uuid::new_v4().to_string()],
+    )
+    .unwrap();
+    a.db.execute(
+        "INSERT INTO exposureplan (Id, profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, enabled, guid)
+         SELECT 34, 'profile-a', -1, 120, 2, 2, Id, 2, 1, 'aaaaaaaa-0000-4000-8000-000000000034' FROM target WHERE name='IC 1805 r1c1'",
+        [],
+    )
+    .unwrap();
+    // By revisions nothing is due: the record has the saved plan.
+    assert_eq!(
+        recorded_plan_revision(&a.f, a.project).await,
+        plan_revision(&a.f, a.project)
+    );
+    let replaced = "disable IC 1805 r1c1 · Ha 120 · 120 s | plan #34 (2 of 120 frames taken) is replaced by IC 1805 r1c1 · Ha 300 · 300 s; Target Scheduler stops taking it";
+    let checked = check_now(&a.f, a.project).await;
+    assert_eq!(plan_writes(&checked), [replaced], "{checked}");
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(plan_writes(&preview["data"]), [replaced], "{preview}");
+
+    activate_now(&a.f, a.project, "again").await;
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE Id=34 AND enabled=0 AND desired=120 AND acquired=2"),
+        1,
+        "turned off, frames kept"
+    );
+    let after = check_now(&a.f, a.project).await;
+    assert!(plan_writes(&after).is_empty(), "{after}");
+    assert_eq!(actions(&after, "project"), ["unchanged"], "{after}");
+}
+
+/// A plan activation owns follows its objective to another length in place,
+/// whether the template changes (the editor then takes the template's
+/// default length) or only the exposure, and the check says what changes.
+/// A template's default changed in N.I.N.A. under a row left at that
+/// default is a change too, though the record has the saved plan.
+#[tokio::test]
+async fn an_owned_plan_moved_to_another_length_is_updated_in_place_and_the_check_says_why() {
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    a.db.execute(
+        "INSERT INTO exposuretemplate (Id, profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel, moonavoidanceenabled,
+            moonavoidanceseparation, moonavoidancewidth, maximumhumidity, defaultexposure, moonrelaxscale, moonrelaxmaxaltitude,
+            moonrelaxminaltitude, moondownenabled, ditherevery, minutesOffset, guid)
+         VALUES (2, 'profile-a', 'Ha 120', 'Ha', 100, 30, 1, -1, 0, 0, 60, 7, 0, 120, 0, 5, -15, 0, -1, 0, '7a7a7a7a-2222-4222-8222-222222222222')",
+        [],
+    )
+    .unwrap();
+    let to_template = |plan: &mut PlanDraft, id: i64, guid: &str, name: &str, exposure: f64| {
+        let contribution = &mut plan.contributions[0];
+        contribution.template.template_id = Some(id);
+        contribution.template.template_guid = Some(Uuid::parse_str(guid).unwrap());
+        contribution.template.name = name.into();
+        contribution.exposure_seconds = exposure;
+        contribution.goal = Some(Goal::Frames { value: 40 });
+    };
+    edit_plan(&a.f, a.project, |plan| {
+        to_template(
+            plan,
+            2,
+            "7a7a7a7a-2222-4222-8222-222222222222",
+            "Ha 120",
+            120.0,
+        );
+    });
+    activate_now(&a.f, a.project, "at 120 s").await;
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE exposureTemplateId=2 AND exposure=120"),
+        2
+    );
+    a.db.execute("UPDATE exposureplan SET acquired=7, accepted=6", [])
+        .unwrap();
+
+    // The template moves to the 300 s one, at its default length.
+    edit_plan(&a.f, a.project, |plan| {
+        to_template(
+            plan,
+            1,
+            "7a7a7a7a-1111-4111-8111-111111111111",
+            "Ha 300",
+            300.0,
+        );
+    });
+    let checked = check_now(&a.f, a.project).await;
+    assert_eq!(
+        plan_writes(&checked),
+        [
+            "update IC 1805 r1c1 · Ha 300 · 300 s | 40 frames, template #1 Ha 300; exposure 120 s → 300 s, template #2 → #1 Ha 300",
+            "update IC 1805 r2c1 · Ha 300 · 300 s | 40 frames, template #1 Ha 300; exposure 120 s → 300 s, template #2 → #1 Ha 300",
+        ],
+        "{checked}"
+    );
+    activate_now(&a.f, a.project, "at 300 s").await;
+    assert_eq!(count("SELECT count(*) FROM exposureplan"), 2, "no twins");
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE exposureTemplateId=1 AND exposure=300 AND acquired=7 AND accepted=6 AND enabled=1"),
+        2
+    );
+
+    // Only the exposure changes, on the same template.
+    edit_plan(&a.f, a.project, |plan| {
+        plan.contributions[0].exposure_seconds = 600.0;
+    });
+    let checked = check_now(&a.f, a.project).await;
+    assert_eq!(
+        plan_writes(&checked)
+            .iter()
+            .map(|line| line.split(" | ").nth(1).unwrap().to_owned())
+            .collect::<Vec<_>>(),
+        ["40 frames, template #1 Ha 300; exposure 300 s → 600 s"; 2],
+        "{checked}"
+    );
+    activate_now(&a.f, a.project, "at 600 s").await;
+    assert!(plan_writes(&check_now(&a.f, a.project).await).is_empty());
+
+    // N.I.N.A. leaves the rows at the template's length and changes that
+    // length: the record still has the saved plan, and the rows differ.
+    a.db.execute_batch(
+        "UPDATE exposureplan SET exposure=-1; UPDATE exposuretemplate SET defaultexposure=300 WHERE Id=1;",
+    )
+    .unwrap();
+    assert_eq!(
+        recorded_plan_revision(&a.f, a.project).await,
+        plan_revision(&a.f, a.project)
+    );
+    let checked = check_now(&a.f, a.project).await;
+    assert_eq!(plan_writes(&checked).len(), 2, "{checked}");
+    assert!(
+        plan_writes(&checked)
+            .iter()
+            .all(|line| line.ends_with("exposure 300 s → 600 s")),
+        "{checked}"
+    );
+}
+
 /// Rows that already match the plan but carry none of Director's own tables,
 /// the way the Sync plugin copies a Target Scheduler project or a plan taken
 /// in from one finds it: the check reads every row unchanged, so the page

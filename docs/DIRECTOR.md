@@ -421,9 +421,9 @@ counts toward the objective its activation wrote it for; one taken in from
 Target Scheduler goes to the objective with its template, else the one with
 its filter's band. `GET /projects/{id}/plan/progress` returns the counts.
 **Rigs** lists each rig with its database's project and whether activation
-has reached it. **Add a rig** offers every rig with a new project, which
-activation creates in its database, and every project another plan holds in
-a database this plan has none in. A rig joins with a template for each
+has reached it, or its rows differ from the plan. **Add a rig** offers every
+rig with a new project, which activation creates in its database, and every
+project another plan holds in a database this plan has none in. A rig joins with a template for each
 objective, from its database or the library; one with no template for any
 objective's band says so and stays out. A library template the database
 already holds, written there by activation or with the same filter, camera
@@ -442,14 +442,18 @@ brings in, never replaces unsaved edits: the tab says the plan changed and
 offers **Reload**, and the save bar will not save over it.
 
 Activation is no tab. Once every edit is saved, a bar at the top asks for an
-activation while the rig databases lack the saved plan or framing, or a rig
+activation while the rig databases lack the saved plan or framing, a rig
 that shoots the plan has none of it (the last activation skipped it, or it
-joined since), and **Activate…** opens the preview and apply over the page.
-The summary's activation line, **On the rigs** when nothing is missing,
-opens the same dialog at any time, to push the last activation again. On a
-server that does not write rig databases the summary says **Drafts only**
-and no bar asks. Older links to the Plan, Rig databases or Activate tabs
-open Exposures or Rigs. A plan with no linked database yet starts its framing
+joined since), or a rig's rows differ from the plan though the last
+activation had it (N.I.N.A. changed them, or an old plan another length
+replaced is still on). Its **Activate…** button, **Activate again…** once
+the plan has been activated, opens the preview and apply over the page. The
+summary ends with where the plan stands as a label (**Checking the rigs…**
+while the [check](#activation) runs, **On the rigs** when nothing is
+missing), and an **Activate…** button beside it opens the same dialog at
+any time, to push the last activation again. On a server that does not
+write rig databases the summary says **Drafts only** and no bar asks. Older
+links to the Plan, Rig databases or Activate tabs open Exposures or Rigs. A plan with no linked database yet starts its framing
 by looking a name up in the CDS catalogs or by typing a center; activation
 then creates and links the Target Scheduler project in each rig database.
 Its **Library** link goes back with the scope it came from. A project
@@ -1229,9 +1233,13 @@ saved.
 
 Before asking for an activation the page runs the same activation on an
 in-memory copy of each rig's planning tables (`GET /activation/check`), so
-it never locks N.I.N.A.'s database. A rig whose rows would all read
-`unchanged` or `keep` already holds the plan, whatever the activation
-record says.
+it never locks N.I.N.A.'s database. It runs the check whenever the plan
+shoots something, whatever the activation record says: the record can lag
+rows that already match, and rows can differ under a record that has the
+saved plan. A rig whose rows would all read `unchanged` or `keep` already
+holds the plan; any other action asks for an activation. An `update` of an
+exposure plan says what changes, such as `desired 100 → 150` or
+`exposure 120 s → 300 s`.
 Panel ids are places in the grid, so growing the grid or turning a mosaic can
 move a panel to other sky. A panel that moves by more than a quarter of its
 size and already has frames gets a new target at its new place; the old

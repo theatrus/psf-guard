@@ -7,7 +7,7 @@ import { useAccess } from '../../auth/access';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import type { DirectorActivationAction, DirectorActivationChange, DirectorActivationPush, DirectorActivationPushReport, DirectorActivationReport, DirectorTakenValues } from '../../api/directorTypes';
 import { describeFailure, useDrafts } from './pageDraftsState';
-import { useActivationState } from './activationState';
+import { useActivationState, writesRows } from './activationState';
 import './ActivationPanel.css';
 import CollaborationActivation from './CollaborationActivation';
 import type { CollaborationVisit } from '../../api/collaborationTypes';
@@ -48,8 +48,7 @@ type ReportRig = DirectorActivationReport['rigs'][number];
 /** Whether a preview would change rows Target Scheduler already holds for
  *  this rig: its project is there, and some row is more than unchanged. */
 function differsFromTargetScheduler(rig: ReportRig): boolean {
-  return rig.changes.some(change => change.kind === 'project' && change.action !== 'create')
-    && rig.changes.some(change => change.action !== 'unchanged' && change.action !== 'keep');
+  return rig.changes.some(change => change.kind === 'project' && change.action !== 'create') && writesRows(rig);
 }
 
 /** Taking a rig's Target Scheduler values: the action, and what it did. */
@@ -92,8 +91,7 @@ export function RigActivation({ rig, applied, take }: { rig: ReportRig; applied:
  *  happens to it and which existing row it lands on. */
 function RigChanges({ rig }: { rig: ReportRig }) {
   if (rig.changes.length === 0) return null;
-  const busy = rig.changes.some(change => change.action !== 'unchanged' && change.action !== 'keep');
-  return <details className="activation-changes" open={busy}>
+  return <details className="activation-changes" open={writesRows(rig)}>
     <summary>What changes in {rig.catalog_name}</summary>
     {KINDS.map(({ kind, label }) => {
       const of = rig.changes.filter(change => change.kind === kind);
@@ -138,7 +136,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   const status = useDirectorStatus();
   const manageable = status.data?.database_management ?? true;
   const client = useQueryClient();
-  const { last, planRevision, framingRevision, behind, behindText, matches } = useActivationState(projectId);
+  const { last, planRevision, framingRevision, behind, behindText, matches, checking } = useActivationState(projectId);
   const [report, setReport] = useState<DirectorActivationReport | null>(null);
   const [visits, setVisits] = useState<CollaborationVisit[]>([]);
   const busy = useRef(false);
@@ -188,7 +186,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
     <CollaborationActivation projectId={projectId} value={visits} disabled={pending || !canWrite} onChange={next => { setVisits(next); setReport(null); }} />
     {last.data && <p className="director-muted">Last activated {new Date(last.data.applied_at_ms).toLocaleString()} · {last.data.rigs.length} rig{last.data.rigs.length === 1 ? '' : 's'}</p>}
     {last.data && behind.length > 0 && <p className="activation-behind" role="note">{behindText}</p>}
-    {last.data && behind.length === 0 && !unsavedPlan && planRevision !== undefined && <p className="director-muted">Rigs are up to date</p>}
+    {last.data && behind.length === 0 && !checking && !unsavedPlan && planRevision !== undefined && <p className="director-muted">Rigs are up to date</p>}
     {!last.data && last.isSuccess && <p className="director-muted">{matches ? 'The rigs already match the saved plan' : 'Not activated yet'}</p>}
     {error && !(apply.isError && httpStatus(apply.error) === 409) && <p className="director-error" role="alert">{message(error)}</p>}
     {((apply.isError && httpStatus(apply.error) === 409) || tookStale) && <p className="director-error" role="alert">Changed since the preview. Preview again.</p>}

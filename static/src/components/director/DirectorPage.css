@@ -134,8 +134,9 @@ select.library-pill-state option { color: var(--color-text-primary); background:
 .workspace-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--color-border-tertiary); border-radius: 18px; background: var(--color-bg-elevated); }
 .workspace-summary-head, .workspace-summary-line { display: contents; }
 .workspace-summary-name { flex: 0 1 auto; min-width: 0; margin: 0 4px; font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Where the plan stands closes the line. */
-.workspace-summary .workspace-activation { order: 1; margin-left: auto; }
+/* Where the plan stands closes the line, with the button that activates it. */
+.workspace-summary .workspace-activation { order: 1; display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; margin-left: auto; }
+.director-page .workspace-summary button.workspace-activate { flex: none; min-height: 26px; padding: 2px 10px; font-size: 12px; }
 .workspace-pills { display: contents; }
 /* The Library's pill: one shape and size for every fact the summary shows. */
 .workspace-pill { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 10px; border: 0; border-radius: 999px; font: inherit; font-size: 12px; line-height: 1.2; background: var(--color-bg-tertiary); color: var(--color-text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
@@ -144,9 +145,7 @@ select.library-pill-state option { color: var(--color-text-primary); background:
 .workspace-pill.is-ok { color: #7be495; background: rgba(123, 228, 149, 0.12); }
 .workspace-pill.is-missing, .workspace-pill.is-behind { color: var(--color-warning-light); background: rgba(255, 197, 107, 0.12); }
 a.workspace-pill { text-decoration: none; }
-a.workspace-pill:hover, button.workspace-pill:hover { color: var(--color-text-primary); }
-button.workspace-pill { cursor: pointer; }
-.director-page .workspace-summary button.workspace-pill { min-height: 24px; padding: 2px 10px; border: 0; border-radius: 999px; }
+a.workspace-pill:hover { color: var(--color-text-primary); }
 .workspace-tabs { display: flex; gap: 6px; margin-top: 0; overflow-x: auto; border-bottom: 1px solid var(--color-border-secondary); scrollbar-width: thin; }
 .director-page .workspace-tabs button.workspace-tab { flex: none; min-height: 36px; padding: 6px 16px; border: none; border-bottom: 3px solid transparent; border-radius: 6px 6px 0 0; background: none; color: var(--color-text-secondary); font-size: 15px; font-weight: 500; }
 .director-page .workspace-tabs button.workspace-tab:hover { color: var(--color-text-primary); background: var(--color-bg-secondary); }

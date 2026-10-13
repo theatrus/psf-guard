@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Check, TriangleAlert } from 'lucide-react';
+import { ArrowLeft, Check, Send, TriangleAlert } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import type { DirectorObjective, DirectorRigProfileSummary } from '../../api/directorTypes';
@@ -21,7 +21,6 @@ function rigGaps(rig: DirectorRigProfileSummary | undefined): string[] {
 }
 
 const bandpassName = (id: string) => KNOWN_BANDPASSES.find(entry => entry.id === id)?.name ?? id;
-const listed = (words: string[]) => words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
 
 function goalText(objective: DirectorObjective): string {
   const { kind, value } = objective.goal;
@@ -40,32 +39,40 @@ export default function WorkspaceSummary({ projectId, projectName, back, rigs, o
   /** Rigs the plan names: a linked database, or a contribution. `off`: a
    *  linked rig that shoots none of it. */
   rigs: Array<{ id: string; name: string; off?: boolean }>;
-  /** Open the activation preview from the line that says where it stands. */
+  /** Open the activation preview; the summary offers it beside where the
+   *  plan stands. */
   onActivation?: () => void;
   /** The activation bar is up and says it already. */
   hideActivation?: boolean;
 }) {
-  const { last, savedPlan, savedFraming, behind, matches } = useActivationState(projectId);
+  const { last, savedPlan, savedFraming, behind, behindText, matches, checking } = useActivationState(projectId);
   const status = useDirectorStatus();
   const profiles = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
   const framing = savedFraming.data?.draft;
   const objectives = savedPlan.data?.plan?.objectives ?? [];
-  // Rows that already match count as on the rigs, recorded or not.
-  const activation = matches ? { ok: true, text: 'On the rigs' } : last.data
-    ? behind.length > 0
-      ? { ok: false, text: `${listed(behind)} not activated` }
-      // Not "Active": that is a Target Scheduler project state, which the
-      // project in each database keeps whatever this says.
-      : { ok: true, text: 'On the rigs' }
-    : last.isSuccess ? { ok: false, text: 'Not activated yet' } : null;
+  // Rows that already match count as on the rigs, recorded or not. Not
+  // "Active": that is a Target Scheduler project state, which the project in
+  // each database keeps whatever this says. While the rows are read, say so
+  // rather than say one thing and then another.
+  const activation: { tone?: 'ok' | 'behind'; text: string } | null = checking ? { text: 'Checking the rigs…' }
+    : matches ? { tone: 'ok', text: 'On the rigs' }
+    : last.data
+      ? behind.length > 0 ? { tone: 'behind', text: behindText } : { tone: 'ok', text: 'On the rigs' }
+      : last.isSuccess ? { tone: 'behind', text: 'Not activated yet' } : null;
   return <div className="workspace-summary" aria-label="Plan summary" role="region">
     <div className="workspace-summary-head">
       <Link className="workspace-pill workspace-back" to={`/?${back}`}><ArrowLeft size={14} />Library</Link>
       <h2 className="workspace-summary-name">{projectName}</h2>
       {status.data && !status.data.database_management && <span className="workspace-pill" title="This server does not write to rig databases" data-testid="summary-drafts-only">Drafts only</span>}
-      {activation && !hideActivation && (onActivation
-        ? <button type="button" className={`workspace-pill workspace-activation${activation.ok ? ' is-ok' : ' is-behind'}`} data-testid="summary-activation" title="Preview an activation, or push the last one again" onClick={onActivation}>{activation.ok ? <Check size={14} aria-hidden="true" /> : <TriangleAlert size={14} aria-hidden="true" />}{activation.text}</button>
-        : <span className={`workspace-pill workspace-activation${activation.ok ? ' is-ok' : ' is-behind'}`} data-testid="summary-activation">{activation.text}</span>)}
+      {/* Where the plan stands is a pill; the action beside it is a button. */}
+      {activation && !hideActivation && <span className="workspace-activation">
+        <span className={`workspace-pill${activation.tone ? ` is-${activation.tone}` : ''}`} data-testid="summary-activation" title={activation.text}>
+          {activation.tone === 'ok' && <Check size={14} aria-hidden="true" />}
+          {activation.tone === 'behind' && <TriangleAlert size={14} aria-hidden="true" />}
+          {activation.text}
+        </span>
+        {onActivation && <button type="button" className="workspace-activate" title="Preview an activation, or push the last one again" onClick={onActivation}><Send size={14} aria-hidden="true" />Activate…</button>}
+      </span>}
     </div>
     <div className="workspace-summary-line">
       {framing

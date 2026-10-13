@@ -1969,11 +1969,34 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                         .optional()?;
                     match existing {
                         Some((exposure0, desired0, template0, enabled0)) => {
-                            let same = exposure0.is_some_and(|exposure| {
-                                (exposure - contribution.exposure_seconds).abs() < 1e-6
-                            }) && desired0 == i64::from(frames)
-                                && template0 == template_id
-                                && enabled0 == 1;
+                            // What differs, so a check that asks for an
+                            // activation says why.
+                            let mut notes = Vec::new();
+                            match exposure0 {
+                                Some(exposure)
+                                    if (exposure - contribution.exposure_seconds).abs() < 1e-6 => {}
+                                Some(exposure) => notes.push(format!(
+                                    "exposure {exposure} s → {} s",
+                                    contribution.exposure_seconds
+                                )),
+                                None => notes.push(format!(
+                                    "exposure → {} s",
+                                    contribution.exposure_seconds
+                                )),
+                            }
+                            if desired0 != i64::from(frames) {
+                                notes.push(format!("desired {desired0} → {frames}"));
+                            }
+                            if template0 != template_id {
+                                notes.push(format!(
+                                    "template #{template0} → #{} {}",
+                                    template.id, template.name
+                                ));
+                            }
+                            if enabled0 != 1 {
+                                notes.push("turned on".to_string());
+                            }
+                            let same = notes.is_empty();
                             if !same {
                                 tx.execute(
                                     "UPDATE exposureplan SET exposure=?2, desired=?3, exposureTemplateId=?4, enabled=1, targetid=?5 WHERE guid=?1",
@@ -1984,7 +2007,11 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                                 kind: "plan",
                                 action: if same { "unchanged" } else { "update" },
                                 name: name.clone(),
-                                detail,
+                                detail: if same {
+                                    detail
+                                } else {
+                                    format!("{detail}; {}", notes.join(", "))
+                                },
                             });
                         }
                         None => {
