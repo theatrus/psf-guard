@@ -203,6 +203,25 @@ pub struct UnmatchedSummary {
     pub folders: Vec<String>,
 }
 
+/// The start of the description `insert_project` gives every project an
+/// import creates. `remove_imported` finds them by it, and a run that does
+/// not create targets changes scheduling only in projects that carry it.
+pub const IMPORTED_PROJECT_MARKER: &str = "Imported by PSF Guard";
+
+/// Lights for an existing target in a project PSF Guard did not create,
+/// left out because the target has no exposure plan for their template and
+/// exposure, and the run does not add one there.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UnplannedSummary {
+    pub project: String,
+    pub target: String,
+    pub filter: Option<String>,
+    pub exposure_s: Option<f64>,
+    pub frames: usize,
+    /// The folders holding them, so a person can review and import them.
+    pub folders: Vec<String>,
+}
+
 /// Per-project report line.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ProjectSummary {
@@ -219,6 +238,10 @@ pub struct AttachSummary {
     pub frames: usize,
     /// `name` or `coordinates` — how the match was made.
     pub matched_by: String,
+    /// Exposure plans this run adds to the target.
+    pub plans_created: usize,
+    /// Existing plans of the target whose acquired count this run raises.
+    pub plans_raised: usize,
 }
 
 #[derive(Debug, Default, Clone, serde::Serialize)]
@@ -275,6 +298,17 @@ pub struct ImportOutcome {
     /// Those frames by target name, with their folders.
     #[serde(default)]
     pub unmatched: Vec<UnmatchedSummary>,
+    /// Lights left out because they belong to an existing target in a
+    /// project PSF Guard did not create, which has no exposure plan for
+    /// them, and the run does not create targets or plans there.
+    #[serde(default)]
+    pub skipped_unplanned: usize,
+    /// Those frames by target, filter and exposure, with their folders.
+    #[serde(default)]
+    pub unplanned: Vec<UnplannedSummary>,
+    /// Existing exposure plans whose acquired count the run raises.
+    #[serde(default)]
+    pub plans_raised: usize,
     pub imported: usize,
     /// Frames attached to targets that already existed in the database.
     pub attached: usize,
@@ -311,6 +345,17 @@ fn note_left_out(
         .entry(reason)
         .or_insert_with(|| (0, frame.path.display().to_string()));
     entry.0 += 1;
+}
+
+/// The folders holding `frames`, sorted, each once.
+fn folders_of(frames: &[FrameMeta]) -> Vec<String> {
+    frames
+        .iter()
+        .filter_map(|frame| frame.path.parent())
+        .map(|folder| folder.display().to_string())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 /// Lights that match no existing target, by target name, with the folders
@@ -615,6 +660,9 @@ pub fn import_frames(
     let creates_targets = options.new_targets == NewTargets::Create;
     let mut attached_rigs: Vec<FrameMeta> = Vec::new();
     let mut attached_rigs_seen: HashSet<String> = HashSet::new();
+    // Frames for existing targets that would need a new template or plan
+    // in a project PSF Guard did not create; such a run holds them.
+    let mut unplanned_frames: Vec<FrameMeta> = Vec::new();
 
     // Merge phase: attach frames to targets that already exist (matched by
     // name, then coordinates). Only what's left falls through to the
@@ -643,23 +691,51 @@ pub fn import_frames(
         attach.sort_by_key(|(idx, _)| *idx);
         for (idx, frames) in attach {
             let target = &existing_targets[idx];
+            // A run that does not create targets changes scheduling only in
+            // projects an import made. Elsewhere it adds image rows to plans
+            // that exist, leaves their counts alone, and holds frames that
+            // would need a new template or plan.
+            let images_only = !creates_targets && !target.project_imported;
+            let attached =
+                attach_frames_to_target(&tx, target, &frames, images_only, &mut outcome)?;
             if !creates_targets {
+                let held: HashSet<&PathBuf> = attached
+                    .unplanned
+                    .iter()
+                    .flat_map(|(_, _, group)| group.iter().map(|frame| &frame.path))
+                    .collect();
                 attached_rigs.extend(
                     frames
                         .iter()
+                        .filter(|frame| !held.contains(&frame.path))
                         .filter(|frame| frame.telescope.is_some() || frame.camera.is_some())
                         .filter(|frame| attached_rigs_seen.insert(rig_key(frame)))
                         .cloned(),
                 );
             }
-            attach_frames_to_target(&tx, target, &frames, &mut outcome)?;
-            outcome.attached += frames.len();
+            for (key, exp_ms, group) in attached.unplanned {
+                outcome.unplanned.push(UnplannedSummary {
+                    project: target.project_name.clone(),
+                    target: target.name.clone(),
+                    filter: (key.filter != "NONE").then_some(key.filter),
+                    exposure_s: (exp_ms > 0).then(|| exp_ms as f64 / 1000.0),
+                    frames: group.len(),
+                    folders: folders_of(&group),
+                });
+                unplanned_frames.extend(group);
+            }
+            if attached.frames == 0 {
+                continue;
+            }
+            outcome.attached += attached.frames;
             outcome.attached_target_ids.push(target.id as i32);
             outcome.attach_summaries.push(AttachSummary {
                 project: target.project_name.clone(),
                 target: target.name.clone(),
-                frames: frames.len(),
+                frames: attached.frames,
                 matched_by: matched_by.get(&idx).copied().unwrap_or("name").to_string(),
+                plans_created: attached.plans_created,
+                plans_raised: attached.plans_raised,
             });
         }
     } else {
@@ -675,10 +751,13 @@ pub fn import_frames(
     } else {
         outcome.skipped_unmatched = fresh.len();
         outcome.unmatched = summarize_unmatched(&fresh);
+        outcome.skipped_unplanned = unplanned_frames.len();
+        let held = fresh.into_iter().chain(unplanned_frames);
+        let held: Vec<FrameMeta> = held.collect();
         if !derivatives.is_empty() {
-            held_identities.extend(fresh.iter().map(crate::frame_derivatives::identity_of));
+            held_identities.extend(held.iter().map(crate::frame_derivatives::identity_of));
         }
-        held_paths.extend(fresh.into_iter().map(|frame| frame.path));
+        held_paths.extend(held.into_iter().map(|frame| frame.path));
         primaries.retain(|frame| !held_paths.contains(&frame.path));
         outcome.calibrated_lights = primaries.len();
         accepted_rigs = attached_rigs;
@@ -802,9 +881,8 @@ pub fn remove_imported(
 ) -> Result<(usize, usize, usize, usize)> {
     let tx = conn.transaction()?;
     let project_ids: Vec<i64> = {
-        let mut stmt =
-            tx.prepare("SELECT Id FROM project WHERE description LIKE 'Imported by PSF Guard%'")?;
-        stmt.query_map([], |row| row.get(0))?
+        let mut stmt = tx.prepare("SELECT Id FROM project WHERE description LIKE ?1")?;
+        stmt.query_map([format!("{IMPORTED_PROJECT_MARKER}%")], |row| row.get(0))?
             .collect::<Result<_, _>>()?
     };
     if project_ids.is_empty() {
@@ -868,16 +946,19 @@ struct ExistingTarget {
     dec_deg: Option<f64>,
     profile_id: String,
     project_name: String,
+    /// The project carries [`IMPORTED_PROJECT_MARKER`]: an import made it.
+    project_imported: bool,
 }
 
 fn load_existing_targets(conn: &Connection) -> Result<Vec<ExistingTarget>> {
     let mut stmt = conn.prepare(
-        "SELECT t.Id, t.projectid, t.name, t.ra, t.dec, p.profileId, p.name
+        "SELECT t.Id, t.projectid, t.name, t.ra, t.dec, p.profileId, p.name,
+                IFNULL(p.description, '') LIKE ?1
          FROM target t JOIN project p ON p.Id = t.projectid
          ORDER BY t.Id",
     )?;
     let targets = stmt
-        .query_map([], |row| {
+        .query_map([format!("{IMPORTED_PROJECT_MARKER}%")], |row| {
             Ok(ExistingTarget {
                 id: row.get(0)?,
                 project_id: row.get(1)?,
@@ -886,6 +967,7 @@ fn load_existing_targets(conn: &Connection) -> Result<Vec<ExistingTarget>> {
                 dec_deg: row.get(4)?,
                 profile_id: row.get(5)?,
                 project_name: row.get(6)?,
+                project_imported: row.get(7)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -990,13 +1072,26 @@ pub(crate) fn resolve_existing_target_identity(
 /// exposure template, reuse a matching exposure plan on the target (bumping
 /// its acquired count) or add one, and land the images under the target's
 /// own project and profile.
+/// What attaching frames to one existing target did.
+#[derive(Debug, Default)]
+struct Attached {
+    frames: usize,
+    plans_created: usize,
+    plans_raised: usize,
+    /// Frames left out because the target has no plan for them and the
+    /// attach may not add one, by template key and exposure.
+    unplanned: Vec<(TemplateKey, i64, Vec<FrameMeta>)>,
+}
+
 fn attach_frames_to_target(
     conn: &Connection,
     target: &ExistingTarget,
     frames: &[FrameMeta],
+    images_only: bool,
     outcome: &mut ImportOutcome,
-) -> Result<()> {
+) -> Result<Attached> {
     use rusqlite::OptionalExtension;
+    let mut attached = Attached::default();
 
     // Group by template + exposure, exactly like the ground-zero path.
     let mut groups: std::collections::BTreeMap<(TemplateKey, i64), Vec<&FrameMeta>> =
@@ -1012,32 +1107,68 @@ fn attach_frames_to_target(
 
     for ((key, exp_ms), group) in groups {
         let exposure_s = exp_ms as f64 / 1000.0;
-        let template_id =
-            find_or_create_template(conn, &key, &target.profile_id, exposure_s, outcome)?;
+        // Only an existing template can have a plan; an attach that may
+        // not change scheduling never creates one.
+        let template_id = if images_only {
+            find_template(conn, &key, &target.profile_id)?
+        } else {
+            Some(find_or_create_template(
+                conn,
+                &key,
+                &target.profile_id,
+                exposure_s,
+                outcome,
+            )?)
+        };
 
         // Reuse the target's own plan for this template + exposure length.
-        let existing_plan: Option<i64> = conn
-            .query_row(
-                "SELECT Id FROM exposureplan
-                 WHERE targetid = ?1 AND exposureTemplateId = ?2
-                   AND ABS(IFNULL(exposure, -1) - ?3) < 0.001",
-                params![
-                    target.id,
-                    template_id,
-                    if exposure_s > 0.0 { exposure_s } else { -1.0 }
-                ],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let plan_id = match existing_plan {
-            Some(id) => {
+        // A plan whose exposure is NULL or below 0 runs at its template's
+        // default, as Target Scheduler reads it; one with its own length
+        // wins when both fit. A frame of unknown length takes a plan left
+        // at the default.
+        let existing_plan: Option<i64> = match template_id {
+            Some(template_id) => conn
+                .query_row(
+                    "SELECT e.Id FROM exposureplan e
+                     LEFT JOIN exposuretemplate t ON t.Id = e.exposureTemplateId
+                     WHERE e.targetid = ?1 AND e.exposureTemplateId = ?2
+                       AND CASE WHEN ?3 > 0
+                         THEN ABS(CASE WHEN e.exposure IS NULL OR e.exposure < 0
+                                       THEN t.defaultexposure ELSE e.exposure END - ?3) < 0.001
+                         ELSE e.exposure IS NULL OR e.exposure < 0 END
+                     ORDER BY CASE WHEN e.exposure IS NULL OR e.exposure < 0 THEN 1 ELSE 0 END,
+                              e.Id
+                     LIMIT 1",
+                    params![
+                        target.id,
+                        template_id,
+                        if exposure_s > 0.0 { exposure_s } else { -1.0 }
+                    ],
+                    |row| row.get(0),
+                )
+                .optional()?,
+            None => None,
+        };
+        let plan_id = match (existing_plan, template_id) {
+            // The image rows go in; the plan's counts stay as the
+            // scheduler left them.
+            (Some(id), _) if images_only => id,
+            (Some(id), _) => {
                 conn.execute(
                     "UPDATE exposureplan SET acquired = IFNULL(acquired, 0) + ?1 WHERE Id = ?2",
                     params![group.len() as i64, id],
                 )?;
+                attached.plans_raised += 1;
+                outcome.plans_raised += 1;
                 id
             }
-            None => {
+            (None, _) if images_only => {
+                attached
+                    .unplanned
+                    .push((key, exp_ms, group.into_iter().cloned().collect()));
+                continue;
+            }
+            (None, Some(template_id)) => {
                 let id = insert_exposure_plan(
                     conn,
                     &target.profile_id,
@@ -1046,9 +1177,11 @@ fn attach_frames_to_target(
                     target.id,
                     template_id,
                 )?;
+                attached.plans_created += 1;
                 outcome.plans_created += 1;
                 id
             }
+            (None, None) => unreachable!("a template is always found or created here"),
         };
 
         for frame in group {
@@ -1061,9 +1194,10 @@ fn attach_frames_to_target(
                 &target.profile_id,
             )?;
             outcome.imported += 1;
+            attached.frames += 1;
         }
     }
-    Ok(())
+    Ok(attached)
 }
 
 /// Basenames (lowercased) of every FileName already present in the DB.
@@ -1277,16 +1411,10 @@ fn ensure_templates(
 /// Reuse the profile's template matching this key, or insert one with the
 /// plugin's constructor defaults. Shared by the ground-zero and the
 /// attach-to-existing paths.
-fn find_or_create_template(
-    conn: &Connection,
-    key: &TemplateKey,
-    profile_id: &str,
-    default_exposure: f64,
-    outcome: &mut ImportOutcome,
-) -> Result<i64> {
+/// The profile's exposure template for `key`, without creating one.
+fn find_template(conn: &Connection, key: &TemplateKey, profile_id: &str) -> Result<Option<i64>> {
     use rusqlite::OptionalExtension;
-
-    let existing: Option<i64> = conn
+    Ok(conn
         .query_row(
             "SELECT Id FROM exposuretemplate
              WHERE profileId = ?1 AND filtername = ?2
@@ -1302,8 +1430,17 @@ fn find_or_create_template(
             ],
             |row| row.get(0),
         )
-        .optional()?;
-    if let Some(id) = existing {
+        .optional()?)
+}
+
+fn find_or_create_template(
+    conn: &Connection,
+    key: &TemplateKey,
+    profile_id: &str,
+    default_exposure: f64,
+    outcome: &mut ImportOutcome,
+) -> Result<i64> {
+    if let Some(id) = find_template(conn, key, profile_id)? {
         outcome.templates_reused += 1;
         return Ok(id);
     }
@@ -1345,7 +1482,7 @@ fn insert_project(
     profile_id: &str,
 ) -> Result<i64> {
     let description = format!(
-        "Imported by PSF Guard ({} frames{})",
+        "{IMPORTED_PROJECT_MARKER} ({} frames{})",
         project.frame_count(),
         match (project.start_ts, project.end_ts) {
             (Some(start), Some(end)) => format!(", {} – {}", format_date(start), format_date(end)),
@@ -1622,10 +1759,31 @@ pub fn print_outcome(outcome: &ImportOutcome) {
     if !outcome.profile_id.is_empty() {
         println!("  Profile: {}", outcome.profile_id);
     }
+    if outcome.plans_raised > 0 {
+        println!("  Plans with acquired raised: {}", outcome.plans_raised);
+    }
     for attach in &outcome.attach_summaries {
+        let mut changes = Vec::new();
+        if attach.plans_created > 0 {
+            changes.push(format!("adds {} exposure plan(s)", attach.plans_created));
+        }
+        if attach.plans_raised > 0 {
+            changes.push(format!(
+                "raises acquired on {} plan(s)",
+                attach.plans_raised
+            ));
+        }
         println!(
-            "    ↳ existing {} / {} — +{} frame(s) (matched by {})",
-            attach.project, attach.target, attach.frames, attach.matched_by
+            "    ↳ existing {} / {} — +{} frame(s) (matched by {}){}",
+            attach.project,
+            attach.target,
+            attach.frames,
+            attach.matched_by,
+            if changes.is_empty() {
+                String::new()
+            } else {
+                format!("; {}", changes.join(", "))
+            }
         );
     }
     for other in &outcome.other_rigs {
@@ -1676,6 +1834,30 @@ pub fn print_outcome(outcome: &ImportOutcome) {
             unmatched.target.as_deref().unwrap_or("(no target name)"),
             unmatched.frames,
             unmatched.folders.join(", ")
+        );
+    }
+    print_unplanned(outcome);
+}
+
+/// One held or left-out group with no exposure plan, for the CLI report.
+fn print_unplanned(outcome: &ImportOutcome) {
+    for group in &outcome.unplanned {
+        println!(
+            "  {} {} / {} — {} frame(s) {} {}, no exposure plan, in {}",
+            if outcome.new_targets == NewTargets::Ask {
+                "Held"
+            } else {
+                "Left out"
+            },
+            group.project,
+            group.target,
+            group.frames,
+            group.filter.as_deref().unwrap_or("no filter"),
+            group
+                .exposure_s
+                .map(|seconds| format!("{seconds} s"))
+                .unwrap_or_else(|| "unknown exposure".into()),
+            group.folders.join(", ")
         );
     }
 }
@@ -2972,5 +3154,234 @@ mod tests {
         let outcome = import_frames(&mut conn, vec![light("m31", "Ha", 4_000)], &off).unwrap();
         assert_eq!(outcome.attached, 1);
         assert_eq!(outcome.attach_summaries[0].matched_by, "name");
+    }
+
+    /// A catalog with M31's L 300 s plan, its project made by an import or,
+    /// with `foreign`, by Target Scheduler, and the plan's acquired count.
+    fn catalog_with_m31_plan(foreign: bool) -> Connection {
+        let mut conn = fresh_conn();
+        import_frames(
+            &mut conn,
+            vec![light("M31", "L", 1_000)],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        if foreign {
+            conn.execute(
+                "UPDATE project SET description = 'Made in Target Scheduler'",
+                [],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    fn scheduling_rows(conn: &Connection) -> (i64, i64, i64, i64) {
+        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |row| row.get(0)).unwrap() };
+        (
+            count("SELECT COUNT(*) FROM exposuretemplate"),
+            count("SELECT COUNT(*) FROM exposureplan"),
+            count("SELECT IFNULL(SUM(acquired), 0) FROM exposureplan"),
+            count("SELECT COUNT(*) FROM acquiredimage"),
+        )
+    }
+
+    /// A new L 300 s frame with a plan, a 3 s one and an Ha one without.
+    fn night_for_m31() -> Vec<FrameMeta> {
+        vec![
+            light("M31", "L", 2_000),
+            FrameMeta {
+                exposure_s: Some(3.0),
+                ..light("M31", "L", 3_000)
+            },
+            light("M31", "Ha", 4_000),
+        ]
+    }
+
+    #[test]
+    fn a_run_that_asks_first_adds_only_image_rows_to_a_scheduler_project() {
+        let mut conn = catalog_with_m31_plan(true);
+        let (templates, plans, acquired, images) = scheduling_rows(&conn);
+        let outcome = import_frames(
+            &mut conn,
+            night_for_m31(),
+            &ImportOptions {
+                new_targets: NewTargets::Ask,
+                ..ImportOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome.attached, 1, "the L 300 s frame has a plan");
+        assert_eq!(outcome.attach_summaries[0].plans_raised, 0);
+        assert_eq!(outcome.skipped_unplanned, 2);
+        let held: Vec<(Option<&str>, Option<f64>)> = outcome
+            .unplanned
+            .iter()
+            .map(|group| (group.filter.as_deref(), group.exposure_s))
+            .collect();
+        assert_eq!(
+            held,
+            vec![(Some("Ha"), Some(300.0)), (Some("L"), Some(3.0))]
+        );
+        assert_eq!(outcome.unplanned[0].folders, vec!["/data".to_string()]);
+        assert_eq!((outcome.templates_created, outcome.plans_created), (0, 0));
+        assert_eq!(
+            scheduling_rows(&conn),
+            (templates, plans, acquired, images + 1),
+            "one image row, and no template, plan or count changed"
+        );
+
+        // Leave out does the same, without the review.
+        let mut conn = catalog_with_m31_plan(true);
+        let outcome = import_frames(
+            &mut conn,
+            night_for_m31(),
+            &ImportOptions {
+                new_targets: NewTargets::Skip,
+                ..ImportOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!((outcome.attached, outcome.skipped_unplanned), (1, 2));
+    }
+
+    #[test]
+    fn a_project_an_import_made_still_gets_plans_and_counts() {
+        let mut conn = catalog_with_m31_plan(false);
+        let (templates, plans, acquired, images) = scheduling_rows(&conn);
+        let outcome = import_frames(
+            &mut conn,
+            night_for_m31(),
+            &ImportOptions {
+                new_targets: NewTargets::Ask,
+                ..ImportOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome.attached, 3);
+        assert_eq!(outcome.skipped_unplanned, 0);
+        let summary = &outcome.attach_summaries[0];
+        assert_eq!((summary.plans_created, summary.plans_raised), (2, 1));
+        assert_eq!(outcome.templates_created, 1, "Ha needs a template");
+        assert_eq!(
+            scheduling_rows(&conn),
+            (templates + 1, plans + 2, acquired + 3, images + 3)
+        );
+    }
+
+    #[test]
+    fn a_preview_says_which_plans_it_would_add_or_raise() {
+        // A person's import keeps changing scheduling anywhere, and the
+        // preview says so before they confirm.
+        let mut conn = catalog_with_m31_plan(true);
+        let before = scheduling_rows(&conn);
+        let outcome = import_frames(
+            &mut conn,
+            night_for_m31(),
+            &ImportOptions {
+                dry_run: true,
+                ..ImportOptions::default()
+            },
+        )
+        .unwrap();
+        let summary = &outcome.attach_summaries[0];
+        assert_eq!(
+            (summary.frames, summary.plans_created, summary.plans_raised),
+            (3, 2, 1)
+        );
+        assert_eq!((outcome.plans_created, outcome.plans_raised), (2, 1));
+        assert_eq!(outcome.templates_created, 1);
+        assert_eq!(scheduling_rows(&conn), before, "a preview writes nothing");
+    }
+
+    /// M31's project made by Target Scheduler, its L plan left at exposure
+    /// -1 so it runs at the template's 300 s default.
+    fn catalog_with_m31_default_plan() -> Connection {
+        let conn = catalog_with_m31_plan(true);
+        conn.execute("UPDATE exposureplan SET exposure = -1", [])
+            .unwrap();
+        conn.execute("UPDATE exposuretemplate SET defaultexposure = 300", [])
+            .unwrap();
+        conn
+    }
+
+    fn plan_rows(conn: &Connection) -> Vec<(i64, f64, i64)> {
+        let mut stmt = conn
+            .prepare("SELECT Id, exposure, acquired FROM exposureplan ORDER BY Id")
+            .unwrap();
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_plan_left_at_the_template_default_takes_frames_of_that_length() {
+        let night = || {
+            vec![
+                light("M31", "L", 2_000),
+                FrameMeta {
+                    exposure_s: Some(120.0),
+                    ..light("M31", "L", 3_000)
+                },
+            ]
+        };
+
+        // Ask first: the 300 s frame is an image row on the -1 plan, whose
+        // counts stay; the 120 s frame has no plan and waits.
+        let mut conn = catalog_with_m31_default_plan();
+        let plans = plan_rows(&conn);
+        let outcome = import_frames(
+            &mut conn,
+            night(),
+            &ImportOptions {
+                new_targets: NewTargets::Ask,
+                ..ImportOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome.attached, 1);
+        assert_eq!(outcome.skipped_unplanned, 1);
+        assert_eq!(outcome.unplanned[0].exposure_s, Some(120.0));
+        assert_eq!(plan_rows(&conn), plans);
+
+        // Create, as a person's import runs: the same frame raises that
+        // plan instead of adding a second one beside it.
+        let mut conn = catalog_with_m31_default_plan();
+        let plans = plan_rows(&conn);
+        let outcome = import_frames(
+            &mut conn,
+            vec![light("M31", "L", 2_000)],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        assert_eq!((outcome.plans_created, outcome.plans_raised), (0, 1));
+        let after = plan_rows(&conn);
+        assert_eq!(after.len(), plans.len());
+        assert_eq!(after[0].2, plans[0].2 + 1);
+    }
+
+    #[test]
+    fn a_plan_with_its_own_length_wins_over_one_left_at_the_default() {
+        let mut conn = catalog_with_m31_default_plan();
+        // A second L plan with its own 300 s, added after the default one.
+        conn.execute(
+            "INSERT INTO exposureplan (profileId, exposure, desired, acquired, accepted,
+                                       targetid, exposureTemplateId, enabled, guid)
+             SELECT profileId, 300, 5, 0, 0, targetid, exposureTemplateId, 1, 'explicit-plan'
+             FROM exposureplan LIMIT 1",
+            [],
+        )
+        .unwrap();
+        let before = plan_rows(&conn);
+        import_frames(
+            &mut conn,
+            vec![light("M31", "L", 2_000)],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        let after = plan_rows(&conn);
+        assert_eq!(after[0], before[0], "the default plan is left alone");
+        assert_eq!(after[1].2, before[1].2 + 1, "the explicit plan takes it");
     }
 }

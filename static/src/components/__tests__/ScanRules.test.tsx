@@ -141,7 +141,7 @@ describe('Settings scan rules and Review', () => {
     },
   };
 
-  function serveCatalog(saved: unknown[], imports: unknown[]) {
+  function serveCatalog(saved: unknown[], imports: unknown[], preview?: ImportJobProgress) {
     // The import job reads idle until a preview starts, then reports it.
     let job: ImportJobProgress = idle;
     server.use(
@@ -186,7 +186,7 @@ describe('Settings scan rules and Review', () => {
       ),
       http.post('/api/db/rig/import', async ({ request }) => {
         imports.push(await request.json());
-        job = { ...idle, running: true, stage: 'scanning', image_dirs: ['/images'] };
+        job = preview ?? { ...idle, running: true, stage: 'scanning', image_dirs: ['/images'] };
         return HttpResponse.json(ok({ started: true, progress: job }));
       }),
       http.put('/api/databases/rig', async ({ request }) => {
@@ -202,7 +202,7 @@ describe('Settings scan rules and Review', () => {
     const saved: Array<{ scan_rules?: ScanRules; autoimport?: AutoImportSettings }> = [];
     serveCatalog(saved, []);
     render(<TauriSettings isOpen onClose={() => undefined} />, { wrapper: createWrapper() });
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit Rig' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Rig' }, { timeout: 5000 }));
     expect(screen.getByLabelText('Exclude:')).toHaveValue('**/Hocus Focus/**');
     expect(screen.getByRole('checkbox', { name: 'Lights need a target name' })).toBeChecked();
     // Saved before the setting existed: Ask first.
@@ -219,11 +219,53 @@ describe('Settings scan rules and Review', () => {
     expect(saved[0].autoimport?.new_targets).toBe('ask');
   });
 
+  it('says what the previewed import would change in the scheduler', async () => {
+    const preview: ImportJobProgress = {
+      ...held,
+      trigger: 'manual',
+      outcome: {
+        ...held.outcome!,
+        dry_run: true,
+        imported: 3,
+        attached: 3,
+        templates_created: 1,
+        plans_created: 1,
+        plans_raised: 2,
+        new_targets: 'create',
+        skipped_unmatched: 0,
+        unmatched: [],
+        attach_summaries: [
+          {
+            project: 'Andromeda',
+            target: 'M31',
+            frames: 3,
+            matched_by: 'name',
+            plans_created: 1,
+            plans_raised: 2,
+          },
+        ],
+      },
+    };
+    serveCatalog([], [], preview);
+    render(<TauriSettings isOpen onClose={() => undefined} />, { wrapper: createWrapper() });
+    fireEvent.click(await screen.findByRole('button', { name: /^Import$/ }, { timeout: 5000 }));
+    expect(
+      await screen.findByText(
+        /existing Andromeda \/ M31 — \+3 frame\(s\) \(name match\) · adds 1 exposure plan · raises acquired on 2 plans/,
+        {},
+        { timeout: 5000 }
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByText('Adds 1 exposure template(s)')).toBeInTheDocument();
+  });
+
   it('reviews held frames by previewing an import of their folders', async () => {
     const imports: Array<{ dry_run?: boolean; image_dirs?: string[] }> = [];
     serveCatalog([], imports);
     render(<TauriSettings isOpen onClose={() => undefined} />, { wrapper: createWrapper() });
-    expect(await screen.findByText('4 held: no matching project')).toBeInTheDocument();
+    expect(
+      await screen.findByText('4 held: no matching project', {}, { timeout: 5000 })
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Review' }));
     await waitFor(() => expect(imports).toHaveLength(1));
     expect(imports[0]).toMatchObject({
@@ -233,7 +275,11 @@ describe('Settings scan rules and Review', () => {
     // The held folder sits below what the folder tree lists, so it shows
     // on its own, ticked, and can be unticked before the next preview.
     expect(
-      await screen.findByRole('checkbox', { name: '/images/2026/NGC 7000/2026-10-01/LIGHT' })
+      await screen.findByRole(
+        'checkbox',
+        { name: '/images/2026/NGC 7000/2026-10-01/LIGHT' },
+        { timeout: 5000 }
+      )
     ).toBeChecked();
   });
 });

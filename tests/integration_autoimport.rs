@@ -26,7 +26,10 @@ fn build_app(state: Arc<AppState>) -> Router {
             put(handlers::update_database_route),
         )
         .route("/api/databases", get(handlers::list_databases))
-        .route("/api/db/{db_id}/import", get(handlers::get_import_progress))
+        .route(
+            "/api/db/{db_id}/import",
+            get(handlers::get_import_progress).post(handlers::start_import_route),
+        )
         .route(
             "/api/db/{db_id}/autoimport",
             get(handlers::get_autoimport_status),
@@ -735,4 +738,135 @@ async fn scan_rules_save_check_their_patterns_and_clear_when_empty() {
     assert!(body["data"].get("scan_rules").is_none(), "{body}");
     let saved = std::fs::read_to_string(dir.path().join("config.json")).unwrap();
     assert!(!saved.contains("\"scan_rules\""), "{saved}");
+}
+
+/// Rows in the tables that decide what Target Scheduler shoots: templates,
+/// plans and their acquired counts. Image rows only record what was shot.
+fn scheduling_state(db_path: &str) -> (i64, i64, i64) {
+    let conn = rusqlite::Connection::open(db_path).unwrap();
+    let count = |sql: &str| -> i64 { conn.query_row(sql, [], |row| row.get(0)).unwrap() };
+    (
+        count("SELECT COUNT(*) FROM exposuretemplate"),
+        count("SELECT COUNT(*) FROM exposureplan"),
+        count("SELECT IFNULL(SUM(acquired), 0) FROM exposureplan"),
+    )
+}
+
+fn image_rows(db_path: &str) -> i64 {
+    let conn = rusqlite::Connection::open(db_path).unwrap();
+    conn.query_row("SELECT COUNT(*) FROM acquiredimage", [], |row| row.get(0))
+        .unwrap()
+}
+
+fn set_project_description(db_path: &str, description: &str) {
+    let conn = rusqlite::Connection::open(db_path).unwrap();
+    conn.execute("UPDATE project SET description = ?1", [description])
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_run_that_asks_first_changes_no_plan_in_a_scheduler_project() {
+    let dir = tempdir().unwrap();
+    let images = dir.path().join("Images");
+    write_fits(
+        &images.join("M31/2026-01-10/LIGHT/m31_001.fits"),
+        "M31",
+        "2026-01-10T01:00:00.000",
+    );
+    let state = state_with_management(dir.path());
+    let (slug, db_path) = catalog_from(&state, &images).await;
+    // Target Scheduler's own project, with a plan for L 300 s.
+    set_project_description(&db_path, "Made in Target Scheduler");
+    let before = scheduling_state(&db_path);
+    let images_before = image_rows(&db_path);
+
+    // The night: another L 300 s frame, and a 3 s test frame of M31 that no
+    // plan covers.
+    write_fits(
+        &images.join("M31/2026-01-11/LIGHT/m31_002.fits"),
+        "M31",
+        "2026-01-11T01:00:00.000",
+    );
+    // Joined part by part: the server reports the folder with the
+    // platform's separator, and Windows would keep a `/` written here.
+    let snapshot = images.join("M31").join("2026-01-11").join("SNAPSHOT");
+    write_frame(
+        &snapshot.join("m31_test.fits"),
+        Some("LIGHT"),
+        Some("M31"),
+        M31,
+        "2026-01-11T00:50:00.000",
+        3.0,
+    );
+    let (status, body) = put_settings(
+        &state,
+        &slug,
+        json!({ "autoimport": { "enabled": true, "on_open": true, "backfill": false } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let progress = run_now(&state, &slug).await;
+    let outcome = &progress["outcome"];
+    assert_eq!(outcome["attached"], 1, "{progress}");
+    assert_eq!(
+        outcome["attach_summaries"][0]["plans_raised"], 0,
+        "{progress}"
+    );
+    assert_eq!(outcome["skipped_unplanned"], 1, "{progress}");
+    let held = &outcome["unplanned"][0];
+    assert_eq!(held["target"], "M31", "{progress}");
+    assert_eq!(held["exposure_s"], 3.0, "{progress}");
+    assert_eq!(
+        held["folders"][0],
+        snapshot.display().to_string(),
+        "{progress}"
+    );
+    assert_eq!(outcome["plans_created"], 0, "{progress}");
+    assert_eq!(outcome["templates_created"], 0, "{progress}");
+    assert_eq!(
+        scheduling_state(&db_path),
+        before,
+        "no template, no plan, no acquired count changed"
+    );
+    assert_eq!(image_rows(&db_path), images_before + 1);
+
+    // A person's preview of that folder says what their import would change.
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        &format!("/api/db/{slug}/import"),
+        Some(json!({ "dry_run": true, "image_dirs": [snapshot] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let progress = wait_for_import(&state, &slug).await;
+    let outcome = &progress["outcome"];
+    assert_eq!(outcome["dry_run"], true, "{progress}");
+    assert_eq!(
+        outcome["attach_summaries"][0]["plans_created"], 1,
+        "{progress}"
+    );
+    assert_eq!(outcome["plans_created"], 1, "{progress}");
+    assert_eq!(
+        scheduling_state(&db_path),
+        before,
+        "the preview wrote nothing"
+    );
+
+    // A project an import made gets its plan, as before.
+    set_project_description(&db_path, "Imported by PSF Guard (1 frames)");
+    let progress = run_now(&state, &slug).await;
+    let outcome = &progress["outcome"];
+    assert_eq!(outcome["attached"], 1, "{progress}");
+    assert_eq!(outcome["skipped_unplanned"], 0, "{progress}");
+    assert_eq!(
+        outcome["attach_summaries"][0]["plans_created"], 1,
+        "{progress}"
+    );
+    let (templates, plans, acquired) = scheduling_state(&db_path);
+    assert_eq!(
+        (templates, plans, acquired),
+        (before.0, before.1 + 1, before.2 + 1)
+    );
 }
