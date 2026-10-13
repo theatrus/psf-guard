@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { applyRealSchema } from '../e2e/fixtures/sync';
+import { openSettings } from '../e2e/helpers';
 
 test("a rig's Target Scheduler limits reach every project in its database on Apply", async ({ page, request }) => {
   const run = process.env.PSF_GUARD_DIRECTOR_E2E_TMP!;
@@ -30,7 +31,7 @@ test("a rig's Target Scheduler limits reach every project in its database on App
     await post(`/director/v1/catalogs/${slug}/rig/apply`, { plan: { catalog_id: catalog }, preview_digest: reviewed.preview_digest });
 
     await page.goto('/#/sky');
-    await page.getByTitle('Settings', { exact: true }).click();
+    await openSettings(page);
     await page.getByRole('tab', { name: 'Rigs', exact: true }).click();
     await page.getByRole('button', { name: 'Setup Limits rig', exact: true }).click();
     await page.getByRole('tab', { name: 'Limits and delivery', exact: true }).click();
