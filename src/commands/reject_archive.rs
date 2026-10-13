@@ -314,7 +314,7 @@ fn validate_sidecar_ext(ext: &str) -> Result<()> {
     }
     if crate::image_io::is_image_extension(ext) {
         return Err(anyhow::anyhow!(
-            "reject_archive.sidecar_exts entry '{}' names an image container. \
+            "reject_archive.sidecar_exts entry '{}' is an image container's extension. \
              PSF Guard catalogs those as frames with their own grade, so \
              archiving one as another frame's sidecar would move a file the \
              catalog still calls accepted",

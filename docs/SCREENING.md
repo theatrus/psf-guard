@@ -95,7 +95,7 @@ catalog. A Tycho-2 catalog mixes two bands and is not used. A value in the image
 metadata is used as recorded. Frames scanned before this measurement existed
 have no SNR until **Rescan All Quality** runs.
 
-A low relative score alone does not name a fault or recommend rejection. The
+A low relative score alone gives no cause and does not recommend rejection. The
 UI labels catalog-only results as **Catalog-relative score** and says which
 comparison produced them. A frame gets a cause such as clouds, obstruction,
 focus drift, tracking error, or off-target only when that detector has enough
@@ -232,7 +232,7 @@ running the chip reads **Finished with errors** until then. Results persist
 across restarts. The
 sequence analysis shows coverage badges, classifications, solved-center
 scatter, a session view, and an all-session stack comparison for each filter.
-When analysis names a cause, the same reason and supporting evidence appear on
+When analysis finds a cause, the same reason and supporting evidence appear on
 the Sequence card, the matching Grid card, and the image detail panel.
 For a localized finding, image detail also offers **Show affected regions**.
 The optional overlay marks the measured 8×6 scan cells behind the finding and

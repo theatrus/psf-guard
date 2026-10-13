@@ -247,7 +247,7 @@ Each project takes what an activation would write: a plan's own limits for the
 project it holds, a collaboration assignment's altitude floor, and the rig's
 for the rest. The rig's value replaces one changed by hand in Target
 Scheduler; a limit no scope sets stays as each project has it, and the list
-names those. Apply is refused when a project or the limits changed since the
+shows those. Apply is refused when a project or the limits changed since the
 list was read, and nothing is written; the list then reloads. A rig whose
 database lives on a Sync peer sends the rows there afterwards, as activation
 does. Nothing applies by itself: a project made later waits for the next
@@ -280,7 +280,7 @@ zero degrees). Missing legacy columns use TS defaults: off, 60 degrees, 7 days,
 zero relaxation, -15/5 degree bounds and Moon-down off. Invalid saved rules are
 reported instead of silently ignored. A Target Scheduler template with avoidance
 on and rules outside these ranges is left out of the rig's template list and of
-imported plans, with a warning that names it; the rig's other templates work as
+imported plans, and a warning says which; the rig's other templates work as
 before. With avoidance off, Target Scheduler ignores the other Moon fields, and
 so does Director: values outside the ranges then read as the defaults.
 
@@ -346,7 +346,7 @@ left out rather than shown as empty.
 
 The header reads Library, then the **scope**, then Sky. The scope runs from
 the whole to the part: the project picker (a plan shot by several rigs is
-one row there, and the closed picker names it with its rig count), the
+one row there, and the closed picker shows it with its rig count), the
 **Planning** button for that plan's workspace, then a switcher for which rig and
 target **Images** and **Sequence** show. For a plan shot by several rigs
 the switcher lists each rig with its targets; for a lone rig it lists the
@@ -371,8 +371,8 @@ plan you had open does not follow you into review.
 
 A workspace lives at `/plan?plan=<key>`. The key is the Target Scheduler
 GUID the plan's rigs share, so the same link opens the same plan on any
-PSF Guard instance that holds those databases. Director's own plan id names
-a plan instead when the GUID cannot: a plan with no database, one whose
+PSF Guard instance that holds those databases. Director's own plan id serves
+instead when the GUID cannot: a plan with no database, one whose
 rigs carry different GUIDs after an attach, or one whose GUID another plan
 also holds, since a detached project keeps its GUID. Any rig's GUID still
 finds its plan, and `plan=<database>:<row>` finds the plan of a project row
@@ -382,7 +382,7 @@ so history and bookmarks stay right. The workspace stays open through that
 rewrite, unsaved edits and all, while opening another plan with edits
 unsaved asks first, as leaving the page does. A workspace open when a detach makes
 its GUID ambiguous stays on its plan; a fresh visit to such a GUID lists
-the plans that hold it. An address that names nothing says so and links
+the plans that hold it. An address that matches no plan says so and links
 back to the Library. Opening a plan from a Library row carries that row's
 database, so its targets and exposures editor is open on arrival. Old `/director` links forward: `directorProject` to its plan,
 `directorSource` with `project` to that row, and anything else to the
@@ -394,7 +394,7 @@ state, from the server's own receipt times of the plugin's calls: *Online*
 within three minutes of any call, *Quiet* within thirty, *Offline* beyond,
 *Never seen* before the first. Then what the rig says it is doing, from its
 last status report (phase, target, current operation and how long, wait
-reason, safety, queue depth, and any errors it named); a report older than ten
+reason, safety, queue depth, and any errors it reported); a report older than ten
 minutes is marked stale rather than shown as the present. The next columns
 give how long ago the rig last pulled its program (with the revision), checked
 in (with saved frames grading has not yet accepted), and reported status, and
@@ -409,7 +409,7 @@ planning, the rig profile, and the project links. **Library** opens its
 catalog.
 
 The **workspace** for one plan has a summary at the top and four tabs. It
-opens on **Framing**, which places the target, unless the address names
+opens on **Framing**, which places the target, unless the address picks
 another tab. **Exposures** holds the objectives and, for
 each rig shooting the plan, its template, exposure and frames per objective.
 Each row also shows the rig's progress, accepted frames against what its
@@ -448,7 +448,7 @@ joined since), and **Activate…** opens the preview and apply over the page.
 The summary's activation line, **On the rigs** when nothing is missing,
 opens the same dialog at any time, to push the last activation again. On a
 server that does not write rig databases the summary says **Drafts only**
-and no bar asks. Older links naming the Plan, Rig databases or Activate tabs
+and no bar asks. Older links to the Plan, Rig databases or Activate tabs
 open Exposures or Rigs. A plan with no linked database yet starts its framing
 by looking a name up in the CDS catalogs or by typing a center; activation
 then creates and links the Target Scheduler project in each rig database.
@@ -516,7 +516,7 @@ has read since the server started keeps its plans' links, marked
 cannot be written yet is planned under the identity it will get, and a
 later listing writes it. A record that cannot be read, such as a damaged
 framing draft, empties only its own part of its plan's row, and the
-warnings name it.
+warnings say which.
 
 The identity table, `psf_guard_catalog_identity`, and the Director side
 tables are plain SQL, so N.I.N.A., Target Scheduler and any SQLite tool open
@@ -526,7 +526,7 @@ never carries these tables: a planning push, a grade push or a pull moves
 Target Scheduler rows only, so a database synced from a peer gets an
 identity of its own when it is adopted here. Copying the file by hand does
 carry the identity, and two registered files with one identity are one
-catalog: the first by slug stands for it and the copy is named in the
+catalog: the first by slug stands for it and the copy is listed in the
 Library's plans section and left out of planning until it is removed from the registry
 or its identity table is dropped.
 
@@ -579,11 +579,11 @@ makes. The plans with nothing captured yet follow Show and search too.
 
 The header's project picker follows the same rule. A project that lives in
 several databases under one GUID is one row there, badged with its rig count
-and naming every database; it opens to one block per rig, each with that
+and listing every database; it opens to one block per rig, each with that
 rig's images and targets, and typing any rig's name, database or target
 finds it. The grid still shows one database at a time, so choosing a block
 scopes the grid to that rig. Grouped by database in Settings, each rig keeps
-its own row and names the others.
+its own row and lists the others.
 
 ## Protocol 1
 
@@ -767,10 +767,10 @@ already has; a row cannot be moved to another plan through these calls.
 | --- | --- | --- |
 | GET | `/sites/{site}/snapshots` | Optional `after` UUID and `limit` 1-256; returns `ids` and `next_after`. |
 | POST | `/sites/{site}/snapshots` | Complete `SiteSnapshot`: `id`, `site_id`, `location`, `horizon`. |
-| GET | `/sites/{site}/snapshots/{snapshot}` | Exact immutable snapshot owned by the named site. |
+| GET | `/sites/{site}/snapshots/{snapshot}` | Exact immutable snapshot owned by that site. |
 | GET | `/rigs/{rig}/setups` | Optional `after` UUID and `limit` 1-256; returns `ids` and `next_after`. |
 | POST | `/rigs/{rig}/setups` | Complete `RigSetup`: `id`, `configuration`, `site_snapshot_id`, `minimum_altitude_degrees`, `maximum_altitude_degrees`, `meridian_exclusion`. |
-| GET | `/rigs/{rig}/setups/{setup}` | Exact immutable setup owned by the named rig. |
+| GET | `/rigs/{rig}/setups/{setup}` | Exact immutable setup owned by that rig. |
 
 Snapshot bodies allow 256 KiB, matching the shared-core bound, so native horizon
 breakpoints are not thinned to fit an identity form. Send canonical horizon
@@ -803,7 +803,7 @@ Open **Settings**, choose the database, then **Project planning links**. Once
 planning is enabled, the **Rig profile** card sits above the mapping table.
 **Use frame headers** copies the sensor size, pixel size, focal length,
 aperture and site from the newest frame whose file the server can find; the
-card names the file so a stale header is never mistaken for a measurement.
+card shows the file so a stale header is never mistaken for a measurement.
 Every section shows where its values came from: frame headers, set by hand, or
 reported by the plugin. The field of view and pixel scale update as you type.
 
@@ -813,7 +813,7 @@ reported by the plugin. The field of view and pixel scale update as you type.
 | PUT | `/catalogs/{slug}/rig/profile` | `expected_revision` plus `optics`, `site`, `horizon`, `sky_quality` (each `{value, source}` or `null`), `limits`, and `peer_id` (a registered Sync peer or `null`). Sources may be `manual` or `frame_headers`; `409` when the revision moved, `400` for a peer this server does not know. The plugin's configuration is kept as stored. |
 | PUT | `/rigs/{rig}/equipment` | Plugin report: `coordinator_instance_id`, `catalog_id`, core `configuration`, `optics`, optional `site`, `horizon` and `limits`, and `reported_at_ms`. All three identities must match this server's binding or the call returns `403`. An identical report does not bump the revision. |
 
-**Remote site** names the Sync peer that holds the rig's real database when
+**Remote site** picks the Sync peer that holds the rig's real database when
 the rig runs on another PSF Guard. The database registered here is then a
 copy pulled from that peer, and activation pushes the plan back to it; see
 [Activation](#activation). Leave it at **This server only** for a rig whose
@@ -845,16 +845,16 @@ degrees, `#` for comments. Paste it or upload it, and download it back as a
 the curve at 0° and 360°, taking the altitude where the line from the last
 point to the first crosses north. It refuses a line that is not two numbers,
 an azimuth outside 0 to 360, an altitude outside -90 to 90, and a repeated
-azimuth, naming the line.
+azimuth; the error says which line.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
 | GET | `/sites/{site}/profile` | The site and its profile: `location` and `horizon`, each `{value, source, reported_at_ms}` or `null`, and `revision` (0 when nothing is saved). `404` for an unknown site. |
 | PUT | `/sites/{site}/profile` | `expected_revision` plus `location` and `horizon`, each `{value, source}` or `null`. Sources may be `manual` or `frame_headers`; `409` when the revision moved. |
-| POST | `/horizons/parse` | `{text}` holding a `.hrz` file; returns the canonical `Horizon` or `400` naming the line it could not read. Stores nothing. |
+| POST | `/horizons/parse` | `{text}` holding a `.hrz` file; returns the canonical `Horizon` or `400` with the line it could not read. Stores nothing. |
 
 `GET /rigs/profiles` carries each rig's resolved `site`: the planning `site`
-it names, `location` and `horizon`, and `location_from` and `horizon_from`
+it uses, `location` and `horizon`, and `location_from` and `horizon_from`
 (`rig`, `site` or `none`). Typed model:
 [site profile](../crates/director-meta/src/site_profile.rs).
 
@@ -894,7 +894,7 @@ tile). Over it sit constellation figures and names once the view is wide
 enough, and an equatorial grid whose spacing follows the zoom, with
 declination labelled down the left edge and right ascension along the top;
 drawn stars and the Milky Way band stand in only until a picture is up.
-Marks name what is in the field. When the server holds the Seiza object
+Marks show what is in the field. When the server holds the Seiza object
 catalog (the same one the astrometry uses, see `astrometry.objects` in the
 registry), deep-sky objects are drawn at their catalog size and angle,
 brightest and largest first, with a label for the most prominent; when it
@@ -956,14 +956,14 @@ SHO and colour layers); the **Survey** list under View holds every layer.
 The layer is how the sky is shown, not part of the framing: picking one is
 never an unsaved change, and this browser keeps it for every plan.
 On a narrow stage, such as a phone's, the chips fold behind one chip that
-names the layer on screen, so they keep clear of the sky and the scale. The rectangle is the field of the **panel rig**: the first rig
+shows the layer on screen, so they keep clear of the sky and the scale. The rectangle is the field of the **panel rig**: the first rig
 holding the project that knows its optics is chosen for you (rigs take their
 optics from their own frames when they are adopted), and you can pick another
 or type a panel size. Drag the rectangle to move the target, drag its handle
 to turn it, and drag the sky to look around; scroll to zoom. The camera angle
 also takes a number, quarter turns, or the rig's fixed camera angle. Rows,
 columns and overlap under **Shared framing** lay out a mosaic; every panel is
-drawn and named. Coordinates show five decimals of a degree and angles two;
+drawn and labelled. Coordinates show five decimals of a degree and angles two;
 the draft keeps every digit. **Rigs** has one card per rig, this plan's rigs
 first. Each card shows a swatch in the colour of the rig's outline on the
 sky, its field and pixel scale, and its part: **Sets panel size**, **Shared
@@ -972,13 +972,13 @@ page, each rig has an **On** switch: rigs that shoot the plan are listed under
 **On**, the rest under **Off**, and several can be on. Turning a rig on
 frames the plan with it, and clicking an on rig's heading (swatch, name and
 field) does the same: its field sets the shared framing's panel size, and its
-card is highlighted. **Shared framing** names the rig its size
+card is highlighted. **Shared framing** shows the rig its size
 comes from and the size the rectangle uses; **Type a size** sets one by
 hand instead, starting from that rig's, and **Use current field** appears
 when the rig's field has changed since it was picked. When the rig that
 sets the size is turned off, here or elsewhere, the first rig that is on,
 knows its optics and shoots the shared framing takes over; with none, the
-size stays and the line says its rig is off. **Outline** draws its field on the sky, named
+size stays and the line says its rig is off. **Outline** draws its field on the sky, labelled
 in small text, and **Frame separately** gives it a grid, camera angle and panel size of its own, edited
 in its card. A separate framing follows the shared center until it is dragged,
 typed or moved to the view center; **Shared center** puts it back in step.
@@ -1039,8 +1039,8 @@ and the single panels. The choice sets `mosaic=1` next to `db` and
   Each panel's first group carries its heading (`r1c2 · M31 Panel 2`), and
   the grouping mode still splits frames within each panel. Arrow keys,
   Space and Shift selection run across panels as across any groups.
-- **Sequence** lists every panel's frames in capture order, each card named
-  by its panel, with a filter choice and a button that opens each panel's
+- **Sequence** lists every panel's frames in capture order, each card labelled
+  with its panel, with a filter choice and a button that opens each panel's
   own sequence. Quality scores stay per panel.
 - **Stacks** shows each panel's latest stack in the mosaic's grid, and a sky
   overview that places every solved stack by its plate solve with the
@@ -1049,7 +1049,7 @@ and the single panels. The choice sets `mosaic=1` next to `db` and
 Grading, calibration and stacking stay per panel.
 
 The panels come from Director's record when it activated the project: the
-rig database's `psf_guard_director_target` rows name each target's panel
+rig database's `psf_guard_director_target` rows give each target's panel
 (`r{row}c{column}`). Without that record the targets' coordinates and
 rotation must form a full grid, read the same way a framing draft is
 imported from Target Scheduler. Target names are never read for this, and
@@ -1091,7 +1091,7 @@ writes into the database for it. A rig with neither for a bandpass sits that
 one out. When the framing is a mosaic, each rig's section has a
 panel chooser: every panel by default, or the panels that rig alone should
 shoot, so a wide rig can take the whole field while a long-focus rig takes
-one corner. A **Coverage** box names any objective and panel no rig covers.
+one corner. A **Coverage** box lists any objective and panel no rig covers.
 Each rig's row totals its planned frames and hours across the panels it owns.
 **Save plan** keeps the draft on the global project with the same reload rule
 as framing. Feasibility by night and activation into rig databases follow.
@@ -1101,7 +1101,7 @@ as framing. Feasibility by night and activation into rig databases follow.
 | GET | `/templates` | The exposure template library: Director's own templates, each with `id`, `revision`, `name`, `filter_name`, `gain`, `offset`, `bin`, `readout_mode`, `default_exposure_seconds` and the `bandpass` its filter resolves to. |
 | PUT | `/templates/{id}` | Save a library template; the body is the whole template and its `revision` is the one read, 0 for a new one. `409` on a stale revision. Open to every server, like plan drafts. |
 | DELETE | `/templates/{id}?revision=` | Remove a library template at the revision read. Plans that chose it keep their copy of its settings. |
-| GET | `/catalogs/{slug}/templates` | Every Target Scheduler exposure template in the database, across profiles, with the `bandpass` its filter name resolves to (`id`, `name`, `kind`). Read only. `warnings` names each template left out because its Moon avoidance is on with rules Director cannot plan with. |
+| GET | `/catalogs/{slug}/templates` | Every Target Scheduler exposure template in the database, across profiles, with the `bandpass` its filter name resolves to (`id`, `name`, `kind`). Read only. `warnings` lists each template left out because its Moon avoidance is on with rules Director cannot plan with. |
 | GET | `/projects/{id}/plan` | The project and its plan draft, or `plan: null`. |
 | PUT | `/projects/{id}/plan` | The whole draft with `revision` set to the one read. `409` when it moved; `404` for an unknown project or rig. |
 
@@ -1211,7 +1211,7 @@ way an import does and writes it into the saved plan:
   matched as near as a grid allows, and an activation then lines its targets
   up.
 
-What the plan has no place for stays as Target Scheduler has it and is named:
+What the plan has no place for stays as Target Scheduler has it, and the preview lists it:
 a Draft project (an activation makes it Active) and targets turned off (an
 activation turns them on). Both drafts save together under the revisions the
 preview saw; a save since refuses, and the preview runs again on what is now
@@ -1242,7 +1242,7 @@ ignore them. A newly created project is linked to the global project in the
 meta store, so it appears under Project planning links at once.
 
 **Preview activation** shows, per rig database, what would be created,
-updated or left alone, names any objective and panel no rig covers, and gives
+updated or left alone, lists any objective and panel no rig covers, and gives
 any reason a rig is skipped: no registered database on this server, a Target
 Scheduler schema older than 22, a database with no N.I.N.A. profile yet, or
 one that cannot be opened, locked or written. Each rig database waits up to a
@@ -1279,8 +1279,8 @@ The **Remote site** column of the report says what happened per rig: *Pushed
 to* the peer, or the peer's refusal or the network error, in which case the
 local activation still stands. **Push to remote sites again** resends the
 last activation to every remote rig's peer, for a site that was offline at
-Apply. A peer removed from the registry is named in the rig's warnings and the
-plan stays on this server until Setup names another.
+Apply. The rig's warnings list a peer removed from the registry, and the
+plan stays on this server until Setup picks another.
 
 The remote PSF Guard sees the pushed rows as ordinary Target Scheduler
 projects with the same GUIDs, so its own Library and Sync work on them; it
@@ -1306,7 +1306,7 @@ holds when the network is away.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
-| GET | `/rigs/{rig}/program?coordinator_instance_id=&catalog_id=` | The rig's current program, built from the last activation: editing the plan does not change it until the next activation. Finished goals are left out and named in `omitted`; past 256 goals the highest-priority ones are kept and the rest named. Send `If-None-Match` with the last `ETag` to get `304` when nothing changed. `403` when the coordinator, catalog and rig do not match this server's binding; `422` until the rig has reported its equipment or an activated plan gives it work; `404` when the catalog is not registered here. |
+| GET | `/rigs/{rig}/program?coordinator_instance_id=&catalog_id=` | The rig's current program, built from the last activation: editing the plan does not change it until the next activation. Finished goals are left out and listed in `omitted`; past 256 goals the highest-priority ones are kept and the rest listed. Send `If-None-Match` with the last `ETag` to get `304` when nothing changed. `403` when the coordinator, catalog and rig do not match this server's binding; `422` until the rig has reported its equipment or an activated plan gives it work; `404` when the catalog is not registered here. |
 
 The envelope carries the shared core's `Program` (schema 1): an `Assignment`
 valid for 24 hours from the pull with one goal per activated exposure plan,
@@ -1321,7 +1321,7 @@ binning and readout mode checked against the reported controls. `links` join
 each goal to its global project, objective, contribution, panel, Target
 Scheduler project GUID, target GUID and exposure plan GUID. `rig` repeats the
 profile's site, horizon, limits and rotation so the plugin can build
-constraints, and `omitted` names any plan row the program could not express
+constraints, and `omitted` lists any plan row the program could not express
 and why. The server binds the program through the core before answering; a
 program that does not bind is a `422` with the reason, never a partial pull.
 
@@ -1339,7 +1339,7 @@ Early beta. The **Live** table on the Sky reads these reports.
 A receipt is stored once by ledger and sequence and never rewritten: a replay
 is acknowledged again, a replay with different content is reported as a
 conflict and left out, and a gap holds the acknowledged cursor back while the
-later events are kept. Acknowledgements name one ledger and one contiguous
+later events are kept. Each acknowledgement covers one ledger and one contiguous
 cursor, never a range across feeds. Saved captures the rig reported appear as
 `pending` credit in the next program pull, capped at the frames still owed,
 until grading turns them into `accepted` counts in the rig database. Check-in
@@ -1363,7 +1363,7 @@ timings, not individual central receipts. The Sky
 places a rig from `pointing`, `{ "ra_degrees": …, "dec_degrees": … }` in
 ICRS (J2000) degrees with right ascension 0–360, when the plugin sends it:
 the mount's position now, whatever it is doing. Without it the Sky uses the
-centre of the Target Scheduler target the report names, looked up by name
+centre of the Target Scheduler target in the report, looked up by name
 among that rig's own plan targets, and draws that place dotted and labelled
 "at target", since it is a guess from the plan rather than a report. A rig
 with neither is listed beside the map but not drawn. The phases `exposing`,
@@ -1404,7 +1404,7 @@ rig from the list to compare sites.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
-| POST | `/projects/{id}/feasibility` | Optional `nights` (1 to 14, default 7), `center` (defaults to the saved framing's center; a rig framed on its own center is timed there), `rig_centers` (rig id to center: where the framing view has a separately framed rig now, saved or not; up to 64) and `start_ms` (default now; the first night is the one under way then). For every rig with a site: the `center` it was timed at, the applied `limits`, `nights` summaries, tonight's `curve` (five-minute samples of Sun, Moon and target altitude with the horizon at each azimuth), `hours_needed` (the plan's goal less accepted frames) and `nights_to_complete`; rigs without a site are named in `warnings`. `400` for a `start_ms` outside 1970-01-02 to 2099-01-01; `422` until there is a center to time. |
+| POST | `/projects/{id}/feasibility` | Optional `nights` (1 to 14, default 7), `center` (defaults to the saved framing's center; a rig framed on its own center is timed there), `rig_centers` (rig id to center: where the framing view has a separately framed rig now, saved or not; up to 64) and `start_ms` (default now; the first night is the one under way then). For every rig with a site: the `center` it was timed at, the applied `limits`, `nights` summaries, tonight's `curve` (five-minute samples of Sun, Moon and target altitude with the horizon at each azimuth), `hours_needed` (the plan's goal less accepted frames) and `nights_to_complete`; `warnings` lists rigs without a site. `400` for a `start_ms` outside 1970-01-02 to 2099-01-01; `422` until there is a center to time. |
 
 Times come from the shared core's planning-grade Sun and Moon positions and
 the same horizon and limit rules the rig's geometry applies; they are
@@ -1438,7 +1438,7 @@ the DSS plates (3.3 GB), and the Northern Sky Narrowband Survey in SHO
 colour with stars (1.4 GB) and starless (0.5 GB). Each is a folder of 5°
 tiles with a `CacheInfo.xml` index, the same format N.I.N.A. keeps under
 `%LOCALAPPDATA%\NINA\FramingAssistantCache`. PSF Guard reads such folders
-from `<cache>/director/sky-maps/` and offers each as a survey layer, named
+from `<cache>/director/sky-maps/` and offers each as a survey layer, called
 `nina:<folder>`, rendered on the server from the tiles that cover the view
 (the 75, 150 or 500 px versions for wide views, the full tiles when zoomed
 in) and cached like a fetched cutout. Nothing leaves the machine.
@@ -1459,7 +1459,7 @@ sets are CC BY-NC-SA); the attribution line under the framing view shows it.
 
 An offline map is preferred wherever it can stand in for an online survey:
 the DSS set for the DSS2 colour plates and the SHO set with stars for the
-online NSNS SHO layer (`stands_in_for` on the survey listing names the
+online NSNS SHO layer (`stands_in_for` on the survey listing gives the
 pair). A plan whose framing was saved on the online layer opens on the
 offline map; the online layer stays a click away on its chip, and a layer
 picked by hand is kept in this browser and comes first.

@@ -765,7 +765,7 @@ pub fn main() -> Result<()> {
         } => {
             use crate::commands::reject_removal::{self, RestoreSelection};
             if batch.is_none() && guid.is_empty() {
-                anyhow::bail!("Name a --batch or at least one --guid to restore.");
+                anyhow::bail!("Give a --batch or at least one --guid to restore.");
             }
             let (_, entry) = removal_entry(registry, &db)?;
             let conn = Connection::open(&entry.db_path)

@@ -153,7 +153,7 @@ async fn build(
 ) -> Result<AstroBinExport, AppError> {
     if query.project_id.is_none() && query.target_id.is_none() {
         return Err(AppError::BadRequest(
-            "name a target_id or a project_id to export".into(),
+            "give a target_id or a project_id to export".into(),
         ));
     }
     let filter_ids = filter_ids(state)?;

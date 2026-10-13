@@ -31,7 +31,7 @@ psf-guard server --host 127.0.0.1 --allow-database-management
 ```
 
 On any other bind address the server refuses to start until a user account
-exists, because database management names paths the server then reads and
+exists, because database management picks paths the server then reads and
 writes. Only an editor can use those routes. `--allow-anonymous-access` opens
 them to everyone instead. See [server authentication](AUTHENTICATION.md).
 
@@ -55,7 +55,7 @@ Choose **New Database from Images**.
 1. Enter a display name. If you leave it blank, PSF Guard uses **Imported
    Images**.
 2. Add one or more absolute paths. Each path must exist and must be a directory;
-   an invalid path stays in the form with the missing path named in the error.
+   an invalid path stays in the form, and the error says which path is missing.
 3. Leave **Queue background quality analysis** off for a quick first import.
 4. Choose **Create & Import**. The settings panel shows header-scan and import
    progress. If you close or reload the page, opening Settings finds the active
@@ -170,10 +170,10 @@ The preview also carries the run's scope controls:
   default — masters are worth cataloging, and later releases will surface a
   finished project's master lights in its display.
 - **Include frames from other rigs** (opt-in): a catalog learns its rigs,
-  the telescope and camera named in its frames' headers, from the
+  the telescope and camera in its frames' headers, from the
   calibration frames and lights it has accepted. Once it knows one, a light
   whose telescope matches none of them (or whose camera does, when the
-  frame names no telescope) is listed by rig, with an example file, and
+  frame records no telescope) is listed by rig, with an example file, and
   left out, because another instrument's file in this catalog's folders is
   a filing mistake far more often than a new scope, and once filed it reads
   as a night this rig never had. The same scope under a new camera, or a
@@ -344,7 +344,7 @@ header name grouped them poorly.
 Add both the local and telescope databases in Settings, then open the **Sync**
 tab and use **Data Transfer**:
 
-![The Sync tab, with Data Transfer over named source and destination catalogs](data-transfer.png)
+![The Sync tab, with Data Transfer between a source and a destination catalog](data-transfer.png)
 
 - **Merge catalogs** copies new or changed projects, targets, templates, plans,
   captures, grades, rigs, and raw calibration-frame records from the selected

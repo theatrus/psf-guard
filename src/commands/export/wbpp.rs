@@ -559,7 +559,7 @@ fn preamble(comment: &str, plan: &ExportPlan, spec: &WbppScriptSpec) -> String {
              {comment}own output.\n"
         ),
         WbppFiles::Referenced { .. } => format!(
-            "{comment}Nothing was copied: {JS_RUNNER} names every frame where it already\n\
+            "{comment}Nothing was copied: {JS_RUNNER} points to every frame where it already\n\
              {comment}is, and WBPP reads each one's type from its IMAGETYP header. The\n\
              {comment}script also tells WBPP which night's flats each light calibrates\n\
              {comment}with, as a {SESSION_KEYWORD} grouping keyword, and which darks, as\n\
@@ -812,7 +812,7 @@ pub fn js_runner(plan: &ExportPlan, spec: &WbppScriptSpec) -> String {
          \x20  // Placed frames: the folders beside the runner, scanned by WBPP.\n\
          \x20  if (psfFrameRoots.length > 0) {{\n\
          \x20     var here = String(given.here || \"\").replace(/\\\\/g, \"/\").replace(/\\/+$/, \"\");\n\
-         \x20     if (!here) throw new Error(\"Pass here=<folder> naming the export folder, as run-wbpp.sh does.\");\n\
+         \x20     if (!here) throw new Error(\"Pass here=<export folder>, as run-wbpp.sh does.\");\n\
          \x20     for (var r = 0; r < psfFrameRoots.length; ++r) {{\n\
          \x20        var dir = here + \"/\" + psfFrameRoots[r];\n\
          \x20        if (File.directoryExists(dir)) args.push(\"dir=\" + dir);\n\

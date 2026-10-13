@@ -159,7 +159,7 @@ and a server started with `--allow-database-management`, as the app does.
 ## Looking into a stack
 
 A typical question is "where does this pattern in the SII stack come from?"
-`list_stacks` names the channel's `job_id`. `get_stack_image` with
+`list_stacks` gives the channel's `job_id`. `get_stack_image` with
 `stretch: "background"` shows the pattern; a crop shows it at full detail.
 `get_stack_calibration` shows whether some sessions had no flat or a dark
 master built from two frames, and the temperatures those frames were shot
@@ -185,7 +185,7 @@ curl -s https://guard.example/api/mcp \
 ## Notes for operators
 
 - The URL must end in `/api/mcp`. The bare host serves the app: it answers
-  a POST with 405 and a note naming the endpoint, so a client given the
+  a POST with 405 and a note giving the right URL, so a client given the
   wrong URL fails with that message.
 - The endpoint sits inside the API router, so the login middleware, the
   read-only role, and the database-management gate apply to it as they do

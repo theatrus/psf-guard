@@ -345,7 +345,7 @@ records of [calibrated subs](calibrated-subs.md). A merge bundle carries
 `psf_guard_frame_derivative` only when the receiver can read it: a client
 sends it on a push only to a server that advertises the capability, and asks
 for it on an export with `include_frame_derivatives`. An older peer rejects
-a bundle naming a table it does not know, so neither side sends one
+a bundle carrying a table it does not know, so neither side sends one
 unasked. A bundle without the table leaves the receiver's records alone.
 
 ### Scheduler flat coverage
@@ -408,8 +408,8 @@ The client is one type over `reqwest`, and the directions sit on top of it in
   source, and hand it to the same merge engine a local `sync pull` runs. The
   write is local, so the preview is too.
 - **Push**: build a bundle from the local database, send it for review, and
-  apply the preview ID the peer returns. Nothing is written there until that
-  ID is named, and a peer whose catalog moved under the preview refuses.
+  apply the preview ID the peer returns. Nothing is written there until an apply
+  sends that ID, and a peer whose catalog moved under the preview refuses.
 
 Two surfaces drive it. `psf-guard sync remote` for a terminal or a cron job,
 and `POST /api/databases/{id}/sync/remote` for the Settings panel, which reads
@@ -426,7 +426,7 @@ the route Settings uses is gated behind `--allow-database-management` — far to
 large a grant to demand for this, since it also lets a network caller name
 server filesystem paths. A headless deployment therefore takes both grants from
 `[[remote_sync]]` and `[[remote_upload]]` blocks in its `--config` file, each
-naming a registry slug and a key (inline, or `token_file` for systemd
+giving a registry slug and a key (inline, or `token_file` for systemd
 credentials and Docker secrets).
 
 An upload block may set `placement = "target_tree"` and a validated
@@ -456,9 +456,9 @@ when it is loaded. Headless servers have no Settings scanner and use their expli
 They apply to the in-memory database list at startup and are never written back
 to the registry, so the config file stays the whole account of what a
 deployment allows and rotating a key is a restart. A database has one key,
-whichever grants it holds; two blocks naming it with different keys is refused
+whichever grants it holds; two blocks giving it different keys are refused
 rather than letting the later one silently disable the earlier. So is a block
-naming a database that is not registered — the alternative is a server that
+for a database that is not registered — the alternative is a server that
 answers every remote request with 403 and cannot say why.
 
 ### Keeping a preview across a refusal
@@ -479,7 +479,7 @@ re-upload of the whole bundle.
 Every remote action lands in `remote-sync-audit.jsonl` under the cache root,
 one JSON object per line: when, which catalog, which action, which operation,
 the outcome, and the row counts. Refusals are recorded too, including ones
-that never named a catalog, because a run of rejected applies is what a stolen
+with no catalog, because a run of rejected applies is what a stolen
 token looks like from the server side. Entries carry no token, no filesystem
 path, and no row contents. The file rolls at 8 MiB, keeping one previous
 generation.
@@ -586,7 +586,7 @@ the directory cache. A suffix is never allowed to escape its root. PSF Guard
 reads candidate headers and requires a matching filter and `DATE-OBS` within
 two seconds of metadata `ExposureStartTime` (or `acquireddate` when the metadata
 omitted it). It treats more than one matching file as a terminal ambiguity
-instead of showing or grading an arbitrary same-named frame.
+instead of showing or grading an arbitrary frame of the same name.
 
 After a successful remote merge, newly inserted captures and captures whose
 file-discovery identity changed get a ten-minute arrival window. Status requests

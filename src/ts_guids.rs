@@ -190,7 +190,7 @@ pub fn backup_beside(database_path: &Path) -> Result<PathBuf> {
         anyhow::bail!("{} already exists; not overwriting it", finished.display());
     }
     std::fs::rename(&partial, &finished)
-        .with_context(|| format!("name the copy {}", finished.display()))?;
+        .with_context(|| format!("rename the copy to {}", finished.display()))?;
     Ok(finished)
 }
 

@@ -1191,7 +1191,7 @@ pub(super) fn planned_push(
         Some(peer) => Some(Push::planned(peer)),
         None => {
             warnings.push(format!(
-                "Its peer '{peer_id}' is no longer registered; the plan stays on this server until Setup names another."
+                "Its peer '{peer_id}' is no longer registered; the plan stays on this server until Setup picks another."
             ));
             None
         }

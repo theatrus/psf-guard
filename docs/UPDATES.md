@@ -20,8 +20,8 @@ Browser/server mode never downloads or installs an executable.
 
 A browser tab can outlive the server build that served it. The Vite build
 stamps `index.html` with `<meta name="psf-guard-build">`, a hash of the page
-and every file the build wrote, and the server names that build in an
-`X-PSF-Guard-Build` header on every reply. When an API reply names a build
+and every file the build wrote, and the server sends that hash in an
+`X-PSF-Guard-Build` header on every reply. When an API reply carries a build
 other than the page's, the UI shows **PSF Guard was updated** with a
 **Reload now** button, and reloads by itself the next time the user changes
 views (Library, Images, Sequence, Stacks, Sky, Planning). Moving inside a view,
@@ -32,8 +32,8 @@ cannot make it reload on every change of view. The desktop app's page ships
 inside the app and never takes part.
 
 The server sends `index.html` and every other file outside `assets/` with
-`Cache-Control: no-cache`, so a reload always checks for a new page. Vite names
-the files in `assets/` by their content, so those are cached for a year. A
+`Cache-Control: no-cache`, so a reload always checks for a new page. Vite puts
+a content hash in each `assets/` file name, so those are cached for a year. A
 request for an `assets/` file the server does not hold, which only a page from
 an older build makes, gets a 404 rather than `index.html`.
 
@@ -106,7 +106,7 @@ key and its password are stored in the local macOS Keychain under:
 - `PSF Guard Tauri Updater Private Key`
 - `PSF Guard Tauri Updater Password`
 
-The release workflow reads GitHub Actions secrets named
+The release workflow reads the GitHub Actions secrets
 `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Copy the
 Keychain values into those secrets without printing them:
 
