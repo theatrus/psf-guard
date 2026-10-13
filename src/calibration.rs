@@ -15,6 +15,19 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::UNIX_EPOCH;
 
+mod quality;
+/// Synthetic frames for tests elsewhere in the crate.
+#[cfg(test)]
+pub(crate) mod test_frames {
+    pub(crate) use super::quality::tests::{noise, write_frame};
+}
+pub use quality::{
+    describe_finding, grade_library, measure_and_grade, measure_frame, measure_frames,
+    pending_measurements, quality_counts, set_overrides, FrameGrade, FrameMeasurement,
+    GradeOutcome, MeasureOutcome, PendingFrame, QualityCounts, QualityOverride, StoredMeasurement,
+    THIN_MASTER_FRAMES,
+};
+
 /// Shape of PSF Guard's own tables inside a scheduler catalog.
 ///
 /// Bump this whenever those tables change, and add the step that gets an
@@ -41,6 +54,17 @@ use std::time::UNIX_EPOCH;
 ///    `psf_guard_calibration_frame`: each dark's measured level and the
 ///    library-health verdict that keeps a dark which caught stray light out
 ///    of masters and exports. NULL means not measured, or healthy.
+///    Later, still at 9: `psf_guard_calibration_frame_quality`, one row per
+///    frame with its measurement, its grade and a person's choice (see
+///    [`quality`]).
+///
+/// A new table, or a new column on a table older builds do not read, needs
+/// no bump: an older build ignores what it does not know. A bump costs
+/// more than it looks. 0.11.0 refuses to import into, sync into or record
+/// masters in a catalog whose version is above its own, and one catalog is
+/// often opened by more than one build at once. So the grade table is
+/// created idempotently by rung 9, and any column it gains later goes in
+/// with [`add_column_if_missing`] in the same rung.
 pub const CALIBRATION_SCHEMA_VERSION: i64 = 9;
 // 2: flat masters suppress defective pixels spatially after integration.
 /// Version 3: masters preserve sensor, optics, exposure and capture-time
@@ -169,10 +193,11 @@ pub struct CalibrationFrame {
     pub rotation: Option<f64>,
     /// User-set validity boundary; absent means both directions.
     pub valid_direction: Option<ValidDirection>,
-    /// Why library health keeps this dark out of masters and exports: it
-    /// sits well above its matching peers, the mark of stray light. Absent
-    /// for a healthy frame, one not yet measured, and every other kind.
-    pub stray_light: Option<String>,
+    /// Why this frame stays out of masters and exports: a person kept it
+    /// out ("by hand"), or its grade is poor and this is the main finding.
+    /// A frame not graded yet keeps the stray-light mark of the older dark
+    /// check. Absent when the frame serves.
+    pub kept_out: Option<String>,
     /// Set after the current file (or a basename-remapped file) has been
     /// checked against this catalog row's hard settings.
     pub source_verified: bool,
@@ -184,9 +209,9 @@ pub struct CalibrationSelection {
     pub dark: Vec<CalibrationFrame>,
     pub dark_flat: Vec<CalibrationFrame>,
     pub flat: Vec<CalibrationFrame>,
-    /// Darks and dark-flats that matched but were left out because library
-    /// health found stray light in them.
-    pub stray_light: Vec<CalibrationFrame>,
+    /// Frames that matched but stay out: graded poor, kept out by hand, or
+    /// marked for stray light before grading.
+    pub kept_out: Vec<CalibrationFrame>,
     /// Which kinds the library holds for this light's sensor at all.
     pub library: LibraryKinds,
 }
@@ -307,8 +332,13 @@ pub struct CalibrationFrameSummary {
     pub dark_level: Option<f64>,
     /// Spread of that dark's pixels around the median, measured with it.
     pub dark_level_sigma: Option<f64>,
-    /// Why library health keeps this dark out of masters and exports.
+    /// The stray-light mark on a dark whose level sits well above its peers.
     pub stray_light: Option<String>,
+    /// The frame's grade, its main finding and a person's choice.
+    #[serde(flatten)]
+    pub quality: FrameGrade,
+    /// Why the frame stays out of masters and exports, when it does.
+    pub kept_out: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -338,6 +368,8 @@ pub struct CalibrationSyncOutcome {
     pub rigs: CalibrationSyncCounts,
     pub rig_bindings: CalibrationSyncCounts,
     pub frames: CalibrationSyncCounts,
+    /// Grade rows: measurements, grades and a person's choices.
+    pub quality: CalibrationSyncCounts,
 }
 
 /// How a stack asks for calibration. `Auto` applies every master that can be
@@ -518,7 +550,7 @@ const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         to_version: 9,
-        apply: add_dark_level_columns,
+        apply: add_dark_level_columns_and_grades,
     },
 ];
 
@@ -559,6 +591,13 @@ const READABLE_FRAME_COLUMNS: &[&str] = &[
     "dark_level_sigma",
     "stray_light",
 ];
+
+/// Rung 9: the dark-level columns, then the grade table that came later
+/// without a bump (see [`CALIBRATION_SCHEMA_VERSION`]).
+fn add_dark_level_columns_and_grades(conn: &Connection) -> Result<bool> {
+    let columns = add_dark_level_columns(conn)?;
+    Ok(quality::add_quality_table(conn)? | columns)
+}
 
 fn add_dark_level_columns(conn: &Connection) -> Result<bool> {
     // NULL is "not measured yet" and "no finding": every frame keeps matching
@@ -771,166 +810,6 @@ pub fn backfill_readout_mode_names(
         progress(handled, pending.len());
     }
     Ok(outcome)
-}
-
-/// What one pass of [`measure_dark_levels`] did.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct DarkLevelOutcome {
-    /// Darks and dark-flats that had no measured level when the pass began.
-    pub pending: usize,
-    /// Frames measured and recorded.
-    pub measured: usize,
-    /// Files that could not be read this time; left for a later pass.
-    pub unreadable: usize,
-    /// Frames library health now keeps out for stray light.
-    pub stray_light: usize,
-}
-
-/// Frames measured between commits. Each is a full read of a raw frame, so
-/// a chunk is small next to the header pass.
-const DARK_LEVEL_CHUNK: usize = 10;
-
-/// Measure every raw dark and dark-flat that has no level yet, then grade
-/// the whole library with [`grade_dark_levels`].
-///
-/// Darks shot while light reaches the sensor, such as dawn through an open
-/// roof, carry the right exposure, gain and temperature, so header matching
-/// takes them. Only their pixels give them away. Each frame is read once;
-/// the level stays on the row, and later passes only measure new frames.
-pub fn measure_dark_levels(
-    conn: &Connection,
-    mut progress: impl FnMut(usize, usize),
-) -> Result<DarkLevelOutcome> {
-    if !schema_supports_current_reads(conn) {
-        return Ok(DarkLevelOutcome::default());
-    }
-    let pending: Vec<(i64, String)> = conn
-        .prepare(
-            "SELECT id, source_path FROM psf_guard_calibration_frame
-             WHERE kind IN ('dark', 'dark_flat') AND is_master = 0 AND dark_level IS NULL
-             ORDER BY id",
-        )?
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut outcome = DarkLevelOutcome {
-        pending: pending.len(),
-        ..Default::default()
-    };
-    let mut handled = 0_usize;
-    for chunk in pending.chunks(DARK_LEVEL_CHUNK) {
-        let levels: Vec<(i64, Option<seiza_stacking::DarkLevel>)> = chunk
-            .iter()
-            .map(|(id, source_path)| {
-                let level = crate::image_io::open_linear_frame(source_path)
-                    .map(|frame| seiza_stacking::DarkLevel::measure(&frame.image.data))
-                    .map_err(|error| {
-                        tracing::debug!("dark level: cannot read {source_path}: {error}");
-                    })
-                    .ok();
-                (*id, level)
-            })
-            .collect();
-        let tx = conn.unchecked_transaction()?;
-        {
-            let mut update = tx.prepare(
-                "UPDATE psf_guard_calibration_frame
-                 SET dark_level = ?1, dark_level_sigma = ?2
-                 WHERE id = ?3",
-            )?;
-            for (id, level) in &levels {
-                match level {
-                    Some(level) => {
-                        update.execute(rusqlite::params![
-                            f64::from(level.level),
-                            f64::from(level.sigma),
-                            id
-                        ])?;
-                        outcome.measured += 1;
-                    }
-                    None => outcome.unreadable += 1,
-                }
-            }
-        }
-        tx.commit()?;
-        handled += chunk.len();
-        progress(handled, pending.len());
-    }
-    outcome.stray_light = grade_dark_levels(conn)?;
-    Ok(outcome)
-}
-
-/// Judge every measured dark and dark-flat against the frames that could
-/// stand in for it: same kind, rig and sensor settings, matching exposure and
-/// temperature. A frame well above the quietest of those caught stray light,
-/// and is kept out of masters and exports until a new grade clears it.
-///
-/// Peers come from every night, so a morning whose darks all leaked is still
-/// caught by a clean set from another night. Returns how many frames are
-/// flagged after the pass.
-pub fn grade_dark_levels(conn: &Connection) -> Result<usize> {
-    if !schema_supports_current_reads(conn) {
-        return Ok(0);
-    }
-    let measured: Vec<(CalibrationFrame, seiza_stacking::DarkLevel)> = conn
-        .prepare(
-            r#"
-            SELECT id, frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
-                   captured_at, telescope, camera, width, height, channels,
-                   binning_x, binning_y, gain, offset, readout_mode, bayer_pattern,
-                   exposure_s, camera_temp, filter_name, focal_length_mm, rotation,
-                   valid_direction, readout_mode_name, is_master, stray_light,
-                   dark_level, dark_level_sigma
-            FROM psf_guard_calibration_frame
-            WHERE kind IN ('dark', 'dark_flat') AND is_master = 0
-              AND dark_level IS NOT NULL AND dark_level_sigma IS NOT NULL
-            "#,
-        )?
-        .query_map([], |row| {
-            Ok((
-                row_to_frame(row)?,
-                seiza_stacking::DarkLevel {
-                    level: row.get::<_, f64>(27)? as f32,
-                    sigma: row.get::<_, f64>(28)? as f32,
-                },
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    let screening = seiza_stacking::DarkLevelScreening::default();
-    let now = chrono::Utc::now().timestamp();
-    let mut flagged = 0;
-    let mut update = conn.prepare(
-        "UPDATE psf_guard_calibration_frame SET stray_light = ?1, updated_at = ?2 WHERE id = ?3",
-    )?;
-    for (frame, _) in &measured {
-        let peers: Vec<(bool, seiza_stacking::DarkLevel)> = measured
-            .iter()
-            .filter(|(other, _)| {
-                other.kind == frame.kind
-                    && other.rig_uuid == frame.rig_uuid
-                    && frame_pair_matches(frame, other)
-                    && exposure_matches(frame.exposure_s, other.exposure_s)
-                    && temperature_matches(frame.camera_temp, other.camera_temp)
-            })
-            .map(|(other, level)| (other.id == frame.id, *level))
-            .collect();
-        let levels: Vec<_> = peers.iter().map(|(_, level)| *level).collect();
-        let verdict = peers
-            .iter()
-            .position(|(is_self, _)| *is_self)
-            .and_then(|index| {
-                seiza_stacking::screen_dark_levels(&levels, screening)
-                    .into_iter()
-                    .nth(index)
-                    .flatten()
-            });
-        if verdict.is_some() {
-            flagged += 1;
-        }
-        if verdict != frame.stray_light {
-            update.execute(rusqlite::params![verdict, now, frame.id])?;
-        }
-    }
-    Ok(flagged)
 }
 
 fn add_is_master_column(conn: &Connection) -> Result<bool> {
@@ -1318,6 +1197,8 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         "#,
     )
     .context("creating PSF Guard calibration tables")?;
+    conn.execute_batch(quality::QUALITY_TABLE_SQL)
+        .context("creating PSF Guard calibration tables")?;
     // A catalog that has just had its tables created is already at the
     // current version; one that had them from an older build is stamped with
     // whatever it was, and the ladder below carries it up.
@@ -1589,63 +1470,87 @@ pub fn library_details(conn: &Connection) -> Result<CalibrationLibraryDetails> {
     };
     let (stray_light_column, dark_level_columns) =
         if has("stray_light") && has("dark_level") && has("dark_level_sigma") {
-            ("stray_light", "dark_level, dark_level_sigma")
+            ("f.stray_light", "f.dark_level, f.dark_level_sigma")
         } else {
             (
                 "NULL AS stray_light",
                 "NULL AS dark_level, NULL AS dark_level_sigma",
             )
         };
+    let (grade_columns, grade_join) = if quality::table_exists(conn) {
+        (
+            "q.grade, q.reason, q.override_choice, q.grade_code",
+            "LEFT JOIN psf_guard_calibration_frame_quality q ON q.frame_uuid = f.frame_uuid",
+        )
+    } else {
+        ("NULL, NULL, NULL, NULL", "")
+    };
     let mut statement = conn.prepare(&format!(
         r#"
-        SELECT id, frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
-               captured_at, telescope, camera, width, height, channels,
-               binning_x, binning_y, gain, offset, readout_mode, bayer_pattern,
-               exposure_s, camera_temp, filter_name, focal_length_mm,
+        SELECT f.id, f.frame_uuid, f.rig_uuid, f.kind, f.source_path, f.source_fingerprint,
+               f.captured_at, f.telescope, f.camera, f.width, f.height, f.channels,
+               f.binning_x, f.binning_y, f.gain, f.offset, f.readout_mode, f.bayer_pattern,
+               f.exposure_s, f.camera_temp, f.filter_name, f.focal_length_mm,
                NULL AS rotation, {validity_column}, {readout_name_column}, {is_master_column},
-               {stray_light_column}, {dark_level_columns}
-        FROM psf_guard_calibration_frame
-        ORDER BY kind, captured_at DESC, source_path COLLATE NOCASE
+               {stray_light_column}, {grade_columns}, {dark_level_columns}
+        FROM psf_guard_calibration_frame f {grade_join}
+        ORDER BY f.kind, f.captured_at DESC, f.source_path COLLATE NOCASE
         "#
     ))?;
     let frames = statement
         .query_map([], |row| {
+            let quality = FrameGrade {
+                grade: row.get(27)?,
+                grade_code: row.get(30)?,
+                grade_reason: row.get(28)?,
+                quality_override: QualityOverride::from_db(
+                    row.get::<_, Option<String>>(29)?.as_deref(),
+                ),
+            };
             Ok((
                 row_to_frame(row)?,
-                row.get::<_, Option<f64>>(27)?,
-                row.get::<_, Option<f64>>(28)?,
+                row.get::<_, Option<String>>(26)?,
+                quality,
+                (
+                    row.get::<_, Option<f64>>(31)?,
+                    row.get::<_, Option<f64>>(32)?,
+                ),
             ))
         })?
         .map(|row| {
-            row.map(|(frame, level, sigma)| CalibrationFrameSummary {
-                frame_uuid: frame.frame_uuid,
-                rig_uuid: frame.rig_uuid,
-                kind: frame.kind,
-                // The server checks paths after releasing the shared database
-                // connection so slow storage cannot block unrelated queries.
-                source_exists: false,
-                source_path: frame.source_path.to_string_lossy().into_owned(),
-                captured_at: frame.captured_at,
-                camera: frame.camera,
-                width: frame.width,
-                height: frame.height,
-                binning_x: frame.binning_x,
-                binning_y: frame.binning_y,
-                gain: frame.gain,
-                offset: frame.offset,
-                readout_mode: frame.readout_mode,
-                readout_mode_name: frame.readout_mode_name,
-                is_master: frame.is_master,
-                bayer_pattern: frame.bayer_pattern,
-                exposure_s: frame.exposure_s,
-                camera_temp: frame.camera_temp,
-                filter: frame.filter,
-                focal_length_mm: frame.focal_length_mm,
-                valid_direction: frame.valid_direction,
-                dark_level: level,
-                dark_level_sigma: sigma,
-                stray_light: frame.stray_light,
-            })
+            row.map(
+                |(frame, stray_light, quality, (level, sigma))| CalibrationFrameSummary {
+                    frame_uuid: frame.frame_uuid,
+                    rig_uuid: frame.rig_uuid,
+                    kind: frame.kind,
+                    // The server checks paths after releasing the shared database
+                    // connection so slow storage cannot block unrelated queries.
+                    source_exists: false,
+                    source_path: frame.source_path.to_string_lossy().into_owned(),
+                    captured_at: frame.captured_at,
+                    camera: frame.camera,
+                    width: frame.width,
+                    height: frame.height,
+                    binning_x: frame.binning_x,
+                    binning_y: frame.binning_y,
+                    gain: frame.gain,
+                    offset: frame.offset,
+                    readout_mode: frame.readout_mode,
+                    readout_mode_name: frame.readout_mode_name,
+                    is_master: frame.is_master,
+                    bayer_pattern: frame.bayer_pattern,
+                    exposure_s: frame.exposure_s,
+                    camera_temp: frame.camera_temp,
+                    filter: frame.filter,
+                    focal_length_mm: frame.focal_length_mm,
+                    valid_direction: frame.valid_direction,
+                    dark_level: level,
+                    dark_level_sigma: sigma,
+                    stray_light,
+                    quality,
+                    kept_out: frame.kept_out,
+                },
+            )
         })
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(CalibrationLibraryDetails {
@@ -1797,6 +1702,7 @@ pub fn forget_frames(
             frames_removed += statement.execute([frame_uuid])?;
         }
     }
+    quality::forget(&transaction, frame_uuids)?;
     transaction.commit()?;
     Ok(CalibrationMutationOutcome {
         frames_removed,
@@ -1818,6 +1724,8 @@ pub fn clear_generated_masters(conn: &Connection) -> Result<CalibrationMutationO
 /// Merge PSF Guard calibration metadata into another scheduler database.
 /// Generated master rows stay local because their cache paths belong to the
 /// source host; the destination rebuilds them from the synced raw-frame set.
+/// Grades travel with their frames, and so does a person's choice to keep a
+/// frame out or use it anyway.
 pub fn sync_library(
     source: &Connection,
     destination: &Transaction<'_>,
@@ -1826,20 +1734,20 @@ pub fn sync_library(
         return Ok(CalibrationSyncOutcome::default());
     }
     ensure_schema(destination)?;
+    let rigs = sync_table_by_key(source, destination, "psf_guard_rig", "rig_uuid")?;
+    let rig_bindings =
+        sync_table_by_key(source, destination, "psf_guard_rig_binding", "binding_uuid")?;
+    let frames = sync_table_by_key(
+        source,
+        destination,
+        "psf_guard_calibration_frame",
+        "frame_uuid",
+    )?;
     Ok(CalibrationSyncOutcome {
-        rigs: sync_table_by_key(source, destination, "psf_guard_rig", "rig_uuid")?,
-        rig_bindings: sync_table_by_key(
-            source,
-            destination,
-            "psf_guard_rig_binding",
-            "binding_uuid",
-        )?,
-        frames: sync_table_by_key(
-            source,
-            destination,
-            "psf_guard_calibration_frame",
-            "frame_uuid",
-        )?,
+        rigs,
+        rig_bindings,
+        frames,
+        quality: quality::sync_quality(source, destination)?,
     })
 }
 
@@ -1965,17 +1873,10 @@ pub fn select_for_light(conn: &Connection, light: &FrameMeta) -> Result<Calibrat
     if !schema_supports_current_reads(conn) {
         return Ok(CalibrationSelection::default());
     }
-    let mut statement = conn.prepare(
-        r#"
-        SELECT id, frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
-               captured_at, telescope, camera, width, height, channels,
-               binning_x, binning_y, gain, offset, readout_mode, bayer_pattern,
-               exposure_s, camera_temp, filter_name, focal_length_mm, rotation,
-               valid_direction, readout_mode_name, is_master, stray_light
-        FROM psf_guard_calibration_frame
-        ORDER BY captured_at DESC, id DESC
-        "#,
-    )?;
+    let mut statement = conn.prepare(&format!(
+        "{} ORDER BY f.captured_at DESC, f.id DESC",
+        frame_select(conn, &[])
+    ))?;
     let frames = statement
         .query_map([], row_to_frame)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1986,7 +1887,10 @@ pub fn select_for_light(conn: &Connection, light: &FrameMeta) -> Result<Calibrat
             continue;
         }
         let sensor = sensor_matches(light, &candidate);
-        if sensor && candidate.stray_light.is_none() {
+        // A frame kept out still shows the library holds this kind, so a
+        // light whose only flats are poor is reported as one that cannot
+        // be calibrated rather than as one whose rig shoots none.
+        if sensor {
             selected.library.note(candidate.kind);
         }
         // A frame marked usable only forward or backward of its capture —
@@ -2008,8 +1912,8 @@ pub fn select_for_light(conn: &Connection, light: &FrameMeta) -> Result<Calibrat
             CalibrationKind::DarkFlat => false,
             CalibrationKind::Flat => flat_matches(light, &candidate),
         };
-        if matches && candidate.stray_light.is_some() {
-            selected.stray_light.push(candidate);
+        if matches && candidate.kept_out.is_some() {
+            selected.kept_out.push(candidate);
             continue;
         }
         if matches {
@@ -2035,8 +1939,8 @@ pub fn select_for_light(conn: &Connection, light: &FrameMeta) -> Result<Calibrat
                 && exposure_matches(flat.exposure_s, candidate.exposure_s)
                 && temperature_matches(flat.camera_temp, candidate.camera_temp)
             {
-                if candidate.stray_light.is_some() {
-                    selected.stray_light.push(candidate);
+                if candidate.kept_out.is_some() {
+                    selected.kept_out.push(candidate);
                 } else {
                     selected.dark_flat.push(candidate);
                 }
@@ -2433,8 +2337,8 @@ fn refusal(light: &FrameMeta, light_signature: &Signature, candidate: &Calibrati
     if candidate.is_master && external_master_policy() == ExternalMasterPolicy::Ignore {
         return "masters from other software are ignored".to_string();
     }
-    if let Some(why) = &candidate.stray_light {
-        return format!("kept out for stray light: {why}");
+    if let Some(why) = &candidate.kept_out {
+        return format!("kept out: {why}");
     }
     if !validity_admits(candidate, light.timestamp) {
         return match candidate.valid_direction {
@@ -2553,6 +2457,9 @@ pub struct KindExplanation {
     pub matching_unused: Vec<NightFrames>,
     /// Frames that do not match, by night and reason, newest night first.
     pub refused: Vec<RefusedFrames>,
+    /// Frames that match but stay out, each with its file and why: graded
+    /// poor or kept out by hand. They are counted under `refused` too.
+    pub kept_out: Vec<KeptOutFrame>,
     /// Flats for other filters, counted rather than listed.
     pub other_filters: usize,
     /// Frames from another camera or sensor size, counted.
@@ -2605,6 +2512,13 @@ impl FrameSpan {
         span.last_night = nights.last().cloned();
         span
     }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct KeptOutFrame {
+    pub file: String,
+    pub night: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -2696,6 +2610,20 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
                 .cmp(&left.night)
                 .then(left.reason.cmp(&right.reason))
         });
+        let kept_out = selected
+            .kept_out
+            .iter()
+            .filter(|frame| frame.kind == kind)
+            .map(|frame| KeptOutFrame {
+                file: frame
+                    .source_path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                night: night(frame.captured_at),
+                reason: frame.kept_out.clone().unwrap_or_default(),
+            })
+            .collect();
         kinds.push(KindExplanation {
             kind: kind.as_str().to_string(),
             master: FrameSpan::of(master.iter().map(|frame| {
@@ -2707,6 +2635,7 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
             used: by_night(&master),
             matching_unused: by_night(&unused),
             refused,
+            kept_out,
             other_filters,
             other_cameras,
         });
@@ -2762,7 +2691,7 @@ fn flat_near_miss(
     let mut near: Vec<(f64, CalibrationFrame)> = Vec::new();
     for candidate in query_kind(conn, CalibrationKind::Flat)? {
         if (candidate.is_master && policy == ExternalMasterPolicy::Ignore)
-            || candidate.stray_light.is_some()
+            || candidate.kept_out.is_some()
             || !validity_admits(&candidate, light.timestamp)
             || !sensor_matches(light, &candidate)
         {
@@ -3269,12 +3198,26 @@ fn resolve_or_build_masters_pinned(
     let mut selected = select_for_light(conn, &light)?;
     let missing_sources = remap_missing_sources(&mut selected, directory_tree);
     let fingerprint = selection_hash(&selected, settings.flat_star_masking);
-    let library_stray_light = selected.stray_light.first().map(|frame| SetAside {
-        kind: frame.kind,
-        count: selected.stray_light.len(),
-        example: frame.source_path.display().to_string(),
-        stray_light: true,
-    });
+    // Frames the library keeps out, per kind, each with one example and why.
+    let mut library_kept_out: Vec<SetAside> = Vec::new();
+    for frame in &selected.kept_out {
+        match library_kept_out
+            .iter_mut()
+            .find(|entry| entry.kind == frame.kind)
+        {
+            Some(entry) => entry.count += 1,
+            None => library_kept_out.push(SetAside {
+                kind: frame.kind,
+                count: 1,
+                example: format!(
+                    "{} ({})",
+                    frame.source_path.display(),
+                    frame.kept_out.as_deref().unwrap_or("kept out")
+                ),
+                why: SetAsideWhy::KeptOut,
+            }),
+        }
+    }
     let mut applied = AppliedCalibration {
         mode,
         state: "matching".into(),
@@ -3418,7 +3361,7 @@ fn resolve_or_build_masters_pinned(
                 kind,
                 count: report.dropped.len(),
                 example: first.source_path.display().to_string(),
-                stray_light: false,
+                why: SetAsideWhy::Incompatible,
             });
         }
         if let Some(failed_dependency) = skip_because {
@@ -3447,13 +3390,16 @@ fn resolve_or_build_masters_pinned(
                     .skipped
                     .iter()
                     .partition(|(_, reason)| reason.starts_with("stray light"));
-                for (group, stray_light) in [(stray, true), (other, false)] {
+                for (group, why) in [
+                    (stray, SetAsideWhy::StrayLight),
+                    (other, SetAsideWhy::Incompatible),
+                ] {
                     if let Some((path, _)) = group.first() {
                         set_aside.push(SetAside {
                             kind,
                             count: group.len(),
                             example: path.display().to_string(),
-                            stray_light,
+                            why,
                         });
                     }
                 }
@@ -3708,10 +3654,26 @@ fn resolve_or_build_masters_pinned(
             .collect::<Vec<_>>()
             .join("; ")
     };
-    let (stray, other): (Vec<&SetAside>, Vec<&SetAside>) = library_stray_light
-        .iter()
-        .chain(&set_aside)
-        .partition(|entry| entry.stray_light);
+    let of = |why: SetAsideWhy| {
+        library_kept_out
+            .iter()
+            .chain(&set_aside)
+            .filter(|entry| entry.why == why)
+            .collect::<Vec<_>>()
+    };
+    let (kept_out, stray, other) = (
+        of(SetAsideWhy::KeptOut),
+        of(SetAsideWhy::StrayLight),
+        of(SetAsideWhy::Incompatible),
+    );
+    if !kept_out.is_empty() {
+        let note = format!(
+            "Left out calibration frames graded poor or kept out by hand — {}; see the \
+             calibration library",
+            describe(&kept_out)
+        );
+        append_warning(&mut applied.warning, note);
+    }
     if !other.is_empty() {
         let note = format!(
             "Built without frames the integrator would not accept — {}. Check the library for \
@@ -4816,14 +4778,50 @@ fn build_master_once(
     ));
     seiza_stacking::write_master_fits_f32(&staged, &frame)
         .with_context(|| format!("writing {}", staged.display()))?;
-    let statistics = serde_json::json!({
+    let mut statistics = serde_json::json!({
         "rejection_method": frame.rejection_method.as_str(),
         "accepted_samples": frame.accepted_samples,
         "rejected_samples": frame.rejected_samples,
         "fallback_pixels": frame.fallback_pixels,
         "masked_samples": frame.masked_samples,
         "flat_star_masking": frame.flat_star_masking,
+        "defect_pixels_replaced": frame.defect_pixels_replaced,
     });
+    // The integrator reports each input it combined, in order: the frames
+    // given less those it refused.
+    let combined: Vec<CalibrationFrame> = frames
+        .iter()
+        .filter(|frame| !skipped.iter().any(|(path, _)| *path == frame.source_path))
+        .cloned()
+        .collect();
+    let named = combined.len() == frame.input_statistics.len();
+    statistics["input_statistics"] = frame
+        .input_statistics
+        .iter()
+        .enumerate()
+        .map(|(index, input)| {
+            let mut value = serde_json::json!({
+                "accepted_samples": input.accepted_samples,
+                "rejected_samples": input.rejected_samples,
+                "masked_samples": input.masked_samples,
+            });
+            if named {
+                value["frame_uuid"] = combined[index].frame_uuid.clone().into();
+            }
+            value
+        })
+        .collect::<Vec<_>>()
+        .into();
+    if matches!(kind, CalibrationKind::Bias | CalibrationKind::Dark) {
+        // A short set puts its own read noise into every light it serves.
+        statistics["thin"] = (frame.input_frames < THIN_MASTER_FRAMES).into();
+        statistics["thin_below"] = THIN_MASTER_FRAMES.into();
+    }
+    if kind == CalibrationKind::Flat
+        && let Some(verdict) = quality::flat_set_verdict(conn, &combined)
+    {
+        statistics["frame_quality"] = verdict;
+    }
     Ok(Some(BuiltAttempt {
         master: BuiltMaster {
             path,
@@ -5181,8 +5179,20 @@ struct SetAside {
     kind: CalibrationKind,
     count: usize,
     example: String,
-    /// Left out for stray light, by library health or by the integrator.
-    stray_light: bool,
+    why: SetAsideWhy,
+}
+
+/// Why frames were left out of a master.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SetAsideWhy {
+    /// The library keeps them out: graded poor, kept out by hand, or marked
+    /// for stray light before grading.
+    KeptOut,
+    /// The integrator's own dark-level screen found stray light in a dark
+    /// the library had not graded yet.
+    StrayLight,
+    /// The integrator would not combine them with the rest.
+    Incompatible,
 }
 
 fn append_warning(warning: &mut Option<String>, note: impl Into<String>) {
@@ -6785,17 +6795,10 @@ fn query_kind(conn: &Connection, kind: CalibrationKind) -> Result<Vec<Calibratio
     if !schema_supports_current_reads(conn) {
         return Ok(Vec::new());
     }
-    let mut statement = conn.prepare(
-        r#"
-        SELECT id, frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
-               captured_at, telescope, camera, width, height, channels,
-               binning_x, binning_y, gain, offset, readout_mode, bayer_pattern,
-               exposure_s, camera_temp, filter_name, focal_length_mm, rotation,
-               valid_direction, readout_mode_name, is_master, stray_light
-        FROM psf_guard_calibration_frame WHERE kind = ?1
-        ORDER BY captured_at DESC, id DESC
-        "#,
-    )?;
+    let mut statement = conn.prepare(&format!(
+        "{} WHERE f.kind = ?1 ORDER BY f.captured_at DESC, f.id DESC",
+        frame_select(conn, &[])
+    ))?;
     Ok(statement
         .query_map([kind.as_str()], row_to_frame)?
         .collect::<rusqlite::Result<Vec<_>>>()?)
@@ -6841,9 +6844,44 @@ fn row_to_frame(row: &rusqlite::Row<'_>) -> rusqlite::Result<CalibrationFrame> {
             .get::<_, Option<String>>(24)?
             .filter(|name| !name.trim().is_empty()),
         is_master: row.get::<_, Option<i64>>(25)?.unwrap_or(0) != 0,
-        stray_light: row.get(26)?,
+        kept_out: quality::kept_out_reason(
+            row.get(26)?,
+            row.get::<_, Option<String>>(27)?.as_deref(),
+            row.get(28)?,
+            quality::QualityOverride::from_db(row.get::<_, Option<String>>(29)?.as_deref()),
+        ),
         source_verified: false,
     })
+}
+
+/// `SELECT … FROM` for the columns [`row_to_frame`] reads, in its order:
+/// the frame's own, then its grade, the main finding and a person's choice,
+/// which decide whether it is kept out. `extra` columns follow from index 30.
+/// A catalog without the grade table (one this build could not upgrade)
+/// reads those as NULL, so its stray-light marks still count. Callers add
+/// `WHERE` and `ORDER BY` against the aliases `f` and `q`.
+fn frame_select(conn: &Connection, extra: &[&str]) -> String {
+    let (grade, join) = if quality::table_exists(conn) {
+        (
+            "q.grade, q.reason, q.override_choice",
+            "LEFT JOIN psf_guard_calibration_frame_quality q ON q.frame_uuid = f.frame_uuid",
+        )
+    } else {
+        ("NULL, NULL, NULL", "")
+    };
+    let extra = extra
+        .iter()
+        .map(|column| format!(", {column}"))
+        .collect::<String>();
+    format!(
+        "SELECT f.id, f.frame_uuid, f.rig_uuid, f.kind, f.source_path, f.source_fingerprint,
+                f.captured_at, f.telescope, f.camera, f.width, f.height, f.channels,
+                f.binning_x, f.binning_y, f.gain, f.offset, f.readout_mode, f.bayer_pattern,
+                f.exposure_s, f.camera_temp, f.filter_name, f.focal_length_mm, f.rotation,
+                f.valid_direction, f.readout_mode_name, f.is_master, f.stray_light,
+                {grade}{extra}
+         FROM psf_guard_calibration_frame f {join}"
+    )
 }
 
 /// Whether a candidate's validity boundary admits this light. A frame or
@@ -6871,9 +6909,9 @@ pub struct ExportCalibration {
     /// has flats. The light and its flats share this component so a stacker
     /// grouping on it pairs each night's lights with that night's flats.
     pub flat_session: Option<String>,
-    /// Darks and dark-flats that matched this light but were left out for
-    /// stray light.
-    pub stray_light: Vec<PathBuf>,
+    /// Frames that matched this light but stay out: graded poor, kept out
+    /// by hand, or marked for stray light.
+    pub kept_out: Vec<PathBuf>,
     /// The darks this light's master is built from, so an export can keep
     /// two lights' different sets from being integrated as one.
     pub dark_set: Option<DarkSet>,
@@ -6908,8 +6946,8 @@ pub fn export_destinations(
     // library matched would pool every session's flats into one folder, and
     // a stacker then integrates one master flat for lights that need
     // different ones.
-    let stray_light = selected
-        .stray_light
+    let kept_out = selected
+        .kept_out
         .iter()
         .map(|frame| frame.source_path.clone())
         .collect();
@@ -6918,7 +6956,7 @@ pub fn export_destinations(
         dark: coherent_master_subset(CalibrationKind::Dark, &selected.dark),
         dark_flat: coherent_master_subset(CalibrationKind::DarkFlat, &selected.dark_flat),
         flat: coherent_master_subset(CalibrationKind::Flat, &selected.flat),
-        stray_light: Vec::new(),
+        kept_out: Vec::new(),
         library: selected.library,
     };
     let flat_session = flat_session_label(&selected.flat, night_boundary);
@@ -7031,7 +7069,7 @@ pub fn export_destinations(
     Ok(ExportCalibration {
         items: output,
         flat_session,
-        stray_light,
+        kept_out,
         dark_set,
     })
 }
@@ -7987,7 +8025,7 @@ mod tests {
             focal_length_mm: None,
             rotation: None,
             valid_direction: None,
-            stray_light: None,
+            kept_out: None,
             source_verified: false,
         };
         assert!(sensor_matches(&light, &master));
@@ -9245,7 +9283,7 @@ mod tests {
             focal_length_mm: Some(2350.0),
             rotation: Some(101.99),
             valid_direction: None,
-            stray_light: None,
+            kept_out: None,
             source_verified: false,
         };
         // Nearest-first, as selection delivers them: the R set, with the one
@@ -9304,7 +9342,7 @@ mod tests {
             focal_length_mm: Some(2350.0),
             rotation: Some(101.99),
             valid_direction: None,
-            stray_light: None,
+            kept_out: None,
             source_verified: false,
         };
         let frames = vec![bias(0, "R"), bias(1, "OIII"), bias(2, "L")];
@@ -9344,7 +9382,7 @@ mod tests {
             focal_length_mm: Some(2350.0),
             rotation: None,
             valid_direction: None,
-            stray_light: None,
+            kept_out: None,
             source_verified: false,
         };
         let frames = vec![
@@ -9391,7 +9429,7 @@ mod tests {
             focal_length_mm: None,
             rotation,
             valid_direction: None,
-            stray_light: None,
+            kept_out: None,
             source_verified: false,
         };
         // Five flats at 30° and two strays at 120°: the master takes only
@@ -9436,7 +9474,7 @@ mod tests {
             focal_length_mm: None,
             rotation: None,
             valid_direction: None,
-            stray_light: None,
+            kept_out: None,
             source_verified: false,
         };
         assert!(!sensor_matches(&light, &candidate));
@@ -9534,7 +9572,7 @@ mod tests {
             focal_length_mm: None,
             rotation: None,
             valid_direction: None,
-            stray_light: None,
+            kept_out: None,
             source_verified: false,
         };
         // Five darks in one mode and two strays in another: the two strays
@@ -9690,7 +9728,7 @@ mod tests {
             focal_length_mm: None,
             rotation: None,
             valid_direction: None,
-            stray_light: None,
+            kept_out: None,
             source_verified: false,
         };
         let stale = row(
@@ -9832,22 +9870,39 @@ mod tests {
 
     #[test]
     fn darks_that_caught_stray_light_leave_masters_and_exports() {
+        // Grading replaced the dark-level pass; its own tests cover the
+        // grades (see `quality::tests`). This keeps the stray-light rule in
+        // sight: three steady darks and one shot as dawn reached the
+        // sensor. The frames carry noise, since Seiza judges a level only
+        // against a frame whose pixels have a measurable spread.
         let temp = tempfile::tempdir().unwrap();
-        // Three steady darks and one shot as dawn reached the sensor. The
-        // test frames are noiseless, so the steady ones must match exactly.
         let mut meta = Vec::new();
-        for (index, value) in [503, 503, 503, 900].into_iter().enumerate() {
+        for (index, value) in [503.0, 503.0, 503.0, 900.0].into_iter().enumerate() {
             let path = temp.path().join(format!("dark-{index}.fits"));
-            write_test_fits(&path, "DARK", value);
+            quality::tests::write_frame(&path, "DARK", (64, 64), "2026-09-10T10:00:00", |x, y| {
+                value + 5.0 * quality::tests::noise(x, y, index as u64)
+            });
             meta.push(crate::commands::import::headers::read_frame_meta(&path));
         }
         let bias_path = temp.path().join("bias.fits");
-        write_test_fits(&bias_path, "BIAS", 500);
+        quality::tests::write_frame(
+            &bias_path,
+            "BIAS",
+            (64, 64),
+            "2026-09-10T10:00:00",
+            |x, y| 500.0 + 5.0 * quality::tests::noise(x, y, 9),
+        );
         meta.push(crate::commands::import::headers::read_frame_meta(
             &bias_path,
         ));
         let light_path = temp.path().join("light.fits");
-        write_test_fits(&light_path, "LIGHT", 1_100);
+        quality::tests::write_frame(
+            &light_path,
+            "LIGHT",
+            (64, 64),
+            "2026-09-11T03:00:00",
+            |_, _| 1_100.0,
+        );
         let light = crate::commands::import::headers::read_frame_meta(&light_path);
         // Catalog paths are canonical (macOS resolves /var to /private/var,
         // Windows adds a verbatim prefix), so frames are told apart by name.
@@ -9863,12 +9918,11 @@ mod tests {
         let before = select_for_light(&conn, &light).unwrap();
         assert_eq!(before.dark.len(), 4, "unmeasured darks all match");
 
-        let outcome = measure_dark_levels(&conn, |_, _| {}).unwrap();
-        assert_eq!(outcome.pending, 4, "only raw darks are measured");
-        assert_eq!(outcome.measured, 4);
-        assert_eq!(outcome.stray_light, 1);
+        let (measured, graded) = measure_and_grade(&conn).unwrap();
+        assert_eq!(measured.pending, 5, "every raw frame is measured");
+        assert_eq!(graded.poor, 1);
         assert_eq!(
-            measure_dark_levels(&conn, |_, _| {}).unwrap().pending,
+            measure_and_grade(&conn).unwrap().0.pending,
             0,
             "a measured frame is not read again"
         );
@@ -9879,8 +9933,14 @@ mod tests {
             .iter()
             .find(|frame| is_leak(Path::new(&frame.source_path)))
             .unwrap();
-        assert_eq!(leaked.dark_level, Some(900.0));
-        assert_eq!(leaked.dark_level_sigma, Some(0.0), "noiseless test frame");
+        assert!(leaked
+            .dark_level
+            .is_some_and(|level| (level - 900.0).abs() < 2.0));
+        // Five counts of noise, which the noiseless fixture this test had
+        // before grading could not show.
+        assert!(leaked
+            .dark_level_sigma
+            .is_some_and(|sigma| (3.0..7.0).contains(&sigma)));
         assert!(
             leaked
                 .stray_light
@@ -9898,8 +9958,8 @@ mod tests {
         let selected = select_for_light(&conn, &light).unwrap();
         assert_eq!(selected.dark.len(), 3);
         assert_eq!(selected.bias.len(), 1);
-        assert_eq!(selected.stray_light.len(), 1);
-        assert!(is_leak(&selected.stray_light[0].source_path));
+        assert_eq!(selected.kept_out.len(), 1);
+        assert!(is_leak(&selected.kept_out[0].source_path));
 
         let export = export_destinations(
             &conn,
@@ -9910,8 +9970,8 @@ mod tests {
             12 * 3600,
         )
         .unwrap();
-        assert_eq!(export.stray_light.len(), 1);
-        assert!(is_leak(&export.stray_light[0]));
+        assert_eq!(export.kept_out.len(), 1);
+        assert!(is_leak(&export.kept_out[0]));
         assert!(
             export
                 .items
@@ -9941,7 +10001,7 @@ mod tests {
             .collect::<rusqlite::Result<_>>()
             .unwrap();
         forget_frames(&mut conn, &quiet).unwrap();
-        assert_eq!(grade_dark_levels(&conn).unwrap(), 0);
+        assert_eq!(grade_library(&conn).unwrap().poor, 0);
         assert_eq!(select_for_light(&conn, &light).unwrap().dark.len(), 1);
     }
 
@@ -10127,7 +10187,7 @@ mod tests {
             focal_length_mm: None,
             rotation: None,
             valid_direction: None,
-            stray_light: None,
+            kept_out: None,
             source_verified: false,
         };
         let day = 24 * 60 * 60;

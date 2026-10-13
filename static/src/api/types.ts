@@ -1628,8 +1628,8 @@ export interface WbppRunProgress {
   frames: number;
   lights: number;
   missing_files: number;
-  /** Darks the calibration library left out because they caught stray light. */
-  stray_light_darks?: number;
+  /** Calibration frames the library keeps out: graded poor or kept out by hand. */
+  kept_out_frames?: number;
   command: string | null;
   pid: number | null;
   started_at: number | null;
@@ -2252,11 +2252,25 @@ export interface CalibrationFrameSummary {
   /** Spread of that dark's pixels around the median, measured with it. */
   dark_level_sigma?: number | null;
   /**
-   * Why library health keeps this dark out of masters and exports: its level
-   * sits well above the matching darks, the mark of stray light.
+   * The stray-light mark on a dark whose level sits well above the matching
+   * darks. Older builds read only this.
    */
   stray_light?: string | null;
+  /** The frame's grade once measured against its peers. */
+  grade?: CalibrationGrade | null;
+  /** The main finding's code, such as `level_excess` or `noise`. */
+  grade_code?: string | null;
+  /** The main finding in plain words, with its number. */
+  grade_reason?: string | null;
+  /** A person's choice, which outranks the grade. */
+  quality_override?: CalibrationQualityOverride | null;
+  /** Why the frame stays out of masters and exports, when it does. */
+  kept_out?: string | null;
 }
+
+export type CalibrationGrade = 'ok' | 'suspect' | 'poor';
+
+export type CalibrationQualityOverride = 'use' | 'exclude';
 
 export type CalibrationValidDirection = 'forward' | 'backward';
 

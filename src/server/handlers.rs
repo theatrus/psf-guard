@@ -129,15 +129,15 @@ pub async fn get_calibration_library_details(
 }
 
 pub async fn forget_calibration_frame(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, frame_uuid)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<crate::calibration::CalibrationMutationOutcome>>, AppError> {
     let conn = ctx.db();
     let mut conn = conn.lock().map_err(AppError::db)?;
     let outcome = crate::calibration::forget_frame(&mut conn, &frame_uuid).map_err(AppError::db)?;
-    // A forgotten dark may have been the quiet one its peers were judged by.
-    crate::calibration::grade_dark_levels(&conn).map_err(AppError::db)?;
+    // A forgotten frame may have been a peer the others were judged by.
+    crate::server::calibration_quality::request(&state, &ctx.database_path);
     if outcome.frames_removed == 0 {
         return Err(AppError::NotFound);
     }
@@ -152,7 +152,7 @@ pub struct ForgetCalibrationFramesRequest {
 /// DELETE /api/db/{db}/calibrations/frames — forget several catalog records
 /// (a whole night of a kind) in one transaction. Files are never touched.
 pub async fn forget_calibration_frames(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Json(request): Json<ForgetCalibrationFramesRequest>,
 ) -> Result<Json<ApiResponse<crate::calibration::CalibrationMutationOutcome>>, AppError> {
@@ -163,8 +163,8 @@ pub async fn forget_calibration_frames(
     let mut conn = conn.lock().map_err(AppError::db)?;
     let outcome =
         crate::calibration::forget_frames(&mut conn, &request.frame_uuids).map_err(AppError::db)?;
-    // A forgotten dark may have been the quiet one its peers were judged by.
-    crate::calibration::grade_dark_levels(&conn).map_err(AppError::db)?;
+    // A forgotten frame may have been a peer the others were judged by.
+    crate::server::calibration_quality::request(&state, &ctx.database_path);
     if outcome.frames_removed == 0 {
         return Err(AppError::NotFound);
     }
@@ -206,6 +206,46 @@ pub async fn set_calibration_validity(
     let conn = ctx.db();
     let conn = conn.lock().map_err(AppError::db)?;
     let updated = crate::calibration::set_frames_validity(&conn, &request.frame_uuids, direction)
+        .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    if updated == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(Json(ApiResponse::success(SetCalibrationValidityResponse {
+        updated,
+    })))
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct SetCalibrationQualityOverrideRequest {
+    pub frame_uuids: Vec<String>,
+    /// "use" (whatever its grade), "exclude" (keep it out), or "clear".
+    pub choice: String,
+}
+
+/// PUT /api/db/{db}/calibrations/frames/quality — use frames whatever their
+/// grade, keep them out of masters and exports, or clear that choice. A
+/// kept-out frame stays in the library, so a rescan does not bring it back.
+pub async fn set_calibration_quality_override(
+    State(_state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Json(request): Json<SetCalibrationQualityOverrideRequest>,
+) -> Result<Json<ApiResponse<SetCalibrationValidityResponse>>, AppError> {
+    let choice = match request.choice.as_str() {
+        "clear" => None,
+        "use" => Some(crate::calibration::QualityOverride::Use),
+        "exclude" => Some(crate::calibration::QualityOverride::Exclude),
+        other => {
+            return Err(AppError::BadRequest(format!(
+                "choice must be use, exclude, or clear, not {other:?}"
+            )));
+        }
+    };
+    if request.frame_uuids.is_empty() {
+        return Err(AppError::BadRequest("no frames named".into()));
+    }
+    let conn = ctx.db();
+    let conn = conn.lock().map_err(AppError::db)?;
+    let updated = crate::calibration::set_overrides(&conn, &request.frame_uuids, choice)
         .map_err(|error| AppError::BadRequest(error.to_string()))?;
     if updated == 0 {
         return Err(AppError::NotFound);
@@ -3360,10 +3400,10 @@ pub(crate) fn spawn_import_job_with_trigger(
         // the normal background refresh so the UI resolves them promptly.
         let _ = ctx.ensure_cache_available();
 
-        // New darks are checked for stray light before a stack or an export
-        // relies on them; with none to measure this is one query.
+        // New calibration frames are graded before a stack or an export
+        // relies on them; with none to measure this regrades the library.
         if !dry_run {
-            crate::server::database_context::spawn_dark_level_backfill(ctx.database_path.clone());
+            crate::server::calibration_quality::request(&state, &ctx.database_path);
         }
 
         // Quality analysis is a general database maintenance job, not an

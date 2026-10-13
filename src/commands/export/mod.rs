@@ -59,8 +59,9 @@ pub struct ExportPlan {
     pub missing: Vec<(i32, String)>,
     /// Rows without a FileName in their metadata.
     pub unresolvable: usize,
-    /// Darks the calibration library matched but left out for stray light.
-    pub stray_light: std::collections::BTreeSet<PathBuf>,
+    /// Calibration frames the library matched but keeps out: graded poor,
+    /// kept out by hand, or marked for stray light.
+    pub kept_out: std::collections::BTreeSet<PathBuf>,
 }
 
 /// How an export arranges its files under the destination root.
@@ -326,7 +327,7 @@ pub fn plan_export(
                 }
             }
             calibration_items.extend(calibration.items);
-            plan.stray_light.extend(calibration.stray_light);
+            plan.kept_out.extend(calibration.kept_out);
             flat_session = calibration.flat_session;
             dark_set = calibration.dark_set;
         }

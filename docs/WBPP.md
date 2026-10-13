@@ -168,9 +168,10 @@ integrates the targets together.
 - **Frames not found.** The run reads each frame from its full path on the
   server. A catalog row whose file is not below the database's image
   folders is left out and counted in the dialog.
-- **Fewer darks than the library holds.** Darks the calibration library
-  marked for stray light stay out of the run, and the dialog counts them.
-  See [darks that caught stray light](CALIBRATION_LIBRARY.md#darks-that-caught-stray-light).
+- **Fewer calibration frames than the library holds.** Frames the
+  calibration library keeps out, graded poor or kept out by hand, stay out
+  of the run, and the dialog counts them. See
+  [frame grades](CALIBRATION_LIBRARY.md#frame-grades).
 - **WBPP wrote no master.** Read WBPP's log from the dialog; the usual
   causes are a group WBPP could not register, or calibration frames that
   do not match. PixInsight prints nothing to its console output in this

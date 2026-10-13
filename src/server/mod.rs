@@ -4,6 +4,7 @@ pub mod auth;
 pub mod autoimport;
 pub mod cache;
 pub mod cache_budget;
+pub mod calibration_quality;
 pub mod calibration_settings;
 pub mod catalog_install;
 pub mod database_context;
@@ -209,6 +210,14 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route(
             "/calibrations/frames/validity",
             put(handlers::set_calibration_validity),
+        )
+        .route(
+            "/calibrations/frames/quality",
+            put(handlers::set_calibration_quality_override),
+        )
+        .route(
+            "/calibrations/quality",
+            get(calibration_quality::get_progress),
         )
         .route(
             "/calibrations/frames",
@@ -964,7 +973,7 @@ async fn run_server_internal(
         for path in paths {
             crate::server::database_context::spawn_query_index_build(path.clone());
             crate::server::database_context::spawn_calibration_header_backfill(path.clone());
-            crate::server::database_context::spawn_dark_level_backfill(path);
+            crate::server::calibration_quality::request(&state, &path);
         }
     }
 

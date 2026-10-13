@@ -25,6 +25,7 @@ Guard-owned tables:
 - `psf_guard_rig`
 - `psf_guard_rig_binding`
 - `psf_guard_calibration_frame`
+- `psf_guard_calibration_frame_quality`
 - `psf_guard_calibration_master`
 
 The catalog stores paths, file fingerprints, capture settings, and provenance.
@@ -42,11 +43,13 @@ database copy carries this catalog with its projects and grades.
 
 Choose **Manage** on a database's calibration summary to inspect every frame.
 The library view filters by rig and frame type, marks paths that no longer
-exist, and shows the settings used for matching. With database management
-enabled, it can:
+exist, shows the settings used for matching, and shows each frame's
+[grade](#frame-grades). With database management enabled, it can:
 
 - scan the database's configured folders again;
 - forget a wrong or stale catalog entry without deleting its FITS file;
+- keep a frame out of masters and exports, use a poor one anyway, or clear
+  that choice;
 - clear generated masters while keeping all raw frames and catalog records.
 
 Forgetting a frame also drops every master record that used it, including
@@ -154,7 +157,99 @@ keeps the judgement: a cached master repeats its note, and a set that was
 set aside is remembered rather than read again. Flat masters built before
 this check rebuild once; bias and dark masters stay as they are.
 
-## Darks that caught stray light
+## Frame grades
+
+PSF Guard grades every raw bias, dark, dark-flat and flat in the library
+against the frames that should agree with it. Seiza measures and judges;
+PSF Guard groups the frames and keeps the results in
+`psf_guard_calibration_frame_quality`. Each frame gets one of three grades:
+
+- **OK**: nothing crossed a limit.
+- **Suspect**: something crossed the first limit. The frame stays in use.
+- **Poor**: something crossed the second limit. Masters, WBPP exports and
+  calibration reports leave the frame out.
+
+A master from other software is not graded.
+
+### What is judged
+
+A frame is judged against its peers:
+
+- **Bias, darks and dark-flats**: every frame that could stand in for it,
+  from any night: the same kind, rig and sensor settings (gain, offset,
+  readout mode, binning), with a matching exposure and temperature.
+- **Flats**: the other flats of its session: the same night, rig, filter,
+  rotation, binning and frame size.
+
+| Kind | Check | Suspect | Poor |
+|---|---|---|---|
+| Bias | level, distance from the set's in noise | 1 | 3 |
+| Bias, dark | noise, ratio to its peers | 1.1 | 1.3 |
+| Bias, dark | row or column banding, ratio to its noise | 0.25 | 0.5 |
+| Dark | level above the quietest peer, in that frame's spread | 0.5 | 1.0 |
+| Dark | hot pixels, ratio to its peers | 1.5 | 3 |
+| Flat | samples clipped | 0.05% | 0.5% |
+| Flat | brightest channel, share of full scale | 80% | 92% |
+| Flat | dimmest channel, share of full scale (lower is worse) | 10% | 3% |
+| Flat | light pattern off the session's | 2% | 5% |
+| Flat | clear spots in one frame | 100 | 500 |
+| Flat | spots that change across the session | 3 | 20 |
+
+Darks are compared for noise and hot pixels only with the peers whose
+level passed, since light raises both. Most checks need three or more
+peers; a frame with fewer is judged only on what it shows alone, such as
+clipping or banding. A flat's level is judged against a 16-bit full scale.
+A flat's temperature is never judged: a flat shot warm with the cooler off
+can be a good flat.
+
+A spot is a small patch that passes less light than the response around
+it. Dust makes spots that sit in every flat of a session at the same depth;
+those are left alone. Dew or frost drying off the window makes spots that
+fade from one flat to the next; a flat holding many of those is poor.
+
+### When frames are graded
+
+A background job grades the library: when the server starts, after each
+import, after a frame is forgotten, and two minutes after remote uploads of
+calibration frames stop arriving. It reads each frame once, on the workers
+the background budget allows, and waits while interactive work runs. Later
+runs read only new frames, frames whose file changed, and frames an older
+version of the checks measured; grading again needs no pixels.
+`GET /api/db/{db}/calibrations/quality` reports its progress and how many
+frames have each grade.
+
+A file the job cannot read, as on an unmounted share, waits for the next
+run. A frame Seiza cannot measure, such as a flat smaller than 32 pixels a
+side, is recorded and left ungraded. An ungraded frame stays in use.
+
+### Choosing for yourself
+
+The library shows each graded frame's grade and main reason, such as
+**Poor · stray light** or **Suspect · noise**; hover for the numbers. A
+collapsed night counts its frames kept out and its suspect ones. With
+database management enabled, each frame offers:
+
+- **Keep out**: leave the frame out of masters and exports whatever its
+  grade. Unlike **Forget**, the frame stays in the library, so a rescan does
+  not bring it back.
+- **Use anyway**: put a frame the library keeps out back in use.
+- **Clear**: let the grade decide again.
+
+The choice survives regrading, rescans and database copies.
+
+### What leaving a frame out does
+
+A frame left out changes the set a master is built from, so the master and
+every stack that used it are built again. The stack card lists the frames
+left out and why, and so does a light's calibration explanation. A WBPP
+export leaves the frame behind, and its dialog counts it.
+
+Grades never stop calibration. If they leave a light with no flat, or with
+neither a bias nor a dark, the light is one that
+[cannot be calibrated](#lights-that-cannot-be-calibrated): the report lists
+it, and a stack goes on without that master, as for any other gap.
+
+### Darks that caught stray light
 
 A dark shot while light reaches the sensor, such as dawn through an open roof
 or a cap left off, carries the right exposure, gain, offset and temperature, so
@@ -166,22 +261,15 @@ drops the worst frame but keeps the milder ones, and subtracting that master
 pushes every light's sky below zero and carves a bowl that later shows as
 colored corners.
 
-PSF Guard checks the library for this in the background. After the server
-starts, after each import, and once remote uploads of darks pause for two
-minutes, it reads every new raw dark and dark-flat once and records its median
-level and pixel noise. It then compares each frame with every frame that could
-stand in for it: the same kind, rig and sensor settings, a matching exposure
-and temperature, from any night. A frame more than one noise sigma above the
-quietest of those is marked **Stray light**. Frames from other nights take
-part, so a morning whose darks all leaked is still caught by a clean set from
-another night. A lone frame with nothing to compare against stays in use.
-
-A marked dark is left out of stack masters, WBPP exports, and calibration
-reports, which list what was left out. The calibration library shows each
-measured frame's level and noise in ADU, the mark on the frame, and a count on
-its night. Nothing is deleted: the grade changes when the library does, and
-forgetting a frame regrades the rest. Master building applies the same rule to
-its own inputs, which catches a dark the background pass has not reached yet.
+The dark check catches this. A dark more than one noise sigma above the
+quietest frame that could stand in for it is poor, with the reason **stray
+light**. Peers come from every night, so a morning whose darks all leaked
+is still caught by a clean set from another night. A lone frame with
+nothing to compare against stays in use. The library shows each measured
+dark's and dark-flat's level and spread in ADU under its settings, such as
+`Level 503 ± 4.4 ADU`. The verdict also goes into the frame's `stray_light`
+column, which older PSF Guard builds read. Master building applies the same
+rule to its own inputs, which catches a dark the job has not reached yet.
 
 ## Upgrades and backups
 
@@ -495,6 +583,13 @@ The stack card reports `Calibration applied`, `Calibration set incomplete`, or
 no calibration. It also shows input counts and any missing-file warning.
 Calibration happens on raw CFA samples before debayering.
 
+A master's catalog record also keeps what Seiza reported about each input
+(samples kept, clipped and masked) and how many defective pixels it
+replaced. A bias or dark master built from fewer than five frames is marked
+thin, since a short set puts its own read noise into every light. A flat
+master records Seiza's verdict on its set of flats: spots that change
+across the set but sit in most of its frames survive into the master.
+
 Lights that need different master sets are partitioned into calibration
 sessions, and each light uses its session's masters. Choose **Masters** on a
 completed mono or color stack to inspect its recorded files, their session and
@@ -648,6 +743,15 @@ versions able to read the same catalog: the older build finds every column it
 knows about, and simply does not see the new one. It also means an upgrade
 cannot lose anything you already had.
 
+Frame grades live in a table of their own,
+`psf_guard_calibration_frame_quality`, added without raising the schema
+version, because a build refuses to import into, sync into or record
+masters in a catalog whose version is newer than its own. PSF Guard 0.11
+therefore keeps working on a catalog this version has graded. It ignores
+the table: it leaves out the darks the grade marks for stray light, which
+it reads from the frame's own stray-light mark, and uses frames graded poor
+for other reasons, or kept out by hand, as before.
+
 A catalog that cannot be written — read-only storage, someone else's file —
 is left as it is. PSF Guard says so in its log and opens the catalog read-only.
 Calibration matching and recorded cached masters remain available when the
@@ -679,9 +783,11 @@ Scheduler and N.I.N.A. keep working exactly as before, and simply run faster.
 
 ## Database transfer
 
-**Merge catalogs** and `sync pull` copy rigs, profile bindings, and raw
-calibration-frame records. They do not copy generated master rows or cached
-FITS files because those paths belong to the source machine. The destination
+**Merge catalogs** and `sync pull` copy rigs, profile bindings, raw
+calibration-frame records, and their grades. A choice to keep a frame out or
+use it anyway travels too; when both catalogs hold one, the later choice
+wins. They do not copy generated master rows or cached FITS files because
+those paths belong to the source machine. The destination
 resolves a stale raw path by basename in its configured image folders, then
 builds its own master.
 
