@@ -12,8 +12,20 @@ const pageBuild = () =>
 let newerBuild: string | null = null;
 const listeners = new Set<() => void>();
 
-/** Note the build the server named on a reply. */
-export function noteServerBuild(build: unknown) {
+/** Whether the browser may have kept a reply with this Cache-Control and
+ *  handed it back without asking the server. Such a reply names the build of
+ *  the day it was fetched, not the server's: a survey image kept for a day
+ *  would say PSF Guard was updated after every reload. */
+export function keptByBrowser(cacheControl: unknown): boolean {
+  const value = typeof cacheControl === 'string' ? cacheControl.toLowerCase() : '';
+  if (value.includes('no-store') || value.includes('no-cache')) return false;
+  return value.includes('immutable') || /(^|,)\s*max-age=0*[1-9]/.test(value);
+}
+
+/** Note the build the server named on a reply, unless the reply may have come
+ *  from the browser's cache. */
+export function noteServerBuild(build: unknown, cacheControl?: unknown) {
+  if (keptByBrowser(cacheControl)) return;
   if (typeof build !== 'string' || !build || build === newerBuild) return;
   const page = pageBuild();
   if (!page || build === page) return;

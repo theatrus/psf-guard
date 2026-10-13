@@ -169,7 +169,7 @@ const initializeApi = async () => {
     // same server can be reloaded into it; the desktop app's page ships
     // inside the app, so it has nothing to reload.
     const noteBuild = (response?: AxiosResponse) => {
-      if (!serverUrl) noteServerBuild(response?.headers[BUILD_HEADER]);
+      if (!serverUrl) noteServerBuild(response?.headers[BUILD_HEADER], response?.headers['cache-control']);
     };
 
     // Add response interceptor for error handling

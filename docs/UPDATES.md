@@ -21,8 +21,12 @@ Browser/server mode never downloads or installs an executable.
 A browser tab can outlive the server build that served it. The Vite build
 stamps `index.html` with `<meta name="psf-guard-build">`, a hash of the page
 and every file the build wrote, and the server sends that hash in an
-`X-PSF-Guard-Build` header on every reply. When an API reply carries a build
-other than the page's, the UI shows **PSF Guard was updated** with a
+`X-PSF-Guard-Build` header on every reply the browser cannot keep. Replies it
+may keep, such as Planning's survey images (cached for a day) and hashed
+assets, carry no build: read back from the browser's cache after an update,
+they would name the old one. The page also ignores the header on any reply
+whose `Cache-Control` lets the browser keep it. When an API reply carries a
+build other than the page's, the UI shows **PSF Guard was updated** with a
 **Reload now** button, and reloads by itself the next time the user changes
 views (Library, Images, Sequence, Stacks, Sky, Planning). Moving inside a view,
 such as from the grid to an image, never reloads. A page with unsaved plan
