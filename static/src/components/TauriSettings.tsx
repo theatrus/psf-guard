@@ -27,7 +27,7 @@ import AstroBinSettings from './AstroBinSettings';
 import PixInsightSettings from './PixInsightSettings';
 import type { AutoImportSettings, DatabaseSummary, ScanRules } from '../api/types';
 import { DEFAULT_AUTOIMPORT_SETTINGS, DEFAULT_SCAN_RULES } from '../api/types';
-import { scanRuleNotes } from '../utils/importNotes';
+import { planChanges, scanRuleNotes } from '../utils/importNotes';
 import {
   describeImportProgress,
   importFinishedMessage,
@@ -1572,6 +1572,11 @@ export default function TauriSettings({
                 {scanRuleNotes(importProgress.outcome).join(' · ')}
               </div>
             )}
+            {importProgress.outcome.templates_created > 0 && (
+              <div className="import-rule-notes">
+                Adds {importProgress.outcome.templates_created} exposure template(s)
+              </div>
+            )}
             {(importProgress.outcome.other_rigs ?? []).map((other) => (
               <div className="import-other-rig" key={other.rig}>
                 {other.frames} frame(s) from another rig left out — {other.rig}
@@ -1586,6 +1591,7 @@ export default function TauriSettings({
                   <li key={`${a.project}:${a.target}`}>
                     ↳ existing {a.project} / {a.target} — +{a.frames} frame(s) (
                     {a.matched_by} match)
+                    {planChanges(a).map((change) => ` · ${change}`).join('')}
                   </li>
                 ))}
               </ul>

@@ -2111,6 +2111,10 @@ export interface ImportAttachSummary {
   frames: number;
   /** 'name' or 'coordinates' */
   matched_by: string;
+  /** Exposure plans the run adds to this target. */
+  plans_created?: number;
+  /** Existing plans of this target whose acquired count the run raises. */
+  plans_raised?: number;
 }
 
 /** Result of one FITS import run (mirrors Rust `ImportOutcome`). */
@@ -2137,6 +2141,14 @@ export interface ImportOutcome {
   /** Lights left out or held because they match no existing target. */
   skipped_unmatched?: number;
   unmatched?: ImportUnmatchedSummary[];
+  /**
+   * Lights left out or held because their target, in a project PSF Guard did
+   * not create, has no exposure plan for them.
+   */
+  skipped_unplanned?: number;
+  unplanned?: ImportUnplannedSummary[];
+  /** Existing exposure plans whose acquired count the run raises. */
+  plans_raised?: number;
   imported: number;
   /** Frames attached to targets that already existed. */
   attached: number;
@@ -2169,6 +2181,16 @@ export interface ImportLeftOutSummary {
   reason: ImportLeftOutReason;
   frames: number;
   example: string;
+}
+
+/** Lights for an existing target that has no exposure plan for them. */
+export interface ImportUnplannedSummary {
+  project: string;
+  target: string;
+  filter?: string | null;
+  exposure_s?: number | null;
+  frames: number;
+  folders: string[];
 }
 
 /** Lights of one target name that match nothing in the catalog. */

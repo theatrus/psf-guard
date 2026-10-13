@@ -127,6 +127,24 @@ describe('AutoImportSummary notes', () => {
       ],
     },
   };
+  // A run that also met frames for a scheduler project's target with no plan.
+  const heldBoth: ImportJobProgress = {
+    ...held,
+    outcome: {
+      ...held.outcome!,
+      skipped_unplanned: 3,
+      unplanned: [
+        {
+          project: 'M31',
+          target: 'M31',
+          filter: 'L',
+          exposure_s: 3,
+          frames: 3,
+          folders: ['/data/M31/SNAPSHOT'],
+        },
+      ],
+    },
+  };
 
   it('says what the last run left out and offers Review for held frames', async () => {
     const reviewed: string[][] = [];
@@ -149,6 +167,24 @@ describe('AutoImportSummary notes', () => {
     expect(screen.getByText('11 held: no matching project')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Review' }));
     expect(reviewed).toEqual([['/data/NGC7000/LIGHT', '/data/misc']]);
+  });
+
+  it('gives both reasons when frames were held for each, and reviews every folder', async () => {
+    const reviewed: string[][] = [];
+    server.use(
+      http.get('/api/db/both/autoimport', () =>
+        HttpResponse.json(ok({ settings, progress: heldBoth, last_started_at: 1 }))
+      )
+    );
+    render(
+      <AutoImportSummary dbId="both" settings={settings} onReview={(folders) => reviewed.push(folders)} />,
+      { wrapper: wrapper() }
+    );
+    expect(
+      await screen.findByText('14 held: 11 no matching project, 3 no exposure plan')
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    expect(reviewed).toEqual([['/data/M31/SNAPSHOT', '/data/NGC7000/LIGHT', '/data/misc']]);
   });
 
   it('offers no Review for frames left out, or without the management gate', async () => {
