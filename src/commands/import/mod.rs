@@ -20,6 +20,7 @@
 
 pub mod grouping;
 pub mod headers;
+pub mod scan_rules;
 
 use crate::ts_schema::new_guid;
 use anyhow::{bail, Context, Result};
@@ -28,6 +29,7 @@ use grouping::{build_plan, ImportPlan, TemplateKey, DEFAULT_TIME_GAP_DAYS};
 use headers::FrameMeta;
 use rayon::prelude::*;
 use rusqlite::{params, Connection};
+use scan_rules::{LeftOutReason, LightFilter, PathFilter, ScanRuleReport};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -42,6 +44,20 @@ pub enum ImportScope {
     Lights,
     /// Only calibration frames; lights are counted and left alone.
     Calibration,
+}
+
+/// What a run does with lights that match no target the catalog has.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NewTargets {
+    /// Create projects and targets for them, as an import always has.
+    #[default]
+    Create,
+    /// Leave them out and list them.
+    Skip,
+    /// Leave them out and list them with their folders, for a person to
+    /// review and import with the Import button.
+    Ask,
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +104,12 @@ pub struct ImportOptions {
     /// automatic run sets this so a folder of thousands of known frames
     /// costs a directory walk and one query, not a header read per file.
     pub only_new: bool,
+    /// The database's light filters: frames that would become lights but
+    /// fail one are left out and counted by reason.
+    pub light_filter: LightFilter,
+    /// Create structure for lights that match no existing target, or leave
+    /// them out. Only an automatic run asks for anything but `Create`.
+    pub new_targets: NewTargets,
 }
 
 pub const DEFAULT_MATCH_RADIUS_DEG: f64 = 0.5;
@@ -105,6 +127,8 @@ impl Default for ImportOptions {
             pair_derivatives: true,
             accept_other_rigs: false,
             only_new: false,
+            light_filter: LightFilter::default(),
+            new_targets: NewTargets::default(),
         }
     }
 }
@@ -151,6 +175,26 @@ pub struct OtherRigSummary {
     pub frames: usize,
     /// One of the files, so the operator can find the batch.
     pub example: String,
+}
+
+/// Lights left out by one of the database's light filters.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LeftOutSummary {
+    pub reason: LeftOutReason,
+    pub frames: usize,
+    /// One of the files, so the operator can find the batch.
+    pub example: String,
+}
+
+/// Lights of one target name that match no target in the catalog, left out
+/// because the run does not create new ones.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UnmatchedSummary {
+    /// The frames' OBJECT; absent when they have none.
+    pub target: Option<String>,
+    pub frames: usize,
+    /// The folders holding them, so a person can review and import them.
+    pub folders: Vec<String>,
 }
 
 /// Per-project report line.
@@ -205,6 +249,26 @@ pub struct ImportOutcome {
     /// Those frames by rig, for the preview.
     #[serde(default)]
     pub other_rigs: Vec<OtherRigSummary>,
+    /// Files and folders the scan rules left out before any header was
+    /// read.
+    #[serde(default)]
+    pub scan_rules: ScanRuleReport,
+    /// Lights the light filters left out.
+    #[serde(default)]
+    pub skipped_by_filter: usize,
+    /// Those frames by reason.
+    #[serde(default)]
+    pub left_out: Vec<LeftOutSummary>,
+    /// What the run did with lights that match no existing target.
+    #[serde(default)]
+    pub new_targets: NewTargets,
+    /// Lights left out because they match no existing target and the run
+    /// does not create new ones.
+    #[serde(default)]
+    pub skipped_unmatched: usize,
+    /// Those frames by target name, with their folders.
+    #[serde(default)]
+    pub unmatched: Vec<UnmatchedSummary>,
     pub imported: usize,
     /// Frames attached to targets that already existed in the database.
     pub attached: usize,
@@ -225,6 +289,48 @@ pub struct ImportOutcome {
     pub attached_target_ids: Vec<i32>,
 }
 
+/// The key a rig is told apart by when the catalog learns it.
+fn rig_key(frame: &FrameMeta) -> String {
+    crate::calibration::rig_label(frame).to_ascii_lowercase()
+}
+
+/// Count a light the filters left out, keeping its first file as the
+/// example.
+fn note_left_out(
+    left_out: &mut std::collections::BTreeMap<LeftOutReason, (usize, String)>,
+    reason: LeftOutReason,
+    frame: &FrameMeta,
+) {
+    let entry = left_out
+        .entry(reason)
+        .or_insert_with(|| (0, frame.path.display().to_string()));
+    entry.0 += 1;
+}
+
+/// Lights that match no existing target, by target name, with the folders
+/// that hold them.
+fn summarize_unmatched(frames: &[FrameMeta]) -> Vec<UnmatchedSummary> {
+    let mut by_target: std::collections::BTreeMap<
+        Option<String>,
+        (usize, std::collections::BTreeSet<String>),
+    > = std::collections::BTreeMap::new();
+    for frame in frames {
+        let entry = by_target.entry(frame.object.clone()).or_default();
+        entry.0 += 1;
+        if let Some(folder) = frame.path.parent() {
+            entry.1.insert(folder.display().to_string());
+        }
+    }
+    by_target
+        .into_iter()
+        .map(|(target, (frames, folders))| UnmatchedSummary {
+            target,
+            frames,
+            folders: folders.into_iter().collect(),
+        })
+        .collect()
+}
+
 /// Whether a light names a rig that none of the catalog's known rigs admits:
 /// another telescope, or another camera when no telescope is named. A
 /// catalog that knows no rig, or a frame that names none, cannot disagree.
@@ -236,12 +342,27 @@ fn from_other_rig(frame: &FrameMeta, known_rigs: &[crate::calibration::KnownRig]
 }
 
 /// Recursively collect image files — FITS or XISF (a bare file argument is
-/// accepted too). Sorted for deterministic plans.
+/// accepted too). Sorted for deterministic plans. A folder holding a
+/// `.psfguardignore` file is skipped with everything below it.
 pub fn collect_fits_files(dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
+    Ok(collect_image_files(dirs, &PathFilter::default())?.files)
+}
+
+/// The image files a walk found, and what the scan rules left out.
+#[derive(Debug, Default)]
+pub struct CollectedFiles {
+    pub files: Vec<PathBuf>,
+    pub skipped: ScanRuleReport,
+}
+
+/// [`collect_fits_files`] under a database's scan rules: excluded folders
+/// are not entered, and excluded files are not read. A file passed on its
+/// own is read as asked.
+pub fn collect_image_files(dirs: &[PathBuf], filter: &PathFilter) -> Result<CollectedFiles> {
+    let mut collected = CollectedFiles::default();
     for dir in dirs {
         if dir.is_file() {
-            files.push(dir.clone());
+            collected.files.push(dir.clone());
             continue;
         }
         if !dir.is_dir() {
@@ -252,10 +373,19 @@ pub fn collect_fits_files(dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
         }
         let mut stack = vec![dir.clone()];
         while let Some(d) = stack.pop() {
-            for entry in std::fs::read_dir(&d)
+            let entries = std::fs::read_dir(&d)
                 .with_context(|| format!("reading directory {}", d.display()))?
-            {
-                let p = entry?.path();
+                .map(|entry| entry.map(|entry| entry.path()))
+                .collect::<std::io::Result<Vec<_>>>()
+                .with_context(|| format!("reading directory {}", d.display()))?;
+            if entries.iter().any(|path| {
+                path.file_name()
+                    .is_some_and(|name| name == scan_rules::IGNORE_FILE)
+            }) {
+                collected.skipped.ignored_folders += 1;
+                continue;
+            }
+            for p in entries {
                 if p.is_dir() {
                     // Removed rejects wait in the trash; they are not frames to import.
                     if p.file_name()
@@ -263,16 +393,24 @@ pub fn collect_fits_files(dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
                     {
                         continue;
                     }
+                    if filter.skips_folder(&p, dir) {
+                        collected.skipped.folders_skipped += 1;
+                        continue;
+                    }
                     stack.push(p);
                 } else if crate::image_io::is_image_path(&p) {
-                    files.push(p);
+                    if filter.keeps_file(&p, dir) {
+                        collected.files.push(p);
+                    } else {
+                        collected.skipped.files_skipped += 1;
+                    }
                 }
             }
         }
     }
-    files.sort();
-    files.dedup();
-    Ok(files)
+    collected.files.sort();
+    collected.files.dedup();
+    Ok(collected)
 }
 
 /// Read headers for every file, in parallel (header-only, I/O bound).
@@ -338,6 +476,8 @@ pub fn import_frames(
     };
     let mut strangers: std::collections::BTreeMap<String, (usize, String)> =
         std::collections::BTreeMap::new();
+    let mut left_out: std::collections::BTreeMap<LeftOutReason, (usize, String)> =
+        std::collections::BTreeMap::new();
     let mut lights: Vec<FrameMeta> = Vec::new();
     let mut calibrations: Vec<FrameMeta> = Vec::new();
     let mut derivatives: Vec<FrameMeta> = Vec::new();
@@ -366,6 +506,8 @@ pub fn import_frames(
             outcome.skipped_out_of_scope += 1;
         } else if existing.contains(&frame.basename().to_lowercase()) {
             outcome.skipped_existing += 1;
+        } else if let Some(reason) = options.light_filter.refuses(&frame) {
+            note_left_out(&mut left_out, reason, &frame);
         } else if from_other_rig(&frame, &known_rigs) {
             outcome.skipped_other_rig += 1;
             let entry = strangers
@@ -419,6 +561,10 @@ pub fn import_frames(
             .collect::<Vec<_>>();
         for index in crate::frame_derivatives::choose_primaries(&derivatives, &unmatched) {
             let frame = derivatives[index].clone();
+            if let Some(reason) = options.light_filter.refuses(&frame) {
+                note_left_out(&mut left_out, reason, &frame);
+                continue;
+            }
             if from_other_rig(&frame, &known_rigs) {
                 outcome.skipped_other_rig += 1;
                 let entry = strangers
@@ -440,15 +586,29 @@ pub fn import_frames(
             example,
         })
         .collect();
+    outcome.skipped_by_filter = left_out.values().map(|(frames, _)| frames).sum();
+    outcome.left_out = left_out
+        .into_iter()
+        .map(|(reason, (frames, example))| LeftOutSummary {
+            reason,
+            frames,
+            example,
+        })
+        .collect();
     // What this run accepts teaches the catalog its rig, so the next run
     // can tell a stranger's frame apart.
     let mut rigs_seen: HashSet<String> = HashSet::new();
-    let accepted_rigs: Vec<FrameMeta> = lights
+    let mut accepted_rigs: Vec<FrameMeta> = lights
         .iter()
         .filter(|frame| frame.telescope.is_some() || frame.camera.is_some())
-        .filter(|frame| rigs_seen.insert(crate::calibration::rig_label(frame).to_ascii_lowercase()))
+        .filter(|frame| rigs_seen.insert(rig_key(frame)))
         .cloned()
         .collect();
+    // A run that creates nothing new learns rigs only from the frames it
+    // attaches, so these are gathered as they attach.
+    let creates_targets = options.new_targets == NewTargets::Create;
+    let mut attached_rigs: Vec<FrameMeta> = Vec::new();
+    let mut attached_rigs_seen: HashSet<String> = HashSet::new();
 
     // Merge phase: attach frames to targets that already exist (matched by
     // name, then coordinates). Only what's left falls through to the
@@ -474,6 +634,15 @@ pub fn import_frames(
         attach.sort_by_key(|(idx, _)| *idx);
         for (idx, frames) in attach {
             let target = &existing_targets[idx];
+            if !creates_targets {
+                attached_rigs.extend(
+                    frames
+                        .iter()
+                        .filter(|frame| frame.telescope.is_some() || frame.camera.is_some())
+                        .filter(|frame| attached_rigs_seen.insert(rig_key(frame)))
+                        .cloned(),
+                );
+            }
             attach_frames_to_target(&tx, target, &frames, &mut outcome)?;
             outcome.attached += frames.len();
             outcome.attached_target_ids.push(target.id as i32);
@@ -487,7 +656,25 @@ pub fn import_frames(
     } else {
         fresh = lights;
     }
-    let lights = fresh;
+    // A run that does not create structure leaves what matched nothing out,
+    // listed by target with its folders, and writes nothing for it.
+    outcome.new_targets = options.new_targets;
+    let mut held_paths: HashSet<PathBuf> = HashSet::new();
+    let mut held_identities: Vec<crate::frame_derivatives::FrameIdentity> = Vec::new();
+    let lights = if creates_targets {
+        fresh
+    } else {
+        outcome.skipped_unmatched = fresh.len();
+        outcome.unmatched = summarize_unmatched(&fresh);
+        if !derivatives.is_empty() {
+            held_identities.extend(fresh.iter().map(crate::frame_derivatives::identity_of));
+        }
+        held_paths.extend(fresh.into_iter().map(|frame| frame.path));
+        primaries.retain(|frame| !held_paths.contains(&frame.path));
+        outcome.calibrated_lights = primaries.len();
+        accepted_rigs = attached_rigs;
+        Vec::new()
+    };
 
     let plan = build_plan(&lights, options.time_gap_days);
     // Only resolve (or create) an import profile when new structure is
@@ -557,9 +744,18 @@ pub fn import_frames(
     if !derivatives.is_empty() {
         crate::frame_derivatives::record_primaries(&tx, &primaries)?;
         let primary_paths: HashSet<&PathBuf> = primaries.iter().map(|frame| &frame.path).collect();
+        // A held light's copies wait with it; they are not processing output.
         let rest: Vec<FrameMeta> = derivatives
             .iter()
-            .filter(|frame| !primary_paths.contains(&frame.path))
+            .filter(|frame| {
+                !primary_paths.contains(&frame.path) && !held_paths.contains(&frame.path)
+            })
+            .filter(|frame| {
+                let identity = crate::frame_derivatives::identity_of(frame);
+                !held_identities
+                    .iter()
+                    .any(|held| crate::frame_derivatives::identities_match(held, &identity))
+            })
             .cloned()
             .collect();
         let lights = crate::frame_derivatives::catalog_lights(&tx)?;
@@ -1431,6 +1627,53 @@ pub fn print_outcome(outcome: &ImportOutcome) {
             "    NEW {} — {} target(s), {} frame(s)",
             summary.name, summary.targets, summary.frames
         );
+    }
+    let rules = &outcome.scan_rules;
+    if rules.files_skipped > 0 {
+        println!("  Skipped by scan rules: {} file(s)", rules.files_skipped);
+    }
+    if rules.folders_skipped > 0 {
+        println!(
+            "  Skipped by scan rules: {} folder(s)",
+            rules.folders_skipped
+        );
+    }
+    if rules.ignored_folders > 0 {
+        println!(
+            "  Skipped for {}: {} folder(s)",
+            scan_rules::IGNORE_FILE,
+            rules.ignored_folders
+        );
+    }
+    for left in &outcome.left_out {
+        println!(
+            "  Left out, {}: {} frame(s) — e.g. {}",
+            left_out_words(left.reason),
+            left.frames,
+            left.example
+        );
+    }
+    for unmatched in &outcome.unmatched {
+        println!(
+            "  {} {} — {} frame(s), no matching target, in {}",
+            if outcome.new_targets == NewTargets::Ask {
+                "Held"
+            } else {
+                "Left out"
+            },
+            unmatched.target.as_deref().unwrap_or("(no target name)"),
+            unmatched.frames,
+            unmatched.folders.join(", ")
+        );
+    }
+}
+
+/// A light filter's reason in a few words, for the CLI report.
+fn left_out_words(reason: LeftOutReason) -> &'static str {
+    match reason {
+        LeftOutReason::NoImageType => "no image type",
+        LeftOutReason::NoTargetName => "no target name",
+        LeftOutReason::ShortExposure => "exposure too short",
     }
 }
 
@@ -2507,5 +2750,163 @@ mod tests {
             .query_row("SELECT name FROM project", [], |r| r.get(0))
             .unwrap();
         assert_eq!(name, "Existing Project");
+    }
+
+    #[test]
+    fn a_run_that_asks_first_writes_nothing_for_lights_that_match_no_target() {
+        use crate::image_io::FrameKind;
+        let mut conn = fresh_conn();
+        import_frames(
+            &mut conn,
+            vec![light("M31", "Ha", 1_000)],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        let count = |conn: &Connection, table: &str| -> i64 {
+            conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+        };
+        let tables = [
+            "project",
+            "target",
+            "exposureplan",
+            "exposuretemplate",
+            "ruleweight",
+        ];
+        let before: Vec<i64> = tables.iter().map(|table| count(&conn, table)).collect();
+        // M42 has only calibrated copies: one would become its light.
+        let m42 = FrameMeta {
+            ra_deg: Some(83.82),
+            dec_deg: Some(-5.39),
+            ..timed("M42", "Ha", 2_000_000)
+        };
+        let outcome = import_frames(
+            &mut conn,
+            vec![
+                light("M31", "Ha", 3_000),
+                copy_of(&m42, "_c", FrameKind::Calibrated),
+                copy_of(&m42, "_c_cc", FrameKind::Calibrated),
+            ],
+            &ImportOptions {
+                new_targets: NewTargets::Ask,
+                ..ImportOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome.attached, 1);
+        assert_eq!(outcome.new_targets, NewTargets::Ask);
+        assert_eq!(outcome.skipped_unmatched, 1);
+        assert_eq!(outcome.unmatched[0].target.as_deref(), Some("M42"));
+        assert_eq!(
+            outcome.calibrated_lights, 0,
+            "the held copy is not a light yet"
+        );
+        assert_eq!(
+            outcome.skipped_processed, 0,
+            "the held light's other copy waits with it"
+        );
+        assert_eq!(outcome.projects_created, 0);
+        let after: Vec<i64> = tables.iter().map(|table| count(&conn, table)).collect();
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn the_light_filters_leave_frames_out_by_reason() {
+        let mut conn = fresh_conn();
+        let untyped = FrameMeta {
+            image_type: None,
+            ..light("M31", "Ha", 1_000)
+        };
+        let unnamed = FrameMeta {
+            object: None,
+            ra_deg: None,
+            dec_deg: None,
+            ..light("M31", "Ha", 2_000)
+        };
+        let short = FrameMeta {
+            exposure_s: Some(1.0),
+            ..light("M31", "Ha", 3_000)
+        };
+        let outcome = import_frames(
+            &mut conn,
+            vec![
+                untyped,
+                unnamed.clone(),
+                unnamed,
+                short,
+                light("M31", "Ha", 4_000),
+                flat("Ha", 5_000),
+            ],
+            &ImportOptions {
+                light_filter: LightFilter {
+                    must_say_light: true,
+                    require_object: true,
+                    min_exposure_seconds: Some(10.0),
+                },
+                ..ImportOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome.imported, 1);
+        assert_eq!(outcome.skipped_by_filter, 4);
+        let reasons: Vec<(LeftOutReason, usize)> = outcome
+            .left_out
+            .iter()
+            .map(|left| (left.reason, left.frames))
+            .collect();
+        assert_eq!(
+            reasons,
+            vec![
+                (LeftOutReason::NoImageType, 1),
+                (LeftOutReason::NoTargetName, 2),
+                (LeftOutReason::ShortExposure, 1),
+            ]
+        );
+        assert_eq!(
+            outcome.calibration.flat, 1,
+            "the filters leave calibration frames alone"
+        );
+    }
+
+    #[test]
+    fn the_walk_skips_excluded_and_ignored_folders_without_entering_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Images");
+        let touch = |relative: &str| {
+            let path = root.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"").unwrap();
+        };
+        touch("M31/LIGHT/m31_001.fits");
+        touch("Hocus Focus/AutoFocus_1/attempt01/af_001.fits");
+        touch("Hocus Focus/AutoFocus_1/attempt01/af_002.fits");
+        touch("PierCam/2026-10-01/timelapse_001.fits");
+        touch("PierCam/.psfguardignore");
+        touch("M31/LIGHT/m31_002_snapshot.fits");
+        let rules = scan_rules::ScanRules {
+            exclude: vec!["Images\\Hocus Focus".into(), "*_snapshot*".into()],
+            ..Default::default()
+        };
+        // A pattern with a folder in it, written with a backslash, reads
+        // from the configured root above the folder walked.
+        let filter = rules.path_filter(&[dir.path().to_path_buf()]).unwrap();
+        let collected = collect_image_files(std::slice::from_ref(&root), &filter).unwrap();
+        assert_eq!(collected.files, vec![root.join("M31/LIGHT/m31_001.fits")]);
+        assert_eq!(
+            collected.skipped,
+            ScanRuleReport {
+                files_skipped: 1,
+                folders_skipped: 1,
+                ignored_folders: 1,
+            }
+        );
+        // With no rules the ignore file still holds.
+        let plain = collect_fits_files(std::slice::from_ref(&root)).unwrap();
+        assert_eq!(plain.len(), 4);
+        assert!(!plain
+            .iter()
+            .any(|path| path.starts_with(root.join("PierCam"))));
     }
 }

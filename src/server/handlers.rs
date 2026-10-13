@@ -588,6 +588,7 @@ fn summary_of(ctx: &crate::server::database_context::DatabaseContext) -> Databas
             .as_ref()
             .map(|path| path.to_string_lossy().into_owned()),
         autoimport: ctx.autoimport.clone(),
+        scan_rules: (ctx.scan_rules != Default::default()).then(|| ctx.scan_rules.clone()),
     }
 }
 
@@ -1597,6 +1598,21 @@ pub async fn update_database_route(
             Some(autoimport.clone())
         };
     }
+    if let Some(scan_rules) = req.scan_rules.as_ref() {
+        let scan_rules = scan_rules.normalized();
+        scan_rules
+            .validate()
+            .map_err(|error| AppError::BadRequest(error.to_string()))?;
+        let entry = reg
+            .databases
+            .iter_mut()
+            .find(|entry| entry.id == new_id)
+            .ok_or(AppError::InternalError(
+                "registry update lost the entry".into(),
+            ))?;
+        // Rules that change nothing are stored as none.
+        entry.scan_rules = (scan_rules != Default::default()).then_some(scan_rules);
+    }
     let entry = reg
         .find(&new_id)
         .ok_or(AppError::InternalError(
@@ -1828,6 +1844,7 @@ mod remote_image_layout_settings_tests {
             export_dir: None,
             process_dir: None,
             autoimport: None,
+            scan_rules: None,
             analyze_new_frames: false,
             pair_calibrated_copies: true,
             scan_calibrated_copies: false,
@@ -3145,6 +3162,10 @@ pub async fn start_import_route(
         pair_derivatives: true,
         accept_other_rigs: req.accept_other_rigs.unwrap_or(false),
         only_new: false,
+        // The import job applies the database's light filters.
+        light_filter: Default::default(),
+        // A person asked for this import, and previews it first.
+        new_targets: crate::commands::import::NewTargets::Create,
     };
     let started = spawn_import_job(
         &state,
@@ -3370,7 +3391,16 @@ fn run_import_blocking(
     use crate::server::import_job as job;
     use rayon::prelude::*;
 
-    let mut files = imp::collect_fits_files(dirs)?;
+    // The database's scan rules apply to every import from its folders:
+    // the patterns here, before any header is read, and the light filters
+    // in the import itself.
+    let path_filter = ctx
+        .scan_rules
+        .path_filter(&ctx.image_dir_paths)
+        .map_err(|error| anyhow::anyhow!("scan rules: {error:#}"))?;
+    let collected = imp::collect_image_files(dirs, &path_filter)?;
+    let scan_rule_report = collected.skipped;
+    let mut files = collected.files;
     let mut prefiltered = 0usize;
     if options.only_new && !files.is_empty() {
         let conn = open_scheduler_connection_with_flags(
@@ -3389,6 +3419,8 @@ fn run_import_blocking(
                 scanned: prefiltered,
                 skipped_existing: prefiltered,
                 dry_run: options.dry_run,
+                scan_rules: scan_rule_report,
+                new_targets: options.new_targets,
                 ..Default::default()
             });
         }
@@ -3415,9 +3447,11 @@ fn run_import_blocking(
     options.pair_derivatives &= ctx
         .pair_calibrated_copies
         .load(std::sync::atomic::Ordering::Relaxed);
+    options.light_filter = ctx.scan_rules.light_filter();
     let mut outcome = imp::import_frames(&mut conn, frames, &options)?;
     outcome.scanned += prefiltered;
     outcome.skipped_existing += prefiltered;
+    outcome.scan_rules = scan_rule_report;
     Ok(outcome)
 }
 
@@ -8601,6 +8635,7 @@ mod delayed_ready_tests {
                     export_dir: None,
                     process_dir: None,
                     autoimport: None,
+                    scan_rules: None,
                     analyze_new_frames: false,
                     pair_calibrated_copies: true,
                     scan_calibrated_copies: false,

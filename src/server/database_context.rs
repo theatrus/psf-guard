@@ -627,6 +627,8 @@ pub struct DatabaseContext {
     pub process_dir: Option<PathBuf>,
     /// Automatic import of new frames, when the operator turned it on.
     pub autoimport: Option<crate::db_registry::AutoImportSettings>,
+    /// What every import from the image folders leaves out.
+    pub scan_rules: crate::commands::import::scan_rules::ScanRules,
     /// Scan frames that arrive by sync, upload or auto-import for quality.
     /// Shared so Settings can change it on the live context.
     pub analyze_new_frames: Arc<AtomicBool>,
@@ -950,6 +952,9 @@ impl DatabaseContext {
         // database from opening. The update route validates what it saves,
         // and the scheduler does nothing with a block that names no trigger.
         context.autoimport = entry.autoimport.clone();
+        // Not validated here either: a bad pattern fails the import that
+        // uses it, with the pattern in the error, rather than the open.
+        context.scan_rules = entry.scan_rules.clone().unwrap_or_default();
         context
             .analyze_new_frames
             .store(entry.analyze_new_frames, Ordering::Relaxed);
@@ -1061,6 +1066,7 @@ impl DatabaseContext {
             export_dir,
             process_dir,
             autoimport: None,
+            scan_rules: Default::default(),
             analyze_new_frames: Arc::new(AtomicBool::new(false)),
             pair_calibrated_copies: Arc::new(AtomicBool::new(true)),
             scan_calibrated_copies: Arc::new(AtomicBool::new(false)),
@@ -2275,6 +2281,7 @@ impl DatabaseContext {
             export_dir: None,
             process_dir: None,
             autoimport: None,
+            scan_rules: Default::default(),
             analyze_new_frames: Arc::new(AtomicBool::new(false)),
             pair_calibrated_copies: Arc::new(AtomicBool::new(true)),
             scan_calibrated_copies: Arc::new(AtomicBool::new(false)),
@@ -2322,6 +2329,7 @@ impl Clone for DatabaseContext {
             export_dir: self.export_dir.clone(),
             process_dir: self.process_dir.clone(),
             autoimport: self.autoimport.clone(),
+            scan_rules: self.scan_rules.clone(),
             analyze_new_frames: self.analyze_new_frames.clone(),
             pair_calibrated_copies: self.pair_calibrated_copies.clone(),
             scan_calibrated_copies: self.scan_calibrated_copies.clone(),

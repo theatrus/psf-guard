@@ -44,6 +44,8 @@ argon2 = "0.6.0"
 chrono = "0.4"
 uuid = { version = "1", features = ["v4", "v5"] }
 regex = "1.12"
+# Scan rules: exclude and include patterns for import walks.
+globset = "0.4"
 semver = "1"
 byteorder = "1.5"
 seiza = "0.29.0"
