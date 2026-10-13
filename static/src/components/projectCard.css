@@ -275,13 +275,15 @@
 }
 
 /* Compact Library: one row of pills per project, the full card on request.
-   A plan shot by several rigs wraps its rows in an outer pill. */
+   A plan shot by several rigs wraps its rows in an outer pill. A row's 25px
+   radius rounds a one-line row (42-50px tall) into a full pill, while a row
+   that wraps on a narrow screen becomes a rounded box, not an oval. */
 .project-density { display: inline-flex; border: 1px solid var(--color-border-secondary); border-radius: 6px; overflow: hidden; align-self: flex-end; }
 .project-density button { min-height: 32px; padding: 4px 12px; border: 0; border-radius: 0; background: transparent; color: var(--color-text-secondary); cursor: pointer; font: inherit; }
 .project-density button + button { border-left: 1px solid var(--color-border-secondary); }
 .project-density button[aria-checked="true"] { background: var(--color-primary-alpha-20); color: var(--color-text-primary); }
 .projects-list.is-compact { gap: 6px; }
-.library-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 10px; border: 1px solid var(--color-border-secondary); border-radius: 999px; background: var(--color-bg-surface); }
+.library-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 10px; border: 1px solid var(--color-border-secondary); border-radius: 25px; background: var(--color-bg-surface); }
 .library-row:hover { border-color: var(--color-border-tertiary); background: var(--color-bg-elevated); }
 .library-row.has-new-images { border-color: var(--color-primary); box-shadow: inset 3px 0 0 var(--color-primary); }
 .library-row.no-files { opacity: 0.6; }

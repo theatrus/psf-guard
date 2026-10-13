@@ -78,3 +78,7 @@
   Sequence a **Poor calibration** choice under **Select**. In a project's
   Calibration report, each finding and each night that can't be calibrated
   opens those lights in Images.
+- The Library uses the whole width of the window, up to 2400 px. In the
+  compact view each project stays on one line on a laptop or wider screen,
+  and a long name ends in "…" rather than pushing pills onto a second line.
+  On a phone, a project row that wraps is a rounded box, not an oval.
