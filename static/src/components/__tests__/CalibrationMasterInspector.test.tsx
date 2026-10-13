@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiClient } from '../../api/client';
 import type { CalibrationMasterSource, StackCalibrationMaster } from '../../api/types';
@@ -24,7 +25,7 @@ const bias: StackCalibrationMaster = {
 
 function wrapper({ children }: { children: React.ReactNode }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  return <QueryClientProvider client={client}><MemoryRouter>{children}</MemoryRouter></QueryClientProvider>;
 }
 
 function mountInspector() {
@@ -127,9 +128,9 @@ describe('CalibrationMasterInspector', () => {
 
   it('pins the action to the displayed artifact even if a rebuild replaces the card', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const element = (revision: string) => <QueryClientProvider client={client}>
+    const element = (revision: string) => <QueryClientProvider client={client}><MemoryRouter>
       <CalibrationMasterButton dbId="fixture" source={{ ...source, artifactRevision: revision }} title="M42" label="R" />
-    </QueryClientProvider>;
+    </MemoryRouter></QueryClientProvider>;
     const view = render(element('old'));
     fireEvent.click(screen.getByRole('button', { name: 'Inspect calibration masters for R' }));
     await screen.findByRole('combobox');
@@ -137,5 +138,27 @@ describe('CalibrationMasterInspector', () => {
     await act(async () => {});
     expect(apiClient.getStackCalibrationMasters).toHaveBeenCalledTimes(1);
     expect(apiClient.getStackCalibrationMasters).toHaveBeenLastCalledWith('fixture', { ...source, artifactRevision: 'old' });
+  });
+
+  it("opens a stack's master in the Calibration page's Masters list", async () => {
+    vi.mocked(apiClient.getStackCalibrationMasters).mockResolvedValue({ masters: [{ ...flat, library_id: 'm-uuid' }, bias], notes: [] });
+    function Where() {
+      const location = useLocation();
+      return <output data-testid="where">{location.pathname}{location.search}</output>;
+    }
+    const onClose = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/stacks?db=fixture&project=3']}>
+          <Routes>
+            <Route path="*" element={<><CalibrationMasterInspector dbId="fixture" source={source} title="M42" label="R" initialMasterId={flat.id} onClose={onClose} /><Where /></>} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Open in Calibration' }));
+    expect(onClose).toHaveBeenCalled();
+    expect(screen.getByTestId('where')).toHaveTextContent('/calibration?db=fixture&project=3&calTab=masters&calMaster=m-uuid');
   });
 });

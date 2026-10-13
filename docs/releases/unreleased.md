@@ -82,3 +82,12 @@
   compact view each project stays on one line on a laptop or wider screen,
   and a long name ends in "…" rather than pushing pills onto a second line.
   On a phone, a project row that wraps is a rounded box, not an oval.
+- The Calibration page has a tab in the header, beside Images, Sequence and
+  Stacks. It follows the database in the header's scope rather than keeping
+  its own, and with a project in scope it opens on that project's rig. A
+  stack's master inspector opens a master on the page with **Open in
+  Calibration**.
+- Settings, keyboard shortcuts, server information and sign out now sit in
+  one menu at the right of the header, which leaves the views more room.
+  The **Editor** and **Read only** label is gone; the menu says who is
+  signed in.

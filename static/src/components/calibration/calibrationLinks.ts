@@ -38,3 +38,12 @@ export function calibrationGridHref(
   if (filterNames.length > 0) params.set('filter', filterNames.map(encodeURIComponent).join(','));
   return `/grid?${params}`;
 }
+
+/** One master in the Calibration page's Masters list. */
+export function calibrationMasterHref(search: string, dbId: string, masterId: string): string {
+  const [path, query] = calibrationPageHref(search, dbId).split('?');
+  const params = new URLSearchParams(query);
+  params.set('calTab', 'masters');
+  params.set('calMaster', masterId);
+  return `${path}?${params}`;
+}

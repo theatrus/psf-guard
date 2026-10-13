@@ -143,8 +143,8 @@ The editor can also:
 - write local exports and apply database sync previews.
 
 Server checks enforce the role even if a client calls the API directly. The UI
-also labels viewer sessions as **Read only**, hides Settings, and disables
-grading controls.
+also leaves Settings out of a viewer's header menu and disables grading
+controls. The menu says who is signed in and holds **Sign out**.
 
 ## API tokens
 

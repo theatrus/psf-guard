@@ -1,12 +1,7 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
-import {
-  fixtureDbPath,
-  fixtureImageDir,
-  resetDatabases,
-  tmpBase,
-} from './helpers';
+import { fixtureDbPath, fixtureImageDir, resetDatabases, tmpBase, openSettings } from './helpers';
 
 /**
  * Settings is tabbed. Data Transfer and Remote PSF Guard live on Sync, which
@@ -14,7 +9,7 @@ import {
  * one first.
  */
 async function openSyncTab(page: Page) {
-  await page.getByRole('button', { name: 'Settings' }).click();
+  await openSettings(page);
   await page.getByRole('tab', { name: 'Sync' }).click();
 }
 
@@ -212,15 +207,15 @@ test('settings shows calibration coverage for each database rig', async ({ page 
   });
 
   await page.goto('/');
-  await page.getByRole('button', { name: 'Settings' }).click();
+  await openSettings(page);
 
   const review = page.locator('.db-row').filter({ hasText: 'Review copy' });
   await expect(review.getByText(/Calibration library · 42 frames · 3 cached masters/)).toBeVisible();
   await expect(review.getByText('Ultracat · TestCam')).toBeVisible();
   await expect(review.getByText(/10 bias · 12 dark · 8 dark-flat · 12 flat/)).toBeVisible();
-  await review.getByRole('button', { name: 'Manage' }).click();
+  await review.getByRole('button', { name: 'Open Calibration' }).click();
 
-  // Manage opens the database's calibration page.
+  // Open Calibration leaves Settings for the database's calibration page.
   await expect(page).toHaveURL(/#\/calibration\?db=review/);
   const sessions = page.getByRole('navigation', { name: 'Sessions' });
   await expect(sessions.getByRole('button')).toHaveCount(2);

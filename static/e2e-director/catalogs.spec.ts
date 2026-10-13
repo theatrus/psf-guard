@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
 import { applyRealSchema } from '../e2e/fixtures/sync';
+import { openSettings } from '../e2e/helpers';
 
 test('every database project is a plan, shared GUIDs make one plan across rigs, and the workspace opens from the Library', async ({ page, request }, testInfo) => {
   test.setTimeout(60_000);
@@ -56,7 +57,7 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     expect(mappings[0].rig.id).not.toBe(mappings[1].rig.id);
 
     // Rig setup lives under Settings › Rigs; Setup expands the rig profile in place.
-    await page.getByRole('button', { name: 'Settings' }).click();
+    await openSettings(page);
     const settings = page.locator('.tauri-settings');
     await settings.getByRole('tab', { name: 'Rigs' }).click();
     await settings.getByRole('button', { name: 'Setup C925 data' }).click();

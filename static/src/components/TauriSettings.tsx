@@ -1813,7 +1813,6 @@ export default function TauriSettings({
                       )}
                       <CalibrationLibrarySummary
                         dbId={entry.id}
-                        canManage={managementAllowed}
                         onOpen={onClose}
                       />
                       <AstroBinFilterSummary

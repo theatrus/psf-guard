@@ -502,3 +502,59 @@ div.activity-error {
     padding: 0.38rem 0.5rem;
   }
 }
+
+/* Settings, shortcuts, server information and sign out, behind one button
+   at the right of the header. */
+.header-menu {
+  position: relative;
+}
+
+.header-menu-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.header-menu-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 300;
+  min-width: 13rem;
+  padding: 0.3rem;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 6px;
+  background: var(--color-bg-secondary);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+}
+
+.header-menu-list [role="menuitem"] {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.6rem;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.header-menu-list [role="menuitem"]:hover,
+.header-menu-list [role="menuitem"]:focus-visible {
+  background: var(--color-bg-tertiary);
+  outline: none;
+}
+
+.header-menu-who {
+  padding: 0.35rem 0.6rem 0.45rem;
+  margin-bottom: 0.2rem;
+  border-bottom: 1px solid var(--color-border-primary);
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+}

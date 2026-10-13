@@ -72,12 +72,12 @@ describe('CalibrationLibrarySummary', () => {
     }
     render(
       <MemoryRouter initialEntries={['/?db=other&project=4&plan=x']}>
-        <CalibrationLibrarySummary dbId="demo" canManage onOpen={onOpen} />
+        <CalibrationLibrarySummary dbId="demo" onOpen={onOpen} />
         <Location />
       </MemoryRouter>,
       { wrapper: wrapper() }
     );
-    fireEvent.click(await screen.findByRole('button', { name: 'Manage' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Calibration' }));
 
     expect(onOpen).toHaveBeenCalledTimes(1);
     // Another database's project does not come along, nor Planning's keys.

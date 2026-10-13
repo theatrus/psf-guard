@@ -5,6 +5,7 @@ import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { applyRealSchema, fitsLight } from '../e2e/fixtures/sync';
+import { openSettings } from '../e2e/helpers';
 
 async function api(request: APIRequestContext, method: string, url: string, data?: unknown) {
   const response = await request.fetch(url, { method, data });
@@ -131,7 +132,7 @@ test(`${executor}: arriving M31 files review measured data and replay a queued s
 
     await page.clock.install();
     await page.goto('/#/');
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await openSettings(page);
     const settings = page.locator('.tauri-settings');
     await settings.getByRole('tab', { name: 'Rigs' }).click();
     await settings.getByRole('button', { name: 'Setup Arrival rig' }).click();
@@ -242,7 +243,7 @@ test(`${executor}: arriving M31 files review measured data and replay a queued s
     expect(taskReads).toBe(readsBeforeReporting);
     const reopened = await page.context().newPage();
     await reopened.goto('/#/sky');
-    await reopened.getByRole('button', { name: 'Settings', exact: true }).click();
+    await openSettings(reopened);
     const reopenedSettings = reopened.locator('.tauri-settings');
     await reopenedSettings.getByRole('tab', { name: 'Rigs' }).click();
     await reopenedSettings.getByRole('button', { name: 'Setup Arrival rig' }).click();

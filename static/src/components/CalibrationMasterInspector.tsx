@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Layers, RotateCcw } from 'lucide-react';
 import { apiClient } from '../api/client';
 import type {
@@ -11,6 +12,7 @@ import type {
   StackMasterSource,
 } from '../api/types';
 import StackPreviewInspector from './StackPreviewInspector';
+import { calibrationMasterHref } from './calibration/calibrationLinks';
 
 interface Inspection {
   dbId: string;
@@ -84,6 +86,8 @@ export function CalibrationMasterInspector({ dbId, source, title, label, initial
     retry: false,
   });
   const [selectedId, setSelectedId] = useState<string | null>(initialMasterId ?? null);
+  const navigate = useNavigate();
+  const location = useLocation();
   const [draftStretch, setDraftStretch] = useState({ midtone: 0.2, shadow: -2.8 });
   const [stretch, setStretch] = useState(draftStretch);
   useEffect(() => {
@@ -172,6 +176,15 @@ export function CalibrationMasterInspector({ dbId, source, title, label, initial
           {master && (
             <div className="calibration-master-provenance">
               <strong>{master.label}</strong>
+              {source.kind !== 'library' && master.library_id && (
+                <button type="button" className="calibration-master-open"
+                  onClick={() => {
+                    onClose();
+                    navigate(calibrationMasterHref(location.search, dbId, master.library_id!));
+                  }}>
+                  Open in Calibration
+                </button>
+              )}
               {master.usages.map((usage, index) => (
                 <span key={`${usage.channel}:${usage.session}:${index}`}>
                   {usage.channel} / Session {usage.session}: {usage.lights} light frames

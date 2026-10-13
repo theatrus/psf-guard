@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { applyRealSchema } from './fixtures/sync';
-import { tmpBase } from './helpers';
+import { tmpBase, openSettings } from './helpers';
 
 // A database of its own with two small files, so removal never touches the
 // suite's shared FITS fixtures.
@@ -42,7 +42,7 @@ test('old rejects are removed to the trash from Settings and restored', async ({
   try {
     await page.goto('/');
     const alreadyOpen = await page.getByRole('tab', { name: 'Databases' }).waitFor({ state: 'visible', timeout: 2000 }).then(() => true, () => false);
-    if (!alreadyOpen) await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    if (!alreadyOpen) await openSettings(page);
     await page.getByRole('tab', { name: 'Databases' }).click();
     await page.locator('.db-row', { hasText: name }).getByRole('button', { name: 'Purge Rejects' }).click();
     const dialog = page.getByRole('dialog', { name: `Purge rejects — ${name}` });

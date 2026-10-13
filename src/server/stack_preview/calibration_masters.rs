@@ -179,6 +179,10 @@ pub struct MasterEntry {
     /// temperatures and the nights they were shot.
     #[serde(skip_serializing_if = "Option::is_none")]
     sources: Option<crate::calibration::FrameSpan>,
+    /// The library's record of this master, which the Calibration page's
+    /// Masters list opens; absent when the library no longer records it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    library_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -549,13 +553,14 @@ fn supplement_entry(ctx: &DatabaseContext, entry: &mut MasterEntry) {
     };
     let path =
         crate::server::storage::calibration_masters(&ctx.calibration_root).join(&entry.label);
-    let row: Result<Option<(i64, String)>, _> = conn.query_row(
-        "SELECT source_count, statistics_json FROM psf_guard_calibration_master WHERE cache_path = ?1",
-        [path.to_string_lossy().as_ref()], |row| Ok((row.get(0)?, row.get(1)?)),
+    let row: Result<Option<(i64, String, String)>, _> = conn.query_row(
+        "SELECT source_count, statistics_json, master_uuid FROM psf_guard_calibration_master WHERE cache_path = ?1",
+        [path.to_string_lossy().as_ref()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     ).optional();
-    let Ok(Some((count, json))) = row else {
+    let Ok(Some((count, json, master_uuid))) = row else {
         return;
     };
+    entry.library_id = Some(master_uuid);
     entry.source_count = usize::try_from(count).ok();
     entry.sources = master_sources(&conn, &path);
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) {
@@ -649,6 +654,7 @@ fn catalog(
                 minimum_clean_samples: None,
                 maximum_clean_samples: None,
                 sources: None,
+                library_id: None,
             };
             supplement_entry(ctx, &mut entry);
             entry

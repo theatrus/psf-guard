@@ -4,7 +4,7 @@ import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../../api/client';
 import type { CalibrationSession } from '../../api/types';
 import { useDbProjectTarget } from '../../hooks/useUrlState';
-import { useAllDatabases } from '../../hooks/useDatabases';
+import { useAllDatabases, useMergedProjects } from '../../hooks/useDatabases';
 import { isTauriApp } from '../../utils/tauri';
 import SchedulerFlatHistory from '../SchedulerFlatHistory';
 import CalibrationFilters from './CalibrationFilters';
@@ -16,7 +16,7 @@ import CalibrationSessionList from './CalibrationSessionList';
 import { fileName, nightLabel, plural, sessionDetails, sessionTitle } from './calibrationLabels';
 import { useCalibrationActions } from './useCalibrationActions';
 import type { ValidityChoice } from './useCalibrationActions';
-import { listFilters, useCalibrationUrlState } from './useCalibrationUrlState';
+import { ALL_RIGS, listFilters, useCalibrationUrlState } from './useCalibrationUrlState';
 import type { CalibrationTab } from './useCalibrationUrlState';
 import './CalibrationPage.css';
 
@@ -54,20 +54,13 @@ export default function CalibrationPage() {
   }, [dbId, resetSelection]);
 
   const database = databases?.find((entry) => entry.id === dbId);
+  // The header's project picker chooses the database, as for every view.
   return (
     <div className="calibration-page">
       <header className="calibration-page-header">
         <div>
           <h1>Calibration</h1>
-          {databases && databases.length > 1 ? (
-            <label className="calibration-database">
-              <select aria-label="Database" value={dbId ?? ''} onChange={(event) => setDatabase(event.target.value)}>
-                {databases.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
-              </select>
-            </label>
-          ) : (
-            database && <span className="calibration-muted">{database.name}</span>
-          )}
+          {database && <span className="calibration-muted">{database.name}</span>}
         </div>
         <div className="calibration-tabs" role="tablist" aria-label="Calibration views">
           {TABS.map((tab) => (
@@ -107,6 +100,25 @@ function CalibrationLibrary({
     queryKey: ['db', dbId, 'calibrations'],
     queryFn: () => apiClient.getCalibrationLibrary(dbId),
   });
+
+  // A project in scope opens on its rig: the one whose frames came from the
+  // project's N.I.N.A. profile, when exactly one did. Only while no rig is
+  // in the URL, once per project, so choosing All sticks, and only when the
+  // library holds more than one rig: with one, the page shows no Rig choice.
+  const { projectId } = useDbProjectTarget();
+  const { data: projects } = useMergedProjects();
+  const profile = projects.find((project) => project.db_id === dbId && project.id === projectId)?.profile_id;
+  const { filters, setFilters } = state;
+  const openedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!profile || !summary.data || summary.data.rigs.length < 2) return;
+    const scope = `${dbId}:${projectId}`;
+    if (openedFor.current === scope) return;
+    openedFor.current = scope;
+    if (filters.rig) return;
+    const own = summary.data.rigs.filter((rig) => rig.profile_ids?.includes(profile));
+    setFilters({ rig: own.length === 1 ? own[0].rig_uuid : ALL_RIGS });
+  }, [dbId, filters.rig, profile, projectId, setFilters, summary.data]);
 
   if (state.tab === 'scheduler') {
     return <SchedulerFlatHistory dbId={dbId} canManage={canManage} />;

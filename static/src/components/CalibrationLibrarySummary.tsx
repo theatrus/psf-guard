@@ -5,7 +5,6 @@ import { calibrationPageHref } from './calibration/calibrationLinks';
 
 interface CalibrationLibrarySummaryProps {
   dbId: string;
-  canManage?: boolean;
   /** Called when the button leaves for the calibration page, so a modal
    *  around this summary can close. */
   onOpen?: () => void;
@@ -13,7 +12,6 @@ interface CalibrationLibrarySummaryProps {
 
 export default function CalibrationLibrarySummary({
   dbId,
-  canManage = false,
   onOpen,
 }: CalibrationLibrarySummaryProps) {
   const navigate = useNavigate();
@@ -28,7 +26,7 @@ export default function CalibrationLibrarySummary({
   };
   const button = (
     <button className="calibration-manage-button" onClick={open}>
-      {canManage ? 'Manage' : 'View'}
+      Open Calibration
     </button>
   );
 

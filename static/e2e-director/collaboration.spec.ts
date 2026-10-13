@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
 import { applyRealSchema } from '../e2e/fixtures/sync';
+import { openSettings } from '../e2e/helpers';
 
 test('rig setup reviews remote work and saved contributions before importing or replaying', async ({ page, request }, testInfo) => {
   const root = mkdtempSync(path.join(process.env.PSF_GUARD_DIRECTOR_E2E_TMP!, 'collaboration-'));
@@ -45,7 +46,7 @@ test('rig setup reviews remote work and saved contributions before importing or 
   });
   try {
     await page.goto('/#/');
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await openSettings(page);
     const settings = page.locator('.tauri-settings');
     await settings.getByRole('tab', { name: 'Rigs' }).click();
     await settings.getByRole('button', { name: 'Setup Collaboration rig' }).click();

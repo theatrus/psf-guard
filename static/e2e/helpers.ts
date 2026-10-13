@@ -1,4 +1,4 @@
-import type { APIRequestContext } from '@playwright/test';
+import type { APIRequestContext, Page } from '@playwright/test';
 import * as os from 'os';
 import * as path from 'path';
 
@@ -91,4 +91,10 @@ export async function waitForCacheReady(
   throw new Error(
     `Cache refresh for db=${dbId} did not surface any project with has_files=true within ${timeout}ms`
   );
+}
+
+/** Open Settings from the header menu. */
+export async function openSettings(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Menu', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Settings' }).click();
 }

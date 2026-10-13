@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
+import { openSettings } from '../e2e/helpers';
 
 test('exposure Moon policy saves, survives reload and retains disabled values', async ({ page, request }, testInfo) => {
   const id = randomUUID();
@@ -14,7 +15,7 @@ test('exposure Moon policy saves, survives reload and retains disabled values', 
     const alreadyOpen = await page.getByRole('tab', { name: 'Exposure templates', exact: true })
       .waitFor({ state: 'visible', timeout: 2000 }).then(() => true, () => false);
     if (!alreadyOpen)
-      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+      await openSettings(page);
     await page.getByRole('tab', { name: 'Exposure templates', exact: true }).click();
     await page.getByRole('button', { name: `Moon settings for ${name}`, exact: true }).click();
     return page.getByRole('group', { name: 'Moon avoidance', exact: true });

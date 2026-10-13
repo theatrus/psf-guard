@@ -291,6 +291,9 @@ pub struct CalibrationRigSummary {
     pub rig_uuid: String,
     pub name: String,
     pub profile_id: Option<String>,
+    /// Every N.I.N.A. profile whose frames went into this rig, so a view
+    /// can find the rigs of a project from the project's profile.
+    pub profile_ids: Vec<String>,
     pub telescope: Option<String>,
     pub camera: Option<String>,
     pub frame_count: usize,
@@ -1423,12 +1426,29 @@ pub fn library_summary(conn: &Connection) -> Result<CalibrationLibrarySummary> {
         ORDER BY r.name COLLATE NOCASE, r.rig_uuid
         "#,
     )?;
+    let mut bound: HashMap<String, Vec<String>> = HashMap::new();
+    let mut bindings = conn.prepare(
+        "SELECT rig_uuid, profile_id FROM psf_guard_rig_binding ORDER BY rig_uuid, profile_id",
+    )?;
+    for row in bindings.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get(1)?)))? {
+        let (rig, profile) = row?;
+        bound.entry(rig).or_default().push(profile);
+    }
     let rigs = statement
         .query_map([], |row| {
+            let rig_uuid: String = row.get(0)?;
+            let profile_id: Option<String> = row.get(2)?;
+            let mut profile_ids = bound.remove(&rig_uuid).unwrap_or_default();
+            if let Some(profile) = profile_id.as_ref().filter(|profile| !profile.is_empty())
+                && !profile_ids.contains(profile)
+            {
+                profile_ids.push(profile.clone());
+            }
             Ok(CalibrationRigSummary {
-                rig_uuid: row.get(0)?,
+                rig_uuid,
                 name: row.get(1)?,
-                profile_id: row.get(2)?,
+                profile_id,
+                profile_ids,
                 telescope: row.get(3)?,
                 camera: row.get(4)?,
                 frame_count: row.get::<_, i64>(5)? as usize,
@@ -9845,6 +9865,25 @@ mod tests {
         assert_eq!(verify_sources(&mut only_stale, Some(&tree)), 0);
         assert_eq!(only_stale.len(), 1);
         assert_eq!(only_stale[0].source_path, filed.join(name));
+    }
+
+    #[test]
+    fn a_rig_lists_every_profile_its_frames_came_from() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
+        for (index, profile) in ["night", "remote"].into_iter().enumerate() {
+            let path = temp.path().join(format!("dark-{index}.fits"));
+            std::fs::write(&path, format!("dark {index}")).unwrap();
+            let mut dark = frame(path.to_str().unwrap(), "DARK");
+            dark.timestamp = Some(1_000 + index as i64);
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &[dark], Some(profile)).unwrap();
+            tx.commit().unwrap();
+        }
+        let summary = library_summary(&conn).unwrap();
+        assert_eq!(summary.rigs.len(), 1, "one camera and scope is one rig");
+        assert_eq!(summary.rigs[0].profile_id.as_deref(), Some("night"));
+        assert_eq!(summary.rigs[0].profile_ids, vec!["night", "remote"]);
     }
 
     #[test]

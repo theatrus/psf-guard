@@ -1,11 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { CalibrationSettings } from '../src/api/types';
-import { registerFixtureDb, resetDatabases } from './helpers';
+import { registerFixtureDb, resetDatabases, openSettings } from './helpers';
 
 let original: CalibrationSettings;
 
 async function openCalibration(page: Page) {
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await openSettings(page);
   await page.getByRole('tab', { name: 'Calibration', exact: true }).click();
   return page.locator('.calibration-matching-settings');
 }

@@ -286,9 +286,9 @@ fn optional_provenance_is_reported_without_recreating_forgotten_catalog_rows() {
     let db = fixture.ctx.db();
     {
         let conn = db.lock().unwrap();
-        conn.execute_batch("CREATE TABLE psf_guard_calibration_master (cache_path TEXT, source_count INTEGER, statistics_json TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE psf_guard_calibration_master (master_uuid TEXT, cache_path TEXT, source_count INTEGER, statistics_json TEXT)").unwrap();
         conn.execute(
-            "INSERT INTO psf_guard_calibration_master VALUES (?1, 8, ?2)",
+            "INSERT INTO psf_guard_calibration_master VALUES ('library-b', ?1, 8, ?2)",
             rusqlite::params![path.to_string_lossy(), serde_json::json!({
                 "rejection_method": "MEDIAN_MAD", "masked_samples": 120,
                 "rejected_samples": 9, "flat_star_masking": { "minimum_clean_samples": 2, "maximum_clean_samples": 8 }
@@ -298,6 +298,8 @@ fn optional_provenance_is_reported_without_recreating_forgotten_catalog_rows() {
     let before = catalog(&fixture.state, &fixture.ctx, &source).unwrap();
     let entry = &before.masters[0];
     assert_eq!(entry.source_count, Some(8));
+    // The library's record, which the Calibration page's Masters list opens.
+    assert_eq!(entry.library_id.as_deref(), Some("library-b"));
     assert_eq!(entry.rejection_method.as_deref(), Some("MEDIAN_MAD"));
     assert_eq!(entry.masked_samples, Some(120));
     assert_eq!(entry.rejected_samples, Some(9));
@@ -316,6 +318,10 @@ fn optional_provenance_is_reported_without_recreating_forgotten_catalog_rows() {
     let after = catalog(&fixture.state, &fixture.ctx, &source).unwrap();
     assert!(after.masters[0].available);
     assert_eq!(after.masters[0].source_count, None);
+    assert_eq!(
+        after.masters[0].library_id, None,
+        "a forgotten record has no link"
+    );
     let count: i64 = db
         .lock()
         .unwrap()
@@ -341,8 +347,8 @@ fn a_master_reports_the_temperatures_and_nights_of_its_source_frames() {
         let db = fixture.ctx.db();
         let conn = db.lock().unwrap();
         conn.execute_batch(
-            "CREATE TABLE psf_guard_calibration_master (cache_path TEXT, source_count INTEGER,
-                 source_frame_uuids TEXT, statistics_json TEXT);
+            "CREATE TABLE psf_guard_calibration_master (master_uuid TEXT, cache_path TEXT,
+                 source_count INTEGER, source_frame_uuids TEXT, statistics_json TEXT);
              CREATE TABLE psf_guard_calibration_frame (frame_uuid TEXT, camera_temp REAL,
                  captured_at INTEGER);
              INSERT INTO psf_guard_calibration_frame VALUES
@@ -351,7 +357,7 @@ fn a_master_reports_the_temperatures_and_nights_of_its_source_frames() {
         .unwrap();
         // Three frames recorded, one since forgotten.
         conn.execute(
-            "INSERT INTO psf_guard_calibration_master VALUES (?1, 3, ?2, '{}')",
+            "INSERT INTO psf_guard_calibration_master VALUES ('library-w', ?1, 3, ?2, '{}')",
             rusqlite::params![path.to_string_lossy(), r#"["warm","warmer","forgotten"]"#],
         )
         .unwrap();
