@@ -401,7 +401,8 @@ async fn frames_and_sessions_page_and_filter() {
             frame["source_path"]
                 .as_str()
                 .unwrap()
-                .rsplit('/')
+                // Either separator: Windows puts `\` between folders.
+                .rsplit(['/', '\\'])
                 .next()
                 .unwrap()
         })
