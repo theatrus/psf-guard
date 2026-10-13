@@ -7,6 +7,9 @@ import RigTargetSelect from './components/header/RigTargetSelect';
 import { useCurrentPlan } from './components/header/useCurrentPlan';
 import ActivityChip from './components/header/ActivityChip';
 import LiveChip from './components/header/LiveChip';
+import HeaderMenu from './components/header/HeaderMenu';
+import ViewTab from './components/header/ViewTab';
+import { ChartColumn, Crosshair, Images, LibraryBig, SquareStack, Telescope, TestTubeDiagonal } from 'lucide-react';
 import { useHeaderFit } from './components/header/useHeaderFit';
 import KeyboardShortcutHelp from './components/KeyboardShortcutHelp';
 import ServerInfoPanel from './components/ServerInfoPanel';
@@ -52,6 +55,7 @@ function AppContent() {
     return query ? `${path}?${query}` : path;
   };
   const [showHelp, setShowHelp] = useState(false);
+  const [showServerInfo, setShowServerInfo] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   // Which form the settings modal should land on. Set by whoever asked for
   // the modal; read once when it mounts.
@@ -140,6 +144,7 @@ function AppContent() {
   const isOnGrid = location.pathname === '/grid';
   const isOnSequence = location.pathname === '/sequence';
   const isOnStacks = location.pathname === '/stacks';
+  const isOnCalibration = location.pathname === '/calibration';
   const isOnSky = isSkyPath(location.pathname);
 
   return (
@@ -163,72 +168,68 @@ function AppContent() {
         </div>
 
         <nav className="header-view-tabs header-nav" aria-label="Views" data-header-part="nav">
-          <button
-            type="button"
+          <ViewTab
+            label="Library"
+            icon={LibraryBig}
+            current={isOnOverview}
             onClick={() => navigate(toScoped('/'))}
-            className="header-button"
-            aria-current={isOnOverview ? 'page' : undefined}
-          >
-            Library
-          </button>
+          />
           {/* The scope, from the whole to the part: the project (a plan shot
               by several rigs is one), its workspace, then which rig and
               target Images and Sequence show. */}
           <div className="header-group header-scope" role="group" aria-label="Scope">
             <ProjectTargetSelector />
             {plan.enabled && (
-              <button
-                type="button"
-                onClick={() => plan.current && navigate(plan.hrefFor(plan.current))}
-                className="header-button"
-                aria-current={isOnWorkspace ? 'page' : undefined}
+              <ViewTab
+                label="Planning"
+                icon={Crosshair}
+                current={isOnWorkspace}
                 disabled={!plan.current}
-                title={plan.current ? `Plan ${plan.current.project.name}: framing, rigs and activation` : 'Choose a project with a plan first'}
-              >
-                Planning
-              </button>
+                title={plan.current ? undefined : 'Choose a project with a plan first'}
+                onClick={() => plan.current && navigate(plan.hrefFor(plan.current))}
+              />
             )}
             <span className="header-scope-divider" aria-hidden="true" />
             <RigTargetSelect />
-            <button
-              type="button"
+            <ViewTab
+              label="Images"
+              icon={Images}
+              current={isOnGrid}
+              disabled={!hasReviewScope}
+              title={hasReviewScope ? undefined : 'Choose a project or database first'}
               onClick={() => navigate(toScoped('/grid'))}
-              className="header-button"
-              aria-current={isOnGrid ? 'page' : undefined}
+            />
+            <ViewTab
+              label="Sequence"
+              icon={ChartColumn}
+              current={isOnSequence}
               disabled={!hasReviewScope}
               title={hasReviewScope ? undefined : 'Choose a project or database first'}
-            >
-              Images
-            </button>
-            <button
-              type="button"
               onClick={() => navigate(toScoped('/sequence'))}
-              className="header-button"
-              aria-current={isOnSequence ? 'page' : undefined}
+            />
+            <ViewTab
+              label="Stacks"
+              icon={SquareStack}
+              current={isOnStacks}
               disabled={!hasReviewScope}
               title={hasReviewScope ? undefined : 'Choose a project or database first'}
-            >
-              Sequence
-            </button>
-            <button
-              type="button"
               onClick={() => navigate(toScoped('/stacks'))}
-              className="header-button"
-              aria-current={isOnStacks ? 'page' : undefined}
-              disabled={!hasReviewScope}
-              title={hasReviewScope ? undefined : 'Choose a project or database first'}
-            >
-              Stacks
-            </button>
+            />
+            {/* The calibration library of the database in scope; it picks
+                the first database when none is. */}
+            <ViewTab
+              label="Calibration"
+              icon={TestTubeDiagonal}
+              current={isOnCalibration}
+              onClick={() => navigate(toScoped('/calibration'))}
+            />
           </div>
-          <button
-            type="button"
+          <ViewTab
+            label="Sky"
+            icon={Telescope}
+            current={isOnSky}
             onClick={() => navigate(toScoped('/sky'))}
-            className="header-button"
-            aria-current={isOnSky ? 'page' : undefined}
-          >
-            Sky
-          </button>
+          />
         </nav>
 
         <div className="header-utilities" data-header-part="utilities">
@@ -236,45 +237,13 @@ function AppContent() {
               hover or click opens the queue. */}
           <ActivityChip />
           <LiveChip />
-          {access.canWrite && (
-            <button
-              type="button"
-              onClick={() => setShowSettings(true)}
-              className="header-button utility-button"
-              title="Settings"
-            >
-              <span className="utility-icon" aria-hidden="true">⚙</span>
-              <span className="utility-label">Settings</span>
-            </button>
-          )}
-          {access.status.authentication_required && (
-            <>
-              <span
-                className={`access-badge ${access.canWrite ? 'read-write' : 'read-only'}`}
-                title={`Signed in as ${access.status.username ?? 'user'}`}
-              >
-                {access.canWrite ? 'Editor' : 'Read only'}
-              </span>
-              <button
-                type="button"
-                onClick={() => void access.logout()}
-                className="header-button utility-button"
-                title="Sign out"
-              >
-                <span className="utility-label">Sign out</span>
-              </button>
-            </>
-          )}
-          <button
-            type="button"
-            onClick={() => setShowHelp(true)}
-            className="header-button utility-button"
-            title="Keyboard shortcuts"
-          >
-            <span className="utility-icon" aria-hidden="true">?</span>
-            <span className="utility-label">Help</span>
-          </button>
-          <ServerInfoPanel />
+          <HeaderMenu
+            onSettings={access.canWrite ? () => setShowSettings(true) : undefined}
+            onShortcuts={() => setShowHelp(true)}
+            onServerInfo={() => setShowServerInfo(true)}
+            signedInAs={access.status.authentication_required ? access.status.username ?? 'user' : null}
+            onSignOut={access.status.authentication_required ? () => void access.logout() : undefined}
+          />
         </div>
       </header>
 
@@ -289,6 +258,8 @@ function AppContent() {
       {showHelp && (
         <KeyboardShortcutHelp onClose={() => setShowHelp(false)} />
       )}
+
+      {showServerInfo && <ServerInfoPanel onClose={() => setShowServerInfo(false)} />}
       
       {showSettings && access.canWrite && (
         <TauriSettings

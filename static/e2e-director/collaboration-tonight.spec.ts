@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { applyRealSchema } from '../e2e/fixtures/sync';
+import { openSettings } from '../e2e/helpers';
 
 test('pull tonight, review and activate allowed work in the background', async ({ page, request }, testInfo) => {
   const root = path.resolve('..');
@@ -55,7 +56,7 @@ test('pull tonight, review and activate allowed work in the background', async (
     } });
     expect(saved.ok(), await saved.text()).toBe(true);
     await page.goto('/#/sky');
-    await page.getByTitle('Settings', { exact: true }).click();
+    await openSettings(page);
     await page.getByRole('tab', { name: 'Rigs', exact: true }).click();
     await page.getByRole('button', { name: 'Setup Collaboration test rig', exact: true }).click();
     await page.getByRole('tab', { name: 'Collaboration', exact: true }).click();

@@ -206,6 +206,30 @@ describe('CalibrationPage', () => {
     expect(params().get('calFrame')).toBe('f2');
   });
 
+  it("opens on the rig of the project in scope, and keeps All once chosen", async () => {
+    const seen = serve();
+    server.use(
+      http.get('/api/db/demo/calibrations', () => ok({
+        schema_version: 9, frame_count: 9, master_count: 1,
+        rigs: [
+          { rig_uuid: 'rig', name: 'Askar · ASI2600', profile_ids: ['p1'], frame_count: 5, bias: 0, dark: 2, dark_flat: 0, flat: 3 },
+          { rig_uuid: 'rig2', name: 'C925 · ASI6200', profile_ids: ['p2', 'p3'], frame_count: 4, bias: 0, dark: 2, dark_flat: 0, flat: 2 },
+        ],
+      })),
+      http.get('/api/db/demo/projects', () => ok([
+        { id: 7, profile_id: 'p3', profile_name: 'C925', name: 'Bubble', display_name: 'Bubble', description: null, has_files: true, state: 1, latest_image_date: null },
+      ])),
+    );
+    renderPage('/calibration?db=demo&project=7');
+    await waitFor(() => expect(params().get('calRig')).toBe('rig2'));
+    await waitFor(() => expect(seen.sessions.at(-1)?.get('rig')).toBe('rig2'));
+    expect(screen.queryByRole('combobox', { name: 'Database' })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Rig'), { target: { value: 'any' } });
+    await waitFor(() => expect(params().get('calRig')).toBe('any'));
+    await waitFor(() => expect(seen.sessions.at(-1)?.has('rig')).toBe(false));
+  });
+
   it('writes filters to the URL and asks the server for them', async () => {
     const seen = serve();
     renderPage('/calibration?db=demo');

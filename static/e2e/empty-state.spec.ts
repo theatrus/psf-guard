@@ -122,16 +122,14 @@ test('the overview import action opens settings on the create form', async ({
   ).toBeVisible();
 });
 
-test('header Settings button is present in browser mode', async ({ page }) => {
+test('the header menu offers Settings in browser mode', async ({ page }) => {
   await page.goto('/');
-  // Wait for the auto-popup to appear, then close it so we can find the
-  // header button beneath. `exact: true` keeps this off any other control
-  // whose name merely contains "Settings".
+  // Wait for the auto-popup to appear, then close it so we can reach the
+  // header menu beneath.
   await page.getByRole('heading', { name: /Welcome to PSF Guard/i }).waitFor();
   await page.getByRole('button', { name: 'Done' }).click();
-  await expect(
-    page.getByRole('button', { name: 'Settings', exact: true })
-  ).toBeVisible();
+  await page.getByRole('button', { name: 'Menu', exact: true }).click();
+  await expect(page.getByRole('menuitem', { name: 'Settings' })).toBeVisible();
 });
 
 test('header shows the PSF Guard logo', async ({ page }) => {

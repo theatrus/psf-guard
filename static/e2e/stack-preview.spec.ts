@@ -2,11 +2,7 @@ import { expect, test } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { StackCalibrationMasters } from '../src/api/types';
-import {
-  registerFixtureDb,
-  resetDatabases,
-  waitForCacheReady,
-} from './helpers';
+import { registerFixtureDb, resetDatabases, waitForCacheReady, openSettings } from './helpers';
 
 let dbId: string;
 
@@ -1224,7 +1220,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
 
   // Management moved to Settings → Setups: export the collection, re-import
   // a renamed copy, and delete it from the table.
-  await page.getByRole('button', { name: 'Settings' }).click();
+  await openSettings(page);
   const settingsModal = page.locator('.tauri-settings .modal-content');
   await settingsModal.getByRole('tab', { name: 'Setups' }).click();
   const manager = settingsModal.locator('.processing-setups-manager');

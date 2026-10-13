@@ -1,11 +1,7 @@
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
-import {
-  registerFixtureDb,
-  resetDatabases,
-  waitForCacheReady,
-} from './helpers';
+import { registerFixtureDb, resetDatabases, waitForCacheReady, openSettings } from './helpers';
 
 // A common phone: iPhone 14 / Pixel-class logical viewport.
 const PHONE = { width: 390, height: 844 };
@@ -168,7 +164,7 @@ test('settings modal fits a phone', async ({ page }, testInfo) => {
   await expect(page.getByRole('heading', { name: 'Earlier work' })).toBeVisible({
     timeout: 15_000,
   });
-  await page.getByRole('button', { name: 'Settings' }).click();
+  await openSettings(page);
   await expect(page.locator('.tauri-settings').first()).toBeVisible();
   await expectPhoneFit(page, testInfo, 'settings');
 });
@@ -178,8 +174,9 @@ test('help overlay fits a phone', async ({ page }, testInfo) => {
   await expect(page.getByRole('heading', { name: 'Earlier work' })).toBeVisible({
     timeout: 15_000,
   });
-  // A phone has no keyboard; the Help button is the mobile path.
-  await page.getByRole('button', { name: 'Help' }).click();
+  // A phone has no keyboard; the header menu is the mobile path.
+  await page.getByRole('button', { name: 'Menu', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Keyboard shortcuts' }).click();
   await expect(page.getByText('Keyboard Shortcuts').first()).toBeVisible();
   await expectPhoneFit(page, testInfo, 'help');
 });

@@ -26,6 +26,11 @@ function number(value: string | null): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+/** The rig filter's value for every rig, chosen on purpose. An absent rig
+ *  lets a project in scope open on its own rig; this one does not. (The
+ *  URL helper drops a value of `all`.) */
+export const ALL_RIGS = 'any';
+
 /** The filters as the page's URL holds them. */
 export interface CalibrationFilterState {
   rig?: string;
@@ -60,7 +65,7 @@ const FILTER_KEYS: Record<keyof CalibrationFilterState, (typeof CALIBRATION_PARA
 /** The filters in the form the frame and session routes take. */
 export function listFilters(state: CalibrationFilterState): CalibrationListFilters {
   const filters: CalibrationListFilters = {
-    rig: state.rig,
+    rig: state.rig === ALL_RIGS ? undefined : state.rig,
     kind: state.kind,
     filter: state.filter,
     exposure: state.exposure,

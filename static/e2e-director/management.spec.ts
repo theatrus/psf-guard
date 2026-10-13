@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { openSettings } from '../e2e/helpers';
 
 test('plans without a database survive reload, conflicts, and narrow viewports in the Library', async ({ page, request }, testInfo) => {
   const browserErrors: string[] = [];
@@ -54,7 +55,7 @@ test('plans without a database survive reload, conflicts, and narrow viewports i
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   // Rig setup lives under Settings › Rigs; with no databases it offers to add one.
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.getByRole('button', { name: 'Settings' }).click();
+  await openSettings(page);
   await page.getByRole('tab', { name: 'Rigs' }).click();
   await expect(page.getByRole('heading', { name: 'Rigs' })).toBeVisible();
   await expect(page.locator('.tauri-settings').getByRole('button', { name: 'Add database' })).toBeVisible();

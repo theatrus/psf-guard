@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import Database from 'better-sqlite3';
 import * as fs from 'fs';
 import * as path from 'path';
-import { resetDatabases, tmpBase } from './helpers';
+import { resetDatabases, tmpBase, openSettings } from './helpers';
 
 let counter = 0;
 let root: string;
@@ -134,7 +134,7 @@ test('auto-import keeps autofocus frames out and holds a new target for Review',
       () => true,
       () => false
     );
-  if (!alreadyOpen) await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  if (!alreadyOpen) await openSettings(page);
   await page.getByRole('tab', { name: 'Databases' }).click();
   const row = page.locator('.db-row', { hasText: name });
   await expect(row).toContainText('1 folder(s) skipped by scan rules');

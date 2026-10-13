@@ -61,10 +61,12 @@ test('viewer signs in through the app and gets a read-only session', async ({ pa
   await page.getByLabel('Password').fill('secret');
   await page.getByRole('button', { name: 'Sign in' }).click();
 
-  await expect(page.getByText('Read only', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Settings', exact: true })).toHaveCount(0);
+  // A viewer's header menu has no Settings, and signs out.
+  await page.getByRole('button', { name: 'Menu', exact: true }).click();
+  await expect(page.getByText('Signed in as viewer')).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: 'Settings' })).toHaveCount(0);
 
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.getByRole('menuitem', { name: 'Sign out' }).click();
   await expect(page.getByRole('heading', { name: 'Sign in to PSF Guard' })).toBeVisible();
 });
 

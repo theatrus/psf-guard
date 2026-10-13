@@ -846,7 +846,9 @@ master unchanged; display settings never change calibration or the stack.
 
 The **Masters** tab of the
 [Calibration page](CALIBRATION_LIBRARY.md#browse-the-library) opens the same
-inspector for any master the library recorded, without a stack.
+inspector for any master the library recorded, without a stack. From a
+stack's inspector, **Open in Calibration** goes to that master there, while
+the library still records it.
 
 Inspection reads the completed artifact's recorded master references, not the
 current library selection. Color stacks follow their recorded channel

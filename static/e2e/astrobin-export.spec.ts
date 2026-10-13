@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { registerFixtureDb, resetDatabases, waitForCacheReady } from './helpers';
+import { registerFixtureDb, resetDatabases, waitForCacheReady, openSettings } from './helpers';
 
 let dbId: string;
 
@@ -137,7 +137,7 @@ test('the Overview opens the AstroBin dialog for a target and maps a filter from
 
 test('Settings shows each database its own filter map with night ranges', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await openSettings(page);
   const summary = page.locator('.astrobin-filter-summary');
   await expect(summary).toContainText('none yet');
   await summary.getByRole('button', { name: 'Edit filters' }).click();

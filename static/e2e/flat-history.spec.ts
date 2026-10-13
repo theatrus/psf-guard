@@ -1,6 +1,7 @@
 import { expect, request as playwrightRequest, test, type APIRequestContext } from '@playwright/test';
 import { randomUUID, createHash } from 'node:crypto';
 import { REVIEW_DB, REVIEW_TOKEN } from './fixtures/sync';
+import { openSettings } from './helpers';
 
 let review: APIRequestContext;
 const headers = { Authorization: `Bearer ${REVIEW_TOKEN}` };
@@ -31,11 +32,11 @@ test('invalidates selected flat coverage, retains decisions across stale snapsho
   expect((await listed.json()).data.total).toBe(3);
 
   await page.goto(`${process.env.PSF_GUARD_E2E_REVIEW_URL}/`);
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await openSettings(page);
   await page.getByRole('tab', { name: 'Databases', exact: true }).click();
   await page.locator('.db-entry').filter({ has: page.locator('.db-row-slug', { hasText: REVIEW_DB }) })
-    .getByRole('button', { name: 'Manage', exact: true }).click();
-  // Manage leaves Settings for the database's calibration page.
+    .getByRole('button', { name: 'Open Calibration', exact: true }).click();
+  // Open Calibration leaves Settings for the database's calibration page.
   await expect(page).toHaveURL(new RegExp(`#/calibration\\?db=${REVIEW_DB}`));
   await page.getByRole('tab', { name: 'Scheduler flats', exact: true }).click();
   await expect(page).toHaveURL(/calTab=scheduler/);

@@ -296,32 +296,7 @@
   background: var(--color-primary);
 }
 
-.utility-icon {
-  display: none;
-}
-
 .header-button:hover {
-  background: var(--color-bg-quaternary);
-  border-color: var(--color-bg-input);
-}
-
-/* Server Info Button */
-.info-button {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-bg-quaternary);
-  padding: 0.5rem;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.2s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-}
-
-.info-button:hover {
   background: var(--color-bg-quaternary);
   border-color: var(--color-bg-input);
 }
@@ -752,10 +727,6 @@
     border: 0;
   }
 
-  .utility-icon {
-    display: inline;
-  }
-
   .utility-button {
     width: 32px;
     height: 32px;
@@ -811,12 +782,6 @@
 
   .project-target-selector.compact {
     gap: 0.3rem;
-  }
-
-  .info-button {
-    width: 30px;
-    height: 30px;
-    font-size: 0.65rem;
   }
 }
 
@@ -5615,6 +5580,18 @@
   flex-basis: 100%;
 }
 
+/* A stack's master opens in the Calibration page's Masters list. */
+.calibration-master-open {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-primary);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
 .calibration-master-statistics {
   display: flex;
   flex-wrap: wrap;
@@ -7423,24 +7400,6 @@
   padding-left: 0.75rem;
   border-left: 3px solid var(--color-warning);
   color: var(--color-warning) !important;
-}
-
-.access-badge {
-  align-self: center;
-  padding: 0.25rem 0.55rem;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 999px;
-  font-size: 0.75rem;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.access-badge.read-only {
-  color: var(--color-warning);
-}
-
-.access-badge.read-write {
-  color: var(--color-success);
 }
 
 .scoring-penalty-control {

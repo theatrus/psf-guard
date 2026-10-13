@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { CalibrationFacets, CalibrationRigSummary } from '../../api/types';
 import { KIND_LABELS } from './calibrationLabels';
-import type { CalibrationFilterState } from './useCalibrationUrlState';
+import { ALL_RIGS, type CalibrationFilterState } from './useCalibrationUrlState';
 
 interface CalibrationFiltersProps {
   filters: CalibrationFilterState;
@@ -48,14 +48,16 @@ const exposureLabel = (seconds: number) => `${Number(seconds.toFixed(2))}s`;
 export default function CalibrationFilters({ filters, facets, rigs, onChange, onClear }: CalibrationFiltersProps) {
   // Open on a wide screen; folded on a phone, where they would fill it.
   const [open, setOpen] = useState(() => !window.matchMedia?.('(max-width: 700px)').matches);
-  const active = Object.entries(filters).filter(([key, value]) => key !== 'sort' && value !== undefined).length;
+  const active = Object.entries(filters)
+    .filter(([key, value]) => key !== 'sort' && value !== undefined && !(key === 'rig' && value === ALL_RIGS))
+    .length;
   const fields = (
     <div className="calibration-filter-fields">
       {rigs.length > 1 && (
         <label>
           Rig
-          <select value={filters.rig ?? ''} onChange={(event) => onChange({ rig: event.target.value || undefined })}>
-            <option value="">All</option>
+          <select value={filters.rig ?? ALL_RIGS} onChange={(event) => onChange({ rig: event.target.value })}>
+            <option value={ALL_RIGS}>All</option>
             {rigs.map((rig) => <option key={rig.rig_uuid} value={rig.rig_uuid}>{rig.name}</option>)}
           </select>
         </label>

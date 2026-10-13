@@ -45,13 +45,19 @@ database copy carries this catalog with its projects and grades.
 
 The **Calibration** page shows one database's library: its sessions, the
 frames of a session as pictures, one frame with its numbers beside its
-session's, and the masters built from them. Open it with **Manage** (or
-**View**) on a database's calibration summary in **Settings › Databases**,
-or with **Browse calibration** in a project's Calibration report, which the
-Library's calibration pill also opens. Everything chosen on the page lives
-in its address, `#/calibration?db=…`, so a reload or a shared link opens
-the same view: the database, the tab, the filters, the session, the frame
-and how it is drawn.
+session's, and the masters built from them. Open it with the header's
+**Calibration** tab, beside Images, Sequence and Stacks. It shows the
+database the header's project picker has in scope, or the first database
+when none is. With a project in scope it opens on that project's rig: the
+one whose frames came from the project's N.I.N.A. profile, when exactly one
+did. **Rig › All** shows them all again.
+
+**Browse calibration** in a project's Calibration report, which the
+Library's calibration pill also opens, and **Open Calibration** on a
+database's calibration summary in **Settings › Databases** lead to the same
+page. Everything chosen on the page lives in its address,
+`#/calibration?db=…`, so a reload or a shared link opens the same view: the
+database, the tab, the filters, the session, the frame and how it is drawn.
 
 ### Sessions and frames
 

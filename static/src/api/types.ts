@@ -491,6 +491,9 @@ export interface StackCalibrationMaster {
   sources?: CalibrationFrameSpan;
   /** How a library master is told apart in a list, where it has no usages. */
   caption?: string;
+  /** A stack's master: the library's record of it, which the Calibration
+   *  page's Masters list opens. Absent once the library forgets it. */
+  library_id?: string;
 }
 
 /** A master the library recorded, with what the library knows of it. */
@@ -2282,6 +2285,8 @@ export interface CalibrationRigSummary {
   rig_uuid: string;
   name: string;
   profile_id?: string | null;
+  /** Every N.I.N.A. profile whose frames went into this rig. */
+  profile_ids?: string[];
   telescope?: string | null;
   camera?: string | null;
   frame_count: number;
