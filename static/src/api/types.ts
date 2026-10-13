@@ -559,6 +559,7 @@ export interface StackFrameDecision {
   matched_stars: number | null;
   registration_rms_pixels: number | null;
   registration_drift_pixels: number | null;
+  /** Always null in replies: the server keeps each frame's mapping for itself. */
   registered_mapping: unknown | null;
   normalization_mean_gain: number | null;
   normalization_mean_offset: number | null;
