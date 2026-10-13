@@ -37,6 +37,23 @@ describe('page build', () => {
     expect(reload).toHaveBeenCalledTimes(2);
   });
 
+  it('ignores a reply the browser may have kept', async () => {
+    stamp('aaaa');
+    const { keptByBrowser, noteServerBuild, reloadForNewerBuild } = await load();
+    // A survey image kept for a day still carries the build it was fetched
+    // under; it says nothing about the server now.
+    noteServerBuild('old0', 'private, max-age=86400');
+    noteServerBuild('old0', 'public, max-age=31536000, immutable');
+    expect(reloadForNewerBuild(vi.fn())).toBe(false);
+    noteServerBuild('bbbb', 'private, no-store');
+    expect(reloadForNewerBuild(vi.fn())).toBe(true);
+
+    expect(keptByBrowser('max-age=0')).toBe(false);
+    expect(keptByBrowser('max-age=60, no-cache')).toBe(false);
+    expect(keptByBrowser(undefined)).toBe(false);
+    expect(keptByBrowser('Private, Max-Age=10')).toBe(true);
+  });
+
   it('compares nothing on an unstamped page', async () => {
     const { noteServerBuild, reloadForNewerBuild } = await load();
     noteServerBuild('bbbb');
