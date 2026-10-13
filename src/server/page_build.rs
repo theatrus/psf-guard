@@ -1,6 +1,9 @@
 //! Which frontend build the server hands out, and how long a browser may keep
-//! each file. Every response names the build in [`BUILD_HEADER`], so a tab
-//! left open across a server update can tell its page is out of date.
+//! each file. Every response a browser cannot keep names the build in
+//! [`BUILD_HEADER`], so a tab left open across a server update can tell its
+//! page is out of date. A response it may keep, such as a survey image, does
+//! not: read back from the browser's cache after an update, it would name the
+//! build of the day it was fetched.
 
 use axum::{
     extract::{Request, State},
@@ -99,9 +102,32 @@ impl PageBuild {
     }
 }
 
-/// Middleware: name the served build on every response.
+/// Whether a browser may keep a response with this `Cache-Control` and hand
+/// it back later without asking the server.
+pub fn kept_by_browser(cache_control: Option<&HeaderValue>) -> bool {
+    let Some(value) = cache_control.and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    let value = value.to_ascii_lowercase();
+    if value.contains("no-store") || value.contains("no-cache") {
+        return false;
+    }
+    value.contains("immutable")
+        || value.split(',').any(|part| {
+            part.trim()
+                .strip_prefix("max-age=")
+                .and_then(|seconds| seconds.trim().parse::<u64>().ok())
+                .is_some_and(|seconds| seconds > 0)
+        })
+}
+
+/// Middleware: name the served build on every response a browser cannot
+/// keep.
 pub async fn stamp(State(page): State<Arc<PageBuild>>, request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
+    if kept_by_browser(response.headers().get(axum::http::header::CACHE_CONTROL)) {
+        return response;
+    }
     if let Some(build) = page.current().await {
         response.headers_mut().insert(BUILD_HEADER, build);
     }
@@ -170,6 +196,56 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(response.headers()[BUILD_HEADER], "abc123");
+    }
+
+    #[test]
+    fn tells_what_a_browser_may_keep() {
+        let kept = |value: &str| kept_by_browser(Some(&HeaderValue::from_str(value).unwrap()));
+        assert!(kept("private, max-age=86400"));
+        assert!(kept("public, max-age=31536000, immutable"));
+        assert!(!kept("private, no-store"));
+        assert!(!kept("no-cache"));
+        assert!(!kept("max-age=0"));
+        assert!(!kept("max-age=60, no-cache"));
+        assert!(!kept_by_browser(None));
+    }
+
+    /// A survey image is kept for a day. Read back from the browser's cache
+    /// after an update, a stamped one would name the old build, and the page
+    /// would say PSF Guard was updated after every reload.
+    #[tokio::test]
+    async fn a_response_the_browser_keeps_names_no_build() {
+        use axum::{body::Body, http::header::CACHE_CONTROL, routing::get, Router};
+        use tower::ServiceExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("index.html"),
+            r#"<meta name="psf-guard-build" content="abc123">"#,
+        )
+        .unwrap();
+        let page = Arc::new(PageBuild::in_dir(dir.path().to_path_buf()));
+        let app = Router::new()
+            .route(
+                "/api/cutout",
+                get(|| async { ([(CACHE_CONTROL, "private, max-age=86400")], "jpeg") }),
+            )
+            .route(
+                "/api/plans",
+                get(|| async { ([(CACHE_CONTROL, "private, no-store")], "{}") }),
+            )
+            .layer(axum::middleware::from_fn_with_state(page, stamp));
+        let kept = app
+            .clone()
+            .oneshot(Request::get("/api/cutout").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert!(kept.headers().get(BUILD_HEADER).is_none());
+        let fresh = app
+            .oneshot(Request::get("/api/plans").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(fresh.headers()[BUILD_HEADER], "abc123");
     }
 
     #[tokio::test]
