@@ -65,6 +65,27 @@ describe('CalibrationReportDialog', () => {
     expect(sent).toEqual({ digest: 'list-one' });
   });
 
+  it('leaves rejected lights out until asked to include them', async () => {
+    const night = (date: string) => ({ night: date, lights: 25, filters: [{ ...filter, filter: 'HA', flat_frames: 0, dark_master_frames: 6, dark_master_nights: 1, external_masters: [] }] });
+    const asked: string[] = [];
+    server.use(http.get('/api/db/c925/projects/1/calibration-report', ({ request }) => {
+      const include = new URL(request.url).searchParams.get('include_rejected');
+      asked.push(include ?? 'default');
+      return HttpResponse.json({ success: true, error: null, data: {
+        warnings: [], kinds: [], lights_missing_files: 0, rejected_lights: 25, rejected_included: include === 'true',
+        nights: include === 'true' ? [night('2026-07-02'), night('2026-07-01')] : [night('2026-07-01')],
+      } });
+    }));
+    const user = userEvent.setup();
+    render(<CalibrationReportDialog open dbId="c925" projectId={1} projectName="Bubble" onClose={() => {}} />, { wrapper });
+    expect(await screen.findByText('2026-07-01')).toBeInTheDocument();
+    expect(screen.queryByText('2026-07-02')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('checkbox', { name: 'Include 25 rejected lights' }));
+    expect(await screen.findByText('2026-07-02')).toBeInTheDocument();
+    expect(asked).toEqual(['default', 'true']);
+  });
+
   it('asks for a fresh check when the lights changed since', async () => {
     server.use(
       http.get('/api/db/c925/projects/1/calibration-report', () => HttpResponse.json({ success: true, error: null, data: { warnings: [], kinds: [], lights_missing_files: 0, nights: [] } })),

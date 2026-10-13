@@ -149,6 +149,18 @@ pub struct ProjectArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CalibrationReportArgs {
+    /// Database id (slug) or name.
+    pub database: String,
+    /// The project id from `list_projects`.
+    pub project_id: i32,
+    /// Count rejected lights too. They are left out by default, since no
+    /// stack uses them.
+    #[serde(default)]
+    pub include_rejected: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SequenceArgs {
     /// Database id (slug) or name.
     pub database: String,
@@ -890,18 +902,24 @@ impl PsfGuardMcp {
     // ---------- Calibration ----------
 
     #[tool(
-        description = "Which darks, flats and bias frames the calibration library can match to a project's lights, and which nights lack them."
+        description = "Which darks, flats and bias frames the calibration library can match to a project's lights, and which nights lack them. Rejected lights are left out unless include_rejected is set."
     )]
     async fn get_calibration_report(
         &self,
-        Parameters(args): Parameters<ProjectArgs>,
+        Parameters(args): Parameters<CalibrationReportArgs>,
         ctx: RequestContext<RoleServer>,
     ) -> ToolResult {
         let db = database!(self, &args.database);
-        let path = format!(
-            "/db/{}/projects/{}/calibration-report",
-            api::encode(&db.id),
-            args.project_id
+        let path = api::with_query(
+            &format!(
+                "/db/{}/projects/{}/calibration-report",
+                api::encode(&db.id),
+                args.project_id
+            ),
+            [(
+                "include_rejected",
+                args.include_rejected.then(|| "true".to_string()),
+            )],
         );
         self.answer(&ctx, Method::GET, &path, None).await
     }

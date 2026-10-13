@@ -50,6 +50,15 @@
   align-items: baseline;
 }
 
+.calibration-report-rejected {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+  align-self: flex-start;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
 .calibration-report-table-wrap {
   overflow-x: auto;
 }

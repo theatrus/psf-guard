@@ -587,6 +587,10 @@ the report describes what WOULD apply, not just what files exist. Warnings
 call out kinds with no matches, nights without same-night flats, and flats
 more than a month from their lights.
 
+The report leaves rejected lights out, since no stack uses them, so a night
+you rejected for cloud does not show up as lacking flats. When the project
+has rejected lights, **Include N rejected lights** adds them back.
+
 ### Lights that cannot be calibrated
 
 A light cannot be calibrated properly when:

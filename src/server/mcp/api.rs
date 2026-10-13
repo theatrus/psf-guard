@@ -295,7 +295,7 @@ pub(super) const READABLE_ROUTES: &[(&str, &str)] = &[
     ),
     (
         "/db/{db}/projects/{project_id}/calibration-report",
-        "Calibration coverage by night and filter",
+        "Calibration coverage by night and filter; ?include_rejected",
     ),
     (
         "/db/{db}/projects/{project_id}/calibration-report/rejects",

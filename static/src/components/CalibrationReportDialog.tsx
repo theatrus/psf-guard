@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { apiClient } from '../api/client';
 import { useAccess } from '../auth/access';
@@ -206,11 +206,13 @@ export default function CalibrationReportDialog({
   projectName,
   onClose,
 }: Props) {
+  const [includeRejected, setIncludeRejected] = useState(false);
   const report = useQuery<ProjectCalibrationReport>({
-    queryKey: ['db', dbId, 'project', projectId, 'calibration-report'],
-    queryFn: () => apiClient.getProjectCalibrationReport(dbId, projectId),
+    queryKey: ['db', dbId, 'project', projectId, 'calibration-report', { includeRejected }],
+    queryFn: () => apiClient.getProjectCalibrationReport(dbId, projectId, includeRejected),
     enabled: open,
     staleTime: 60_000,
+    placeholderData: keepPreviousData,
   });
   const navigate = useNavigate();
   const location = useLocation();
@@ -258,6 +260,17 @@ export default function CalibrationReportDialog({
                 </div>
               ))}
             </div>
+
+            {report.data.rejected_lights > 0 && (
+              <label className="calibration-report-rejected">
+                <input
+                  type="checkbox"
+                  checked={includeRejected}
+                  onChange={(event) => setIncludeRejected(event.target.checked)}
+                />
+                Include {report.data.rejected_lights.toLocaleString()} rejected light{report.data.rejected_lights === 1 ? '' : 's'}
+              </label>
+            )}
 
             <div className="calibration-report-table-wrap">
               <table>

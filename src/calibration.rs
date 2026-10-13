@@ -2133,6 +2133,11 @@ pub struct ProjectCalibrationReport {
     /// Lights whose file was not found in the image directories; the
     /// report is built from the lights that resolve.
     pub lights_missing_files: usize,
+    /// The project's rejected lights. The report leaves them out unless it
+    /// was asked to include them.
+    pub rejected_lights: usize,
+    /// Whether the report counts the rejected lights.
+    pub rejected_included: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2841,11 +2846,13 @@ fn catalog_night_boundary(conn: &Connection) -> i64 {
 /// One representative light per night and filter is read from disk (header
 /// only) and matched against the library exactly as a stack build would,
 /// so the report describes what calibration WOULD apply — not just what
-/// files exist.
+/// files exist. Rejected lights never reach a stack, so they are left out
+/// unless `include_rejected` is set.
 pub fn project_calibration_report(
     conn: &Connection,
     project_id: i32,
     directory_tree: &crate::directory_tree::DirectoryTree,
+    include_rejected: bool,
 ) -> Result<ProjectCalibrationReport> {
     let db = crate::db::Database::new(conn);
     let rows = db
@@ -2856,7 +2863,14 @@ pub fn project_calibration_report(
     // bucket as its representative.
     let boundary = catalog_night_boundary(conn);
     let mut buckets: HashMap<(String, String), Vec<(i64, String)>> = HashMap::new();
+    let mut rejected_lights = 0usize;
     for (image, _project, _target) in &rows {
+        if image.grading_status == 2 {
+            rejected_lights += 1;
+            if !include_rejected {
+                continue;
+            }
+        }
         let Some(acquired) = image.acquired_date else {
             continue;
         };
@@ -3026,7 +3040,8 @@ pub fn project_calibration_report(
     }
 
     let mut warnings = Vec::new();
-    for summary in &kinds {
+    // With no lights to match, every kind would read as missing.
+    for summary in kinds.iter().filter(|_| !nights.is_empty()) {
         if summary.matching_frames == 0 && summary.kind != "dark_flat" {
             warnings.push(format!(
                 "No {} frames match any of this project's lights",
@@ -3056,6 +3071,8 @@ pub fn project_calibration_report(
         kinds,
         warnings,
         lights_missing_files,
+        rejected_lights,
+        rejected_included: include_rejected,
     })
 }
 
@@ -10862,7 +10879,7 @@ mod tests {
             .query_row("SELECT id FROM project LIMIT 1", [], |row| row.get(0))
             .unwrap();
         let tree = crate::directory_tree::DirectoryTree::build_multiple(&[temp.path()]).unwrap();
-        let report = project_calibration_report(&conn, project_id, &tree).unwrap();
+        let report = project_calibration_report(&conn, project_id, &tree, false).unwrap();
 
         assert_eq!(report.nights.len(), 2);
         // Newest night first; it has no same-night flats.
@@ -10894,6 +10911,37 @@ mod tests {
             .iter()
             .any(|warning| warning.contains("1 of 2 nights have no same-night flats")));
         assert_eq!(report.lights_missing_files, 0);
+        assert_eq!(report.rejected_lights, 0);
+
+        // Rejecting the second night's light drops that night, and its
+        // warning, unless the report is asked to include rejects.
+        conn.execute(
+            "UPDATE acquiredimage SET gradingStatus = 2 WHERE acquireddate = ?1",
+            [night_two],
+        )
+        .unwrap();
+        let report = project_calibration_report(&conn, project_id, &tree, false).unwrap();
+        assert_eq!(report.nights.len(), 1);
+        assert_eq!(report.nights[0].night, oldest.night);
+        assert_eq!(report.rejected_lights, 1);
+        assert!(!report.rejected_included);
+        assert!(!report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("same-night flats")));
+        let report = project_calibration_report(&conn, project_id, &tree, true).unwrap();
+        assert_eq!(report.nights.len(), 2);
+        assert_eq!(report.rejected_lights, 1);
+        assert!(report.rejected_included);
+
+        // With every light rejected there is nothing to match, so no kind
+        // reads as missing.
+        conn.execute("UPDATE acquiredimage SET gradingStatus = 2", [])
+            .unwrap();
+        let report = project_calibration_report(&conn, project_id, &tree, false).unwrap();
+        assert!(report.nights.is_empty());
+        assert_eq!(report.rejected_lights, 2);
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
     }
 
     fn vignetted_flat_only_library(
