@@ -328,7 +328,6 @@ export function useImageZoom(options: UseImageZoomOptions = DEFAULT_BOUNDS): Use
 
   // Handle mouse wheel zoom
   const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
 
     const container = containerRef.current;
     if (!container) return;
@@ -431,7 +430,6 @@ export function useImageZoom(options: UseImageZoomOptions = DEFAULT_BOUNDS): Use
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (e.touches.length >= 2) {
       touchPinchActiveRef.current = true;
-      e.preventDefault();
       beginPinch(e.touches, zoomState);
       return;
     }
@@ -450,7 +448,6 @@ export function useImageZoom(options: UseImageZoomOptions = DEFAULT_BOUNDS): Use
 
     if (e.touches.length >= 2) {
       touchPinchActiveRef.current = true;
-      e.preventDefault();
 
       if (!pinchRef.current) {
         beginPinch(e.touches, zoomState);
@@ -493,7 +490,6 @@ export function useImageZoom(options: UseImageZoomOptions = DEFAULT_BOUNDS): Use
     }
 
     if (e.touches.length === 1 && lastTouchPosRef.current) {
-      e.preventDefault();
       const touch = e.touches[0];
       const deltaX = touch.clientX - lastTouchPosRef.current.x;
       const deltaY = touch.clientY - lastTouchPosRef.current.y;
@@ -533,11 +529,11 @@ export function useImageZoom(options: UseImageZoomOptions = DEFAULT_BOUNDS): Use
     }
   }, [beginPinch, zoomState]);
 
-  // React delegates wheel events at the root. Browsers may make that listener
-  // passive, which means preventDefault() in the React handler cannot stop a
-  // trackpad pinch from also zooming the whole page. A non-passive listener
-  // on this container keeps the gesture local. The touch path is already
-  // covered by touch-action: none on .zoom-container.
+  // React attaches wheel, touchstart and touchmove as passive listeners, so
+  // preventDefault() in those handlers does nothing but log a warning; the
+  // handlers above never call it. A non-passive wheel listener on this
+  // container stops a trackpad pinch from also zooming the whole page, and
+  // touch-action: none on .zoom-container keeps touches local.
   //
   // Safari on macOS reports trackpad pinch as gesture events. Translate each
   // change into the same wheel path used by every viewer, including synced
