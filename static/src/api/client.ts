@@ -1555,6 +1555,20 @@ export const apiClient = {
     return data.data;
   },
 
+  setCalibrationQualityOverride: async (
+    dbId: string,
+    frameUuids: string[],
+    choice: 'use' | 'exclude' | 'clear'
+  ): Promise<{ updated: number }> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<{ updated: number }>>(
+      dbPath(dbId, '/calibrations/frames/quality'),
+      { frame_uuids: frameUuids, choice }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to set the frame choice');
+    return data.data;
+  },
+
   setCalibrationValidity: async (
     dbId: string,
     frameUuids: string[],

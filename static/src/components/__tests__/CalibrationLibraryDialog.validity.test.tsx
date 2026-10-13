@@ -188,6 +188,8 @@ describe('calibration validity marking', () => {
   });
 
   it('marks darks that caught stray light on the night and on the frame', async () => {
+    // Not graded yet: the stray-light mark an older check left still shows.
+    const why = 'stray light: level 1172.0 sits 669.0 above the quietest dark';
     serveLibrary([
       {
         ...flat('dark-quiet', earlyNight),
@@ -198,7 +200,8 @@ describe('calibration validity marking', () => {
         ...flat('dark-dawn', earlyNight + 600),
         kind: 'dark',
         dark_level: 1172,
-        stray_light: 'stray light: level 1172.0 sits 669.0 above the quietest dark',
+        stray_light: why,
+        kept_out: why,
       },
     ]);
     render(
@@ -206,8 +209,9 @@ describe('calibration validity marking', () => {
       { wrapper: wrapper() }
     );
 
-    // The collapsed night already says it holds a leaking dark.
-    expect(await screen.findByText('1 stray light')).toBeInTheDocument();
+    // The collapsed night already says it holds a frame kept out, which now
+    // counts every cause, stray light among them.
+    expect(await screen.findByText('1 kept out')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Night of 2026-06-01/ }));
     const badge = await screen.findByText('Stray light');
     expect(badge.getAttribute('title')).toContain('669.0 above the quietest dark');
@@ -246,5 +250,93 @@ describe('calibration validity marking', () => {
     expect(screen.getByText('dark-new.fits')).toBeInTheDocument();
     expect(screen.getByText('flat-a.fits')).toBeInTheDocument();
     expect(screen.getAllByText(/^Level /)).toHaveLength(2);
+  });
+});
+
+describe('calibration frame grades', () => {
+  const graded = [
+    { ...flat('ok-flat', earlyNight), grade: 'ok' },
+    {
+      ...flat('dim-flat', earlyNight + 60),
+      grade: 'suspect',
+      grade_code: 'dim',
+      grade_reason: 'dimmest channel at 7.5% of full scale',
+    },
+    {
+      ...flat('spotted-flat', earlyNight + 120),
+      grade: 'poor',
+      grade_code: 'changing_features',
+      grade_reason: '36 spots that change across its session',
+      kept_out: '36 spots that change across its session',
+    },
+    {
+      ...flat('kept-flat', earlyNight + 180),
+      grade: 'ok',
+      quality_override: 'exclude',
+      kept_out: 'by hand',
+    },
+  ];
+
+  it('shows each grade with its main reason, and the night counts', async () => {
+    serveLibrary(graded);
+    render(
+      <CalibrationLibraryDialog dbId="demo" dbName="Demo" canManage={false} onClose={() => {}} />,
+      { wrapper: wrapper() }
+    );
+
+    expect(await screen.findByText('2 kept out')).toBeInTheDocument();
+    expect(screen.getByText('1 suspect')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Night of 2026-06-01/ }));
+    expect(await screen.findByText('Suspect · too dim')).toHaveAttribute(
+      'title',
+      'dimmest channel at 7.5% of full scale'
+    );
+    expect(screen.getByText('Poor · changing spots')).toHaveAttribute(
+      'title',
+      '36 spots that change across its session'
+    );
+    expect(screen.getAllByText('OK')).toHaveLength(2);
+    expect(screen.getByText('Kept out')).toBeInTheDocument();
+    // A read-only viewer sees the grades but cannot change them.
+    expect(screen.queryByRole('button', { name: 'Keep out' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Use anyway' })).toBeNull();
+  });
+
+  it('keeps out a good frame, uses a poor one, and clears a choice', async () => {
+    serveLibrary(graded);
+    const received: unknown[] = [];
+    server.use(
+      http.put('/api/db/demo/calibrations/frames/quality', async ({ request }) => {
+        received.push(await request.json());
+        return HttpResponse.json({ success: true, data: { updated: 1 }, error: null });
+      })
+    );
+    render(
+      <CalibrationLibraryDialog dbId="demo" dbName="Demo" canManage onClose={() => {}} />,
+      { wrapper: wrapper() }
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /Night of 2026-06-01/ }));
+    await screen.findByText('Poor · changing spots');
+
+    // Serving frames offer Keep out; the poor one offers Use anyway; the
+    // frame kept out by hand offers Clear.
+    const keepOut = screen.getAllByRole('button', { name: 'Keep out' });
+    expect(keepOut).toHaveLength(2);
+    fireEvent.click(keepOut[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Use anyway' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+
+    await waitFor(() => expect(received).toHaveLength(3));
+    expect(received).toEqual(
+      expect.arrayContaining([
+        { frame_uuids: ['spotted-flat'], choice: 'use' },
+        { frame_uuids: ['kept-flat'], choice: 'clear' },
+      ])
+    );
+    expect(
+      received.filter(
+        (body) => (body as { choice: string }).choice === 'exclude'
+      )
+    ).toHaveLength(1);
   });
 });

@@ -94,6 +94,31 @@ const VALIDITY_LABELS: Record<'forward' | 'backward', string> = {
   backward: '◂ before only',
 };
 
+/** The main finding of a grade, in a word or two. */
+const GRADE_REASONS: Record<string, string> = {
+  clipped: 'clipped',
+  bright: 'too bright',
+  dim: 'too dim',
+  illumination: 'uneven light',
+  features: 'spots',
+  changing_features: 'changing spots',
+  carried_features: 'spots',
+  level: 'level',
+  level_excess: 'stray light',
+  noise: 'noise',
+  row_banding: 'row banding',
+  column_banding: 'column banding',
+  hot_pixels: 'hot pixels',
+};
+
+function gradeLabel(frame: CalibrationFrameSummary): string | null {
+  if (!frame.grade) return null;
+  if (frame.grade === 'ok') return 'OK';
+  const reason = frame.grade_code ? GRADE_REASONS[frame.grade_code] : undefined;
+  const grade = frame.grade === 'poor' ? 'Poor' : 'Suspect';
+  return reason ? `${grade} · ${reason}` : grade;
+}
+
 const VALIDITY_TITLES: Record<'forward' | 'backward', string> = {
   forward:
     'Marked usable only for lights captured after this frame — shot after an optics change or cleaning.',
@@ -171,6 +196,11 @@ export default function CalibrationLibraryDialog({
   });
   const clearMasters = useMutation({
     mutationFn: () => apiClient.clearCalibrationMasters(dbId),
+    onSuccess: refresh,
+  });
+  const choose = useMutation({
+    mutationFn: (input: { frameUuid: string; choice: 'use' | 'exclude' | 'clear' }) =>
+      apiClient.setCalibrationQualityOverride(dbId, [input.frameUuid], input.choice),
     onSuccess: refresh,
   });
   const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set());
@@ -422,12 +452,17 @@ export default function CalibrationLibraryDialog({
             </button>
           </div>
         )}
-        {(forget.error || forgetNight.error || clearMasters.error || markValidity.error) && (
+        {(forget.error ||
+          forgetNight.error ||
+          clearMasters.error ||
+          markValidity.error ||
+          choose.error) && (
           <div className="calibration-library-error">
             {forget.error?.message ||
               forgetNight.error?.message ||
               clearMasters.error?.message ||
-              markValidity.error?.message}
+              markValidity.error?.message ||
+              choose.error?.message}
           </div>
         )}
 
@@ -473,7 +508,10 @@ export default function CalibrationLibraryDialog({
                   {groups.map((group) => {
                     const expanded = expandedGroups.has(group.key);
                     const shared = groupValidity(group.frames);
-                    const strayLight = group.frames.filter((frame) => frame.stray_light).length;
+                    const keptOut = group.frames.filter((frame) => frame.kept_out).length;
+                    const suspect = group.frames.filter(
+                      (frame) => frame.grade === 'suspect' && !frame.kept_out
+                    ).length;
                     return [
                       <tr key={group.key} className="calibration-night-row">
                         <td colSpan={canManage ? 5 : 4}>
@@ -509,12 +547,20 @@ export default function CalibrationLibraryDialog({
                                 {VALIDITY_LABELS[shared]}
                               </span>
                             )}
-                            {strayLight > 0 && (
+                            {keptOut > 0 && (
                               <span
                                 className="calibration-validity calibration-stray-light"
-                                title="These darks sit well above the matching darks, the mark of stray light. Masters and exports leave them out."
+                                title="Graded poor or kept out by hand. Masters and exports leave them out."
                               >
-                                {strayLight} stray light
+                                {keptOut} kept out
+                              </span>
+                            )}
+                            {suspect > 0 && (
+                              <span
+                                className="calibration-validity"
+                                title="Worth a look. Masters and exports still use them."
+                              >
+                                {suspect} suspect
                               </span>
                             )}
                             {/* Destructive, so it only appears once the
@@ -577,17 +623,76 @@ export default function CalibrationLibraryDialog({
                             {VALIDITY_LABELS[frame.valid_direction]}
                           </span>
                         )}
-                        {frame.stray_light && (
+                        {frame.grade ? (
+                          <span
+                            className={`calibration-validity calibration-grade-${frame.grade}`}
+                            title={frame.grade_reason ?? 'Nothing crossed a limit.'}
+                          >
+                            {gradeLabel(frame)}
+                          </span>
+                        ) : (
+                          frame.stray_light && (
+                            <span
+                              className="calibration-validity calibration-stray-light"
+                              title={`${frame.stray_light}. Left out of masters and exports.`}
+                            >
+                              Stray light
+                            </span>
+                          )
+                        )}
+                        {frame.quality_override === 'exclude' && (
                           <span
                             className="calibration-validity calibration-stray-light"
-                            title={`${frame.stray_light}. Left out of masters and exports.`}
+                            title="Kept out by hand. Masters and exports leave it out."
                           >
-                            Stray light
+                            Kept out
+                          </span>
+                        )}
+                        {frame.quality_override === 'use' && (
+                          <span
+                            className="calibration-validity calibration-grade-ok"
+                            title="Used by hand, whatever its grade."
+                          >
+                            Used anyway
                           </span>
                         )}
                       </td>
                       {canManage && (
                         <td>
+                          {frame.quality_override ? (
+                            <button
+                              className="browse-button"
+                              title="Let the grade decide again"
+                              onClick={() =>
+                                choose.mutate({ frameUuid: frame.frame_uuid, choice: 'clear' })
+                              }
+                              disabled={choose.isPending}
+                            >
+                              Clear
+                            </button>
+                          ) : frame.kept_out ? (
+                            <button
+                              className="browse-button"
+                              title="Use in masters and exports whatever its grade"
+                              onClick={() =>
+                                choose.mutate({ frameUuid: frame.frame_uuid, choice: 'use' })
+                              }
+                              disabled={choose.isPending}
+                            >
+                              Use anyway
+                            </button>
+                          ) : (
+                            <button
+                              className="browse-button"
+                              title="Leave out of masters and exports; the frame stays in the library"
+                              onClick={() =>
+                                choose.mutate({ frameUuid: frame.frame_uuid, choice: 'exclude' })
+                              }
+                              disabled={choose.isPending}
+                            >
+                              Keep out
+                            </button>
+                          )}
                           <button
                             className="remove-button"
                             onClick={() => handleForget(frame)}

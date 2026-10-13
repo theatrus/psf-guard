@@ -367,10 +367,10 @@ pub fn main() -> Result<()> {
             if plan.missing.len() > 10 {
                 eprintln!("  … and {} more missing", plan.missing.len() - 10);
             }
-            if let Some(example) = plan.stray_light.first() {
+            if let Some(example) = plan.kept_out.first() {
                 eprintln!(
-                    "  ⚠️ left out {} dark(s) that caught stray light, e.g. {}",
-                    plan.stray_light.len(),
+                    "  ⚠️ left out {} calibration frame(s) graded poor or kept out, e.g. {}",
+                    plan.kept_out.len(),
                     example.display()
                 );
             }
