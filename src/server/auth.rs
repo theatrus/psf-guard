@@ -883,6 +883,7 @@ fn requires_write(method: &Method, path: &str, can_compute: bool) -> bool {
 
     if path.ends_with("/images/generation-status")
         || path.ends_with("/stack-previews/calibration-masters/generation-status")
+        || path.ends_with("/calibrations/generation-status")
     {
         return false;
     }
@@ -1083,6 +1084,16 @@ mod tests {
         assert!(!requires_write(
             &Method::POST,
             "/db/test/stack-previews/calibration-masters/generation-status",
+            false,
+        ));
+        assert!(!requires_write(
+            &Method::POST,
+            "/db/test/calibrations/generation-status",
+            false,
+        ));
+        assert!(requires_write(
+            &Method::PUT,
+            "/db/test/calibrations/frames/quality",
             false,
         ));
         assert!(requires_write(

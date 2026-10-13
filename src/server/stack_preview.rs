@@ -3137,7 +3137,7 @@ fn excluded_decision_for(image_id: i32, reason: String) -> StackFrameDecision {
     }
 }
 
-fn source_fingerprint(path: &FsPath) -> String {
+pub(crate) fn source_fingerprint(path: &FsPath) -> String {
     let mut hasher = Sha256::new();
     hasher.update(path.to_string_lossy().as_bytes());
     if let Ok(metadata) = path.metadata() {

@@ -23,9 +23,12 @@ pub const WBPP_RUNS: &str = "wbpp";
 /// Built calibration masters, below the calibration root.
 pub const CALIBRATION_MASTERS: &str = "calibration-masters";
 
+/// Pictures of raw calibration frames, and the session medians they are
+/// compared with, below the cache root.
+pub const CALIBRATION_PREVIEWS: &str = "calibration-previews";
 /// Image preview folders below the cache root, which the disk budget culls
 /// first.
-pub const PREVIEW_CATEGORIES: [&str; 3] = ["previews", "annotated", "stars"];
+pub const PREVIEW_CATEGORIES: [&str; 4] = ["previews", "annotated", "stars", CALIBRATION_PREVIEWS];
 /// Preview folders whose files carry the configured image encoding.
 pub const ENCODED_PREVIEW_CATEGORIES: [&str; 2] = ["previews", "annotated"];
 

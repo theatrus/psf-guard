@@ -253,6 +253,37 @@ pub fn referenced_labels(stack_root: &Path) -> Option<HashSet<String>> {
     Some(labels)
 }
 
+/// The projects whose latest stacks use each master, by file name: read
+/// from each project's latest-stack index as text. An index that cannot be
+/// read adds nothing.
+pub(crate) fn projects_by_label(stack_root: &Path) -> HashMap<String, Vec<i32>> {
+    let mut projects: HashMap<String, Vec<i32>> = HashMap::new();
+    let Ok(entries) = std::fs::read_dir(storage::stacks(stack_root)) else {
+        return projects;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(project_id) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("latest-project-"))
+            .and_then(|name| name.strip_suffix(".json"))
+            .and_then(|id| id.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        let Ok(text) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        for label in labels_in(&text) {
+            let ids = projects.entry(label).or_default();
+            if !ids.contains(&project_id) {
+                ids.push(project_id);
+            }
+        }
+    }
+    projects
+}
+
 /// Master labels (`<kind>-<64 hex>.fits`) in a text.
 fn labels_in(text: &str) -> impl Iterator<Item = String> + '_ {
     text.match_indices(".fits").filter_map(|(end, _)| {

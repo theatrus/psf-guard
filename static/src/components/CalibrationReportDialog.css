@@ -5,6 +5,22 @@
   min-width: min(38rem, 90vw);
 }
 
+.calibration-report-browse {
+  align-self: flex-end;
+  padding: 0.3rem 0.75rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-primary);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.calibration-report-browse:hover {
+  border-color: var(--color-primary);
+}
+
 .calibration-report-muted {
   color: var(--color-text-muted);
   font-size: 0.85rem;

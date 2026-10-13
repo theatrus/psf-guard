@@ -2,14 +2,24 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Layers, RotateCcw } from 'lucide-react';
 import { apiClient } from '../api/client';
-import type { CalibrationFrameSpan, CalibrationMasterSource, StackCalibrationMaster } from '../api/types';
+import type {
+  CalibrationFrameSpan,
+  CalibrationMasterSource,
+  LibraryCalibrationMaster,
+  StackCalibrationMaster,
+  StackCalibrationMasters,
+  StackMasterSource,
+} from '../api/types';
 import StackPreviewInspector from './StackPreviewInspector';
 
 interface Inspection {
   dbId: string;
+  /** One stack's masters, or every master the library recorded. */
   source: CalibrationMasterSource;
   title: string;
   label: string;
+  /** The master shown first. */
+  initialMasterId?: string;
 }
 
 const kindLabels: Record<StackCalibrationMaster['kind'], string> = {
@@ -17,7 +27,26 @@ const kindLabels: Record<StackCalibrationMaster['kind'], string> = {
 };
 
 function usageLabel(master: StackCalibrationMaster): string {
-  return master.usages.map((usage) => `${usage.channel} / Session ${usage.session}`).join(', ');
+  return master.caption
+    ?? master.usages.map((usage) => `${usage.channel} / Session ${usage.session}`).join(', ');
+}
+
+/** A library master's caption: its filter, exposure and nights. */
+function libraryCaption(master: LibraryCalibrationMaster): string {
+  return [
+    master.kind === 'flat' ? master.filter : null,
+    master.exposure_s != null ? `${Number(master.exposure_s.toFixed(2))}s` : null,
+    master.sources?.first_night,
+    master.source_count != null ? `${master.source_count} frames` : null,
+  ].filter(Boolean).join(' · ') || master.label;
+}
+
+function loadCatalog(dbId: string, source: CalibrationMasterSource): Promise<StackCalibrationMasters> {
+  if (source.kind !== 'library') return apiClient.getStackCalibrationMasters(dbId, source);
+  return apiClient.getLibraryCalibrationMasters(dbId).then((catalog) => ({
+    notes: catalog.notes,
+    masters: catalog.masters.map((master) => ({ ...master, caption: libraryCaption(master) })),
+  }));
 }
 
 /** The sensor temperatures and nights a master's source frames span. */
@@ -46,15 +75,15 @@ function stretchUrl(url: string | null, midtone: number, shadow: number): string
   return `${path}?${params}`;
 }
 
-export function CalibrationMasterInspector({ dbId, source, title, label, onClose }: Inspection & {
+export function CalibrationMasterInspector({ dbId, source, title, label, initialMasterId, onClose }: Inspection & {
   onClose: () => void;
 }) {
   const catalog = useQuery({
     queryKey: ['db', dbId, 'stack-calibration-masters', source],
-    queryFn: () => apiClient.getStackCalibrationMasters(dbId, source),
+    queryFn: () => loadCatalog(dbId, source),
     retry: false,
   });
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialMasterId ?? null);
   const [draftStretch, setDraftStretch] = useState({ midtone: 0.2, shadow: -2.8 });
   const [stretch, setStretch] = useState(draftStretch);
   useEffect(() => {
@@ -82,18 +111,18 @@ export function CalibrationMasterInspector({ dbId, source, title, label, onClose
   ] : [];
   const emptyMessage = catalog.isPending ? 'Loading calibration masters...'
     : catalog.isError ? 'Calibration masters could not be loaded.'
-      : !master ? 'No calibration master files were recorded for this stack.'
+      : !master ? (source.kind === 'library' ? 'The library has no masters yet.' : 'No calibration master files were recorded for this stack.')
         : master.unavailable_reason || 'This calibration master is unavailable.';
 
   return (
     <StackPreviewInspector
       className="calibration-master-inspector"
-      eyebrow="Applied calibration"
+      eyebrow={source.kind === 'library' ? 'Calibration library' : 'Applied calibration'}
       title={title}
       label={`${label} / ${masterLabel}`}
       summary={[]}
       imageUrl={imageUrl}
-      imageIdentity={master ? `${dbId}:${source.artifactRevision}:${master.id}` : undefined}
+      imageIdentity={master ? `${dbId}:${source.kind === 'library' ? 'library' : source.artifactRevision}:${master.id}` : undefined}
       fitsUrl={master?.available ? master.fits_url : null}
       imageAlt={`${masterLabel} master for ${title}`}
       downloadLabel="Download master FITS"
@@ -171,7 +200,7 @@ export function CalibrationMasterInspector({ dbId, source, title, label, onClose
   );
 }
 
-export default function CalibrationMasterButton(props: Inspection) {
+export default function CalibrationMasterButton(props: Inspection & { source: StackMasterSource }) {
   const [inspection, setInspection] = useState<Inspection | null>(null);
   return (
     <>

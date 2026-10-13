@@ -498,7 +498,17 @@ fn recorded_masters(
 }
 
 fn master_path(ctx: &DatabaseContext, master: &RecordedMaster) -> Result<PathBuf, AppError> {
-    if !valid_label(master.kind, &master.label) {
+    master_file(ctx, master.kind, &master.label)
+}
+
+/// A recorded master's file, which must sit in this database's master
+/// folder under a name of its kind.
+pub(crate) fn master_file(
+    ctx: &DatabaseContext,
+    kind: CalibrationKind,
+    label: &str,
+) -> Result<PathBuf, AppError> {
+    if !valid_label(kind, label) {
         return Err(AppError::BadRequest(
             "Invalid calibration master reference".into(),
         ));
@@ -508,7 +518,7 @@ fn master_path(ctx: &DatabaseContext, master: &RecordedMaster) -> Result<PathBuf
         &ctx.calibration_root,
     ))
     .map_err(|_| AppError::NotFound)?;
-    let path = std::fs::canonicalize(root.join(&master.label)).map_err(|_| AppError::NotFound)?;
+    let path = std::fs::canonicalize(root.join(label)).map_err(|_| AppError::NotFound)?;
     if !root.starts_with(&base) || !path.starts_with(&root) || !path.is_file() {
         return Err(AppError::NotFound);
     }
@@ -669,6 +679,17 @@ fn preview_job(
     path: PathBuf,
     options: &DisplayOptions,
 ) -> Result<GenJob, AppError> {
+    master_preview_job(ctx, &master.id, path, options)
+}
+
+/// The preview of one master file, keyed by `id`, its file and the display
+/// settings, cached below this database's previews.
+pub(crate) fn master_preview_job(
+    ctx: &DatabaseContext,
+    id: &str,
+    path: PathBuf,
+    options: &DisplayOptions,
+) -> Result<GenJob, AppError> {
     let (size, midtone, shadow) = options.normalized()?;
     let fingerprint = super::source_fingerprint(&path);
     let key = digest_hex(
@@ -677,7 +698,7 @@ fn preview_job(
             env!("CARGO_PKG_VERSION"),
             super::stretch::SEIZA_STRETCH_VERSION,
             seiza_stacking::VERSION,
-            master.id
+            id
         )
         .as_bytes(),
     );
@@ -720,7 +741,7 @@ fn preview_job(
     })
 }
 
-fn generation_status(state: &Arc<AppState>, job: GenJob) -> GenerationStatus {
+pub(crate) fn generation_status(state: &Arc<AppState>, job: GenJob) -> GenerationStatus {
     if let Some(status) = state
         .preview_queue
         .status_for_source(&job.cache_path, &job.fits_path)
@@ -795,7 +816,7 @@ pub async fn download_fits(
     serve_file(&path, "application/fits", Some(&master.label)).await
 }
 
-async fn serve_file(
+pub(crate) async fn serve_file(
     path: &FsPath,
     content_type: &str,
     filename: Option<&str>,

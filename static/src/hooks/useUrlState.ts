@@ -139,12 +139,42 @@ export function useDbProjectTarget() {
   };
 }
 
-/** Query params that belong to one view and never travel to another: the
- *  Planning workspace's plan (`plan`, and the older names) and the Sky's
- *  Live panel (`live`). */
-export const PLANNING_PARAMS = ['plan', 'planTab', 'directorProject', 'directorSource', 'directorView', 'directorCatalog', 'live'] as const;
+/**
+ * The calibration page's own URL keys. Each starts with `cal` so none
+ * collides with a key another view reads, such as the Images `filter`.
+ */
+export const CALIBRATION_PARAMS = [
+  'calTab',
+  'calRig',
+  'calKind',
+  'calFilter',
+  'calExposure',
+  'calTempMin',
+  'calTempMax',
+  'calFrom',
+  'calTo',
+  'calGrade',
+  'calKept',
+  'calMissing',
+  'calSort',
+  'calPage',
+  'calSession',
+  'calFrame',
+  'calView',
+  'calStretch',
+  'calFull',
+  'calMaster',
+] as const;
 
-/** A copy of `search` without the Planning page's own params. */
+/** Query params that belong to one view and never travel to another: the
+ *  Planning workspace's plan (`plan`, and the older names), the Sky's Live
+ *  panel (`live`) and the calibration page's. */
+export const PLANNING_PARAMS = [
+  'plan', 'planTab', 'directorProject', 'directorSource', 'directorView', 'directorCatalog', 'live',
+  ...CALIBRATION_PARAMS,
+] as const;
+
+/** A copy of `search` without the params one view keeps to itself. */
 export function withoutPlanningParams(search: string): URLSearchParams {
   const next = new URLSearchParams(search);
   for (const key of PLANNING_PARAMS) next.delete(key);
