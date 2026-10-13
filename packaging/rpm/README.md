@@ -58,6 +58,12 @@ The unit binds to `127.0.0.1:3000` by default and is sandboxed (`ProtectSystem=s
 libraries live somewhere `ProtectHome=read-only` blocks, relax it with a
 drop-in: `systemctl edit psf-guard`.
 
+Stopping or restarting the service lets work under way reach a safe point
+first: a quality scan finishes the frames in hand and saves what it measured,
+a stack build checkpoints what it integrated, and imports and calibration
+grading stop at their next commit. Every five seconds the journal names what
+the stop still waits for. systemd's stop timeout still applies.
+
 ## Build locally
 
 ```bash

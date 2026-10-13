@@ -127,16 +127,29 @@ pub fn progress(path: &str) -> CalibrationQualityProgress {
 /// Measure what is new in the catalog at `path` and grade it, on a thread
 /// of its own.
 pub fn request(state: &Arc<AppState>, path: &str) {
+    if state.shutdown.is_stopping() {
+        return;
+    }
     let job = job(path);
     if !claim(&mut job.flags.lock().unwrap_or_else(|p| p.into_inner())) {
         return;
     }
     let state = Arc::clone(state);
     let path = path.to_string();
+    // A stop waits for the batch being measured to be committed.
+    let work = state.shutdown.hold(format!("calibration grading ({path})"));
     std::thread::spawn(move || {
+        let _work = work;
         loop {
             run_logged(&state, &path, &job);
-            if !finish(&mut job.flags.lock().unwrap_or_else(|p| p.into_inner())) {
+            let mut flags = job.flags.lock().unwrap_or_else(|p| p.into_inner());
+            if state.shutdown.is_stopping() {
+                // Let go of the catalog: the next start grades the rest.
+                flags.running = false;
+                flags.again = false;
+                return;
+            }
+            if !finish(&mut flags) {
                 break;
             }
         }
@@ -283,7 +296,7 @@ fn run_pass(
             // Interactive work comes first; this frame waits for it.
             if state.interactive_job_active() {
                 update(job, |progress| progress.stage = Some("waiting".into()));
-                while state.interactive_job_active() {
+                while state.interactive_job_active() && !state.shutdown.is_stopping() {
                     std::thread::sleep(YIELD_POLL);
                 }
                 update(job, |progress| progress.stage = Some("measuring".into()));
@@ -294,9 +307,14 @@ fn run_pass(
             &conn,
             &pending,
             |frames| pool.install(|| frames.par_iter().map(measure).collect()),
+            || !state.shutdown.is_stopping(),
             |done, _| update(job, |progress| progress.done = done),
         )?
     };
+    if state.shutdown.is_stopping() {
+        // Grading reads the whole library; the next start does it.
+        return Ok((measured, Default::default()));
+    }
     update(job, |progress| {
         progress.stage = Some("grading".into());
         progress.last_measured = Some(measured.clone());

@@ -323,7 +323,7 @@ fn path_for(state: &AppState) -> Option<PathBuf> {
         .map(journal_path)
 }
 
-/// Keep the journal current until the process ends.
+/// Keep the journal current until the server stops, which writes it itself.
 pub fn spawn_writer(state: Arc<AppState>) {
     let Some(path) = path_for(&state) else {
         return;
@@ -331,7 +331,9 @@ pub fn spawn_writer(state: Arc<AppState>) {
     tokio::spawn(async move {
         let mut last = read(&path).unwrap_or_default();
         loop {
-            tokio::time::sleep(WRITE_INTERVAL).await;
+            if !state.shutdown.sleep(WRITE_INTERVAL).await {
+                return;
+            }
             let current = snapshot(&state);
             if current == last {
                 continue;
@@ -423,7 +425,10 @@ pub async fn restore(state: &Arc<AppState>) {
 
 async fn retry_deferred(state: Arc<AppState>) {
     loop {
-        tokio::time::sleep(RETRY_EVERY).await;
+        // A stop leaves them in the journal for the next start.
+        if !state.shutdown.sleep(RETRY_EVERY).await {
+            return;
+        }
         let pending = std::mem::take(&mut *DEFERRED.lock().unwrap());
         if pending.is_empty() {
             return;

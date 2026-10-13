@@ -103,3 +103,9 @@
   its grade already keeps out, so you can keep a frame out by hand the way
   you reject a light, and a later grade cannot bring it back. Such a frame
   shows **Kept out by hand**.
+- Stopping or restarting the server no longer hangs until systemd kills it.
+  Background work stops at its next safe point: a quality scan saves what it
+  measured, a stack build checkpoints the frames it integrated and resumes
+  after the restart, and imports and calibration grading stop at a commit.
+  The log says what the stop is still waiting for. A stack build stopped this
+  way no longer counts toward the two restarts that drop a build.

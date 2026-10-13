@@ -676,7 +676,9 @@ database registry (`<registry>.jobs.json`), rewritten a few seconds after the
 queue changes and once more when the server stops cleanly (Ctrl+C, SIGTERM,
 or quitting the desktop app). It holds stack and color builds queued or
 running, in the order they would run, automatic refreshes still settling with
-their due times, and the WBPP line.
+their due times, and the WBPP line. A stopping server asks every build to
+stop and waits for it: a running build checkpoints the frames it has
+integrated, and the journal keeps it to resume.
 
 On start PSF Guard puts them back before the automatic scheduler may start
 anything:
@@ -687,8 +689,8 @@ anything:
   yet, because its disk is not mounted, is retried every minute for half an
   hour and stays in the journal meanwhile.
 - A build cut off part way resumes from its checkpoint where it can. A build
-  cut off by two restarts in a row is not started a third time, since it is
-  the likelier cause of the restarts.
+  cut off by two crashes or killed processes in a row is not started a third
+  time, since it is the likelier cause of them. A clean stop does not count.
 - A build you adopted from the automatic refresh comes back as yours.
 - Settling refreshes keep their due times, or run at once if those passed.
 - Waiting WBPP runs keep their order. A WBPP run the restart cut off is not

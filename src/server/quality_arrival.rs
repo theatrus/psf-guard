@@ -54,10 +54,12 @@ pub async fn run(state: Arc<AppState>) {
             note_arrival(&ctx.id);
         }
     }
+    let shutdown = Arc::clone(&state.shutdown);
     let state = Arc::downgrade(&state);
-    let mut interval = tokio::time::interval(POLL);
     loop {
-        interval.tick().await;
+        if !shutdown.sleep(POLL).await {
+            return;
+        }
         let Some(state) = state.upgrade() else {
             return;
         };

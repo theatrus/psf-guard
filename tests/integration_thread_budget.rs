@@ -102,7 +102,7 @@ async fn budgeted_jobs_keep_seiza_inside_their_pools() {
             source_generation: 0,
             source_revision: None,
         };
-        psf_guard::server::spatial_scan::run_scan(&store, &cache, &[item], 2, &|| {});
+        psf_guard::server::spatial_scan::run_scan(&store, &cache, &[item], 2, &|| true);
         let store = store.into_inner().unwrap();
         (store.metrics.len(), store.progress.errors)
     })

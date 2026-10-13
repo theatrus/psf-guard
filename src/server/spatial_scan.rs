@@ -373,12 +373,14 @@ pub fn try_begin_scan(
 /// concurrency (see `concurrency::plan_workers`), clamped here to the
 /// amount of work. Detection is CPU-bound at several seconds per full-frame
 /// image, so each worker roughly adds one frame's worth of throughput.
+/// `wait_for_turn` runs before each frame and returns false when the scan
+/// should stop; what was measured until then is still saved.
 pub fn run_scan(
     store: &RwLock<SpatialMetricsStore>,
     cache_dir: &Path,
     work: &[ScanWorkItem],
     workers: usize,
-    wait_for_turn: &(dyn Fn() + Sync),
+    wait_for_turn: &(dyn Fn() -> bool + Sync),
 ) {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -388,7 +390,9 @@ pub fn run_scan(
     // A pool sized by the caller's worker budget, which the detectors' own
     // rayon work shares.
     crate::concurrency::parallel_in_pool(work.len(), workers, |i| {
-        wait_for_turn();
+        if !wait_for_turn() {
+            return;
+        }
         let item = &work[i];
         {
             let mut s = store.write().unwrap();
