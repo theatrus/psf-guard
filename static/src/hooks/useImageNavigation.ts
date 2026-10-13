@@ -16,7 +16,9 @@ import {
 } from '../utils/imageDetailRoutes';
 import { matchesStatusFilter } from '../utils/statusFilter';
 import { matchesFlagFilter } from '../utils/flagFilter';
+import { matchesCalibrationFilter } from '../utils/calibrationFilter';
 import { useScopedQuality } from './useSequenceAnalysis';
+import { useCalibrationMarks } from './useCalibrationMarks';
 
 /**
  * Hook for navigating between images in the current context
@@ -39,6 +41,8 @@ export function useImageNavigation(currentImageId?: number) {
     filters.filterNames.length === 1 ? filters.filterNames[0] : undefined,
     filters.flags.length > 0,
   );
+  // And by calibration, read only when that filter is on.
+  const calibration = useCalibrationMarks(dbId, projectId, filters.calibration.length > 0);
 
   // Fetch all images for navigation context
   const { data: allImages = [] } = useQuery({
@@ -91,10 +95,24 @@ export function useImageNavigation(currentImageId?: number) {
         && !matchesFlagFilter(filters.flags, quality.qualityByImage.get(image.id))) {
         return false;
       }
+
+      if (filters.calibration.length > 0 && !calibration.isLoading && !calibration.error
+        && !matchesCalibrationFilter(filters.calibration, calibration.marks.get(image.id))) {
+        return false;
+      }
       
       return true;
     });
-  }, [allImages, filters, quality.isLoading, quality.error, quality.qualityByImage]);
+  }, [
+    allImages,
+    filters,
+    quality.isLoading,
+    quality.error,
+    quality.qualityByImage,
+    calibration.isLoading,
+    calibration.error,
+    calibration.marks,
+  ]);
 
   // Group and sort images the same way as GroupedImageGrid
   const imageGroups = useMemo(() => {

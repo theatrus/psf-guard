@@ -77,7 +77,7 @@ function useOverviewData(projects: ReturnType<typeof project>[]) {
 
 describe('Overview return scope', () => {
   // These tests read the full cards; the Library opens compact by default.
-  beforeEach(() => { setDisplayPreferences({ showNightChip: true, showAllChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'detailed' }); });
+  beforeEach(() => { setDisplayPreferences({ showNightChip: true, showAllChip: true, showCalibrationChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'detailed' }); });
   it('marks and reveals the project the user came from', async () => {
     useOverviewData([project(1, 'Sh2 86'), project(2, 'NGC 6820')]);
     const scrollIntoView = vi.fn();

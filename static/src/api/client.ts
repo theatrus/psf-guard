@@ -1463,6 +1463,21 @@ export const apiClient = {
     return data.data;
   },
 
+  /** The lights each calibration health result found something in, for
+   *  one project or, without one, the whole database. */
+  getCalibrationLightMarks: async (
+    dbId: string,
+    projectId: number | null
+  ): Promise<import('./types').CalibrationLightMarks> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<import('./types').CalibrationLightMarks>>(
+      dbPath(dbId, '/calibration-health/lights'),
+      { params: projectId == null ? undefined : { project_id: projectId } }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read calibration marks');
+    return data.data;
+  },
+
   getProjectCalibrationHealth: async (
     dbId: string,
     projectId: number

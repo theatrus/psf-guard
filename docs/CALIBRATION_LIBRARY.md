@@ -651,15 +651,28 @@ on the compact row and the card; it opens the Calibration report, whose
 **Quality** section lists each finding with its lights by night and filter.
 **Show › Calibration issues** narrows the Library to those projects.
 
+The image views mark the same lights. In Images, Sequence and a mosaic's
+sequence, a **🧪** chip under the score chips is red on a Poor light and
+yellow on one to check; hover it for its findings. The chip has its own
+toggle beside the 🌙 and layers toggles, and in **Settings › Review**.
+Images has a **Calibration** filter: **Poor**, **Check**, or both. Sequence
+adds **Poor calibration** to **Select**, so the lights can go straight to
+**Review rejection**. In the Calibration report, each Quality finding, each
+night that can't be calibrated, and each line of **Check lights** opens
+those lights in Images, filtered to that finding and its filters.
+
 Reading every light takes time, so this runs in the background, never on a
 request: after each grading pass (which follows the server start, imports,
-syncs, forgets and remote uploads), and when a frame is kept out or used
-anyway, a validity mark changes, or the calibration settings change. It uses
-the background worker share and waits while interactive work runs. The
-results are kept below the database's cache folder, each filed under a key
-of the library and its grades, the project's lights, the calibration
-settings and the rules, so a project is read again only when one of those
-changed. Until then, a project whose result no longer holds shows no pill.
+syncs, forgets and remote uploads), when a light's grade changes, and when a
+frame is kept out or used anyway, a validity mark changes, or the
+calibration settings change. It uses the background worker share and waits
+while interactive work runs. The results are kept below the database's cache
+folder, each filed under a key of the library and its grades, the project's
+lights, the calibration settings and the rules, so a project is read again
+only when one of those changed. Accepting a light, or setting it back to
+pending, changes no key; rejecting one does. Until a project is read again,
+a result that no longer holds shows no pill. The image views keep showing its
+marks, so rejecting lights does not clear the rest until the pass ends.
 
 ## Stack previews
 

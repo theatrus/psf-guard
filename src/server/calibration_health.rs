@@ -13,18 +13,18 @@
 //! The Library reads the kept results only. One whose key no longer matches
 //! is stale and is not shown until the next pass replaces it.
 
-use crate::calibration::{HealthLevel, HealthLibrary, ProjectHealth};
+use crate::calibration::{HealthCode, HealthLevel, HealthLibrary, ProjectHealth};
 use crate::concurrency::{ComputePool, Priority};
 use crate::server::api::ApiResponse;
 use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
-use axum::extract::Path;
+use axum::extract::{Path, Query};
 use axum::Json;
 use rayon::prelude::*;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
@@ -345,9 +345,138 @@ pub async fn get_project_health(
     })))
 }
 
+/// One light with a finding, as the image views mark it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LightMark {
+    pub image_id: i32,
+    /// Its worst finding's level.
+    pub level: HealthLevel,
+    /// Every rule that found something in it.
+    pub codes: Vec<HealthCode>,
+}
+
+/// Each light of a project's result that has a finding, by id.
+fn marks_of(health: &ProjectHealth) -> Vec<LightMark> {
+    let mut lights: BTreeMap<i32, (HealthLevel, BTreeSet<HealthCode>)> = BTreeMap::new();
+    for finding in &health.findings {
+        for &image_id in &finding.image_ids {
+            let entry = lights
+                .entry(image_id)
+                .or_insert((finding.level, BTreeSet::new()));
+            entry.0 = entry.0.max(finding.level);
+            entry.1.insert(finding.code);
+        }
+    }
+    lights
+        .into_iter()
+        .map(|(image_id, (level, codes))| LightMark {
+            image_id,
+            level,
+            codes: codes.into_iter().collect(),
+        })
+        .collect()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LightMarksQuery {
+    /// One project's lights; every project's when absent.
+    pub project_id: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LightMarksResponse {
+    /// Lights with a finding, by id. A light not listed has none, or its
+    /// project has no result yet.
+    pub lights: Vec<LightMark>,
+    /// Projects whose result came before a change: a light rejected or
+    /// imported, or the library changed. The next pass replaces it.
+    pub stale_projects: Vec<i32>,
+    /// A pass is working out results now.
+    pub running: bool,
+}
+
+/// `GET /api/db/{db}/calibration-health/lights` — the lights each kept
+/// result found something in, for the image views to mark and filter.
+/// Unlike the Library, it serves a result a change has made stale, and says
+/// so: rejecting lights would otherwise blank every mark in their project
+/// until the next pass.
+pub async fn get_light_marks(
+    ctx: DbContext,
+    Query(query): Query<LightMarksQuery>,
+) -> Result<Json<ApiResponse<LightMarksResponse>>, AppError> {
+    let path = ctx.database_path.clone();
+    let cache_dir = ctx.cache_dir_path.clone();
+    let (lights, stale_projects) = tokio::task::spawn_blocking(move || {
+        let conn = read_only(&path)?;
+        let keys = crate::calibration::health_keys(&conn)?;
+        let mut lights = Vec::new();
+        let mut stale = Vec::new();
+        for (project, kept) in read_cache(&cache_dir).projects {
+            if query.project_id.is_some_and(|wanted| wanted != project) {
+                continue;
+            }
+            match keys.get(&project) {
+                None => continue,
+                Some(key) if key != &kept.key => stale.push(project),
+                Some(_) => {}
+            }
+            lights.extend(marks_of(&kept.health));
+        }
+        anyhow::Ok((lights, stale))
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("reading calibration marks: {error}")))?
+    .map_err(|error| AppError::InternalError(format!("reading calibration marks: {error:#}")))?;
+    Ok(Json(ApiResponse::success(LightMarksResponse {
+        lights,
+        stale_projects,
+        running: running(&ctx.database_path),
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_light_takes_its_worst_level_and_every_code() {
+        use crate::calibration::HealthFinding;
+        let finding = |code, level, image_ids: Vec<i32>| HealthFinding {
+            code,
+            level,
+            reason: String::new(),
+            lights: image_ids.len(),
+            nights: Vec::new(),
+            image_ids,
+        };
+        let health = ProjectHealth {
+            project_id: 1,
+            level: Some(HealthLevel::Poor),
+            checked: 3,
+            missing_files: 0,
+            poor_lights: 1,
+            check_lights: 1,
+            findings: vec![
+                finding(HealthCode::CannotCalibrate, HealthLevel::Poor, vec![4]),
+                finding(HealthCode::OldFlats, HealthLevel::Check, vec![2, 4]),
+            ],
+        };
+        assert_eq!(
+            marks_of(&health),
+            vec![
+                LightMark {
+                    image_id: 2,
+                    level: HealthLevel::Check,
+                    codes: vec![HealthCode::OldFlats],
+                },
+                LightMark {
+                    image_id: 4,
+                    level: HealthLevel::Poor,
+                    codes: vec![HealthCode::CannotCalibrate, HealthCode::OldFlats],
+                },
+            ]
+        );
+    }
 
     #[test]
     fn a_request_during_a_pass_runs_one_more() {

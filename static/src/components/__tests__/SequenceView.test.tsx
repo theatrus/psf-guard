@@ -677,6 +677,28 @@ describe('SequenceView: interactions', () => {
     });
   });
 
+  it('selects and marks the lights the calibration library serves poorly', async () => {
+    setupDefaultHandlers();
+    server.use(
+      http.get('/api/db/:dbId/calibration-health/lights', () => HttpResponse.json({ success: true, error: null, status: 'ready', data: {
+        lights: [
+          { image_id: 2, level: 'poor', codes: ['cannot_calibrate'] },
+          { image_id: 4, level: 'poor', codes: ['thin_dark'] },
+          { image_id: 6, level: 'check', codes: ['old_flats'] },
+        ],
+        stale_projects: [],
+        running: false,
+      } })),
+    );
+    const user = userEvent.setup();
+
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
+
+    await waitFor(() => expect(screen.getAllByTestId('calibration-chip')).toHaveLength(3));
+    await user.selectOptions(screen.getByLabelText('Select:'), 'poor-calibration');
+    await waitFor(() => expect(screen.getByText('2 selected')).toBeInTheDocument());
+  });
+
   it('uses a selection preset as the base for the next Shift-click range', async () => {
     setupDefaultHandlers();
     const user = userEvent.setup();

@@ -86,7 +86,7 @@ function useTwoCatalogs() {
 
 describe('Overview database filter', () => {
   // These tests read the full cards; the Library opens compact by default.
-  beforeEach(() => { setDisplayPreferences({ showNightChip: true, showAllChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'detailed' }); });
+  beforeEach(() => { setDisplayPreferences({ showNightChip: true, showAllChip: true, showCalibrationChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'detailed' }); });
   it('narrows the projects list to the chosen database', async () => {
     useTwoCatalogs();
     render(<Overview />, { wrapper: wrapper() });

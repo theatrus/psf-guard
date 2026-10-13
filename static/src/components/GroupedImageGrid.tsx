@@ -48,6 +48,8 @@ import { useScopedQuality } from '../hooks/useSequenceAnalysis';
 import { mosaicLabel, useProjectMosaic } from '../hooks/useProjectMosaic';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import SecondaryScoreToggle from './SecondaryScoreToggle';
+import { useCalibrationMarks } from '../hooks/useCalibrationMarks';
+import { calibrationFilterLabel, matchesCalibrationFilter } from '../utils/calibrationFilter';
 import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog';
 import { matchesStatusFilter, statusFilterLabel } from '../utils/statusFilter';
 
@@ -169,12 +171,13 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
       dateEnd: filterOptions.dateRange.end?.toISOString().split('T')[0] || '',
       searchTerm: filterOptions.searchTerm,
       flags: filterOptions.flags,
+      calibration: filterOptions.calibration,
     });
   }, [updateFilters]);
 
   // Initialize grading system with undo/redo
   const grading = useGrading(dbId!);
-  const { advanceOnGrade } = useDisplayPreferences();
+  const { advanceOnGrade, showCalibrationChip } = useDisplayPreferences();
   const [lastSelectedImageId, setLastSelectedImageId] = useState<number | null>(null);
   const [organizationScope, setOrganizationScope] = useState<OrganizationScope | null>(null);
   const gridScopeKey = JSON.stringify([dbId, projectId, targetId]);
@@ -231,6 +234,9 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
 
   const flagFilterActive = filters.flags.length > 0;
   const flagFilterReady = !quality.isLoading && !quality.error;
+  const calibrationFilterActive = filters.calibration.length > 0;
+  const calibration = useCalibrationMarks(dbId, projectId, calibrationFilterActive || showCalibrationChip);
+  const calibrationFilterReady = !calibration.isLoading && !calibration.error;
 
   // Filter images based on current filters
   const filteredImages = useMemo(() => {
@@ -272,10 +278,26 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
         && !matchesFlagFilter(filters.flags, quality.qualityByImage.get(image.id))) {
         return false;
       }
+
+      // Calibration filter, the same way: nothing is hidden until the
+      // marks are in.
+      if (calibrationFilterActive && calibrationFilterReady
+        && !matchesCalibrationFilter(filters.calibration, calibration.marks.get(image.id))) {
+        return false;
+      }
       
       return true;
     });
-  }, [allImages, filters, flagFilterActive, flagFilterReady, quality.qualityByImage]);
+  }, [
+    allImages,
+    filters,
+    flagFilterActive,
+    flagFilterReady,
+    quality.qualityByImage,
+    calibrationFilterActive,
+    calibrationFilterReady,
+    calibration.marks,
+  ]);
 
   const availableFlagsForScope = useMemo(
     () => availableFlags(quality.qualityByImage.values()),
@@ -665,6 +687,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     filters.dateRange.end ?? '',
     filters.searchTerm,
     filters.flags,
+    filters.calibration,
   ].join('\u0000');
   const previousSelectionFilterKey = useRef(selectionFilterKey);
   useEffect(() => {
@@ -1001,6 +1024,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                   {filters.status !== 'all' && ` • ${statusFilterLabel(filters.status)}`}
                   {filters.filterNames.length > 0 && ` • ${filters.filterNames.join(', ')}`}
                   {filters.searchTerm && ` • "${filters.searchTerm}"`}
+                  {calibrationFilterActive && ` • ${filters.calibration.map(calibrationFilterLabel).join(', ')}`}
+                  {calibrationFilterActive && calibration.updating && ' (updating)'}
                   {' • '}
                   <span className="grid-quality-state" title={qualityStatus.title}>
                     {qualityStatus.label}
@@ -1132,6 +1157,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                             quality={quality.qualityByImage.get(image.id)}
                             qualityScoreScope={quality.scopeByImage.get(image.id)}
                             basisScores={quality.basisScoresByImage.get(image.id)}
+                            calibration={calibration.marks.get(image.id)}
                             qualityPresentation="compact"
                             showTarget={severalTargets}
                             isSelected={

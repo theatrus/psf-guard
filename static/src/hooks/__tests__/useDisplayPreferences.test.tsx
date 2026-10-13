@@ -10,7 +10,7 @@ describe('display preferences', () => {
     window.localStorage.removeItem('psf-guard.display-preferences');
     setDisplayPreferences({
       showNightChip: true,
-      showAllChip: true,
+      showAllChip: true, showCalibrationChip: true,
       advanceOnGrade: true,
       projectPickerGrouping: 'activity',
       libraryDensity: 'compact',
@@ -21,7 +21,7 @@ describe('display preferences', () => {
     const { result } = renderHook(() => useDisplayPreferences());
     expect(result.current).toEqual({
       showNightChip: true,
-      showAllChip: true,
+      showAllChip: true, showCalibrationChip: true,
       advanceOnGrade: true,
       projectPickerGrouping: 'activity',
       libraryDensity: 'compact',
@@ -32,7 +32,7 @@ describe('display preferences', () => {
     act(() => {
       setDisplayPreferences({
         showNightChip: false,
-        showAllChip: true,
+        showAllChip: true, showCalibrationChip: true,
         advanceOnGrade: true,
         projectPickerGrouping: 'activity',
         libraryDensity: 'compact',
@@ -51,7 +51,7 @@ describe('display preferences', () => {
     act(() => {
       setDisplayPreferences({
         showNightChip: true,
-        showAllChip: false,
+        showAllChip: false, showCalibrationChip: true,
         advanceOnGrade: true,
         projectPickerGrouping: 'activity',
         libraryDensity: 'compact',
@@ -65,7 +65,7 @@ describe('display preferences', () => {
     act(() => {
       setDisplayPreferences({
         showNightChip: false,
-        showAllChip: false,
+        showAllChip: false, showCalibrationChip: true,
         advanceOnGrade: false,
         projectPickerGrouping: 'database',
         libraryDensity: 'compact',
@@ -75,7 +75,7 @@ describe('display preferences', () => {
       JSON.parse(window.localStorage.getItem('psf-guard.display-preferences')!),
     ).toEqual({
       showNightChip: false,
-      showAllChip: false,
+      showAllChip: false, showCalibrationChip: true,
       advanceOnGrade: false,
       projectPickerGrouping: 'database',
       libraryDensity: 'compact',
@@ -85,7 +85,7 @@ describe('display preferences', () => {
   it('falls back to the default on malformed stored values', () => {
     setDisplayPreferences({
       showNightChip: 'yes' as unknown as boolean,
-      showAllChip: true,
+      showAllChip: true, showCalibrationChip: true,
       advanceOnGrade: true,
       projectPickerGrouping: 'sideways' as unknown as 'activity',
       libraryDensity: 'huge' as unknown as 'compact',

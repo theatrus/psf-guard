@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
@@ -6,7 +6,7 @@ import { apiClient } from '../api/client';
 import { useAccess } from '../auth/access';
 import type { CalibrationExternalMaster, CalibrationHealthFinding, CalibrationHealthLevel, CalibrationNightFilter, ProjectCalibrationGaps, ProjectCalibrationReport } from '../api/types';
 import Dialog from './Dialog';
-import { calibrationPageHref } from './calibration/calibrationLinks';
+import { calibrationGridHref, calibrationPageHref } from './calibration/calibrationLinks';
 import './CalibrationReportDialog.css';
 
 interface Props {
@@ -62,12 +62,35 @@ const httpStatus = (error: unknown) => isAxiosError(error) ? error.response?.sta
   : error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined;
 const lights = (count: number) => `${count.toLocaleString()} light${count === 1 ? '' : 's'}`;
 
+/** Open the Images grid on the lights a calibration level or finding code
+ *  covers, in the given filters or all of them. */
+type ShowLights = (calib: string, filterNames: string[]) => void;
+
+/** The text of a finding as a link to its lights in the Images grid. */
+function LightsLink({ onShow, calib, filterNames, children }: {
+  onShow: ShowLights;
+  calib: string;
+  filterNames: string[];
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className="calibration-report-link"
+      title="Show these lights in Images"
+      onClick={() => onShow(calib, filterNames)}
+    >
+      {children}
+    </button>
+  );
+}
+
 /**
  * The lights a stack leaves out because the library cannot calibrate them,
  * found on request (every light is read), and rejected after that check so
  * Target Scheduler shoots them again.
  */
-function UncalibratedLights({ dbId, projectId }: { dbId: string; projectId: number }) {
+function UncalibratedLights({ dbId, projectId, onShow }: { dbId: string; projectId: number; onShow: ShowLights }) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const [notice, setNotice] = useState('');
@@ -93,9 +116,9 @@ function UncalibratedLights({ dbId, projectId }: { dbId: string; projectId: numb
   });
   const gaps = check.data;
   const counted = gaps
-    ? Object.entries(gaps.lights.reduce<Record<string, number>>((counts, light) => {
+    ? Object.entries(gaps.lights.reduce<Record<string, { filter: string; count: number }>>((counts, light) => {
       const key = `${light.night} · ${light.filter || '—'} · ${light.reason}`;
-      counts[key] = (counts[key] ?? 0) + 1;
+      counts[key] = { filter: light.filter, count: (counts[key]?.count ?? 0) + 1 };
       return counts;
     }, {}))
     : [];
@@ -123,7 +146,13 @@ function UncalibratedLights({ dbId, projectId }: { dbId: string; projectId: numb
           </p>
           {counted.length > 0 && (
             <ul className="calibration-report-gap-list">
-              {counted.map(([key, count]) => <li key={key}>{key}: {count}</li>)}
+              {counted.map(([key, { filter, count }]) => (
+                <li key={key}>
+                  <LightsLink onShow={onShow} calib="cannot_calibrate" filterNames={filter ? [filter] : []}>
+                    {key}: {count}
+                  </LightsLink>
+                </li>
+              ))}
             </ul>
           )}
           {gaps.lights.length > 0 && canWrite && (
@@ -144,12 +173,19 @@ const LEVEL_WORDS: Record<CalibrationHealthLevel, string> = { poor: 'Poor', chec
 const nightsText = (finding: CalibrationHealthFinding) =>
   finding.nights.map((night) => `${night.night} ${night.filter || '—'}: ${night.lights}`).join(' · ');
 
+/** The filters a finding's lights were taken through; none when one of
+ *  them has no filter, since the grid cannot pick that out. */
+const findingFilters = (finding: CalibrationHealthFinding) => {
+  const filters = finding.nights.map((night) => night.filter);
+  return filters.includes('') ? [] : [...new Set(filters)].sort();
+};
+
 /**
  * What the background check found for this project: each finding with its
  * lights by night and filter. Read from the kept result; never worked out
  * here, so a project the check has not reached says so.
  */
-function QualitySection({ dbId, projectId }: { dbId: string; projectId: number }) {
+function QualitySection({ dbId, projectId, onShow }: { dbId: string; projectId: number; onShow: ShowLights }) {
   const query = useQuery({
     queryKey: ['db', dbId, 'project', projectId, 'calibration-health'],
     queryFn: () => apiClient.getProjectCalibrationHealth(dbId, projectId),
@@ -180,7 +216,10 @@ function QualitySection({ dbId, projectId }: { dbId: string; projectId: number }
             {health.findings.map((finding) => (
               <li key={`${finding.level}:${finding.code}:${finding.reason}`}>
                 <span className={`calibration-report-level is-${finding.level}`}>{LEVEL_WORDS[finding.level]}</span>
-                {' '}{finding.reason}: {lights(finding.lights)}
+                {' '}
+                <LightsLink onShow={onShow} calib={finding.code} filterNames={findingFilters(finding)}>
+                  {finding.reason}: {lights(finding.lights)}
+                </LightsLink>
                 <small className="calibration-report-muted">{nightsText(finding)}</small>
               </li>
             ))}
@@ -220,6 +259,10 @@ export default function CalibrationReportDialog({
     onClose();
     navigate(calibrationPageHref(location.search, dbId, projectId));
   };
+  const showLights: ShowLights = (calib, filterNames) => {
+    onClose();
+    navigate(calibrationGridHref(location.search, dbId, projectId, calib, filterNames));
+  };
 
   return (
     <Dialog open={open} onClose={onClose} title={`Calibration coverage — ${projectName}`}>
@@ -227,7 +270,7 @@ export default function CalibrationReportDialog({
         <button type="button" className="calibration-report-browse" onClick={browse}>
           Browse calibration
         </button>
-        <QualitySection dbId={dbId} projectId={projectId} />
+        <QualitySection dbId={dbId} projectId={projectId} onShow={showLights} />
         {report.isLoading && <p className="calibration-report-muted">Matching the library…</p>}
         {report.error && (
           <p className="calibration-report-error">
@@ -304,7 +347,11 @@ export default function CalibrationReportDialog({
                     )).concat(night.filters.filter((filter) => filter.cannot_calibrate).map((filter) => (
                       <tr key={`${night.night}:${filter.filter}:gap`} className="calibration-report-masters">
                         <td />
-                        <td colSpan={5} className="missing">{filter.filter}: can't be calibrated · {filter.cannot_calibrate}</td>
+                        <td colSpan={5} className="missing">
+                          <LightsLink onShow={showLights} calib="cannot_calibrate" filterNames={filter.filter ? [filter.filter] : []}>
+                            {filter.filter}: can't be calibrated · {filter.cannot_calibrate}
+                          </LightsLink>
+                        </td>
                       </tr>
                     ))).concat(night.filters.filter((filter) => (filter.external_masters ?? []).length > 0).map((filter) => (
                       <tr key={`${night.night}:${filter.filter}:masters`} className="calibration-report-masters">
@@ -325,7 +372,7 @@ export default function CalibrationReportDialog({
                 reported.
               </p>
             )}
-            <UncalibratedLights dbId={dbId} projectId={projectId} />
+            <UncalibratedLights dbId={dbId} projectId={projectId} onShow={showLights} />
           </>
         )}
       </div>

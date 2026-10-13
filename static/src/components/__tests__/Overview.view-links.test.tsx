@@ -35,7 +35,7 @@ function Location() {
 }
 
 function renderLibrary(density: 'compact' | 'detailed') {
-  setDisplayPreferences({ showNightChip: true, showAllChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: density });
+  setDisplayPreferences({ showNightChip: true, showAllChip: true, showCalibrationChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: density });
   server.use(
     http.get('/api/databases', () => ok([{ id: 'askar', name: 'Askar', path: '/a.sqlite' }])),
     http.get('/api/db/:dbId/projects/overview', () => ok([project(1, 'Heart Nebula', 1), project(2, 'Cygnus Wall', 2)])),
@@ -83,6 +83,6 @@ describe('Library view links', () => {
     expect(await screen.findByRole('status', { name: 'Location' })).toHaveTextContent(
       '/sequence?db=askar&project=2&target=9'
     );
-    setDisplayPreferences({ showNightChip: true, showAllChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
+    setDisplayPreferences({ showNightChip: true, showAllChip: true, showCalibrationChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
   });
 });

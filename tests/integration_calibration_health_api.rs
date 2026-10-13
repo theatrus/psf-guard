@@ -142,6 +142,10 @@ fn server() -> Server {
             "/api/db/{db_id}/projects/{project_id}/calibration-health",
             get(calibration_health::get_project_health),
         )
+        .route(
+            "/api/db/{db_id}/calibration-health/lights",
+            get(calibration_health::get_light_marks),
+        )
         .with_state(Arc::clone(&state));
     Server {
         _dir: dir,
@@ -167,6 +171,7 @@ async fn call(app: &Router, uri: &str) -> (StatusCode, Value) {
 
 const LIST: &str = "/api/db/rig/calibration-health";
 const DETAIL: &str = "/api/db/rig/projects/1/calibration-health";
+const LIGHTS: &str = "/api/db/rig/calibration-health/lights";
 
 /// The Library's list once a pass has put project 1 in it.
 async fn wait_for_project(app: &Router) -> Value {
@@ -211,6 +216,18 @@ async fn health_is_shown_only_once_worked_out_and_while_it_still_holds() {
     );
     assert_eq!(health["findings"][0]["lights"], 2);
     assert_eq!(health["findings"][0]["nights"][0]["filter"], "Ha");
+    assert_eq!(health["findings"][0]["image_ids"], json!([1, 2]));
+
+    // The image views read each light's mark.
+    let (_, body) = call(&server.app, LIGHTS).await;
+    let marked = json!([
+        { "image_id": 1, "level": "poor", "codes": ["no_library"] },
+        { "image_id": 2, "level": "poor", "codes": ["no_library"] },
+    ]);
+    assert_eq!(body["data"]["lights"], marked);
+    assert_eq!(body["data"]["stale_projects"], json!([]));
+    let (_, body) = call(&server.app, &format!("{LIGHTS}?project_id=2")).await;
+    assert_eq!(body["data"]["lights"], json!([]));
 
     // A pass with nothing changed judges nothing again.
     calibration_health::request(&server.state, &server.database);
@@ -240,7 +257,16 @@ async fn health_is_shown_only_once_worked_out_and_while_it_still_holds() {
     drop(connection);
     let (_, body) = call(&server.app, LIST).await;
     assert_eq!(body["data"]["projects"], json!([]));
+    // The marks keep the last result, and say it is stale, so the grid
+    // does not lose them while the next pass runs.
+    let (_, body) = call(&server.app, LIGHTS).await;
+    assert_eq!(body["data"]["lights"], marked);
+    assert_eq!(body["data"]["stale_projects"], json!([1]));
     calibration_health::request(&server.state, &server.database);
     let project = wait_for_project(&server.app).await;
     assert_eq!(project["poor_lights"], 1);
+    let (_, body) = call(&server.app, LIGHTS).await;
+    assert_eq!(body["data"]["lights"][0]["image_id"], 1);
+    assert_eq!(body["data"]["lights"].as_array().unwrap().len(), 1);
+    assert_eq!(body["data"]["stale_projects"], json!([]));
 }

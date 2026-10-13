@@ -2510,14 +2510,44 @@ export interface CalibrationHealthList {
   running: boolean;
 }
 
+/** The rule a calibration health finding comes from. */
+export type CalibrationHealthCode =
+  | 'no_library'
+  | 'cannot_calibrate'
+  | 'thin_dark'
+  | 'thin_bias'
+  | 'flat_spots'
+  | 'old_flats'
+  | 'mixed_flats'
+  | 'suspect_frames'
+  | 'short_after_keep_out';
+
 export interface CalibrationHealthFinding {
-  code: string;
+  code: CalibrationHealthCode;
   level: CalibrationHealthLevel;
   /** In plain words, with its numbers. */
   reason: string;
   lights: number;
   /** Newest night first. */
   nights: { night: string; filter: string; lights: number }[];
+  /** The lights themselves. */
+  image_ids?: number[];
+}
+
+/** A light the calibration library serves poorly, or one worth a look. */
+export interface CalibrationLightMark {
+  image_id: number;
+  /** Its worst finding's level. */
+  level: CalibrationHealthLevel;
+  codes: CalibrationHealthCode[];
+}
+
+export interface CalibrationLightMarks {
+  /** Lights with a finding. One not listed has none, or no result yet. */
+  lights: CalibrationLightMark[];
+  /** Projects whose result came before a change; the next pass replaces it. */
+  stale_projects: number[];
+  running: boolean;
 }
 
 export interface ProjectCalibrationHealth {

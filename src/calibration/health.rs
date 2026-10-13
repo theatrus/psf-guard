@@ -38,8 +38,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-/// Bump when the rules change, so every kept result is computed again.
-pub const HEALTH_ALGORITHM_VERSION: u32 = 1;
+/// Bump when the rules or what a result keeps change, so every kept result
+/// is computed again. 2: each finding keeps its lights' ids.
+pub const HEALTH_ALGORITHM_VERSION: u32 = 2;
 
 /// Flats further than this from a light are worth a look, though they are
 /// within the age limit that makes a light one that cannot be calibrated.
@@ -105,6 +106,9 @@ pub struct HealthFinding {
     pub lights: usize,
     /// Newest night first.
     pub nights: Vec<NightFilterLights>,
+    /// The lights themselves, so the image views can mark and filter them.
+    #[serde(default)]
+    pub image_ids: Vec<i32>,
 }
 
 /// How well the library calibrates one project.
@@ -138,6 +142,7 @@ pub struct ProjectLight {
 /// What judging one light found.
 #[derive(Debug, Clone)]
 pub struct LightResult {
+    pub image_id: i32,
     pub night: String,
     pub filter: String,
     /// `None` when the file could not be read.
@@ -293,6 +298,7 @@ impl HealthLibrary {
     pub fn judge_light(&self, light: &ProjectLight) -> Result<LightResult> {
         if self.is_empty() {
             return Ok(LightResult {
+                image_id: light.image_id,
                 night: light.night.clone(),
                 filter: light.filter.clone(),
                 findings: Some(Vec::new()),
@@ -305,6 +311,7 @@ impl HealthLibrary {
             None
         };
         Ok(LightResult {
+            image_id: light.image_id,
             night: light.night.clone(),
             filter: light.filter.clone(),
             findings,
@@ -500,7 +507,7 @@ pub fn project_lights(
 
 /// Gather judged lights into a project's health.
 pub fn summarize(project_id: i32, results: Vec<LightResult>, missing: usize) -> ProjectHealth {
-    type Group = (usize, BTreeMap<(String, String), usize>);
+    type Group = (BTreeSet<i32>, BTreeMap<(String, String), usize>);
     let mut groups: BTreeMap<(std::cmp::Reverse<HealthLevel>, HealthCode, String), Group> =
         BTreeMap::new();
     let (mut checked, mut unreadable, mut poor_lights, mut check_lights) = (0, 0, 0, 0);
@@ -528,7 +535,7 @@ pub fn summarize(project_id: i32, results: Vec<LightResult>, missing: usize) -> 
             .collect();
         for key in distinct {
             let group = groups.entry(key).or_default();
-            group.0 += 1;
+            group.0.insert(result.image_id);
             *group
                 .1
                 .entry((result.night.clone(), result.filter.clone()))
@@ -537,7 +544,7 @@ pub fn summarize(project_id: i32, results: Vec<LightResult>, missing: usize) -> 
     }
     let findings = groups
         .into_iter()
-        .map(|((level, code, reason), (lights, nights))| {
+        .map(|((level, code, reason), (image_ids, nights))| {
             let mut nights: Vec<NightFilterLights> = nights
                 .into_iter()
                 .map(|((night, filter), lights)| NightFilterLights {
@@ -556,8 +563,9 @@ pub fn summarize(project_id: i32, results: Vec<LightResult>, missing: usize) -> 
                 code,
                 level: level.0,
                 reason,
-                lights,
+                lights: image_ids.len(),
                 nights,
+                image_ids: image_ids.into_iter().collect(),
             }
         })
         .collect();
@@ -667,11 +675,13 @@ pub fn settings_digest(boundary: i64) -> String {
     )
 }
 
-/// Each project's lights as health reads them: which, how graded, when,
-/// with what filter and file. One query for the whole catalog.
+/// Each project's lights as health reads them: which, whether rejected,
+/// when, with what filter and file. One query for the whole catalog.
+/// Accepting a light, or setting it back to pending, leaves the key alone:
+/// only a rejected light leaves the lights judged.
 pub fn project_light_digests(conn: &Connection) -> Result<BTreeMap<i32, String>> {
     let mut statement = conn.prepare(
-        "SELECT ai.projectId, ai.Id, ai.gradingStatus, ai.acquireddate, ai.filtername,
+        "SELECT ai.projectId, ai.Id, ai.gradingStatus = 2, ai.acquireddate, ai.filtername,
                 CASE WHEN json_valid(ai.metadata) THEN json_extract(ai.metadata, '$.FileName') END
          FROM acquiredimage ai
          JOIN project p ON ai.projectId = p.Id
@@ -1063,6 +1073,7 @@ mod tests {
         assert_eq!((health.checked, health.missing_files), (2, 1));
         let finding = &health.findings[0];
         assert_eq!(finding.lights, 2);
+        assert_eq!(finding.image_ids, vec![1, 2]);
         assert_eq!(
             finding.nights,
             [NightFilterLights {
@@ -1085,11 +1096,22 @@ mod tests {
         assert_eq!(keys.len(), 2);
         assert_eq!(current_keys(&fixture.conn).unwrap(), keys, "stable");
 
-        // A light graded in one project changes that project's key only.
+        // Accepting a light leaves the key alone: only a rejected light
+        // leaves the lights judged.
         fixture
             .conn
             .execute(
                 "UPDATE acquiredimage SET gradingStatus = 1 WHERE Id = 1",
+                [],
+            )
+            .unwrap();
+        assert_eq!(current_keys(&fixture.conn).unwrap(), keys);
+
+        // A light rejected in one project changes that project's key only.
+        fixture
+            .conn
+            .execute(
+                "UPDATE acquiredimage SET gradingStatus = 2 WHERE Id = 1",
                 [],
             )
             .unwrap();

@@ -394,6 +394,10 @@ pub(super) const READABLE_ROUTES: &[(&str, &str)] = &[
         "/db/{db}/projects/{project_id}/calibration-health",
         "One project's calibration findings by night and filter",
     ),
+    (
+        "/db/{db}/calibration-health/lights",
+        "Lights with a calibration finding: level and codes by image id; ?project_id",
+    ),
     ("/db/{db}/flat-history", "Target Scheduler flat history"),
     ("/db/{db}/rejects/removed", "Removed rejects, by batch"),
     (
