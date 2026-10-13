@@ -276,6 +276,12 @@ pub enum Commands {
         #[arg(long)]
         no_register: bool,
 
+        /// Leave out files and folders matching this pattern, relative to
+        /// each directory, such as `**/Hocus Focus/**`. Repeat for more.
+        /// A folder holding a `.psfguardignore` file is always skipped.
+        #[arg(long = "exclude", value_name = "PATTERN")]
+        exclude: Vec<String>,
+
         /// Path to the database registry JSON file (defaults to the platform
         /// config directory). Useful for dev/test isolation.
         #[arg(long)]
@@ -347,6 +353,13 @@ pub enum Commands {
         /// frame in this catalog's folders is usually a filing mistake.
         #[arg(long)]
         accept_other_rigs: bool,
+
+        /// Leave out files and folders matching this pattern, relative to
+        /// each directory, such as `**/Hocus Focus/**`. Repeat for more.
+        /// Adds to the scan rules of a registered database. A folder
+        /// holding a `.psfguardignore` file is always skipped.
+        #[arg(long = "exclude", value_name = "PATTERN")]
+        exclude: Vec<String>,
 
         /// Path to the database registry JSON file (defaults to the platform
         /// config directory).

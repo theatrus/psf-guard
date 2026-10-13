@@ -1,4 +1,4 @@
-import type { AutoImportSettings, ImportScope } from '../api/types';
+import type { AutoImportSettings, ImportScope, NewTargets } from '../api/types';
 import { AUTOIMPORT_INTERVALS } from '../utils/autoimport';
 
 interface AutoImportFieldsProps {
@@ -66,6 +66,18 @@ export default function AutoImportFields({ value, onChange }: AutoImportFieldsPr
             <option value="lights">Lights only</option>
             <option value="calibration">Calibration frames only</option>
           </select>
+          <label htmlFor="autoimport-new-targets">New targets:</label>
+          <select
+            id="autoimport-new-targets"
+            className="file-path-input"
+            value={value.new_targets ?? 'ask'}
+            onChange={(event) => set({ new_targets: event.target.value as NewTargets })}
+            title="Lights that match no target in the catalog"
+          >
+            <option value="ask">Ask first</option>
+            <option value="skip">Leave out</option>
+            <option value="create">Create a project</option>
+          </select>
           <label className="checkbox-label">
             <input
               type="checkbox"
@@ -89,7 +101,7 @@ export default function AutoImportFields({ value, onChange }: AutoImportFieldsPr
           )}
           <small className="muted">
             A run reads only files the catalog does not have yet, with the same
-            matching rules as the Import button, and never asks for confirmation.
+            matching rules as the Import button.
           </small>
         </>
       )}

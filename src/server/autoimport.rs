@@ -227,6 +227,7 @@ pub fn start(
         scope: settings.scope,
         accept_other_rigs: settings.accept_other_rigs,
         only_new: true,
+        new_targets: settings.new_targets,
         ..ImportOptions::default()
     };
     let started = crate::server::handlers::spawn_import_job_with_trigger(
@@ -275,6 +276,17 @@ mod tests {
             opened,
             last_started_unix: None,
         }
+    }
+
+    #[test]
+    fn an_entry_saved_before_new_targets_existed_asks_first() {
+        let saved: AutoImportSettings =
+            serde_json::from_str(r#"{"enabled":true,"on_open":true,"interval_minutes":30}"#)
+                .unwrap();
+        assert_eq!(saved.new_targets, crate::commands::import::NewTargets::Ask);
+        // Off with every other choice at its default still reads as unset.
+        let off: AutoImportSettings = serde_json::from_str(r#"{"enabled":false}"#).unwrap();
+        assert_eq!(off, AutoImportSettings::default());
     }
 
     #[test]

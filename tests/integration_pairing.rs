@@ -79,6 +79,7 @@ fn harness() -> (Arc<AppState>, Router, PathBuf, tempfile::TempDir) {
         export_dir: None,
         process_dir: None,
         autoimport: None,
+        scan_rules: None,
         analyze_new_frames: false,
         pair_calibrated_copies: true,
         scan_calibrated_copies: false,

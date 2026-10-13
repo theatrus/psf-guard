@@ -389,16 +389,25 @@ pub fn main() -> Result<()> {
             profile_id,
             dry_run,
             no_register,
+            exclude,
             registry,
         } => {
             use crate::commands::import::{
-                collect_fits_files, import_frames, print_outcome, scan_frames, ImportOptions,
+                collect_image_files, import_frames, print_outcome, scan_frames,
+                scan_rules::ScanRules, ImportOptions,
             };
             use crate::db_registry::DbRegistry;
             use std::path::PathBuf;
 
             let dirs: Vec<PathBuf> = directories.iter().map(PathBuf::from).collect();
-            let files = collect_fits_files(&dirs)?;
+            let rules = ScanRules {
+                exclude,
+                ..ScanRules::default()
+            }
+            .normalized();
+            rules.validate()?;
+            let collected = collect_image_files(&dirs, &rules.path_filter(&dirs)?)?;
+            let files = collected.files;
             println!("Found {} FITS file(s); reading headers...", files.len());
             let frames = scan_frames(&files);
 
@@ -416,7 +425,8 @@ pub fn main() -> Result<()> {
                 dry_run,
                 ..Default::default()
             };
-            let outcome = import_frames(&mut conn, frames, &options)?;
+            let mut outcome = import_frames(&mut conn, frames, &options)?;
+            outcome.scan_rules = collected.skipped;
             print_outcome(&outcome);
 
             if dry_run {
@@ -471,10 +481,11 @@ pub fn main() -> Result<()> {
             skip_processed,
             no_pairing,
             accept_other_rigs,
+            exclude,
             registry,
         } => {
             use crate::commands::import::{
-                collect_fits_files, import_frames, print_outcome, scan_frames, ImportOptions,
+                collect_image_files, import_frames, print_outcome, scan_frames, ImportOptions,
             };
             use crate::commands::sync::{require_pull_capable, resolve_db_path};
             use crate::db_registry::DbRegistry;
@@ -488,9 +499,29 @@ pub fn main() -> Result<()> {
             };
             let reg = DbRegistry::load_or_init(&registry_path).ok();
             let db_path = resolve_db_path(reg.as_ref(), &db)?;
+            // A registered database brings its scan rules; --exclude adds
+            // to them. Patterns read from its image folders when the
+            // directories sit inside them.
+            let entry = reg.as_ref().and_then(|reg| {
+                reg.find(&db).or_else(|| {
+                    reg.databases
+                        .iter()
+                        .find(|entry| std::path::Path::new(&entry.db_path) == db_path)
+                })
+            });
+            let mut rules = entry
+                .and_then(|entry| entry.scan_rules.clone())
+                .unwrap_or_default();
+            rules.exclude.extend(exclude);
+            let rules = rules.normalized();
+            rules.validate()?;
+            let roots: Vec<PathBuf> = entry
+                .map(|entry| entry.image_dirs.iter().map(PathBuf::from).collect())
+                .unwrap_or_default();
 
             let dirs: Vec<PathBuf> = directories.iter().map(PathBuf::from).collect();
-            let files = collect_fits_files(&dirs)?;
+            let collected = collect_image_files(&dirs, &rules.path_filter(&roots)?)?;
+            let files = collected.files;
             println!("Found {} FITS file(s); reading headers...", files.len());
             let frames = scan_frames(&files);
 
@@ -510,6 +541,7 @@ pub fn main() -> Result<()> {
                 dry_run,
                 attach_existing: !no_attach,
                 match_radius_deg,
+                match_by_position: rules.match_by_position,
                 scope: if lights_only {
                     crate::commands::import::ImportScope::Lights
                 } else if calibration_only {
@@ -521,8 +553,12 @@ pub fn main() -> Result<()> {
                 pair_derivatives: !no_pairing,
                 accept_other_rigs,
                 only_new: false,
+                light_filter: rules.light_filter(),
+                // A person ran this import; it creates what matches nothing.
+                new_targets: crate::commands::import::NewTargets::Create,
             };
-            let outcome = import_frames(&mut conn, frames, &options)?;
+            let mut outcome = import_frames(&mut conn, frames, &options)?;
+            outcome.scan_rules = collected.skipped;
             print_outcome(&outcome);
         }
         Commands::ListTargets { project } => {

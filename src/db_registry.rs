@@ -60,6 +60,10 @@ pub struct DbEntry {
     /// Import new frames from the image folders on its own. Absent means off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autoimport: Option<AutoImportSettings>,
+    /// What every import from the image folders leaves out: exclude and
+    /// include patterns, and the light filters. Absent means none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_rules: Option<crate::commands::import::scan_rules::ScanRules>,
     /// Run the background quality scan on frames that arrive by sync, peer
     /// pull, remote upload or auto-import. Off unless a person turns it on.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -103,6 +107,12 @@ pub struct AutoImportSettings {
     /// Take lights from a rig the catalog has not recorded. Off by default,
     /// as for a manual import.
     pub accept_other_rigs: bool,
+    /// What a run does with lights that match no target in the catalog.
+    /// Ask first by default: a run attaches frames to the targets the
+    /// catalog has and holds the rest for a person to review, because the
+    /// scheduler database is often shared with N.I.N.A. and synced to the
+    /// rig. An entry saved before this setting existed reads the same way.
+    pub new_targets: crate::commands::import::NewTargets,
 }
 
 /// The longest schedule: once a week.
@@ -117,6 +127,7 @@ impl Default for AutoImportSettings {
             scope: crate::commands::import::ImportScope::All,
             backfill: true,
             accept_other_rigs: false,
+            new_targets: crate::commands::import::NewTargets::Ask,
         }
     }
 }
@@ -918,6 +929,7 @@ impl DbRegistry {
                 export_dir: None,
                 process_dir: None,
                 autoimport: None,
+                scan_rules: None,
                 analyze_new_frames: false,
                 pair_calibrated_copies: true,
                 scan_calibrated_copies: false,
@@ -991,6 +1003,7 @@ impl DbRegistry {
             export_dir: None,
             process_dir: None,
             autoimport: None,
+            scan_rules: None,
             analyze_new_frames: false,
             pair_calibrated_copies: true,
             scan_calibrated_copies: false,
@@ -1234,6 +1247,7 @@ mod tests {
             export_dir: None,
             process_dir: None,
             autoimport: None,
+            scan_rules: None,
             analyze_new_frames: false,
             pair_calibrated_copies: true,
             scan_calibrated_copies: false,
