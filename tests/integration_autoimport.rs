@@ -787,7 +787,9 @@ async fn a_run_that_asks_first_changes_no_plan_in_a_scheduler_project() {
         "M31",
         "2026-01-11T01:00:00.000",
     );
-    let snapshot = images.join("M31/2026-01-11/SNAPSHOT");
+    // Joined part by part: the server reports the folder with the
+    // platform's separator, and Windows would keep a `/` written here.
+    let snapshot = images.join("M31").join("2026-01-11").join("SNAPSHOT");
     write_frame(
         &snapshot.join("m31_test.fits"),
         Some("LIGHT"),
