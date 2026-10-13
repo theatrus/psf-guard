@@ -44,6 +44,13 @@ fn db_read_only_flags() -> OpenFlags {
 /// out the current refresh statement and wins the gap between statements.
 /// Sized to cover the worst observed single-query duration. (External writers
 /// like N.I.N.A. on a network share get the same courtesy.)
+///
+/// The wait only helps a transaction that asks for the write lock before it
+/// reads. One that reads and then writes cannot wait: while another
+/// connection (a background pass, N.I.N.A.) holds the write lock, SQLite
+/// refuses the upgrade at once with "database is locked", because waiting
+/// could deadlock. So a transaction that reads before it writes begins
+/// `TransactionBehavior::Immediate`.
 pub(crate) const SCHEDULER_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_REMOTE_IMAGE_VERIFICATIONS: usize = 4096;
 const MAX_REMOTE_FILE_VERIFICATIONS: usize = 4096;

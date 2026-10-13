@@ -15,7 +15,7 @@
 use super::require_pull_capable;
 use anyhow::{anyhow, Context, Result};
 use rusqlite::types::Value;
-use rusqlite::{params, params_from_iter, Connection, ToSql, Transaction};
+use rusqlite::{params, params_from_iter, Connection, ToSql, Transaction, TransactionBehavior};
 use std::collections::{HashMap, HashSet};
 
 /// Knobs for a pull.
@@ -1174,7 +1174,8 @@ pub fn sync_pull(src: &Connection, dest: &Connection, opts: &PullOptions) -> Res
     require_pull_capable(src).context("source database")?;
     require_pull_capable(dest).context("destination database")?;
 
-    let tx = dest.unchecked_transaction()?;
+    // A dry run writes too, then rolls back.
+    let tx = Transaction::new_unchecked(dest, TransactionBehavior::Immediate)?;
     let summary = sync_pull_in_transaction(src, &tx, opts)?;
     if opts.dry_run {
         tx.rollback()?;

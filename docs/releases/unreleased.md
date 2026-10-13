@@ -92,3 +92,8 @@
   shortcuts, server information and sign out sit in one menu at the right.
   The **Editor** and **Read only** label is gone; the menu says who is
   signed in.
+- Saving a project or adding an exposure plan no longer fails with "database
+  is locked" when a background pass or N.I.N.A. is writing to the catalog at
+  the same moment. The save now waits for that write to finish. Imports,
+  syncs, forgetting calibration frames, and moving or restoring rejects wait
+  the same way.

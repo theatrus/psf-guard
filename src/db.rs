@@ -4,7 +4,7 @@ use crate::models::{
     RecentImageSummary, Target, TargetNavigation, TargetWithDesiredStats, TargetWithStats,
 };
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 use std::collections::HashMap;
 
 /// Earliest and latest acquisition for one target, in Unix seconds. Either
@@ -1278,7 +1278,7 @@ impl<'a> Database<'a> {
     where
         F: FnOnce(&rusqlite::Transaction) -> Result<T>,
     {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = Transaction::new_unchecked(self.conn, TransactionBehavior::Immediate)?;
         let result = f(&tx)?;
         tx.commit()?;
         Ok(result)

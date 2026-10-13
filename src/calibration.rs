@@ -6,7 +6,7 @@
 use crate::commands::import::headers::FrameMeta;
 use anyhow::{Context, Result};
 use rusqlite::types::Value;
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use seiza_fits::{HeaderValue, WriteHeaderCard};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -1653,7 +1653,7 @@ pub fn forget_frames(
     if frame_uuids.is_empty() || !schema_exists(conn) {
         return Ok(CalibrationMutationOutcome::default());
     }
-    let transaction = conn.transaction()?;
+    let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let uuid_set = frame_uuids
         .iter()
         .map(String::as_str)
@@ -6422,7 +6422,7 @@ pub fn rewrite_master_paths(
 ) -> rusqlite::Result<usize> {
     use crate::server::storage::relocate::normalized;
     let from = normalized(from);
-    let transaction = conn.transaction()?;
+    let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let rows: Vec<(String, String)> = {
         let mut statement = match transaction
             .prepare("SELECT master_uuid, cache_path FROM psf_guard_calibration_master")

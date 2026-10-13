@@ -8,7 +8,7 @@
 use super::pull::sync_structure;
 use super::{require_planning_capable, TableCounts};
 use anyhow::{Context, Result};
-use rusqlite::{Connection, Transaction};
+use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 /// Options for a planning-only settings push.
 pub struct PlanningOptions {
@@ -58,7 +58,8 @@ pub fn sync_planning(
     require_planning_capable(src).context("source database")?;
     require_planning_capable(dest).context("destination database")?;
 
-    let tx = dest.unchecked_transaction()?;
+    // A dry run writes too, then rolls back.
+    let tx = Transaction::new_unchecked(dest, TransactionBehavior::Immediate)?;
     let summary = sync_planning_in_transaction(src, &tx, opts)?;
     if opts.dry_run {
         tx.rollback()?;
