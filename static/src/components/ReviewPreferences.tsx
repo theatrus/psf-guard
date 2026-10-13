@@ -2,7 +2,7 @@ import {
   setDisplayPreferences,
   useDisplayPreferences,
 } from '../hooks/useDisplayPreferences';
-import { LayersIcon, MoonIcon } from './ScoreChipIcons';
+import { CalibrationIcon, LayersIcon, MoonIcon } from './ScoreChipIcons';
 
 /**
  * Review behavior preferences. Stored in this browser and shared by the
@@ -54,6 +54,20 @@ export default function ReviewPreferences() {
           <LayersIcon /> All-sessions score chip
           <small>
             How the frame ranks against every stack candidate for its filter.
+          </small>
+        </span>
+      </label>
+      <label className="review-preference">
+        <input
+          type="checkbox"
+          checked={preferences.showCalibrationChip}
+          onChange={(event) => set({ showCalibrationChip: event.target.checked })}
+        />
+        <span>
+          <CalibrationIcon /> Calibration chip
+          <small>
+            Red on a light the calibration library can't calibrate properly,
+            yellow on one worth a look.
           </small>
         </span>
       </label>

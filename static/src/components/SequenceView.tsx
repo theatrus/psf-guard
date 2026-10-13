@@ -24,7 +24,7 @@ import ImageCard from './ImageCard';
 import Dialog from './Dialog';
 import ThumbnailSizeControl from './ThumbnailSizeControl';
 import { QualityScanButton } from './QualityScanControl';
-import type { Image, ScoredSequence, ImageQualityResult } from '../api/types';
+import type { CalibrationLightMark, Image, ScoredSequence, ImageQualityResult } from '../api/types';
 import {
   imageDetailNavigationState,
   imageDetailPath,
@@ -37,6 +37,7 @@ import {
 import { thumbnailGridColumns } from '../utils/thumbnailSizing';
 import { formatCategory } from '../utils/issueCategory';
 import SecondaryScoreToggle from './SecondaryScoreToggle';
+import { useCalibrationMarks } from '../hooks/useCalibrationMarks';
 import {
   type BasisScores,
   qualityScoreDescription,
@@ -94,6 +95,8 @@ export default function SequenceView() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const grading = useGrading(dbId!);
+  // Calibration marks for the chips and the Poor calibration choice.
+  const calibration = useCalibrationMarks(dbId, projectId, targetId != null);
   const { analyze, data: analysisData, isLoading: isAnalyzing, error: analysisError } = useSequenceAnalysis(dbId);
 
   const filterName = searchParams.get('filterName') || undefined;
@@ -472,6 +475,15 @@ export default function SequenceView() {
     ));
   }, [activeSequence, replaceSelectedImages]);
 
+  const selectPoorCalibration = useCallback(() => {
+    if (!activeSequence) return;
+    replaceSelectedImages(new Set(
+      activeSequence.images
+        .filter(img => calibration.marks.get(img.image_id)?.level === 'poor')
+        .map(img => img.image_id)
+    ));
+  }, [activeSequence, calibration.marks, replaceSelectedImages]);
+
   const applySelectionPreset = useCallback((preset: string) => {
     switch (preset) {
       case 'threshold':
@@ -489,11 +501,15 @@ export default function SequenceView() {
       case 'recommended':
         selectRecommended();
         break;
+      case 'poor-calibration':
+        selectPoorCalibration();
+        break;
     }
   }, [
     selectAstrometryIssues,
     selectBelowThreshold,
     selectCloudedSequence,
+    selectPoorCalibration,
     selectRecommended,
     selectUnsolved,
   ]);
@@ -792,6 +808,7 @@ export default function SequenceView() {
               <option value="off-target">Off target</option>
               <option value="unsolved">Unsolved</option>
               <option value="recommended">Recommended</option>
+              <option value="poor-calibration">Poor calibration</option>
             </select>
           </div>
           {selectedForReview.length > 0 && (
@@ -921,6 +938,7 @@ export default function SequenceView() {
                 images={activeSequence.images}
                 scoreScope={activeScoreScope}
                 basisScoresByImage={basisScoresByImage}
+                calibrationByImage={calibration.marks}
                 imageMap={imageMap}
                 projectId={projectId!}
                 targetId={activeSequence.target_id}
@@ -1149,6 +1167,7 @@ const SequenceStrip = memo(function SequenceStrip({
   images,
   scoreScope,
   basisScoresByImage,
+  calibrationByImage,
   imageMap,
   projectId,
   targetId,
@@ -1166,6 +1185,7 @@ const SequenceStrip = memo(function SequenceStrip({
   images: ImageQualityResult[];
   scoreScope: QualityScoreScope;
   basisScoresByImage: ReadonlyMap<number, BasisScores>;
+  calibrationByImage: ReadonlyMap<number, CalibrationLightMark>;
   imageMap: ReadonlyMap<number, Image>;
   projectId: number;
   targetId: number;
@@ -1232,6 +1252,7 @@ const SequenceStrip = memo(function SequenceStrip({
             quality={quality}
             qualityScoreScope={scoreScope}
             basisScores={basisScoresByImage.get(quality.image_id)}
+            calibration={calibrationByImage.get(quality.image_id)}
             isSelected={selectedImages.has(quality.image_id)}
             onClick={(event) => onSelect(quality.image_id, event)}
             onDoubleClick={() => onOpen(quality.image_id)}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from 'react';
 import { useInView } from 'react-intersection-observer';
-import type { Image, ImageCopy, ImageQualityResult } from '../api/types';
+import type { CalibrationLightMark, Image, ImageCopy, ImageQualityResult } from '../api/types';
 
 /** How far a skewed frame turned, and against what. A rotator slip is
  *  measured against the angle the rotator reported; its own run agrees with
@@ -31,7 +31,8 @@ import {
 } from '../utils/qualityScore';
 import QualityReasonPopover from './QualityReasonPopover';
 import { formatCategory } from '../utils/issueCategory';
-import { LayersIcon, MoonIcon } from './ScoreChipIcons';
+import { CalibrationIcon, LayersIcon, MoonIcon } from './ScoreChipIcons';
+import { calibrationMarkTitle } from '../utils/calibrationFilter';
 
 export interface ImageCardProps {
   dbId: string;
@@ -45,6 +46,9 @@ export interface ImageCardProps {
    * score exists and their toggle is on — never hidden for matching the
    * badge, so the same frame keeps the same chips in every view. */
   basisScores?: BasisScores;
+  /** The light's calibration health mark, when it has one. Its chip shows
+   *  whenever the toggle is on, in every view. */
+  calibration?: CalibrationLightMark;
   qualityPresentation?: 'full' | 'compact';
   lazyPreview?: boolean;
   selectionEffects?: boolean;
@@ -63,6 +67,7 @@ export default function ImageCard({
   quality,
   qualityScoreScope = 'capture_sequence',
   basisScores,
+  calibration,
   qualityPresentation = 'full',
   lazyPreview = false,
   selectionEffects = true,
@@ -70,7 +75,9 @@ export default function ImageCard({
   showTarget = true,
 }: ImageCardProps) {
   const color = useColorPreview();
-  const { showNightChip, showAllChip } = useDisplayPreferences();
+  const { showNightChip, showAllChip, showCalibrationChip } = useDisplayPreferences();
+  const scoreChips = quality && basisScores && (showNightChip || showAllChip) ? basisScores : null;
+  const calibrationChip = showCalibrationChip ? calibration : undefined;
   const shouldDeferPreview = lazyPreview && typeof IntersectionObserver !== 'undefined';
   const { ref: inViewRef, inView } = useInView({
     threshold: 0,
@@ -186,30 +193,39 @@ export default function ImageCard({
             {(quality.quality_score * 100).toFixed(0)}
           </div>
         )}
-        {quality && basisScores && (showNightChip || showAllChip) && (
+        {(scoreChips || calibrationChip) && (
           <div className="score-chip-stack">
-            {showNightChip && (
+            {scoreChips && showNightChip && (
               <div
                 className="score-chip"
                 style={{
-                  backgroundColor: qualityColor(basisScores.night),
+                  backgroundColor: qualityColor(scoreChips.night),
                 }}
-                title={basisChipDescription(basisScores.night, 'capture_sequence')}
+                title={basisChipDescription(scoreChips.night, 'capture_sequence')}
               >
                 <MoonIcon />
-                {(basisScores.night * 100).toFixed(0)}
+                {(scoreChips.night * 100).toFixed(0)}
               </div>
             )}
-            {showAllChip && basisScores.all != null && (
+            {scoreChips && showAllChip && scoreChips.all != null && (
               <div
                 className="score-chip"
                 style={{
-                  backgroundColor: qualityColor(basisScores.all),
+                  backgroundColor: qualityColor(scoreChips.all),
                 }}
-                title={basisChipDescription(basisScores.all, 'target_filter')}
+                title={basisChipDescription(scoreChips.all, 'target_filter')}
               >
                 <LayersIcon />
-                {(basisScores.all * 100).toFixed(0)}
+                {(scoreChips.all * 100).toFixed(0)}
+              </div>
+            )}
+            {calibrationChip && (
+              <div
+                className={`score-chip calibration-chip is-${calibrationChip.level}`}
+                title={calibrationMarkTitle(calibrationChip)}
+                data-testid="calibration-chip"
+              >
+                <CalibrationIcon />
               </div>
             )}
           </div>

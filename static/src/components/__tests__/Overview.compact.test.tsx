@@ -44,7 +44,7 @@ function twoRigs() {
 
 describe('compact Library', () => {
   it('shows one row of pills per project, wraps a plan shot by two rigs in an outer pill, and opens the full card on request', async () => {
-    setDisplayPreferences({ showNightChip: true, showAllChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
+    setDisplayPreferences({ showNightChip: true, showAllChip: true, showCalibrationChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
     twoRigs();
     render(<Overview />, { wrapper: wrapper('/') });
     const family = await screen.findByTestId('library-family');
@@ -87,11 +87,11 @@ describe('compact Library', () => {
     expect(screen.getAllByTestId('library-row')).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: `Show details for ${name}` }));
     expect(document.querySelectorAll('.project-card')).toHaveLength(4);
-    setDisplayPreferences({ showNightChip: true, showAllChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
+    setDisplayPreferences({ showNightChip: true, showAllChip: true, showCalibrationChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
   });
 
   it('opens the project the user came from on its own and lets them fold it', async () => {
-    setDisplayPreferences({ showNightChip: true, showAllChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
+    setDisplayPreferences({ showNightChip: true, showAllChip: true, showCalibrationChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
     twoRigs();
     render(<Overview />, { wrapper: wrapper('/?db=c925&project=2') });
     const card = await screen.findByText('Loner', { selector: '.project-title' });
@@ -102,7 +102,7 @@ describe('compact Library', () => {
   });
 
   it('flags calibration with a pill that opens the report, and Show narrows to it', async () => {
-    setDisplayPreferences({ showNightChip: true, showAllChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
+    setDisplayPreferences({ showNightChip: true, showAllChip: true, showCalibrationChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
     twoRigs();
     // Only C925's Loner has a finding; its health is per database.
     server.use(
@@ -129,7 +129,7 @@ describe('compact Library', () => {
   });
 
   it('narrows the Library to projects with calibration issues', async () => {
-    setDisplayPreferences({ showNightChip: true, showAllChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
+    setDisplayPreferences({ showNightChip: true, showAllChip: true, showCalibrationChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
     twoRigs();
     server.use(
       http.get('/api/db/:dbId/calibration-health', ({ params }) => ok({

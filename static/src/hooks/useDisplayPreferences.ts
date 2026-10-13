@@ -17,6 +17,9 @@ export interface DisplayPreferences {
   /** Show the smaller "all <score>" chip — the all-sessions basis shown
    * when the main badge is a single session's score. */
   showAllChip: boolean;
+  /** Mark lights the calibration library serves poorly, or that are worth
+   * a look, with a chip from the background calibration health results. */
+  showCalibrationChip: boolean;
   /** Move to the next image after accept/reject/pending. Holding Shift
    * while grading does the opposite of this setting for that one grade. */
   advanceOnGrade: boolean;
@@ -30,6 +33,7 @@ const STORAGE_KEY = 'psf-guard.display-preferences';
 const DEFAULTS: DisplayPreferences = {
   showNightChip: true,
   showAllChip: true,
+  showCalibrationChip: true,
   advanceOnGrade: true,
   projectPickerGrouping: 'activity',
   libraryDensity: 'compact',
@@ -58,6 +62,10 @@ function sanitize(parsed: StoredPreferences): DisplayPreferences {
       typeof parsed.showAllChip === 'boolean'
         ? parsed.showAllChip
         : legacy ?? DEFAULTS.showAllChip,
+    showCalibrationChip:
+      typeof parsed.showCalibrationChip === 'boolean'
+        ? parsed.showCalibrationChip
+        : DEFAULTS.showCalibrationChip,
     advanceOnGrade:
       typeof parsed.advanceOnGrade === 'boolean'
         ? parsed.advanceOnGrade

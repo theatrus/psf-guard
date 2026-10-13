@@ -4707,8 +4707,18 @@ pub async fn update_image_grade(
 }
 
 /// A grade change queues a refresh of the project's remembered stack
-/// previews, after the grading delay so an interactive pass settles first.
-fn note_grade_changes(state: &AppState, ctx: &DatabaseContext, db: &Database, image_ids: &[i32]) {
+/// previews, after the grading delay so an interactive pass settles first,
+/// and a calibration health pass.
+fn note_grade_changes(
+    state: &Arc<AppState>,
+    ctx: &DatabaseContext,
+    db: &Database,
+    image_ids: &[i32],
+) {
+    // A rejected light leaves the lights calibration health judges. The
+    // pass works out only the projects whose key changed, and accepting a
+    // light changes none.
+    crate::server::calibration_health::request(state, &ctx.database_path);
     let projects: std::collections::HashSet<i32> = match db.get_images_by_ids(image_ids) {
         Ok(images) => images.into_iter().map(|image| image.project_id).collect(),
         Err(error) => {

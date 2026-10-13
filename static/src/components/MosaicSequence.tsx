@@ -4,6 +4,8 @@ import type { Image, ProjectMosaic } from '../api/types';
 import ImageCard from './ImageCard';
 import { imageDetailPath } from '../utils/imageDetailRoutes';
 import { mosaicLabel } from '../hooks/useProjectMosaic';
+import { useCalibrationMarks } from '../hooks/useCalibrationMarks';
+import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 
 interface MosaicSequenceProps {
   dbId: string;
@@ -19,6 +21,8 @@ export default function MosaicSequence({ dbId, mosaic, images }: MosaicSequenceP
   const [searchParams] = useSearchParams();
   const filterName = searchParams.get('filterName') || undefined;
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const { showCalibrationChip } = useDisplayPreferences();
+  const calibration = useCalibrationMarks(dbId, mosaic.project_id, showCalibrationChip);
 
   const panelOf = useMemo(
     () => new Map(mosaic.panels.map(panel => [panel.target_id, panel])),
@@ -91,6 +95,7 @@ export default function MosaicSequence({ dbId, mosaic, images }: MosaicSequenceP
                 <ImageCard
                   dbId={dbId}
                   image={image}
+                  calibration={calibration.marks.get(image.id)}
                   isSelected={image.id === selectedId}
                   qualityPresentation="compact"
                   lazyPreview

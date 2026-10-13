@@ -3762,6 +3762,19 @@
   filter: drop-shadow(0 1px 1px rgb(0 0 0 / 40%));
 }
 
+/* The calibration chip carries only its icon, coloured by level. */
+.score-chip.calibration-chip {
+  padding: 1px 4px;
+}
+
+.score-chip.calibration-chip.is-poor {
+  background-color: #d64545;
+}
+
+.score-chip.calibration-chip.is-check {
+  background-color: #c9971c;
+}
+
 /* Keep the chips clear of the selection marker, like the badge above. */
 .image-card-wrapper.multi-selected .score-chip-stack {
   right: 40px;

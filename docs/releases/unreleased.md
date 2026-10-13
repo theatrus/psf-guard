@@ -72,3 +72,9 @@
 - A project's calibration coverage report leaves rejected lights out, so a
   night you rejected no longer shows up as lacking flats or darks.
   **Include N rejected lights** adds them back.
+- Images, Sequence and a mosaic's sequence mark lights the calibration
+  library serves poorly with a 🧪 chip: red for Poor, yellow for Check. The
+  chip has its own toggle. Images gains a **Calibration** filter, and
+  Sequence a **Poor calibration** choice under **Select**. In a project's
+  Calibration report, each finding and each night that can't be calibrated
+  opens those lights in Images.

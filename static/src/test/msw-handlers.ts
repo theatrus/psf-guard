@@ -177,6 +177,8 @@ export const handlers = [
     HttpResponse.json({ success: true, data: { projects: [], running: false }, error: null, status: 'ready' })),
   http.get('/api/db/:dbId/projects/:projectId/calibration-health', () =>
     HttpResponse.json({ success: true, data: { health: null, computed_at: null, running: false }, error: null, status: 'ready' })),
+  http.get('/api/db/:dbId/calibration-health/lights', () =>
+    HttpResponse.json({ success: true, data: { lights: [], stale_projects: [], running: false }, error: null, status: 'ready' })),
   http.get('/api/db/:dbId/targets/overview', () => HttpResponse.json(emptyList)),
   http.get('/api/db/:dbId/projects/:projectId/targets', () =>
     HttpResponse.json(emptyList)

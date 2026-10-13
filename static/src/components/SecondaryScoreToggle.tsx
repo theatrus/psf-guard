@@ -2,11 +2,11 @@ import {
   setDisplayPreferences,
   useDisplayPreferences,
 } from '../hooks/useDisplayPreferences';
-import { LayersIcon, MoonIcon } from './ScoreChipIcons';
+import { CalibrationIcon, LayersIcon, MoonIcon } from './ScoreChipIcons';
 
 /**
- * Quick toggles for the two score chips on cards, labeled with the same
- * icons the chips carry. One shared preference: flipping a box changes
+ * Quick toggles for the chips on cards, labeled with the same icons the
+ * chips carry. One shared preference: flipping a box changes
  * the grid, the Sequence view, and the detail panel together.
  */
 export default function SecondaryScoreToggle({ className }: { className?: string }) {
@@ -38,6 +38,19 @@ export default function SecondaryScoreToggle({ className }: { className?: string
           }
         />
         <LayersIcon />
+      </label>
+      <label title="Show the calibration chip on lights the calibration library serves poorly or that are worth a look">
+        <input
+          type="checkbox"
+          checked={preferences.showCalibrationChip}
+          onChange={(event) =>
+            setDisplayPreferences({
+              ...preferences,
+              showCalibrationChip: event.target.checked,
+            })
+          }
+        />
+        <CalibrationIcon />
       </label>
     </div>
   );

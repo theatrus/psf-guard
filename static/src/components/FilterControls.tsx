@@ -8,6 +8,7 @@ import {
   type StatusWord,
 } from '../utils/statusFilter';
 import { flagFilterLabel } from '../utils/flagFilter';
+import { CALIBRATION_LEVELS, calibrationFilterLabel } from '../utils/calibrationFilter';
 import MultiSelectMenu from './MultiSelectMenu';
 
 export interface FilterOptions {
@@ -22,6 +23,8 @@ export interface FilterOptions {
   /** Quality issue categories to keep, as the API spells them; none keeps
    *  every image. */
   flags: string[];
+  /** Calibration levels or finding codes to keep; none keeps every image. */
+  calibration: string[];
 }
 
 interface FilterControlsProps {
@@ -38,6 +41,7 @@ interface FilterControlsProps {
     };
     searchTerm: string;
     flags?: string[];
+    calibration?: string[];
   };
 }
 
@@ -66,6 +70,7 @@ export default function FilterControls({
     },
     searchTerm: currentFilters.searchTerm,
     flags: currentFilters.flags ?? [],
+    calibration: currentFilters.calibration ?? [],
   }), [currentFilters]);
 
   const handleStatusChange = (status: StatusFilter) => {
@@ -107,6 +112,10 @@ export default function FilterControls({
     onFilterChange({ ...filters, flags });
   };
 
+  const handleCalibrationChange = (calibration: string[]) => {
+    onFilterChange({ ...filters, calibration });
+  };
+
   const resetFilters = () => {
     const defaultFilters: FilterOptions = {
       status: 'all',
@@ -117,6 +126,7 @@ export default function FilterControls({
       },
       searchTerm: '',
       flags: [],
+      calibration: [],
     };
     onFilterChange(defaultFilters);
     setShowDateFilters(false);
@@ -128,13 +138,18 @@ export default function FilterControls({
     || filters.filterNames.length > 0
     || dateFilterCount > 0
     || filters.searchTerm !== ''
-    || filters.flags.length > 0;
+    || filters.flags.length > 0
+    || filters.calibration.length > 0;
   // A chosen filter or flag stays offered even when the current scope has
   // no image carrying it, so the list keeps showing what the URL asked for.
   const filterOptions = [...availableFilters, ...filters.filterNames.filter((name) => !availableFilters.includes(name))]
     .map((name) => ({ value: name, label: name }));
   const flagOptions = [...filters.flags.filter((flag) => !availableFlags.includes(flag)), ...availableFlags]
     .map((flag) => ({ value: flag, label: flagFilterLabel(flag) }));
+  // The two levels, then any finding a coverage report link chose.
+  const levels: string[] = CALIBRATION_LEVELS.map((level) => level.value);
+  const calibrationOptions = [...levels, ...filters.calibration.filter((value) => !levels.includes(value))]
+    .map((value) => ({ value, label: calibrationFilterLabel(value) }));
 
   return (
     <div className="filter-controls compact">
@@ -169,6 +184,15 @@ export default function FilterControls({
           chosen={filters.flags}
           onChange={handleFlagsChange}
           title="Keep only images whose quality analysis raised any of these flags"
+        />
+
+        <MultiSelectMenu
+          id="image-calibration-filter"
+          label="Calibration:"
+          options={calibrationOptions}
+          chosen={filters.calibration}
+          onChange={handleCalibrationChange}
+          title="Keep only lights the calibration library serves poorly (Poor) or that are worth a look (Check)"
         />
 
         <div className="filter-input-group search-filter">

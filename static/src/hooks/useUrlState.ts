@@ -240,6 +240,8 @@ export function useFilters() {
     },
     searchTerm: getParam('search') || '',
     flags: listFilterOf(getParam('flag'), (value) => value.toLowerCase()),
+    // Calibration levels or finding codes to keep; see utils/calibrationFilter.
+    calibration: listFilterOf(getParam('calib'), (value) => value.toLowerCase()),
   }), [getParam]);
   
   const updateFilters = useCallback((updates: {
@@ -249,6 +251,7 @@ export function useFilters() {
     dateEnd?: string;
     searchTerm?: string;
     flags?: string[];
+    calibration?: string[];
   }) => {
     updateParams({
       status: updates.status,
@@ -259,6 +262,7 @@ export function useFilters() {
       // updateParams drops the key for undefined, empty, or 'all', like
       // the other filters: no filter or flag chosen leaves the URL clean.
       flag: updates.flags,
+      calib: updates.calibration,
     });
   }, [updateParams]);
   
@@ -270,6 +274,7 @@ export function useFilters() {
       dateEnd: null,
       search: null,
       flag: null,
+      calib: null,
     });
   }, [updateParams]);
   

@@ -58,7 +58,7 @@ function mount(route: string, puts: { path: string; body: unknown }[] = []) {
   return render(<Overview />, { wrapper: Wrapper });
 }
 
-const compact = { showNightChip: true, showAllChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity' as const, libraryDensity: 'compact' as const };
+const compact = { showNightChip: true, showAllChip: true, showCalibrationChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity' as const, libraryDensity: 'compact' as const };
 const names = () => screen.getAllByTestId('library-row').map(row => within(row).getByRole('button', { name: /image grid/ }).textContent);
 
 describe('the Library with Planning', () => {
