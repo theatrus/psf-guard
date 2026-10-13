@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
@@ -78,5 +78,34 @@ describe('CalibrationReportDialog', () => {
     await user.click(await screen.findByRole('button', { name: 'Reject 1 light' }));
     expect(await screen.findByRole('status')).toHaveTextContent('The lights changed since the check; check again.');
     expect(screen.queryByRole('button', { name: 'Reject 1 light' })).toBeNull();
+  });
+
+  it('says what the calibration check found, by night and filter, or that it has not run', async () => {
+    const report = { warnings: [], kinds: [], nights: [], lights_missing_files: 0 };
+    server.use(
+      http.get('/api/db/:dbId/projects/:id/calibration-report', () => HttpResponse.json({ success: true, error: null, data: report })),
+      http.get('/api/db/c925/projects/1/calibration-health', () => HttpResponse.json({ success: true, error: null, data: {
+        running: false, computed_at: 1, health: {
+          project_id: 1, level: 'poor', checked: 30, missing_files: 2, poor_lights: 6, check_lights: 3,
+          findings: [
+            { code: 'thin_dark', level: 'poor', reason: 'Its dark master would use only 2 frames', lights: 6,
+              nights: [{ night: '2026-07-02', filter: 'SII', lights: 4 }, { night: '2026-07-01', filter: 'SII', lights: 2 }] },
+            { code: 'old_flats', level: 'check', reason: 'Its flats are 41 days from it', lights: 3,
+              nights: [{ night: '2026-07-01', filter: 'OIII', lights: 3 }] },
+          ],
+        },
+      } })),
+    );
+    const { unmount } = render(<CalibrationReportDialog open dbId="c925" projectId={1} projectName="Bubble" onClose={() => {}} />, { wrapper });
+    const quality = await screen.findByRole('region', { name: 'Quality' });
+    expect(await within(quality).findByText("6 of 30 lights can't be calibrated properly; 3 more to check.")).toBeInTheDocument();
+    expect(within(quality).getByText('Its dark master would use only 2 frames: 6 lights')).toBeInTheDocument();
+    expect(within(quality).getByText('2026-07-02 SII: 4 · 2026-07-01 SII: 2')).toBeInTheDocument();
+    expect(within(quality).getByText('Check')).toHaveClass('is-check');
+    expect(within(quality).getByText('2 lights not found or not readable.')).toBeInTheDocument();
+    unmount();
+
+    render(<CalibrationReportDialog open dbId="redcat" projectId={7} projectName="Heart" onClose={() => {}} />, { wrapper });
+    expect(await screen.findByText('Not checked yet.')).toBeInTheDocument();
   });
 });

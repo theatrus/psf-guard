@@ -188,6 +188,11 @@ export const handlers = [
   // Per-DB project / target / image listings
   http.get('/api/db/:dbId/projects', () => HttpResponse.json(emptyList)),
   http.get('/api/db/:dbId/projects/overview', () => HttpResponse.json(emptyList)),
+  // The background calibration check has not judged anything yet.
+  http.get('/api/db/:dbId/calibration-health', () =>
+    HttpResponse.json({ success: true, data: { projects: [], running: false }, error: null, status: 'ready' })),
+  http.get('/api/db/:dbId/projects/:projectId/calibration-health', () =>
+    HttpResponse.json({ success: true, data: { health: null, computed_at: null, running: false }, error: null, status: 'ready' })),
   http.get('/api/db/:dbId/targets/overview', () => HttpResponse.json(emptyList)),
   http.get('/api/db/:dbId/projects/:projectId/targets', () =>
     HttpResponse.json(emptyList)

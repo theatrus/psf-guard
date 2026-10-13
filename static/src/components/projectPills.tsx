@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { ProjectCalibrationHealthSummary } from '../api/types';
 import type { LibraryDensity } from '../hooks/useDisplayPreferences';
 import { ago, percentDone, stateLabel } from './libraryFamilies';
 
@@ -56,6 +57,25 @@ export function DatesPill({ earliest, latest, nowMs, title }: { earliest: number
     {latest ? `${formatDay(earliest ?? latest)} – ${formatDay(latest)}` : 'No dates'}
     {last ? <small> · {last}</small> : null}
   </span>;
+}
+
+const lightCount = (count: number) => `${count} light${count === 1 ? '' : 's'}`;
+
+/** How well the calibration library serves the project's lights: Poor when
+ *  some cannot be calibrated properly, Check when something is worth a look.
+ *  Nothing until the background check has a current answer. Opens the
+ *  project's calibration report. */
+export function CalibrationPill({ health, name, onOpen }: { health: ProjectCalibrationHealthSummary | undefined; name: string; onOpen: () => void }) {
+  if (!health?.level) return null;
+  const poor = health.level === 'poor';
+  const word = poor ? 'Poor' : 'Check';
+  const title = poor
+    ? `${lightCount(health.poor_lights)} can't be calibrated properly${health.check_lights > 0 ? `; ${lightCount(health.check_lights)} to check` : ''}`
+    : `${lightCount(health.check_lights)} to check`;
+  return <button type="button" className={`library-pill library-pill-calibration is-${health.level}`} title={`Calibration: ${title}`}
+    aria-label={`Calibration ${word} for ${name}`} onClick={onOpen}>
+    <span aria-hidden="true">🧪</span>{word}
+  </button>;
 }
 
 /** The outer pill's own marker: one plan shot by several rigs. */

@@ -236,6 +236,8 @@ pub async fn update_calibration_settings(
     })
     .await?;
     crate::calibration::configure(calibration.as_ref());
+    // The settings decide what each light matches.
+    crate::server::calibration_health::request_all(&state);
     Ok(Json(ApiResponse::success(current_response(
         calibration.as_ref(),
     ))))

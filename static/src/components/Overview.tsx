@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { ago, projectFamilies, stateLabel } from './libraryFamilies';
 import { setDisplayPreferences, useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import { useFoldedRows } from '../hooks/useFoldedRows';
-import { DatesPill, DbPill, DensityToggle, FamilyPill, FoldButton, GradingPill, ProgressPill, StateControl } from './projectPills';
+import { CalibrationPill, DatesPill, DbPill, DensityToggle, FamilyPill, FoldButton, GradingPill, ProgressPill, StateControl } from './projectPills';
 import { familyMatchesShow, parseShow, SHOW_OPTIONS } from './libraryShow';
 import { usePlans } from './header/useCurrentPlan';
 import LibraryPlans from './director/LibraryPlans';
@@ -24,6 +24,7 @@ import {
   useMergedProjectsOverview,
   useMergedTargetsOverview,
   useMergedOverallStats,
+  useCalibrationHealth,
   type WithDb,
 } from '../hooks/useDatabases';
 import { isTauriApp, tauriFileSystem } from '../utils/tauri';
@@ -141,6 +142,15 @@ export default function Overview() {
   const { data: overallStats, isLoading: statsLoading } = useMergedOverallStats();
   const { data: projects, isLoading: projectsLoading, isError: projectsIncomplete } = useMergedProjectsOverview();
   const { data: targets, isLoading: targetsLoading } = useMergedTargetsOverview();
+  // What the background calibration check found, by db:project. Only
+  // current results; a project without one shows no pill.
+  const calibrationHealth = useCalibrationHealth();
+  const openCalibrationReport = (project: WithDb<ProjectOverview>) =>
+    setCalibrationReportProject({
+      dbId: project.db_id,
+      id: project.id,
+      name: project.display_name,
+    });
   const { canWrite } = useAccess();
   const organizeAllowed = canWrite && (serverInfo?.allow_database_management ?? false);
   // A project's Target Scheduler state, written straight into its database.
@@ -384,11 +394,15 @@ export default function Overview() {
     if (show === 'all') return searchedProjects;
     const keep = new Set<string>();
     for (const family of projectFamilies(searchedProjects)) {
-      if (!familyMatchesShow(family.members, show)) continue;
+      const members = family.members.map((member) => ({
+        ...member,
+        calibration_level: calibrationHealth.get(projectKey(member.db_id, member.id))?.level ?? null,
+      }));
+      if (!familyMatchesShow(members, show)) continue;
       for (const member of family.members) keep.add(projectKey(member.db_id, member.id));
     }
     return searchedProjects.filter((project) => keep.has(projectKey(project.db_id, project.id)));
-  }, [searchedProjects, show]);
+  }, [calibrationHealth, searchedProjects, show]);
   const narrowed = show !== 'all' || projectSearch.trim() !== '';
 
   const activeProjectGroups = useMemo(
@@ -954,6 +968,7 @@ export default function Overview() {
                     <ProgressPill accepted={project.accepted_images} desired={project.total_desired} totalImages={project.total_images} />
                     <GradingPill accepted={project.accepted_images} rejected={project.rejected_images} pending={project.pending_images} />
                     <DatesPill earliest={project.date_range.earliest} latest={project.date_range.latest} nowMs={relativeNow} title={formatDateRange(project.date_range)} />
+                    <CalibrationPill health={calibrationHealth.get(key)} name={project.display_name} onOpen={() => openCalibrationReport(project)} />
                     {projectNewImages > 0 && <span className="new-images-badge"><span aria-hidden="true" />{projectNewImages} new</span>}
                     {!project.has_files && <span className="no-files-badge">No Files</span>}
                     {project.files_missing > 0 && <span className="library-pill files-missing">{project.files_missing} missing</span>}
@@ -1053,11 +1068,7 @@ export default function Overview() {
                         title="How the calibration library covers this project: matches, ages, and same-night flats"
                         onClick={(e) => {
                           e.stopPropagation();
-                          setCalibrationReportProject({
-                            dbId: project.db_id,
-                            id: project.id,
-                            name: project.display_name,
-                          });
+                          openCalibrationReport(project);
                         }}
                       >
                         <span aria-hidden="true">🧪</span>
@@ -1292,6 +1303,11 @@ export default function Overview() {
                   
                   <div className="project-meta">
                     <span>{formatDateRange(project.date_range)}</span>
+                    <CalibrationPill
+                      health={calibrationHealth.get(key)}
+                      name={project.display_name}
+                      onOpen={() => openCalibrationReport(project)}
+                    />
                     {project.filters_used.length > 0 && (
                       <span>{project.filters_used.join(', ')}</span>
                     )}
