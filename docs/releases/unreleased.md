@@ -8,3 +8,5 @@
   once uploads pause for two minutes, as it does after an import; before,
   they waited for the next server start. The calibration library shows each
   measured dark's level and spread, in ADU.
+- Every stack and master rebuilds once, the first time each is used, after
+  the move to Seiza 0.29.
