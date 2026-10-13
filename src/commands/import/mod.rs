@@ -28,7 +28,7 @@ use chrono::TimeZone;
 use grouping::{build_plan, ImportPlan, TemplateKey, DEFAULT_TIME_GAP_DAYS};
 use headers::FrameMeta;
 use rayon::prelude::*;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, TransactionBehavior};
 use scan_rules::{LeftOutReason, LightFilter, PathFilter, ScanRuleReport};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -502,7 +502,9 @@ pub fn import_frames(
         ..Default::default()
     };
 
-    let tx = conn.transaction().context("starting import transaction")?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .context("starting import transaction")?;
     // Pairing records point at a light's guid; a catalog without the column
     // imports copies as it always has.
     let options = &ImportOptions {
@@ -879,7 +881,7 @@ pub fn remove_imported(
     conn: &mut Connection,
     dry_run: bool,
 ) -> Result<(usize, usize, usize, usize)> {
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let project_ids: Vec<i64> = {
         let mut stmt = tx.prepare("SELECT Id FROM project WHERE description LIKE ?1")?;
         stmt.query_map([format!("{IMPORTED_PROJECT_MARKER}%")], |row| row.get(0))?

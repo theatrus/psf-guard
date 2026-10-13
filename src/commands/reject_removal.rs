@@ -14,7 +14,10 @@ use crate::commands::reject_archive;
 use crate::directory_tree::DirectoryTree;
 use anyhow::{bail, Context, Result};
 use base64::Engine;
-use rusqlite::{params, types::Value as SqlValue, Connection, OptionalExtension};
+use rusqlite::{
+    params, types::Value as SqlValue, Connection, OptionalExtension, Transaction,
+    TransactionBehavior,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
@@ -769,7 +772,7 @@ fn remove_one(
         });
     }
     let committed = (|| -> Result<()> {
-        let tx = conn.unchecked_transaction()?;
+        let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
         let rows = RowSnapshot {
             acquiredimage: snapshot(&tx, "acquiredimage", "Id", &frame.image_id)?
                 .into_iter()
@@ -1203,7 +1206,7 @@ pub fn restore(conn: &Connection, selection: &RestoreSelection) -> Result<Restor
             continue;
         }
         let committed = (|| -> Result<i64> {
-            let tx = conn.unchecked_transaction()?;
+            let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
             let rows = &tombstone.rows;
             let free: bool = !tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM acquiredimage WHERE Id = ?1)",

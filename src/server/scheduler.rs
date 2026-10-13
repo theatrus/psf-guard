@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, State},
     Json,
 };
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -461,7 +461,11 @@ pub fn update_project(
             ));
         }
     }
-    let tx = conn.transaction().map_err(AppError::db)?;
+    // Immediate: this reads before it writes, and such a transaction cannot
+    // wait for another connection's write lock (see SCHEDULER_BUSY_TIMEOUT).
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(AppError::db)?;
     let exists = tx
         .query_row("SELECT 1 FROM project WHERE Id = ?", [project_id], |_| {
             Ok(())
@@ -607,7 +611,10 @@ pub async fn create_exposure_plan(
             "creating exposure plans requires Target Scheduler schema 22 or newer".into(),
         ));
     }
-    let tx = conn.transaction().map_err(AppError::db)?;
+    // Immediate, as in `update_project`: a background pass may be writing.
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(AppError::db)?;
     let (profile_id, project_id): (String, i32) = tx
         .query_row(
             "SELECT p.profileId, p.Id

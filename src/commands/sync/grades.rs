@@ -13,7 +13,7 @@ use crate::commands::reject_archive::require_target_scheduler_guid;
 use crate::db::Database;
 use crate::models::GradingStatus;
 use anyhow::{anyhow, Context, Result};
-use rusqlite::{Connection, Transaction};
+use rusqlite::{Connection, Transaction, TransactionBehavior};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Knobs for a one-way grade push.
@@ -93,7 +93,13 @@ pub fn sync_grades(
     require_target_scheduler_guid(src).context("source database")?;
     require_target_scheduler_guid(dest).context("destination database")?;
 
-    let tx = dest.unchecked_transaction()?;
+    // A dry run only reads.
+    let behavior = if opts.dry_run {
+        TransactionBehavior::Deferred
+    } else {
+        TransactionBehavior::Immediate
+    };
+    let tx = Transaction::new_unchecked(dest, behavior)?;
     let summary = sync_grades_in_transaction(src, &tx, opts)?;
     if opts.dry_run {
         tx.rollback()?;

@@ -815,6 +815,94 @@ async fn project_scheduler_views_and_updates_plans() {
     assert_eq!(template, (60.0, -1, -1, -1));
 }
 
+/// A background pass on its own connection, such as the calibration grading
+/// pass an import starts, can hold the catalog's write lock when someone
+/// saves a plan or a project. The save waits for the lock; it must not fail
+/// with "database is locked".
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scheduler_edits_wait_for_another_writer() {
+    let dir = tempdir().unwrap();
+    let images = dir.path().join("lights");
+    std::fs::create_dir_all(&images).unwrap();
+    write_fits(
+        &images.join("m31_ha_0001.fits"),
+        "M31",
+        "Ha",
+        "2026-01-15T04:00:00.000",
+        10.6847,
+    );
+    let state = state_with_management(dir.path());
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        "/api/databases/create",
+        Some(serde_json::json!({
+            "name": "Contended",
+            "image_dirs": [images.to_string_lossy()],
+            "backfill": false,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let slug = body["data"]["database"]["id"].as_str().unwrap().to_string();
+    let db_path = body["data"]["database"]["database_path"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    wait_for_import(&state, &slug).await;
+
+    let writer = rusqlite::Connection::open(&db_path).unwrap();
+    let (project_id, target_id): (i32, i32) = writer
+        .query_row(
+            "SELECT p.Id, t.Id FROM project p JOIN target t ON t.projectid = p.Id",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+
+    let edits = [
+        (
+            "POST",
+            format!("/api/db/{slug}/targets/{target_id}/exposure-plans"),
+            serde_json::json!({
+                "filter_name": "OIII",
+                "exposure": 180.0,
+                "desired": 10,
+                "enabled": true
+            }),
+        ),
+        (
+            "PUT",
+            format!("/api/db/{slug}/projects/{project_id}"),
+            serde_json::json!({ "priority": 2 }),
+        ),
+    ];
+    for (method, uri, body) in edits {
+        // What the other connection holds while it writes its results.
+        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let app = build_app(state.clone());
+        let label = format!("{method} {uri}");
+        let request =
+            tokio::spawn(async move { json_request(app, method, &uri, Some(body)).await });
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        if request.is_finished() {
+            let (status, body) = request.await.unwrap();
+            panic!("{label} answered while another connection wrote: {status} {body}");
+        }
+        writer.execute_batch("COMMIT").unwrap();
+        let (status, body) = request.await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{label} failed: {body}");
+    }
+    let priority: i32 = writer
+        .query_row(
+            "SELECT priority FROM project WHERE Id = ?",
+            [project_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(priority, 2);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn organize_rename_move_and_merge() {
     let dir = tempdir().unwrap();

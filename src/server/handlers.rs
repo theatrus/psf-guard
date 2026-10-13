@@ -1133,8 +1133,14 @@ pub(crate) async fn execute_scheduler_sync_paths(
                     Ok((response, None, changed_image_ids))
                 }
                 SyncGuardMode::Preview => {
-                    let transaction =
-                        Transaction::new_unchecked(&destination, TransactionBehavior::Deferred)?;
+                    // A pull or planning preview writes, then rolls back; a
+                    // grade preview only reads.
+                    let behavior = if matches!(kind, SchedulerSyncKind::PushGrades) {
+                        TransactionBehavior::Deferred
+                    } else {
+                        TransactionBehavior::Immediate
+                    };
+                    let transaction = Transaction::new_unchecked(&destination, behavior)?;
                     let fingerprint = crate::server::sync_preview::connection_fingerprint(
                         &transaction,
                         &fingerprint_queries,
