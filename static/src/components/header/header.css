@@ -573,6 +573,8 @@ div.activity-error {
   flex: none;
 }
 
+/* Hidden, it has no width, so a tab at the window's edge never widens the
+   page. */
 .view-tab-flyout {
   position: absolute;
   top: -1px;
@@ -581,23 +583,25 @@ div.activity-error {
   z-index: 10;
   display: flex;
   align-items: center;
-  padding: 0 0.62rem 0 0.2rem;
-  border: 1px solid var(--color-bg-input);
-  border-left: none;
+  max-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0 solid var(--color-bg-input);
   border-radius: 0 4px 4px 0;
   background: var(--color-bg-quaternary);
   color: var(--color-text-primary);
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;
-  clip-path: inset(0 100% 0 0);
-  transition: clip-path 0.16s ease-out, opacity 0.12s;
+  transition: max-width 0.16s ease-out, opacity 0.12s;
 }
 
 .view-tab:hover .view-tab-flyout,
 .view-tab:focus-visible .view-tab-flyout {
+  max-width: 12rem;
+  padding: 0 0.62rem 0 0.2rem;
+  border-width: 1px 1px 1px 0;
   opacity: 1;
-  clip-path: inset(0 0 0 0);
 }
 
 .view-tab:hover:not([aria-current="page"]),
