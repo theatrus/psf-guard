@@ -8,6 +8,8 @@ import { useCurrentPlan } from './components/header/useCurrentPlan';
 import ActivityChip from './components/header/ActivityChip';
 import LiveChip from './components/header/LiveChip';
 import HeaderMenu from './components/header/HeaderMenu';
+import ViewTab from './components/header/ViewTab';
+import { ChartColumn, Crosshair, Images, LibraryBig, SquareStack, Telescope, TestTubeDiagonal } from 'lucide-react';
 import { useHeaderFit } from './components/header/useHeaderFit';
 import KeyboardShortcutHelp from './components/KeyboardShortcutHelp';
 import ServerInfoPanel from './components/ServerInfoPanel';
@@ -166,82 +168,68 @@ function AppContent() {
         </div>
 
         <nav className="header-view-tabs header-nav" aria-label="Views" data-header-part="nav">
-          <button
-            type="button"
+          <ViewTab
+            label="Library"
+            icon={LibraryBig}
+            current={isOnOverview}
             onClick={() => navigate(toScoped('/'))}
-            className="header-button"
-            aria-current={isOnOverview ? 'page' : undefined}
-          >
-            Library
-          </button>
+          />
           {/* The scope, from the whole to the part: the project (a plan shot
               by several rigs is one), its workspace, then which rig and
               target Images and Sequence show. */}
           <div className="header-group header-scope" role="group" aria-label="Scope">
             <ProjectTargetSelector />
             {plan.enabled && (
-              <button
-                type="button"
-                onClick={() => plan.current && navigate(plan.hrefFor(plan.current))}
-                className="header-button"
-                aria-current={isOnWorkspace ? 'page' : undefined}
+              <ViewTab
+                label="Planning"
+                icon={Crosshair}
+                current={isOnWorkspace}
                 disabled={!plan.current}
-                title={plan.current ? `Plan ${plan.current.project.name}: framing, rigs and activation` : 'Choose a project with a plan first'}
-              >
-                Planning
-              </button>
+                title={plan.current ? undefined : 'Choose a project with a plan first'}
+                onClick={() => plan.current && navigate(plan.hrefFor(plan.current))}
+              />
             )}
             <span className="header-scope-divider" aria-hidden="true" />
             <RigTargetSelect />
-            <button
-              type="button"
+            <ViewTab
+              label="Images"
+              icon={Images}
+              current={isOnGrid}
+              disabled={!hasReviewScope}
+              title={hasReviewScope ? undefined : 'Choose a project or database first'}
               onClick={() => navigate(toScoped('/grid'))}
-              className="header-button"
-              aria-current={isOnGrid ? 'page' : undefined}
+            />
+            <ViewTab
+              label="Sequence"
+              icon={ChartColumn}
+              current={isOnSequence}
               disabled={!hasReviewScope}
               title={hasReviewScope ? undefined : 'Choose a project or database first'}
-            >
-              Images
-            </button>
-            <button
-              type="button"
               onClick={() => navigate(toScoped('/sequence'))}
-              className="header-button"
-              aria-current={isOnSequence ? 'page' : undefined}
+            />
+            <ViewTab
+              label="Stacks"
+              icon={SquareStack}
+              current={isOnStacks}
               disabled={!hasReviewScope}
               title={hasReviewScope ? undefined : 'Choose a project or database first'}
-            >
-              Sequence
-            </button>
-            <button
-              type="button"
               onClick={() => navigate(toScoped('/stacks'))}
-              className="header-button"
-              aria-current={isOnStacks ? 'page' : undefined}
-              disabled={!hasReviewScope}
-              title={hasReviewScope ? undefined : 'Choose a project or database first'}
-            >
-              Stacks
-            </button>
+            />
             {/* The calibration library of the database in scope; it picks
                 the first database when none is. */}
-            <button
-              type="button"
+            <ViewTab
+              label="Calibration"
+              icon={TestTubeDiagonal}
+              current={isOnCalibration}
               onClick={() => navigate(toScoped('/calibration'))}
-              className="header-button"
-              aria-current={isOnCalibration ? 'page' : undefined}
-            >
-              Calibration
-            </button>
+            />
           </div>
-          <button
-            type="button"
+          <ViewTab
+            label="Sky"
+            icon={Telescope}
+            current={isOnSky}
             onClick={() => navigate(toScoped('/sky'))}
-            className="header-button"
-            aria-current={isOnSky ? 'page' : undefined}
-          >
-            Sky
-          </button>
+          />
         </nav>
 
         <div className="header-utilities" data-header-part="utilities">

@@ -558,3 +558,56 @@ div.activity-error {
   color: var(--color-text-muted);
   font-size: 0.78rem;
 }
+
+/* A view shown by its icon (ViewTab). The current view also shows its name;
+   any other shows its name on hover or focus, drawn over its neighbours as
+   if the tab had grown, so nothing moves and the row fit holds. */
+.view-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.view-tab > svg {
+  flex: none;
+}
+
+.view-tab-flyout {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  left: calc(100% - 1px);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  padding: 0 0.62rem 0 0.2rem;
+  border: 1px solid var(--color-bg-input);
+  border-left: none;
+  border-radius: 0 4px 4px 0;
+  background: var(--color-bg-quaternary);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  clip-path: inset(0 100% 0 0);
+  transition: clip-path 0.16s ease-out, opacity 0.12s;
+}
+
+.view-tab:hover .view-tab-flyout,
+.view-tab:focus-visible .view-tab-flyout {
+  opacity: 1;
+  clip-path: inset(0 0 0 0);
+}
+
+.view-tab:hover:not([aria-current="page"]),
+.view-tab:focus-visible:not([aria-current="page"]) {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .view-tab-flyout {
+    transition: none;
+  }
+}

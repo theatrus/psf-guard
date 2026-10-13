@@ -87,7 +87,8 @@
   its own, and with a project in scope it opens on that project's rig. A
   stack's master inspector opens a master on the page with **Open in
   Calibration**.
-- Settings, keyboard shortcuts, server information and sign out now sit in
-  one menu at the right of the header, which leaves the views more room.
+- The header is narrower. Its views show as icons; the current one keeps
+  its name, and hovering any other shows its name. Settings, keyboard
+  shortcuts, server information and sign out sit in one menu at the right.
   The **Editor** and **Read only** label is gone; the menu says who is
   signed in.
