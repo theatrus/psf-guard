@@ -1122,12 +1122,23 @@ fn attach_frames_to_target(
         };
 
         // Reuse the target's own plan for this template + exposure length.
+        // A plan whose exposure is NULL or below 0 runs at its template's
+        // default, as Target Scheduler reads it; one with its own length
+        // wins when both fit. A frame of unknown length takes a plan left
+        // at the default.
         let existing_plan: Option<i64> = match template_id {
             Some(template_id) => conn
                 .query_row(
-                    "SELECT Id FROM exposureplan
-                     WHERE targetid = ?1 AND exposureTemplateId = ?2
-                       AND ABS(IFNULL(exposure, -1) - ?3) < 0.001",
+                    "SELECT e.Id FROM exposureplan e
+                     LEFT JOIN exposuretemplate t ON t.Id = e.exposureTemplateId
+                     WHERE e.targetid = ?1 AND e.exposureTemplateId = ?2
+                       AND CASE WHEN ?3 > 0
+                         THEN ABS(CASE WHEN e.exposure IS NULL OR e.exposure < 0
+                                       THEN t.defaultexposure ELSE e.exposure END - ?3) < 0.001
+                         ELSE e.exposure IS NULL OR e.exposure < 0 END
+                     ORDER BY CASE WHEN e.exposure IS NULL OR e.exposure < 0 THEN 1 ELSE 0 END,
+                              e.Id
+                     LIMIT 1",
                     params![
                         target.id,
                         template_id,
@@ -3281,5 +3292,96 @@ mod tests {
         assert_eq!((outcome.plans_created, outcome.plans_raised), (2, 1));
         assert_eq!(outcome.templates_created, 1);
         assert_eq!(scheduling_rows(&conn), before, "a preview writes nothing");
+    }
+
+    /// M31's project made by Target Scheduler, its L plan left at exposure
+    /// -1 so it runs at the template's 300 s default.
+    fn catalog_with_m31_default_plan() -> Connection {
+        let conn = catalog_with_m31_plan(true);
+        conn.execute("UPDATE exposureplan SET exposure = -1", [])
+            .unwrap();
+        conn.execute("UPDATE exposuretemplate SET defaultexposure = 300", [])
+            .unwrap();
+        conn
+    }
+
+    fn plan_rows(conn: &Connection) -> Vec<(i64, f64, i64)> {
+        let mut stmt = conn
+            .prepare("SELECT Id, exposure, acquired FROM exposureplan ORDER BY Id")
+            .unwrap();
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_plan_left_at_the_template_default_takes_frames_of_that_length() {
+        let night = || {
+            vec![
+                light("M31", "L", 2_000),
+                FrameMeta {
+                    exposure_s: Some(120.0),
+                    ..light("M31", "L", 3_000)
+                },
+            ]
+        };
+
+        // Ask first: the 300 s frame is an image row on the -1 plan, whose
+        // counts stay; the 120 s frame has no plan and waits.
+        let mut conn = catalog_with_m31_default_plan();
+        let plans = plan_rows(&conn);
+        let outcome = import_frames(
+            &mut conn,
+            night(),
+            &ImportOptions {
+                new_targets: NewTargets::Ask,
+                ..ImportOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome.attached, 1);
+        assert_eq!(outcome.skipped_unplanned, 1);
+        assert_eq!(outcome.unplanned[0].exposure_s, Some(120.0));
+        assert_eq!(plan_rows(&conn), plans);
+
+        // Create, as a person's import runs: the same frame raises that
+        // plan instead of adding a second one beside it.
+        let mut conn = catalog_with_m31_default_plan();
+        let plans = plan_rows(&conn);
+        let outcome = import_frames(
+            &mut conn,
+            vec![light("M31", "L", 2_000)],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        assert_eq!((outcome.plans_created, outcome.plans_raised), (0, 1));
+        let after = plan_rows(&conn);
+        assert_eq!(after.len(), plans.len());
+        assert_eq!(after[0].2, plans[0].2 + 1);
+    }
+
+    #[test]
+    fn a_plan_with_its_own_length_wins_over_one_left_at_the_default() {
+        let mut conn = catalog_with_m31_default_plan();
+        // A second L plan with its own 300 s, added after the default one.
+        conn.execute(
+            "INSERT INTO exposureplan (profileId, exposure, desired, acquired, accepted,
+                                       targetid, exposureTemplateId, enabled, guid)
+             SELECT profileId, 300, 5, 0, 0, targetid, exposureTemplateId, 1, 'explicit-plan'
+             FROM exposureplan LIMIT 1",
+            [],
+        )
+        .unwrap();
+        let before = plan_rows(&conn);
+        import_frames(
+            &mut conn,
+            vec![light("M31", "L", 2_000)],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        let after = plan_rows(&conn);
+        assert_eq!(after[0], before[0], "the default plan is left alone");
+        assert_eq!(after[1].2, before[1].2 + 1, "the explicit plan takes it");
     }
 }
