@@ -1151,11 +1151,19 @@ rig's database, the same rows Target Scheduler and the Director plugin read:
   one no activation owns, on the resolved template, else on a template with
   the same filter, gain, offset, binning and readout mode, at the same
   exposure length either way (a plan left at the template's default exposure
-  counts at that default). Another exposure length is other work and gets a
-  plan of its own. A taken-over plan keeps its `acquired` and `accepted`
-  counts; its `desired`, template and enabled flag follow the plan, and the
-  preview lists it as `adopt` with its row number and what changes, or as
-  `unchanged` when it already holds the plan's values.
+  counts at that default). Another exposure length gets a plan of its own,
+  and the old plan is turned off (below). A taken-over plan keeps its
+  `acquired` and `accepted` counts; its `desired`, template and enabled flag
+  follow the plan, and the preview lists it as `adopt` with its row number
+  and what changes, or as `unchanged` when it already holds the plan's
+  values.
+- a plan of the target's that no activation owns and that takes the same
+  frames as a rig objective (same filter, gain, offset, binning and readout
+  mode) at another length is turned off as replaced: for example a G_120
+  plan when the plan's G objective moved to G_300 before the first
+  activation. Its frames and settings stay; the preview lists it as
+  `disable`, "replaced by …". To keep both lengths running, give the plan
+  an objective for each.
 
 Rows are owned by GUID. A target or exposure plan activation would take over
 but that has no GUID yet refuses the rig, which says which row and points at
@@ -1163,9 +1171,11 @@ but that has no GUID yet refuses the rig, which says which row and points at
 the database, and skipping the row would make a twin of it.
 
 The preview accounts for every exposure plan on the targets: plans it adds
-(`create`), takes over (`adopt`), changes (`update`), turns off (`disable`)
-or leaves alone (`unchanged`), and with `keep` the rig's own plans no
-objective asks for, which stay as they are in Target Scheduler. A template
+(`create`), takes over (`adopt`), changes (`update`), turns off (`disable`,
+including plans another length replaced) or leaves alone (`unchanged`), and
+with `keep` the rig's own plans for work no objective asks for, which stay as
+they are in Target Scheduler. A `disable` counts as a change, so the plan
+asks to be activated until it is applied. A template
 activation creates is listed under `template`.
 
 A plan an earlier activation made that nothing plans now is turned off

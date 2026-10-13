@@ -1880,6 +1880,12 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
         .iter()
         .map(|c| c.id.to_string())
         .collect();
+    // What each target's contributions take, by template settings, so a
+    // plan Director never owned that takes the same frames at another length
+    // (the template a person changed before the first activation) is turned
+    // off rather than left running beside its replacement.
+    let mut taken: std::collections::BTreeMap<String, Vec<(TemplateSettings, String)>> =
+        std::collections::BTreeMap::new();
     for contribution in inputs.contributions {
         let objective = inputs
             .plan
@@ -2114,6 +2120,12 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                 ],
             )?;
             planned.insert((contribution.id.to_string(), target_guid.clone()));
+            if let Some(settings) = template_settings(tx, template_id)? {
+                taken
+                    .entry(target_guid.clone())
+                    .or_default()
+                    .push((settings, name.clone()));
+            }
             plans.push(ActivatedPlan {
                 contribution_id: contribution.id,
                 objective_id: objective.id,
@@ -2198,11 +2210,14 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
         }
     }
     // The rig's own plans on these targets that no contribution took stay
-    // as they are in Target Scheduler. Say so, so the preview accounts for
-    // every plan on the target.
+    // as they are in Target Scheduler, unless one takes the same frames as a
+    // contribution (same filter, gain, offset, binning and readout mode): that
+    // plan was replaced, so it is turned off. Say which, so the preview
+    // accounts for every plan on the target.
     for (_, target_guid, target_name) in &targets {
         let mut statement = tx.prepare(
-            "SELECT e.Id, e.exposure, IFNULL(e.acquired, 0), IFNULL(e.desired, 0), t.name, t.defaultexposure
+            "SELECT e.Id, e.exposure, IFNULL(e.acquired, 0), IFNULL(e.desired, 0), t.name, t.defaultexposure,
+                    e.exposureTemplateId
              FROM exposureplan e
              JOIN target tg ON tg.Id = e.targetid
              LEFT JOIN exposuretemplate t ON t.Id = e.exposureTemplateId
@@ -2210,7 +2225,15 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                AND (e.guid IS NULL OR e.guid NOT IN (SELECT exposureplan_guid FROM psf_guard_director_plan))
              ORDER BY e.Id",
         )?;
-        type Unclaimed = (i64, Option<f64>, i64, i64, Option<String>, Option<f64>);
+        type Unclaimed = (
+            i64,
+            Option<f64>,
+            i64,
+            i64,
+            Option<String>,
+            Option<f64>,
+            Option<i64>,
+        );
         let unclaimed: Vec<Unclaimed> = statement
             .query_map([target_guid], |row| {
                 Ok((
@@ -2220,25 +2243,55 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                     row.get(3)?,
                     row.get(4)?,
                     row.get(5)?,
+                    row.get(6)?,
                 ))
             })?
             .collect::<Result<_, _>>()?;
-        for (row_id, exposure, acquired, desired, template_name, default_exposure) in unclaimed {
+        drop(statement);
+        for (row_id, exposure, acquired, desired, template_name, default_exposure, template_id) in
+            unclaimed
+        {
             let exposure = exposure
                 .filter(|e| *e > 0.0)
                 .or(default_exposure)
                 .unwrap_or(0.0);
-            changes.push(Change {
-                kind: "plan",
-                action: "keep",
-                name: format!(
-                    "{target_name} · {} · {exposure} s",
-                    template_name.unwrap_or_default()
-                ),
-                detail: format!(
-                    "plan #{row_id} ({acquired} of {desired} frames taken) is not part of this plan; left as it is"
-                ),
+            let name = format!(
+                "{target_name} · {} · {exposure} s",
+                template_name.unwrap_or_default()
+            );
+            let settings = match template_id {
+                Some(id) => template_settings(tx, id)?,
+                None => None,
+            };
+            let replacement = settings.and_then(|settings| {
+                taken.get(target_guid).and_then(|plans| {
+                    plans
+                        .iter()
+                        .find(|(taken, _)| *taken == settings)
+                        .map(|(_, by)| by.clone())
+                })
             });
+            match replacement {
+                Some(by) => {
+                    tx.execute("UPDATE exposureplan SET enabled=0 WHERE Id=?1", [row_id])?;
+                    changes.push(Change {
+                        kind: "plan",
+                        action: "disable",
+                        name,
+                        detail: format!(
+                            "plan #{row_id} ({acquired} of {desired} frames taken) is replaced by {by}; Target Scheduler stops taking it"
+                        ),
+                    });
+                }
+                None => changes.push(Change {
+                    kind: "plan",
+                    action: "keep",
+                    name,
+                    detail: format!(
+                        "plan #{row_id} ({acquired} of {desired} frames taken) is not part of this plan; left as it is"
+                    ),
+                }),
+            }
         }
     }
 
@@ -2625,6 +2678,29 @@ struct AdoptablePlan {
 /// left at Target Scheduler's "template default" exposure counts at the
 /// template's default. Ownership is by GUID, so a match without one refuses
 /// the rig.
+/// What makes two templates take the same frames: filter, gain, offset,
+/// binning and readout mode. Exposure is the plan's, not the template's.
+type TemplateSettings = (String, i64, i64, i64, i64);
+
+fn template_settings(tx: &Connection, id: i64) -> rusqlite::Result<Option<TemplateSettings>> {
+    tx.query_row(
+        "SELECT LOWER(TRIM(IFNULL(filtername, ''))), IFNULL(gain, -1), IFNULL(offset, -1),
+                CASE WHEN IFNULL(bin, 1) < 1 THEN 1 ELSE bin END, IFNULL(readoutmode, -1)
+         FROM exposuretemplate WHERE Id = ?1",
+        [id],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        },
+    )
+    .optional()
+}
+
 fn adoptable_plan(
     tx: &Connection,
     target_row: i64,
@@ -2633,25 +2709,7 @@ fn adoptable_plan(
     claimed: &std::collections::BTreeSet<i64>,
     held: &std::collections::BTreeSet<String>,
 ) -> Result<Option<AdoptablePlan>, RigError> {
-    type Settings = (String, i64, i64, i64, i64);
-    let settings_of = |id: i64| -> rusqlite::Result<Option<Settings>> {
-        tx.query_row(
-            "SELECT LOWER(TRIM(IFNULL(filtername, ''))), IFNULL(gain, -1), IFNULL(offset, -1),
-                    CASE WHEN IFNULL(bin, 1) < 1 THEN 1 ELSE bin END, IFNULL(readoutmode, -1)
-             FROM exposuretemplate WHERE Id = ?1",
-            [id],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            },
-        )
-        .optional()
-    };
+    let settings_of = |id: i64| template_settings(tx, id);
     let wanted = settings_of(template_id)?;
     let mut statement = tx.prepare(
         "SELECT e.Id, e.guid, e.exposure, IFNULL(e.desired, 0), IFNULL(e.acquired, 0),

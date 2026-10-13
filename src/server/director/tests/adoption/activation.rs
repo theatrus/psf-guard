@@ -877,6 +877,8 @@ async fn side_tables_an_earlier_build_made_strict_are_rebuilt_with_their_rows() 
 /// A plan adopted from a Target Scheduler project already has that project's
 /// targets: activation takes them over by name, by place, or as the only
 /// target of a single-panel framing, and never writes a twin beside them.
+/// A plan of the target's that takes the same frames at another length was
+/// replaced, so it is turned off; work on another filter is left alone.
 #[tokio::test]
 async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doubling_them() {
     let a = activated().await;
@@ -907,14 +909,26 @@ async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doublin
         [Uuid::new_v4().to_string()],
     )
     .unwrap();
-    // Target 1: Ha 300 s on the plan's own template, a third done, and Ha
-    // 600 s, which is other work. Target 2: Ha on the copy, at the
-    // template's default exposure.
+    // And an OIII template, for work the plan does not ask for.
+    a.db.execute(
+        "INSERT INTO exposuretemplate (Id, profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel, moonavoidanceenabled,
+            moonavoidanceseparation, moonavoidancewidth, maximumhumidity, defaultexposure, moonrelaxscale, moonrelaxmaxaltitude,
+            moonrelaxminaltitude, moondownenabled, ditherevery, minutesOffset, guid)
+         VALUES (3, 'profile-a', 'OIII 600', 'OIII', 100, 30, 1, -1, 0, 0, 60, 7, 0, 600, 0, 5, -15, 0, -1, 0, ?1)",
+        [Uuid::new_v4().to_string()],
+    )
+    .unwrap();
+    // Target 1: Ha 300 s on the plan's own template, a third done; Ha 600 s
+    // on the same template; Ha 120 s on the copy, as when a person moved the
+    // filter to a new template before the first activation; and OIII.
+    // Target 2: Ha on the copy, at the template's default exposure.
     a.db.execute_batch(
         "INSERT INTO exposureplan (Id, profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, enabled, guid)
          VALUES (11, 'profile-a', 300, 40, 12, 12, 1, 1, 1, 'aaaaaaaa-0000-4000-8000-000000000011'),
                 (12, 'profile-a', 600, 10, 0, 0, 1, 1, 1, 'aaaaaaaa-0000-4000-8000-000000000012'),
-                (13, 'profile-a', -1, 30, 5, 5, 2, 2, 0, 'aaaaaaaa-0000-4000-8000-000000000013');",
+                (13, 'profile-a', -1, 30, 5, 5, 2, 2, 0, 'aaaaaaaa-0000-4000-8000-000000000013'),
+                (14, 'profile-a', 120, 20, 2, 0, 1, 2, 1, 'aaaaaaaa-0000-4000-8000-000000000014'),
+                (15, 'profile-a', 600, 10, 3, 3, 1, 3, 1, 'aaaaaaaa-0000-4000-8000-000000000015');",
     )
     .unwrap();
     let catalog = crate::catalog_identity::read(&a.db).unwrap().unwrap().id;
@@ -948,8 +962,13 @@ async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doublin
         }
     };
     let data = preview("first").await;
-    // Both plans taken over, and the 600 s work listed as left alone.
-    assert_eq!(actions(&data, "plan"), ["adopt", "adopt", "keep"], "{data}");
+    // Both plans taken over, the other Ha lengths turned off as replaced,
+    // and the OIII work listed as left alone.
+    assert_eq!(
+        actions(&data, "plan"),
+        ["adopt", "adopt", "disable", "disable", "keep"],
+        "{data}"
+    );
     assert!(
         actions(&data, "template").is_empty(),
         "the plan's template exists: {data}"
@@ -979,7 +998,15 @@ async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doublin
     );
     assert_eq!(
         details[2],
-        "IC 1805 r1c1 · Ha 300 · 600 s | plan #12 (0 of 10 frames taken) is not part of this plan; left as it is"
+        "IC 1805 r1c1 · Ha 300 · 600 s | plan #12 (0 of 10 frames taken) is replaced by IC 1805 r1c1 · Ha 300 · 300 s; Target Scheduler stops taking it"
+    );
+    assert_eq!(
+        details[3],
+        "IC 1805 r1c1 · Ha copy · 120 s | plan #14 (2 of 20 frames taken) is replaced by IC 1805 r1c1 · Ha 300 · 300 s; Target Scheduler stops taking it"
+    );
+    assert_eq!(
+        details[4],
+        "IC 1805 r1c1 · OIII 600 · 600 s | plan #15 (3 of 10 frames taken) is not part of this plan; left as it is"
     );
     let digest = data["preview_digest"].as_str().unwrap().to_owned();
     let (status, applied) = call(
@@ -993,7 +1020,7 @@ async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doublin
     assert_eq!(status, StatusCode::OK, "{applied}");
     assert_eq!(
         count("SELECT count(*) FROM exposureplan"),
-        3,
+        5,
         "no twin plans"
     );
     assert_eq!(
@@ -1002,9 +1029,19 @@ async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doublin
         "the taken-over plan keeps its frames"
     );
     assert_eq!(
-        count("SELECT count(*) FROM exposureplan WHERE Id=12 AND desired=10 AND exposure=600"),
+        count("SELECT count(*) FROM exposureplan WHERE Id IN (12, 14) AND enabled=0"),
+        2,
+        "replaced plans are turned off"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE Id=14 AND desired=20 AND acquired=2 AND exposure=120 AND exposureTemplateId=2"),
         1,
-        "other work is left alone"
+        "a replaced plan keeps its frames and settings"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE Id=15 AND enabled=1 AND desired=10 AND acquired=3"),
+        1,
+        "work on another filter is left alone"
     );
     assert_eq!(
         count("SELECT count(*) FROM exposureplan WHERE Id=13 AND exposureTemplateId=1 AND enabled=1 AND exposure=300 AND guid IS NOT NULL"),
