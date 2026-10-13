@@ -324,12 +324,18 @@ it, and each session counts its frames by grade and those kept out. With
 database management enabled, each frame offers:
 
 - **Keep out**: leave the frame out of masters and exports whatever its
-  grade. Unlike **Forget**, the frame stays in the library, so a rescan does
-  not bring it back.
+  grade, as rejecting does for a light. It is offered for every frame,
+  including one its grade already keeps out: kept out by hand, it stays out
+  if a later grade would let it back in. Unlike **Forget**, the frame stays
+  in the library, so a rescan does not bring it back. The frame shows
+  **Kept out by hand**.
 - **Use anyway**: put a frame the library keeps out back in use.
 - **Clear**: let the grade decide again.
 
-The choice survives regrading, rescans and database copies.
+The choice survives regrading, rescans and database copies. A frame kept out
+counts for nothing in [calibration health](#calibration-health): a suspect
+frame kept out no longer makes the lights it would have served worth a
+check.
 
 ### What leaving a frame out does
 

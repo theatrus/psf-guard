@@ -97,3 +97,7 @@
   the same moment. The save now waits for that write to finish. Imports,
   syncs, forgetting calibration frames, and moving or restoring rejects wait
   the same way.
+- On the Calibration page, **Keep out** is offered for every frame, even one
+  its grade already keeps out, so you can keep a frame out by hand the way
+  you reject a light, and a later grade cannot bring it back. Such a frame
+  shows **Kept out by hand**.

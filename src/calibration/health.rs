@@ -1053,6 +1053,33 @@ mod tests {
     }
 
     #[test]
+    fn a_suspect_frame_kept_out_by_hand_no_longer_flags_the_lights() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut fixture = Fixture::new();
+        fixture.light(1, 1, LIGHT_AT, "Camera");
+        fixture.frames("BIAS", 10, "2026-09-09T12:00:00", 500.0);
+        let darks = fixture.frames("DARK", 10, "2026-09-09T13:00:00", 503.0);
+        measure_and_grade(&fixture.conn).unwrap();
+        let uuid = fixture.uuid(&darks[0]);
+        fixture
+            .conn
+            .execute(
+                "UPDATE psf_guard_calibration_frame_quality SET grade = 'suspect' WHERE frame_uuid = ?1",
+                [&uuid],
+            )
+            .unwrap();
+        assert!(
+            codes(&fixture.health(1)).contains(&(HealthCode::SuspectFrames, HealthLevel::Check))
+        );
+
+        // Kept out, the master no longer takes it, and nine darks are plenty.
+        set_overrides(&fixture.conn, &[uuid], Some(QualityOverride::Exclude)).unwrap();
+        let health = fixture.health(1);
+        assert_eq!(codes(&health), Vec::new(), "{health:?}");
+        assert_eq!(health.level, None);
+    }
+
+    #[test]
     fn findings_count_lights_by_night_and_filter_and_skip_rejects() {
         let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let mut fixture = Fixture::new();

@@ -71,7 +71,7 @@ export default function CalibrationFramePanel({
         {grade && <span className={`calibration-badge calibration-badge-${detail.grade}`} title={detail.grade_reason ?? 'Nothing crossed a limit.'}>{grade}</span>}
         {!detail.grade && detail.stray_light && <span className="calibration-badge calibration-badge-poor" title={detail.stray_light}>Stray light</span>}
         {!detail.grade && !detail.stray_light && <span className="calibration-badge">Not graded</span>}
-        {detail.quality_override === 'exclude' && <span className="calibration-badge calibration-badge-poor">Kept out</span>}
+        {detail.quality_override === 'exclude' && <span className="calibration-badge calibration-badge-poor">Kept out by hand</span>}
         {detail.quality_override === 'use' && <span className="calibration-badge calibration-badge-ok">Used anyway</span>}
         {detail.valid_direction && (
           <span className="calibration-badge calibration-badge-suspect" title={VALIDITY_TITLES[detail.valid_direction]}>
@@ -122,24 +122,31 @@ export default function CalibrationFramePanel({
 
       {canManage && (
         <div className="calibration-actions">
+          {/* Keep out is a choice made by hand, like rejecting a light: it
+              holds whatever later grades say. So it is offered even when the
+              grade already keeps the frame out. */}
           <div className="calibration-action-row">
-            {detail.quality_override ? (
+            {detail.quality_override !== 'exclude' && (
               <button type="button" className="calibration-button" disabled={actions.pending || stale}
-                title="Let the grade decide again"
-                onClick={() => actions.choose.mutate({ frameUuids: uuids, choice: 'clear' })}>
-                Clear
+                title={detail.kept_out
+                  ? 'Keep out by hand, whatever later grades say; the frame stays in the library'
+                  : 'Leave out of masters and exports; the frame stays in the library'}
+                onClick={() => actions.choose.mutate({ frameUuids: uuids, choice: 'exclude' })}>
+                Keep out
               </button>
-            ) : detail.kept_out ? (
+            )}
+            {detail.quality_override !== 'use' && detail.kept_out && (
               <button type="button" className="calibration-button" disabled={actions.pending || stale}
                 title="Use in masters and exports whatever its grade"
                 onClick={() => actions.choose.mutate({ frameUuids: uuids, choice: 'use' })}>
                 Use anyway
               </button>
-            ) : (
+            )}
+            {detail.quality_override && (
               <button type="button" className="calibration-button" disabled={actions.pending || stale}
-                title="Leave out of masters and exports; the frame stays in the library"
-                onClick={() => actions.choose.mutate({ frameUuids: uuids, choice: 'exclude' })}>
-                Keep out
+                title="Let the grade decide again"
+                onClick={() => actions.choose.mutate({ frameUuids: uuids, choice: 'clear' })}>
+                Clear
               </button>
             )}
             <button type="button" className="calibration-button calibration-button-danger"

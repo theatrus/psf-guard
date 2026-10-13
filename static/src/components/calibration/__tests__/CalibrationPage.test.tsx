@@ -292,13 +292,30 @@ describe('CalibrationPage', () => {
     await waitFor(() => expect(params().get('calFrame')).toBe('f2'));
   });
 
-  it('offers Use anyway for a frame kept out, and no writes on a read-only server', async () => {
-    serve();
+  it('keeps a frame out by hand even when its grade already does, and no writes on a read-only server', async () => {
+    const seen = serve();
     const first = renderPage('/calibration?db=demo&calSession=s1&calFrame=f2');
     const panel = await screen.findByRole('complementary', { name: 'Frame' });
     await within(panel).findByRole('heading', { name: 'f2.fits' });
+    // Its grade keeps it out: Keep out pins that by hand, Use anyway lets it in.
     expect(within(panel).getByRole('button', { name: 'Use anyway' })).toBeInTheDocument();
+    expect(within(panel).queryByRole('button', { name: 'Clear' })).toBeNull();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Keep out' }));
+    await waitFor(() => expect(seen.choices).toEqual([{ frame_uuids: ['f2'], choice: 'exclude' }]));
     first.unmount();
+
+    // Kept out by hand: Use anyway and Clear remain, Keep out does not.
+    serve();
+    server.use(http.get('/api/db/demo/calibrations/frames/f2', () => ok(detail('f2', 's1', {
+      ...FRAMES.s1[1], quality_override: 'exclude', kept_out: 'by hand',
+    }))));
+    const second = renderPage('/calibration?db=demo&calSession=s1&calFrame=f2');
+    const pinned = await screen.findByRole('complementary', { name: 'Frame' });
+    await within(pinned).findByText('Kept out by hand');
+    expect(within(pinned).queryByRole('button', { name: 'Keep out' })).toBeNull();
+    expect(within(pinned).getByRole('button', { name: 'Use anyway' })).toBeInTheDocument();
+    expect(within(pinned).getByRole('button', { name: 'Clear' })).toBeInTheDocument();
+    second.unmount();
 
     serve({ manage: false });
     renderPage('/calibration?db=demo&calSession=s1&calFrame=f2');
