@@ -10,6 +10,7 @@
 //! handlers until B2 nests them under `/api/db/{slug}/...`.
 
 use crate::directory_tree::DirectoryTree;
+use crate::server::shutdown::Shutdown;
 use crate::server::state::{FileCheckCache, RefreshProgress, RefreshStage, RefreshStatus};
 use anyhow::Result;
 use rusqlite::{Connection, OpenFlags};
@@ -178,8 +179,11 @@ const INDEX_BUILD_BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 /// A catalog being written right now is left alone and picked up at the next
 /// server start; the only cost of skipping is that per-target lookups scan
 /// until then.
-pub(crate) fn spawn_query_index_build(path: String) {
+pub(crate) fn spawn_query_index_build(path: String, shutdown: &Arc<Shutdown>) {
+    // A stop waits for the index being built rather than cut it off.
+    let work = shutdown.hold(format!("query index build ({path})"));
     std::thread::spawn(move || {
+        let _work = work;
         let built = Connection::open_with_flags(&path, db_open_flags())
             .and_then(|conn| {
                 conn.busy_timeout(INDEX_BUILD_BUSY_TIMEOUT)?;
@@ -207,7 +211,9 @@ pub(crate) fn spawn_query_index_build(path: String) {
 /// timeout, one commit per hundred frames, a progress line every chunk, and a
 /// clean stop if the capture software holds the catalog — the next start
 /// picks up where it left off.
-pub(crate) fn spawn_calibration_header_backfill(path: String) {
+pub(crate) fn spawn_calibration_header_backfill(path: String, shutdown: &Arc<Shutdown>) {
+    // A stop ends the pass at its next commit.
+    let work = shutdown.hold(format!("readout mode backfill ({path})"));
     std::thread::spawn(move || {
         let outcome = Connection::open_with_flags(&path, db_open_flags())
             .and_then(|conn| {
@@ -217,18 +223,22 @@ pub(crate) fn spawn_calibration_header_backfill(path: String) {
             .map_err(anyhow::Error::from)
             .and_then(|conn| {
                 let mut announced = false;
-                crate::calibration::backfill_readout_mode_names(&conn, |done, total| {
-                    if !announced {
-                        tracing::info!(
-                            "Reading the headers of {total} calibration frame(s) in {path} to \
+                crate::calibration::backfill_readout_mode_names(
+                    &conn,
+                    || !work.is_stopping(),
+                    |done, total| {
+                        if !announced {
+                            tracing::info!(
+                                "Reading the headers of {total} calibration frame(s) in {path} to \
                              record their readout modes; the server is already up"
-                        );
-                        announced = true;
-                    }
-                    if done < total {
-                        tracing::info!("Readout modes: {done} of {total} frames in {path}");
-                    }
-                })
+                            );
+                            announced = true;
+                        }
+                        if done < total {
+                            tracing::info!("Readout modes: {done} of {total} frames in {path}");
+                        }
+                    },
+                )
             });
         match outcome {
             Ok(outcome) if outcome.pending == 0 => {}

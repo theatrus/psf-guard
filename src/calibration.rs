@@ -763,9 +763,12 @@ pub struct HeaderBackfillOutcome {
 /// an unmounted share — nothing, so a later pass tries again. Work is
 /// committed every [`HEADER_BACKFILL_CHUNK`] frames, so a restart or a lock
 /// held by the capture software loses at most one chunk. `progress` is told
-/// how many of the pending frames have been handled after each chunk.
+/// how many of the pending frames have been handled after each chunk, and
+/// `keep_going` is asked before each one, so a server stop ends the pass at
+/// a commit.
 pub fn backfill_readout_mode_names(
     conn: &Connection,
+    keep_going: impl Fn() -> bool,
     mut progress: impl FnMut(usize, usize),
 ) -> Result<HeaderBackfillOutcome> {
     if !schema_supports_current_reads(conn) {
@@ -787,6 +790,9 @@ pub fn backfill_readout_mode_names(
     };
     let mut handled = 0_usize;
     for chunk in pending.chunks(HEADER_BACKFILL_CHUNK) {
+        if !keep_going() {
+            break;
+        }
         let verdicts: Vec<(i64, Option<String>)> = chunk
             .iter()
             .map(|(id, source_path)| {
@@ -7956,10 +7962,22 @@ mod tests {
             assert_eq!(name_of(uuid), None, "{uuid} untouched by the ladder");
         }
 
+        // A stop before the first chunk leaves every frame for a later pass.
+        let stopped = backfill_readout_mode_names(&conn, || false, |_, _| {}).unwrap();
+        assert_eq!(
+            stopped,
+            HeaderBackfillOutcome {
+                pending: 3,
+                ..Default::default()
+            }
+        );
+        assert_eq!(name_of("named"), None);
+
         // The background pass gives each frame its verdict.
         let mut reported = Vec::new();
         let outcome =
-            backfill_readout_mode_names(&conn, |done, total| reported.push((done, total))).unwrap();
+            backfill_readout_mode_names(&conn, || true, |done, total| reported.push((done, total)))
+                .unwrap();
         assert_eq!(
             outcome,
             HeaderBackfillOutcome {
@@ -7984,7 +8002,7 @@ mod tests {
         );
 
         // A later pass revisits only the unreadable file.
-        let again = backfill_readout_mode_names(&conn, |_, _| {}).unwrap();
+        let again = backfill_readout_mode_names(&conn, || true, |_, _| {}).unwrap();
         assert_eq!(again.pending, 1);
         assert_eq!(again.unreadable, 1);
 

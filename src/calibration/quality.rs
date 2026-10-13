@@ -277,11 +277,13 @@ pub fn measure_frame(frame: &PendingFrame) -> FrameMeasurement {
 /// Measure `pending` a few frames at a time with `measure`, which returns
 /// one result per frame it is given, in order. Each batch is committed, so
 /// a restart or a lock held by the capture software loses little.
-/// `progress` hears how many of them are done.
+/// `progress` hears how many of them are done, and `keep_going` is asked
+/// before each batch, so a server stop ends the pass at a commit.
 pub fn measure_frames(
     conn: &Connection,
     pending: &[PendingFrame],
     mut measure: impl FnMut(&[PendingFrame]) -> Vec<FrameMeasurement>,
+    keep_going: impl Fn() -> bool,
     mut progress: impl FnMut(usize, usize),
 ) -> Result<MeasureOutcome> {
     let mut outcome = MeasureOutcome {
@@ -290,6 +292,9 @@ pub fn measure_frames(
     };
     let mut done = 0;
     for chunk in pending.chunks(MEASURE_CHUNK) {
+        if !keep_going() {
+            break;
+        }
         let measured = measure(chunk);
         anyhow::ensure!(
             measured.len() == chunk.len(),
@@ -753,6 +758,7 @@ pub fn measure_and_grade(conn: &Connection) -> Result<(MeasureOutcome, GradeOutc
         conn,
         &pending,
         |frames| frames.iter().map(measure_frame).collect(),
+        || true,
         |_, _| {},
     )?;
     Ok((measured, grade_library(conn)?))

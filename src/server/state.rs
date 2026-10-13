@@ -130,6 +130,10 @@ pub struct AppState {
     /// Process-global orbital-element cache and satellite predictor. Network
     /// refresh is explicit; sequence grading consumes cached predictions only.
     pub satellites: Arc<crate::satellites::SatelliteContext>,
+    /// This server's stop: background work reads it between units and holds
+    /// it while a write must finish. Each server has its own, since the
+    /// desktop app starts a new one in the same process.
+    pub shutdown: Arc<crate::server::shutdown::Shutdown>,
 }
 
 /// RAII marker that an interactive CPU-heavy job is running. Increments the
@@ -497,6 +501,7 @@ impl AppState {
             registry_write: tokio::sync::Mutex::new(()),
             astrometry: Arc::new(crate::astrometry::AstrometryContext::new(astrometry_config)),
             satellites: Arc::new(satellites),
+            shutdown: crate::server::shutdown::Shutdown::new(),
         })
     }
 
@@ -719,6 +724,7 @@ impl AppState {
                 )
                 .expect("test satellite context"),
             ),
+            shutdown: crate::server::shutdown::Shutdown::new(),
         }
     }
 }

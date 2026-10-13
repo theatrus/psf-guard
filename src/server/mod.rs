@@ -36,6 +36,7 @@ pub mod remote_sync;
 pub mod remote_upload;
 pub mod remote_upload_layout;
 pub mod scheduler;
+pub mod shutdown;
 pub mod sky_coverage;
 pub mod slug;
 pub mod spatial_scan;
@@ -1002,8 +1003,11 @@ async fn run_server_internal(
             })
             .unwrap_or_default();
         for path in paths {
-            crate::server::database_context::spawn_query_index_build(path.clone());
-            crate::server::database_context::spawn_calibration_header_backfill(path.clone());
+            crate::server::database_context::spawn_query_index_build(path.clone(), &state.shutdown);
+            crate::server::database_context::spawn_calibration_header_backfill(
+                path.clone(),
+                &state.shutdown,
+            );
             crate::server::calibration_quality::request(&state, &path);
         }
     }
@@ -1106,13 +1110,15 @@ async fn run_server_internal(
     tracing::info!("🎯 Ready to serve requests!");
 
     // Run server with optional graceful shutdown
+    let stopping_state = Arc::clone(&journal_state);
     match shutdown_rx {
         Some(shutdown_rx) => {
             tracing::info!("🚀 Server started with graceful shutdown support");
             axum::serve(listener, app)
-                .with_graceful_shutdown(async {
+                .with_graceful_shutdown(async move {
                     shutdown_rx.await.ok();
                     tracing::info!("🛑 Graceful shutdown signal received");
+                    begin_stop(&stopping_state);
                 })
                 .await?;
         }
@@ -1120,18 +1126,37 @@ async fn run_server_internal(
             // Ctrl+C and a service manager's SIGTERM end the server cleanly,
             // so the job journal gets its last word.
             axum::serve(listener, app)
-                .with_graceful_shutdown(async {
+                .with_graceful_shutdown(async move {
                     stop_signal().await;
                     tracing::info!("🛑 Stop signal received");
+                    begin_stop(&stopping_state);
                 })
                 .await?;
         }
     }
 
-    // The queue as it stands, for the next start.
-    crate::server::stack_preview::journal::write_now(&journal_state);
+    finish_stop(&journal_state).await;
     tracing::info!("🛑 Server shutdown completed");
     Ok(())
+}
+
+/// Tell background work the server is stopping: loops start nothing new,
+/// and stack builds stop at their next checkpoint.
+fn begin_stop(state: &AppState) {
+    state.shutdown.begin();
+    state.stack_previews.stop_for_shutdown();
+}
+
+/// Wait for the work in hand to finish, then leave the job journal for the
+/// next start.
+async fn finish_stop(state: &AppState) {
+    // As a crash would leave it, in case something kills the process before
+    // the work below finishes: a build still running counts as cut off.
+    crate::server::stack_preview::journal::write_now(state);
+    state.shutdown.drained().await;
+    // Builds that stopped at a checkpoint come back without counting as cut
+    // off.
+    crate::server::stack_preview::journal::write_now(state);
 }
 
 /// Ctrl+C, or SIGTERM where there is one.
@@ -1176,10 +1201,16 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
     let mut interval_timer = interval(scan_interval);
 
     loop {
-        interval_timer.tick().await;
+        tokio::select! {
+            _ = interval_timer.tick() => {}
+            _ = state.shutdown.begun() => return,
+        }
 
         // Iterate every configured database; pre-generation is per-DB work.
         for ctx in state.all_databases() {
+            if state.shutdown.is_stopping() {
+                return;
+            }
             // Yield to interactive work: while a user-triggered scan is
             // running anywhere in the process, skip this cycle entirely so we
             // don't take cores or memory from a job the user is waiting on. We
@@ -1263,6 +1294,11 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
                 lease.summary()
             );
 
+            // A stop dispatches nothing more and waits for the previews in
+            // hand to be written.
+            let _work = state
+                .shutdown
+                .hold(format!("preview pre-generation (db={})", ctx.id));
             // Bound in-flight work to the background budget with a semaphore;
             // each permit is held for one image's whole (multi-format) job.
             let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
@@ -1271,6 +1307,9 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
             let mut yielded_early = false;
 
             for (image_id, file_only, target_name) in images {
+                if state.shutdown.is_stopping() {
+                    break;
+                }
                 // Yield mid-cycle: stop dispatching new work as soon as an
                 // interactive job appears; already-running tasks drain.
                 if state.interactive_job_active() {
@@ -1288,6 +1327,10 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
                     Ok(p) => p,
                     Err(_) => break, // semaphore closed (shouldn't happen)
                 };
+                // The wait for a worker can outlast the start of a stop.
+                if state.shutdown.is_stopping() {
+                    break;
+                }
                 let state = Arc::clone(&state);
                 let ctx = Arc::clone(&ctx);
                 let pool = Arc::clone(&pool);

@@ -50,12 +50,16 @@ pub(crate) fn spawn(state: Arc<AppState>) {
     if state.director.is_none() {
         return;
     }
+    let shutdown = Arc::clone(&state.shutdown);
     let weak = Arc::downgrade(&state);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(30));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            tick.tick().await;
+            tokio::select! {
+                _ = tick.tick() => {}
+                _ = shutdown.begun() => break,
+            }
             let Some(state) = weak.upgrade() else {
                 break;
             };

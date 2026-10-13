@@ -142,21 +142,36 @@ fn running(path: &str) -> bool {
 /// changed, on a thread of its own. A request while a pass runs makes it
 /// run once more when it ends.
 pub fn request(state: &Arc<AppState>, path: &str) {
+    if state.shutdown.is_stopping() {
+        return;
+    }
     let job = job(path);
     if !claim(&mut job.flags.lock().unwrap_or_else(|p| p.into_inner())) {
         return;
     }
     let state = Arc::clone(state);
     let path = path.to_string();
-    std::thread::spawn(move || loop {
-        if let Err(error) = run_pass(&state, &path, &job) {
-            tracing::info!(
-                "Paused working out calibration health in {path}: {error:#}. \
+    // A stop waits for the project being judged to be written.
+    let work = state.shutdown.hold(format!("calibration health ({path})"));
+    std::thread::spawn(move || {
+        let _work = work;
+        loop {
+            if let Err(error) = run_pass(&state, &path, &job) {
+                tracing::info!(
+                    "Paused working out calibration health in {path}: {error:#}. \
                      The next pass picks it up."
-            );
-        }
-        if !finish(&mut job.flags.lock().unwrap_or_else(|p| p.into_inner())) {
-            break;
+                );
+            }
+            let mut flags = job.flags.lock().unwrap_or_else(|p| p.into_inner());
+            if state.shutdown.is_stopping() {
+                // Let go of the catalog: the next start judges the rest.
+                flags.running = false;
+                flags.again = false;
+                break;
+            }
+            if !finish(&mut flags) {
+                break;
+            }
         }
     });
 }
@@ -225,6 +240,9 @@ fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
     );
     let mut poor = 0;
     for (index, (project, key)) in stale.into_iter().enumerate() {
+        if state.shutdown.is_stopping() {
+            break;
+        }
         let (lights, missing) =
             crate::calibration::project_lights(&conn, project, &tree, library.night_boundary())?;
         let results = pool.install(|| {
@@ -232,7 +250,7 @@ fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
                 .par_iter()
                 .map(|light| {
                     // Interactive work comes first; this light waits for it.
-                    while state.interactive_job_active() {
+                    while state.interactive_job_active() && !state.shutdown.is_stopping() {
                         std::thread::sleep(YIELD_POLL);
                     }
                     library.judge_light(light)

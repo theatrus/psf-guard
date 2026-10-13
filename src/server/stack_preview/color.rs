@@ -1694,7 +1694,13 @@ pub(super) fn enqueue_color_job(
     let cancel = state.stack_previews.track_cancel(&job_id);
     state.stack_previews.remember_origin(&job_id, origin);
     state.stack_previews.join_line(&job_id);
+    // A stop waits for a composition already under way to finish.
+    let work = state.shutdown.hold(format!(
+        "color composition for project {} (db={})",
+        prepared.public.project_id, prepared.public.database_id
+    ));
     tokio::spawn(async move {
+        let _work = work;
         let permit = state.stack_previews.wait_turn(&job_id, &cancel).await;
         if permit.is_none() && !cancel.load(std::sync::atomic::Ordering::Relaxed) {
             state.stack_previews.forget_cancel(&job_id);

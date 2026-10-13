@@ -929,6 +929,10 @@ pub struct StackPreviewManager {
     /// What each queued or running build was asked for, so the job journal
     /// can put it back after a restart. Kept as long as its stop flag.
     origins: Mutex<HashMap<String, journal::JournaledStackJob>>,
+    /// Every build a server stop interrupted, in the order they would have
+    /// run. A stopped build drops its own entry from `origins`; this keeps it
+    /// for the journal's last write.
+    stopped_for_shutdown: Mutex<Option<Vec<(String, journal::JournaledStackJob)>>>,
 }
 
 impl StackPreviewManager {
@@ -943,6 +947,7 @@ impl StackPreviewManager {
             waiting: Mutex::new(Vec::new()),
             turn: tokio::sync::Notify::new(),
             origins: Mutex::new(HashMap::new()),
+            stopped_for_shutdown: Mutex::new(None),
         }
     }
 
@@ -1045,25 +1050,51 @@ impl StackPreviewManager {
             .insert(job_id.to_string(), origin);
     }
 
+    fn job_state(&self, job_id: &str) -> Option<StackJobState> {
+        self.jobs
+            .lock()
+            .unwrap()
+            .get(job_id)
+            .map(|job| job.state)
+            .or_else(|| {
+                self.color_jobs
+                    .lock()
+                    .unwrap()
+                    .get(job_id)
+                    .map(|job| job.state)
+            })
+    }
+
     /// Every build still queued or running, as it was asked for, in the
     /// order it will run: running first, then the line.
     pub fn journal_entries(&self) -> Vec<journal::JournaledStackJob> {
-        let origins = self.origins.lock().unwrap().clone();
-        let running = |job_id: &str| {
-            self.jobs
-                .lock()
-                .unwrap()
-                .get(job_id)
-                .map(|job| job.state == StackJobState::Running)
-                .or_else(|| {
-                    self.color_jobs
-                        .lock()
-                        .unwrap()
-                        .get(job_id)
-                        .map(|job| job.state == StackJobState::Running)
-                })
-                .unwrap_or(false)
+        let mut entries = self.ordered_origins();
+        let Some(stopped) = self.stopped_for_shutdown.lock().unwrap().clone() else {
+            return entries.into_iter().map(|(_, origin)| origin).collect();
         };
+        // A build the stop interrupted comes back unless it finished first.
+        // One that stopped at its checkpoint was not cut off, so it does not
+        // count against its attempts; one still running would be.
+        let mut kept = Vec::with_capacity(stopped.len() + entries.len());
+        for (job_id, mut origin) in stopped {
+            let state = self.job_state(&job_id);
+            if matches!(
+                state,
+                Some(StackJobState::Completed | StackJobState::Failed)
+            ) {
+                continue;
+            }
+            origin.set_running(state == Some(StackJobState::Running));
+            entries.retain(|(entry_id, _)| entry_id != &job_id);
+            kept.push(origin);
+        }
+        kept.extend(entries.into_iter().map(|(_, origin)| origin));
+        kept
+    }
+
+    fn ordered_origins(&self) -> Vec<(String, journal::JournaledStackJob)> {
+        let origins = self.origins.lock().unwrap().clone();
+        let running = |job_id: &str| self.job_state(job_id) == Some(StackJobState::Running);
         let mut entries = origins
             .into_iter()
             .map(|(job_id, origin)| {
@@ -1078,11 +1109,29 @@ impl StackPreviewManager {
         entries.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
         entries
             .into_iter()
-            .map(|(rank, _, mut origin)| {
+            .map(|(rank, job_id, mut origin)| {
                 origin.set_running(rank.0 == 0);
-                origin
+                (job_id, origin)
             })
             .collect()
+    }
+
+    /// Stop every build for a server stop. A running build checkpoints the
+    /// frames it integrated and a waiting one leaves the line; the journal
+    /// puts all of them back on the next start.
+    pub fn stop_for_shutdown(&self) {
+        let interrupted = self.ordered_origins();
+        *self.stopped_for_shutdown.lock().unwrap() = Some(interrupted);
+        let job_ids = self
+            .cancels
+            .lock()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for job_id in job_ids {
+            self.request_cancel(&job_id);
+        }
     }
 
     /// Ask a queued or running job to stop. Returns false when the job is not
@@ -3201,7 +3250,13 @@ fn enqueue_job(state: Arc<AppState>, prepared: PreparedJob, origin: journal::Jou
         .stack_previews
         .remember_origin(&prepared.public.job_id, origin);
     state.stack_previews.join_line(&prepared.public.job_id);
+    // A stop waits for the build to checkpoint, or to leave the line.
+    let work = state.shutdown.hold(format!(
+        "stack build for project {} (db={})",
+        prepared.public.project_id, prepared.public.database_id
+    ));
     tokio::spawn(async move {
+        let _work = work;
         let job_id = prepared.public.job_id.clone();
         // Stack jobs run one at a time, so a job can wait here for minutes,
         // in the line's order. A cancel during that wait means the work
@@ -4891,17 +4946,37 @@ fn manifest_path(stack_root: &FsPath, job_id: &str) -> PathBuf {
 /// minutes, past the journal restore. Holds the state weakly, so a server
 /// the desktop app restarted stops its janitor with it.
 pub async fn run_janitor(state: Arc<AppState>) {
+    let shutdown = Arc::clone(&state.shutdown);
     let state = Arc::downgrade(&state);
-    tokio::time::sleep(std::time::Duration::from_secs(10 * 60)).await;
-    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
+    if !shutdown
+        .sleep(std::time::Duration::from_secs(10 * 60))
+        .await
+    {
+        return;
+    }
     loop {
-        interval.tick().await;
         let Some(live) = state.upgrade() else {
             return;
         };
         for ctx in live.all_databases() {
+            if shutdown.is_stopping() {
+                return;
+            }
+            // A sweep under way finishes the files it is moving.
+            let work = shutdown.hold(format!("stack folder sweep (db={})", ctx.id));
             let state = Arc::clone(&live);
-            let _ = tokio::task::spawn_blocking(move || sweep_database(&state, &ctx)).await;
+            let _ = tokio::task::spawn_blocking(move || {
+                let _work = work;
+                sweep_database(&state, &ctx)
+            })
+            .await;
+        }
+        drop(live);
+        if !shutdown
+            .sleep(std::time::Duration::from_secs(60 * 60))
+            .await
+        {
+            return;
         }
     }
 }
@@ -5883,6 +5958,69 @@ mod tests {
         }
         assert_eq!(*started.lock().unwrap(), vec!["c", "b"]);
         assert!(manager.waiting.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_server_stop_keeps_its_builds_without_counting_a_cut_off() {
+        let origin = |project_id, running| journal::JournaledStackJob::Mono {
+            database_id: "db-test".into(),
+            project_id,
+            automatic: false,
+            request: serde_json::from_value(serde_json::json!({
+                "image_ids": [1, 2],
+                "method": {"final_pass": "draft"}
+            }))
+            .unwrap(),
+            attempts: 0,
+            running,
+        };
+        let manager = StackPreviewManager::new();
+        for (job_id, project_id, state) in [
+            ("running", 1, StackJobState::Running),
+            ("waiting", 2, StackJobState::Queued),
+            ("finishing", 3, StackJobState::Running),
+        ] {
+            let mut job = completed_job(job_id, vec![]);
+            job.project_id = project_id;
+            job.state = state;
+            assert!(manager.insert(job));
+            manager.track_cancel(job_id);
+            manager.remember_origin(job_id, origin(project_id, false));
+        }
+        manager.join_line("waiting");
+
+        manager.stop_for_shutdown();
+        assert!(
+            manager
+                .cancels
+                .lock()
+                .unwrap()
+                .values()
+                .all(|flag| flag.load(Ordering::Relaxed)),
+            "every build is asked to stop"
+        );
+        // Killed now, the builds still running would count as cut off.
+        assert_eq!(
+            manager.journal_entries(),
+            vec![origin(3, true), origin(1, true), origin(2, false)]
+        );
+
+        // One stops at its checkpoint, one leaves the line, and one was
+        // already writing its result and finishes.
+        for (job_id, state) in [
+            ("running", StackJobState::Cancelled),
+            ("waiting", StackJobState::Cancelled),
+            ("finishing", StackJobState::Completed),
+        ] {
+            manager.update(job_id, |job| job.state = state);
+            manager.leave_line(job_id);
+            manager.forget_cancel(job_id);
+        }
+        assert_eq!(
+            manager.journal_entries(),
+            vec![origin(1, false), origin(2, false)],
+            "the stopped builds come back in order, not counted as cut off"
+        );
     }
 
     #[test]

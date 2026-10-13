@@ -3360,6 +3360,9 @@ pub(crate) fn spawn_import_job_with_trigger(
 ) -> bool {
     use crate::server::import_job as job;
 
+    if state.shutdown.is_stopping() {
+        return false;
+    }
     if !job::try_begin(&ctx.import_job, dirs.clone()) {
         return false;
     }
@@ -3372,7 +3375,10 @@ pub(crate) fn spawn_import_job_with_trigger(
     );
 
     let state = state.clone();
+    // A stop lets an import already writing its transaction finish.
+    let work = state.shutdown.hold(format!("import (db={})", ctx.id));
     tokio::spawn(async move {
+        let _work = work;
         let job_store = ctx.import_job.clone();
         let _import_guard = ctx.image_import_mutex.lock().await;
 
@@ -3380,8 +3386,11 @@ pub(crate) fn spawn_import_job_with_trigger(
         let blocking_options = options.clone();
         let dir_paths: Vec<std::path::PathBuf> =
             dirs.iter().map(std::path::PathBuf::from).collect();
+        let shutdown = Arc::clone(&state.shutdown);
         let import_result = tokio::task::spawn_blocking(move || {
-            run_import_blocking(&blocking_ctx, &dir_paths, &blocking_options)
+            run_import_blocking(&blocking_ctx, &dir_paths, &blocking_options, &|| {
+                shutdown.is_stopping()
+            })
         })
         .await;
 
@@ -3453,11 +3462,13 @@ pub(crate) fn spawn_import_job_with_trigger(
 
 /// Stages 1+2 of the import job, on a blocking thread: collect files, scan
 /// headers (with progress), then run the single import transaction on a
-/// dedicated connection (never the shared request connection).
+/// dedicated connection (never the shared request connection). A server stop
+/// (`stopping`) before the transaction leaves the catalog as it was.
 fn run_import_blocking(
     ctx: &DatabaseContext,
     dirs: &[std::path::PathBuf],
     options: &crate::commands::import::ImportOptions,
+    stopping: &(dyn Fn() -> bool + Sync),
 ) -> anyhow::Result<crate::commands::import::ImportOutcome> {
     use crate::commands::import as imp;
     use crate::server::import_job as job;
@@ -3500,14 +3511,22 @@ fn run_import_blocking(
     job::set_scan_totals(&ctx.import_job, files.len(), 0);
 
     let store = ctx.import_job.clone();
-    let frames: Vec<imp::headers::FrameMeta> = files
+    let frames: Option<Vec<imp::headers::FrameMeta>> = files
         .par_iter()
         .map(|path| {
+            if stopping() {
+                return None;
+            }
             let meta = imp::headers::read_frame_meta(path);
             store.write().unwrap().progress.scanned_files += 1;
-            meta
+            Some(meta)
         })
         .collect();
+    let stopped = || anyhow::anyhow!("the server stopped before the import was written");
+    let frames = frames.ok_or_else(stopped)?;
+    if stopping() {
+        return Err(stopped());
+    }
 
     job::set_stage(&ctx.import_job, "importing");
     let mut conn = open_scheduler_connection_with_flags(
@@ -3579,11 +3598,16 @@ async fn run_quality_scan_for_target(
                 return;
             }
         }
-        tokio::time::sleep(poll).await;
+        if !state.shutdown.sleep(poll).await {
+            return;
+        }
     }
 
+    // The scan holds the stop itself until it has saved what it measured.
     loop {
-        tokio::time::sleep(poll).await;
+        if !state.shutdown.sleep(poll).await {
+            return;
+        }
         let (progress, _) = spatial_scan::progress_snapshot(&ctx.spatial_metrics);
         if !progress.running {
             break;
@@ -3719,6 +3743,9 @@ pub(crate) fn spawn_quality_backfill(
 ) -> bool {
     use crate::server::quality_backfill as job;
 
+    if state.shutdown.is_stopping() {
+        return false;
+    }
     if !job::try_begin(&ctx.quality_backfill, force, target_ids.len()) {
         return false;
     }
@@ -3735,6 +3762,10 @@ pub(crate) fn spawn_quality_backfill(
             target_ids.len()
         );
         for target_id in target_ids {
+            // The next start's backfill picks up the targets left.
+            if state.shutdown.is_stopping() {
+                return;
+            }
             job::begin_target(&ctx.quality_backfill, target_id);
             run_quality_scan_for_target(&state, &ctx, target_id, force, fill_metadata).await;
             job::finish_target(&ctx.quality_backfill);
@@ -8222,7 +8253,13 @@ async fn start_spatial_scan_with_priority(
     let interactive_guard = (priority == crate::concurrency::Priority::Interactive)
         .then(|| state.begin_interactive_job());
     let scheduling_state = Arc::clone(&state);
+    // A stop waits for the frames in hand and the save of what was measured.
+    let held = state.shutdown.hold(format!(
+        "quality scan for target {} (db={})",
+        req.target_id, ctx.id
+    ));
     tokio::task::spawn_blocking(move || {
+        let _held = held;
         let _interactive_guard = interactive_guard;
         // Any panic below would be silently swallowed by tokio (the join
         // handle is dropped) and leave the singleton wedged at running=true;
@@ -8313,12 +8350,16 @@ async fn start_spatial_scan_with_priority(
             // share, and go back when the scan ends.
             let lease =
                 scheduling_state.lease_workers(priority, budget.workers.min(items.len().max(1)));
+            // False once the server is stopping: the frames left wait for
+            // the next start, and what was measured is still saved below.
             let wait_for_turn = || {
                 while priority == crate::concurrency::Priority::Background
                     && scheduling_state.interactive_job_active()
+                    && !scheduling_state.shutdown.is_stopping()
                 {
                     std::thread::sleep(std::time::Duration::from_millis(250));
                 }
+                !scheduling_state.shutdown.is_stopping()
             };
             if !spatial_items.is_empty() {
                 tracing::info!(
@@ -8361,7 +8402,9 @@ async fn start_spatial_scan_with_priority(
                 crate::concurrency::parallel_in_pool(astrometry_items.len(), workers, |index| {
                     let (item, expected, _, need_astrometry, need_satellite) =
                         astrometry_items[index];
-                    wait_for_turn();
+                    if !wait_for_turn() {
+                        return;
+                    }
                     crate::server::spatial_scan::begin_astrometry_item(
                         &ctx_arc.spatial_metrics,
                         &item.filename,

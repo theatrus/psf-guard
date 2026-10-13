@@ -140,11 +140,13 @@ impl AutoImportScheduler {
     }
 }
 
-/// Run the scheduler for the life of the process.
+/// Run the scheduler until the server stops.
 pub fn spawn(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(TICK).await;
+            if !state.shutdown.sleep(TICK).await {
+                return;
+            }
             tick(&state, Instant::now()).await;
         }
     })
