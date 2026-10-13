@@ -559,59 +559,46 @@ div.activity-error {
   font-size: 0.78rem;
 }
 
-/* A view shown by its icon (ViewTab). The current view also shows its name;
-   any other shows its name on hover or focus, drawn over its neighbours as
-   if the tab had grown, so nothing moves and the row fit holds. */
+/* A view shown by its icon (ViewTab). The current view also shows its
+   name. Any other slides its name out of the button on hover or focus, and
+   the current view folds its name away meanwhile, still highlighted, so the
+   row keeps about the same width. */
 .view-tab {
-  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
 }
 
 .view-tab > svg {
   flex: none;
 }
 
-/* Hidden, it has no width, so a tab at the window's edge never widens the
-   page. */
-.view-tab-flyout {
-  position: absolute;
-  top: -1px;
-  bottom: -1px;
-  left: calc(100% - 1px);
-  z-index: 10;
-  display: flex;
-  align-items: center;
+.view-tab-name {
+  display: inline-block;
   max-width: 0;
   overflow: hidden;
-  padding: 0;
-  border: 0 solid var(--color-bg-input);
-  border-radius: 0 4px 4px 0;
-  background: var(--color-bg-quaternary);
-  color: var(--color-text-primary);
-  white-space: nowrap;
-  pointer-events: none;
+  margin-left: 0;
   opacity: 0;
-  transition: max-width 0.16s ease-out, opacity 0.12s;
+  white-space: nowrap;
+  transition: max-width 0.18s ease-out, margin-left 0.18s ease-out, opacity 0.14s;
 }
 
-.view-tab:hover .view-tab-flyout,
-.view-tab:focus-visible .view-tab-flyout {
-  max-width: 12rem;
-  padding: 0 0.62rem 0 0.2rem;
-  border-width: 1px 1px 1px 0;
+.view-tab[aria-current="page"] .view-tab-name,
+.view-tab:hover .view-tab-name,
+.view-tab:focus-visible .view-tab-name {
+  max-width: 9rem;
+  margin-left: 0.4rem;
   opacity: 1;
 }
 
-.view-tab:hover:not([aria-current="page"]),
-.view-tab:focus-visible:not([aria-current="page"]) {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
+.header-nav:has(.view-tab:not([aria-current="page"]):is(:hover, :focus-visible))
+  .view-tab[aria-current="page"] .view-tab-name {
+  max-width: 0;
+  margin-left: 0;
+  opacity: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .view-tab-flyout {
+  .view-tab-name {
     transition: none;
   }
 }
