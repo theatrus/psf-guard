@@ -428,9 +428,14 @@ export interface ImagePreviewDescriptor {
   copy?: string;
 }
 
+/** Where a master comes from: one stack's record, or the library's. */
 export type CalibrationMasterSource =
   | { kind: 'mono'; jobId: string; groupIndex: number; artifactRevision: string }
-  | { kind: 'color'; jobId: string; artifactRevision: string };
+  | { kind: 'color'; jobId: string; artifactRevision: string }
+  | { kind: 'library' };
+
+/** A master recorded by one stack. */
+export type StackMasterSource = Exclude<CalibrationMasterSource, { kind: 'library' }>;
 
 export interface CalibrationMasterPreviewDescriptor {
   kind: 'calibration_master';
@@ -441,7 +446,25 @@ export interface CalibrationMasterPreviewDescriptor {
   shadow?: number;
 }
 
-export type PreviewDescriptor = ImagePreviewDescriptor | CalibrationMasterPreviewDescriptor;
+/** What a raw calibration frame's picture shows: the frame, or a flat
+ *  divided by its session's median flat. */
+export type CalibrationFrameView = 'frame' | 'session';
+export type CalibrationFrameSize = 'thumb' | 'screen' | 'original';
+/** How wide a window of values the grey scale spans. */
+export type CalibrationFrameStretch = 'wide' | 'normal' | 'tight';
+
+export interface CalibrationFramePreviewDescriptor {
+  kind: 'calibration_frame';
+  frameUuid: string;
+  view: CalibrationFrameView;
+  size: CalibrationFrameSize;
+  stretch: CalibrationFrameStretch;
+}
+
+export type PreviewDescriptor =
+  | ImagePreviewDescriptor
+  | CalibrationMasterPreviewDescriptor
+  | CalibrationFramePreviewDescriptor;
 
 export interface StackCalibrationMaster {
   id: string;
@@ -466,6 +489,42 @@ export interface StackCalibrationMaster {
   maximum_clean_samples: number | null;
   /** The source frames still in the library; absent when none are recorded. */
   sources?: CalibrationFrameSpan;
+  /** How a library master is told apart in a list, where it has no usages. */
+  caption?: string;
+}
+
+/** A master the library recorded, with what the library knows of it. */
+export interface LibraryCalibrationMaster extends StackCalibrationMaster {
+  rig_uuid: string;
+  rig_name: string | null;
+  created_at: number;
+  exposure_s: number | null;
+  filter: string | null;
+  camera_temp: number | null;
+  /** A bias or dark master from too few frames. */
+  thin: boolean;
+  /** A master from other software, used as it is. */
+  external: boolean;
+  defect_pixels_replaced: number | null;
+  /** Seiza's verdict on a flat master's set of flats. */
+  flat_set: {
+    measured_frames?: number;
+    frames?: number;
+    master?: { grade: CalibrationGrade; findings: unknown[] };
+    steady_features?: number;
+    changing_features?: number;
+    carried_features?: number;
+  } | null;
+  flat_note: string | null;
+  /** Set aside by the flat-set check for another set of flats. */
+  set_aside: boolean;
+  /** Projects whose latest stacks use it. */
+  used_by: { project_id: number; name: string | null }[];
+}
+
+export interface LibraryCalibrationMasters {
+  masters: LibraryCalibrationMaster[];
+  notes: string[];
 }
 
 /** What a set of calibration frames spans. */
@@ -2242,6 +2301,8 @@ export interface CalibrationFrameSummary {
   camera_temp?: number | null;
   filter?: string | null;
   focal_length_mm?: number | null;
+  /** Rotator angle in degrees at capture, when the rig recorded one. */
+  rotation?: number | null;
   /**
    * User-set validity boundary: `forward` serves only lights captured at or
    * after this frame, `backward` only at or before. Absent means both.
@@ -2269,6 +2330,142 @@ export interface CalibrationFrameSummary {
 }
 
 export type CalibrationGrade = 'ok' | 'suspect' | 'poor';
+
+export type CalibrationKind = CalibrationFrameSummary['kind'];
+
+/** A frame in the browser's lists: its night and the session it was shot in. */
+export interface BrowsedCalibrationFrame extends CalibrationFrameSummary {
+  /** `YYYY-MM-DD`; absent without a capture time. */
+  night?: string | null;
+  session: string;
+}
+
+export interface CalibrationFramePage {
+  frames: BrowsedCalibrationFrame[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+/** Frames of one kind from one night with one set of capture settings. */
+export interface CalibrationSession {
+  id: string;
+  kind: CalibrationKind;
+  night: string | null;
+  rig_uuid: string;
+  rig_name: string | null;
+  is_master: boolean;
+  filter: string | null;
+  exposure_min_s: number | null;
+  exposure_max_s: number | null;
+  temp_min_c: number | null;
+  temp_max_c: number | null;
+  gain: number | null;
+  offset: number | null;
+  readout: string | null;
+  binning: string | null;
+  width: number | null;
+  height: number | null;
+  rotation: number | null;
+  first_at: number | null;
+  last_at: number | null;
+  /** Frames the filters keep; the counts are of these. */
+  frames: number;
+  ok: number;
+  suspect: number;
+  poor: number;
+  ungraded: number;
+  kept_out: number;
+}
+
+/** Values the filters can take, across the library. */
+export interface CalibrationFacets {
+  filters: string[];
+  exposures: number[];
+  first_night?: string | null;
+  last_night?: string | null;
+  temp_min_c?: number | null;
+  temp_max_c?: number | null;
+}
+
+export interface CalibrationSessionPage {
+  sessions: CalibrationSession[];
+  total: number;
+  page: number;
+  per_page: number;
+  frames: number;
+  facets: CalibrationFacets;
+  night_boundary_seconds: number;
+}
+
+export type CalibrationGradeFilter = CalibrationGrade | 'ungraded';
+export type CalibrationFrameSort = 'newest' | 'oldest' | 'file' | 'grade';
+
+/** What the frame and session lists keep. */
+export interface CalibrationListFilters {
+  rig?: string;
+  kind?: CalibrationKind;
+  filter?: string;
+  exposure?: number;
+  temp_min?: number;
+  temp_max?: number;
+  night_from?: string;
+  night_to?: string;
+  grade?: CalibrationGradeFilter;
+  kept_out?: boolean;
+  missing?: boolean;
+  session?: string;
+  sort?: CalibrationFrameSort;
+  page?: number;
+  per_page?: number;
+}
+
+export interface CalibrationFrameMetric {
+  key: string;
+  value: number;
+  /** The median among the other measured frames of its session. */
+  session: number | null;
+}
+
+/** A limit the frame crossed, with the numbers behind it. */
+export interface CalibrationFinding {
+  code: string;
+  grade: 'suspect' | 'poor';
+  value: number;
+  limit: number;
+  text: string;
+}
+
+/** One compact dip in a flat, in image pixels. */
+export interface CalibrationFlatFeature {
+  x: number;
+  y: number;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  pixels: number;
+  depth: number;
+}
+
+export interface CalibrationFrameDetail extends BrowsedCalibrationFrame {
+  measurement: {
+    type: 'flat' | 'dark';
+    width: number;
+    height: number;
+    features?: CalibrationFlatFeature[];
+    feature_count?: number;
+  } | null;
+  measure_error: string | null;
+  findings: CalibrationFinding[];
+  metrics: CalibrationFrameMetric[];
+  session_frames: number;
+  session_measured: number;
+  /** A flat with enough flats in its session to be compared with them. */
+  compare: boolean;
+  /** Recorded masters built from this frame. */
+  masters: number;
+}
 
 /** How well the library calibrates a project: lights that cannot be
  *  calibrated properly, or ones worth a look. */
@@ -2320,13 +2517,6 @@ export interface ProjectCalibrationHealthResponse {
 export type CalibrationQualityOverride = 'use' | 'exclude';
 
 export type CalibrationValidDirection = 'forward' | 'backward';
-
-export interface CalibrationLibraryDetails {
-  summary: CalibrationLibrarySummary;
-  frames: CalibrationFrameSummary[];
-  /** Where this catalog's nights split, in seconds after 00:00 UTC. */
-  night_boundary_seconds?: number;
-}
 
 export interface CalibrationMutationOutcome {
   frames_removed: number;

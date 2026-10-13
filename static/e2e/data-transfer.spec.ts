@@ -160,52 +160,55 @@ test('settings shows calibration coverage for each database rig', async ({ page 
       }),
     });
   });
-  await page.route('**/api/db/review/calibrations/details', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        success: true,
-        data: {
-          summary,
-          frames: [
-            {
-              frame_uuid: 'frame-dark',
-              rig_uuid: 'rig-1',
-              kind: 'dark',
-              source_path: '/archive/calibration/dark-300s.fits',
-              source_exists: true,
-              captured_at: 1_752_000_000,
-              camera: 'TestCam',
-              width: 6248,
-              height: 4176,
-              binning_x: 1,
-              binning_y: 1,
-              gain: 100,
-              offset: 30,
-              exposure_s: 300,
-              camera_temp: -10,
-            },
-            {
-              frame_uuid: 'frame-flat',
-              rig_uuid: 'rig-1',
-              kind: 'flat',
-              source_path: '/old-host/calibration/flat-ha.fits',
-              source_exists: false,
-              camera: 'TestCam',
-              width: 6248,
-              height: 4176,
-              binning_x: 1,
-              binning_y: 1,
-              gain: 100,
-              filter: 'Ha',
-            },
-          ],
-        },
-        error: null,
-        status: 'ready',
-      }),
-    });
+  const ok = (data: unknown) => ({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ success: true, data, error: null, status: 'ready' }),
+  });
+  const dark = {
+    frame_uuid: 'frame-dark', rig_uuid: 'rig-1', kind: 'dark',
+    source_path: '/archive/calibration/dark-300s.fits', source_exists: true,
+    captured_at: 1_752_000_000, camera: 'TestCam', width: 6248, height: 4176,
+    binning_x: 1, binning_y: 1, gain: 100, offset: 30, exposure_s: 300, camera_temp: -10,
+    night: '2025-07-08', session: 'session-dark',
+  };
+  const flat = {
+    frame_uuid: 'frame-flat', rig_uuid: 'rig-1', kind: 'flat',
+    source_path: '/old-host/calibration/flat-ha.fits', source_exists: false,
+    camera: 'TestCam', width: 6248, height: 4176, binning_x: 1, binning_y: 1, gain: 100,
+    filter: 'Ha', night: null, session: 'session-flat',
+  };
+  const session = (frame: typeof dark | typeof flat) => ({
+    id: frame.session, kind: frame.kind, night: frame.night, rig_uuid: 'rig-1',
+    rig_name: 'Ultracat · TestCam', is_master: false, filter: frame.kind === 'flat' ? 'Ha' : null,
+    exposure_min_s: 'exposure_s' in frame ? frame.exposure_s : null,
+    exposure_max_s: 'exposure_s' in frame ? frame.exposure_s : null,
+    temp_min_c: null, temp_max_c: null, gain: 100, offset: null, readout: null, binning: '1x1',
+    width: 6248, height: 4176, rotation: null, first_at: null, last_at: null,
+    frames: 1, ok: 0, suspect: 0, poor: 0, ungraded: 1, kept_out: 0,
+  });
+  const sessionRequests: URLSearchParams[] = [];
+  await page.route((url) => url.pathname === '/api/db/review/calibrations/sessions', async (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    sessionRequests.push(params);
+    const frames = params.get('missing') === 'true' ? [flat] : [dark, flat];
+    await route.fulfill(ok({
+      sessions: frames.map(session), total: frames.length, page: 0, per_page: 50, frames: frames.length,
+      facets: { filters: ['Ha'], exposures: [300] }, night_boundary_seconds: 43200,
+    }));
+  });
+  await page.route((url) => url.pathname === '/api/db/review/calibrations/frames', async (route) => {
+    const sessionId = new URL(route.request().url()).searchParams.get('session');
+    const frames = [dark, flat].filter((frame) => frame.session === sessionId);
+    await route.fulfill(ok({ frames, total: frames.length, page: 0, per_page: 500 }));
+  });
+  await page.route((url) => /^\/api\/db\/review\/calibrations\/frames\/frame-[a-z]+$/.test(url.pathname), async (route) => {
+    const uuid = new URL(route.request().url()).pathname.split('/').pop();
+    const frame = uuid === 'frame-flat' ? flat : dark;
+    await route.fulfill(ok({
+      ...frame, measurement: null, measure_error: null, findings: [], metrics: [],
+      session_frames: 1, session_measured: 0, compare: false, masters: 0,
+    }));
   });
 
   await page.goto('/');
@@ -217,19 +220,24 @@ test('settings shows calibration coverage for each database rig', async ({ page 
   await expect(review.getByText(/10 bias · 12 dark · 8 dark-flat · 12 flat/)).toBeVisible();
   await review.getByRole('button', { name: 'Manage' }).click();
 
-  const library = page.getByRole('dialog', { name: 'Calibration library' });
-  await expect(library).toBeVisible();
-  // Night groups start collapsed: expand the flat's (no capture date) and
-  // the dark's before asserting their rows.
-  await library.getByRole('button', { name: /Date unknown/ }).click();
-  await library.getByRole('button', { name: /Night of/ }).click();
-  await expect(library.getByText('dark-300s.fits', { exact: true })).toBeVisible();
-  await expect(library.getByText('flat-ha.fits', { exact: true })).toBeVisible();
-  await expect(library.getByText('⚠ Missing')).toBeVisible();
-  await expect(library.getByRole('button', { name: 'Clear generated masters' })).toBeVisible();
-  await library.getByLabel('Missing files only').check();
-  await expect(library.getByText('dark-300s.fits', { exact: true })).toBeHidden();
-  await expect(library.getByText('flat-ha.fits', { exact: true })).toBeVisible();
+  // Manage opens the database's calibration page.
+  await expect(page).toHaveURL(/#\/calibration\?db=review/);
+  const sessions = page.getByRole('navigation', { name: 'Sessions' });
+  await expect(sessions.getByRole('button')).toHaveCount(2);
+  await sessions.getByRole('button', { name: /Flats · Ha/ }).click();
+  const panel = page.getByRole('complementary', { name: 'Frame' });
+  await expect(panel.getByRole('heading', { name: 'flat-ha.fits' })).toBeVisible();
+  await expect(panel.getByText('Missing file', { exact: true })).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Frames' }).getByText('Missing', { exact: true })).toBeVisible();
+  await sessions.getByRole('button', { name: /Darks · 300s/ }).click();
+  await expect(panel.getByRole('heading', { name: 'dark-300s.fits' })).toBeVisible();
+  // The box follows the address, which changes a moment after the click.
+  await page.getByLabel('Missing files').click();
+  await expect(page).toHaveURL(/calMissing=true/);
+  await expect(page.getByLabel('Missing files')).toBeChecked();
+  await expect(sessions.getByRole('button')).toHaveCount(1);
+  await expect(sessions.getByRole('button', { name: /Flats · Ha/ })).toBeVisible();
+  expect(sessionRequests.at(-1)?.get('missing')).toBe('true');
 });
 
 test('data transfer controls fit a compact settings view', async ({ page }) => {

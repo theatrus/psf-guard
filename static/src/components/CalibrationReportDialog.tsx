@@ -1,10 +1,12 @@
 import { useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { apiClient } from '../api/client';
 import { useAccess } from '../auth/access';
 import type { CalibrationExternalMaster, CalibrationHealthFinding, CalibrationHealthLevel, CalibrationNightFilter, ProjectCalibrationGaps, ProjectCalibrationReport } from '../api/types';
 import Dialog from './Dialog';
+import { calibrationPageHref } from './calibration/calibrationLinks';
 import './CalibrationReportDialog.css';
 
 interface Props {
@@ -210,10 +212,19 @@ export default function CalibrationReportDialog({
     enabled: open,
     staleTime: 60_000,
   });
+  const navigate = useNavigate();
+  const location = useLocation();
+  const browse = () => {
+    onClose();
+    navigate(calibrationPageHref(location.search, dbId, projectId));
+  };
 
   return (
     <Dialog open={open} onClose={onClose} title={`Calibration coverage — ${projectName}`}>
       <div className="calibration-report">
+        <button type="button" className="calibration-report-browse" onClick={browse}>
+          Browse calibration
+        </button>
         <QualitySection dbId={dbId} projectId={projectId} />
         {report.isLoading && <p className="calibration-report-muted">Matching the library…</p>}
         {report.error && (

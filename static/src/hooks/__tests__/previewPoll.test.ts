@@ -13,7 +13,7 @@ import {
   __resetForTest,
 } from '../previewPoll';
 import { apiClient } from '../../api/client';
-import type { PreviewDescriptor, GenerationStatus, CalibrationMasterPreviewDescriptor } from '../../api/types';
+import type { PreviewDescriptor, GenerationStatus, CalibrationMasterPreviewDescriptor, CalibrationFramePreviewDescriptor } from '../../api/types';
 
 const preview = (imageId: number): PreviewDescriptor => ({
   imageId,
@@ -126,12 +126,12 @@ describe('previewPoll coordinator', () => {
   });
 
   it('keys calibration previews by exact provenance and display stretch', () => {
+    const source = { kind: 'mono', jobId: 'job', groupIndex: 0, artifactRevision: 'old' } as const;
     const master: CalibrationMasterPreviewDescriptor = {
-      kind: 'calibration_master', masterId: 'same-master', size: 'original', midtone: 0.2,
-      source: { kind: 'mono', jobId: 'job', groupIndex: 0, artifactRevision: 'old' },
+      kind: 'calibration_master', masterId: 'same-master', size: 'original', midtone: 0.2, source,
     };
     const variants: CalibrationMasterPreviewDescriptor[] = [
-      { ...master, source: { ...master.source, artifactRevision: 'new' } },
+      { ...master, source: { ...source, artifactRevision: 'new' } },
       { ...master, source: { kind: 'mono', jobId: 'job', groupIndex: 1, artifactRevision: 'old' } },
       { ...master, source: { kind: 'color', jobId: 'job', artifactRevision: 'old' } },
       { ...master, masterId: 'another-master' },
@@ -140,6 +140,26 @@ describe('previewPoll coordinator', () => {
       { ...master, shadow: -2 },
     ];
     expect(new Set([master, ...variants].map(descriptorKey)).size).toBe(8);
+  });
+
+  it('keys raw calibration frames by view, size and stretch, and library masters apart from stacks', () => {
+    const frame: CalibrationFramePreviewDescriptor = {
+      kind: 'calibration_frame', frameUuid: 'f1', view: 'frame', size: 'thumb', stretch: 'normal',
+    };
+    const frames: CalibrationFramePreviewDescriptor[] = [
+      frame,
+      { ...frame, frameUuid: 'f2' },
+      { ...frame, view: 'session' },
+      { ...frame, size: 'screen' },
+      { ...frame, stretch: 'tight' },
+    ];
+    expect(new Set(frames.map(descriptorKey)).size).toBe(5);
+    const library: CalibrationMasterPreviewDescriptor = {
+      kind: 'calibration_master', masterId: 'm', size: 'original', source: { kind: 'library' },
+    };
+    expect(descriptorKey(library)).not.toBe(descriptorKey({
+      ...library, source: { kind: 'color', jobId: 'job', artifactRevision: 'r' },
+    }));
   });
 
   it('drops an old master subscriber when selection changes while polling', async () => {

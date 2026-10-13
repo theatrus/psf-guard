@@ -46,11 +46,17 @@ export function __resetForTest(): void {
 
 export function descriptorKey(d: PreviewDescriptor): string {
   if (d.kind === 'calibration_master') {
+    const source = d.source;
     return JSON.stringify([
-      d.kind, d.source.kind, d.source.jobId,
-      d.source.kind === 'mono' ? d.source.groupIndex : null,
-      d.source.artifactRevision, d.masterId, d.size, d.midtone ?? '', d.shadow ?? '',
+      d.kind, source.kind,
+      source.kind === 'library' ? null : source.jobId,
+      source.kind === 'mono' ? source.groupIndex : null,
+      source.kind === 'library' ? null : source.artifactRevision,
+      d.masterId, d.size, d.midtone ?? '', d.shadow ?? '',
     ]);
+  }
+  if (d.kind === 'calibration_frame') {
+    return JSON.stringify([d.kind, d.frameUuid, d.view, d.size, d.stretch]);
   }
   return [
     d.kind,

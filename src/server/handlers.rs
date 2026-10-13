@@ -5087,7 +5087,7 @@ pub(crate) fn artifact_cache_path(
 
 /// Serve a cached image, labelled as whatever it was written as rather than as
 /// whatever the setting says now.
-async fn serve_cached_png(
+pub(crate) async fn serve_cached_png(
     cache_path: &std::path::Path,
     request_headers: &HeaderMap,
 ) -> Result<Response, AppError> {
@@ -5202,7 +5202,7 @@ fn tracked_cache_matches_source(
 /// The immediate "not ready — poll for it" response on a cache miss. `<img>`
 /// treats the non-image body as an error and the frontend then batch-polls the
 /// generation-status endpoint.
-fn generating_response() -> Response {
+pub(crate) fn generating_response() -> Response {
     (
         StatusCode::ACCEPTED,
         [(CACHE_CONTROL, "no-store")],

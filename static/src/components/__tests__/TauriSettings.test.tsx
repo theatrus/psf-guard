@@ -17,7 +17,7 @@ function createWrapper() {
   });
 
   return function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+    return <QueryClientProvider client={queryClient}><MemoryRouter>{children}</MemoryRouter></QueryClientProvider>;
   };
 }
 
@@ -115,7 +115,7 @@ describe('TauriSettings import state', () => {
       http.get('/api/director/v1/rigs/status', () => HttpResponse.json({ success: true, data: [], error: null })),
       http.get('/api/director/v1/templates', () => HttpResponse.json({ success: true, data: [], error: null })),
     );
-    render(<MemoryRouter><TauriSettings isOpen onClose={() => {}} initialIntent="rigs" /></MemoryRouter>, { wrapper: createWrapper() });
+    render(<TauriSettings isOpen onClose={() => {}} initialIntent="rigs" />, { wrapper: createWrapper() });
     const tabs = await screen.findByRole('tab', { name: 'Rigs' });
     expect(tabs).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tab', { name: 'Exposure templates' })).toBeInTheDocument();
@@ -146,7 +146,7 @@ describe('TauriSettings import state', () => {
         })
       ),
     );
-    render(<MemoryRouter><TauriSettings isOpen onClose={() => {}} initialIntent="stacking" /></MemoryRouter>, { wrapper: createWrapper() });
+    render(<TauriSettings isOpen onClose={() => {}} initialIntent="stacking" />, { wrapper: createWrapper() });
     expect(await screen.findByRole('tab', { name: 'Stacking' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.queryByRole('heading', { name: 'Disk use' })).not.toBeInTheDocument();
 
@@ -173,7 +173,7 @@ describe('TauriSettings import state', () => {
         })
       ),
     );
-    render(<MemoryRouter><TauriSettings isOpen onClose={() => {}} initialIntent="stacking" /></MemoryRouter>, { wrapper: createWrapper() });
+    render(<TauriSettings isOpen onClose={() => {}} initialIntent="stacking" />, { wrapper: createWrapper() });
     expect(await screen.findByRole('tab', { name: 'Stacking' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.queryByRole('heading', { name: 'Processor use' })).not.toBeInTheDocument();
 
@@ -184,7 +184,7 @@ describe('TauriSettings import state', () => {
   });
 
   it('keeps calibration settings on their own tab, not under Setups', async () => {
-    render(<MemoryRouter><TauriSettings isOpen onClose={() => {}} /></MemoryRouter>, { wrapper: createWrapper() });
+    render(<TauriSettings isOpen onClose={() => {}} />, { wrapper: createWrapper() });
     fireEvent.click(await screen.findByRole('tab', { name: 'Setups' }));
     expect(document.querySelector('.calibration-matching-settings')).toBeNull();
     fireEvent.click(screen.getByRole('tab', { name: 'Calibration' }));
@@ -192,7 +192,7 @@ describe('TauriSettings import state', () => {
   });
 
   it('shows a server without accounts how to connect an agent, with no token', async () => {
-    render(<MemoryRouter><TauriSettings isOpen onClose={() => {}} /></MemoryRouter>, { wrapper: createWrapper() });
+    render(<TauriSettings isOpen onClose={() => {}} />, { wrapper: createWrapper() });
     fireEvent.click(await screen.findByRole('tab', { name: 'Agents' }));
     const url = `${window.location.origin}/api/mcp`;
     expect(await screen.findByText(`claude mcp add --transport http psf-guard ${url}`)).toBeInTheDocument();

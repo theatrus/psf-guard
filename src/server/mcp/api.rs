@@ -371,6 +371,22 @@ pub(super) const READABLE_ROUTES: &[(&str, &str)] = &[
         "Calibration grading progress, and frames by grade",
     ),
     (
+        "/db/{db}/calibrations/frames",
+        "Calibration frames a page at a time; ?rig&kind&filter&exposure&temp_min&temp_max&night_from&night_to&grade&kept_out&session&sort&page&per_page",
+    ),
+    (
+        "/db/{db}/calibrations/sessions",
+        "Calibration sessions (night, kind, settings) with counts by grade; the frame filters",
+    ),
+    (
+        "/db/{db}/calibrations/frames/{frame_uuid}",
+        "One calibration frame: measurement, findings, its session's numbers",
+    ),
+    (
+        "/db/{db}/calibrations/masters",
+        "Recorded calibration masters: sources, statistics, projects using them",
+    ),
+    (
         "/db/{db}/calibration-health",
         "Each project's calibration health: poor or check, with light counts",
     ),
@@ -483,6 +499,7 @@ mod tests {
                 .replace("{image_id}", "1")
                 .replace("{job_id}", &job)
                 .replace("{plan_id}", uuid)
+                .replace("{frame_uuid}", uuid)
                 .replace("{rig}", uuid);
             let request = Request::get(&path).body(Body::empty()).unwrap();
             let response = router.clone().oneshot(request).await.unwrap();

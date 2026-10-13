@@ -6,6 +6,7 @@ import Overview from '../components/Overview';
 import SequenceView from '../components/SequenceView';
 import StacksView from '../components/stacks/StacksView';
 import SkyPage from '../components/sky/SkyPage';
+import CalibrationPage from '../components/calibration/CalibrationPage';
 import PlanPage from '../components/director/PlanPage';
 import LegacyPlanningRedirect from '../components/director/LegacyPlanningRedirect';
 
@@ -59,6 +60,10 @@ const router = createHashRouter([
       {
         path: "sky",
         element: <SkyPage />
+      },
+      {
+        path: "calibration",
+        element: <CalibrationPage />
       }
     ]
   }

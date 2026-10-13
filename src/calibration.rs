@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::UNIX_EPOCH;
 
+pub mod browse;
 mod health;
 mod quality;
 pub use health::{
@@ -332,6 +333,8 @@ pub struct CalibrationFrameSummary {
     pub camera_temp: Option<f64>,
     pub filter: Option<String>,
     pub focal_length_mm: Option<f64>,
+    /// Rotator angle in degrees at capture, when the rig recorded one.
+    pub rotation: Option<f64>,
     /// User-set validity boundary; absent means both directions.
     pub valid_direction: Option<ValidDirection>,
     /// Median level of a raw dark or dark-flat, once measured.
@@ -1447,18 +1450,33 @@ pub fn library_summary(conn: &Connection) -> Result<CalibrationLibrarySummary> {
 }
 
 pub fn library_details(conn: &Connection) -> Result<CalibrationLibraryDetails> {
-    let summary = library_summary(conn)?;
+    Ok(CalibrationLibraryDetails {
+        summary: library_summary(conn)?,
+        frames: frame_summaries(conn, "", &[])?,
+        night_boundary_seconds: catalog_night_boundary(conn),
+    })
+}
+
+/// The library listing's rows, all of them or those a `WHERE` clause
+/// against the alias `f` keeps (`condition` starts with `WHERE`), newest
+/// first within each kind.
+pub(crate) fn frame_summaries(
+    conn: &Connection,
+    condition: &str,
+    params: &[&dyn rusqlite::ToSql],
+) -> Result<Vec<CalibrationFrameSummary>> {
     if !schema_exists(conn) {
-        return Ok(CalibrationLibraryDetails {
-            summary,
-            frames: Vec::new(),
-            night_boundary_seconds: catalog_night_boundary(conn),
-        });
+        return Ok(Vec::new());
     }
     // The listing tolerates a catalog that could not be upgraded: an absent
-    // column reads as NULL rather than failing the whole dialog.
+    // column reads as NULL rather than failing the whole listing.
     let columns = table_column_names(conn, "psf_guard_calibration_frame")?;
     let has = |wanted: &str| columns.iter().any(|name| name.eq_ignore_ascii_case(wanted));
+    let rotation_column = if has("rotation") {
+        "f.rotation"
+    } else {
+        "NULL AS rotation"
+    };
     let validity_column = if has("valid_direction") {
         "valid_direction"
     } else {
@@ -1497,14 +1515,15 @@ pub fn library_details(conn: &Connection) -> Result<CalibrationLibraryDetails> {
                f.captured_at, f.telescope, f.camera, f.width, f.height, f.channels,
                f.binning_x, f.binning_y, f.gain, f.offset, f.readout_mode, f.bayer_pattern,
                f.exposure_s, f.camera_temp, f.filter_name, f.focal_length_mm,
-               NULL AS rotation, {validity_column}, {readout_name_column}, {is_master_column},
+               {rotation_column}, {validity_column}, {readout_name_column}, {is_master_column},
                {stray_light_column}, {grade_columns}, {dark_level_columns}
         FROM psf_guard_calibration_frame f {grade_join}
+        {condition}
         ORDER BY f.kind, f.captured_at DESC, f.source_path COLLATE NOCASE
         "#
     ))?;
     let frames = statement
-        .query_map([], |row| {
+        .query_map(params, |row| {
             let quality = FrameGrade {
                 grade: row.get(27)?,
                 grade_code: row.get(30)?,
@@ -1549,6 +1568,7 @@ pub fn library_details(conn: &Connection) -> Result<CalibrationLibraryDetails> {
                     camera_temp: frame.camera_temp,
                     filter: frame.filter,
                     focal_length_mm: frame.focal_length_mm,
+                    rotation: frame.rotation,
                     valid_direction: frame.valid_direction,
                     dark_level: level,
                     dark_level_sigma: sigma,
@@ -1559,11 +1579,7 @@ pub fn library_details(conn: &Connection) -> Result<CalibrationLibraryDetails> {
             )
         })
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(CalibrationLibraryDetails {
-        summary,
-        frames,
-        night_boundary_seconds: catalog_night_boundary(conn),
-    })
+    Ok(frames)
 }
 
 /// Mark frames with a validity boundary (or clear one with `None`). Returns

@@ -1807,9 +1807,8 @@ export default function TauriSettings({
                       )}
                       <CalibrationLibrarySummary
                         dbId={entry.id}
-                        dbName={entry.name}
                         canManage={managementAllowed}
-                        onImport={() => handleImport(entry)}
+                        onOpen={onClose}
                       />
                       <AstroBinFilterSummary
                         dbId={entry.id}
