@@ -462,6 +462,99 @@ describe('SequenceView: quality display', () => {
     expect(timeline).toHaveAttribute('height', '120');
   });
 
+  it('marks each bar with its frame grade', async () => {
+    setupDefaultHandlers();
+    server.use(
+      http.get('/api/db/:dbId/images', () => HttpResponse.json({
+        success: true,
+        data: mockImages.map(image => {
+          if (image.id === 2) return { ...image, grading_status: 1 };
+          if (image.id === 3) return { ...image, grading_status: 2, reject_reason: 'Clouds' };
+          return image;
+        }),
+        error: null,
+        status: 'ready',
+      })),
+    );
+
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
+
+    await waitFor(() => {
+      expect(document.querySelectorAll('.sequence-grade-mark')).toHaveLength(10);
+    });
+    const mark = (id: number) =>
+      document.querySelector(`.sequence-grade-mark[data-grade-image-id="${id}"]`);
+    expect(mark(2)).toHaveAttribute('data-grade', 'accepted');
+    expect(mark(2)).toHaveAttribute('fill', 'var(--color-success)');
+    expect(mark(3)).toHaveAttribute('data-grade', 'rejected');
+    expect(mark(3)).toHaveAttribute('fill', 'var(--color-error)');
+    expect(mark(1)).toHaveAttribute('data-grade', 'pending');
+    // The bar's tooltip leads with the grade.
+    const barTitle = (id: number) => document.querySelector(
+      `.sequence-timeline rect[data-image-id="${id}"] title`,
+    )?.textContent;
+    expect(barTitle(3)).toMatch(/^Rejected: Clouds\. /);
+    expect(barTitle(2)).toMatch(/^Accepted\. /);
+    expect(barTitle(1)).toMatch(/^Pending\. /);
+  });
+
+  it('keeps grade marks under their bars and clear of their neighbours', async () => {
+    const frames = 300;
+    const template = normalFixture.data.sequences[0];
+    const images = Array.from({ length: frames }, (_, i) => ({
+      ...template.images[i % template.images.length],
+      image_id: i + 1,
+    }));
+    setupDefaultHandlers();
+    server.use(
+      http.get('/api/db/:dbId/analysis/sequence', () => HttpResponse.json({
+        ...normalFixture,
+        data: {
+          ...normalFixture.data,
+          sequences: [{ ...template, image_count: frames, images }],
+        },
+      })),
+      http.get('/api/db/:dbId/images', () => HttpResponse.json({
+        success: true,
+        data: images.map((image, i) => ({
+          ...mockImages[0],
+          id: image.image_id,
+          grading_status: i % 3,
+        })),
+        error: null,
+        status: 'ready',
+      })),
+    );
+
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
+
+    await waitFor(() => {
+      expect(document.querySelectorAll('.sequence-grade-mark')).toHaveLength(frames);
+    });
+    const timeline = screen.getByRole('img', { name: 'Capture sequence comparison scores' });
+    expect(timeline).toHaveAttribute('height', '120');
+    const box = (element: Element) => {
+      const x = Number(element.getAttribute('x'));
+      const y = Number(element.getAttribute('y'));
+      return {
+        left: x,
+        right: x + Number(element.getAttribute('width')),
+        top: y,
+        bottom: y + Number(element.getAttribute('height')),
+      };
+    };
+    const bars = [...document.querySelectorAll('.sequence-timeline rect[data-image-id]')].map(box);
+    const marks = [...document.querySelectorAll('.sequence-grade-mark')].map(box);
+    marks.forEach((mark, i) => {
+      const bar = bars[i];
+      expect(mark.top).toBeGreaterThan(bar.bottom);
+      expect(mark.bottom).toBeLessThanOrEqual(120);
+      expect(mark.right - mark.left).toBeLessThanOrEqual(bar.right - bar.left + 1e-9);
+      expect((mark.left + mark.right) / 2).toBeCloseTo((bar.left + bar.right) / 2, 6);
+      if (i > 0) expect(mark.left).toBeGreaterThanOrEqual(marks[i - 1].right - 1e-9);
+    });
+  });
+
   it('shows cloud event badges when clouds are detected', async () => {
     server.use(
       http.get('/api/db/:dbId/analysis/sequence', () => {
@@ -1255,6 +1348,53 @@ describe('SequenceView: batch operations', () => {
     gradeRequests[0].updates.forEach(update => {
       expect(update.status).toBe('rejected');
     });
+  });
+
+  it('moves a grade mark when the frame is rejected, undone and redone', async () => {
+    setupDefaultHandlers();
+    const words = ['pending', 'accepted', 'rejected'];
+    const grades = new Map<number, number>(mockImages.map(image => [image.id, 1]));
+    server.use(
+      http.get('/api/db/:dbId/images', () => HttpResponse.json({
+        success: true,
+        data: mockImages.map(image => ({ ...image, grading_status: grades.get(image.id) })),
+        error: null,
+        status: 'ready',
+      })),
+      http.post('/api/db/:dbId/images/grade', async ({ request }) => {
+        const body = await request.json() as { updates: Array<{ image_id: number; status: string }> };
+        const previous = body.updates.map(update => ({
+          image_id: update.image_id,
+          status: words[grades.get(update.image_id) ?? 0],
+          reason: null,
+        }));
+        body.updates.forEach(update => grades.set(update.image_id, words.indexOf(update.status)));
+        return HttpResponse.json({
+          success: true,
+          data: { updated: body.updates.length, previous },
+          error: null,
+          status: 'ready',
+        });
+      }),
+    );
+    const user = userEvent.setup();
+
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
+
+    const mark = () => document.querySelector('.sequence-grade-mark[data-grade-image-id="4"]');
+    await waitFor(() => expect(mark()).toHaveAttribute('data-grade', 'accepted'));
+
+    fireEvent.click(document.querySelector('.sequence-timeline rect[data-image-id="4"]')!);
+    await user.click(await screen.findByText('Review rejection'));
+    await user.click(screen.getByText(/Reject selected \(1\)/));
+    await waitFor(() => expect(mark()).toHaveAttribute('data-grade', 'rejected'));
+    expect(mark()).toHaveAttribute('fill', 'var(--color-error)');
+
+    await user.click(document.querySelector<HTMLButtonElement>('.undo-button')!);
+    await waitFor(() => expect(mark()).toHaveAttribute('data-grade', 'accepted'));
+
+    await user.click(document.querySelector<HTMLButtonElement>('.redo-button')!);
+    await waitFor(() => expect(mark()).toHaveAttribute('data-grade', 'rejected'));
   });
 
   it('offers one action that scans pixels and refreshes sequence scores', async () => {
