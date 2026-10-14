@@ -2,13 +2,15 @@ import type { ReactNode } from 'react';
 import type { ProjectCalibrationHealthSummary } from '../api/types';
 import type { LibraryDensity } from '../hooks/useDisplayPreferences';
 import { ago, percentDone, stateLabel } from './libraryFamilies';
+import './toolbar/toolbar.css';
 
 /** The pills the Library rows and the plan list share, so a project reads
  *  the same way wherever it is listed: which database, what state Target
  *  Scheduler has it in, how far along, how it graded, and when. */
 
 export function DbPill({ name, title }: { name: string; title?: string }) {
-  return <span className="library-pill library-pill-db" title={title}>{name}</span>;
+  // The inner span carries the ellipsis, which a flex pill cannot.
+  return <span className="library-pill library-pill-db" title={title}><span className="library-pill-text">{name}</span></span>;
 }
 
 /** Target Scheduler's project state: Draft, Active, Inactive or Closed. */
@@ -48,14 +50,16 @@ export function GradingPill({ accepted, rejected, pending }: { accepted: number;
   </span>;
 }
 
-const formatDay = (seconds: number) => new Date(seconds * 1000).toLocaleDateString();
+// Two-digit month and day, so every range in the list is the same width.
+const formatDay = (seconds: number) => new Date(seconds * 1000).toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' });
 
-/** First to last capture, with how long ago the last one was. */
+/** First to last capture, with how long ago the last one was. A narrow
+ *  Library hides the range and keeps the age. */
 export function DatesPill({ earliest, latest, nowMs, title }: { earliest: number | null | undefined; latest: number | null | undefined; nowMs: number; title?: string }) {
   const last = ago(latest, nowMs);
   return <span className="library-pill library-pill-dates" title={title}>
-    {latest ? `${formatDay(earliest ?? latest)} – ${formatDay(latest)}` : 'No dates'}
-    {last ? <small> · {last}</small> : null}
+    <span className="library-dates-range">{latest ? `${formatDay(earliest ?? latest)} – ${formatDay(latest)}` : 'No dates'}</span>
+    {last ? <small className="library-dates-ago">{last}</small> : null}
   </span>;
 }
 
@@ -89,9 +93,10 @@ export function FoldButton({ open, name, onClick }: { open: boolean; name: strin
     aria-label={`${open ? 'Hide' : 'Show'} details for ${name}`} title={open ? 'Fold to a row' : 'Show details'} onClick={onClick}>{open ? '▾' : '▸'}</button>;
 }
 
-/** The Compact / Detailed switch both lists carry. */
+/** The Compact / Detailed switch both lists carry, as the toolbar's
+ *  segmented group: one radio of two is on. */
 export function DensityToggle({ density, onChange }: { density: LibraryDensity; onChange: (next: LibraryDensity) => void }) {
-  return <div className="project-density" role="radiogroup" aria-label="Project view">
+  return <div className="tool-segmented project-density" role="radiogroup" aria-label="Project view">
     <button type="button" role="radio" aria-checked={density === 'compact'} onClick={() => onChange('compact')}>Compact</button>
     <button type="button" role="radio" aria-checked={density === 'detailed'} onClick={() => onChange('detailed')}>Detailed</button>
   </div>;
@@ -100,4 +105,14 @@ export function DensityToggle({ density, onChange }: { density: LibraryDensity; 
 /** One compact row: the fold arrow, the name, then pills. */
 export function ProjectRow({ className, testId, children }: { className?: string; testId?: string; children: ReactNode }) {
   return <div className={['library-row', className].filter(Boolean).join(' ')} data-testid={testId ?? 'library-row'}>{children}</div>;
+}
+
+/** The Library's columns, in order. Overview.css gives each one a track. */
+export const ROW_COLUMNS = ['fold', 'name', 'db', 'state', 'progress', 'grades', 'dates', 'calibration', 'views', 'plan'] as const;
+export type RowColumn = typeof ROW_COLUMNS[number];
+
+/** A Library row's cells, one per column in column order. A row without a
+ *  pill still gets the empty cell, so the pills after it keep their x. */
+export function RowCells({ cells }: { cells: Partial<Record<RowColumn, ReactNode>> }) {
+  return <>{ROW_COLUMNS.map(column => <div key={column} className={`library-cell library-cell-${column}`} data-column={column}>{cells[column]}</div>)}</>;
 }
