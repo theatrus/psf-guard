@@ -461,21 +461,42 @@ fn accepted_frames(
     let mut statement =
         connection.prepare("SELECT IFNULL(accepted, 0) FROM exposureplan WHERE guid=?1")?;
     let mut found: BTreeMap<Uuid, BTreeMap<String, u32>> = BTreeMap::new();
+    // A plan that sums several objectives' frames hands its accepted frames
+    // out in record order, each taking up to its own frames, so they are
+    // counted once.
+    let mut left: BTreeMap<Uuid, u32> = BTreeMap::new();
     for plan in &activated.plans {
         let Some(panel) = panels.get(&plan.target_guid) else {
             continue;
         };
-        // A row deleted in Target Scheduler leaves nothing accepted.
-        let accepted: i64 = statement
-            .query_row([plan.exposureplan_guid.to_string()], |row| row.get(0))
-            .optional()?
-            .unwrap_or(0);
+        let pool = match left.get(&plan.exposureplan_guid) {
+            Some(pool) => *pool,
+            None => {
+                // A row deleted in Target Scheduler leaves nothing accepted.
+                let accepted: i64 = statement
+                    .query_row([plan.exposureplan_guid.to_string()], |row| row.get(0))
+                    .optional()?
+                    .unwrap_or(0);
+                u32::try_from(accepted.max(0)).unwrap_or(u32::MAX)
+            }
+        };
+        let shares = activated
+            .plans
+            .iter()
+            .filter(|other| other.exposureplan_guid == plan.exposureplan_guid)
+            .count();
+        let mine = if shares > 1 {
+            pool.min(plan.required_frames)
+        } else {
+            pool
+        };
+        left.insert(plan.exposureplan_guid, pool - mine);
         let count = found
             .entry(plan.contribution_id)
             .or_default()
             .entry((*panel).to_owned())
             .or_default();
-        *count = count.saturating_add(u32::try_from(accepted.max(0)).unwrap_or(u32::MAX));
+        *count = count.saturating_add(mine);
     }
     Ok(found)
 }

@@ -558,7 +558,13 @@ fn build(
         // the objective.
         let plan = plans.get(&activation.project_id);
         let mut done = 0usize;
+        // Objectives whose frames an activation summed into one exposure
+        // plan are recorded once each against it; the rig shoots it once.
+        let mut served = std::collections::BTreeSet::new();
         for activated in &entry.plans {
+            if !served.insert(activated.exposureplan_guid) {
+                continue;
+            }
             let goal_id = activated.exposureplan_guid.to_string();
             // A row the program cannot use (a template's Moon rules out of
             // range, a value of the wrong type) costs that goal only.

@@ -532,6 +532,38 @@ async fn a_band_at_two_lengths_imports_as_two_objectives() {
         ],
         "{plan}"
     );
+    // Before any activation records which plan is whose, each counts toward
+    // the objective with its template and length: the one left at the
+    // template's default runs at 300 s. The test frames count apart.
+    let (status, progress) = call(
+        &f.app,
+        "GET",
+        &format!("/projects/{project}/plan/progress"),
+        Value::Null,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{progress}");
+    let rig = &progress["data"]["rigs"][0];
+    let desired: Vec<(i64, i64)> = plan["objectives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| {
+            let entry = rig["objectives"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["objective_id"] == o["id"])
+                .unwrap();
+            (
+                entry["frames"]["desired"].as_i64().unwrap(),
+                entry["frames"]["acquired"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(desired, [(40, 0), (80, 10)], "{progress}");
+    assert_eq!(rig["other"]["desired"], 5, "{progress}");
 }
 
 #[tokio::test]

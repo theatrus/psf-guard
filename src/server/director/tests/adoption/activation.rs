@@ -963,10 +963,10 @@ async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doublin
     };
     let data = preview("first").await;
     // Both plans taken over, the other Ha lengths turned off as replaced,
-    // and the OIII work listed as left alone.
+    // and the OIII work the plan has no part for turned off too.
     assert_eq!(
         actions(&data, "plan"),
-        ["adopt", "adopt", "disable", "disable", "keep"],
+        ["adopt", "adopt", "disable", "disable", "disable"],
         "{data}"
     );
     assert!(
@@ -1006,7 +1006,7 @@ async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doublin
     );
     assert_eq!(
         details[4],
-        "IC 1805 r1c1 · OIII 600 · 600 s | plan #15 (3 of 10 frames taken) is not part of this plan; left as it is"
+        "IC 1805 r1c1 · OIII 600 · 600 s | plan #15 (3 of 10 frames taken), not in the plan"
     );
     let digest = data["preview_digest"].as_str().unwrap().to_owned();
     let (status, applied) = call(
@@ -1039,9 +1039,9 @@ async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doublin
         "a replaced plan keeps its frames and settings"
     );
     assert_eq!(
-        count("SELECT count(*) FROM exposureplan WHERE Id=15 AND enabled=1 AND desired=10 AND acquired=3"),
+        count("SELECT count(*) FROM exposureplan WHERE Id=15 AND enabled=0 AND desired=10 AND acquired=3"),
         1,
-        "work on another filter is left alone"
+        "work on a filter the plan does not have is turned off, its frames kept"
     );
     assert_eq!(
         count("SELECT count(*) FROM exposureplan WHERE Id=13 AND exposureTemplateId=1 AND enabled=1 AND exposure=300 AND guid IS NOT NULL"),
@@ -1050,7 +1050,7 @@ async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doublin
     assert_eq!(count("SELECT count(*) FROM psf_guard_director_plan"), 2);
     assert_eq!(
         actions(&preview("again").await, "plan"),
-        ["unchanged", "unchanged", "keep"]
+        ["unchanged", "unchanged"]
     );
 
     // A contribution made anew (a rig dropped and added back) takes its old
@@ -1063,11 +1063,7 @@ async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doublin
         store.save_plan_draft(&draft, revision).unwrap();
     }
     let data = preview("remade").await;
-    assert_eq!(
-        actions(&data, "plan"),
-        ["unchanged", "unchanged", "keep"],
-        "{data}"
-    );
+    assert_eq!(actions(&data, "plan"), ["unchanged", "unchanged"], "{data}");
 }
 
 /// A linked project with more targets than the plan frames on this rig is
@@ -2562,6 +2558,36 @@ async fn a_second_length_made_in_nina_is_turned_off_unless_taken_into_the_plan()
             ("h_alpha".to_owned(), "faint_detail".to_owned(), 300.0),
         ]
     );
+    // Until an activation records the 30 s plan, it counts toward the
+    // objective with its template and length, not the 300 s one's.
+    let (status, progress) = call(
+        &a.f.app,
+        "GET",
+        &format!("/projects/{}/plan/progress", a.project),
+        Value::Null,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{progress}");
+    let by_purpose = |purpose: &str| {
+        let objective = plan
+            .objectives
+            .iter()
+            .find(|o| o.purpose == purpose)
+            .unwrap()
+            .id
+            .to_string();
+        progress["data"]["rigs"][0]["objectives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["objective_id"] == objective)
+            .unwrap()["frames"]
+            .clone()
+    };
+    assert_eq!(by_purpose("unsaturated_stars")["desired"], 60, "{progress}");
+    assert_eq!(by_purpose("unsaturated_stars")["acquired"], 4, "{progress}");
+    assert_eq!(by_purpose("faint_detail")["desired"], 72, "{progress}");
     let checked = check_now(&a.f, a.project).await;
     assert!(plan_writes(&checked).is_empty(), "{checked}");
     assert_eq!(
@@ -2575,6 +2601,234 @@ async fn a_second_length_made_in_nina_is_turned_off_unless_taken_into_the_plan()
         1
     );
     assert_eq!(count("SELECT count(*) FROM exposureplan"), 2, "no twins");
+}
+
+/// Add a second H-alpha objective shooting the same template at `exposure`,
+/// with its own frames goal.
+fn add_ha_objective(f: &Fixture, project: Uuid, rig: Uuid, exposure: f64, frames: u32) -> Uuid {
+    let objective = Uuid::new_v4();
+    edit_plan(f, project, |plan| {
+        let template = plan.contributions[0].template.clone();
+        plan.objectives.push(Objective {
+            id: objective,
+            bandpass_id: "h_alpha".into(),
+            purpose: "unsaturated_stars".into(),
+            goal: Goal::Frames { value: frames },
+            priority: 1,
+        });
+        plan.contributions.push(Contribution {
+            id: Uuid::new_v4(),
+            objective_id: objective,
+            rig_id: rig,
+            template,
+            exposure_seconds: exposure,
+            panel_ids: vec![],
+            enabled: true,
+            goal: None,
+        });
+    });
+    objective
+}
+
+/// The plans the report says Target Scheduler shoots, as
+/// "target · template · exposure s: desired, objectives".
+fn shoots(data: &Value) -> Vec<String> {
+    data["rigs"][0]["shoots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|shot| {
+            format!(
+                "{} · {} · {} s: {}, {} objective{}{}",
+                shot["target"].as_str().unwrap(),
+                shot["template"].as_str().unwrap(),
+                shot["exposure_seconds"],
+                shot["desired"],
+                shot["objectives"].as_array().unwrap().len(),
+                if shot["objectives"].as_array().unwrap().len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                if shot["turned_on"] == true {
+                    ", turned on"
+                } else {
+                    ""
+                }
+            )
+        })
+        .collect()
+}
+
+/// Two objectives that come to the same exposure plan (the same target,
+/// template settings and length) share one Target Scheduler plan asking for
+/// the sum of their frames. Progress shows it under each, marked shared,
+/// and counts it once in the rig's total; the program serves it once.
+#[tokio::test]
+async fn identical_rows_share_one_plan_asking_for_their_frames_summed() {
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    let stars = add_ha_objective(&a.f, a.project, a.rig, 300.0, 30);
+    let applied = activate_now(&a.f, a.project, "summed").await;
+    // Six hours of 300 s frames is 72, plus 30.
+    assert_eq!(
+        shoots(&applied),
+        [
+            "IC 1805 r1c1 · Ha 300 · 300.0 s: 102, 2 objectives",
+            "IC 1805 r2c1 · Ha 300 · 300.0 s: 102, 2 objectives",
+        ],
+        "{applied}"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan"),
+        2,
+        "one plan per panel"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE desired=102 AND enabled=1"),
+        2
+    );
+    let (_, last) = call(
+        &a.f.app,
+        "GET",
+        &format!("/projects/{}/activation", a.project),
+        Value::Null,
+        None,
+    )
+    .await;
+    let recorded = last["data"]["activation"]["rigs"][0]["plans"]
+        .as_array()
+        .unwrap();
+    assert_eq!(recorded.len(), 4, "each objective is recorded on each plan");
+    let checked = check_now(&a.f, a.project).await;
+    assert!(plan_writes(&checked).is_empty(), "{checked}");
+    assert_eq!(actions(&checked, "plan"), ["unchanged", "unchanged"]);
+
+    a.db.execute("UPDATE exposureplan SET acquired=10, accepted=8", [])
+        .unwrap();
+    let (status, progress) = call(
+        &a.f.app,
+        "GET",
+        &format!("/projects/{}/plan/progress", a.project),
+        Value::Null,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{progress}");
+    let rig = &progress["data"]["rigs"][0];
+    for (objective, other) in [(a.objective, stars), (stars, a.objective)] {
+        let entry = rig["objectives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["objective_id"] == objective.to_string())
+            .unwrap();
+        assert_eq!(entry["frames"]["desired"], 204, "{progress}");
+        assert_eq!(entry["frames"]["accepted"], 16, "{progress}");
+        assert_eq!(
+            entry["shared_with"],
+            json!([other.to_string()]),
+            "{progress}"
+        );
+    }
+    assert_eq!(rig["total"]["desired"], 204, "counted once: {progress}");
+    assert_eq!(rig["total"]["accepted"], 16, "{progress}");
+}
+
+/// Any difference makes a plan of its own: the same template at another
+/// length gives each objective its plan.
+#[tokio::test]
+async fn rows_at_another_length_get_their_own_plans() {
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    add_ha_objective(&a.f, a.project, a.rig, 30.0, 40);
+    let applied = activate_now(&a.f, a.project, "two lengths").await;
+    assert_eq!(
+        shoots(&applied),
+        [
+            "IC 1805 r1c1 · Ha 300 · 300.0 s: 72, 1 objective",
+            "IC 1805 r2c1 · Ha 300 · 300.0 s: 72, 1 objective",
+            "IC 1805 r1c1 · Ha 300 · 30.0 s: 40, 1 objective",
+            "IC 1805 r2c1 · Ha 300 · 30.0 s: 40, 1 objective",
+        ],
+        "{applied}"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE exposure=300 AND desired=72"),
+        2
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE exposure=30 AND desired=40"),
+        2
+    );
+}
+
+/// The plan is the source of truth for what runs in the rig's project: a
+/// plan made in N.I.N.A. on a filter the plan does not have is turned off,
+/// frames kept, and the rig is not synced until it is; a plan the plan has
+/// that was turned off in N.I.N.A. is turned back on.
+#[tokio::test]
+async fn activation_turns_off_what_the_plan_lacks_and_on_what_it_has() {
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    activate_now(&a.f, a.project, "first").await;
+    let synced = check_now(&a.f, a.project).await;
+    assert!(
+        synced["rigs"][0]["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["action"] == "unchanged"),
+        "synced: every row unchanged: {synced}"
+    );
+
+    // SII made in N.I.N.A.; the plan has no SII.
+    a.db.execute_batch(
+        "INSERT INTO exposuretemplate (Id, profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel, moonavoidanceenabled,
+            moonavoidanceseparation, moonavoidancewidth, maximumhumidity, defaultexposure, moonrelaxscale, moonrelaxmaxaltitude,
+            moonrelaxminaltitude, moondownenabled, ditherevery, minutesOffset, guid)
+         VALUES (5, 'profile-a', 'SII 300', 'SII', 100, 30, 1, -1, 0, 0, 60, 7, 0, 300, 0, 5, -15, 0, -1, 0, 'aaaaaaaa-0000-4000-8000-0000000000a5');
+         INSERT INTO exposureplan (Id, profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, enabled, guid)
+         SELECT 50, 'profile-a', 300, 20, 6, 5, Id, 5, 1, 'aaaaaaaa-0000-4000-8000-000000000050' FROM target WHERE name='IC 1805 r1c1';",
+    )
+    .unwrap();
+    // And one of the plan's own plans turned off there.
+    a.db.execute(
+        "UPDATE exposureplan SET enabled=0 WHERE Id=(SELECT e.Id FROM exposureplan e JOIN target t ON t.Id=e.targetid WHERE t.name='IC 1805 r2c1' AND e.exposure=300 AND e.exposureTemplateId=1)",
+        [],
+    )
+    .unwrap();
+    let checked = check_now(&a.f, a.project).await;
+    let writes = plan_writes(&checked);
+    assert_eq!(writes.len(), 2, "{checked}");
+    assert!(
+        writes[0].starts_with("update IC 1805 r2c1 · Ha 300 · 300 s |")
+            && writes[0].ends_with("turned on"),
+        "{writes:?}"
+    );
+    assert_eq!(
+        writes[1],
+        "disable IC 1805 r1c1 · SII 300 · 300 s | plan #50 (6 of 20 frames taken), not in the plan"
+    );
+    assert_eq!(
+        shoots(&checked),
+        [
+            "IC 1805 r1c1 · Ha 300 · 300.0 s: 72, 1 objective",
+            "IC 1805 r2c1 · Ha 300 · 300.0 s: 72, 1 objective, turned on",
+        ]
+    );
+    activate_now(&a.f, a.project, "back to the plan").await;
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE Id=50 AND enabled=0 AND acquired=6 AND accepted=5 AND desired=20"),
+        1,
+        "turned off, frames and counts kept"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE enabled=1"),
+        2
+    );
+    let after = check_now(&a.f, a.project).await;
+    assert!(plan_writes(&after).is_empty(), "{after}");
 }
 
 /// A band turned off in Target Scheduler is turned off for that rig, and
