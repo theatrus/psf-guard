@@ -1898,7 +1898,13 @@ mod tests {
         let state = Arc::new(AppState::new_for_test(
             rusqlite::Connection::open_in_memory().unwrap(),
         ));
-        let ctx = DbContext(state.all_databases().remove(0));
+        // A real folder for the runs: the test context's stack root,
+        // "/tmp/psf-guard-test", has no drive on Windows, so nothing there
+        // counts as inside it.
+        let exports = tempfile::tempdir().unwrap();
+        let mut context = (*state.all_databases().remove(0)).clone();
+        context.export_dir = Some(exports.path().to_path_buf());
+        let ctx = DbContext(Arc::new(context));
         assert!(!state.database_management_allowed());
         // Hold the slot, so an accepted start joins the line rather than
         // looking for PixInsight.
