@@ -11,6 +11,7 @@ import { usePageDrafts } from '../director/pageDraftsState';
 import type { DirectorFramingDraft, DirectorMosaicPreview } from '../../api/directorTypes';
 import type { SkyPreview } from '../../api/types';
 import { angleAt, moveBy, offsetFrom, skyAtStage, stackMatrix, thumbnailFov, toStage, viewAt } from '../director/framingModel';
+import { gridLayout } from '../director/mosaicLayout';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
 const rigA = { rig: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'RedCat', revision: 1 }, catalog_slug: 'redcat', catalog_name: 'RedCat 61',
@@ -27,6 +28,8 @@ const mosaic: DirectorMosaicPreview = { project: { id: 'project', name: 'Androme
   { panel_id: 'r1c1', rig: rigA.rig, catalog_slug: 'redcat', catalog_name: 'RedCat 61', target_guid: 'g1', target_id: 7, target_name: 'M31 r1c1', progress: { desired: 72, acquired: 40, accepted: 36 }, status: 'ready', preview: solvedStack, stacks: [solvedStack, oiiiStack] },
   { panel_id: 'r2c1', rig: rigA.rig, catalog_slug: 'redcat', catalog_name: 'RedCat 61', target_guid: 'g2', target_id: 8, target_name: 'M31 r2c1', progress: { desired: 72, acquired: 0, accepted: 0 }, status: 'no_stack', preview: null, stacks: [] },
 ] };
+/** The same panels before anything was shot: none of them is locked by its frames. */
+const unshot: DirectorMosaicPreview = { ...mosaic, panels: mosaic.panels.map(panel => ({ ...panel, progress: panel.progress && { ...panel.progress, acquired: 0, accepted: 0 } })) };
 
 function fixture(existing: DirectorFramingDraft | null = null) {
   const saves: DirectorFramingDraft[] = [];
@@ -45,7 +48,7 @@ function fixture(existing: DirectorFramingDraft | null = null) {
       { id: 'finkbeiner_halpha', name: 'Finkbeiner H-alpha composite', hips: 'CDS/P/Finkbeiner', kind: 'narrowband', bandpass: 'H-alpha', attribution: 'Finkbeiner via CDS' },
     ]))),
     http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB]))),
-    http.get('/api/director/v1/projects/project/mosaic', () => HttpResponse.json(ok(mosaic))),
+    http.get('/api/director/v1/projects/project/mosaic', () => HttpResponse.json(ok(unshot))),
     http.post('/api/director/v1/projects/project/feasibility', () => HttpResponse.json(ok({ center: seed.center, target_name: 'M31', nights: 7, rigs: [], warnings: ['No rig has a site yet, so nothing can be timed.'] }))),
     http.get('/api/director/v1/sky/cutout', ({ request }) => {
       cutouts.push(new URL(request.url).search);
@@ -148,7 +151,7 @@ describe('Framing view', () => {
     expect(await screen.findByText('Saved framing revision 1.')).toBeInTheDocument();
     expect(saves).toHaveLength(1);
     expect(saves[0]).toMatchObject({ project_id: 'project', revision: 0, target_name: 'M31', panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 },
-      mosaic: { rows: 2, columns: 1, overlap_percent: 15 }, shown_rig_ids: [rigA.rig.id], survey_id: 'dss2_color' });
+      layout: gridLayout({ rows: 2, columns: 1, overlap_percent: 15 }), shown_rig_ids: [rigA.rig.id], survey_id: 'dss2_color' });
     // The view widened on its own to show the whole footprint.
     expect(saves[0].view_fov_degrees).toBeGreaterThan(5.38);
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
@@ -158,7 +161,7 @@ describe('Framing view', () => {
 
   it('starts from a saved draft, switches survey, and pans without moving the target', async () => {
     const stored: DirectorFramingDraft = { project_id: 'project', revision: 3, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.5 }, position_angle_degrees: 0,
-      mosaic: { rows: 1, columns: 2, overlap_percent: 10 }, panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'finkbeiner_halpha', view_fov_degrees: 6, updated_at_ms: 1 };
+      layout: gridLayout({ rows: 1, columns: 2, overlap_percent: 10 }), panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'finkbeiner_halpha', view_fov_degrees: 6, updated_at_ms: 1 };
     const { cutouts, saves } = fixture(stored); mount();
     expect(await screen.findByLabelText('Target name')).toHaveValue('Heart');
     expect(screen.getByLabelText('Survey')).toHaveValue('finkbeiner_halpha');
@@ -271,7 +274,7 @@ describe('Framing view', () => {
     expect(screen.getByLabelText('Mosaic columns')).toHaveValue(1);
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
     await waitFor(() => expect(saves).toHaveLength(1));
-    expect(saves[0].rig_framings).toEqual([{ rig_id: rigB.rig.id, center: { ra_degrees: 12, dec_degrees: seed.center.dec_degrees }, position_angle_degrees: 90, mosaic: { rows: 1, columns: 3, overlap_percent: 20 }, panel: { width_degrees: 5.38, height_degrees: 3.6 } }]);
+    expect(saves[0].rig_framings).toEqual([{ rig_id: rigB.rig.id, center: { ra_degrees: 12, dec_degrees: seed.center.dec_degrees }, position_angle_degrees: 90, layout: gridLayout({ rows: 1, columns: 3, overlap_percent: 20 }), panel: { width_degrees: 5.38, height_degrees: 3.6 } }]);
     // One tick puts it back in step with the shared center.
     fireEvent.click(within(c925()).getByRole('button', { name: 'Edit' }));
     fireEvent.click(screen.getByLabelText('C925 data follows the shared center'));
@@ -324,7 +327,9 @@ describe('Framing view', () => {
   });
 
   it('draws each solved stack where its plate solve puts it and lists every panel', async () => {
-    fixture(); mount();
+    fixture();
+    server.use(http.get('/api/director/v1/projects/project/mosaic', () => HttpResponse.json(ok(mosaic))));
+    mount();
     await waitFor(() => expect(screen.getByTestId('framing-stacks')).toBeInTheDocument());
     expect(screen.getByText(/r1c1, RedCat 61: 36\/72 frames accepted; Ha stack placed by its solve\./)).toBeInTheDocument();
     expect(screen.getByText(/r2c1, RedCat 61: 0\/72 frames accepted; no stack yet\./)).toBeInTheDocument();
@@ -430,7 +435,7 @@ describe('Framing view', () => {
 
   it('goes back to the saved framing after a search, and only while something differs', async () => {
     const draft: DirectorFramingDraft = { project_id: 'project', revision: 3, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.45 }, position_angle_degrees: 15,
-      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 8, updated_at_ms: 1 };
+      layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 20 }), panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 8, updated_at_ms: 1 };
     fixture(draft); mount();
     expect(await screen.findByLabelText('Target name')).toHaveValue('Heart');
     expect(screen.getByRole('button', { name: 'Back to saved framing' })).toBeDisabled();
@@ -458,7 +463,7 @@ describe('Framing view', () => {
 
   it('opens a draft saved on an online survey on the offline map that stands in for it', async () => {
     const stored: DirectorFramingDraft = { project_id: 'project', revision: 2, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.5 }, position_angle_degrees: 0,
-      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'nsns_ohs', view_fov_degrees: 6, updated_at_ms: 1 };
+      layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 20 }), panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'nsns_ohs', view_fov_degrees: 6, updated_at_ms: 1 };
     const { cutouts } = fixture(stored);
     server.use(http.get('/api/director/v1/sky/surveys', () => HttpResponse.json(ok(offlineSurveys))));
     mount();
@@ -647,7 +652,7 @@ describe('Framing view', () => {
     // A draft saved on an online survey opens on the offline map that
     // stands in for it: that is the view's choice, not an unsaved edit.
     const stored: DirectorFramingDraft = { project_id: 'project', revision: 2, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.5 }, position_angle_degrees: 0,
-      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'nsns_ohs', view_fov_degrees: 6, updated_at_ms: 1 };
+      layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 20 }), panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'nsns_ohs', view_fov_degrees: 6, updated_at_ms: 1 };
     fixture(stored);
     server.use(http.get('/api/director/v1/sky/surveys', () => HttpResponse.json(ok(offlineSurveys))));
     const drafts = mountOnPage();
@@ -664,7 +669,7 @@ describe('Framing view', () => {
   it('keeps a survey picked by hand in this browser and never calls it an edit', async () => {
     // The layer is how the sky is shown, not part of what is planned.
     const stored: DirectorFramingDraft = { project_id: 'project', revision: 2, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.5 }, position_angle_degrees: 0,
-      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 6, updated_at_ms: 1 };
+      layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 20 }), panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 6, updated_at_ms: 1 };
     fixture(stored);
     const drafts = mountOnPage();
     await waitFor(() => expect(screen.getByLabelText('Survey')).toHaveValue('dss2_color'));
@@ -686,7 +691,7 @@ describe('Framing view', () => {
 
   it('shows coordinates and angles to the places that matter, and saves them whole', async () => {
     const stored: DirectorFramingDraft = { project_id: 'project', revision: 2, target_name: 'Medusa Nebula', center: { ra_degrees: 112.26128933333334, dec_degrees: 13.246830369444444 }, position_angle_degrees: 218.8412345,
-      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: null, panel: { width_degrees: 0.5727744486363814, height_degrees: 0.3828274803946109 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 1.6164391178182103, updated_at_ms: 1 };
+      layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 20 }), panel_rig_id: null, panel: { width_degrees: 0.5727744486363814, height_degrees: 0.3828274803946109 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 1.6164391178182103, updated_at_ms: 1 };
     const { saves } = fixture(stored);
     mount();
     expect(await screen.findByLabelText('Right ascension degrees')).toHaveValue(112.26129);
@@ -803,7 +808,7 @@ describe('Framing view', () => {
     // nothing to list, so it must not say the framing is unsaved.
     const rigC = { ...rigA, rig: { ...rigA.rig, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Askar' }, catalog_slug: 'askar', catalog_name: 'Askar 107' };
     const stored: DirectorFramingDraft = { project_id: 'project', revision: 2, target_name: 'M33', center: { ra_degrees: 23.46, dec_degrees: 30.66 }, position_angle_degrees: 0,
-      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 }, shown_rig_ids: [rigA.rig.id, rigC.rig.id], survey_id: 'dss2_color', view_fov_degrees: 6, updated_at_ms: 1 };
+      layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 20 }), panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 }, shown_rig_ids: [rigA.rig.id, rigC.rig.id], survey_id: 'dss2_color', view_fov_degrees: 6, updated_at_ms: 1 };
     fixture(stored);
     server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigC]))));
     const drafts = mountOnPage();
@@ -842,7 +847,7 @@ describe('Framing view', () => {
   const rigC = { ...rigA, rig: { ...rigA.rig, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Askar' }, catalog_slug: 'askar', catalog_name: 'Askar 107',
     field_of_view: { width_degrees: 1.2, height_degrees: 0.8, pixel_scale_arcsec: 1.9, focal_ratio: 7 } };
   const heart: DirectorFramingDraft = { project_id: 'project', revision: 3, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.5 }, position_angle_degrees: 0,
-    mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 6, updated_at_ms: 1 };
+    layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 20 }), panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 6, updated_at_ms: 1 };
   /** The view on the planning page, with the rigs that shoot the plan. */
   function mountWithRigs(shooting: string[]) {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -953,7 +958,7 @@ describe('Framing view', () => {
     expect(screen.queryByTestId('framing-problem')).not.toBeInTheDocument();
     fireEvent.click(button());
     await waitFor(() => expect(saves).toHaveLength(1));
-    expect(saves[0]).toMatchObject({ center: { ra_degrees: 0, dec_degrees: 90 }, mosaic: { columns: 2 }, panel: { width_degrees: 5 } });
+    expect(saves[0]).toMatchObject({ center: { ra_degrees: 0, dec_degrees: 90 }, layout: { panels: [{ id: 'r1c1' }, { id: 'r1c2' }] }, panel: { width_degrees: 5 } });
   });
 
   it('gives the page\'s save bar the reason a framing cannot be saved', async () => {
@@ -1069,8 +1074,8 @@ describe('Framing view', () => {
   it('dims the separate framing of a rig that is off and leaves it in place, and lists one whose rig is gone', async () => {
     const gone = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
     fixture({ ...heart, center: seed.center, view_fov_degrees: 20, panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 }, rig_framings: [
-      { rig_id: rigB.rig.id, center: { ra_degrees: seed.center.ra_degrees, dec_degrees: seed.center.dec_degrees + 4 }, position_angle_degrees: 0, mosaic: { rows: 1, columns: 1, overlap_percent: 0 }, panel: { width_degrees: 1, height_degrees: 1 } },
-      { rig_id: gone, center: null, position_angle_degrees: null, mosaic: { rows: 1, columns: 2, overlap_percent: 0 }, panel: { width_degrees: 1, height_degrees: 1 } },
+      { rig_id: rigB.rig.id, center: { ra_degrees: seed.center.ra_degrees, dec_degrees: seed.center.dec_degrees + 4 }, position_angle_degrees: 0, layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 0 }), panel: { width_degrees: 1, height_degrees: 1 } },
+      { rig_id: gone, center: null, position_angle_degrees: null, layout: gridLayout({ rows: 1, columns: 2, overlap_percent: 0 }), panel: { width_degrees: 1, height_degrees: 1 } },
     ] });
     mountWithRigs([rigA.rig.id]);
     await waitFor(() => expect(screen.getAllByTestId('framing-rig-panels')).toHaveLength(2));
@@ -1089,7 +1094,7 @@ describe('Framing view', () => {
     expect(screen.getByTestId('framing-view-center')).not.toHaveTextContent('00h 42m 44.3s');
     // A rig gone from the list has no card; its framing is listed so it can go.
     const orphans = screen.getByRole('list', { name: 'Framings of rigs not listed' });
-    expect(orphans).toHaveTextContent('Rig not listed · separate framing, 1 × 2');
+    expect(orphans).toHaveTextContent('Rig not listed · separate framing, 2 panels');
     fireEvent.click(within(orphans).getByRole('button', { name: 'Remove' }));
     expect(screen.queryByRole('list', { name: 'Framings of rigs not listed' })).not.toBeInTheDocument();
     expect(screen.getAllByTestId('framing-rig-panels')).toHaveLength(1);
@@ -1136,5 +1141,137 @@ describe('Framing view', () => {
     const east = skyAtStage(viewAt({ ra_degrees: 10, dec_degrees: 0 }, { ra_degrees: 10, dec_degrees: 0 }), 4, 256, 384);
     expect(east.ra_degrees).toBeCloseTo(11, 3);
     expect(moveBy({ ra_degrees: 359.5, dec_degrees: 89.9 }, 1, 1).dec_degrees).toBe(90);
+  });
+});
+
+describe('Mosaic panels', () => {
+  beforeEach(() => {
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:stage'), revokeObjectURL: vi.fn() }));
+    window.localStorage.clear();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** M31 framed with RedCat at 35°, its panels as given. */
+  const placed = (panels: Array<{ id: string; x: number; y: number; locked: boolean }>): DirectorFramingDraft => ({ project_id: 'project', revision: 3, target_name: 'M31', center: seed.center,
+    position_angle_degrees: 35, layout: { min_overlap_percent: 20, panels }, panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 },
+    shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 20, updated_at_ms: 1 });
+  const stageOf = () => {
+    const stage = screen.getByTestId('framing-stage');
+    stage.setPointerCapture = vi.fn();
+    stage.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1024, height: 768, right: 1024, bottom: 768, x: 0, y: 0, toJSON: () => ({}) });
+    Object.defineProperty(stage, 'clientWidth', { value: 1024, configurable: true });
+    return stage;
+  };
+  /** A panel's middle on the stage, from its drawn corners. */
+  const middle = (id: string): [number, number] => {
+    const points = document.querySelector(`[data-panel-id='${id}'] polygon`)!.getAttribute('points')!.split(' ').map(pair => pair.split(',').map(Number));
+    return [points.reduce((sum, [x]) => sum + x, 0) / 4, points.reduce((sum, [, y]) => sum + y, 0) / 4];
+  };
+
+  it('holds a panel with frames where they were shot and adds panels round it', async () => {
+    const { saves } = fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }]));
+    // The framed target has 40 frames: it is locked, and so are the center and angle.
+    server.use(http.get('/api/director/v1/projects/project/mosaic', () => HttpResponse.json(ok({ ...mosaic, panels: [mosaic.panels[0]] }))));
+    mount();
+    await waitFor(() => expect(document.querySelector("[data-panel-id='r1c1']")).toHaveAttribute('data-panel-state', 'locked'));
+    expect(screen.getByLabelText('Right ascension degrees')).toBeDisabled();
+    expect(screen.getByLabelText('Position angle degrees')).toBeDisabled();
+    expect(screen.getByTestId('framing-held')).toHaveTextContent('Locked panels hold the center and camera angle');
+    expect(screen.queryByLabelText('Mosaic rows')).not.toBeInTheDocument();
+    expect(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /r1c1/ })).toHaveTextContent('40 frames');
+    // A column east, then a row north across both.
+    fireEvent.click(screen.getByRole('button', { name: "Add a column on the mosaic's east side" }));
+    expect(await screen.findByText(/Added p2 on the E side/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: "Add a row on the mosaic's north side" }));
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(4);
+    expect(screen.queryByTestId('framing-issues')).not.toBeInTheDocument();
+    // Undo takes the row back, redo puts it again.
+    fireEvent.click(screen.getByRole('button', { name: 'Undo panel change' }));
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Redo panel change' }));
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(4);
+    fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    const [first, east, ...north] = saves[0].layout.panels;
+    expect(first).toEqual({ id: 'r1c1', x: 0, y: 0, locked: true });
+    // At 35° east is the camera's left: 80% of a panel that way.
+    expect(east.id).toBe('p2'); expect(east.x).toBeCloseTo(-0.8, 9); expect(east.y).toBe(0);
+    expect(north.map(panel => panel.y.toFixed(3))).toEqual(['0.800', '0.800']);
+    expect(saves[0].center).toEqual(seed.center);
+  });
+
+  it('drags one panel, settles it at the minimum, refuses a thin overlap and places it with Alt', async () => {
+    const { saves } = fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: true }, { id: 'p2', x: -0.8, y: 0, locked: false }]));
+    mount();
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2));
+    fireEvent.click(screen.getByRole('button', { name: 'Drag moves one panel' }));
+    const stage = stageOf();
+    // The locked panel stays put however it is dragged: the drag looks
+    // around instead, so both panels slide together.
+    const [lx, ly] = middle('r1c1');
+    const apart = middle('p2')[0] - lx;
+    fireEvent.pointerDown(stage, pointer(lx, ly));
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: lx + 60, clientY: ly });
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: lx + 60, clientY: ly });
+    expect(Math.abs(middle('p2')[0] - middle('r1c1')[0] - apart)).toBeLessThan(5);
+    expect(screen.getByText(/r1c1 is locked/)).toBeInTheDocument();
+    // From the locked panel's middle to p2's is 80% of a panel width on the stage.
+    const [ax, ay] = middle('r1c1');
+    const [bx, by] = middle('p2');
+    const along = [(bx - ax) / 0.8, (by - ay) / 0.8];
+    // A little further out is pulled back to the minimum overlap.
+    const nudge = (share: number) => [bx + along[0] * share, by + along[1] * share];
+    fireEvent.pointerDown(stage, pointer(bx, by));
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: nudge(0.02)[0], clientY: nudge(0.02)[1] });
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: nudge(0.02)[0], clientY: nudge(0.02)[1] });
+    expect(middle('p2')[0]).toBeCloseTo(bx, 1);
+    // Well past it leaves 8% overlap: refused, and the panel goes back.
+    fireEvent.pointerDown(stage, pointer(bx, by));
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: nudge(0.12)[0], clientY: nudge(0.12)[1] });
+    expect(document.querySelector("[data-panel-id='p2']")).toHaveAttribute('data-panel-state', 'invalid');
+    expect(screen.getByTestId('framing-overlap')).toHaveAttribute('data-short', 'true');
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: nudge(0.12)[0], clientY: nudge(0.12)[1] });
+    expect(screen.getByText(/Not placed: r1c1 and p2 overlap by only 8%/)).toBeInTheDocument();
+    expect(middle('p2')[0]).toBeCloseTo(bx, 1);
+    // Alt places it anyway, flagged.
+    fireEvent.pointerDown(stage, pointer(bx, by));
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: nudge(0.12)[0], clientY: nudge(0.12)[1], altKey: true });
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: nudge(0.12)[0], clientY: nudge(0.12)[1], altKey: true });
+    expect(screen.getByText(/Placed p2 off the rule/)).toBeInTheDocument();
+    expect(screen.getByTestId('framing-issues')).toHaveTextContent('r1c1 and p2 overlap by only 8%, under the 20% minimum');
+    fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].layout.panels[1].x).toBeCloseTo(-0.92, 2);
+  });
+
+  it('nudges, locks, removes and undoes the chosen panel from the keyboard', async () => {
+    fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }, { id: 'p2', x: -0.8, y: 0, locked: false }]));
+    mount();
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2));
+    fireEvent.click(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /p2/ }));
+    expect(document.querySelector("[data-panel-id='p2']")).toHaveAttribute('data-selected', 'true');
+    expect(screen.getAllByTestId('framing-add-handle')).toHaveLength(8);
+    const stage = stageOf();
+    const before = middle('p2');
+    fireEvent.keyDown(stage, { key: 'ArrowUp', shiftKey: true });
+    expect(middle('p2')).not.toEqual(before);
+    fireEvent.keyDown(stage, { key: 'z', ctrlKey: true });
+    expect(middle('p2')[0]).toBeCloseTo(before[0], 3);
+    fireEvent.keyDown(stage, { key: 'l' });
+    expect(document.querySelector("[data-panel-id='p2']")).toHaveAttribute('data-panel-state', 'locked');
+    fireEvent.keyDown(stage, { key: 'Delete' });
+    expect(screen.getByText('p2 is locked: unlock it to remove it.')).toBeInTheDocument();
+    fireEvent.keyDown(stage, { key: 'l' });
+    fireEvent.keyDown(stage, { key: 'Delete' });
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1);
+    fireEvent.keyDown(stage, { key: 'z', ctrlKey: true });
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2);
+    // A + on the chosen panel's side adds one there.
+    fireEvent.click(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /r1c1/ }));
+    const handle = screen.getAllByTestId('framing-add-handle')[1].getAttribute('transform')!.match(/translate\(([-\d.]+) ([-\d.]+)\)/)!.slice(1).map(Number);
+    fireEvent.pointerDown(stage, pointer(handle[0], handle[1]));
+    fireEvent.pointerUp(stage, pointer(handle[0], handle[1]));
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(3);
+    expect(screen.getByText('Added p3 beside r1c1.')).toBeInTheDocument();
   });
 });

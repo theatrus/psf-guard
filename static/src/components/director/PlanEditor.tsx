@@ -8,6 +8,7 @@ import NumberInput from '../NumberInput';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorContribution, DirectorFrameCounts, DirectorGoal, DirectorObjective, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplate } from '../../api/directorTypes';
+import { layoutOf } from './framingModel';
 import { PURPOSES, bandpassKind, bandpassOptions, bindOwnTemplates, choiceFrom, convertGoal, coverageGaps, goalFor, speedAdjustedHours, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, libraryChoice, libraryFor, newContribution, newLibraryContribution, newObjective, objectiveName, onePartEach, ownTwin, panelIds, partStatus, panelsByRig, planProblem, rigPanels, rigStatus, rigTotals, samePlan, shootingRigs, templateValue, templatesFor } from './planModel';
 import './PlanEditor.css';
 
@@ -57,7 +58,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
   const rigs = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
   // The framing's grid names the panels a rig can own.
   const framing = useQuery({ queryKey: ['directorFraming', projectId], queryFn: () => apiClient.getDirectorFramingDraft(projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
-  const sharedPanels = useMemo(() => panelIds(framing.data?.draft?.mosaic), [framing.data]);
+  const sharedPanels = useMemo(() => framing.data?.draft ? panelIds(layoutOf(framing.data.draft)) : [], [framing.data]);
   const rigList = useMemo(() => rigs.data ?? [], [rigs.data]);
   const templateQueries = useQueries({ queries: rigList.map(rig => ({
     queryKey: ['directorTemplates', rig.catalog_slug], queryFn: () => apiClient.getDirectorTemplates(rig.catalog_slug), retry: retryWhenBusy, retryDelay: 700, staleTime: 60_000,

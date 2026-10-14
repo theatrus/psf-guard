@@ -18,6 +18,12 @@
   --framing-rig-3: #c9a7ff;
   --framing-rig-3-ink: #ebe0ff;
   --framing-handle: #ffd166;
+  /* Mosaic panels: one held where its frames were shot, the one chosen,
+     one short of the minimum overlap, and what two panels share. */
+  --framing-panel-locked: #eef5ff;
+  --framing-panel-chosen: var(--framing-handle);
+  --framing-panel-invalid: #ff7a6b;
+  --framing-overlap: #7be495;
   --sky-star: rgb(235 240 255 / 90%);
   --sky-figure: rgb(150 175 235 / 40%);
   --sky-figure-name: rgb(170 185 230 / 55%);
@@ -223,3 +229,51 @@
 .framing-controls input[aria-invalid='true'] { border-color: var(--color-error-light); }
 .framing-orphans { display: grid; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--color-text-secondary); }
 .framing-orphans li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+
+/* Mosaic panels on the sky. A locked panel is drawn solid in the locked ink
+   with a lock beside its name; the chosen one is outlined in the handle's
+   colour; one short of the minimum overlap is dashed in the warning colour.
+   The chosen panel's overlaps are shaded with their share, and a + on each
+   side and corner adds a panel there. */
+.framing-panel[data-panel-state='locked'] polygon { stroke: var(--framing-panel-locked); stroke-width: 3; fill: color-mix(in srgb, var(--framing-panel-locked) 14%, transparent); }
+.framing-panel[data-panel-state='invalid'] polygon { stroke: var(--framing-panel-invalid); stroke-dasharray: 9 6; fill: color-mix(in srgb, var(--framing-panel-invalid) 12%, transparent); }
+.framing-panel[data-selected='true'] polygon { stroke: var(--framing-panel-chosen); stroke-width: 4; }
+.framing-panel-lock rect { fill: var(--framing-panel-locked); }
+.framing-panel-lock path { fill: none; stroke: var(--framing-panel-locked); stroke-width: 2; }
+.framing-overlap polygon { fill: color-mix(in srgb, var(--framing-overlap) 28%, transparent); stroke: var(--framing-overlap); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.framing-overlap[data-short='true'] polygon { fill: color-mix(in srgb, var(--framing-panel-invalid) 35%, transparent); stroke: var(--framing-panel-invalid); }
+.framing-overlap text { fill: var(--framing-ink); font-size: 17px; font-weight: 600; paint-order: stroke; stroke: var(--color-halo); stroke-width: 4px; }
+.framing-overlap[data-short='true'] text { fill: var(--framing-panel-invalid); }
+.framing-add-handle circle { fill: color-mix(in srgb, var(--framing-panel-chosen) 35%, transparent); stroke: var(--framing-panel-chosen); stroke-width: 2; }
+.framing-add-handle path { stroke: var(--framing-ink); stroke-width: 2.5; stroke-linecap: round; }
+.framing-stage[data-drag='panel'] { cursor: move; }
+.framing-stage:focus-visible { outline: 2px solid var(--state-focus-border); outline-offset: 2px; }
+
+/* The panel editor beside the sky. */
+.framing-mosaic { display: flex; flex-direction: column; gap: 10px; }
+.framing-mosaic-note { margin: 4px 0 0; font-size: 12px; }
+.framing-regrid summary { cursor: pointer; font-size: 13px; color: var(--color-text-secondary); }
+.framing-extend { display: flex; flex-direction: column; gap: 6px; }
+.framing-extend-head, .framing-panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; }
+.framing-extend-head .framing-catalogs-title, .framing-panel-head .framing-catalogs-title { flex-basis: auto; }
+.framing-scope { display: inline-flex; border: 1px solid var(--color-border-tertiary); border-radius: 6px; overflow: hidden; }
+.director-page .framing-scope button { min-height: 26px; padding: 1px 9px; font-size: 12px; border: 0; border-radius: 0; background: transparent; color: var(--color-text-secondary); }
+.director-page .framing-scope button + button { border-left: 1px solid var(--color-border-tertiary); }
+.director-page .framing-scope button[aria-pressed='true'] { background: var(--state-on-bg); color: var(--color-text-primary); box-shadow: inset 0 0 0 1px var(--state-on-border); }
+.framing-extend-body { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
+.framing-pad { display: grid; grid-template-columns: repeat(3, 42px); grid-template-rows: repeat(3, 32px); gap: 4px; }
+.director-page .framing-pad button { min-height: 0; height: 32px; padding: 0; font-size: 12px; font-weight: 600; justify-content: center; }
+.framing-pad-center { display: flex; align-items: center; justify-content: center; overflow: hidden; font-size: 11px; color: var(--color-text-secondary); border: 1px dashed var(--color-border-tertiary); border-radius: 4px; }
+.framing-extend-side { display: flex; flex: 1; flex-direction: column; gap: 6px; min-width: 8rem; }
+.director-page .framing-extend-side button { min-height: 28px; padding: 2px 10px; font-size: 13px; }
+.framing-history { display: inline-flex; gap: 4px; }
+.director-page .framing-history button { width: 30px; min-height: 26px; height: 26px; padding: 0; justify-content: center; }
+.framing-panel-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.director-page button.framing-panel-pick { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 2px 9px; font-size: 12px; }
+.director-page button.framing-panel-pick[aria-pressed='true'] { background: var(--state-on-bg); border-color: var(--state-on-border); }
+.director-page button.framing-panel-pick[aria-invalid='true'] { border-color: var(--color-error-light); }
+.framing-panel-pick small { color: var(--color-text-muted); }
+.framing-chosen { padding-left: 10px; border-left: 3px solid var(--color-border-tertiary); }
+.framing-chosen p { margin: 0; font-size: 13px; }
+.framing-chosen .director-actions { margin-top: 6px; gap: 6px; }
+.framing-issues { margin: 0; padding-left: 18px; font-size: 13px; color: var(--color-error-light); }

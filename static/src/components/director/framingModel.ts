@@ -1,7 +1,8 @@
-import type { DirectorFootprint, DirectorFramingDraft, DirectorFramingPreview, DirectorFramingRequest, DirectorMosaic, DirectorOffset, DirectorPanelSize, DirectorRigProfileSummary, DirectorSkyPosition, DirectorSurvey, DirectorRigFraming} from '../../api/directorTypes';
+import type { DirectorFootprint, DirectorFramingDraft, DirectorFramingPreview, DirectorFramingRequest, DirectorLayout, DirectorMosaic, DirectorOffset, DirectorPanelSize, DirectorRigProfileSummary, DirectorSkyPosition, DirectorSurvey, DirectorRigFraming} from '../../api/directorTypes';
 import type { SkyPreview } from '../../api/types';
 import { formatDecShort, formatRaShort, galacticBandQuads, tanPixelToSky } from '../../utils/skyProjection';
 import { BRIGHT_STARS, CONSTELLATION_LINES, CONSTELLATION_NAMES } from '../../data/skyBackdrop';
+import { cameraToPlane, gridLayout, layoutCells, layoutExtent, layoutIssues, layoutStructureProblem, singleLayout } from './mosaicLayout';
 
 /** The stage's logical pixels; CSS scales the drawing to the element. The
  *  longer side is always 1024, so a 4:3 stage is 1024 × 768. */
@@ -29,7 +30,8 @@ export interface FramingState {
   targetName: string;
   center: DirectorSkyPosition;
   positionAngle: number;
-  mosaic: DirectorMosaic;
+  /** The shared framing's panels, placed one by one around the center. */
+  layout: DirectorLayout;
   panelRigId: string | null;
   panel: DirectorPanelSize | null;
   shownRigIds: string[];
@@ -40,14 +42,23 @@ export interface FramingState {
   rigFramings: DirectorRigFraming[];
 }
 
+/** A draft's panels; one written before panels were placed one by one
+ *  carries a grid instead, which makes the same panels in the same places. */
+export function layoutOf(source: { layout?: DirectorLayout | null; mosaic?: DirectorMosaic | null }): DirectorLayout {
+  return source.layout ?? (source.mosaic ? gridLayout(source.mosaic) : singleLayout());
+}
+
 export function stateFromDraft(draft: DirectorFramingDraft): FramingState {
   // Angles are read through the same rounding every edit uses, so one saved
   // with float drift before is not an edit when a turn comes back to it.
   return {
     targetName: draft.target_name, center: draft.center, positionAngle: normaliseAngle(draft.position_angle_degrees),
-    mosaic: draft.mosaic, panelRigId: draft.panel_rig_id, panel: draft.panel, shownRigIds: draft.shown_rig_ids,
+    layout: layoutOf(draft), panelRigId: draft.panel_rig_id, panel: draft.panel, shownRigIds: draft.shown_rig_ids,
     surveyId: draft.survey_id, viewCenter: draft.center, viewFov: clampFov(draft.view_fov_degrees),
-    rigFramings: (draft.rig_framings ?? []).map(own => own.position_angle_degrees === null ? own : { ...own, position_angle_degrees: normaliseAngle(own.position_angle_degrees) }),
+    rigFramings: (draft.rig_framings ?? []).map(own => {
+      const read = { ...own, layout: layoutOf(own) };
+      return read.position_angle_degrees === null ? read : { ...read, position_angle_degrees: normaliseAngle(read.position_angle_degrees) };
+    }),
   };
 }
 
@@ -75,9 +86,8 @@ export const MAX_EXTENT_DEGREES = 30;
 export const MIN_PANEL_DEGREES = 0.01;
 
 /** The mosaic's extent along the camera axes, as the core computes it. */
-export function mosaicExtent(panel: DirectorPanelSize, mosaic: DirectorMosaic): DirectorPanelSize {
-  const [stepX, stepY] = mosaicStep(panel, mosaic);
-  return { width_degrees: panel.width_degrees + stepX * (mosaic.columns - 1), height_degrees: panel.height_degrees + stepY * (mosaic.rows - 1) };
+export function mosaicExtent(panel: DirectorPanelSize, layout: DirectorLayout): DirectorPanelSize {
+  return layoutExtent(panel, layout);
 }
 
 /** Something the server would refuse to save, named by the field it is in. */
@@ -88,18 +98,20 @@ export interface FramingProblem {
   message: string;
 }
 
-function layoutProblems(prefix: string, who: string, center: DirectorSkyPosition, angle: number, panel: DirectorPanelSize | null, mosaic: DirectorMosaic): FramingProblem[] {
+function layoutProblems(prefix: string, who: string, center: DirectorSkyPosition, angle: number, panel: DirectorPanelSize | null, layout: DirectorLayout): FramingProblem[] {
   const problems: FramingProblem[] = [];
   const say = (field: string, message: string) => problems.push({ field: `${prefix}${field}`, message: who ? `${who}${message}` : message[0].toUpperCase() + message.slice(1) });
   const within = (value: number, low: number, high: number) => Number.isFinite(value) && value >= low && value <= high;
   if (!within(center.ra_degrees, 0, 360) || center.ra_degrees >= 360 || !within(center.dec_degrees, -90, 90)) say('center', 'RA 0 to 360°, Dec −90 to 90°');
   if (!within(angle, 0, 360) || angle >= 360) say('angle', 'camera angle 0 to 360°');
-  if (![mosaic.rows, mosaic.columns].every(n => Number.isInteger(n) && n >= 1 && n <= 16) || !within(mosaic.overlap_percent, 0, 90)) say('mosaic', '1 to 16 rows and columns, overlap up to 90%');
+  const structure = layoutStructureProblem(layout);
+  if (structure) say('mosaic', structure);
   if (panel) {
     if (![panel.width_degrees, panel.height_degrees].every(side => within(side, MIN_PANEL_DEGREES, MAX_EXTENT_DEGREES))) say('panel', `panel sides ${MIN_PANEL_DEGREES}° to ${MAX_EXTENT_DEGREES}°`);
-    else {
-      const extent = mosaicExtent(panel, mosaic);
+    else if (!structure) {
+      const extent = mosaicExtent(panel, layout);
       if (extent.width_degrees > MAX_EXTENT_DEGREES || extent.height_degrees > MAX_EXTENT_DEGREES) say('mosaic', `mosaic ${formatDegrees(extent.width_degrees)} × ${formatDegrees(extent.height_degrees)}, over ${MAX_EXTENT_DEGREES}°`);
+      else if (layout.panels.some(p => Math.abs(p.x * panel.width_degrees) > MAX_EXTENT_DEGREES || Math.abs(p.y * panel.height_degrees) > MAX_EXTENT_DEGREES)) say('mosaic', `a panel more than ${MAX_EXTENT_DEGREES}° from the center`);
     }
   }
   return problems;
@@ -109,9 +121,9 @@ function layoutProblems(prefix: string, who: string, center: DirectorSkyPosition
  *  field can say so before a save, not after a bare 400. A separate framing
  *  is sized from its rig's field when no size is typed, as activation sizes it. */
 export function framingProblems(state: FramingState, rigs: DirectorRigProfileSummary[], rigName: (id: string) => string = () => 'A rig'): FramingProblem[] {
-  const problems = layoutProblems('', '', state.center, state.positionAngle, state.panel, state.mosaic);
+  const problems = layoutProblems('', '', state.center, state.positionAngle, state.panel, state.layout);
   for (const own of state.rigFramings) {
-    problems.push(...layoutProblems(`rig:${own.rig_id}:`, `${rigName(own.rig_id)}: `, own.center ?? state.center, own.position_angle_degrees ?? state.positionAngle, own.panel ?? panelForRig(rigs, own.rig_id), own.mosaic));
+    problems.push(...layoutProblems(`rig:${own.rig_id}:`, `${rigName(own.rig_id)}: `, own.center ?? state.center, own.position_angle_degrees ?? state.positionAngle, own.panel ?? panelForRig(rigs, own.rig_id), own.layout));
   }
   return problems;
 }
@@ -119,7 +131,7 @@ export function framingProblems(state: FramingState, rigs: DirectorRigProfileSum
 export function stateFromSeed(seed: FramingSeed, defaultSurvey: string): FramingState {
   return {
     targetName: seed.name, center: seed.center, positionAngle: seed.position_angle_degrees,
-    mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panelRigId: null, panel: null, shownRigIds: [],
+    layout: singleLayout(20), panelRigId: null, panel: null, shownRigIds: [],
     surveyId: defaultSurvey, viewCenter: seed.center, viewFov: 4, rigFramings: [],
   };
 }
@@ -127,7 +139,7 @@ export function stateFromSeed(seed: FramingSeed, defaultSurvey: string): Framing
 export function draftFromState(state: FramingState, projectId: string, revision: number): DirectorFramingDraft {
   return {
     project_id: projectId, revision, target_name: state.targetName.trim(), center: state.center,
-    position_angle_degrees: state.positionAngle, mosaic: state.mosaic, panel_rig_id: state.panelRigId,
+    position_angle_degrees: state.positionAngle, layout: state.layout, panel_rig_id: state.panelRigId,
     panel: state.panel, shown_rig_ids: state.shownRigIds, survey_id: state.surveyId,
     // The view's width is the view's own: it is kept with the draft but
     // never part of the layout, and always within what the stage shows.
@@ -138,13 +150,13 @@ export function draftFromState(state: FramingState, projectId: string, revision:
 /** What one rig shoots, the way the server lays it out: its own framing when
  *  it has one (its field standing in for a size not set by hand), else the
  *  shared framing. Null when no panel size is known. */
-export function rigLayout(state: FramingState, rigId: string, rigs: DirectorRigProfileSummary[]): { center: DirectorSkyPosition; positionAngle: number; panel: DirectorPanelSize; mosaic: DirectorMosaic; own: boolean } | null {
+export function rigLayout(state: FramingState, rigId: string, rigs: DirectorRigProfileSummary[]): { center: DirectorSkyPosition; positionAngle: number; panel: DirectorPanelSize; layout: DirectorLayout; own: boolean } | null {
   const own = state.rigFramings.find(entry => entry.rig_id === rigId);
   if (own) {
     const panel = own.panel ?? panelForRig(rigs, rigId);
-    return panel ? { center: own.center ?? state.center, positionAngle: own.position_angle_degrees ?? state.positionAngle, panel, mosaic: own.mosaic, own: true } : null;
+    return panel ? { center: own.center ?? state.center, positionAngle: own.position_angle_degrees ?? state.positionAngle, panel, layout: own.layout, own: true } : null;
   }
-  return state.panel ? { center: state.center, positionAngle: state.positionAngle, panel: state.panel, mosaic: state.mosaic, own: false } : null;
+  return state.panel ? { center: state.center, positionAngle: state.positionAngle, panel: state.panel, layout: state.layout, own: false } : null;
 }
 
 /** The geometry of every rig framed on its own, for the stage. */
@@ -152,7 +164,7 @@ export function rigGeometries(state: FramingState, rigs: DirectorRigProfileSumma
   return state.rigFramings.flatMap(own => {
     const layout = rigLayout(state, own.rig_id, rigs);
     if (!layout) return [];
-    return [{ rigId: own.rig_id, layout, geometry: framingGeometry({ center: layout.center, position_angle_degrees: layout.positionAngle, panel: layout.panel, mosaic: layout.mosaic, overlays: [], view: { center: state.viewCenter, rotation_degrees: 0 } }) }];
+    return [{ rigId: own.rig_id, layout, geometry: framingGeometry({ center: layout.center, position_angle_degrees: layout.positionAngle, panel: layout.panel, layout: layout.layout, overlays: [], view: { center: state.viewCenter, rotation_degrees: 0 } }) }];
   });
 }
 
@@ -166,7 +178,7 @@ export function panelForRig(rigs: DirectorRigProfileSummary[], rigId: string | n
 export function previewRequest(state: FramingState, rigs: DirectorRigProfileSummary[]): DirectorFramingRequest | null {
   if (!state.panel) return null;
   return {
-    center: state.center, position_angle_degrees: state.positionAngle, panel: state.panel, mosaic: state.mosaic,
+    center: state.center, position_angle_degrees: state.positionAngle, panel: state.panel, layout: state.layout,
     // A rig framed on its own is drawn as its own grid, not as an overlay.
     overlays: state.shownRigIds.filter(id => !state.rigFramings.some(own => own.rig_id === id)).flatMap(id => {
       const size = panelForRig(rigs, id);
@@ -360,20 +372,14 @@ function rectangle(center: DirectorOffset, size: DirectorPanelSize, angleDegrees
   return [corner(-1, 1), corner(-1, -1), corner(1, -1), corner(1, 1)];
 }
 
-/** The mosaic's step between panel centers along the camera axes. */
-function mosaicStep(panel: DirectorPanelSize, mosaic: DirectorMosaic): [number, number] {
-  const keep = 1 - mosaic.overlap_percent / 100;
-  return [panel.width_degrees * keep, panel.height_degrees * keep];
-}
-
 /** The same geometry `POST /framing/preview` returns, computed here so the
- *  rectangle follows the pointer: panels laid out on the tangent plane at the
- *  target, corners taken to the sky, then onto the view's plane. A footprint
- *  past the view plane's horizon has no view corners. The server recomputes
- *  this from the saved draft when it activates, so nothing depends on the
- *  browser's copy being kept. */
+ *  rectangles follow the pointer: each panel placed on the tangent plane at
+ *  the target, corners taken to the sky, then onto the view's plane. A
+ *  footprint past the view plane's horizon has no view corners. The server
+ *  recomputes this from the saved draft when it activates, so nothing
+ *  depends on the browser's copy being kept. */
 export function framingGeometry(request: DirectorFramingRequest): DirectorFramingPreview {
-  const { center, panel, mosaic } = request;
+  const { center, panel, layout } = request;
   const view = request.view;
   const toView = (position: DirectorSkyPosition): DirectorOffset | null => {
     if (!view) return null;
@@ -387,26 +393,18 @@ export function framingGeometry(request: DirectorFramingRequest): DirectorFramin
     const mapped = view ? corners.map(toView) : null;
     return { id, center: deprojectFrom(center, at), corners, view_corners: mapped && mapped.every(Boolean) ? mapped as DirectorFootprint['view_corners'] : null };
   };
-  const [stepX, stepY] = mosaicStep(panel, mosaic);
-  const rad = (request.position_angle_degrees * Math.PI) / 180;
-  const up = [Math.sin(rad), Math.cos(rad)];
-  const right = [-Math.cos(rad), Math.sin(rad)];
-  const panels: DirectorFramingPreview['panels'] = [];
-  for (let row = 0; row < mosaic.rows; row += 1) {
-    // Row one is the top of the mosaic as the camera sees it.
-    const dy = ((mosaic.rows - 1) / 2 - row) * stepY;
-    for (let column = 0; column < mosaic.columns; column += 1) {
-      const dx = (column - (mosaic.columns - 1) / 2) * stepX;
-      const at: DirectorOffset = [dx * right[0] + dy * up[0], dx * right[1] + dy * up[1]];
-      panels.push({ row: row + 1, column: column + 1, ...footprint(`r${row + 1}c${column + 1}`, at, panel, request.position_angle_degrees) });
-    }
-  }
+  const cells = layoutCells(layout);
+  const panels: DirectorFramingPreview['panels'] = layout.panels.map((placement, index) => ({
+    row: cells[index][0], column: cells[index][1], locked: placement.locked,
+    ...footprint(placement.id, cameraToPlane(placement.x, placement.y, panel, request.position_angle_degrees), panel, request.position_angle_degrees),
+  }));
   return {
     schema_version: 1,
     panels,
     overlays: request.overlays.map(overlay => footprint(overlay.id, [0, 0], overlay.size, overlay.position_angle_degrees)),
-    extent: { width_degrees: panel.width_degrees + stepX * (mosaic.columns - 1), height_degrees: panel.height_degrees + stepY * (mosaic.rows - 1) },
+    extent: layoutExtent(panel, layout),
     view_center_offset: view ? toView(center) : null,
+    issues: layoutIssues(layout),
   };
 }
 
@@ -553,7 +551,11 @@ export function handleSky(center: DirectorSkyPosition, positionAngle: number, ha
 /** The framing's rotation handle on the sky: past the top edge of the whole
  *  mosaic, along the camera's up direction, a few per cent of the view out. */
 export function rotationHandleSky(state: FramingState, extent: DirectorPanelSize, viewFov = state.viewFov): DirectorSkyPosition {
-  return handleSky(state.center, state.positionAngle, extent.height_degrees / 2, Math.max(0.02, viewFov * 0.03));
+  // Above the top edge of the highest panel, which for a grid is half the extent.
+  const top = state.panel && state.layout.panels.length > 0
+    ? (Math.max(...state.layout.panels.map(panel => panel.y)) + 0.5) * state.panel.height_degrees
+    : extent.height_degrees / 2;
+  return handleSky(state.center, state.positionAngle, top, Math.max(0.02, viewFov * 0.03));
 }
 
 /** How much wider than its footprint a fitted view is. */

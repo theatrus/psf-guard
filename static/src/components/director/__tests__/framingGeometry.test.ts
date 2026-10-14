@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { DirectorFramingPreview, DirectorFramingRequest } from '../../../api/directorTypes';
 import { DEFAULT_STAGE, MAX_VIEW_FOV, angleAt, deprojectFrom, draftFromState, fitViewFov, framingBackdrop, framingGeometry, framingGraticule, framingProblems, gridSteps, handleSky, compassDirections, deprojectOn, normaliseAngle, offsetFrom, preferredSurveyId, projectOn, roundRa, rotationHandleSky, stageDeproject, stateFromDraft, stateFromSeed, tileFor, tileSize, viewLeftTile, stageFor, stageProject, tileMatrix, toStage, trueWidth, viewAt } from '../framingModel';
+import { gridLayout } from '../mosaicLayout';
 
 /** Written by `crates/director-core/tests/framing_fixture.rs`; the core keeps
  *  reproducing it, so this test pins the browser port to the server. */
@@ -79,7 +80,7 @@ describe('the rotation handle', () => {
       expect(Math.min(wrapped, 360 - wrapped)).toBeLessThan(1e-6);
       // On the stage, the handle sits where the rectangle's top edge points, from any view center.
       for (const view of [center, { ra_degrees: 50, dec_degrees: 58 }, { ra_degrees: 20, dec_degrees: 70 }]) {
-        const geometry = framingGeometry({ center, position_angle_degrees: angle, panel: { width_degrees: 2, height_degrees: 1.5 }, mosaic: { rows: 1, columns: 1, overlap_percent: 0 }, overlays: [], view: { center: view, rotation_degrees: 0 } });
+        const geometry = framingGeometry({ center, position_angle_degrees: angle, panel: { width_degrees: 2, height_degrees: 1.5 }, layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 0 }), overlays: [], view: { center: view, rotation_degrees: 0 } });
         const [topLeft, , , topRight] = geometry.panels[0].corners;
         const mid = { ra_degrees: (topLeft.ra_degrees + topRight.ra_degrees) / 2, dec_degrees: (topLeft.dec_degrees + topRight.dec_degrees) / 2 };
         const c = toStage(stageProject(view, center)!, 6); const h = toStage(stageProject(view, handle)!, 6); const m = toStage(stageProject(view, mid)!, 6);
@@ -129,7 +130,7 @@ describe('the chart under the framing', () => {
 describe('the anchored window', () => {
   const target = { ra_degrees: 38.2, dec_degrees: 61.45 };
   it('keeps a footprint\'s bearing when the window slides over one plane', () => {
-    const geometry = framingGeometry({ center: target, position_angle_degrees: 35, panel: { width_degrees: 2, height_degrees: 1.5 }, mosaic: { rows: 1, columns: 1, overlap_percent: 0 }, overlays: [], view: null });
+    const geometry = framingGeometry({ center: target, position_angle_degrees: 35, panel: { width_degrees: 2, height_degrees: 1.5 }, layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 0 }), overlays: [], view: null });
     const corners = geometry.panels[0].corners;
     const bearing = (view: ReturnType<typeof viewAt>) => {
       const [a, b] = corners.map(c => projectOn(view, c)!);
@@ -236,7 +237,7 @@ describe('what the server takes', () => {
   it('reads a saved angle through the same rounding', () => {
     const seed = stateFromSeed({ name: 'M31', center: { ra_degrees: 10.68, dec_degrees: 41.27 }, position_angle_degrees: 0 }, 'dss2_color');
     const draft = { ...draftFromState(seed, 'project', 1), position_angle_degrees: 35.10000000000002, view_fov_degrees: 180,
-      rig_framings: [{ rig_id: 'r', center: null, position_angle_degrees: 359.9999999999, mosaic: seed.mosaic, panel: null }] };
+      rig_framings: [{ rig_id: 'r', center: null, position_angle_degrees: 359.9999999999, layout: seed.layout, panel: null }] };
     const state = stateFromDraft(draft);
     expect(state.positionAngle).toBe(35.1);
     expect(state.rigFramings[0].position_angle_degrees).toBe(0);
@@ -251,14 +252,14 @@ describe('what the server takes', () => {
     const base = { ...stateFromSeed({ name: 'M31', center: { ra_degrees: 10.68, dec_degrees: 41.27 }, position_angle_degrees: 0 }, 'dss2_color'), panelRigId: rig.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 } };
     expect(framingProblems(base, [rig])).toEqual([]);
     // Eight RedCat columns at 20% overlap span 35.5°: past the core's 30°.
-    const wide = { ...base, mosaic: { rows: 1, columns: 8, overlap_percent: 20 } };
+    const wide = { ...base, layout: gridLayout({ rows: 1, columns: 8, overlap_percent: 20 }) };
     expect(framingProblems(wide, [rig])).toEqual([{ field: 'mosaic', message: 'Mosaic 35.51° × 3.60°, over 30°' }]);
     expect(framingProblems({ ...base, panel: { width_degrees: 0, height_degrees: 1 } }, [rig]).map(problem => problem.field)).toEqual(['panel']);
     expect(framingProblems({ ...base, panel: { width_degrees: 31, height_degrees: 1 } }, [rig]).map(problem => problem.field)).toEqual(['panel']);
     expect(framingProblems({ ...base, center: { ra_degrees: 360, dec_degrees: 0 } }, [rig]).map(problem => problem.field)).toEqual(['center']);
     expect(framingProblems({ ...base, positionAngle: 360 }, [rig]).map(problem => problem.field)).toEqual(['angle']);
     // A separate framing with no size of its own is sized from its rig's field.
-    const own = { ...base, rigFramings: [{ rig_id: rig.rig.id, center: null, position_angle_degrees: null, mosaic: { rows: 1, columns: 8, overlap_percent: 20 }, panel: null }] };
+    const own = { ...base, rigFramings: [{ rig_id: rig.rig.id, center: null, position_angle_degrees: null, layout: gridLayout({ rows: 1, columns: 8, overlap_percent: 20 }), panel: null }] };
     expect(framingProblems(own, [rig], () => 'RedCat 61')).toEqual([{ field: `rig:${rig.rig.id}:mosaic`, message: 'RedCat 61: mosaic 35.51° × 3.60°, over 30°' }]);
   });
 });
@@ -272,7 +273,7 @@ describe('fitting the view', () => {
   it('takes a turned rectangle\'s corners as drawn, and its handle', () => {
     // A long panel turned 45°: its unturned box would fit a narrower view
     // than its corners need.
-    const turned = framingGeometry({ center, position_angle_degrees: 45, panel: { width_degrees: 4, height_degrees: 1 }, mosaic: { rows: 1, columns: 1, overlap_percent: 0 }, overlays: [], view: null });
+    const turned = framingGeometry({ center, position_angle_degrees: 45, panel: { width_degrees: 4, height_degrees: 1 }, layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 0 }), overlays: [], view: null });
     const corners = turned.panels.flatMap(panel => panel.corners);
     const fov = fitViewFov(corners, null, center, 0)!;
     expect(fov).toBeGreaterThan(4 * 1.3);
@@ -280,7 +281,7 @@ describe('fitting the view', () => {
     // With the sky turned by the camera, the same rectangle stands upright and fits a narrower view.
     expect(fitViewFov(corners, null, center, 45)!).toBeLessThan(fov);
     // A tall panel's handle stands past its top edge: the fit makes room for it.
-    const tall = framingGeometry({ center, position_angle_degrees: 0, panel: { width_degrees: 1, height_degrees: 3 }, mosaic: { rows: 1, columns: 1, overlap_percent: 0 }, overlays: [], view: null });
+    const tall = framingGeometry({ center, position_angle_degrees: 0, panel: { width_degrees: 1, height_degrees: 3 }, layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 0 }), overlays: [], view: null });
     const tallCorners = tall.panels.flatMap(panel => panel.corners);
     const state = { ...stateFromSeed({ name: 'x', center, position_angle_degrees: 0 }, 'dss2_color') };
     const handle = (viewFov: number) => rotationHandleSky(state, tall.extent, viewFov);
