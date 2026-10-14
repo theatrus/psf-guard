@@ -77,6 +77,9 @@ export function parseScoreCutoff(raw: string | null | undefined): number {
 interface RuleInputs {
   cutoff: number;
   calibration: ReadonlyMap<number, CalibrationLightMark>;
+  /** The project's calibration marks came before a change and wait for a
+   *  pass. Fine to show; not to select from, since a reject follows. */
+  calibrationStale?: boolean;
 }
 
 function matches(rule: SelectionRuleId, image: ImageQualityResult, inputs: RuleInputs): boolean {
@@ -94,7 +97,7 @@ function matches(rule: SelectionRuleId, image: ImageQualityResult, inputs: RuleI
     case 'recommended':
       return Boolean(image.regrade_reason);
     case 'poor-calibration':
-      return inputs.calibration.get(image.image_id)?.level === 'poor';
+      return !inputs.calibrationStale && inputs.calibration.get(image.image_id)?.level === 'poor';
   }
 }
 

@@ -483,9 +483,13 @@ export default function SequenceView() {
   // selects again. Choosing "By hand" or Stop rule turns the rule off and
   // keeps the frames; Clear, and rejecting the selection, turn it off and
   // empty the selection.
+  // Marks from before a reject, an import or a library change may no
+  // longer hold, and a reject from Poor calibration writes the catalog: that
+  // rule selects nothing until the pass that replaces them.
+  const calibrationStale = projectId != null && calibration.staleProjects.has(projectId);
   const ruleInputs = useMemo(
-    () => ({ cutoff: threshold, calibration: calibration.marks }),
-    [calibration.marks, threshold],
+    () => ({ cutoff: threshold, calibration: calibration.marks, calibrationStale }),
+    [calibration.marks, calibrationStale, threshold],
   );
   const ruleCounts = useMemo(() => new Map(SELECTION_RULES.map(rule => [
     rule.id,
@@ -837,9 +841,17 @@ export default function SequenceView() {
             >
               <option value="">By hand</option>
               {SELECTION_RULES.map(rule => (
-                <option key={rule.id} value={rule.id} title={rule.description}>
-                  {rule.label} ({ruleCounts.get(rule.id) ?? 0})
-                </option>
+                rule.id === 'poor-calibration' && calibrationStale
+                  ? (
+                    <option key={rule.id} value={rule.id} title={rule.description} disabled>
+                      {rule.label} (updating)
+                    </option>
+                  )
+                  : (
+                    <option key={rule.id} value={rule.id} title={rule.description}>
+                      {rule.label} ({ruleCounts.get(rule.id) ?? 0})
+                    </option>
+                  )
               ))}
             </PillSelect>
             {selectionRule && (
