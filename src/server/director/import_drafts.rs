@@ -373,6 +373,17 @@ pub(super) struct Drafts {
     pub test_frames: Vec<String>,
 }
 
+/// How a band's exposure plans become objectives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Split {
+    /// One objective per band, as an import and the plan that follows its
+    /// project make it: Planning never grows objectives on its own.
+    Band,
+    /// One per band and exposure length, for taking Target Scheduler's
+    /// values: a second length made in N.I.N.A. joins the plan.
+    Length,
+}
+
 /// Which drafts a project has none of yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Missing {
@@ -395,6 +406,7 @@ pub(super) fn read_drafts(
     project_name: &str,
     panel: Option<PanelSize>,
     missing: Missing,
+    split: Split,
 ) -> Result<Drafts, StoreError> {
     let mut drafts = Drafts::default();
     let missing = Missing {
@@ -477,13 +489,11 @@ pub(super) fn read_drafts(
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
-        // One objective per bandpass and exposure length, so a band shot at
-        // two lengths (long frames for faint detail, short ones for star
-        // cores) keeps both, and an activation turns neither off. The frames
-        // a panel wants is the most any plan at that length asks for, since
-        // Director counts per panel; the template is that of the plan asking
-        // for the most. A length under a second beside a longer one is
-        // flats or test frames taken as lights, and is left out.
+        // Each band's plans by exposure length: the frames a panel wants is
+        // the most any plan at that length asks for, since Director counts
+        // per panel, and the template is that of the plan asking for the
+        // most. `split` says whether they make one objective per band or one
+        // per length.
         let mut by_length: BTreeMap<(String, i64), Length> = BTreeMap::new();
         let mut left_out = std::collections::BTreeSet::new();
         for (template_id, exposure, desired) in rows {
@@ -519,28 +529,47 @@ pub(super) fn read_drafts(
                 length.desired = desired;
             }
         }
-        // Each band's lengths, shortest first, without the ones asking for
-        // nothing.
+        // Each band's lengths, shortest first.
         let mut bands: BTreeMap<String, Vec<Length>> = BTreeMap::new();
         for ((bandpass_id, _), length) in by_length {
-            if length.desired > 0 {
-                bands.entry(bandpass_id).or_default().push(length);
-            }
+            bands.entry(bandpass_id).or_default().push(length);
         }
         let mut objectives = Vec::new();
         let mut contributions = Vec::new();
         for (bandpass_id, mut lengths) in bands {
-            if lengths.iter().any(|l| l.exposure >= 1.0) {
-                for short in lengths.iter().filter(|l| l.exposure < 1.0) {
-                    drafts.test_frames.push(format!(
-                        "{} {} s",
-                        templates.usable[short.template].filter_name, short.exposure
-                    ));
+            let parts: Vec<(Length, &str)> = match split {
+                // One objective per band: the template and length of its
+                // main plan (one of at least a second, then the one asking
+                // for most frames, then the longest), and the most frames
+                // any of its plans asks for. A short plan made first (flats
+                // or test frames taken as lights) never sets them.
+                Split::Band => {
+                    let desired = lengths.iter().map(|l| l.desired).max().unwrap_or(0);
+                    lengths
+                        .into_iter()
+                        .max_by_key(|l| (l.exposure >= 1.0, l.desired, l.exposure.to_bits()))
+                        .filter(|_| desired > 0)
+                        .map(|main| vec![(Length { desired, ..main }, "faint_detail")])
+                        .unwrap_or_default()
                 }
-                lengths.retain(|l| l.exposure >= 1.0);
-            }
-            let purposes = length_purposes(lengths.len());
-            for (length, purpose) in lengths.into_iter().zip(purposes) {
+                // One objective per length that asks for frames; a length
+                // under a second beside a longer one is test frames.
+                Split::Length => {
+                    lengths.retain(|l| l.desired > 0);
+                    if lengths.iter().any(|l| l.exposure >= 1.0) {
+                        for short in lengths.iter().filter(|l| l.exposure < 1.0) {
+                            drafts.test_frames.push(format!(
+                                "{} {} s",
+                                templates.usable[short.template].filter_name, short.exposure
+                            ));
+                        }
+                        lengths.retain(|l| l.exposure >= 1.0);
+                    }
+                    let purposes = length_purposes(lengths.len());
+                    lengths.into_iter().zip(purposes).collect()
+                }
+            };
+            for (length, purpose) in parts {
                 let (index, exposure, desired) = (length.template, length.exposure, length.desired);
                 let template = &templates.usable[index];
                 let objective = Objective {

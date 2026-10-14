@@ -213,6 +213,7 @@ fn read_rig(
             framing: true,
             plan: true,
         },
+        import_drafts::Split::Length,
     )
     .map_err(|_| {
         ActivationError::NotReady("This rig's Target Scheduler project could not be read.")

@@ -487,11 +487,13 @@ plans. The first time a project is listed, what Target Scheduler already
 holds for it becomes Director's own drafts: its targets become the framing
 (center and rotation from the rows, a grid of panels when the targets form
 one, the rig's field as the panel size when its optics are known) and its
-exposure plans become the plan (one objective per bandpass and exposure
-length with the frames a panel wants, bound to the template each plan uses
-at its exposure; a band at two lengths gets an objective for each, the
-shorter for unsaturated stars and the longer for faint detail, and a
-length under a second beside a longer one is test frames and stays out).
+exposure plans become the plan (one objective per bandpass with the frames
+a panel wants, bound to the template each plan uses at its exposure). A
+second exposure length on the same filter does not add an objective, on
+the import or when a following plan is read again: Planning never grows
+objectives on its own. Activation then lists that plan under **Turns off**,
+and **Take Target Scheduler's values** brings it in as an objective of its
+own.
 Director plans one target or one mosaic per project. A project whose targets
 are separate, not panels of one grid, is drafted as its first target with
 that target's own exposure plans, and the listing says so; Target Scheduler
@@ -1273,13 +1275,14 @@ ones to keep, a rig's block in the preview offers **Take Target Scheduler's
 values** instead of overwriting them. It reads that rig's linked project the
 way an import does and writes it into the saved plan:
 
-- each exposure length of each band, as an import reads it, as its own
-  part: it lands on the rig's part at the same length, else on another of
-  its parts in that band (taking the template and length), else on an
-  objective of that band other rigs shoot, else on a new objective, for
-  unsaturated stars if it is the shorter of two. So an exposure plan made in
-  N.I.N.A., such as L 30 s beside the plan's L 300 s, joins the plan and the
-  next activation keeps it instead of turning it off;
+- each exposure length of each band as its own part (an import makes one
+  objective per band; a take makes one per length): it lands on the rig's
+  part at the same length, else on another of its parts in that band
+  (taking the template and length), else on an objective of that band
+  other rigs shoot, else on a new objective, for unsaturated stars if it is
+  the shorter of two. So an exposure plan made in N.I.N.A., such as L 30 s
+  beside the plan's L 300 s, joins the plan and the next activation keeps it
+  instead of turning it off;
 - each part's frames: the objective's goal where only this rig shoots it,
   else this rig's own goal. Goals compare by the frames they come to at the
   rig's exposure length, so six hours of 300 s frames and 72 frames are the

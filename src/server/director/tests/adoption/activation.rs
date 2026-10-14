@@ -2010,7 +2010,7 @@ async fn recorded_plan_revision(f: &Fixture, project: Uuid) -> u64 {
 }
 
 /// Each plan row the report would change, as "action name | detail".
-fn plan_writes(data: &Value) -> Vec<String> {
+pub(super) fn plan_writes(data: &Value) -> Vec<String> {
     data["rigs"][0]["changes"]
         .as_array()
         .unwrap()
@@ -2294,7 +2294,7 @@ async fn matching_rows_without_directors_tables_read_unchanged() {
 }
 
 /// Take a rig's Target Scheduler values under the revisions now saved.
-async fn take_values(f: &Fixture, project: Uuid, rig: Uuid) -> (StatusCode, Value) {
+pub(super) async fn take_values(f: &Fixture, project: Uuid, rig: Uuid) -> (StatusCode, Value) {
     let (plan, framing) = {
         let store = f.state.director.as_ref().unwrap().writer.lock().unwrap();
         (
@@ -2315,7 +2315,7 @@ async fn take_values(f: &Fixture, project: Uuid, rig: Uuid) -> (StatusCode, Valu
     .await
 }
 
-async fn check_now(f: &Fixture, project: Uuid) -> Value {
+pub(super) async fn check_now(f: &Fixture, project: Uuid) -> Value {
     let (status, checked) = call(
         &f.app,
         "GET",

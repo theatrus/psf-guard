@@ -989,6 +989,7 @@ fn prepare(service: &Service, sources: &[Source], work: Work) -> Prepared {
                 &import.label,
                 panel,
                 import.missing,
+                import_drafts::Split::Band,
             ) {
                 Ok(mut drafts) => {
                     // A plan read again was warned about when it came in.

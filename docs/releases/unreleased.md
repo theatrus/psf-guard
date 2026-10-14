@@ -83,8 +83,8 @@
 - To keep a plan made in N.I.N.A., **Take Target Scheduler's values**: it
   now brings each exposure length in as its own objective, so a 30 s L plan
   beside the plan's 300 s one becomes an "Unsaturated stars" objective and
-  stays on. A project imported from Target Scheduler does the same with
-  each band's lengths.
+  stays on. Planning never adds objectives on its own: a project imported
+  from Target Scheduler keeps one objective per filter.
 - Automatic import no longer changes what Target Scheduler will shoot in
   projects it did not create. There it only adds image rows to exposure
   plans that already exist, and leaves their counts alone. Frames that would
