@@ -231,3 +231,10 @@
   error and when it was tried, and show no button when every site has it.
   Once the site answers a connection test, a sync or another push, the
   server sends the activation there on its own.
+- The Library's compact rows line up in columns: database, state, progress,
+  grade counts, dates, calibration, **Sequence** and **Stacks**, and ⚙ each
+  sit at the same place on every row, and a project without a pill leaves
+  its space empty. A long name ends in "…" and shows in full on hover. On a
+  laptop the dates show how long ago the last frame was and keep the range
+  in the tooltip; on a tablet a row takes two or three lines, and on a phone
+  it stacks one pill kind per place.

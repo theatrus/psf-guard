@@ -82,6 +82,26 @@ test('overview fits a phone', async ({ page }, testInfo) => {
   await expectPhoneFit(page, testInfo, 'overview-bottom');
 });
 
+test('compact overview fits a phone', async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      'psf-guard.display-preferences',
+      JSON.stringify({ libraryDensity: 'compact' })
+    );
+  });
+  await page.goto('/');
+  const rows = page.getByTestId('library-row');
+  await expect(rows).toHaveCount(2, { timeout: 15_000 });
+  await rows.first().scrollIntoViewIfNeeded();
+  await expectPhoneFit(page, testInfo, 'overview-compact');
+  // A stacked row: the name line first, then its pills below it.
+  const name = await rows.first().locator(`[data-column='name']`).boundingBox();
+  const progress = await rows.first().locator(`[data-column='progress']`).boundingBox();
+  expect(name).not.toBeNull();
+  expect(progress).not.toBeNull();
+  expect(progress!.y).toBeGreaterThanOrEqual(name!.y + name!.height);
+});
+
 test('image grid fits a phone', async ({ page }, testInfo) => {
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
   const firstCard = page.locator('.image-card').first();

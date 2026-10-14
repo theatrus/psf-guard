@@ -13,6 +13,8 @@ export interface ProjectFamily {
   accepted: number;
   desired: number;
   totalImages: number;
+  /** The oldest capture across the members, in seconds, if any has one. */
+  earliest: number | null;
   /** The newest capture across the members, in seconds, if any has one. */
   latest: number | null;
 }
@@ -28,6 +30,7 @@ export function projectFamilies(projects: WithDb<ProjectOverview>[]): ProjectFam
   return order.map(key => {
     const members = byKey.get(key)!;
     const latest = members.map(m => m.date_range.latest ?? 0).reduce((a, b) => Math.max(a, b), 0);
+    const starts = members.map(m => m.date_range.earliest ?? m.date_range.latest).filter((start): start is number => !!start);
     return {
       key,
       members,
@@ -35,6 +38,7 @@ export function projectFamilies(projects: WithDb<ProjectOverview>[]): ProjectFam
       accepted: members.reduce((sum, m) => sum + m.accepted_images, 0),
       desired: members.reduce((sum, m) => sum + m.total_desired, 0),
       totalImages: members.reduce((sum, m) => sum + m.total_images, 0),
+      earliest: starts.length > 0 ? Math.min(...starts) : null,
       latest: latest > 0 ? latest : null,
     };
   });

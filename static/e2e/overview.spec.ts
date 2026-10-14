@@ -119,6 +119,41 @@ test('overview puts projects ahead of a compact catalog summary', async ({
   );
 });
 
+test('compact rows keep each pill kind in one column', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      'psf-guard.display-preferences',
+      JSON.stringify({ libraryDensity: 'compact' })
+    );
+  });
+  // One line at desktop width, two lines on a small laptop: the columns
+  // line up either way.
+  for (const width of [1440, 1024]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+    const rows = page.getByTestId('library-row');
+    await expect(rows).toHaveCount(2, { timeout: 15_000 });
+    const lefts = await rows.evaluateAll((all) =>
+      all.map((row) =>
+        Object.fromEntries(
+          [...row.children].map((cell) => [
+            cell.getAttribute('data-column'),
+            Math.round(cell.getBoundingClientRect().left),
+          ])
+        )
+      )
+    );
+    expect(Object.keys(lefts[0])).toEqual([
+      'fold', 'name', 'db', 'state', 'progress', 'grades', 'dates', 'calibration', 'views', 'plan',
+    ]);
+    // The fold arrow shifts with a group's or family's inset; every column
+    // after it starts at one x on every row.
+    for (const column of Object.keys(lefts[0]).filter((key) => key !== 'fold')) {
+      expect(lefts[1][column], `${column} at ${width}px`).toBe(lefts[0][column]);
+    }
+  }
+});
+
 test('overview marks projects with images added since they were opened', async ({
   page,
   request,

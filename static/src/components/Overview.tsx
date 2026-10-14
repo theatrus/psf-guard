@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import { ago, projectFamilies, stateLabel } from './libraryFamilies';
+import { projectFamilies, stateLabel } from './libraryFamilies';
 import { setDisplayPreferences, useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import { useFoldedRows } from '../hooks/useFoldedRows';
-import { CalibrationPill, DatesPill, DbPill, DensityToggle, FamilyPill, FoldButton, GradingPill, ProgressPill, StateControl } from './projectPills';
+import { CalibrationPill, DatesPill, DbPill, DensityToggle, FamilyPill, FoldButton, GradingPill, ProgressPill, RowCells, StateControl } from './projectPills';
 import { familyMatchesShow, parseShow, SHOW_OPTIONS } from './libraryShow';
 import { usePlans } from './header/useCurrentPlan';
 import LibraryPlans from './director/LibraryPlans';
@@ -918,6 +918,10 @@ export default function Overview() {
             </div>
           )}
 
+          {/* One column grid for every group: rows, families and group
+              headings take its tracks through subgrid, so a pill kind sits
+              at the same x down the whole list. */}
+          <div className="library-groups">
           {activeProjectGroups.map((group) => {
             return (
               <section
@@ -960,22 +964,30 @@ export default function Overview() {
               // A compact row says what matters at a glance; the project the
               // user came from, and any row they open, shows the whole card.
               if (!showsCard(key, isCurrent)) {
+                // One cell per Library column, so each pill kind lines up
+                // down the list. The name's badges ride in its cell.
                 return (
                   <div key={key} data-project-key={key} className={['library-row', !project.has_files ? 'no-files' : '', projectNewImages > 0 ? 'has-new-images' : ''].filter(Boolean).join(' ')} data-testid="library-row">
-                    <FoldButton open={false} name={project.display_name} onClick={() => toggleCard(key, isCurrent)} />
-                    <button type="button" className="library-name" onClick={() => project.has_files && handleSelectProject(project)} disabled={!project.has_files} aria-label={`Open ${project.display_name} image grid`}>{project.display_name}</button>
-                    <DbPill name={project.db_name} title={`Database ID: ${project.db_id}`} />
-                    <StateControl state={project.state} name={project.display_name} dbName={project.db_name} editable={organizeAllowed} pending={pendingStates[key] ?? null} onChange={(state) => void changeState(project, state)} />
-                    <ProgressPill accepted={project.accepted_images} desired={project.total_desired} totalImages={project.total_images} />
-                    <GradingPill accepted={project.accepted_images} rejected={project.rejected_images} pending={project.pending_images} />
-                    <DatesPill earliest={project.date_range.earliest} latest={project.date_range.latest} nowMs={relativeNow} title={formatDateRange(project.date_range)} />
-                    <CalibrationPill health={calibrationHealth.get(key)} name={project.display_name} onOpen={() => openCalibrationReport(project)} />
-                    {projectNewImages > 0 && <span className="new-images-badge"><span aria-hidden="true" />{projectNewImages} new</span>}
-                    {!project.has_files && <span className="no-files-badge">No Files</span>}
-                    {project.files_missing > 0 && <span className="library-pill files-missing">{project.files_missing} missing</span>}
-                    <button type="button" className="library-view" disabled={!project.has_files} aria-label={`Open ${project.display_name} sequence`} title="Sequence analysis" onClick={() => openProjectView('sequence', project, projectTargets)}>Sequence</button>
-                    <button type="button" className="library-view" disabled={!project.has_files} aria-label={`Open ${project.display_name} stacks`} title="Stack previews" onClick={() => openProjectView('stacks', project, projectTargets)}>Stacks</button>
-                    {plans.enabled && !inFamily && <button type="button" className="library-planning" title="Open this project's plan: framing, rigs and activation" aria-label={`Open the ${project.display_name} plan`} onClick={() => openPlan(project, plan)}>⚙</button>}
+                    <RowCells cells={{
+                      fold: <FoldButton open={false} name={project.display_name} onClick={() => toggleCard(key, isCurrent)} />,
+                      name: <>
+                        <button type="button" className="library-name" onClick={() => project.has_files && handleSelectProject(project)} disabled={!project.has_files} aria-label={`Open ${project.display_name} image grid`} title={project.display_name}>{project.display_name}</button>
+                        {projectNewImages > 0 && <span className="new-images-badge"><span aria-hidden="true" />{projectNewImages} new</span>}
+                        {!project.has_files && <span className="no-files-badge">No Files</span>}
+                        {project.files_missing > 0 && <span className="library-pill files-missing">{project.files_missing} missing</span>}
+                      </>,
+                      db: <DbPill name={project.db_name} title={`Database ID: ${project.db_id}`} />,
+                      state: <StateControl state={project.state} name={project.display_name} dbName={project.db_name} editable={organizeAllowed} pending={pendingStates[key] ?? null} onChange={(state) => void changeState(project, state)} />,
+                      progress: <ProgressPill accepted={project.accepted_images} desired={project.total_desired} totalImages={project.total_images} />,
+                      grades: <GradingPill accepted={project.accepted_images} rejected={project.rejected_images} pending={project.pending_images} />,
+                      dates: <DatesPill earliest={project.date_range.earliest} latest={project.date_range.latest} nowMs={relativeNow} title={formatDateRange(project.date_range)} />,
+                      calibration: <CalibrationPill health={calibrationHealth.get(key)} name={project.display_name} onOpen={() => openCalibrationReport(project)} />,
+                      views: <>
+                        <button type="button" className="library-view" disabled={!project.has_files} aria-label={`Open ${project.display_name} sequence`} title="Sequence analysis" onClick={() => openProjectView('sequence', project, projectTargets)}>Sequence</button>
+                        <button type="button" className="library-view" disabled={!project.has_files} aria-label={`Open ${project.display_name} stacks`} title="Stack previews" onClick={() => openProjectView('stacks', project, projectTargets)}>Stacks</button>
+                      </>,
+                      plan: plans.enabled && !inFamily && <button type="button" className="library-planning" title="Open this project's plan: framing, rigs and activation" aria-label={`Open the ${project.display_name} plan`} onClick={() => openPlan(project, plan)}>⚙</button>,
+                    }} />
                   </div>
                 );
               }
@@ -1617,18 +1629,23 @@ export default function Overview() {
             const planned = family.members.map((member) => ({ member, plan: plans.planFor(member.db_id, member.id) })).find((entry) => entry.plan);
             const familyPlan = planned?.plan ?? null;
             const planMember = planned?.member ?? family.members[0];
+            const rigNames = family.members.map(member => member.db_name).join(' · ');
             return (
               <div key={family.key} className={`library-family${density === 'compact' ? ' is-compact' : ''}`} data-testid="library-family">
                 <div className="library-family-head">
-                  <FamilyPill rigs={family.members.length} />
-                  <strong className="library-family-name">{family.name}</strong>
-                  {familyPlan?.activation
-                    ? <span className="director-stage-badge">Active on {familyPlan.activation.rigs} rig{familyPlan.activation.rigs === 1 ? '' : 's'}</span>
-                    : familyPlan && (familyPlan.framing || familyPlan.plan) && <span className="library-pill library-pill-stage" title={stage(familyPlan)}>{stageShort(familyPlan)}</span>}
-                  <DbPill name={family.members.map(member => member.db_name).join(' · ')} />
-                  <ProgressPill accepted={family.accepted} desired={family.desired} totalImages={family.totalImages} title={`${family.accepted} of ${family.desired} desired frames accepted across the rigs`} />
-                  {ago(family.latest, relativeNow) && <span className="library-pill library-pill-dates">{ago(family.latest, relativeNow)}</span>}
-                  {plans.enabled && <button type="button" className="library-planning" title="Open this plan: framing, rigs and activation" aria-label={`Open the ${family.name} plan`} onClick={() => openPlan(planMember, familyPlan)}>⚙</button>}
+                  <RowCells cells={{
+                    name: <>
+                      <FamilyPill rigs={family.members.length} />
+                      <strong className="library-family-name" title={family.name}>{family.name}</strong>
+                    </>,
+                    db: <DbPill name={rigNames} title={rigNames} />,
+                    state: familyPlan?.activation
+                      ? <span className="director-stage-badge">Active on {familyPlan.activation.rigs} rig{familyPlan.activation.rigs === 1 ? '' : 's'}</span>
+                      : familyPlan && (familyPlan.framing || familyPlan.plan) && <span className="library-pill library-pill-stage" title={stage(familyPlan)}>{stageShort(familyPlan)}</span>,
+                    progress: <ProgressPill accepted={family.accepted} desired={family.desired} totalImages={family.totalImages} title={`${family.accepted} of ${family.desired} desired frames accepted across the rigs`} />,
+                    dates: family.latest !== null && <DatesPill earliest={family.earliest} latest={family.latest} nowMs={relativeNow} title={`Across the rigs: ${formatDateRange({ earliest: family.earliest ?? undefined, latest: family.latest })}`} />,
+                    plan: plans.enabled && <button type="button" className="library-planning" title="Open this plan: framing, rigs and activation" aria-label={`Open the ${family.name} plan`} onClick={() => openPlan(planMember, familyPlan)}>⚙</button>,
+                  }} />
                 </div>
                 <div className="library-family-members">{family.members.map(renderProject)}</div>
               </div>
@@ -1638,6 +1655,7 @@ export default function Overview() {
               </section>
             );
           })}
+          </div>
 
           <LibraryPlans search={projectSearch} show={show} listed={projectKeys} dbFilter={dbFilter} incomplete={projectsIncomplete} />
 

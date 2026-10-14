@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { CalibrationPill, DatesPill, ProgressPill, StatePill } from '../projectPills';
+import { CalibrationPill, DatesPill, ProgressPill, ROW_COLUMNS, RowCells, StatePill } from '../projectPills';
 
 describe('project pills', () => {
   it('reads Done once the goal is met, a percent before, and a count without a goal', () => {
@@ -25,6 +25,28 @@ describe('project pills', () => {
     expect(screen.getByText(/3 d ago/)).toBeInTheDocument();
     render(<DatesPill earliest={null} latest={null} nowMs={now} />);
     expect(screen.getByText('No dates')).toBeInTheDocument();
+  });
+
+  it('writes every range at one width, so the dates line up down the Library', () => {
+    const day = (month: number, date: number) => Date.UTC(2026, month, date, 12) / 1000;
+    const now = Date.UTC(2026, 11, 1);
+    const { container } = render(<>
+      <DatesPill earliest={day(3, 6)} latest={day(3, 9)} nowMs={now} />
+      <DatesPill earliest={day(9, 12)} latest={day(10, 30)} nowMs={now} />
+    </>);
+    const ranges = [...container.querySelectorAll('.library-dates-range')].map(range => range.textContent ?? '');
+    expect(ranges).toHaveLength(2);
+    expect(ranges[0].length).toBe(ranges[1].length);
+    // The age is its own element, so a narrow Library can show it alone.
+    expect(container.querySelectorAll('.library-dates-ago')).toHaveLength(2);
+  });
+
+  it('renders one cell per Library column, in order, empty where nothing is given', () => {
+    const { container } = render(<div><RowCells cells={{ name: <span>Heart</span>, views: <button type="button">Sequence</button>, plan: false }} /></div>);
+    const cells = [...container.firstElementChild!.children];
+    expect(cells.map(cell => cell.getAttribute('data-column'))).toEqual([...ROW_COLUMNS]);
+    expect(cells.map(cell => cell.textContent)).toEqual(['', 'Heart', '', '', '', '', '', '', 'Sequence', '']);
+    expect(cells[0]).toHaveClass('library-cell', 'library-cell-fold');
   });
 
   it('shows calibration as an icon and one word, and opens the report', () => {

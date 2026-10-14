@@ -8,6 +8,7 @@ import { server } from '../../test/msw-server';
 import Overview from '../Overview';
 import { ago, percentDone, projectFamilies, stateLabel } from '../libraryFamilies';
 import { setDisplayPreferences, useDisplayPreferences } from '../../hooks/useDisplayPreferences';
+import { ROW_COLUMNS } from '../projectPills';
 
 function ok(data: unknown) {
   return HttpResponse.json({ success: true, data, error: null, status: 'ready' });
@@ -128,6 +129,53 @@ describe('compact Library', () => {
     expect(screen.getByText('2026-07-01 SII: 4')).toBeInTheDocument();
   });
 
+  it('gives every row and family head a cell for each column, in one order, empty where a pill is missing', async () => {
+    setDisplayPreferences({ showNightChip: true, showAllChip: true, showCalibrationChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
+    twoRigs();
+    // Only C925's Loner has a calibration finding.
+    server.use(
+      http.get('/api/db/:dbId/calibration-health', ({ params }) => ok({
+        running: false,
+        projects: params.dbId === 'c925' ? [{ project_id: 2, level: 'poor', poor_lights: 4, check_lights: 0, checked: 8, computed_at: 1 }] : [],
+      })),
+    );
+    render(<Overview />, { wrapper: wrapper('/') });
+    await screen.findByRole('button', { name: 'Calibration Poor for Loner' });
+    const columnsOf = (row: Element) => [...row.children].map(cell => cell.getAttribute('data-column'));
+    const cell = (row: Element, column: string) => row.querySelector(`:scope > [data-column='${column}']`)!;
+
+    // The Library's columns sit in one grid; each row is a subgrid of it.
+    const groups = document.querySelector('.library-groups')!;
+    const rows = screen.getAllByTestId('library-row');
+    const head = document.querySelector('.library-family-head')!;
+    expect(rows).toHaveLength(4);
+    for (const row of [...rows, head]) {
+      expect(groups.contains(row)).toBe(true);
+      expect(columnsOf(row)).toEqual([...ROW_COLUMNS]);
+    }
+
+    // A missing pill leaves its cell in place, empty, so later columns keep their x.
+    const loners = rows.filter(row => within(row).queryByText('Loner'));
+    const flagged = loners.find(row => within(row).queryByRole('button', { name: 'Calibration Poor for Loner' }))!;
+    const clean = loners.find(row => row !== flagged)!;
+    expect(cell(flagged, 'calibration')).not.toBeEmptyDOMElement();
+    expect(cell(clean, 'calibration')).toBeEmptyDOMElement();
+    expect(cell(clean, 'views')).toHaveTextContent('SequenceStacks');
+    // Planning is off here, so no row has the plan button.
+    for (const row of rows) expect(cell(row, 'plan')).toBeEmptyDOMElement();
+
+    // The family head fills the columns it has a pill for and leaves the rest empty.
+    expect(within(cell(head, 'name') as HTMLElement).getByText('2 rigs')).toBeInTheDocument();
+    expect(cell(head, 'progress')).toHaveTextContent('20 / 80 · 25%');
+    expect(cell(head, 'dates')).toHaveTextContent(/5 h ago/);
+    for (const column of ['fold', 'state', 'grades', 'calibration', 'views', 'plan']) {
+      expect(cell(head, column)).toBeEmptyDOMElement();
+    }
+
+    // The name carries its full text in a tooltip for when it is cut short.
+    expect(within(rows[0]).getByRole('button', { name: /image grid$/ })).toHaveAttribute('title', 'Heart Nebula');
+  });
+
   it('narrows the Library to projects with calibration issues', async () => {
     setDisplayPreferences({ showNightChip: true, showAllChip: true, showCalibrationChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
     twoRigs();
@@ -150,7 +198,7 @@ describe('compact Library', () => {
     const c = { ...project(3, 'Loner', null, 1, 0, 50), db_id: 'a', db_name: 'A' };
     const families = projectFamilies([a, c, b]);
     expect(families.map(f => f.members.length)).toEqual([2, 1]);
-    expect(families[0]).toMatchObject({ name: 'Heart', accepted: 15, desired: 60, latest: 200 });
+    expect(families[0]).toMatchObject({ name: 'Heart', accepted: 15, desired: 60, earliest: 100 - 86_400 * 3, latest: 200 });
     expect(percentDone(15, 60)).toBe(25);
     expect(percentDone(3, 0)).toBeNull();
     expect(ago(null, 0)).toBeNull();

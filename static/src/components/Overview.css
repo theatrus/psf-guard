@@ -365,7 +365,8 @@
   gap: 12px;
 }
 
-/* Above phone width a compact row stays on one line: the name shrinks to an
+/* Above phone width a wrapping row of pills (a plan row, or a project row
+   where subgrid is missing) stays on one line: the name shrinks to an
    ellipsis before any pill wraps, and on laptop screens the pills sit a
    little closer. */
 @media (min-width: 761px) {
@@ -383,6 +384,285 @@
 
   .overview .library-pill-bar {
     width: 48px;
+  }
+}
+
+.library-pill-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The dates pill: a fixed-width range, then the age. */
+.library-dates-ago::before {
+  content: '· ';
+}
+
+/* Library columns. One grid on .library-groups gives every pill kind its own
+   track; groups, lists, families, family heads and rows pass the tracks down
+   through subgrid, so a pill sits at the same x on every row of the list.
+   Each row renders a cell per column (RowCells), empty when it has no pill.
+   A subgrid's padding and border add to its edge tracks, so a family's
+   inset rows still line up with the rows outside it. Opened cards and group
+   headings span every track.
+
+   Widths, widest first:
+   - above 1366px, one line with every column;
+   - 1181-1366px, one line; the dates show the age and keep the range in
+     their tooltip;
+   - 861-1180px, two lines: the name with the view links and plan, then
+     the pills;
+   - 761-860px, three lines: the name, then database, state, progress and
+     grades, then dates, calibration and the view links;
+   - phone, a stacked row of its own (below). */
+@supports (grid-template-columns: subgrid) {
+  @media (min-width: 761px) {
+    .overview .library-groups {
+      display: grid;
+      grid-template-columns:
+        [fold] auto
+        [name] minmax(8rem, 1fr)
+        [db] auto
+        [state] auto
+        [progress] auto
+        [grades] auto auto auto
+        [dates] auto
+        [calibration] auto
+        [views] auto
+        [plan] auto
+        [end];
+      column-gap: 8px;
+    }
+
+    .overview .library-groups .project-activity-group,
+    .overview .library-groups .projects-list,
+    .overview .library-groups .library-family,
+    .overview .library-groups .library-family-members,
+    .overview .library-groups .library-family-head,
+    .overview .library-groups .library-row {
+      display: grid;
+      grid-column: 1 / -1;
+      grid-template-columns: subgrid;
+      /* normal takes the parent grid's gap: one gutter at every level. */
+      column-gap: normal;
+      align-items: center;
+    }
+
+    .overview .library-groups .project-activity-heading,
+    .overview .library-groups .project-card {
+      grid-column: 1 / -1;
+      min-width: 0;
+    }
+
+    /* A cell is as wide as its pill, so a short track never squeezes one.
+       Only the name and the database give way, with an ellipsis. */
+    .library-cell {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .library-cell-name,
+    .library-cell-db {
+      min-width: 0;
+    }
+
+    /* The name fills whatever tracks it spans and never widens them: on two
+       lines it spans the pill tracks below it. */
+    .library-cell-name {
+      contain: inline-size;
+    }
+
+    .library-cell-fold { grid-column: fold; }
+    .library-cell-name { grid-column: name; }
+    .library-cell-db { grid-column: db; }
+    .library-cell-state { grid-column: state; }
+    .library-cell-progress { grid-column: progress; }
+    .library-cell-grades { grid-column: grades / dates; }
+    .library-cell-dates { grid-column: dates; }
+    .library-cell-calibration { grid-column: calibration; }
+    .library-cell-views { grid-column: views; justify-content: flex-end; gap: 2px; }
+    .library-cell-plan { grid-column: plan; justify-content: flex-end; }
+
+    /* Accepted, rejected and pending each take a track, so the counts line
+       up down the column whatever their digits. */
+    .library-cell-grades,
+    .library-cell-grades > .library-pill-grading {
+      display: grid;
+      grid-template-columns: subgrid;
+      column-gap: normal;
+      align-items: center;
+    }
+
+    .library-cell-grades > .library-pill-grading {
+      grid-column: 1 / -1;
+    }
+
+    /* The name takes the flexible track and ends in an ellipsis; its badges
+       follow it inside the cell. */
+    .overview .library-cell-name > .library-name,
+    .overview .library-cell-name > .library-family-name {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    .library-cell-name > :not(.library-name):not(.library-family-name) {
+      flex: none;
+    }
+
+    /* Pills fill their column, so each kind reads as one even block. The
+       state and calibration pills keep their own size. */
+    .library-cell-db > .library-pill,
+    .library-cell-progress > .library-pill,
+    .library-cell-dates > .library-pill {
+      flex: 1 1 auto;
+    }
+
+    .overview .library-groups .library-pill-db {
+      max-width: 10rem;
+    }
+
+    /* A family's joined database names fill the column its rows set and
+       truncate there; the title holds them all. */
+    .library-family-head .library-cell-db {
+      contain: inline-size;
+    }
+  }
+
+  /* Short of the full width the dates keep the age; the range stays in the
+     tooltip. A project with no dates keeps its "No dates". */
+  @media (min-width: 761px) and (max-width: 1366px) {
+    .overview .library-groups .library-dates-range:not(:last-child) {
+      display: none;
+    }
+
+    .overview .library-groups .library-dates-ago {
+      font-size: inherit;
+    }
+
+    .overview .library-groups .library-dates-ago::before {
+      content: none;
+    }
+  }
+
+  /* Two lines: the name, view links and plan, then the pills below. The
+     links sit over the dates and calibration tracks, which take the spare
+     width. */
+  @media (min-width: 861px) and (max-width: 1180px) {
+    .overview .library-groups {
+      grid-template-columns:
+        [fold] auto
+        [db] minmax(0, auto)
+        [state] auto
+        [progress] auto
+        [grades] auto auto auto
+        [dates] auto
+        [calibration] minmax(auto, 1fr)
+        [plan] auto
+        [end];
+    }
+
+    .library-cell-fold { grid-area: 1 / fold; }
+    .library-cell-name { grid-area: 1 / db / auto / dates; }
+    .library-cell-views { grid-area: 1 / dates / auto / plan; }
+    .library-cell-plan { grid-area: 1 / plan; }
+    .library-cell-db { grid-area: 2 / db; }
+    .library-cell-state { grid-area: 2 / state; }
+    .library-cell-progress { grid-area: 2 / progress; }
+    .library-cell-grades { grid-area: 2 / grades / auto / dates; }
+    .library-cell-dates { grid-area: 2 / dates; }
+    .library-cell-calibration { grid-area: 2 / calibration; }
+  }
+
+  /* Three lines: the name and plan; database, state, progress and grades;
+     then dates, calibration and the view links. */
+  @media (min-width: 761px) and (max-width: 860px) {
+    .overview .library-groups {
+      grid-template-columns:
+        [fold] auto
+        [db] minmax(0, auto)
+        [state] auto
+        [progress] auto
+        [grades] auto auto auto
+        [rest] minmax(0, 1fr)
+        [plan] auto
+        [end];
+    }
+
+    .library-cell-fold { grid-area: 1 / fold; }
+    .library-cell-name { grid-area: 1 / db / auto / plan; }
+    .library-cell-plan { grid-area: 1 / plan; }
+    .library-cell-db { grid-area: 2 / db; }
+    .library-cell-state { grid-area: 2 / state; }
+    .library-cell-progress { grid-area: 2 / progress; }
+    .library-cell-grades { grid-area: 2 / grades / auto / rest; }
+    .library-cell-dates { grid-area: 3 / db / auto / progress; }
+    /* The age alone would leave a stretched pill mostly empty. */
+    .library-cell-dates > .library-pill { flex: none; }
+    .library-cell-calibration { grid-area: 3 / progress; }
+    .library-cell-views { grid-area: 3 / grades / auto / end; }
+  }
+}
+
+/* Without subgrid the cells step aside and the row is the old wrapping
+   line of pills. */
+@supports not (grid-template-columns: subgrid) {
+  @media (min-width: 761px) {
+    .library-cell {
+      display: contents;
+    }
+  }
+}
+
+/* Phone: each row stacks on its own grid, a pill kind always on the same
+   line and at the same edge. The name line holds the fold arrow and the
+   plan; below it, pills start at the left edge and their partners end at
+   the right: database and state, progress and calibration, the dates, then
+   grades and the view links. A line with no pill takes no space. */
+@media (max-width: 760px) {
+  .overview .library-groups .library-row,
+  .overview .library-groups .library-family-head {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .library-cell {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .library-cell:empty {
+    display: none;
+  }
+
+  .library-cell-fold { grid-area: 1 / 1; }
+  .library-cell-name { grid-area: 1 / 2; }
+  .library-family-head .library-cell-name { grid-column: 1 / 3; }
+  .library-cell-plan { grid-area: 1 / 3; }
+  .library-cell-db { grid-area: 2 / 1 / auto / -1; justify-self: start; max-width: 60%; }
+  .library-cell-state { grid-area: 2 / 1 / auto / -1; justify-self: end; }
+  .library-cell-progress { grid-area: 3 / 1 / auto / -1; justify-self: start; }
+  .library-cell-calibration { grid-area: 3 / 1 / auto / -1; justify-self: end; }
+  .library-cell-dates { grid-area: 4 / 1 / auto / -1; justify-self: start; }
+  .library-cell-grades { grid-area: 5 / 1 / auto / -1; justify-self: start; }
+  .library-cell-views { grid-area: 5 / 1 / auto / -1; justify-self: end; gap: 2px; }
+
+  .overview .library-cell-name > .library-name,
+  .overview .library-cell-name > .library-family-name {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .library-cell-name > :not(.library-name):not(.library-family-name) {
+    flex: none;
+  }
+
+  /* A line of its own has room for the age beside the range. */
+  .overview .library-groups .library-pill-dates small {
+    display: inline;
   }
 }
 
