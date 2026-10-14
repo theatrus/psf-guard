@@ -249,3 +249,6 @@
   reload. **Calibration** opens on its own only for a light with a Poor or
   Check finding, or when you came from the 🧪 chip or Images filtered by
   calibration; folded, it reads "no findings".
+- Moving between images with the arrow keys keeps the detail's sidebar on the
+  panel you were reading. In Safari and the macOS app it used to jump up to
+  the panels above whenever the next image's sky context was loading.

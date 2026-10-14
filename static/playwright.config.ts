@@ -93,6 +93,14 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
+    // Safari's engine, which the macOS app's WebView shares. It has no CSS
+    // scroll anchoring, so the specs about keeping a scroll position run
+    // here too; the rest stay Chromium-only to keep the run short.
+    {
+      name: 'webkit',
+      use: { ...devices['Desktop Safari'] },
+      testMatch: ['detail-scroll.spec.ts'],
+    },
   ],
 
   webServer: [
