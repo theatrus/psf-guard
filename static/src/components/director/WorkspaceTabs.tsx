@@ -17,6 +17,6 @@ export default function WorkspaceTabs<T extends string>({ id, label, tabs, value
   };
   return <div className={`workspace-tabs ${className}`.trim()} role="tablist" aria-label={label} aria-orientation={orientation} onKeyDown={onKeyDown}>
     {tabs.map(tab => <button key={tab.id} type="button" role="tab" id={`${id}-tab-${tab.id}`} aria-controls={`${id}-panel-${tab.id}`}
-      aria-selected={tab.id === value} tabIndex={tab.id === value ? 0 : -1} className={`workspace-tab${tab.id === value ? ' active' : ''}`} onClick={() => onChange(tab.id)}>{tab.icon}{tab.label}</button>)}
+      aria-selected={tab.id === value} tabIndex={tab.id === value ? 0 : -1} className="workspace-tab" onClick={() => onChange(tab.id)}>{tab.icon}{tab.label}</button>)}
   </div>;
 }

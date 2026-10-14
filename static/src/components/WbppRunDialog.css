@@ -19,18 +19,18 @@
 }
 
 .wbpp-run-pixinsight.is-ready {
-  color: var(--color-success, #1e8449);
+  color: var(--color-success);
 }
 
 .wbpp-run-pixinsight.is-missing {
-  color: var(--color-warning, #b9770e);
+  color: var(--color-warning);
 }
 
 .wbpp-run-pixinsight .link-button {
   padding: 0;
   border: 0;
   background: none;
-  color: var(--color-primary, #2d6cdf);
+  color: var(--color-primary);
   cursor: pointer;
   font: inherit;
   text-decoration: underline;
@@ -66,7 +66,7 @@
 
 .wbpp-run-error {
   margin: 0 0 0.75rem;
-  color: var(--color-error, #c0392b);
+  color: var(--color-error);
 }
 
 .wbpp-run-progress {
@@ -76,7 +76,7 @@
 .wbpp-run-busy {
   margin: 0 0 0.75rem;
   padding: 0.5rem 0.7rem;
-  border-left: 3px solid var(--color-warning, #b9770e);
+  border-left: 3px solid var(--color-warning);
   border-radius: 4px;
   background: var(--color-bg-tertiary);
 }
@@ -85,7 +85,7 @@
   padding: 0;
   border: 0;
   background: none;
-  color: var(--color-primary, #2d6cdf);
+  color: var(--color-primary);
   cursor: pointer;
   font: inherit;
   text-decoration: underline;
@@ -120,9 +120,9 @@
   overflow: auto;
   margin: 0 0 0.75rem;
   padding: 0.5rem 0.6rem;
-  border: 1px solid var(--color-border, #444);
+  border: 1px solid var(--color-border-secondary);
   border-radius: 6px;
-  background: var(--color-bg-input, rgba(0, 0, 0, 0.2));
+  background: var(--color-bg-input);
   font-size: 0.75rem;
   white-space: pre-wrap;
   word-break: break-all;
@@ -131,7 +131,7 @@
 .wbpp-run-log-errors {
   margin: 0 0 0.6rem;
   padding-left: 1.2rem;
-  color: var(--color-error, #c0392b);
+  color: var(--color-error);
   font-size: 0.82rem;
 }
 
@@ -151,7 +151,7 @@
 .wbpp-run-publish {
   margin: 0.4rem 0 0.8rem;
   padding: 0.6rem 0.75rem;
-  border: 1px solid var(--color-border-primary, var(--color-border, #444));
+  border: 1px solid var(--color-border-primary);
   border-radius: 6px;
 }
 

@@ -28,7 +28,7 @@ export default function CollaborationWizard({ rig, name, connection, onPendingId
   return <Dialog open title="Connect collaboration" onClose={() => { if (!busy && !create.isPending) onClose(); }} className="collaboration-wizard director-page director-embedded" backdropClassName="collaboration-wizard-backdrop"
     footer={<button type="button" disabled={busy || create.isPending} onClick={onClose}>Close</button>}>
     <ol className="collaboration-steps" aria-label="Connection setup progress">
-      {['Server', 'Sign in', 'Capture'].map((label, index) => <li key={label} aria-current={step === index ? 'step' : undefined} className={index < step ? 'is-complete' : step === index ? 'is-current' : ''}>
+      {['Server', 'Sign in', 'Capture'].map((label, index) => <li key={label} aria-current={step === index ? 'step' : undefined} className={index < step ? 'is-complete' : undefined}>
         <span>{index < step ? <Check size={14} /> : index + 1}</span>{label}
       </li>)}
     </ol>

@@ -226,7 +226,6 @@ export default function SchedulerSyncControls({
             <button
               key={operation}
               type="button"
-              className={kind === operation ? 'active' : ''}
               aria-pressed={kind === operation}
               onClick={() => {
                 setKind(operation);

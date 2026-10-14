@@ -91,6 +91,14 @@ describe('Overview return scope', () => {
     expect(
       screen.getByText('Sh2 86').closest('.project-card')
     ).not.toHaveAttribute('data-current-project');
+    // A screen reader hears which project the user came from.
+    expect(screen.getByRole('button', { name: 'Open NGC 6820 image grid' })).toHaveAttribute(
+      'aria-current',
+      'true'
+    );
+    expect(
+      screen.getByRole('button', { name: 'Open Sh2 86 image grid' })
+    ).not.toHaveAttribute('aria-current');
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
   });
 
@@ -118,6 +126,7 @@ describe('Overview return scope', () => {
       'data-current-project',
       'true'
     );
+    expect(archived.closest('.project-archive-item')).toHaveAttribute('aria-current', 'true');
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
   });
 });

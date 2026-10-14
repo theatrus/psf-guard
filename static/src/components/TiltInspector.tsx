@@ -31,12 +31,12 @@ function cellLabel(row: number, col: number): string {
 /** Color a cell by how much softer it is than the sharpest cell. */
 function hfrColor(hfr: number | null, bestHfr: number | null): string {
   if (hfr === null || bestHfr === null || bestHfr <= 0) {
-    return 'var(--color-border, #555)';
+    return 'var(--color-border-tertiary)';
   }
   const excess = hfr / bestHfr - 1;
-  if (excess < 0.1) return 'var(--color-success)';
-  if (excess < 0.25) return 'var(--color-warning)';
-  return 'var(--color-error)';
+  if (excess < 0.1) return 'var(--color-score-good)';
+  if (excess < 0.25) return 'var(--color-score-fair)';
+  return 'var(--color-score-poor)';
 }
 
 /** Where each corner's vertex points, on the unit square's diagonals. */
@@ -102,9 +102,9 @@ function TiltDiagram({ tilt }: { tilt: TiltSummaryInfo }) {
       />
       <polygon
         points={polygon}
-        fill="var(--color-primary, #4a9eff)"
+        fill="var(--color-primary)"
         fillOpacity={0.18}
-        stroke="var(--color-primary, #4a9eff)"
+        stroke="var(--color-primary)"
         strokeWidth={1.5}
       />
       {measured.map(({ name, hfr, point: [x, y] }) => (
@@ -115,9 +115,9 @@ function TiltDiagram({ tilt }: { tilt: TiltSummaryInfo }) {
             r={3}
             fill={
               name === tilt.worst_corner
-                ? 'var(--color-error)'
+                ? 'var(--color-score-poor)'
                 : name === tilt.best_corner
-                  ? 'var(--color-success)'
+                  ? 'var(--color-score-good)'
                   : 'currentColor'
             }
           />

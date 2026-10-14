@@ -76,13 +76,13 @@ export default function TargetSearch({ label, ariaLabel, placeholder, buttonLabe
             else if (event.key === 'Enter') { event.preventDefault(); go(); }
           }} />
         {open && rows > 0 && !disabled && <ul className="target-search-list" role="listbox" id={listId} aria-label="Matching names" onMouseDown={event => event.preventDefault()}>
-          {local.map((hit, index) => <li key={hit.name} id={`${listId}-${index}`} role="option" aria-selected={index === active} className={index === active ? 'is-active' : undefined}
+          {local.map((hit, index) => <li key={hit.name} id={`${listId}-${index}`} role="option" aria-selected={index === active}
             onMouseEnter={() => setActive(index)} onClick={() => pickLocal(hit)}>
             <span className="target-search-name">{hit.name}</span>
             {hit.common_name && <span className="target-search-common">{hit.common_name}</span>}
             <span className="target-search-kind">{KIND_LABEL[hit.kind] ?? hit.kind}</span>
           </li>)}
-          {query && <li id={`${listId}-${local.length}`} role="option" aria-selected={active === local.length} className={`target-search-online${active === local.length ? ' is-active' : ''}`}
+          {query && <li id={`${listId}-${local.length}`} role="option" aria-selected={active === local.length} className="target-search-online"
             onMouseEnter={() => setActive(local.length)} onClick={() => { setOpen(false); online.mutate(query); }}>
             <Search size={13} />Look up “{query}” online{suggestions.data && !suggestions.data.local.available ? ' (no local catalog on this server)' : ''}
           </li>}

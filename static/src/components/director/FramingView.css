@@ -2,6 +2,29 @@
    form on the right; stacked on a phone. The sky column stays put while
    the form scrolls, so the horizon chart is always on screen. */
 .framing { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 20px; align-items: start; margin-top: 12px; }
+/* The framing's own colours: the shared panels in blue, each rig framed on
+   its own in a colour of its own, the light ink of labels and the compass,
+   and the rotate handle. The chart of the sky under it takes the Sky view's
+   tokens, drawn a little brighter here. */
+.framing {
+  --framing-panel: #5ab4ff;
+  --framing-ink: #d8ecff;
+  --framing-rig-0: #ffc56b;
+  --framing-rig-0-ink: #ffe3b3;
+  --framing-rig-1: #7be495;
+  --framing-rig-1-ink: #d2f7dc;
+  --framing-rig-2: #ff8ad4;
+  --framing-rig-2-ink: #ffd6ef;
+  --framing-rig-3: #c9a7ff;
+  --framing-rig-3-ink: #ebe0ff;
+  --framing-handle: #ffd166;
+  --sky-star: rgb(235 240 255 / 90%);
+  --sky-figure: rgb(150 175 235 / 40%);
+  --sky-figure-name: rgb(170 185 230 / 55%);
+  --sky-graticule: rgb(150 170 220 / 28%);
+  --sky-label: rgb(190 200 235 / 80%);
+  --sky-milky-way: rgb(200 210 255 / 5%);
+}
 @media (max-width: 1000px) { .framing { grid-template-columns: minmax(0, 1fr); } }
 .framing-stage-wrap, .framing-sky-box { min-width: 0; }
 /* A framing that could not be reloaded stays up under this line. */
@@ -10,7 +33,7 @@
 /* The stage takes the column's width and what the window leaves after the
    readout and the visibility strip; the drawing measures the element and
    lays the sky out to that shape. */
-.framing-stage { position: relative; width: 100%; height: clamp(300px, calc(100vh - 560px), 1200px); background: #05070c; border: 1px solid var(--color-border-secondary); border-radius: 6px; overflow: hidden; cursor: grab; touch-action: none; user-select: none; }
+.framing-stage { position: relative; width: 100%; height: clamp(300px, calc(100vh - 560px), 1200px); background: var(--sky-bg); border: 1px solid var(--color-border-secondary); border-radius: 6px; overflow: hidden; cursor: grab; touch-action: none; user-select: none; }
 @media (max-width: 1000px) { .framing-stage { height: clamp(260px, 55vh, 900px); } }
 .framing-stage:active { cursor: grabbing; }
 .framing-stage > img, .framing-stage > svg, .framing-stage-empty { position: absolute; inset: 0; width: 100%; height: 100%; }
@@ -19,15 +42,15 @@
 .framing-stage canvas.framing-sky.is-empty { opacity: 0; }
 .framing-stage.is-stale .framing-sky { opacity: 0.85; }
 .framing-stage > svg { pointer-events: none; }
-.framing-panel polygon { fill: rgba(80, 180, 255, 0.12); stroke: #5ab4ff; stroke-width: 2.5; vector-effect: non-scaling-stroke; }
-.framing-panel text { fill: #d8ecff; font-size: 22px; paint-order: stroke; stroke: rgba(0, 0, 0, 0.7); stroke-width: 4px; }
-.framing-overlay { fill: none; stroke: #ffc56b; stroke-width: 2; stroke-dasharray: 10 8; vector-effect: non-scaling-stroke; }
+.framing-panel polygon { fill: color-mix(in srgb, var(--framing-panel) 12%, transparent); stroke: var(--framing-panel); stroke-width: 2.5; vector-effect: non-scaling-stroke; }
+.framing-panel text { fill: var(--framing-ink); font-size: 22px; paint-order: stroke; stroke: var(--color-halo); stroke-width: 4px; }
+.framing-overlay { fill: none; stroke: var(--framing-rig-0); stroke-width: 2; stroke-dasharray: 10 8; vector-effect: non-scaling-stroke; }
 /* Rigs framed on their own: each grid in a colour of its own, the one being edited solid. */
-.framing-rig-panels polygon { fill: rgba(255, 197, 107, 0.08); stroke: #ffc56b; stroke-width: 2; stroke-dasharray: 6 5; vector-effect: non-scaling-stroke; }
-.framing-rig-panels text { fill: #ffe3b3; font-size: 18px; paint-order: stroke; stroke: rgba(0, 0, 0, 0.7); stroke-width: 4px; }
-.framing-rig-1 polygon { stroke: #7be495; fill: rgba(123, 228, 149, 0.08); } .framing-rig-1 text { fill: #d2f7dc; }
-.framing-rig-2 polygon { stroke: #ff8ad4; fill: rgba(255, 138, 212, 0.08); } .framing-rig-2 text { fill: #ffd6ef; }
-.framing-rig-3 polygon { stroke: #c9a7ff; fill: rgba(201, 167, 255, 0.08); } .framing-rig-3 text { fill: #ebe0ff; }
+.framing-rig-panels polygon { fill: color-mix(in srgb, var(--framing-rig-0) 8%, transparent); stroke: var(--framing-rig-0); stroke-width: 2; stroke-dasharray: 6 5; vector-effect: non-scaling-stroke; }
+.framing-rig-panels text { fill: var(--framing-rig-0-ink); font-size: 18px; paint-order: stroke; stroke: var(--color-halo); stroke-width: 4px; }
+.framing-rig-1 polygon { stroke: var(--framing-rig-1); fill: color-mix(in srgb, var(--framing-rig-1) 8%, transparent); } .framing-rig-1 text { fill: var(--framing-rig-1-ink); }
+.framing-rig-2 polygon { stroke: var(--framing-rig-2); fill: color-mix(in srgb, var(--framing-rig-2) 8%, transparent); } .framing-rig-2 text { fill: var(--framing-rig-2-ink); }
+.framing-rig-3 polygon { stroke: var(--framing-rig-3); fill: color-mix(in srgb, var(--framing-rig-3) 8%, transparent); } .framing-rig-3 text { fill: var(--framing-rig-3-ink); }
 .framing-rig-panels.is-editing polygon { stroke-dasharray: none; stroke-width: 2.5; }
 /* A rig that is off, or no longer listed, shoots nothing: its grid is dim. */
 .framing-rig-panels.is-off { opacity: 0.35; }
@@ -38,28 +61,28 @@
    small buttons; the compass keeps the top-right corner. */
 .framing-stage-top { position: absolute; left: 10px; top: 10px; right: 84px; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; pointer-events: none; }
 .framing-stage-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; pointer-events: auto; }
-.framing-seg { display: inline-flex; background: rgba(0, 0, 0, 0.65); border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 6px; overflow: hidden; }
-.framing-seg button { min-height: 28px; height: 28px; padding: 0 9px; gap: 5px; font-size: 12px; color: #fff; background: transparent; border: 0; border-radius: 0; border-right: 1px solid rgba(255, 255, 255, 0.18); }
+.framing-seg { display: inline-flex; background: var(--color-scrim); border: 1px solid var(--color-scrim-border); border-radius: 6px; overflow: hidden; }
+.framing-seg button { min-height: 28px; height: 28px; padding: 0 9px; gap: 5px; font-size: 12px; color: var(--color-text-on-fill); background: transparent; border: 0; border-radius: 0; border-right: 1px solid var(--color-scrim-border); }
 .framing-seg button:last-child { border-right: 0; }
-.framing-seg button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
-.framing-seg button[aria-pressed="true"] { background: rgba(90, 180, 255, 0.85); color: #06121f; }
-.framing-seg button[aria-pressed="true"]:hover { background: rgba(90, 180, 255, 0.95); }
+.framing-seg button:hover:not(:disabled) { background: var(--color-overlay-white); }
+/* Over the sky a tint would not read, so an on toggle fills. */
+.framing-seg button[aria-pressed='true'], .framing-seg button[aria-pressed='true']:hover { background: var(--state-on-fill); color: var(--state-on-fill-fg); }
 .framing-seg-icons button { width: 30px; padding: 0; }
-.framing-seg-icons button[aria-pressed="false"] { color: rgba(255, 255, 255, 0.6); }
+.framing-seg-icons button[aria-pressed='false'] { color: var(--color-text-muted); }
 @media (max-width: 600px) { .framing-seg button span { display: none; } }
 .framing-stage-status { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; pointer-events: none; max-width: min(100%, 520px); }
-.framing-stage-status span { background: rgba(0, 0, 0, 0.65); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
-.framing-stage-status [role="alert"] { background: rgba(160, 40, 40, 0.85); }
+.framing-stage-status span { background: var(--color-scrim); color: var(--color-text-on-fill); padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+.framing-stage-status [role='alert'] { background: rgba(160, 40, 40, 0.85); }
 /* A note is a few words; its title gives the reason, so it takes the pointer
    for the tooltip. A drag that starts on it still reaches the stage. */
-.framing-stage-status [role="note"] { color: rgba(255, 255, 255, 0.8); pointer-events: auto; cursor: help; }
-.framing-stage-scale { position: absolute; right: 10px; bottom: 8px; background: rgba(0, 0, 0, 0.65); color: #fff; padding: 3px 8px; border-radius: 4px; font-size: 12px; pointer-events: none; }
+.framing-stage-status [role='note'] { color: var(--color-text-lighter); pointer-events: auto; cursor: help; }
+.framing-stage-scale { position: absolute; right: 10px; bottom: 8px; background: var(--color-scrim); color: var(--color-text-on-fill); padding: 3px 8px; border-radius: 4px; font-size: 12px; pointer-events: none; }
 .framing-attribution { margin: 4px 0 0; font-size: 11px; line-height: 1.35; }
 .framing-controls fieldset { border: 1px solid var(--color-border-secondary); border-radius: 6px; padding: 6px 12px 10px; margin: 0 0 10px; min-width: 0; }
 .framing-controls legend { padding: 0 4px; font-weight: 600; }
 .framing-controls label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--color-text-secondary); min-width: 0; }
 .framing-controls label > small:last-child { color: var(--color-text-secondary); }
-.framing-controls input:not([type="checkbox"]), .framing-controls select { width: 100%; min-width: 0; box-sizing: border-box; background: var(--color-bg-secondary); color: var(--color-text-primary); border: 1px solid var(--color-border-tertiary); border-radius: 4px; padding: 7px 9px; font: inherit; }
+.framing-controls input:not([type='checkbox']), .framing-controls select { width: 100%; min-width: 0; box-sizing: border-box; background: var(--color-bg-secondary); color: var(--color-text-primary); border: 1px solid var(--color-border-tertiary); border-radius: 4px; padding: 7px 9px; font: inherit; }
 .framing-controls input:disabled, .framing-controls select:disabled { opacity: 0.6; }
 .framing-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: 8px 12px; margin-top: 8px; }
 .framing-input { display: flex; align-items: center; gap: 6px; }
@@ -70,10 +93,10 @@
 .framing-start { border: 1px solid var(--color-border-secondary); border-radius: 6px; padding: 8px 12px 12px; margin-top: 16px; }
 .framing-start label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--color-text-secondary); }
 .framing-start input { min-width: 0; box-sizing: border-box; background: var(--color-bg-secondary); color: var(--color-text-primary); border: 1px solid var(--color-border-tertiary); border-radius: 4px; padding: 7px 9px; font: inherit; width: 100%; }
-.framing-rotate line { stroke: #ffd166; stroke-width: 1.5; stroke-dasharray: 4 4; vector-effect: non-scaling-stroke; }
-.framing-rotate circle { fill: rgba(255, 209, 102, 0.35); stroke: #ffd166; stroke-width: 2.5; vector-effect: non-scaling-stroke; }
-.framing-compass line { stroke: #d8ecff; stroke-width: 2; }
-.framing-compass text { fill: #d8ecff; font-size: 16px; font-weight: 600; paint-order: stroke; stroke: rgba(0, 0, 0, 0.7); stroke-width: 3px; }
+.framing-rotate line { stroke: var(--framing-handle); stroke-width: 1.5; stroke-dasharray: 4 4; vector-effect: non-scaling-stroke; }
+.framing-rotate circle { fill: color-mix(in srgb, var(--framing-handle) 35%, transparent); stroke: var(--framing-handle); stroke-width: 2.5; vector-effect: non-scaling-stroke; }
+.framing-compass line { stroke: var(--framing-ink); stroke-width: 2; }
+.framing-compass text { fill: var(--framing-ink); font-size: 16px; font-weight: 600; paint-order: stroke; stroke: var(--color-halo); stroke-width: 3px; }
 .framing-readout { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 6px 0 0; font-size: 13px; font-variant-numeric: tabular-nums; }
 .framing-readout span:first-child { font-weight: 600; }
 .framing-turns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
@@ -102,21 +125,20 @@
    scale's width clear and shortens its name to fit. */
 .framing-stage-surveys.is-narrow .framing-layers-chip { max-width: calc(100% - 115px); }
 .framing-layers-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.framing-stage-surveys button { min-height: 26px; padding: 2px 9px; font-size: 12px; border-radius: 12px; background: rgba(0, 0, 0, 0.65); color: #fff; border: 1px solid rgba(255, 255, 255, 0.25); }
-.framing-stage-surveys button[aria-pressed="true"] { background: rgba(90, 180, 255, 0.85); color: #06121f; border-color: #5ab4ff; }
-.framing-stage-surveys button:hover:not(:disabled) { background: rgba(40, 40, 40, 0.85); }
-.framing-stage-surveys button[aria-pressed="true"]:hover { background: rgba(90, 180, 255, 0.95); }
+.framing-stage-surveys button { min-height: 26px; padding: 2px 9px; font-size: 12px; border-radius: 12px; background: var(--color-scrim); color: var(--color-text-on-fill); border: 1px solid var(--color-scrim-border); }
+.framing-stage-surveys button:hover:not(:disabled) { background: var(--color-scrim-hover); }
+.framing-stage-surveys button[aria-pressed='true'], .framing-stage-surveys button[aria-pressed='true']:hover { background: var(--state-on-fill); color: var(--state-on-fill-fg); border-color: var(--state-on-fill); }
 
 /* The chart under the framing, in the Sky view's colours. */
-.framing-graticule path { fill: none; stroke: rgba(150, 170, 220, 0.28); stroke-width: 1; vector-effect: non-scaling-stroke; }
-.framing-graticule text { fill: rgba(190, 200, 235, 0.8); font-size: 13px; paint-order: stroke; stroke: rgba(0, 0, 0, 0.7); stroke-width: 3px; }
-.framing-milky-way path { fill: rgba(200, 210, 255, 0.05); stroke: none; }
-.framing-stars circle { fill: rgba(235, 240, 255, 0.9); }
-.framing-figures path { fill: none; stroke: rgba(150, 175, 235, 0.4); stroke-width: 1; vector-effect: non-scaling-stroke; }
-.framing-names text { fill: rgba(170, 185, 230, 0.55); font-size: 14px; letter-spacing: 0.08em; text-transform: uppercase; text-anchor: middle; }
+.framing-graticule path { fill: none; stroke: var(--sky-graticule); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.framing-graticule text { fill: var(--sky-label); font-size: 13px; paint-order: stroke; stroke: var(--color-halo); stroke-width: 3px; }
+.framing-milky-way path { fill: var(--sky-milky-way); stroke: none; }
+.framing-stars circle { fill: var(--sky-star); }
+.framing-figures path { fill: none; stroke: var(--sky-figure); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.framing-names text { fill: var(--sky-figure-name); font-size: 14px; letter-spacing: 0.08em; text-transform: uppercase; text-anchor: middle; }
 /* Catalog marks: places, not pixels. One colour per kind of object, on the
    outline and its label alike (kinds are the catalog's kebab-case names). */
-.framing-marks text { font-size: 13px; fill: #e8eefc; paint-order: stroke; stroke: rgba(0, 0, 0, 0.75); stroke-width: 3px; }
+.framing-marks text { font-size: 13px; fill: #e8eefc; paint-order: stroke; stroke: var(--color-halo); stroke-width: 3px; }
 .framing-mark ellipse { fill: none; stroke: rgba(255, 214, 120, 0.8); stroke-width: 0.75; vector-effect: non-scaling-stroke; }
 .framing-mark-galaxy ellipse { stroke: rgba(255, 160, 110, 0.9); }
 .framing-mark-galaxy text { fill: #ffc9b0; }
@@ -148,10 +170,10 @@
 .framing-catalogs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 8px; }
 .framing-catalogs-title { flex-basis: 100%; font-size: 12px; color: var(--color-text-secondary); }
 .framing-catalogs button { min-height: 24px; padding: 1px 8px; font-size: 12px; border-radius: 12px; color: var(--color-text-secondary); }
-.framing-catalogs button[aria-pressed="true"] { background: rgba(90, 180, 255, 0.18); border-color: #5ab4ff; color: var(--color-text-primary); }
+.framing-catalogs button[aria-pressed='true'] { background: var(--state-on-bg); border-color: var(--state-on-border); color: var(--color-text-primary); }
 .framing-stage-zoom { position: absolute; right: 10px; bottom: 34px; display: flex; flex-direction: column; gap: 4px; }
-.framing-stage-zoom button { width: 30px; min-height: 30px; padding: 0; background: rgba(0, 0, 0, 0.65); color: #fff; border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 4px; }
-.framing-stage-zoom button:hover:not(:disabled) { background: rgba(40, 40, 40, 0.85); }
+.framing-stage-zoom button { width: 30px; min-height: 30px; padding: 0; background: var(--color-scrim); color: var(--color-text-on-fill); border: 1px solid var(--color-scrim-border); border-radius: 4px; }
+.framing-stage-zoom button:hover:not(:disabled) { background: var(--color-scrim-hover); }
 
 /* One card per rig, its swatch the colour of its outline on the sky. */
 .framing-rig-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
@@ -162,41 +184,42 @@
 .framing-rig-role { margin: 0; font-size: 13px; color: var(--color-text-secondary); }
 .framing-rig-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 13px; }
 .framing-rig-swatch { flex: none; width: 14px; height: 10px; border-radius: 3px; border: 2px solid var(--color-border-tertiary); }
-.framing-rig-swatch.is-shared { border-color: #5ab4ff; background: rgba(80, 180, 255, 0.25); }
-.framing-rig-swatch.is-compared { border-color: #ffc56b; border-style: dashed; }
-.framing-rig-swatch.is-own-0 { border-color: #ffc56b; background: rgba(255, 197, 107, 0.2); }
-.framing-rig-swatch.is-own-1 { border-color: #7be495; background: rgba(123, 228, 149, 0.2); }
-.framing-rig-swatch.is-own-2 { border-color: #ff8ad4; background: rgba(255, 138, 212, 0.2); }
-.framing-rig-swatch.is-own-3 { border-color: #c9a7ff; background: rgba(201, 167, 255, 0.2); }
+.framing-rig-swatch.is-shared { border-color: var(--framing-panel); background: color-mix(in srgb, var(--framing-panel) 25%, transparent); }
+.framing-rig-swatch.is-compared { border-color: var(--framing-rig-0); border-style: dashed; }
+.framing-rig-swatch.is-own-0 { border-color: var(--framing-rig-0); background: color-mix(in srgb, var(--framing-rig-0) 20%, transparent); }
+.framing-rig-swatch.is-own-1 { border-color: var(--framing-rig-1); background: color-mix(in srgb, var(--framing-rig-1) 20%, transparent); }
+.framing-rig-swatch.is-own-2 { border-color: var(--framing-rig-2); background: color-mix(in srgb, var(--framing-rig-2) 20%, transparent); }
+.framing-rig-swatch.is-own-3 { border-color: var(--framing-rig-3); background: color-mix(in srgb, var(--framing-rig-3) 20%, transparent); }
 .framing-rig-swatch.is-none { border-style: dotted; }
 .framing-other-rigs { margin-top: 8px; }
 .framing-other-rigs > summary { cursor: pointer; color: var(--color-text-secondary); margin-bottom: 8px; }
 .framing-rig-card .framing-own { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--color-border-secondary); }
 .director-page .framing-rig-actions button { min-height: 28px; padding: 2px 10px; font-size: 13px; }
-.framing-legend-swatch { display: inline-block; width: 14px; height: 10px; margin-left: 4px; border: 2px solid #5ab4ff; border-radius: 3px; background: rgba(80, 180, 255, 0.25); vertical-align: middle; }
+.framing-legend-swatch { display: inline-block; width: 14px; height: 10px; margin-left: 4px; border: 2px solid var(--framing-panel); border-radius: 3px; background: color-mix(in srgb, var(--framing-panel) 25%, transparent); vertical-align: middle; }
 /* A pickable swatch: an outline that fills on hover; the panel rig's is filled and ringed. */
 .framing-rig-group { margin: 8px 0 4px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-secondary); }
 /* An on/off switch: a track with a knob that slides right when on. */
-.director-page button.framing-rig-switch { flex: none; position: relative; width: 34px; min-width: 34px; height: 18px; min-height: 18px; padding: 0; border: 0; border-radius: 999px; background: var(--color-bg-quaternary, #3a3f47); cursor: pointer; }
+.director-page button.framing-rig-switch { flex: none; position: relative; width: 34px; min-width: 34px; height: 18px; min-height: 18px; padding: 0; border: 0; border-radius: 999px; background: var(--color-bg-quaternary); cursor: pointer; }
 .director-page button.framing-rig-switch > span { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--color-text-secondary); transition: left 0.12s; }
-.director-page button.framing-rig-switch[aria-checked="true"] { background: #5ab4ff; }
-.director-page button.framing-rig-switch[aria-checked="true"] > span { left: 18px; background: #fff; }
+.director-page button.framing-rig-switch[aria-checked='true'] { background: var(--state-on-fill); }
+.director-page button.framing-rig-switch[aria-checked='true'] > span { left: 18px; background: var(--color-text-on-fill); }
 .director-page button.framing-rig-switch:disabled { cursor: not-allowed; opacity: 0.6; }
 .framing-rig-pick { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
 .director-page button.framing-rig-pick { flex: 1; min-height: 0; justify-content: flex-start; padding: 2px 6px; margin: -2px 0; border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
-.director-page button.framing-rig-pick:hover:not(:disabled) { background: rgba(80, 180, 255, 0.12); }
-.director-page button.framing-rig-pick:hover:not(:disabled) .framing-rig-swatch { border-color: #5ab4ff; background: rgba(80, 180, 255, 0.35); }
+.director-page button.framing-rig-pick:hover:not(:disabled) { background: color-mix(in srgb, var(--framing-panel) 12%, transparent); }
+.director-page button.framing-rig-pick:hover:not(:disabled) .framing-rig-swatch { border-color: var(--framing-panel); background: color-mix(in srgb, var(--framing-panel) 35%, transparent); }
 .director-page button.framing-rig-pick:disabled { cursor: default; opacity: 1; }
-/* The rig that sizes the shared panels reads as the selected one. */
-.framing-rig-card.is-framing { border-color: #5ab4ff; background: rgba(80, 180, 255, 0.08); box-shadow: inset 3px 0 0 #5ab4ff; }
+/* The rig that sizes the shared panels reads as the selected one, in the
+   panels' blue so the card and its outline on the sky match. */
+.framing-rig-card.is-framing { border-color: var(--framing-panel); background: color-mix(in srgb, var(--framing-panel) 8%, transparent); box-shadow: inset 3px 0 0 var(--framing-panel); }
 .framing-panel-source { margin: 0 0 6px; font-size: 13px; color: var(--color-text-secondary); }
 .framing-panel-source strong { color: var(--color-text-primary); }
 .director-page .framing-panel-source button { min-height: 24px; margin-left: 6px; padding: 1px 8px; font-size: 12px; }
 
-.framing-overlay-label { fill: #ffe3b3; font-size: 13px; paint-order: stroke; stroke: rgba(0, 0, 0, 0.7); stroke-width: 3px; }
+.framing-overlay-label { fill: var(--framing-rig-0-ink); font-size: 13px; paint-order: stroke; stroke: var(--color-halo); stroke-width: 3px; }
 
 /* What the server would refuse, said at the field. */
 .framing-problem { margin: 4px 0 0; font-size: 13px; color: var(--color-error-light); }
-.framing-controls input[aria-invalid="true"] { border-color: var(--color-error-light); }
+.framing-controls input[aria-invalid='true'] { border-color: var(--color-error-light); }
 .framing-orphans { display: grid; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--color-text-secondary); }
 .framing-orphans li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }

@@ -168,7 +168,7 @@
 .overview .action-button.primary {
   background: var(--color-success);
   border-color: var(--color-success);
-  color: white;
+  color: var(--color-text-on-fill);
 }
 
 .overview .action-button.primary:hover {
@@ -253,8 +253,9 @@
 .project-show select:focus,
 .project-sort select:focus,
 .project-db-filter select:focus {
-  border-color: var(--color-primary);
-  outline: 2px solid var(--color-primary-alpha-20);
+  outline: none;
+  border-color: var(--state-focus-border);
+  box-shadow: var(--state-focus-ring);
 }
 
 .sr-only {
@@ -353,7 +354,7 @@
 
 .project-archive-item:focus-visible,
 .project-archive-toggle:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--state-focus-border);
   outline-offset: 2px;
 }
 
@@ -401,11 +402,13 @@
 }
 
 /* The project the user was working in before they opened the Overview. The
-   ring says "you were here" without competing with the new-images accent. */
+   ring says "you were here" without competing with the new-images accent.
+   The card is a container, so it keeps a class; its open button and the
+   archive row say aria-current. */
 .project-card.is-current,
-.project-archive-item.is-current {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px var(--color-primary-alpha-20);
+.project-archive-item[aria-current='true'] {
+  border-color: var(--state-on-border);
+  box-shadow: 0 0 0 2px var(--state-on-bg);
 }
 
 .project-card.no-files {
@@ -420,7 +423,7 @@
 .project-open-main:focus-visible,
 .project-settings-button:focus-visible,
 .project-frame:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--state-focus-border);
   outline-offset: 2px;
 }
 
@@ -469,7 +472,7 @@
 
 .no-files-badge {
   background: var(--color-error);
-  color: white;
+  color: var(--color-text-on-fill);
   padding: 2px 8px;
   border-radius: 4px;
   font-size: 0.75em;
@@ -662,7 +665,7 @@
 
 .target-compact-main:focus-visible,
 .target-settings-button:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--state-focus-border);
   outline-offset: -2px;
 }
 
@@ -952,27 +955,27 @@
   gap: 6px;
   margin: 6px 0;
   padding: 8px;
-  border: 1px solid var(--color-border, #444);
+  border: 1px solid var(--color-border-secondary);
   border-radius: 6px;
-  background: var(--color-bg-secondary, rgba(255, 255, 255, 0.04));
+  background: var(--color-bg-secondary);
 }
 
 .organize-input {
   flex: 1;
   min-width: 140px;
   padding: 4px 8px;
-  border: 1px solid var(--color-border, #555);
+  border: 1px solid var(--color-border-tertiary);
   border-radius: 4px;
-  background: var(--color-bg-primary, #1a1a1a);
+  background: var(--color-bg-primary);
   color: inherit;
   font-size: 13px;
 }
 
 .organize-select {
   padding: 4px 6px;
-  border: 1px solid var(--color-border, #555);
+  border: 1px solid var(--color-border-tertiary);
   border-radius: 4px;
-  background: var(--color-bg-primary, #1a1a1a);
+  background: var(--color-bg-primary);
   color: inherit;
   font-size: 12px;
   max-width: 220px;
@@ -982,17 +985,17 @@
 .organize-cancel {
   padding: 4px 10px;
   border-radius: 4px;
-  border: 1px solid var(--color-border, #555);
+  border: 1px solid var(--color-border-tertiary);
   cursor: pointer;
   font-size: 12px;
-  background: var(--color-bg-primary, #222);
+  background: var(--color-bg-primary);
   color: inherit;
 }
 
 .organize-save {
-  background: var(--color-primary, #2d6cdf);
-  border-color: var(--color-primary, #2d6cdf);
-  color: #fff;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-text-on-fill);
 }
 
 .organize-save:disabled,
@@ -1003,12 +1006,12 @@
 
 .organize-error {
   flex-basis: 100%;
-  color: var(--color-error, #e66);
+  color: var(--color-error);
   font-size: 12px;
 }
 
 .export-link {
-  color: var(--color-primary, #2d6cdf);
+  color: var(--color-primary);
   text-decoration: none;
   cursor: pointer;
 }
@@ -1018,19 +1021,19 @@
 }
 
 .export-link.wbpp-state-running {
-  color: var(--color-warning, #b9770e);
+  color: var(--color-warning);
 }
 
 .export-link.wbpp-state-done {
-  color: var(--color-success, #1e8449);
+  color: var(--color-success);
 }
 
 .export-link.wbpp-state-error {
-  color: var(--color-error, #c0392b);
+  color: var(--color-error);
 }
 
 .export-link.wbpp-state-queued {
-  color: var(--color-text-muted, #7a7f87);
+  color: var(--color-text-muted);
 }
 
 /* Background jobs above the metrics: WBPP runs, runs in line, server exports.
@@ -1059,22 +1062,22 @@
 }
 
 .overview-job.tone-running {
-  border-left-color: var(--color-warning, #b9770e);
+  border-left-color: var(--color-warning);
   color: var(--color-text-primary);
 }
 
 .overview-job.tone-done {
-  border-left-color: var(--color-success, #1e8449);
+  border-left-color: var(--color-success);
 }
 
 .overview-job.tone-error {
-  border-left-color: var(--color-error, #c0392b);
-  color: var(--color-error, #c0392b);
+  border-left-color: var(--color-error);
+  color: var(--color-error);
 }
 
 .overview-job.tone-queued {
   border-left-color: var(--color-border-secondary);
-  color: var(--color-text-muted, #7a7f87);
+  color: var(--color-text-muted);
 }
 
 .overview-job-icon {
@@ -1113,7 +1116,7 @@
   border: 1px solid transparent;
   border-radius: 4px;
   background: none;
-  color: var(--color-text-muted, #7a7f87);
+  color: var(--color-text-muted);
   font-size: 15px;
   line-height: 1;
   cursor: pointer;

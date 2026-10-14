@@ -1175,17 +1175,10 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                 <div>
                   <p>No images found in the selected date range.</p>
                   <p>Try clearing the date filters or selecting a broader range.</p>
-                  <button 
+                  <button
+                    type="button"
+                    className="empty-state-action"
                     onClick={() => updateFilters({ dateStart: '', dateEnd: '' })}
-                    style={{ 
-                      marginTop: '0.5rem', 
-                      padding: '0.5rem 1rem', 
-                      backgroundColor: '#61dafb', 
-                      color: '#000',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer'
-                    }}
                   >
                     Clear Date Filters
                   </button>

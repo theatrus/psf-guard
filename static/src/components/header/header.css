@@ -96,22 +96,23 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--color-success, #7be495);
-  box-shadow: 0 0 0 2px var(--color-success-alpha-20, rgba(123, 228, 149, 0.2));
+  background: var(--color-success);
+  box-shadow: 0 0 0 2px var(--color-success-alpha-20);
 }
 
 .live-chip.is-alert {
-  border-color: var(--color-error, #ff6b6b);
-  color: var(--color-error, #ff6b6b);
+  border-color: var(--color-error);
+  color: var(--color-error);
 }
 
 .live-chip.is-alert .live-chip-dot {
-  background: var(--color-error, #ff6b6b);
-  box-shadow: 0 0 0 2px rgba(255, 107, 107, 0.25);
+  background: var(--color-error);
+  box-shadow: 0 0 0 2px var(--color-error-alpha-20);
 }
 
-.live-chip[aria-current="page"] {
-  border-color: var(--color-primary);
+.live-chip[aria-current='page'] {
+  border-color: var(--state-on-border);
+  background: var(--state-on-bg);
 }
 
 /* Background work: a small chip with the overall progress and the job
@@ -128,8 +129,9 @@
   font-variant-numeric: tabular-nums;
 }
 
-.activity-chip[aria-expanded="true"] {
-  border-color: var(--color-primary);
+.activity-chip[aria-expanded='true'] {
+  border-color: var(--state-on-border);
+  background: var(--state-on-bg);
 }
 
 .activity-chip-percent {
@@ -143,7 +145,7 @@
 
 .activity-chip.is-finished {
   cursor: default;
-  color: var(--color-success, #7be495);
+  color: var(--color-success);
 }
 
 /* Finished with errors is a button: it opens the errors to dismiss. */
@@ -152,7 +154,7 @@ button.activity-chip.is-finished {
 }
 
 .activity-chip.is-finished.has-errors {
-  color: var(--color-warning, #f6c344);
+  color: var(--color-warning);
 }
 
 .activity-chip-mark {
@@ -271,7 +273,7 @@ div.activity-error {
   border: 1px solid var(--color-border-secondary);
   border-radius: 8px;
   background: var(--color-bg-secondary);
-  box-shadow: 0 10px 28px rgb(0 0 0 / 45%);
+  box-shadow: var(--shadow-popover);
   white-space: normal;
   text-align: left;
 }
@@ -377,14 +379,14 @@ div.activity-error {
 }
 
 .activity-row-actions .activity-row-stop:hover:not(:disabled) {
-  border-color: var(--color-error, #ff6b6b);
-  color: var(--color-error, #ff6b6b);
+  border-color: var(--color-error);
+  color: var(--color-error);
 }
 
 .activity-row-detail {
   min-width: 0;
   font-size: 0.74rem;
-  color: var(--color-text-muted, #999);
+  color: var(--color-text-muted);
 }
 
 .activity-row-tag {
@@ -527,10 +529,10 @@ div.activity-error {
   border: 1px solid var(--color-border-primary);
   border-radius: 6px;
   background: var(--color-bg-secondary);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+  box-shadow: var(--shadow-popover);
 }
 
-.header-menu-list [role="menuitem"] {
+.header-menu-list [role='menuitem'] {
   display: flex;
   align-items: center;
   gap: 0.55rem;
@@ -545,8 +547,8 @@ div.activity-error {
   cursor: pointer;
 }
 
-.header-menu-list [role="menuitem"]:hover,
-.header-menu-list [role="menuitem"]:focus-visible {
+.header-menu-list [role='menuitem']:hover,
+.header-menu-list [role='menuitem']:focus-visible {
   background: var(--color-bg-tertiary);
   outline: none;
 }
@@ -583,7 +585,7 @@ div.activity-error {
   transition: max-width 0.18s ease-out, margin-left 0.18s ease-out, opacity 0.14s;
 }
 
-.view-tab[aria-current="page"] .view-tab-name,
+.view-tab[aria-current='page'] .view-tab-name,
 .view-tab:hover .view-tab-name,
 .view-tab:focus-visible .view-tab-name {
   max-width: 9rem;
@@ -592,7 +594,7 @@ div.activity-error {
 }
 
 /* Opening waits; closing does not. */
-.view-tab:not([aria-current="page"]):hover .view-tab-name {
+.view-tab:not([aria-current='page']):hover .view-tab-name {
   transition-delay: 0.15s;
 }
 

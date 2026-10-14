@@ -1691,7 +1691,7 @@ export default function TauriSettings({
               aria-selected={tab.id === currentTab}
               aria-controls={`settings-panel-${tab.id}`}
               tabIndex={tab.id === currentTab ? 0 : -1}
-              className={`settings-tab${tab.id === currentTab ? ' active' : ''}`}
+              className="settings-tab"
               onClick={() => setActiveTab(tab.id)}
             >
               {tab.label}
@@ -1750,7 +1750,7 @@ export default function TauriSettings({
           )}
 
           {!managementAllowed && (
-            <div className="welcome-message" style={{ borderColor: 'var(--color-border-warning, #c62)' }}>
+            <div className="welcome-message is-warning">
               <h3>🔒 Database management is read-only</h3>
               <p>
                 This server was launched without

@@ -345,7 +345,7 @@ export default function ProjectTargetSelector() {
             <div ref={optionsRef} className="selector-options" aria-label="Projects and targets">
               <button
                 type="button"
-                className={`selector-option ${dbId === null ? 'is-selected' : ''}`}
+                className="selector-option"
                 aria-current={dbId === null ? 'true' : undefined}
                 onClick={() => chooseProject(null, null)}
               >
@@ -356,7 +356,7 @@ export default function ProjectTargetSelector() {
                 <button
                   key={`${database.id}:all`}
                   type="button"
-                  className={`selector-option ${dbId === database.id && selectedProjectId === null ? 'is-selected' : ''}`}
+                  className="selector-option"
                   aria-current={
                     dbId === database.id && selectedProjectId === null ? 'true' : undefined
                   }
@@ -404,7 +404,8 @@ export default function ProjectTargetSelector() {
                     <button
                       key={row.project.id}
                       type="button"
-                      className={`selector-option${workspacePlan?.project.id === row.project.id ? ' is-selected' : ''}`}
+                      className="selector-option"
+                      aria-current={workspacePlan?.project.id === row.project.id ? 'true' : undefined}
                       onClick={() => { setPickerOpen(false); setSearch(''); navigate(plans.hrefFor(row)); }}
                     >
                       <span>{row.project.name}</span>

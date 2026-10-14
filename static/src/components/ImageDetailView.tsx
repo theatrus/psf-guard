@@ -559,12 +559,11 @@ export default function ImageDetailView({
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  background: '#1a1a1a',
                   borderRadius: '8px'
                 }}>
                   <div style={{
                     textAlign: 'center',
-                    color: '#888'
+                    color: 'var(--color-text-muted)'
                   }}>
                     <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ marginBottom: '16px' }}>
                       <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
@@ -572,7 +571,7 @@ export default function ImageDetailView({
                       <line x1="15" y1="9" x2="9" y2="15" />
                     </svg>
                     <h3 style={{ margin: '0 0 8px 0', fontSize: '1.2rem', fontWeight: 'normal' }}>Image not available</h3>
-                    <p style={{ margin: 0, fontSize: '0.9rem', color: '#666' }}>{asyncImg.error ?? 'The requested image could not be found on the server'}</p>
+                    <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--color-text-hint)' }}>{asyncImg.error ?? 'The requested image could not be found on the server'}</p>
                   </div>
                 </div>
               ) : (

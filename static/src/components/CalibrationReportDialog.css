@@ -27,13 +27,13 @@
 }
 
 .calibration-report-error {
-  color: var(--color-error, #c0392b);
+  color: var(--color-error);
 }
 
 .calibration-report-warnings {
   margin: 0;
   padding-left: 1.2rem;
-  color: var(--color-warning, #b9770e);
+  color: var(--color-warning);
   font-size: 0.88rem;
 }
 
@@ -73,16 +73,16 @@
 .calibration-report td {
   text-align: left;
   padding: 0.28rem 0.7rem 0.28rem 0;
-  border-bottom: 1px solid var(--color-border, #444);
+  border-bottom: 1px solid var(--color-border-secondary);
   white-space: nowrap;
 }
 
 .calibration-report td.nightly {
-  color: var(--color-success, #1e8449);
+  color: var(--color-success);
 }
 
 .calibration-report td.missing {
-  color: var(--color-error, #c0392b);
+  color: var(--color-error);
 }
 
 .calibration-report-masters ul {
@@ -96,7 +96,7 @@
   flex-direction: column;
   gap: 0.4rem;
   padding-top: 0.6rem;
-  border-top: 1px solid var(--color-border, #444);
+  border-top: 1px solid var(--color-border-secondary);
   font-size: 0.88rem;
 }
 
@@ -126,7 +126,7 @@
   flex-direction: column;
   gap: 0.35rem;
   padding-bottom: 0.6rem;
-  border-bottom: 1px solid var(--color-border, #444);
+  border-bottom: 1px solid var(--color-border-secondary);
 }
 
 .calibration-report-quality p {
@@ -158,13 +158,13 @@
 }
 
 .calibration-report-level.is-poor {
-  color: #ff6b6b;
-  background: rgba(255, 107, 107, 0.14);
+  color: var(--color-status-bad);
+  background: var(--color-status-bad-bg);
 }
 
 .calibration-report-level.is-check {
-  color: #f2c94c;
-  background: rgba(242, 201, 76, 0.14);
+  color: var(--color-status-caution);
+  background: var(--color-status-caution-bg);
 }
 
 /* A finding's text, opening its lights in the Images grid. */

@@ -67,7 +67,7 @@
 .organization-preview dd { margin: 0; }
 .organization-preview ul { padding-left: 1.2rem; }
 .organization-preview li + li { margin-top: 0.5rem; }
-.organization-error { color: var(--color-error, #e57373); overflow-wrap: anywhere; }
+.organization-error { color: var(--color-error); overflow-wrap: anywhere; }
 .organization-note { margin: 1rem 0 0; }
 .organization-action { display: inline-flex; align-items: center; gap: 0.35rem; }
 .organization-action svg { flex: 0 0 auto; }

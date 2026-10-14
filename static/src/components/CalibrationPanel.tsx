@@ -165,7 +165,7 @@ export default function CalibrationPanel({ dbId, imageId, projectId }: Calibrati
                 <li key={finding.code}>
                   <button
                     type="button"
-                    className={`light-calibration-finding is-${finding.level}${isChosen ? ' is-chosen' : ''}`}
+                    className={`light-calibration-finding is-${finding.level}`}
                     aria-pressed={isChosen}
                     onClick={() => choose(finding)}
                   >

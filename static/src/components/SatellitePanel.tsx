@@ -51,7 +51,7 @@ export default function SatellitePanel({
       {analysis ? (
         <button
           type="button"
-          className={`astrometry-toggle ${overlayVisible ? 'active' : ''}`}
+          className="astrometry-toggle"
           aria-pressed={overlayVisible}
           onClick={onToggleOverlay}
         >

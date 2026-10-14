@@ -1191,14 +1191,14 @@ export default function StackPreviewPanel({
                           <div className="stack-preview-stars-toggle" role="group" aria-label="Star removal view">
                             <button
                               type="button"
-                              className={starsView[stretchKey] ? '' : 'is-active'}
+                              aria-pressed={!starsView[stretchKey]}
                               onClick={() => setStarsView((current) => ({ ...current, [stretchKey]: false }))}
                             >
                               Starless
                             </button>
                             <button
                               type="button"
-                              className={starsView[stretchKey] ? 'is-active' : ''}
+                              aria-pressed={Boolean(starsView[stretchKey])}
                               onClick={() => setStarsView((current) => ({ ...current, [stretchKey]: true }))}
                             >
                               Stars

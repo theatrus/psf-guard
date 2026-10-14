@@ -39,7 +39,7 @@ export default function ProjectTargetRows({
     <>
       <button
         type="button"
-        className={`selector-option selector-target-option ${projectSelected ? 'is-selected' : ''}`}
+        className="selector-option selector-target-option"
         aria-current={projectSelected ? 'true' : undefined}
         disabled={!project.has_files}
         onClick={onChooseProject}
@@ -57,7 +57,7 @@ export default function ProjectTargetRows({
           <button
             key={`${target.db_id}:${target.id}`}
             type="button"
-            className={`selector-option selector-target-option ${selected ? 'is-selected' : ''}`}
+            className="selector-option selector-target-option"
             aria-current={selected ? 'true' : undefined}
             disabled={!target.has_files}
             onClick={() => onChooseTarget(target)}

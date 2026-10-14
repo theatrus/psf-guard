@@ -18,7 +18,7 @@
 
 .draft-bar.is-dirty {
   border-color: var(--color-warning-light);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--shadow-raised);
 }
 
 .draft-bar-message {

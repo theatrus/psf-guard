@@ -16,6 +16,6 @@
 }
 
 .project-exposure-grouping .error {
-  color: var(--error-color, #c84f4f);
+  color: var(--color-error);
   overflow-wrap: anywhere;
 }

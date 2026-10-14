@@ -137,7 +137,7 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
       <WorkspaceSummary projectId={projectId} projectName={row.project.name} back={back.toString()} rigs={summaryRigs} onActivation={() => setActivating(true)} hideActivation={activationDue} />
       <div className="workspace-tabs" role="tablist" aria-label="Plan sections" onKeyDown={onTabKey}>
         {TABS.map(entry => <button key={entry.id} type="button" role="tab" id={`workspace-tab-${entry.id}`} aria-selected={entry.id === tab} aria-controls={`workspace-panel-${entry.id}`}
-          tabIndex={entry.id === tab ? 0 : -1} className={`workspace-tab${entry.id === tab ? ' active' : ''}`} onClick={() => chooseTab(entry.id)}>
+          tabIndex={entry.id === tab ? 0 : -1} className="workspace-tab" onClick={() => chooseTab(entry.id)}>
           {entry.label}{drafted(entry.drafts) && <><span className="workspace-tab-edited" aria-hidden="true" title="Unsaved changes">●</span><span className="workspace-tab-edited-text">, edited</span></>}
         </button>)}
       </div>
