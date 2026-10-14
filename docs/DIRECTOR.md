@@ -456,9 +456,9 @@ beside it opens the same dialog at any time, to push the last activation
 again. When the last activation had the saved plan, framing and rigs, the
 label says **Synced** at once while the [check](#activation) runs, and
 changes only if the check finds rows to write. Otherwise it says
-**Checking…** until the check answers. When the check fails, or cannot
-read a rig's database, the label says **Couldn't check**, with the reason
-in its tooltip, and no bar asks. The activation dialog's status line says
+**Checking the rigs…** until the check answers. When the check fails, or
+cannot read a rig's database, the label says **Couldn't check the rigs**
+(or the rig), with the reason in its tooltip, and no bar asks. The activation dialog's status line says
 the same. On a server that does not write rig databases the summary
 says **Drafts only** and no bar asks. Older links to the Plan, Rig
 databases or Activate tabs open Exposures or Rigs. A plan with no linked database yet starts its framing

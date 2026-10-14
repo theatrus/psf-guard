@@ -56,11 +56,11 @@ export default function WorkspaceSummary({ projectId, projectName, back, rigs, o
   // tooltip. A current record answers at once; where it cannot, the rows
   // are read first, rather than say one thing and then another.
   const synced = { tone: 'ok', text: 'Synced', title: 'The rigs hold the saved plan' } as const;
-  const activation: { tone?: 'ok' | 'behind'; text: string; title?: string } | null = checking ? { text: 'Checking…', title: 'Reading the rig databases' }
+  const activation: { tone?: 'ok' | 'behind'; text: string; title?: string } | null = checking ? { text: 'Checking the rigs…' }
     : matches ? synced
     : last.data
       ? behind.length > 0 ? { tone: 'behind', text: 'Not synced', title: notSynced }
-        : unchecked ? { tone: 'behind', text: "Couldn't check", title: `${unchecked.text}: ${unchecked.title}` }
+        : unchecked ? { tone: 'behind', ...unchecked }
         : synced
       : last.isSuccess ? { tone: 'behind', text: 'Not synced', title: notSynced } : null;
   return <div className="workspace-summary" aria-label="Plan summary" role="region">

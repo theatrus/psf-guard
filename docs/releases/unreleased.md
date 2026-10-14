@@ -65,7 +65,7 @@
   Target Scheduler rows, not only after a save: rows changed in N.I.N.A., or
   an old plan another length replaced that is still on. The plan's summary
   says **Synced** or **Not synced** (why is in the tooltip and in the bar at
-  the top), or **Couldn't check** when the rigs cannot be read, with a
+  the top), or **Couldn't check the rigs** when they cannot be read, with a
   separate **Activate…** button. The bar's button says **Activate again…**
   once the plan has been activated. An exposure plan the preview updates
   says what changes, such as `desired 100 → 150`.

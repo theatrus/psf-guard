@@ -208,15 +208,15 @@ describe('project workspace', () => {
   it('says the rigs could not be checked, without asking, when the check fails', async () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4 }, check: 'fails' });
     const summary = await screen.findByRole('region', { name: 'Plan summary' });
-    await waitFor(() => expect(within(summary).getByTestId('summary-activation')).toHaveTextContent(/^Couldn't check$/));
-    expect(within(summary).getByTestId('summary-activation')).toHaveAttribute('title', "Couldn't check the rigs: The check failed: disk I/O error");
+    await waitFor(() => expect(within(summary).getByTestId('summary-activation')).toHaveTextContent(/^Couldn't check the rigs$/));
+    expect(within(summary).getByTestId('summary-activation')).toHaveAttribute('title', 'The check failed: disk I/O error');
     expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
     expect(within(summary).getByRole('button', { name: 'Activate…' })).toBeInTheDocument();
   });
   it('says which rig could not be checked when its database could not be read', async () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4 }, check: 'unreadable' });
-    await waitFor(() => expect(screen.getByTestId('summary-activation')).toHaveTextContent(/^Couldn't check$/));
-    expect(screen.getByTestId('summary-activation')).toHaveAttribute('title', "Couldn't check C925 data: Its database could not be read: file is not a database.");
+    await waitFor(() => expect(screen.getByTestId('summary-activation')).toHaveTextContent(/^Couldn't check C925 data$/));
+    expect(screen.getByTestId('summary-activation')).toHaveAttribute('title', 'Its database could not be read: file is not a database.');
     expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: /Rigs/ }));
     expect(within(await screen.findByRole('group', { name: 'C925 data' })).getByText(/^couldn't check/)).toHaveAttribute('title', 'Its database could not be read: file is not a database.');
