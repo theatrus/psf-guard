@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { http, HttpResponse } from 'msw';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AccessContext, useAccess } from '../../../auth/access';
 import { server } from '../../../test/msw-server';
 import CalibrationPage from '../CalibrationPage';
 
@@ -149,15 +150,22 @@ function Location() {
   return <output aria-label="location">{location.search}</output>;
 }
 
-function renderPage(entry: string) {
+function WithAccess({ canWrite, children }: { canWrite: boolean; children: ReactNode }) {
+  const access = useAccess();
+  return <AccessContext.Provider value={{ ...access, canWrite }}>{children}</AccessContext.Provider>;
+}
+
+function renderPage(entry: string, { canWrite = true }: { canWrite?: boolean } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[entry]}>
-        <Routes>
-          <Route path="/calibration" element={<>{children}<Location /></>} />
-        </Routes>
-      </MemoryRouter>
+      <WithAccess canWrite={canWrite}>
+        <MemoryRouter initialEntries={[entry]}>
+          <Routes>
+            <Route path="/calibration" element={<>{children}<Location /></>} />
+          </Routes>
+        </MemoryRouter>
+      </WithAccess>
     </QueryClientProvider>
   );
   return render(<CalibrationPage />, { wrapper });
@@ -324,6 +332,25 @@ describe('CalibrationPage', () => {
     expect(await screen.findByText(/read-only/)).toBeInTheDocument();
     expect(within(readOnly).queryByRole('button', { name: 'Use anyway' })).toBeNull();
     expect(within(readOnly).queryByRole('button', { name: 'Forget' })).toBeNull();
+  });
+
+  it('offers no writes to a viewer, though the server allows management', async () => {
+    serve();
+    const frames = renderPage('/calibration?db=demo&calSession=s1&calFrame=f2', { canWrite: false });
+    const panel = await screen.findByRole('complementary', { name: 'Frame' });
+    await within(panel).findByRole('heading', { name: 'f2.fits' });
+    expect(await screen.findByText('Your account can view frames, not change them.')).toBeInTheDocument();
+    expect(within(panel).queryByRole('button', { name: 'Keep out' })).toBeNull();
+    expect(within(panel).queryByRole('button', { name: 'Use anyway' })).toBeNull();
+    expect(within(panel).queryByRole('button', { name: 'Forget' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Forget session' })).toBeNull();
+    frames.unmount();
+
+    serve();
+    renderPage('/calibration?db=demo&calTab=masters', { canWrite: false });
+    const masters = await screen.findByRole('region', { name: 'Masters' });
+    await within(masters).findByText('Used by Heart');
+    expect(screen.queryByRole('button', { name: /Clear/ })).toBeNull();
   });
 
   it('lists masters and opens one in the inspector from the URL', async () => {
