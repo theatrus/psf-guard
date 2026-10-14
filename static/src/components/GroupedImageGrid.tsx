@@ -52,6 +52,7 @@ import { mosaicLabel, useProjectMosaic } from '../hooks/useProjectMosaic';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import SecondaryScoreToggle from './SecondaryScoreToggle';
 import { useCalibrationMarks } from '../hooks/useCalibrationMarks';
+import { useNavigateNow } from '../hooks/useNavigateNow';
 import { chipFocus } from '../utils/calibrationFocus';
 import { calibrationFilterLabel, matchesCalibrationFilter } from '../utils/calibrationFilter';
 import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog';
@@ -77,6 +78,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   // Get state from URL hooks
   const location = useLocation();
   const navigate = useNavigate();
+  const navigateNow = useNavigateNow();
   const { dbId, projectId, targetId, mosaic: mosaicScope } = useDbProjectTarget();
   const { data: projectMosaic } = useProjectMosaic(mosaicScope ? dbId : null, mosaicScope ? projectId : null);
   // In a mosaic's scope the grid shows each panel's frames under its panel.
@@ -127,13 +129,13 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const [searchParams] = useSearchParams();
   
   const navigateToDetail = useCallback((imageId: number, calibrationFocus?: string) => {
-    navigate(imageDetailPath(imageId, searchParams, 'grid', calibrationFocus));
-  }, [navigate, searchParams]);
+    navigateNow(imageDetailPath(imageId, searchParams, 'grid', calibrationFocus));
+  }, [navigateNow, searchParams]);
   
   const navigateToComparison = useCallback((leftId: number, rightId: number) => {
     const params = searchParams.toString();
-    navigate(`/compare/${leftId}/${rightId}?${params}`);
-  }, [navigate, searchParams]);
+    navigateNow(`/compare/${leftId}/${rightId}?${params}`);
+  }, [navigateNow, searchParams]);
   
   // Fetch ALL images (no pagination for grouping) with periodic refresh
   const { data: allImages = [], isLoading } = useQuery({
@@ -729,9 +731,10 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     () => ({ enabled: isGridRoute, preventDefault: true }),
     [isGridRoute],
   );
-  // React Router updates the hash before this component rerenders. Guard each
-  // callback against that live value too, so a key pressed just after opening
-  // detail/compare cannot reach one stale grid listener.
+  // React Router updates the hash before this component rerenders. Opening
+  // detail or Compare draws them in the same step (useNavigateNow), but other
+  // route changes, such as Back, do not. Guard each callback against the live
+  // hash too, so a key pressed in that gap cannot reach a stale grid listener.
   const isLiveGridRoute = useCallback(
     () => window.location.hash.slice(1).split('?')[0] === '/grid',
     [],

@@ -382,3 +382,9 @@
   the previous result, says why, and is not tried again. **Re-apply
   processing when a stack refreshes**, under Settings → Stacking, is on by
   default.
+- A key pressed straight after opening, stepping or closing an image's
+  detail or Compare now reaches the view you see. Before, → pressed just as
+  the detail opened was lost, or moved the Sequence cursor behind it; ← →
+  pressed quickly in a row could step one image instead of two; and →
+  pressed just as the detail closed opened the next image again instead of
+  moving the Images cursor.

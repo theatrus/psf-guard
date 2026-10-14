@@ -8,6 +8,7 @@ import { useCalibrationMarks } from '../hooks/useCalibrationMarks';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import { useImageOrder } from '../hooks/useUrlState';
 import { useNewFrameIds } from '../hooks/useNewFrames';
+import { useNavigateNow } from '../hooks/useNavigateNow';
 
 interface MosaicSequenceProps {
   dbId: string;
@@ -20,6 +21,7 @@ interface MosaicSequenceProps {
  *  each panel's own sequence is one click away. */
 export default function MosaicSequence({ dbId, mosaic, images }: MosaicSequenceProps) {
   const navigate = useNavigate();
+  const navigateNow = useNavigateNow();
   const [searchParams] = useSearchParams();
   const filterName = searchParams.get('filterName') || undefined;
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -101,13 +103,13 @@ export default function MosaicSequence({ dbId, mosaic, images }: MosaicSequenceP
                   image={image}
                   calibration={calibration.marks.get(image.id)}
                   onCalibrationClick={(mark) =>
-                    navigate(imageDetailPath(image.id, searchParams, 'sequence', mark.codes[0]))}
+                    navigateNow(imageDetailPath(image.id, searchParams, 'sequence', mark.codes[0]))}
                   isSelected={image.id === selectedId}
                   isNew={newImageIds.has(image.id)}
                   qualityPresentation="compact"
                   lazyPreview
                   onClick={() => setSelectedId(image.id)}
-                  onDoubleClick={() => navigate(imageDetailPath(image.id, searchParams, 'sequence'))}
+                  onDoubleClick={() => navigateNow(imageDetailPath(image.id, searchParams, 'sequence'))}
                 />
               </li>
             );
