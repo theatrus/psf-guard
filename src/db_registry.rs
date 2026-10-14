@@ -13,6 +13,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -704,46 +705,40 @@ impl StackAutomationSettings {
 /// desktop modes — is where they will reach for it when a flat is refused.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct CalibrationSettings {
-    /// Rotator angle between a flat and what it corrects, in degrees.
-    /// Absent uses the library default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rotation_tolerance_deg: Option<f64>,
-    /// How masters built by other software are used: `prefer` (the
-    /// default), `fallback`, or `ignore`. Absent means prefer.
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub external_masters: Option<crate::calibration::ExternalMasterPolicy>,
+    /// The tunable checks, key to value, for every rig without a value of
+    /// its own: `rotation_tolerance_deg`, `dark_reach_days`,
+    /// `check_no_flat`, `grade_flat_dim` and the rest of
+    /// [`crate::calibration::rules::fields`]. Kept flat beside the other
+    /// keys, so the keys older builds know (`rotation_tolerance_deg`,
+    /// `external_masters`, `dark_reach_days`, `complete_dark_frames`,
+    /// `dark_choice`, `flat_max_age_days`) stay where they read them. An
+    /// absent key uses the default; a value this build cannot read is kept
+    /// and reads as absent.
+    #[serde(flatten)]
+    pub rules: crate::calibration::RuleValues,
     /// Mask stars in raw flats before integration. Absent means disabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flat_star_masking: Option<bool>,
-    /// How far from a light a dark may have been shot, in days. Absent uses
-    /// [`crate::calibration::DEFAULT_DARK_REACH_DAYS`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dark_reach_days: Option<f64>,
-    /// Darks from one night that make a master without older nights. Absent
-    /// uses [`crate::calibration::DEFAULT_COMPLETE_DARK_FRAMES`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub complete_dark_frames: Option<usize>,
-    /// Whether a dark master starts from the nearest complete set or the
-    /// nearest set however short. Absent means
-    /// [`crate::calibration::DarkChoice::Complete`].
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub dark_choice: Option<crate::calibration::DarkChoice>,
-    /// How far from a light its flats may have been shot, in days, before
-    /// the light cannot be calibrated. Zero lifts the limit; absent uses
-    /// [`crate::calibration::DEFAULT_FLAT_MAX_AGE_DAYS`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub flat_max_age_days: Option<f64>,
     /// Stacks leave out lights that cannot be calibrated. Absent means off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exclude_uncalibrated: Option<bool>,
+    /// Each rig's own values, by the calibration library's rig UUID (see
+    /// [`crate::calibration::rules::light_rig_uuid`]). A rig's value beats
+    /// the global one, which beats the default.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rigs: BTreeMap<String, RigCalibrationSettings>,
+}
+
+/// One rig's own calibration values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct RigCalibrationSettings {
+    /// What the rig was called when its values were saved, to name it when
+    /// no open catalog holds it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Key to value, as [`CalibrationSettings::rules`]; absent inherits.
+    #[serde(flatten)]
+    pub rules: crate::calibration::RuleValues,
 }
 
 /// What the export dialog starts from. The dialog still offers every layout
@@ -1304,12 +1299,20 @@ mod tests {
 
         let reg = DbRegistry::load_or_init(&path).unwrap();
         let calibration = reg.calibration.unwrap();
-        assert_eq!(calibration.dark_choice, None);
+        // The values are kept as written; the choice this build cannot read
+        // resolves to the default.
         assert_eq!(
-            calibration.external_masters,
-            Some(crate::calibration::ExternalMasterPolicy::Fallback)
+            calibration.rules.get("dark_choice"),
+            Some(&serde_json::json!("by_gain"))
         );
-        assert_eq!(calibration.complete_dark_frames, Some(20));
+        let book = crate::calibration::RuleBook::new(calibration.rules.clone(), Default::default());
+        let rules = book.global();
+        assert_eq!(rules.dark_choice, crate::calibration::DarkChoice::Complete);
+        assert_eq!(
+            rules.external_masters,
+            crate::calibration::ExternalMasterPolicy::Fallback
+        );
+        assert_eq!(rules.complete_dark_frames, 20);
         let stacking = reg.stacking.unwrap();
         assert_eq!(stacking.method, None);
         assert_eq!(stacking.build_new_channels, Some(true));
@@ -1324,16 +1327,35 @@ mod tests {
     fn round_trips_calibration_settings_and_absence_stays_absent() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.json");
+        let values = |pairs: &[(&str, serde_json::Value)]| -> crate::calibration::RuleValues {
+            pairs
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.clone()))
+                .collect()
+        };
         let reg = DbRegistry {
             calibration: Some(CalibrationSettings {
-                rotation_tolerance_deg: Some(3.5),
-                external_masters: Some(crate::calibration::ExternalMasterPolicy::Fallback),
+                rules: values(&[
+                    ("rotation_tolerance_deg", serde_json::json!(3.5)),
+                    ("external_masters", serde_json::json!("fallback")),
+                    ("dark_reach_days", serde_json::json!(90.0)),
+                    ("complete_dark_frames", serde_json::json!(20)),
+                    ("dark_choice", serde_json::json!("nearest")),
+                    ("flat_max_age_days", serde_json::json!(0.0)),
+                    ("check_no_flat", serde_json::json!("advisory")),
+                ]),
                 flat_star_masking: Some(true),
-                dark_reach_days: Some(90.0),
-                complete_dark_frames: Some(20),
-                dark_choice: Some(crate::calibration::DarkChoice::Nearest),
-                flat_max_age_days: Some(0.0),
                 exclude_uncalibrated: Some(true),
+                rigs: BTreeMap::from([(
+                    "5a1e0000-0000-5000-8000-000000000001".to_string(),
+                    RigCalibrationSettings {
+                        name: Some("SpaceCat61 · ASI2600MM Pro".into()),
+                        rules: values(&[(
+                            "grade_flat_illumination",
+                            serde_json::json!({"suspect": 0.05, "poor": 0.1}),
+                        )]),
+                    },
+                )]),
             }),
             ..Default::default()
         };
@@ -1346,6 +1368,24 @@ mod tests {
         assert!(serialized.contains("rotation_tolerance_deg"));
         assert!(serialized.contains("\"external_masters\": \"fallback\""));
         assert!(serialized.contains("\"flat_star_masking\": true"));
+        assert!(serialized.contains("\"rigs\""));
+
+        // The keys an older build reads stay where it reads them.
+        #[derive(Deserialize)]
+        struct OlderCalibration {
+            rotation_tolerance_deg: Option<f64>,
+            dark_reach_days: Option<f64>,
+            complete_dark_frames: Option<usize>,
+            flat_max_age_days: Option<f64>,
+            flat_star_masking: Option<bool>,
+        }
+        let raw: serde_json::Value = serde_json::from_str(&serialized).unwrap();
+        let older: OlderCalibration = serde_json::from_value(raw["calibration"].clone()).unwrap();
+        assert_eq!(older.rotation_tolerance_deg, Some(3.5));
+        assert_eq!(older.dark_reach_days, Some(90.0));
+        assert_eq!(older.complete_dark_frames, Some(20));
+        assert_eq!(older.flat_max_age_days, Some(0.0));
+        assert_eq!(older.flat_star_masking, Some(true));
 
         // A registry that never configured it keeps a clean file: additive
         // within v2, and an older build reading this file sees nothing new.
@@ -1361,6 +1401,11 @@ mod tests {
             serde_json::from_str(r#"{"rotation_tolerance_deg":3.5,"external_masters":"fallback"}"#)
                 .unwrap();
         assert_eq!(settings.flat_star_masking, None);
+        assert_eq!(
+            settings.rules.get("rotation_tolerance_deg"),
+            Some(&serde_json::json!(3.5))
+        );
+        assert!(settings.rigs.is_empty());
     }
 
     #[test]
