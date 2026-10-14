@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { Check, Download, Eye, Send, TriangleAlert } from 'lucide-react';
+import { Check, Download, Eye, Power, Send, Telescope, TriangleAlert } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
-import type { DirectorActivationAction, DirectorActivationChange, DirectorActivationPush, DirectorActivationPushReport, DirectorActivationReport, DirectorTakenValues } from '../../api/directorTypes';
+import type { DirectorActivationAction, DirectorActivationChange, DirectorActivationPush, DirectorActivationPushReport, DirectorActivationReport, DirectorActivationShot, DirectorTakenValues } from '../../api/directorTypes';
 import { describeFailure, useDrafts } from './pageDraftsState';
 import { turnedOff, useActivationState, writesRows } from './activationState';
+import { objectiveName } from './planModel';
 import './ActivationPanel.css';
 import CollaborationActivation from './CollaborationActivation';
 import type { CollaborationVisit } from '../../api/collaborationTypes';
@@ -59,23 +60,28 @@ interface Take {
 }
 
 /** What the last preview or apply did in one rig's database: a line of
- *  counts, its warnings, what it turns off in Target Scheduler, where its
- *  rows go, and every other row it touches. Where a preview would
- *  overwrite Target Scheduler's rows, the plan can take them instead. */
-export function RigActivation({ rig, applied, take }: { rig: ReportRig; applied: boolean; take?: Take }) {
+ *  counts, its warnings, what Target Scheduler shoots afterwards, what it
+ *  turns off and on, where its rows go, and every other row it touches.
+ *  Where a preview would overwrite Target Scheduler's rows, the plan can
+ *  take them instead. */
+export function RigActivation({ rig, applied, take, objectiveLabel = () => '' }: { rig: ReportRig; applied: boolean; take?: Take; objectiveLabel?: (id: string) => string }) {
   const summary = KINDS
     .filter(({ kind }) => rig.changes.some(change => change.kind === kind))
     .map(({ kind, label }) => `${label}: ${counts(rig.changes, kind)}`);
   const off = turnedOff(rig.changes);
+  const on = (rig.shoots ?? []).filter(shot => shot.turned_on).length;
   return <div className="activation-rig" aria-label={`${rig.catalog_name} activation`}>
     <p className="activation-rig-summary">
       <strong>{applied ? 'Applied' : 'Preview'}</strong>{rig.applied && <> <Check size={14} aria-label="applied" /></>}
       {off && <strong className="activation-off-count"> · {applied ? 'Turned off' : 'Turns off'} {off}</strong>}
+      {on > 0 && <strong> · {applied ? 'Turned on' : 'Turns on'} {on} plan{on === 1 ? '' : 's'}</strong>}
       {summary.length > 0 ? ` · ${summary.join(' · ')}` : ''}
       {rig.push && <span className={rig.push.error ? 'director-error' : 'director-muted'}> · {describePush(rig.push, rig.applied)}</span>}
     </p>
     {rig.warnings.map(warning => <p key={warning} className="director-muted" role="note">{warning}</p>)}
+    <Shoots rig={rig} applied={applied} objectiveLabel={objectiveLabel} />
     <TurnedOff rig={rig} applied={applied} />
+    <TurnedOn rig={rig} applied={applied} />
     <RigChanges rig={rig} />
     {take && !applied && differsFromTargetScheduler(rig) && <div className="director-actions">
       <button type="button" disabled={take.pending} title={`Write ${rig.catalog_name}'s Target Scheduler values into the plan instead`} onClick={take.run}>
@@ -90,6 +96,42 @@ export function RigActivation({ rig, applied, take }: { rig: ReportRig; applied:
   </div>;
 }
 
+/** A plan's template in a few words: its name, then the filter, gain and
+ *  offset where set. */
+function templateText(shot: DirectorActivationShot): string {
+  const settings = [shot.filter, shot.gain !== null && `gain ${shot.gain}`, shot.offset !== null && `offset ${shot.offset}`].filter(Boolean);
+  return settings.length > 0 ? `${shot.template} (${settings.join(', ')})` : shot.template;
+}
+
+/** The end result: every plan Target Scheduler shoots in the rig's project
+ *  after the activation, with its frames, and which objectives a summed one
+ *  serves. */
+function Shoots({ rig, applied, objectiveLabel }: { rig: ReportRig; applied: boolean; objectiveLabel: (id: string) => string }) {
+  if (!rig.shoots) return null;
+  return <div className="activation-shoots" role="note" aria-label={`Shoots in ${rig.catalog_name}`}>
+    <h4><Telescope size={14} aria-hidden="true" />{applied ? 'Target Scheduler now shoots' : 'After activation, Target Scheduler shoots'}</h4>
+    {rig.shoots.length === 0 ? <p className="director-muted">Nothing in this project</p> : <ul>{rig.shoots.map(shot => {
+      const summed = shot.objectives.length > 1 ? shot.objectives.map(objectiveLabel).filter(Boolean) : [];
+      return <li key={shot.plan}>
+        <strong>{shot.target} · {shot.exposure_seconds} s</strong> {templateText(shot)} · {shot.desired} frames, {shot.acquired} taken
+        {shot.objectives.length > 1 && <span className="director-muted"> · summed from {summed.length === shot.objectives.length ? listed(summed) : `${shot.objectives.length} objectives`}</span>}
+      </li>;
+    })}</ul>}
+  </div>;
+}
+
+/** Plans that were off in Target Scheduler and come back on. */
+function TurnedOn({ rig, applied }: { rig: ReportRig; applied: boolean }) {
+  const on = (rig.shoots ?? []).filter(shot => shot.turned_on);
+  if (on.length === 0) return null;
+  return <div className="activation-on" role="note" aria-label={`Turned on in ${rig.catalog_name}`}>
+    <h4><Power size={14} aria-hidden="true" />{applied ? 'Turned on' : 'Turns on'}</h4>
+    <ul>{on.map(shot => <li key={shot.plan}><strong>{shot.target} · {shot.exposure_seconds} s</strong> {shot.template}, plan #{shot.plan}, {shot.acquired} of {shot.desired} frames taken</li>)}</ul>
+  </div>;
+}
+
+const listed = (words: string[]) => words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+
 /** What activation turns off in Target Scheduler, on its own and open
  *  above the rest, so it is never missed: plans the plan does not have, and
  *  a project whose rig is off. */
@@ -97,7 +139,7 @@ function TurnedOff({ rig, applied }: { rig: ReportRig; applied: boolean }) {
   const off = rig.changes.filter(change => change.action === 'disable');
   if (off.length === 0) return null;
   return <div className="activation-off" role="note" aria-label={`Turned off in ${rig.catalog_name}`}>
-    <h4><TriangleAlert size={14} aria-hidden="true" />{applied ? 'Turned off in Target Scheduler' : 'Turns off in Target Scheduler'}</h4>
+    <h4><TriangleAlert size={14} aria-hidden="true" />{applied ? 'Turned off' : 'Turns off'}</h4>
     <ul>{off.map((change, index) => <li key={`${change.name}-${index}`}><strong>{change.name}</strong>{change.detail && <span> {change.detail}</span>}</li>)}</ul>
     {!applied && off.some(change => change.kind === 'plan') && <p>To keep one, take Target Scheduler's values or add it to the plan.</p>}
   </div>;
@@ -153,7 +195,11 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   const status = useDirectorStatus();
   const manageable = status.data?.database_management ?? true;
   const client = useQueryClient();
-  const { last, planRevision, framingRevision, behind, notSynced, matches, checking, unchecked } = useActivationState(projectId);
+  const { last, savedPlan, planRevision, framingRevision, behind, notSynced, matches, checking, unchecked } = useActivationState(projectId);
+  const objectiveLabel = (id: string) => {
+    const objective = savedPlan.data?.plan?.objectives.find(entry => entry.id === id);
+    return objective ? objectiveName(objective) : '';
+  };
   const [report, setReport] = useState<DirectorActivationReport | null>(null);
   const [visits, setVisits] = useState<CollaborationVisit[]>([]);
   const busy = useRef(false);
@@ -214,7 +260,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
       {report.warnings.map(warning => <p key={warning} className="director-error" role="alert">{warning}</p>)}
       {report.rigs.filter(rig => !shownElsewhere?.has(rig.rig.id)).map(rig => <div key={rig.rig.id}>
         <h4 className="activation-rig-name">{rig.catalog_name}</h4>
-        <RigActivation rig={rig} applied={report.applied} take={canWrite ? {
+        <RigActivation rig={rig} applied={report.applied} objectiveLabel={objectiveLabel} take={canWrite ? {
           run: () => run(() => takeValues.mutate(rig.rig.id)),
           pending: takeValues.isPending && takeValues.variables === rig.rig.id,
           result: taken[rig.rig.id],

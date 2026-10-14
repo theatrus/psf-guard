@@ -417,9 +417,13 @@ Target Scheduler exposure plans ask for, with the frames taken and rejected
 beneath, and a status: **Off**, **Not activated**, **Done**, or the project's
 state in Target Scheduler. The top row sums the rig: the plan's frames and
 hours, its progress over every objective, and its status. An exposure plan
-counts toward the objective its activation wrote it for; one taken in from
-Target Scheduler goes to the objective with its template, else the one with
-its filter's band. `GET /projects/{id}/plan/progress` returns the counts.
+counts toward the objectives its activation wrote it for; one that sums
+several objectives' frames shows under each, "shared with" the others, and
+once in the top row (`shared_with` in the API). One taken in from Target
+Scheduler goes to the objective with its template and exposure length (a
+plan left at the template's default runs at that default), else the one
+with its template, else the one with its filter's band.
+`GET /projects/{id}/plan/progress` returns the counts.
 **Rigs** lists each rig with its database's project and whether it is
 **synced** (its rows hold the saved plan) or **not synced**, and why: not
 activated yet, or its rows differ from the plan. **Add a rig** offers every
@@ -1143,6 +1147,41 @@ a template leaves plans that chose it with their copy of its settings.
 
 ## Activation
 
+### What activation does
+
+The plan decides which Target Scheduler exposure plans run in each rig's
+linked project:
+
+1. **The plan turns plans on and off.** Every plan the plan has is written
+   and switched on, and one that was off is turned on. A plan already in
+   Target Scheduler on the same target, with the same template settings and
+   exposure length, is taken over in place, frames kept, never doubled.
+2. **Identical rows are summed.** Two or more of a rig's objectives that
+   come to the same target, template settings (filter, gain, offset,
+   binning, readout mode) and exposure length get one plan, asking for the
+   sum of their frames (an hours goal counts in frames at that length). Each
+   objective is recorded against it, so progress shows it under each, marked
+   shared, and counts it once in the rig's total.
+3. **Any difference makes a plan of its own**: another exposure length or
+   any other template setting.
+4. **What the plan does not account for is turned off**: any plan on any of
+   the project's targets that no row of the plan writes, whether another
+   length of a filter the plan shoots or a filter it does not have at all
+   (an SII plan made in N.I.N.A. when the plan has no SII). It stays in
+   Target Scheduler with its frames and counts, switched off. To keep one,
+   **Take Target Scheduler's values** first, which brings it into the plan,
+   or add it to the plan.
+5. **The preview says what happens and the end result.** Each rig's block
+   starts with **After activation, Target Scheduler shoots**: every plan that
+   will run, with its target, template, length, frames asked for and taken,
+   and the objectives a summed one serves. Then **Turns off**, each plan with
+   its frames and why ("not in the plan", "replaced by Ha · 300 s"), and
+   **Turns on**, plans that were off and come back. After Apply the same
+   blocks show what was done. A rig is **Synced** only when the plans running
+   there are exactly what the plan would write.
+
+### What it writes
+
 **Activation**, below Plan, pushes the framing and plan into each participating
 rig's database, the same rows Target Scheduler and the Director plugin read:
 
@@ -1159,7 +1198,8 @@ rig's database, the same rows Target Scheduler and the Director plugin read:
   project's only target not yet owned by a panel. The preview lists these as
   `adopt` with where they move, or `unchanged` when one already sits at the
   panel;
-- one exposure plan per rig objective and panel, bound to the chosen template
+- one exposure plan per panel for each of the rig's objectives, or for
+  several objectives that come to the same plan (rule 2), bound to the chosen template
   (or one matching its settings, created if needed; a library template is created under the library's own GUID, so every rig database carries the same one), with `desired` set to the
   frames that objective needs at that rig's exposure length. A plan the
   target already has for the same work is taken over rather than doubled:
@@ -1172,12 +1212,13 @@ rig's database, the same rows Target Scheduler and the Director plugin read:
   follow the plan, and the preview lists it as `adopt` with its row number
   and what changes, or as `unchanged` when it already holds the plan's
   values.
-- a plan of the target's that no activation owns and that takes the same
-  frames as a rig objective (same filter, gain, offset, binning and readout
-  mode) at another length is turned off as replaced: for example a G_120
-  plan when the plan's G objective moved to G_300 before the first
+- every other plan in the project is turned off (rule 4). One that takes
+  the same frames as a written plan (same filter, gain, offset, binning and
+  readout mode) at another length is listed as replaced: for example a
+  G_120 plan when the plan's G objective moved to G_300 before the first
   activation. Its frames and settings stay; the preview lists it as
-  `disable`, "replaced by …". To keep both lengths running, take Target
+  `disable`, "replaced by …", or "not in the plan" for one on a filter the
+  plan does not shoot. To keep both lengths running, take Target
   Scheduler's values (below), which brings each length in as an objective
   of its own, or give the plan an objective for each.
 
@@ -1186,20 +1227,20 @@ but that has no GUID yet refuses the rig, which says which row and points at
 **Fill in GUIDs**: a GUID made at activation would exist only in that copy of
 the database, and skipping the row would make a twin of it.
 
-The preview accounts for every exposure plan on the targets: plans it adds
-(`create`), takes over (`adopt`), changes (`update`), turns off (`disable`,
-including plans another length replaced) or leaves alone (`unchanged`), and
-with `keep` the rig's own plans for work no objective asks for, which stay as
-they are in Target Scheduler. A `disable` counts as a change, so the plan
-asks to be activated until it is applied. A template
-activation creates is listed under `template`.
+The preview accounts for every exposure plan in the project: plans it adds
+(`create`), takes over (`adopt`), changes (`update`, including turning one
+on), turns off (`disable`) or leaves as they are (`unchanged`). Any action
+but `unchanged` counts as a change, so the plan asks to be activated until
+it is applied. A template activation creates is listed under `template`.
+Each rig's report also carries `shoots`, the plans Target Scheduler runs
+afterwards (row, target, template, filter, gain, offset, exposure, desired
+and acquired frames, the objectives it serves, and whether it is turned on).
 
-What a preview turns off is never folded away: each rig's block lists it
-first, open and in the warning colour, under **Turns off in Target
-Scheduler**, with "To keep one, take Target Scheduler's values or add it to
-the plan." The rig's line counts it ("Turns off 1 plan"), and when turning
-plans off is all an activation would do there, the bar says so: "Not
-synced: turns off 1 plan in ultracat131".
+What a preview turns off is never folded away: the **Turns off** block is
+open and in the warning colour, with "To keep one, take Target Scheduler's
+values or add it to the plan." The rig's line counts it ("Turns off 1 plan",
+"Turns on 1 plan"), and when turning plans off is all an activation would
+do there, the bar says so: "Not synced: turns off 1 plan in ultracat131".
 
 A plan an earlier activation made that nothing plans now is turned off
 (`disable`, `enabled = 0`), so Target Scheduler stops taking it: its
@@ -1263,8 +1304,9 @@ in-memory copy of each rig's planning tables (`GET /activation/check`), so
 it never locks N.I.N.A.'s database. It runs the check whenever the plan
 shoots something, whatever the activation record says: the record can lag
 rows that already match, and rows can differ under a record that has the
-saved plan. A rig whose rows would all read `unchanged` or `keep` already
-holds the plan; any other action asks for an activation. An `update` of an
+saved plan. A rig whose rows would all read `unchanged` is synced: the
+plans running there are exactly what the plan would write. Any other action
+asks for an activation. An `update` of an
 exposure plan says what changes, such as `desired 100 → 150` or
 `exposure 120 s → 300 s`. The check writes nothing, so it does not wait
 for the turn at the rig databases that discovery, adoption, previews and

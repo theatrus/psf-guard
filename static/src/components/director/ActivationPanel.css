@@ -13,6 +13,14 @@
 .activation-rig-summary { margin: 0 0 4px; }
 .activation-rig-name { margin: 8px 0 2px; font-size: 14px; }
 .activation-behind { color: var(--color-warning-light); }
+/* The end result and what comes back on: open, above the other changes. */
+.activation-shoots, .activation-on { margin: 8px 0; padding: 6px 10px; border: 1px solid var(--color-border-secondary); border-radius: 6px; }
+.activation-shoots h4, .activation-on h4 { display: flex; align-items: center; gap: 6px; margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.activation-shoots ul, .activation-on ul { margin: 0; padding-left: 0; list-style: none; }
+.activation-shoots li, .activation-on li { padding: 2px 0; overflow-wrap: anywhere; }
+.activation-shoots p { margin: 0; font-size: 13px; }
+.activation-on { border-color: rgba(123, 228, 149, 0.5); }
+.activation-on h4 { color: #7be495; }
 /* What activation turns off: open, above the other changes, in the warning colour. */
 .activation-off { margin: 8px 0; padding: 6px 10px; border: 1px solid var(--color-warning-light); border-radius: 6px; background: rgba(255, 197, 107, 0.08); }
 .activation-off h4 { display: flex; align-items: center; gap: 6px; margin: 0 0 4px; font-size: 13px; font-weight: 600; color: var(--color-warning-light); }

@@ -308,12 +308,31 @@ export interface DirectorActivationPush {
   summary: Record<string, number>;
   error: string | null;
 }
+/** An exposure plan Target Scheduler shoots after an activation. */
+export interface DirectorActivationShot {
+  /** Its row in Target Scheduler. */
+  plan: number;
+  target: string;
+  template: string;
+  filter: string;
+  gain: number | null;
+  offset: number | null;
+  exposure_seconds: number;
+  desired: number;
+  acquired: number;
+  /** The objectives it serves; more than one when their frames are summed. */
+  objectives: string[];
+  /** It was off in Target Scheduler and comes back on. */
+  turned_on: boolean;
+}
 export interface DirectorActivationRig {
   rig: DirectorIdentity;
   catalog_slug: string | null;
   catalog_name: string;
   profile_id: string | null;
   changes: DirectorActivationChange[];
+  /** What Target Scheduler shoots in this rig's project afterwards. */
+  shoots?: DirectorActivationShot[];
   warnings: string[];
   applied: boolean;
   push: DirectorActivationPush | null;
@@ -365,6 +384,8 @@ export interface DirectorObjectiveProgress {
   frames: DirectorFrameCounts;
   /** Exposure plans counting toward it; 0 until one is written. */
   exposure_plans: number;
+  /** Objectives sharing an exposure plan with it, which sums their frames. */
+  shared_with?: string[];
 }
 /** One rig's progress on a plan, read from its database. */
 export interface DirectorRigProgress {
