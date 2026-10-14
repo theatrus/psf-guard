@@ -22,6 +22,13 @@ interface Anchor {
  * the first panel grows back. WebKit has no `overflow-anchor`, so this is
  * all the anchoring Safari and the macOS app get.
  *
+ * None of this waits for the browser to draw. The browser reports a scroll,
+ * and runs resize observers, only when it next draws, and a busy WebKit can
+ * go seconds without drawing while keys and data keep arriving. A scroll
+ * learned only then would be read against the next image's panels. So a
+ * key or a press first reads where the reader is, before the app acts on
+ * it, and a change inside the panels is made good as it lands.
+ *
  * `scroller` is the sidebar itself; its children are the panels.
  */
 export function useSidebarScrollAnchor(scroller: HTMLElement | null) {
@@ -29,20 +36,20 @@ export function useSidebarScrollAnchor(scroller: HTMLElement | null) {
     if (!scroller || typeof ResizeObserver === 'undefined') return;
 
     let anchor: Anchor | null = null;
-    // Where the last change left the sidebar and how tall its content was,
-    // so the scroll events a change fires are not taken for the reader's.
-    // The browser fires one when it clamps the scroll of content that got
-    // shorter, sometimes before the resize reaches `preserve`.
-    let settledTop: number | null = null;
-    let settledHeight = scroller.scrollHeight;
+    // Where the sidebar was and how tall its content was when the anchor
+    // was last chosen or kept. A move from there with the content the same
+    // height is the reader's; with the height changed it is a panel's, such
+    // as the scroll the browser clamps when the content gets shorter.
+    let knownTop = scroller.scrollTop;
+    let knownHeight = scroller.scrollHeight;
 
     const scrollerTop = () => scroller.getBoundingClientRect().top;
 
     const capture = () => {
       anchor = null;
-      settledTop = null;
-      settledHeight = scroller.scrollHeight;
-      if (scroller.scrollTop <= 1) return;
+      knownTop = scroller.scrollTop;
+      knownHeight = scroller.scrollHeight;
+      if (knownTop <= 1) return;
       const { top, bottom } = scroller.getBoundingClientRect();
       for (const element of Array.from(scroller.children)) {
         const rect = element.getBoundingClientRect();
@@ -65,42 +72,56 @@ export function useSidebarScrollAnchor(scroller: HTMLElement | null) {
       // Clamped at either end, the sidebar may not get all the way there; the
       // anchor stays, and the next change that makes room finishes the job.
       if (Math.abs(delta) >= 0.5) scroller.scrollTop += delta;
-      settledTop = scroller.scrollTop;
-      settledHeight = scroller.scrollHeight;
+      knownTop = scroller.scrollTop;
+      knownHeight = scroller.scrollHeight;
+    };
+
+    // Whether the sidebar moved since the hook last looked, and who moved it.
+    const sync = () => {
+      // The content changed height: a panel moved the scroll, not the reader.
+      if (scroller.scrollHeight !== knownHeight) {
+        preserve();
+        return;
+      }
+      // Where the last change left it, or where the reader already was.
+      if (Math.abs(scroller.scrollTop - knownTop) < 1) return;
+      capture();
     };
 
     // Read on every scroll, not on the next frame: a panel that changes
     // size in the same frame as the reader scrolls must not undo the scroll.
-    const onScroll = () => {
-      // The content changed height: a panel moved the scroll, not the reader.
-      if (scroller.scrollHeight !== settledHeight) {
-        preserve();
-        return;
-      }
-      // The scroll an adjustment or a clamp already accounted for.
-      if (settledTop !== null && Math.abs(scroller.scrollTop - settledTop) < 1) return;
-      capture();
-    };
+    scroller.addEventListener('scroll', sync, { passive: true });
+    // Before the app acts on a key or a press, such as an arrow key moving
+    // to the next image, so a scroll not yet reported is still the reader's.
+    window.addEventListener('keydown', sync, { capture: true });
+    window.addEventListener('pointerdown', sync, { capture: true });
 
     const resizes = new ResizeObserver(preserve);
-    const observeChildren = () => {
-      for (const child of Array.from(scroller.children)) resizes.observe(child);
-    };
-    // A panel that appears or goes, such as the copy switch.
+    for (const child of Array.from(scroller.children)) resizes.observe(child);
+    // A panel that appears or goes, such as the copy switch, or that changes
+    // inside, such as the next light's data arriving: checked as the change
+    // lands rather than when the browser next draws.
     const mutations = typeof MutationObserver === 'undefined'
       ? null
-      : new MutationObserver(() => {
-          observeChildren();
-          preserve();
+      : new MutationObserver((records) => {
+          for (const record of records) {
+            if (record.target !== scroller) continue;
+            record.addedNodes.forEach((node) => {
+              if (node instanceof Element) resizes.observe(node);
+            });
+            record.removedNodes.forEach((node) => {
+              if (node instanceof Element) resizes.unobserve(node);
+            });
+          }
+          sync();
         });
-
-    observeChildren();
-    mutations?.observe(scroller, { childList: true });
+    mutations?.observe(scroller, { childList: true, characterData: true, subtree: true });
     capture();
-    scroller.addEventListener('scroll', onScroll, { passive: true });
 
     return () => {
-      scroller.removeEventListener('scroll', onScroll);
+      scroller.removeEventListener('scroll', sync);
+      window.removeEventListener('keydown', sync, { capture: true });
+      window.removeEventListener('pointerdown', sync, { capture: true });
       resizes.disconnect();
       mutations?.disconnect();
     };

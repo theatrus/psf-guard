@@ -40,7 +40,13 @@ function Sidebar({ heights }: { heights: number[] }) {
         setSidebar(element);
       }}
     >
-      {PANELS.slice(0, heights.length).map((name) => <section key={name}>{name}</section>)}
+      {PANELS.slice(0, heights.length).map((name, index) => (
+        <section key={name}>
+          {name}
+          {/* An open panel's body, as DetailSection renders it. */}
+          {heights[index] > 100 && <p>{name} details</p>}
+        </section>
+      ))}
     </div>
   );
 }
@@ -137,6 +143,40 @@ describe('useSidebarScrollAnchor', () => {
     view.rerender(<Sidebar heights={[300, 500, 700, 400, 300]} />);
     act(() => notifyResize?.());
     expect(sidebar.scrollTop).toBe(0);
+  });
+
+  it('reads a scroll the browser has not reported yet when a key is pressed', () => {
+    const view = render(<Sidebar heights={[300, 40, 60, 400]} />);
+    const sidebar = view.getByTestId('sidebar');
+    // Reading the satellites, but the browser reports the scroll only when
+    // it next draws, and a busy WebKit has not drawn since.
+    sidebar.scrollTop = 380;
+    // The arrow key that moves to the next light, whose Calibration opens.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+    view.rerender(<Sidebar heights={[300, 500, 60, 400]} />);
+    // The late scroll event, then the resize, when the browser draws at last.
+    sidebar.dispatchEvent(new Event('scroll'));
+    act(() => notifyResize?.());
+    expect(sidebar.scrollTop).toBe(840);
+    expect(satellitesTop(sidebar)).toBe(20);
+  });
+
+  it('keeps the place as a panel changes, before the browser draws', async () => {
+    const view = render(<Sidebar heights={[300, 40, 60, 400]} />);
+    const sidebar = view.getByTestId('sidebar');
+    sidebar.scrollTop = 380;
+    sidebar.dispatchEvent(new Event('scroll'));
+
+    // Calibration opens: its body appears. No resize is reported.
+    view.rerender(<Sidebar heights={[300, 500, 60, 400]} />);
+    await act(async () => {});
+    expect(sidebar.scrollTop).toBe(840);
+    expect(satellitesTop(sidebar)).toBe(20);
+
+    // The resize the browser reports when it draws changes nothing more.
+    act(() => notifyResize?.());
+    sidebar.dispatchEvent(new Event('scroll'));
+    expect(satellitesTop(sidebar)).toBe(20);
   });
 
   it('leaves a sidebar at the top at the top', () => {
