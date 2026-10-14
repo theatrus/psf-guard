@@ -382,6 +382,42 @@ pub(super) struct Activated {
     pub(super) db: Connection,
 }
 
+/// Where the 2 x 1 Heart grid's panels land, in Target Scheduler's hours
+/// and degrees, and the angle each is shot at, laid out the way activation
+/// lays them out.
+fn heart_places() -> Vec<(f64, f64, f64)> {
+    psf_guard_director_core::framing::FramingRequest {
+        center: IcrsPosition {
+            ra_degrees: 38.2,
+            dec_degrees: 61.45,
+        },
+        position_angle_degrees: 15.0,
+        panel: PanelSize {
+            width_degrees: 2.0,
+            height_degrees: 1.5,
+        },
+        layout: Layout::grid(Mosaic {
+            rows: 2,
+            columns: 1,
+            overlap_percent: 20,
+        }),
+        overlays: vec![],
+        view: None,
+    }
+    .preview()
+    .unwrap()
+    .panels
+    .iter()
+    .map(|panel| {
+        (
+            panel.footprint.center.ra_degrees / 15.0,
+            panel.footprint.center.dec_degrees,
+            panel.position_angle_degrees,
+        )
+    })
+    .collect()
+}
+
 pub(super) async fn activated() -> Activated {
     let f = Fixture::new();
     let path = f._dir.path().join("rig.sqlite");
@@ -906,11 +942,16 @@ async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doublin
         [source.to_string()],
     )
     .unwrap();
-    for (id, name) in [(1, "IC 1805 r1c1"), (2, "IC 1805 r2c1")] {
+    // Where the panels were shot: a target with frames is taken over only
+    // where it sits.
+    for ((id, name), (ra_hours, dec, _)) in [(1, "IC 1805 r1c1"), (2, "IC 1805 r2c1")]
+        .into_iter()
+        .zip(heart_places())
+    {
         a.db.execute(
             "INSERT INTO target (Id, name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
-             VALUES (?1, ?2, 1, 0.0, 0.0, 2, 0.0, 100, 1, ?3)",
-            rusqlite::params![id, name, Uuid::new_v4().to_string()],
+             VALUES (?1, ?2, 1, ?3, ?4, 2, 0.0, 100, 1, ?5)",
+            rusqlite::params![id, name, ra_hours, dec, Uuid::new_v4().to_string()],
         )
         .unwrap();
     }
@@ -1152,38 +1193,7 @@ async fn activation_takes_over_the_linked_projects_existing_targets_instead_of_d
         [source.to_string()],
     )
     .unwrap();
-    // Where the panels land, and the angle each is shot at, laid out the
-    // way activation lays them out.
-    let places: Vec<(f64, f64, f64)> = psf_guard_director_core::framing::FramingRequest {
-        center: IcrsPosition {
-            ra_degrees: 38.2,
-            dec_degrees: 61.45,
-        },
-        position_angle_degrees: 15.0,
-        panel: PanelSize {
-            width_degrees: 2.0,
-            height_degrees: 1.5,
-        },
-        layout: Layout::grid(Mosaic {
-            rows: 2,
-            columns: 1,
-            overlap_percent: 20,
-        }),
-        overlays: vec![],
-        view: None,
-    }
-    .preview()
-    .unwrap()
-    .panels
-    .iter()
-    .map(|panel| {
-        (
-            panel.footprint.center.ra_degrees / 15.0,
-            panel.footprint.center.dec_degrees,
-            panel.position_angle_degrees,
-        )
-    })
-    .collect();
+    let places = heart_places();
     assert_eq!(places.len(), 2);
     a.db.execute(
         "INSERT INTO target (name, active, ra, dec, epochcode, rotation, roi, projectid, guid)

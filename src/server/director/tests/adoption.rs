@@ -15,6 +15,7 @@ mod program;
 mod remote_push;
 mod rig_profile;
 mod rig_scheduling;
+mod target_safety;
 
 const PREVIEW: &str = "/catalogs/catalog/adoption/preview";
 const APPLY: &str = "/catalogs/catalog/adoption/apply";

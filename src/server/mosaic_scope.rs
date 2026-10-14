@@ -218,6 +218,16 @@ fn director_cells(conn: &Connection, project_id: i32) -> rusqlite::Result<Option
     if rows.iter().any(|(_, guid, _)| guid != project_guid) {
         return Ok(None);
     }
+    // A mosaic has at least two panels the plan still holds: one panel and
+    // the retired target it moved away from (`r1c1~3`) are a single panel.
+    if rows
+        .iter()
+        .filter(|(_, _, panel_id)| !panel_id.contains('~'))
+        .count()
+        < 2
+    {
+        return Ok(None);
+    }
     let grid: Option<Vec<Cell>> = rows
         .iter()
         .map(|(target_id, _, panel_id)| {

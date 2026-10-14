@@ -1593,17 +1593,49 @@ async fn an_imported_plan_follows_target_scheduler_until_it_is_saved_here() {
     assert!((moved.center.dec_degrees - 1.0).abs() < 1e-3, "{moved:?}");
     assert_eq!(moved.survey_id, "nina:FramingAssistantCache");
 
+    // A lock and a new minimum overlap change nothing activation writes, so
+    // the plan still follows; a refresh keeps them.
+    {
+        let mut store = f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut locked = moved.clone();
+        locked.layout.panels[1].locked = true;
+        locked.layout.min_overlap_percent = 30;
+        let locked = store.save_framing_draft(&locked, moved.revision).unwrap();
+        assert_eq!(locked.layout_revision, moved.layout_revision);
+    }
+    db.execute("UPDATE exposureplan SET desired=50", [])
+        .unwrap();
+    list().await;
+    let (kept, plan_kept, import_kept) = saved();
+    assert_eq!(plan_kept.objectives[0].goal, Goal::Frames { value: 50 });
+    assert!(kept.layout.panels[1].locked, "{kept:?}");
+    assert!(!kept.layout.panels[0].locked);
+    assert_eq!(kept.layout.min_overlap_percent, 30);
+    assert!(import_kept.is_some(), "still following");
+    // Target Scheduler moving the locked panel's target: the plan keeps its
+    // own framing and stops following.
+    db.execute("UPDATE target SET dec=2.0 WHERE Id=2", [])
+        .unwrap();
+    list().await;
+    let (held, _, import_held) = saved();
+    assert!(import_held.is_none(), "stopped following");
+    assert_eq!(
+        held.revision, kept.revision,
+        "the framing is the plan's own"
+    );
+    let plan2 = plan_kept;
+
     // Saved here: the plan is the operator's from now on.
     {
         let mut store = f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut edited = plan2.clone();
         edited.objectives[0].goal = Goal::Frames { value: 60 };
-        store.save_plan_draft(&edited, 2).unwrap();
+        store.save_plan_draft(&edited, edited.revision).unwrap();
     }
     db.execute("UPDATE exposureplan SET desired=80", [])
         .unwrap();
     list().await;
     let (_, plan3, _) = saved();
-    assert_eq!(plan3.revision, 3);
+    assert_eq!(plan3.revision, plan2.revision + 1);
     assert_eq!(plan3.objectives[0].goal, Goal::Frames { value: 60 });
 }

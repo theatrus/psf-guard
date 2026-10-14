@@ -531,8 +531,9 @@ async fn a_shot_panel_is_measured_from_its_frames_and_its_lock_holds_it() {
     assert!((solved["size"]["width_degrees"].as_f64().unwrap() - 2.0).abs() < 1e-9);
     assert!((solved["size"]["height_degrees"].as_f64().unwrap() - 1.5).abs() < 1e-9);
 
-    // The editor locks the panel with what the frames say; the server
-    // checks it against its own reading.
+    // The editor locks the panel; whatever shot geometry the body carries,
+    // the server writes its own reading. A client that sends none, or one
+    // stale or made up, gets the same.
     let framing = format!("/projects/{}/framing", a.project);
     let (_, got) = call(&a.f.app, "GET", &framing, Value::Null, None).await;
     let mut draft = got["data"]["draft"].clone();
@@ -540,21 +541,50 @@ async fn a_shot_panel_is_measured_from_its_frames_and_its_lock_holds_it() {
     let mut made_up = draft.clone();
     let mut wrong = solved.clone();
     wrong["frames"] = json!(9);
+    wrong["position_angle_degrees"] = json!(120.0);
     made_up["layout"]["panels"][0]["measured"] = wrong;
-    let (status, refused) = call(&a.f.app, "PUT", &framing, made_up, None).await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
-    assert!(
-        refused["error"]
-            .as_str()
-            .unwrap()
-            .contains("r1c1 must stay where its frames say it was shot"),
-        "{refused}"
-    );
-    draft["layout"]["panels"][0]["measured"] = solved.clone();
-    let (status, saved) = call(&a.f.app, "PUT", &framing, draft, None).await;
+    let (status, saved) = call(&a.f.app, "PUT", &framing, made_up, None).await;
     assert_eq!(status, StatusCode::OK, "{saved}");
     let saved = saved["data"]["draft"].clone();
     assert_eq!(saved["layout"]["panels"][0]["measured"], solved);
+    // Without any, the same reading; an unlocked panel is planned and has none.
+    let mut bare = saved.clone();
+    bare["layout"]["panels"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("measured");
+    bare["layout"]["panels"][1]["measured"] = solved.clone();
+    let (status, again) = call(&a.f.app, "PUT", &framing, bare, None).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    let saved = again["data"]["draft"].clone();
+    assert_eq!(saved["layout"]["panels"][0]["measured"], solved);
+    assert!(
+        saved["layout"]["panels"][1].get("measured").is_none(),
+        "{saved}"
+    );
+    // A new solve moves the reading on; the next save carries it, though
+    // the body still has the old one.
+    persist_solve(
+        &cache,
+        102,
+        &dir.join("frame-2.fits"),
+        (200, 150),
+        36.0,
+        (r1_ra + 0.01, r1_dec),
+        27.0,
+    );
+    let (status, newer) = call(&a.f.app, "PUT", &framing, saved.clone(), None).await;
+    assert_eq!(status, StatusCode::OK, "{newer}");
+    let saved = newer["data"]["draft"].clone();
+    assert!(
+        (saved["layout"]["panels"][0]["measured"]["position_angle_degrees"]
+            .as_f64()
+            .unwrap()
+            - 26.5)
+            .abs()
+            < 1e-9,
+        "{saved}"
+    );
 
     // Turning the locked panel is a move, refused like any other.
     let mut turned = saved.clone();
@@ -565,7 +595,7 @@ async fn a_shot_panel_is_measured_from_its_frames_and_its_lock_holds_it() {
         refused["error"]
             .as_str()
             .unwrap()
-            .contains("Locked panel r1c1 would move"),
+            .contains("Locked panel r1c1 would move. A locked panel keeps its place, its turn"),
         "{refused}"
     );
 

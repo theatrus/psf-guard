@@ -798,11 +798,32 @@ pub(super) fn refresh_drafts(
     let mut changed = false;
     if let Some(mut framing) = drafts.framing {
         framing.project_id = project_id;
-        // How the person looks at it stays theirs.
+        // How the person looks at it stays theirs, and so do the edits that
+        // change nothing activation writes: locks (with a locked panel's
+        // shot geometry) and the minimum overlap. They leave the plan
+        // following, so a refresh must not drop them.
         if let Some(stored) = &stored_framing {
             framing.survey_id = stored.survey_id.clone();
             framing.view_fov_degrees = stored.view_fov_degrees;
             framing.shown_rig_ids = stored.shown_rig_ids.clone();
+            framing.layout.min_overlap_percent = stored.layout.min_overlap_percent;
+            // A locked panel Target Scheduler no longer has is the plan's
+            // own to keep: it stops following rather than lose it.
+            if stored
+                .layout
+                .panels
+                .iter()
+                .any(|panel| panel.locked && framing.layout.panel(&panel.id).is_none())
+            {
+                store.forget_draft_import(project_id)?;
+                return Ok(false);
+            }
+            for panel in &mut framing.layout.panels {
+                if let Some(kept) = stored.layout.panel(&panel.id) {
+                    panel.locked = kept.locked;
+                    panel.measured = kept.measured.clone().filter(|_| kept.locked);
+                }
+            }
         }
         let expected = stored_framing.as_ref().map_or(0, |stored| stored.revision);
         match store.save_framing_draft(&framing, expected) {
@@ -810,7 +831,10 @@ pub(super) fn refresh_drafts(
                 changed |= saved.revision != expected;
                 record.framing_revision = saved.layout_revision;
             }
-            Err(StoreError::Conflict) => {
+            // A save made here meanwhile, or Target Scheduler moving a panel
+            // the plan has locked: the plan keeps its own and stops
+            // following.
+            Err(StoreError::Conflict | StoreError::InvalidInput) => {
                 store.forget_draft_import(project_id)?;
                 return Ok(false);
             }

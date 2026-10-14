@@ -1426,7 +1426,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Save a plan's framing: send the whole object get_framing returned under `draft`, changed (centre, rotation, `layout` panels with their places, turns (`angle_offset_degrees`) and locks, panel rigs). A locked panel's `measured` geometry is what its frames say and is left as read. Refuses a stale revision, a change that would move or turn a locked panel, and shot geometry its frames do not support."
+        description = "Save a plan's framing: send the whole object get_framing returned under `draft`, changed (centre, rotation, `layout` panels with their places, turns (`angle_offset_degrees`) and locks, panel rigs). The server writes each locked panel's `measured` geometry from its frames on every save, whatever is sent. Refuses a stale revision, and a change that would move or turn a locked panel or move the centre, angle or panel size under one."
     )]
     async fn save_framing(
         &self,

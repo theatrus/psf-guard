@@ -125,7 +125,8 @@ fn same_position(a: &IcrsPosition, b: &IcrsPosition) -> bool {
 
 /// Whether two layouts put the same panels in the same places: the same
 /// ids, each where it was. Order, locks and the minimum overlap do not
-/// change what activation writes.
+/// change what activation writes, nor does a shot panel's frame count or
+/// how sure its reading is, only where it puts the panel.
 pub fn same_places(a: &Layout, b: &Layout) -> bool {
     a.panels.len() == b.panels.len()
         && a.panels.iter().all(|panel| {
@@ -136,7 +137,7 @@ pub fn same_places(a: &Layout, b: &Layout) -> bool {
                     // A panel redrawn from new solves of its frames moves.
                     && match (&panel.measured, &other.measured) {
                         (None, None) => true,
-                        (Some(a), Some(b)) => a.same(b),
+                        (Some(a), Some(b)) => a.same_place(b),
                         _ => false,
                     }
             })
@@ -295,11 +296,12 @@ impl FramingDraft {
         })
     }
 
-    /// The locked panels `next` would move: each panel `next` still marks
+    /// The locked panels `next` would move: each panel both drafts mark
     /// locked, whose center or camera angle on the sky differs from where
     /// this draft has it. A lock holds the panel, so the framing's center,
-    /// angle and panel size cannot move under it either; unlocking is
-    /// itself an edit, so a body that unlocks a panel may also move it.
+    /// angle and panel size cannot move under it either. Locking and
+    /// unlocking are edits of their own: a body may move a panel and lock
+    /// it, or unlock it and move it, in one save.
     pub fn locked_moves(&self, next: &Self) -> Vec<String> {
         let mut moved = Vec::new();
         let shared = |draft: &Self| Placing {
@@ -339,41 +341,6 @@ impl FramingDraft {
     }
 }
 
-impl FramingDraft {
-    /// The locked panels whose measured geometry `next` changes, by rig
-    /// framing (`None` for the shared one) and id. Only the server measures
-    /// a panel's frames, so each change must be what it measures now; the
-    /// route checks that before saving.
-    pub fn measured_changes(&self, next: &Self) -> Vec<(Option<Uuid>, String)> {
-        let mut out = Vec::new();
-        let changed = |was: Option<&Layout>, now: &Layout, rig: Option<Uuid>, out: &mut Vec<_>| {
-            for panel in now.panels.iter().filter(|panel| panel.locked) {
-                let old = was
-                    .and_then(|layout| layout.panel(&panel.id))
-                    .and_then(|p| p.measured.as_ref());
-                let same = match (old, panel.measured.as_ref()) {
-                    (None, None) => true,
-                    (Some(a), Some(b)) => a.same(b),
-                    _ => false,
-                };
-                if !same {
-                    out.push((rig, panel.id.clone()));
-                }
-            }
-        };
-        changed(Some(&self.layout), &next.layout, None, &mut out);
-        for own in &next.rig_framings {
-            changed(
-                self.rig_framing(own.rig_id).map(|before| &before.layout),
-                &own.layout,
-                Some(own.rig_id),
-                &mut out,
-            );
-        }
-        out
-    }
-}
-
 /// Where a framing puts its panels: around a center, turned by an angle,
 /// sized by a panel.
 struct Placing {
@@ -403,7 +370,7 @@ fn moved_locks(
     out: &mut Vec<String>,
 ) {
     for panel in now.panels.iter().filter(|panel| panel.locked) {
-        let Some(old) = was.panel(&panel.id) else {
+        let Some(old) = was.panel(&panel.id).filter(|old| old.locked) else {
             continue;
         };
         let same_offsets = (old.x - panel.x).abs() <= PLACE_TOLERANCE_PANELS
@@ -416,7 +383,15 @@ fn moved_locks(
         } else {
             match (before.sky(old.x, old.y), after.sky(panel.x, panel.y)) {
                 (Some(a), Some(b)) => same_position(&a, &b),
-                _ => same_position(&before.center, &after.center) && same_offsets,
+                // A size given or taken away moves a panel off the center:
+                // its place in degrees is gone, or new.
+                (Some(_), None) | (None, Some(_)) => {
+                    same_offsets
+                        && old.x.abs() <= PLACE_TOLERANCE_PANELS
+                        && old.y.abs() <= PLACE_TOLERANCE_PANELS
+                        && same_position(&before.center, &after.center)
+                }
+                (None, None) => same_position(&before.center, &after.center) && same_offsets,
             }
         };
         // Its own turn holds as well: a locked panel's camera angle is

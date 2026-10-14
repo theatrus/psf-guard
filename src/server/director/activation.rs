@@ -1907,29 +1907,28 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                             && rot0.is_finite();
                         // Frames shot before panels took north's lean were
                         // shot at the framing's angle; the target keeps it.
+                        // A new target, made when the panel moved far, has
+                        // no frames and takes the panel's own angle.
                         let unleaned = frames > 0
                             && inputs.collaboration.is_none()
                             && planned_angle(rot0, inputs.position_angle_degrees, panel);
-                        let rotation = if unleaned { rot0 } else { rotation };
-                        let detail = if unleaned {
-                            format!(
-                                "{} {}, angle {rot0:.1}° as its frames were shot",
-                                format_ra(ra_hours),
-                                format_dec(dec)
-                            )
-                        } else {
-                            detail.clone()
-                        };
+                        let in_place = if unleaned { rot0 } else { rotation };
                         let same = kept
                             || ((ra0 - ra_hours).abs() < 1e-7
                                 && (dec0 - dec).abs() < 1e-6
-                                && (rot0 - rotation).abs() < 1e-3
+                                && angle_apart(rot0, in_place) < 1e-3
                                 && epoch0 == 2);
-                        let detail = if kept {
+                        let in_place_detail = if kept {
                             format!(
                                 "{} {}, angle {rot0:.1}°, kept where its frames were shot",
                                 format_ra(ra0),
                                 format_dec(dec0)
+                            )
+                        } else if unleaned {
+                            format!(
+                                "{} {}, angle {rot0:.1}° as its frames were shot",
+                                format_ra(ra_hours),
+                                format_dec(dec)
                             )
                         } else {
                             detail.clone()
@@ -1971,14 +1970,14 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                             if !same {
                                 tx.execute(
                                     "UPDATE target SET ra=?2, dec=?3, rotation=?4, epochcode=2, projectid=?5 WHERE guid=?1",
-                                    params![guid, ra_hours, dec, rotation, project_row_id],
+                                    params![guid, ra_hours, dec, in_place, project_row_id],
                                 )?;
                             }
                             changes.push(Change {
                                 kind: "target",
                                 action: if same { "unchanged" } else { "update" },
                                 name: name0.clone(),
-                                detail,
+                                detail: in_place_detail,
                             });
                             shown = name0;
                             guid
@@ -1999,105 +1998,137 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
             // Nothing owned yet: a target already in this project (imported
             // from Target Scheduler, or made by hand) is taken over rather
             // than doubled.
-            None => match if inputs.collaboration.is_some() {
-                None
-            } else {
-                adoptable_target(
-                    tx,
-                    project_row_id,
-                    &name,
-                    stands_for.get(&panel.footprint.id).copied(),
-                    ra_hours,
-                    dec,
-                    !mosaic,
-                )?
-            } {
-                Some(found) => {
-                    // Director writes J2000 coordinates and plans the target,
-                    // so a JNOW or switched-off target is put right too; the
-                    // program only serves J2000 targets that are on.
-                    // A locked panel with frames keeps the target where
-                    // they were shot.
+            None => {
+                let found = if inputs.collaboration.is_some() {
+                    None
+                } else {
+                    adoptable_target(
+                        tx,
+                        project_row_id,
+                        &name,
+                        stands_for.get(&panel.footprint.id).copied(),
+                        PanelPlace {
+                            ra_hours,
+                            dec,
+                            side_degrees: panel_side_degrees(panel),
+                        },
+                        !mosaic,
+                    )?
+                };
+                // A target with frames sits where they were shot. Taking it
+                // over from further than a quarter of the panel would move
+                // the frames with it, so it is left as it is and the panel
+                // gets a new target, as an owned target that moved far does.
+                let left_alone = found.as_ref().and_then(|found| {
                     let kept = panel.locked
                         && found.frames > 0
                         && found.epochcode == 2
                         && found.ra_hours.is_finite()
                         && found.dec.is_finite()
                         && found.rotation.is_finite();
-                    // Frames shot at the framing's angle keep it.
-                    let unleaned = found.frames > 0
-                        && planned_angle(found.rotation, inputs.position_angle_degrees, panel);
-                    let (ra_hours, dec, rotation) = if kept {
-                        (found.ra_hours, found.dec, found.rotation)
-                    } else if unleaned {
-                        (ra_hours, dec, found.rotation)
-                    } else {
-                        (ra_hours, dec, rotation)
-                    };
-                    let detail = if kept {
-                        format!(
-                            "{} {}, angle {rotation:.1}°, kept where its frames were shot",
-                            format_ra(ra_hours),
-                            format_dec(dec)
-                        )
-                    } else if unleaned {
-                        format!(
-                            "{} {}, angle {rotation:.1}° as its frames were shot",
-                            format_ra(ra_hours),
-                            format_dec(dec)
-                        )
-                    } else {
-                        detail.clone()
-                    };
-                    let placed = (found.ra_hours - ra_hours).abs() < 1e-7
-                        && (found.dec - dec).abs() < 1e-6
-                        && (found.rotation - rotation).abs() < 1e-3;
-                    let same = placed && found.epochcode == 2 && found.active;
-                    if !same {
-                        tx.execute(
+                    let moved =
+                        separation_degrees(found.ra_hours * 15.0, found.dec, ra_hours * 15.0, dec);
+                    let far = !moved.is_finite() || moved > 0.25 * panel_side_degrees(panel);
+                    (!kept && found.frames > 0 && far)
+                        .then(|| (found.name.clone(), found.frames, moved))
+                });
+                let found = if left_alone.is_some() { None } else { found };
+                match found {
+                    Some(found) => {
+                        // Director writes J2000 coordinates and plans the target,
+                        // so a JNOW or switched-off target is put right too; the
+                        // program only serves J2000 targets that are on.
+                        // A locked panel with frames keeps the target where
+                        // they were shot.
+                        let kept = panel.locked
+                            && found.frames > 0
+                            && found.epochcode == 2
+                            && found.ra_hours.is_finite()
+                            && found.dec.is_finite()
+                            && found.rotation.is_finite();
+                        // Frames shot at the framing's angle keep it.
+                        let unleaned = found.frames > 0
+                            && planned_angle(found.rotation, inputs.position_angle_degrees, panel);
+                        let (ra_hours, dec, rotation) = if kept {
+                            (found.ra_hours, found.dec, found.rotation)
+                        } else if unleaned {
+                            (ra_hours, dec, found.rotation)
+                        } else {
+                            (ra_hours, dec, rotation)
+                        };
+                        let detail = if kept {
+                            format!(
+                                "{} {}, angle {rotation:.1}°, kept where its frames were shot",
+                                format_ra(ra_hours),
+                                format_dec(dec)
+                            )
+                        } else if unleaned {
+                            format!(
+                                "{} {}, angle {rotation:.1}° as its frames were shot",
+                                format_ra(ra_hours),
+                                format_dec(dec)
+                            )
+                        } else {
+                            detail.clone()
+                        };
+                        let placed = (found.ra_hours - ra_hours).abs() < 1e-7
+                            && (found.dec - dec).abs() < 1e-6
+                            && angle_apart(found.rotation, rotation) < 1e-3;
+                        let same = placed && found.epochcode == 2 && found.active;
+                        if !same {
+                            tx.execute(
                             "UPDATE target SET ra=?2, dec=?3, rotation=?4, epochcode=2, active=1 WHERE guid=?1",
                             params![found.guid, ra_hours, dec, rotation],
                         )?;
-                    }
-                    let mut notes = Vec::new();
-                    if found.epochcode != 2 {
-                        notes.push("now J2000");
-                    }
-                    if !found.active {
-                        notes.push("turned on");
-                    }
-                    let notes = if notes.is_empty() {
-                        String::new()
-                    } else {
-                        format!("; {}", notes.join(", "))
-                    };
-                    changes.push(Change {
-                        kind: "target",
-                        action: if same { "unchanged" } else { "adopt" },
-                        name: found.name.clone(),
-                        detail: if same {
-                            format!("already in Target Scheduler at {detail}")
-                        } else if placed {
-                            format!("takes over the existing target at {detail}{notes}")
+                        }
+                        let mut notes = Vec::new();
+                        if found.epochcode != 2 {
+                            notes.push("now J2000");
+                        }
+                        if !found.active {
+                            notes.push("turned on");
+                        }
+                        let notes = if notes.is_empty() {
+                            String::new()
                         } else {
-                            format!("takes over the existing target, moving it to {detail}{notes}")
-                        },
-                    });
-                    shown = found.name;
-                    found.guid
-                }
-                None => {
-                    let guid = new_guid();
-                    insert_target(tx, &guid, &name, ra_hours, dec, rotation, project_row_id)?;
-                    changes.push(Change {
+                            format!("; {}", notes.join(", "))
+                        };
+                        changes.push(Change {
+                            kind: "target",
+                            action: if same { "unchanged" } else { "adopt" },
+                            name: found.name.clone(),
+                            detail: if same {
+                                format!("already in Target Scheduler at {detail}")
+                            } else if placed {
+                                format!("takes over the existing target at {detail}{notes}")
+                            } else {
+                                format!(
+                                    "takes over the existing target, moving it to {detail}{notes}"
+                                )
+                            },
+                        });
+                        shown = found.name;
+                        found.guid
+                    }
+                    None => {
+                        let guid = new_guid();
+                        insert_target(tx, &guid, &name, ra_hours, dec, rotation, project_row_id)?;
+                        changes.push(Change {
                         kind: "target",
                         action: "create",
                         name: name.clone(),
-                        detail,
+                        detail: match &left_alone {
+                            Some((other, frames, moved)) => format!(
+                                "{detail}; the existing target {other} sits {} away with its {frames} frames, so it is left as it is",
+                                format_distance(*moved)
+                            ),
+                            None => detail,
+                        },
                     });
-                    guid
+                        guid
+                    }
                 }
-            },
+            }
         };
         tx.execute(
             "INSERT INTO psf_guard_director_target(target_guid,project_guid,panel_id,framing_revision) VALUES(?1,?2,?3,?4)
@@ -2895,21 +2926,33 @@ struct Adoptable {
     frames: i64,
 }
 
+/// Where a panel sits, as Target Scheduler stores it, and its shorter side.
+struct PanelPlace {
+    ra_hours: f64,
+    dec: f64,
+    side_degrees: f64,
+}
+
 /// The existing target a panel should take over, if any: the one with the
 /// panel's name, else the one that stands for the panel (`stands_for`), else
 /// the one at the panel's place (within a quarter of an arcminute, an
 /// import's round trip), else, for a single-panel framing, the project's
-/// only unowned target. Ownership is by GUID, so a match
+/// only unowned target. The one the panel stands for counts only within a
+/// quarter of the panel side. Ownership is by GUID, so a match
 /// without one refuses the rig.
 fn adoptable_target(
     tx: &Connection,
     project_row_id: i64,
     name: &str,
     stands_for: Option<i64>,
-    ra_hours: f64,
-    dec: f64,
+    place: PanelPlace,
     single_panel: bool,
 ) -> Result<Option<Adoptable>, RigError> {
+    let PanelPlace {
+        ra_hours,
+        dec,
+        side_degrees: panel_side,
+    } = place;
     let mut statement = tx.prepare(
         "SELECT Id, guid, name, ra, dec, rotation, IFNULL(epochcode, 2), COALESCE(active, 1),
                 (SELECT IFNULL(SUM(acquired), 0) FROM exposureplan WHERE targetid = target.Id)
@@ -2943,7 +2986,16 @@ fn adoptable_target(
         (row.3 - ra_hours).abs() * 15.0 * 60.0 < 0.25 && (row.4 - dec).abs() * 60.0 < 0.25
     });
     let only = (single_panel && rows.len() == 1).then_some(0);
-    let by_panel = stands_for.and_then(|id| rows.iter().position(|row| row.0 == id));
+    // The target the panel stands for, if it is near the panel: a lone
+    // target is `r1c1` whatever the layout, and that is no claim on a
+    // target a whole panel or a constellation away.
+    let by_panel = stands_for.and_then(|id| {
+        rows.iter().position(|row| {
+            row.0 == id
+                && separation_degrees(row.3 * 15.0, row.4, ra_hours * 15.0, dec)
+                    <= 0.25 * panel_side
+        })
+    });
     let Some(index) = by_name.or(by_panel).or(by_place).or(only) else {
         return Ok(None);
     };
@@ -3354,6 +3406,12 @@ fn format_distance(degrees: f64) -> String {
     } else {
         format!("{:.1}′", degrees * 60.0)
     }
+}
+
+/// How far apart two angles are, the short way round.
+fn angle_apart(a: f64, b: f64) -> f64 {
+    let apart = (a - b).rem_euclid(360.0);
+    apart.min(360.0 - apart)
 }
 
 /// Whether a stored angle is the framing's plus the panel's own turn, with

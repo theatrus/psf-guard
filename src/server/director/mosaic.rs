@@ -253,11 +253,25 @@ pub(super) fn collect(
     catalogs: &[Arc<DatabaseContext>],
     instance_id: Uuid,
 ) -> Result<Mosaic, Error> {
+    collect_for(store, id, catalogs, instance_id, None)
+}
+
+/// [`collect`], with shot geometry keyed by `keying` (the framings a save
+/// is about to store) instead of the stored draft: which rigs are framed on
+/// their own, and the sizes a panel falls back on.
+pub(super) fn collect_for(
+    store: &MetaStore,
+    id: Uuid,
+    catalogs: &[Arc<DatabaseContext>],
+    instance_id: Uuid,
+    keying: Option<&FramingDraft>,
+) -> Result<Mosaic, Error> {
     let project = store.project(id)?.ok_or(Error::Missing)?;
-    let framing = store.framing_draft(id)?;
-    let framing_revision = framing.as_ref().map(|draft| draft.revision);
+    let stored = store.framing_draft(id)?;
+    let framing_revision = stored.as_ref().map(|draft| draft.revision);
     // Only a change activation writes moves the rectangles off the stacks.
-    let layout_revision = framing.as_ref().map(|draft| draft.layout_revision);
+    let layout_revision = stored.as_ref().map(|draft| draft.layout_revision);
+    let framing = keying.or(stored.as_ref());
     let activation = store.activation(id)?;
     let framing_stale = activation.as_ref().is_some_and(|activation| {
         layout_revision.is_some_and(|revision| revision > activation.framing_revision)
@@ -276,7 +290,7 @@ pub(super) fn collect(
                        connection: &rusqlite::Connection,
                        panel_id: &str,
                        target_id: i64| {
-        let Some(draft) = framing.as_ref() else {
+        let Some(draft) = framing else {
             return Ok::<_, Error>(());
         };
         let key = (draft.rig_framing(rig).map(|_| rig), panel_id.to_owned());

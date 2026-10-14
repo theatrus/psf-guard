@@ -474,10 +474,7 @@ fn a_schema_29_store_opens_unchanged_and_keeps_measured_panels() {
     // A locked panel keeps the geometry its frames were shot with.
     let mut shot = saved.clone();
     shot.layout.panels[0].measured = Some(measured());
-    assert_eq!(
-        saved.measured_changes(&shot),
-        vec![(None, "r1c1".to_string())]
-    );
+    assert!(!saved.same_layout(&shot));
     let shot = store.save_framing_draft(&shot, saved.revision).unwrap();
     // New geometry is a layout change: activation writes new neighbours.
     assert_eq!(shot.layout_revision, shot.revision);
@@ -487,7 +484,8 @@ fn a_schema_29_store_opens_unchanged_and_keeps_measured_panels() {
     );
     assert!(raw(&conn, project).contains("\"measured\""));
     // Saving it unchanged is no change.
-    assert!(shot.measured_changes(&shot.clone()).is_empty());
+    let again = store.save_framing_draft(&shot, shot.revision).unwrap();
+    assert_eq!(again.revision, shot.revision);
 
     // Only a locked panel holds measured geometry.
     let mut loose = shot.clone();
@@ -498,7 +496,6 @@ fn a_schema_29_store_opens_unchanged_and_keeps_measured_panels() {
     ));
     // Unlocking drops it, and the panel is planned again.
     loose.layout.panels[0].measured = None;
-    assert!(shot.measured_changes(&loose).is_empty());
     store.save_framing_draft(&loose, shot.revision).unwrap();
 }
 
@@ -536,7 +533,8 @@ fn a_measured_panel_holds_where_it_was_shot_under_a_new_camera() {
         vec!["r1c1".to_string(), "r1c2".to_string()]
     );
 
-    // A rig framed on its own reports its measured changes by rig.
+    // A rig framed on its own keeps its panels' shot geometry too, and a
+    // refreshed reading is a layout change.
     let rig = store.create_rig(Uuid::new_v4(), "C925").unwrap().id;
     let mut own = Layout::single(20);
     own.panels[0].locked = true;
@@ -553,14 +551,128 @@ fn a_measured_panel_holds_where_it_was_shot_under_a_new_camera() {
         .unwrap();
     let mut shot = with_rig.clone();
     shot.rig_framings[0].layout.panels[0].measured = Some(measured());
+    assert!(!with_rig.same_layout(&shot));
+    let shot = store.save_framing_draft(&shot, with_rig.revision).unwrap();
     assert_eq!(
-        with_rig.measured_changes(&shot),
-        vec![(Some(rig), "r1c1".to_string())]
+        shot.rig_framings[0].layout.panels[0].measured,
+        Some(measured())
     );
-    let mut refreshed = shot.clone();
-    refreshed.layout.panels[1].measured.as_mut().unwrap().frames = 14;
+    // More frames saying the same is no layout change; a reading that
+    // moves the panel is.
+    let mut counted = shot.clone();
+    counted.layout.panels[1].measured.as_mut().unwrap().frames = 14;
+    let counted = store.save_framing_draft(&counted, shot.revision).unwrap();
+    assert_eq!(counted.layout_revision, shot.layout_revision);
+    let mut moved = counted.clone();
+    moved.layout.panels[1]
+        .measured
+        .as_mut()
+        .unwrap()
+        .position_angle_degrees = 37.5;
+    let moved = store.save_framing_draft(&moved, counted.revision).unwrap();
+    assert_eq!(moved.layout_revision, moved.revision);
+}
+
+/// Drag a panel, press L, save: one body moves and locks it, and the lock
+/// holds the place it is given.
+#[test]
+fn moving_then_locking_a_panel_in_one_save_is_taken() {
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let project = store.create_project(Uuid::new_v4(), "Heart").unwrap().id;
+    let mut draft = single(project);
+    draft.layout.panels.push(place("p2", -0.8, 0.0, false));
+    let saved = store.save_framing_draft(&draft, 0).unwrap();
+    let mut next = saved.clone();
+    next.layout.panels[1].x = -0.75;
+    next.layout.panels[1].locked = true;
+    assert!(saved.locked_moves(&next).is_empty());
+    let locked = store.save_framing_draft(&next, saved.revision).unwrap();
+    let mut moved = locked.clone();
+    moved.layout.panels[1].x = -0.7;
+    assert_eq!(locked.locked_moves(&moved), vec!["p2".to_string()]);
+}
+
+/// A panel size given or taken away moves a locked planned panel off the
+/// center: the shared size, or a rig framing's typed size dropped back to
+/// its rig's field.
+#[test]
+fn a_size_given_or_taken_away_under_a_locked_panel_off_the_center_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let project = store.create_project(Uuid::new_v4(), "Heart").unwrap().id;
+    let rig = store.create_rig(Uuid::new_v4(), "C925").unwrap().id;
+    let mut draft = single(project);
+    draft.layout.panels.push(place("p2", -0.8, 0.0, true));
+    draft.rig_framings.push(RigFraming {
+        rig_id: rig,
+        center: None,
+        position_angle_degrees: None,
+        layout: Layout {
+            min_overlap_percent: 20,
+            panels: vec![place("r1c1", 0.0, 0.0, false), place("p2", -0.8, 0.0, true)],
+        },
+        panel: Some(PanelSize {
+            width_degrees: 0.5,
+            height_degrees: 0.4,
+        }),
+    });
+    let saved = store.save_framing_draft(&draft, 0).unwrap();
+    let mut follow = saved.clone();
+    follow.rig_framings[0].panel = None;
+    assert_eq!(saved.locked_moves(&follow), vec![format!("{rig}:p2")]);
+    assert!(store.save_framing_draft(&follow, saved.revision).is_err());
+    let mut sizeless = saved.clone();
+    sizeless.panel = None;
+    assert_eq!(saved.locked_moves(&sizeless), vec!["p2".to_string()]);
+    // A locked panel at the center has no place to lose.
+    let mut centered = saved.clone();
+    centered.layout.panels[1].locked = false;
+    centered.rig_framings[0].layout.panels[1].locked = false;
+    centered.layout.panels[0].locked = true;
+    let centered = store.save_framing_draft(&centered, saved.revision).unwrap();
+    let mut sizeless = centered.clone();
+    sizeless.panel = None;
+    assert!(centered.locked_moves(&sizeless).is_empty());
+}
+
+/// A failure part way through schema 29 leaves the store at 28, untouched,
+/// and the next open migrates it whole.
+#[test]
+fn a_failed_grid_migration_rolls_back_whole() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let mut store = MetaStore::create(&path).unwrap();
+    let a = store.create_project(Uuid::new_v4(), "A").unwrap().id;
+    let b = store.create_project(Uuid::new_v4(), "B").unwrap().id;
+    drop(store);
+    let conn = Connection::open(&path).unwrap();
+    for (project, revision) in [(a, 2u64), (b, 3)] {
+        store_raw(
+            &conn,
+            project,
+            revision,
+            &grid_payload(project, revision, grid(2, 2, 20)),
+        );
+    }
+    let before = (raw(&conn, a), raw(&conn, b));
+    conn.execute_batch(&format!(
+        "CREATE TRIGGER boom BEFORE UPDATE ON framing_draft WHEN NEW.project_id='{b}'
+         BEGIN SELECT RAISE(ABORT,'boom'); END;
+         PRAGMA user_version=28;"
+    ))
+    .unwrap();
+    assert!(MetaStore::open(&path).is_err());
+    let version: i32 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 28);
+    assert_eq!((raw(&conn, a), raw(&conn, b)), before);
+    conn.execute_batch("DROP TRIGGER boom").unwrap();
+    let store = MetaStore::open(&path).unwrap();
     assert_eq!(
-        shot.measured_changes(&refreshed),
-        vec![(None, "r1c2".to_string())]
+        store.framing_draft(a).unwrap().unwrap().layout.panels.len(),
+        4
     );
+    assert!(raw(&conn, a).contains("\"layout\"") && raw(&conn, b).contains("\"layout\""));
 }

@@ -20,8 +20,9 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-/// Solves read per panel, newest first: plenty for a steady median.
-const MAX_SOLVED_FRAMES: usize = 200;
+/// Solves read per panel, newest first: plenty for a steady median, and
+/// few enough stats of files on network storage per mosaic read.
+const MAX_SOLVED_FRAMES: usize = 60;
 /// Headers read per panel when no frame is solved: headers on network
 /// storage are slow, and frames of one panel agree.
 const MAX_HEADER_FRAMES: usize = 8;
@@ -40,9 +41,18 @@ struct HeaderSample {
     size: Option<PanelSize>,
 }
 
-fn header_cache() -> &'static Mutex<HashMap<PathBuf, Option<HeaderSample>>> {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<HeaderSample>>>> = OnceLock::new();
+/// A frame file as it is now: its path, size and modification time. A
+/// header read is kept under this, so a replaced file is read again.
+type HeaderKey = (PathBuf, u64, Option<std::time::SystemTime>);
+
+fn header_cache() -> &'static Mutex<HashMap<HeaderKey, HeaderSample>> {
+    static CACHE: OnceLock<Mutex<HashMap<HeaderKey, HeaderSample>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// An angle in [0, 360): `rem_euclid` alone gives 360 for a hair below 0.
+fn whole_turn(degrees: f64) -> f64 {
+    degrees.rem_euclid(360.0) % 360.0
 }
 
 /// The camera's up, east of north, from a CD matrix: the field rotation the
@@ -51,7 +61,7 @@ fn header_cache() -> &'static Mutex<HashMap<PathBuf, Option<HeaderSample>>> {
 fn position_angle_from_cd(cd: [[f64; 2]; 2]) -> Option<f64> {
     let (rotation, mirrored) = crate::sequence_analysis::field_rotation_from_cd(cd)?;
     let angle = if mirrored { -rotation } else { rotation };
-    angle.is_finite().then(|| angle.rem_euclid(360.0) % 360.0)
+    angle.is_finite().then(|| whole_turn(angle))
 }
 
 fn position(ra_degrees: f64, dec_degrees: f64) -> Option<IcrsPosition> {
@@ -94,14 +104,19 @@ fn solved_sample(context: &DatabaseContext, frame: &Frame) -> Option<FrameSample
     })
 }
 
-/// What a frame's header says, read once per file for the process.
+/// What a frame's header says, read once per version of the file: kept
+/// under its size and modification time, so a replaced frame is read again.
+/// A read that fails is not kept, so a passing network error does not drop
+/// the frame for good.
 fn header_sample(path: &Path) -> Option<HeaderSample> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let key: HeaderKey = (path.to_path_buf(), metadata.len(), metadata.modified().ok());
     if let Some(known) = header_cache()
         .lock()
         .ok()
-        .and_then(|cache| cache.get(path).copied())
+        .and_then(|cache| cache.get(&key).copied())
     {
-        return known;
+        return Some(known);
     }
     let sample = crate::astrometry_headers::FitsAstrometryHeaders::from_path(path)
         .ok()
@@ -128,33 +143,43 @@ fn header_sample(path: &Path) -> Option<HeaderSample> {
                 }),
             }
         });
-    if let Ok(mut cache) = header_cache().lock() {
-        cache.insert(path.to_path_buf(), sample);
+    if let (Some(sample), Ok(mut cache)) = (sample, header_cache().lock()) {
+        cache.insert(key, sample);
     }
     sample
 }
 
 /// The target as Target Scheduler holds it: center and planned rotation.
+/// A target kept in JNow coordinates has no ICRS center to give.
 fn planned(
     connection: &Connection,
     target_id: i64,
 ) -> rusqlite::Result<Option<(Option<IcrsPosition>, Option<f64>)>> {
-    let rotation = if super::import_drafts::has_column(connection, "target", "rotation") {
-        "rotation"
-    } else {
-        "NULL"
+    let column = |name: &'static str| {
+        if super::import_drafts::has_column(connection, "target", name) {
+            name
+        } else {
+            "NULL"
+        }
     };
     connection
         .query_row(
-            &format!("SELECT ra, dec, {rotation} FROM target WHERE Id = ?1"),
+            &format!(
+                "SELECT ra, dec, {}, IFNULL({}, 2) FROM target WHERE Id = ?1",
+                column("rotation"),
+                column("epochcode")
+            ),
             [target_id],
             |row| {
                 let ra: Option<f64> = row.get(0)?;
                 let dec: Option<f64> = row.get(1)?;
                 let rotation: Option<f64> = row.get(2)?;
+                let epoch: i64 = row.get(3)?;
                 // Target Scheduler stores right ascension in hours.
                 Ok((
-                    ra.zip(dec).and_then(|(ra, dec)| position(ra * 15.0, dec)),
+                    ra.zip(dec)
+                        .filter(|_| epoch == 2)
+                        .and_then(|(ra, dec)| position(ra * 15.0, dec)),
                     rotation.filter(|value| value.is_finite()),
                 ))
             },
@@ -212,7 +237,7 @@ pub(super) fn measure_target(
         };
         return Ok(Some(MeasuredGeometry {
             center,
-            position_angle_degrees: angle.unwrap_or_else(|| reference.rem_euclid(360.0)),
+            position_angle_degrees: angle.unwrap_or_else(|| whole_turn(reference)),
             size,
             source: MeasuredSource::Solved,
             size_source,
@@ -275,7 +300,7 @@ pub(super) fn measure_target(
         };
         return Ok(Some(MeasuredGeometry {
             center,
-            position_angle_degrees: angle.unwrap_or_else(|| reference.rem_euclid(360.0)),
+            position_angle_degrees: angle.unwrap_or_else(|| whole_turn(reference)),
             size,
             source: MeasuredSource::Header,
             size_source,
@@ -292,7 +317,7 @@ pub(super) fn measure_target(
     };
     Ok(Some(MeasuredGeometry {
         center,
-        position_angle_degrees: reference.rem_euclid(360.0) % 360.0,
+        position_angle_degrees: whole_turn(reference),
         size,
         source: MeasuredSource::Plan,
         size_source,
@@ -303,6 +328,109 @@ pub(super) fn measure_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Four real lights from N.I.N.A. 3 rigs with rotators (Askar 107,
+    /// RedCat 61, C925 and Ultracat 108, planned at 75°, 319.31°, 160° and
+    /// 35°), solved fresh from their pixels: each CD matrix reads as the sky
+    /// angle the rotator reported (`RotatorPosition`), a half turn either way
+    /// being the same framing. A handedness error would read the mirror
+    /// angle, tens of degrees away.
+    #[test]
+    fn real_rotator_frames_read_as_the_angle_the_rotator_reported() {
+        let frames: [([[f64; 2]; 2], f64); 4] = [
+            (
+                [
+                    [6.990482307099638e-5, 2.773326610787368e-4],
+                    [-2.773614711812854e-4, 6.989856989050347e-5],
+                ],
+                75.5322036743164,
+            ),
+            (
+                [
+                    [5.446752282112514e-4, -4.7006450224301835e-4],
+                    [4.7064917129732616e-4, 5.436290419800887e-4],
+                ],
+                139.1587677001953,
+            ),
+            (
+                [
+                    [-8.540919365504887e-5, 3.0773532793127025e-5],
+                    [-3.0762088540537845e-5, -8.53921599650019e-5],
+                ],
+                340.1150817871094,
+            ),
+            (
+                [
+                    [3.3623309231744136e-4, 2.4357134561677068e-4],
+                    [-2.4351777146067272e-4, 3.3630491101969084e-4],
+                ],
+                35.01029968261719,
+            ),
+        ];
+        let half_turn_apart = |a: f64, b: f64| {
+            let d = (a - b).rem_euclid(180.0);
+            d.min(180.0 - d)
+        };
+        for (cd, reported) in frames {
+            let angle = position_angle_from_cd(cd).unwrap();
+            assert!(
+                half_turn_apart(angle, reported) < 1.5,
+                "{angle} against {reported}"
+            );
+            assert!(
+                half_turn_apart(-angle, reported) > 10.0,
+                "{angle} against {reported}"
+            );
+        }
+    }
+
+    fn write_header(path: &Path, dec: f64) {
+        let cards = [
+            "SIMPLE  =                    T".to_string(),
+            "BITPIX  =                   16".into(),
+            "NAXIS   =                    2".into(),
+            "NAXIS1  =                  100".into(),
+            "NAXIS2  =                   80".into(),
+            "RA      =                 38.2".into(),
+            format!("DEC     = {dec:>20}"),
+            "END".into(),
+        ];
+        let mut header = Vec::new();
+        for card in &cards {
+            let mut bytes = card.as_bytes().to_vec();
+            bytes.resize(80, b' ');
+            header.extend(bytes);
+        }
+        header.resize(header.len().div_ceil(2880) * 2880, b' ');
+        std::fs::write(path, header).unwrap();
+    }
+
+    /// A frame that cannot be read yet is read again later, and a frame
+    /// replaced on disk is read anew: the cache keys on the file as it is.
+    #[test]
+    fn a_header_read_is_kept_per_version_of_the_file_and_failures_are_not_kept() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("frame.fits");
+        assert!(header_sample(&path).is_none());
+        std::fs::write(&path, b"not a fits file").unwrap();
+        assert!(header_sample(&path).is_none());
+        write_header(&path, 61.45);
+        let first = header_sample(&path).unwrap();
+        assert!((first.center.unwrap().dec_degrees - 61.45).abs() < 1e-9);
+        // Replaced with another frame: a new size or time, read anew.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_header(&path, 12.5);
+        let second = header_sample(&path).unwrap();
+        assert!((second.center.unwrap().dec_degrees - 12.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_fallback_angle_a_hair_below_zero_is_a_whole_turn_angle() {
+        assert_eq!((-1e-14f64).rem_euclid(360.0), 360.0);
+        assert_eq!(whole_turn(-1e-14), 0.0);
+        assert_eq!(whole_turn(-90.0), 270.0);
+        assert_eq!(whole_turn(720.5), 0.5);
+    }
 
     #[test]
     fn a_solved_cd_matrix_gives_the_angle_target_scheduler_stores() {
