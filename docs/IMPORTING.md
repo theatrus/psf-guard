@@ -114,7 +114,9 @@ The grouping rules stay conservative:
   RA as decimal hours and Dec as degrees.
 - Filter, gain, offset, binning, and numeric readout mode define a shared
   exposure template. The most common exposure length for that template becomes
-  its default.
+  its default. A template left at -1 for gain, offset, or readout mode runs at
+  the camera's default, so it takes a frame with any value there; a template
+  that matches exactly comes first.
 - Each distinct template and exposure length becomes an exposure plan. The
   imported frame count seeds its desired and acquired counts.
 
