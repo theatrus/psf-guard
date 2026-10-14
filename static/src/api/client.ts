@@ -1478,6 +1478,19 @@ export const apiClient = {
     return data.data;
   },
 
+  /** Which frames calibrate one light, and what the health check finds. */
+  getImageCalibration: async (
+    dbId: string,
+    imageId: number
+  ): Promise<import('./types').ImageCalibrationExplanation> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<
+      ApiResponse<import('./types').ImageCalibrationExplanation>
+    >(dbPath(dbId, `/images/${imageId}/calibration`));
+    if (!data.data) throw new Error(data.error || 'Failed to read the light\'s calibration');
+    return data.data;
+  },
+
   getProjectCalibrationHealth: async (
     dbId: string,
     projectId: number

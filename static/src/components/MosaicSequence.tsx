@@ -96,6 +96,8 @@ export default function MosaicSequence({ dbId, mosaic, images }: MosaicSequenceP
                   dbId={dbId}
                   image={image}
                   calibration={calibration.marks.get(image.id)}
+                  onCalibrationClick={(mark) =>
+                    navigate(imageDetailPath(image.id, searchParams, 'sequence', mark.codes[0]))}
                   isSelected={image.id === selectedId}
                   qualityPresentation="compact"
                   lazyPreview

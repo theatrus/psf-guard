@@ -172,11 +172,16 @@ export const CALIBRATION_PARAMS = [
   'calMaster',
 ] as const;
 
+/** The image detail's chosen calibration finding, or `all`. */
+export const CALIBRATION_FOCUS_PARAM = 'calibFocus';
+
 /** Query params that belong to one view and never travel to another: the
  *  Planning workspace's plan (`plan`, and the older names), the Sky's Live
- *  panel (`live`) and the calibration page's. */
+ *  panel (`live`), the image detail's calibration focus and the
+ *  calibration page's. */
 export const PLANNING_PARAMS = [
   'plan', 'planTab', 'directorProject', 'directorSource', 'directorView', 'directorCatalog', 'live',
+  CALIBRATION_FOCUS_PARAM,
   ...CALIBRATION_PARAMS,
 ] as const;
 

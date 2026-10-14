@@ -45,6 +45,17 @@ describe('image detail routes', () => {
     );
   });
 
+  it('opens on a calibration finding and leaves it behind on close', () => {
+    const params = new URLSearchParams('db=test&project=1&calib=poor');
+    const path = imageDetailPath(12, params, 'grid', 'mixed_flats');
+    expect(path).toBe('/detail/12?db=test&project=1&calib=poor&calibFocus=mixed_flats');
+
+    const opened = new URLSearchParams(path.split('?')[1]);
+    // A plain open does not keep an old choice.
+    expect(imageDetailPath(13, opened, 'grid')).toBe('/detail/13?db=test&project=1&calib=poor');
+    expect(imageDetailClosePath(opened)).toBe('/grid?db=test&project=1&calib=poor');
+  });
+
   it('uses Images as the safe fallback', () => {
     const params = new URLSearchParams('db=test&project=1&returnTo=unknown');
 

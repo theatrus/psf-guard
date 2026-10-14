@@ -87,6 +87,17 @@ pub struct LightFinding {
     pub level: HealthLevel,
     /// In plain words, with its numbers.
     pub reason: String,
+    /// The kinds of calibration frame it is about, so a view of one light
+    /// can point at them. Every kind when nothing matches the light.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kinds: Vec<CalibrationKind>,
+}
+
+impl LightFinding {
+    fn about(mut self, kinds: impl IntoIterator<Item = CalibrationKind>) -> Self {
+        self.kinds = kinds.into_iter().collect();
+        self
+    }
 }
 
 /// How many lights of one night and filter a finding holds.
@@ -218,6 +229,7 @@ fn poor(code: HealthCode, reason: impl Into<String>) -> LightFinding {
         code,
         level: HealthLevel::Poor,
         reason: reason.into(),
+        kinds: Vec::new(),
     }
 }
 
@@ -226,6 +238,7 @@ fn check(code: HealthCode, reason: impl Into<String>) -> LightFinding {
         code,
         level: HealthLevel::Check,
         reason: reason.into(),
+        kinds: Vec::new(),
     }
 }
 
@@ -326,13 +339,30 @@ impl HealthLibrary {
             return Ok(vec![poor(
                 HealthCode::NoLibrary,
                 "No calibration frames match its camera and settings",
-            )]);
+            )
+            .about([
+                CalibrationKind::Bias,
+                CalibrationKind::Dark,
+                CalibrationKind::DarkFlat,
+                CalibrationKind::Flat,
+            ])]);
         }
         let mut found = Vec::new();
         if let Some(reason) = calibration_gap_with(light, &selected, self.boundary, || {
             Ok(self.flats.as_slice())
         })? {
-            found.push(poor(HealthCode::CannotCalibrate, reason));
+            // The gap rule's order: no flat, then no bias or dark, then
+            // flats past the age limit.
+            let no_bias_or_dark = !(selected.flat.is_empty() && library.flat)
+                && selected.bias.is_empty()
+                && selected.dark.is_empty()
+                && (library.bias || library.dark);
+            let kinds = if no_bias_or_dark {
+                vec![CalibrationKind::Bias, CalibrationKind::Dark]
+            } else {
+                vec![CalibrationKind::Flat]
+            };
+            found.push(poor(HealthCode::CannotCalibrate, reason).about(kinds));
         }
         let bias = MasterInput::of(CalibrationKind::Bias, &selected.bias);
         let dark = MasterInput::of(CalibrationKind::Dark, &selected.dark);
@@ -343,10 +373,13 @@ impl HealthLibrary {
             && !darks.is_empty()
             && darks.len() < THIN_MASTER_FRAMES
         {
-            found.push(poor(
-                HealthCode::ThinDark,
-                format!("Its dark master would use only {}", frames(darks.len())),
-            ));
+            found.push(
+                poor(
+                    HealthCode::ThinDark,
+                    format!("Its dark master would use only {}", frames(darks.len())),
+                )
+                .about([CalibrationKind::Dark]),
+            );
         }
         if let MasterInput::Raw(biases) = &bias
             && !biases.is_empty()
@@ -355,11 +388,14 @@ impl HealthLibrary {
             // A dark carries the bias for the light; then a thin bias only
             // touches the flats.
             let reason = format!("Its bias master would use only {}", frames(biases.len()));
-            found.push(if dark.applies() {
-                check(HealthCode::ThinBias, reason)
-            } else {
-                poor(HealthCode::ThinBias, reason)
-            });
+            found.push(
+                if dark.applies() {
+                    check(HealthCode::ThinBias, reason)
+                } else {
+                    poor(HealthCode::ThinBias, reason)
+                }
+                .about([CalibrationKind::Bias]),
+            );
         }
         if let Some((grade, carried)) = self.flat_set_verdict(flat.raw()) {
             let reason = format!(
@@ -367,8 +403,12 @@ impl HealthLibrary {
                 if carried == 1 { "" } else { "s" }
             );
             match grade {
-                Grade::Poor => found.push(poor(HealthCode::FlatSpots, reason)),
-                Grade::Suspect => found.push(check(HealthCode::FlatSpots, reason)),
+                Grade::Poor => {
+                    found.push(poor(HealthCode::FlatSpots, reason).about([CalibrationKind::Flat]))
+                }
+                Grade::Suspect => {
+                    found.push(check(HealthCode::FlatSpots, reason).about([CalibrationKind::Flat]))
+                }
                 Grade::Ok => {}
             }
         }
@@ -377,10 +417,13 @@ impl HealthLibrary {
             let age = flats_at.abs_diff(light_at) as f64 / 86_400.0;
             // Past the limit, the gap rule has already made it poor.
             if age > FLAT_CHECK_AGE_DAYS && age <= limit {
-                found.push(check(
-                    HealthCode::OldFlats,
-                    format!("Its flats are {age:.0} days from it"),
-                ));
+                found.push(
+                    check(
+                        HealthCode::OldFlats,
+                        format!("Its flats are {age:.0} days from it"),
+                    )
+                    .about([CalibrationKind::Flat]),
+                );
             }
         }
         let nights: BTreeSet<String> = flat
@@ -390,24 +433,43 @@ impl HealthLibrary {
             .map(|at| night_of(at, self.boundary))
             .collect();
         if nights.len() > 1 {
-            found.push(check(
-                HealthCode::MixedFlats,
-                format!("Its flat master mixes flats from {} nights", nights.len()),
-            ));
+            found.push(
+                check(
+                    HealthCode::MixedFlats,
+                    format!("Its flat master mixes flats from {} nights", nights.len()),
+                )
+                .about([CalibrationKind::Flat]),
+            );
         }
-        let suspect = [&bias, &dark, &dark_flat, &flat]
-            .iter()
-            .flat_map(|input| input.raw())
-            .filter(|frame| self.suspect.contains(&frame.frame_uuid))
-            .count();
+        let mut suspect = 0;
+        let mut suspect_kinds = Vec::new();
+        for (kind, input) in [
+            (CalibrationKind::Bias, &bias),
+            (CalibrationKind::Dark, &dark),
+            (CalibrationKind::DarkFlat, &dark_flat),
+            (CalibrationKind::Flat, &flat),
+        ] {
+            let count = input
+                .raw()
+                .iter()
+                .filter(|frame| self.suspect.contains(&frame.frame_uuid))
+                .count();
+            if count > 0 {
+                suspect += count;
+                suspect_kinds.push(kind);
+            }
+        }
         if suspect > 0 {
-            found.push(check(
-                HealthCode::SuspectFrames,
-                format!(
-                    "Its masters use {suspect} suspect frame{}",
-                    if suspect == 1 { "" } else { "s" }
-                ),
-            ));
+            found.push(
+                check(
+                    HealthCode::SuspectFrames,
+                    format!(
+                        "Its masters use {suspect} suspect frame{}",
+                        if suspect == 1 { "" } else { "s" }
+                    ),
+                )
+                .about(suspect_kinds),
+            );
         }
         for (kind, input, name) in [
             (CalibrationKind::Bias, &bias, "bias"),
@@ -420,13 +482,16 @@ impl HealthLibrary {
                 .any(|frame| frame.kind == kind && self.by_hand.contains(&frame.frame_uuid));
             let left = input.raw().len();
             if kept && !matches!(input, MasterInput::External) && left < THIN_MASTER_FRAMES {
-                found.push(check(
-                    HealthCode::ShortAfterKeepOut,
-                    format!(
-                        "Frames kept out by hand leave its {name} at {}",
-                        frames(left)
-                    ),
-                ));
+                found.push(
+                    check(
+                        HealthCode::ShortAfterKeepOut,
+                        format!(
+                            "Frames kept out by hand leave its {name} at {}",
+                            frames(left)
+                        ),
+                    )
+                    .about([kind]),
+                );
             }
         }
         Ok(found)
@@ -861,6 +926,23 @@ mod tests {
             let tree = crate::directory_tree::DirectoryTree::build(self.temp.path()).unwrap();
             project_health(&self.conn, project, &tree).unwrap()
         }
+
+        /// What a view of one light is told about its calibration.
+        fn explain(&self, id: i32) -> super::super::CalibrationExplanation {
+            let light = read_frame_meta(&self.path(&format!("light-{id}.fits")));
+            super::super::explain_calibration(&self.conn, &light).unwrap()
+        }
+    }
+
+    /// The kinds each of a light's findings is about, by code.
+    fn finding_kinds(
+        explained: &super::super::CalibrationExplanation,
+    ) -> Vec<(HealthCode, Vec<CalibrationKind>)> {
+        explained
+            .findings
+            .iter()
+            .map(|finding| (finding.code, finding.kinds.clone()))
+            .collect()
     }
 
     fn codes(health: &ProjectHealth) -> Vec<(HealthCode, HealthLevel)> {
@@ -926,6 +1008,13 @@ mod tests {
             reason(&health, HealthCode::ThinDark),
             "Its dark master would use only 3 frames"
         );
+        assert_eq!(
+            finding_kinds(&fixture.explain(1)),
+            [
+                (HealthCode::ThinDark, vec![CalibrationKind::Dark]),
+                (HealthCode::ThinBias, vec![CalibrationKind::Bias]),
+            ]
+        );
 
         // Enough darks: the bias alone is thin, and only worth a look.
         fixture.frames("DARK", 7, "2026-09-09T14:00:00", 503.0);
@@ -965,6 +1054,10 @@ mod tests {
             reason(&health, HealthCode::CannotCalibrate),
             "Its flats are 70 days from it, past the 60-day limit"
         );
+        assert_eq!(
+            finding_kinds(&fixture.explain(1)),
+            [(HealthCode::CannotCalibrate, vec![CalibrationKind::Flat])]
+        );
         // Lifting the limit leaves them only old.
         configure_flat_max_age(Some(0.0));
         let health = fixture.health(1);
@@ -994,6 +1087,25 @@ mod tests {
         assert_eq!(
             reason(&health, HealthCode::MixedFlats),
             "Its flat master mixes flats from 2 nights"
+        );
+
+        // A view of the light names the finding, its kind, and both nights.
+        let explained = fixture.explain(1);
+        assert_eq!(
+            finding_kinds(&explained),
+            [(HealthCode::MixedFlats, vec![CalibrationKind::Flat])]
+        );
+        let flat = explained
+            .kinds
+            .iter()
+            .find(|kind| kind.kind == "flat")
+            .unwrap();
+        assert_eq!(
+            flat.used
+                .iter()
+                .map(|night| (night.night.as_str(), night.frames))
+                .collect::<Vec<_>>(),
+            [("2026-09-10", 3), ("2026-09-09", 3)]
         );
     }
 
@@ -1050,6 +1162,23 @@ mod tests {
             reason(&health, HealthCode::FlatSpots).starts_with("Its flats carry 12 changing spots"),
             "{health:?}"
         );
+
+        // A view of the light names the suspect flats the master takes.
+        let explained = fixture.explain(1);
+        let kinds = finding_kinds(&explained);
+        assert!(kinds.contains(&(HealthCode::FlatSpots, vec![CalibrationKind::Flat])));
+        assert!(kinds.contains(&(HealthCode::SuspectFrames, vec![CalibrationKind::Flat])));
+        assert_eq!(explained.findings[0].level, HealthLevel::Poor, "poor first");
+        let flat = explained
+            .kinds
+            .iter()
+            .find(|kind| kind.kind == "flat")
+            .unwrap();
+        assert_eq!(flat.suspect.len(), graded.suspect);
+        assert!(flat
+            .suspect
+            .iter()
+            .all(|frame| frame.file.starts_with("flat-") && !frame.reason.is_empty()));
     }
 
     #[test]

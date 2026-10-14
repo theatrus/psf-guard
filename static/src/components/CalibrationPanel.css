@@ -1,0 +1,306 @@
+/* The image detail's calibration account. Poor is red and Check amber, as
+   on the calibration chip. */
+.light-calibration-panel {
+  --calibration-poor: #d64545;
+  --calibration-check: #c9971c;
+  border-top: 1px solid var(--color-bg-tertiary);
+  padding-top: 1rem;
+  scroll-margin-top: 0.75rem;
+}
+
+.light-calibration-panel a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+.light-calibration-panel a:hover {
+  text-decoration: underline;
+}
+
+.light-calibration-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.light-calibration-panel-heading h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0;
+}
+
+.light-calibration-panel-heading h3 .score-chip-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+.light-calibration-panel-badge {
+  border: 1px solid var(--color-bg-input);
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  background: var(--color-bg-elevated);
+  font-size: 0.67rem;
+  font-weight: 600;
+  letter-spacing: 0.035em;
+  padding: 0.22rem 0.48rem;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.light-calibration-panel-badge.is-poor {
+  border-color: var(--calibration-poor);
+  color: #fff;
+  background: var(--calibration-poor);
+}
+
+.light-calibration-panel-badge.is-check {
+  border-color: var(--calibration-check);
+  color: #1a1a1a;
+  background: var(--calibration-check);
+}
+
+.light-calibration-panel-readings,
+.light-calibration-panel-message {
+  margin: 0.6rem 0 0;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.light-calibration-findings {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.light-calibration-finding {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  gap: 0.55rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--color-border-secondary);
+  border-left-width: 4px;
+  border-radius: 6px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 0.84rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.light-calibration-finding:hover {
+  background: var(--color-bg-elevated);
+}
+
+.light-calibration-finding:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.light-calibration-finding.is-poor {
+  border-left-color: var(--calibration-poor);
+}
+
+.light-calibration-finding.is-check {
+  border-left-color: var(--calibration-check);
+}
+
+.light-calibration-finding.is-chosen.is-poor {
+  border-color: var(--calibration-poor);
+  background: rgb(214 69 69 / 14%);
+}
+
+.light-calibration-finding.is-chosen.is-check {
+  border-color: var(--calibration-check);
+  background: rgb(201 151 28 / 14%);
+}
+
+.light-calibration-finding-level {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.light-calibration-finding.is-poor .light-calibration-finding-level {
+  color: var(--calibration-poor);
+}
+
+.light-calibration-finding.is-check .light-calibration-finding-level {
+  color: var(--calibration-check);
+}
+
+.light-calibration-focus-note {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.6rem;
+}
+
+.light-calibration-focus-note p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.light-calibration-show-all,
+.light-calibration-more {
+  flex: none;
+  border: 1px solid var(--color-border-tertiary);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+}
+
+.light-calibration-show-all:hover,
+.light-calibration-more:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-border-quaternary);
+}
+
+.light-calibration-kind {
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 6px;
+  background: var(--color-bg-surface);
+}
+
+.light-calibration-kind.is-about.is-poor {
+  border-color: var(--calibration-poor);
+}
+
+.light-calibration-kind.is-about.is-check {
+  border-color: var(--calibration-check);
+}
+
+.light-calibration-kind.is-folded {
+  opacity: 0.6;
+}
+
+.light-calibration-kind-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  font-size: 0.84rem;
+}
+
+.light-calibration-kind-heading > span {
+  flex: 1;
+  min-width: 0;
+  color: var(--color-text-secondary);
+}
+
+.light-calibration-kind-link {
+  flex: none;
+  font-size: 0.75rem;
+}
+
+.light-calibration-missing {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.light-calibration-kind-body {
+  margin-top: 0.45rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.light-calibration-part {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.light-calibration-part-label {
+  display: block;
+  margin-bottom: 0.2rem;
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.light-calibration-part ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.light-calibration-night,
+.light-calibration-frame {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.6rem;
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+}
+
+.light-calibration-file {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.light-calibration-frame-reason {
+  flex-basis: 100%;
+  color: var(--color-text-secondary);
+}
+
+.light-calibration-muted {
+  color: var(--color-text-muted);
+}
+
+.light-calibration-night-note {
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
+
+/* What the chosen finding points at. */
+.light-calibration-panel .is-focus.is-poor {
+  background: rgb(214 69 69 / 16%);
+  box-shadow: inset 3px 0 0 var(--calibration-poor);
+}
+
+.light-calibration-panel .is-focus.is-check {
+  background: rgb(201 151 28 / 16%);
+  box-shadow: inset 3px 0 0 var(--calibration-check);
+}
+
+.light-calibration-part.is-focus,
+.light-calibration-kind-heading.is-focus {
+  padding: 0.25rem 0.4rem;
+  border-radius: 4px;
+}
+
+/* A chip that opens the light's calibration account. */
+button.score-chip.calibration-chip {
+  border: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+button.score-chip.calibration-chip:hover {
+  filter: brightness(1.15);
+}
+
+button.score-chip.calibration-chip:focus-visible {
+  outline: 2px solid var(--color-text-primary);
+  outline-offset: 1px;
+}

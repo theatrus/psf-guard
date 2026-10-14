@@ -2555,6 +2555,78 @@ export interface CalibrationLightMarks {
   running: boolean;
 }
 
+/** One thing wrong with one light's calibration. */
+export interface LightCalibrationFinding {
+  code: CalibrationHealthCode;
+  level: CalibrationHealthLevel;
+  /** In plain words, with its numbers. */
+  reason: string;
+  /** The kinds of calibration frame it is about. */
+  kinds?: CalibrationKind[];
+}
+
+/** Frames of one night, with the coldest and warmest sensor reading. */
+export interface CalibrationNightFrames {
+  night: string;
+  frames: number;
+  temp_min_c?: number;
+  temp_max_c?: number;
+}
+
+/** A named frame and why it is called out. */
+export interface CalibrationNamedFrame {
+  file: string;
+  night: string;
+  reason: string;
+}
+
+/** For one kind, what the library gives a light and what it passes over. */
+export interface CalibrationKindExplanation {
+  kind: CalibrationKind;
+  /** The frames the master would take, in sum. */
+  master: {
+    frames: number;
+    temp_min_c?: number;
+    temp_max_c?: number;
+    first_night?: string;
+    last_night?: string;
+    nights: number;
+  };
+  /** The nights whose frames the master takes, newest first. */
+  used: CalibrationNightFrames[];
+  /** Frames that match, but another set was taken instead. */
+  matching_unused: CalibrationNightFrames[];
+  /** Frames that do not match, by night and reason. */
+  refused: { night: string; frames: number; reason: string }[];
+  /** Matching frames graded poor or kept out by hand. */
+  kept_out: CalibrationNamedFrame[];
+  /** Frames the master takes though they are graded suspect. */
+  suspect: CalibrationNamedFrame[];
+  other_filters: number;
+  other_cameras: number;
+}
+
+/** Why one light got the calibration it did, and what is wrong with it. */
+export interface ImageCalibrationExplanation {
+  light: {
+    file: string;
+    night: string | null;
+    filter: string | null;
+    exposure_s: number | null;
+    gain: number | null;
+    offset: number | null;
+    binning: string | null;
+    camera_temp: number | null;
+    rotator_deg: number | null;
+    camera: string | null;
+    telescope: string | null;
+    focal_length_mm: number | null;
+  };
+  kinds: CalibrationKindExplanation[];
+  /** Poor first. */
+  findings: LightCalibrationFinding[];
+}
+
 export interface ProjectCalibrationHealth {
   project_id: number;
   level: CalibrationHealthLevel | null;

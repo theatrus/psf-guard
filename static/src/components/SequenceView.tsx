@@ -650,7 +650,7 @@ export default function SequenceView() {
     if (currentImageId !== null) toggleImage(currentImageId);
   }, sequenceHotkeyOptions, [toggleImage]);
 
-  const openImage = useCallback((imageId: number) => {
+  const openImage = useCallback((imageId: number, calibrationFocus?: string) => {
     const scroller = document.querySelector<HTMLElement>('.app-main');
     const anchor = document.querySelector<HTMLElement>(
       `.sequence-image-card[data-card-image-id="${imageId}"]`,
@@ -659,7 +659,7 @@ export default function SequenceView() {
     const offsetTop = scroller && anchor
       ? anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top
       : 0;
-    navigate(imageDetailPath(imageId, searchParams, 'sequence'), {
+    navigate(imageDetailPath(imageId, searchParams, 'sequence', calibrationFocus), {
       state: imageDetailNavigationState({ scrollTop, imageId, offsetTop }),
     });
   }, [navigate, searchParams]);
@@ -1250,7 +1250,8 @@ const SequenceStrip = memo(function SequenceStrip({
   imageSize: number;
   stripRef: RefObject<HTMLDivElement | null>;
   onSelect: (id: number, event: React.MouseEvent) => void;
-  onOpen: (id: number) => void;
+  /** Open a light, on its calibration account with a finding chosen. */
+  onOpen: (id: number, calibrationFocus?: string) => void;
 }) {
   useEffect(() => {
     if (currentImageId === null) return;
@@ -1306,6 +1307,7 @@ const SequenceStrip = memo(function SequenceStrip({
             qualityScoreScope={scoreScope}
             basisScores={basisScoresByImage.get(quality.image_id)}
             calibration={calibrationByImage.get(quality.image_id)}
+            onCalibrationClick={(mark) => onOpen(quality.image_id, mark.codes[0])}
             isSelected={selectedImages.has(quality.image_id)}
             onClick={(event) => onSelect(quality.image_id, event)}
             onDoubleClick={() => onOpen(quality.image_id)}

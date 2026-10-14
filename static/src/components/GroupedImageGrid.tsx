@@ -52,6 +52,7 @@ import { mosaicLabel, useProjectMosaic } from '../hooks/useProjectMosaic';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import SecondaryScoreToggle from './SecondaryScoreToggle';
 import { useCalibrationMarks } from '../hooks/useCalibrationMarks';
+import { chipFocus } from '../utils/calibrationFocus';
 import { calibrationFilterLabel, matchesCalibrationFilter } from '../utils/calibrationFilter';
 import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog';
 import { matchesStatusFilter, statusFilterLabel } from '../utils/statusFilter';
@@ -196,8 +197,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   // Navigation helpers
   const [searchParams] = useSearchParams();
   
-  const navigateToDetail = useCallback((imageId: number) => {
-    navigate(imageDetailPath(imageId, searchParams, 'grid'));
+  const navigateToDetail = useCallback((imageId: number, calibrationFocus?: string) => {
+    navigate(imageDetailPath(imageId, searchParams, 'grid', calibrationFocus));
   }, [navigate, searchParams]);
   
   const navigateToComparison = useCallback((leftId: number, rightId: number) => {
@@ -1147,6 +1148,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                             qualityScoreScope={quality.scopeByImage.get(image.id)}
                             basisScores={quality.basisScoresByImage.get(image.id)}
                             calibration={calibration.marks.get(image.id)}
+                            onCalibrationClick={(mark) =>
+                              navigateToDetail(image.id, chipFocus(mark.codes, filters.calibration))}
                             qualityPresentation="compact"
                             showTarget={severalTargets}
                             isSelected={

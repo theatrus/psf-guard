@@ -49,6 +49,8 @@ export interface ImageCardProps {
   /** The light's calibration health mark, when it has one. Its chip shows
    *  whenever the toggle is on, in every view. */
   calibration?: CalibrationLightMark;
+  /** Open the light's calibration account; the chip is a button then. */
+  onCalibrationClick?: (mark: CalibrationLightMark) => void;
   qualityPresentation?: 'full' | 'compact';
   lazyPreview?: boolean;
   selectionEffects?: boolean;
@@ -68,6 +70,7 @@ export default function ImageCard({
   qualityScoreScope = 'capture_sequence',
   basisScores,
   calibration,
+  onCalibrationClick,
   qualityPresentation = 'full',
   lazyPreview = false,
   selectionEffects = true,
@@ -219,7 +222,23 @@ export default function ImageCard({
                 {(scoreChips.all * 100).toFixed(0)}
               </div>
             )}
-            {calibrationChip && (
+            {calibrationChip && (onCalibrationClick ? (
+              <button
+                type="button"
+                className={`score-chip calibration-chip is-${calibrationChip.level}`}
+                title={`${calibrationMarkTitle(calibrationChip)}. Open its calibration.`}
+                aria-label={`${calibrationMarkTitle(calibrationChip)}. Open its calibration.`}
+                data-testid="calibration-chip"
+                // The card's own click selects it; this one opens the light.
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onCalibrationClick(calibrationChip);
+                }}
+                onDoubleClick={(event) => event.stopPropagation()}
+              >
+                <CalibrationIcon />
+              </button>
+            ) : (
               <div
                 className={`score-chip calibration-chip is-${calibrationChip.level}`}
                 title={calibrationMarkTitle(calibrationChip)}
@@ -227,7 +246,7 @@ export default function ImageCard({
               >
                 <CalibrationIcon />
               </div>
-            )}
+            ))}
           </div>
         )}
         {quality?.category && (

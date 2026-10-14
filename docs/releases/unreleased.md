@@ -122,3 +122,10 @@
   selects again, frames you clicked by hand stay as you left them, and the
   address keeps the rule. **×** beside the pill turns the rule off and keeps
   the frames; **Clear** drops them.
+- An image's detail view has a **Calibration** panel: the light's
+  calibration findings in words, and for each kind the frames its master
+  would take, by night and sensor temperature, with suspect, kept-out,
+  unused and refused frames and why. Choosing a finding picks out the frames
+  behind it, such as the two nights a flat master mixes, and the choice
+  stays as you move between images. The 🧪 chip in Images and Sequence now
+  opens the light on that panel.

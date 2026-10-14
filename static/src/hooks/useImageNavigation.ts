@@ -2,7 +2,7 @@ import { useMemo, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiClient } from '../api/client';
-import { useDbProjectTarget, useFilters, useGridState } from './useUrlState';
+import { CALIBRATION_FOCUS_PARAM, useDbProjectTarget, useFilters, useGridState } from './useUrlState';
 import type { Image } from '../api/types';
 import {
   groupImagesBySession,
@@ -205,8 +205,14 @@ export function useImageNavigation(currentImageId?: number) {
     const params = searchParams.toString();
     
     if (view === 'detail') {
+      // A chosen calibration finding stays chosen from image to image.
       navigate(
-        imageDetailPath(imageId, searchParams, imageDetailReturnView(searchParams)),
+        imageDetailPath(
+          imageId,
+          searchParams,
+          imageDetailReturnView(searchParams),
+          searchParams.get(CALIBRATION_FOCUS_PARAM) ?? undefined,
+        ),
         { replace: true, state: location.state },
       );
     } else {
@@ -232,7 +238,8 @@ export function useImageNavigation(currentImageId?: number) {
   }, [canGoPrevious, currentIndex, flatImages, navigateToImageWithContext]);
 
   const goToGrid = useCallback(() => {
-    const params = searchParams.toString();
+    const params = new URLSearchParams(searchParams);
+    params.delete(CALIBRATION_FOCUS_PARAM);
     navigate(`/grid?${params}`, { replace: true });
   }, [navigate, searchParams]);
 

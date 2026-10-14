@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
@@ -23,12 +23,20 @@ const image = (id: number, filter = 'R') => ({
   filesystem_path: `/images/${id}.fits`,
 });
 
+function Where() {
+  const location = useLocation();
+  return <output data-testid="where">{`${location.pathname}${location.search}`}</output>;
+}
+
 function wrapper(route: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return function Wrapper({ children }: { children: ReactNode }) {
     return (
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={[route]}>{children}</MemoryRouter>
+        <MemoryRouter initialEntries={[route]}>
+          {children}
+          <Where />
+        </MemoryRouter>
       </QueryClientProvider>
     );
   };
@@ -66,7 +74,10 @@ describe('GroupedImageGrid calibration marks', () => {
     expect(asked).toContain('?project_id=1');
     const chip = screen.getByTestId('calibration-chip');
     expect(chip).toHaveClass('is-poor');
-    expect(chip).toHaveAttribute('title', "Can't be calibrated properly: Can't be calibrated, Old flats");
+    expect(chip).toHaveAttribute(
+      'title',
+      "Can't be calibrated properly: Can't be calibrated, Old flats. Open its calibration.",
+    );
 
     const button = screen.getByRole('button', { name: /^Calibration:/ });
     fireEvent.click(button);
@@ -77,6 +88,18 @@ describe('GroupedImageGrid calibration marks', () => {
       'score-chip calibration-chip is-check',
       'score-chip calibration-chip is-poor',
     ]);
+  });
+
+  it('opens a light on its calibration account from the chip, without selecting it', async () => {
+    serve();
+    render(<GroupedImageGrid />, { wrapper: wrapper('/grid?db=c925&project=1&calib=poor') });
+    await waitFor(() => expect(screen.getByText(/1 of 3 images/)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Open its calibration/ }));
+    const where = new URL(screen.getByTestId('where').textContent!, 'http://x');
+    expect(where.pathname).toBe('/detail/8');
+    expect(where.searchParams.get('calibFocus')).toBe('cannot_calibrate');
+    expect(where.searchParams.get('calib')).toBe('poor');
+    expect(where.searchParams.get('selected')).toBeNull();
   });
 
   it('offers the finding a coverage report link chose, beside the two levels', async () => {

@@ -81,6 +81,20 @@ pub(super) fn add_quality_table(conn: &Connection) -> Result<bool> {
     Ok(true)
 }
 
+/// The frames graded suspect, each with its grade's reason.
+pub(super) fn suspect_reasons(conn: &Connection) -> Result<HashMap<String, String>> {
+    if !table_exists(conn) {
+        return Ok(HashMap::new());
+    }
+    let mut statement = conn.prepare(&format!(
+        "SELECT frame_uuid, COALESCE(reason, '') FROM {QUALITY_TABLE} WHERE grade = 'suspect'"
+    ))?;
+    let rows = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<HashMap<String, String>>>()?;
+    Ok(rows)
+}
+
 /// Whether this catalog has the grade table. One this build could not
 /// upgrade has none, and reads as if nothing were graded.
 pub(super) fn table_exists(conn: &Connection) -> bool {
